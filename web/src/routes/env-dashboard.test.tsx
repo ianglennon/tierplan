@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -178,7 +178,7 @@ describe("dashboard", () => {
     const header = heading.parentElement as HTMLElement;
     expect(within(header).getByText("Standalone")).toBeTruthy();
     expect(within(header).getByText("Online")).toBeTruthy();
-    expect(within(header).getByText("Coaming (this instance)")).toBeTruthy();
+    expect(within(header).getByText("TierPlan (this instance)")).toBeTruthy();
 
     await waitFor(() => expect(within(tile("Containers")).getByText("7")).toBeTruthy());
     expect(within(tile("Containers")).getByText("5 running · 2 stopped")).toBeTruthy();
@@ -288,24 +288,24 @@ describe("dashboard", () => {
     renderAt("/env/e1");
     expect(
       await screen.findByText(
-        "This host is a swarm worker. Pin Coaming to a manager node to manage the swarm. Showing node-local data only.",
+        "This host is a swarm worker. Pin TierPlan to a manager node to manage the swarm. Showing node-local data only.",
       ),
     ).toBeTruthy();
   });
 
-  it("badges Coaming's own host only when the server found its container (D-27)", async () => {
+  it("badges TierPlan's own host only when the server found its container (D-27)", async () => {
     summary = () => Response.json({ ...SUMMARY, selfContainerId: undefined });
     renderAt("/env/e1");
     await screen.findByRole("heading", { name: "Lab host" });
     await waitFor(() => expect(within(tile("Images")).getByText("12")).toBeTruthy());
-    expect(screen.queryByText("Coaming (this instance)")).toBeNull();
+    expect(screen.queryByText("TierPlan (this instance)")).toBeNull();
   });
 
   it("does not badge another host", async () => {
     environments = () => Response.json({ items: [{ ...LAB, isSelfHost: false }] });
     renderAt("/env/e1");
     await waitFor(() => expect(within(tile("Images")).getByText("12")).toBeTruthy());
-    expect(screen.queryByText("Coaming (this instance)")).toBeNull();
+    expect(screen.queryByText("TierPlan (this instance)")).toBeNull();
   });
 
   it("renders a dash for what Docker does not report and lets values wrap", async () => {

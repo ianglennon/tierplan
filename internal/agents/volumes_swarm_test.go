@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // volumeNames lists the volumes called name on a node, as Docker itself lists them, so
@@ -128,17 +128,17 @@ func sharedVolumes(t *testing.T, f *swarmFix) {
 
 	// A service scaled to zero that mounts a volume blocks its delete.
 	create("svcvol", mgrAgent)
-	sh(t, mgr, "docker service create --name cm-vol-idle --replicas 0 --mount type=volume,source=svcvol,target=/data busybox sleep 600")
+	sh(t, mgr, "docker service create --name tp-vol-idle --replicas 0 --mount type=volume,source=svcvol,target=/data busybox sleep 600")
 	res = del("svcvol", map[string]string{"nodeId": mgrAgent, "name": "svcvol"})
-	if len(res) != 1 || res[0].Result != "failed" || res[0].Code != "volume_in_use" || !strings.Contains(res[0].Detail, "cm-vol-idle") {
-		t.Fatalf("delete with a service at zero replicas: %+v, want volume_in_use naming cm-vol-idle", res)
+	if len(res) != 1 || res[0].Result != "failed" || res[0].Code != "volume_in_use" || !strings.Contains(res[0].Detail, "tp-vol-idle") {
+		t.Fatalf("delete with a service at zero replicas: %+v, want volume_in_use naming tp-vol-idle", res)
 	}
 	if got := volumeNames(t, mgr, "svcvol"); len(got) != 1 {
 		t.Fatalf("the refused delete took the volume away: %v", got)
 	}
 
 	// With the service gone, the delete goes through.
-	sh(t, mgr, "docker service rm cm-vol-idle")
+	sh(t, mgr, "docker service rm tp-vol-idle")
 	f.srv.WaitFor("the volume to be deletable once the service is gone", 90*time.Second, func() (bool, string) {
 		res := del("svcvol", map[string]string{"nodeId": mgrAgent, "name": "svcvol"})
 		return len(res) == 1 && res[0].Result == "done", res[0].Code

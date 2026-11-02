@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Release pipeline (D-75). A pushed v* tag builds the binaries, the multi-arch
-# images and the SBOMs with goreleaser, publishes ghcr.io/ianglennon/coaming and
-# ghcr.io/ianglennon/coaming-agent (D-16) as X.Y.Z and X.Y (never a floating
+# images and the SBOMs with goreleaser, publishes ghcr.io/ianglennon/tierplan and
+# ghcr.io/ianglennon/tierplan-agent (D-16) as X.Y.Z and X.Y (never a floating
 # catch-all tag) and signs the checksums and both image digests with keyless
 # cosign (docker_signs in .goreleaser.yaml covers every image). No release is cut in Phase 1: nothing tags v0.1.0 until
 # the user decides to.

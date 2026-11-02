@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 -- name: InsertAgentEnvironment :exec
 INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, name_auto)

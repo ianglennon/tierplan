@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -19,14 +19,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // TestAnAgentOfflineDuringASecondAddressChange is the tracer for G-02-4b: an
-// agent that followed one change of Coaming's agent address, was offline during a
-// second, and is started again with the new COAMING_AGENT_URL on its own volume
+// agent that followed one change of TierPlan's agent address, was offline during a
+// second, and is started again with the new TIERPLAN_AGENT_URL on its own volume
 // must connect at the new address as the same agent, with no join token and
 // without enrolling again (ENV-05). The server is one handler behind three TLS
 // listeners, A (the install address), B and C; it accepts agent handshakes only for
@@ -37,8 +37,8 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 		t.Skip("builds and runs the agent binary")
 	}
 
-	agentBin := filepath.Join(t.TempDir(), "coaming-agent")
-	build := exec.Command("go", "build", "-o", agentBin, "./cmd/coaming-agent") //nolint:gosec // the agent module is built from this repository
+	agentBin := filepath.Join(t.TempDir(), "tierplan-agent")
+	build := exec.Command("go", "build", "-o", agentBin, "./cmd/tierplan-agent") //nolint:gosec // the agent module is built from this repository
 	build.Dir = "../../agent"
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -49,8 +49,8 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 	// handler, so they differ only in their port, which is part of the audience.
 	tsA := httptest.NewUnstartedServer(nil)
 	cfg := testConfig(t, map[string]string{
-		"COAMING_DATA_DIR":   t.TempDir() + "/data",
-		"COAMING_PUBLIC_URL": "https://" + tsA.Listener.Addr().String(),
+		"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
+		"TIERPLAN_PUBLIC_URL": "https://" + tsA.Listener.Addr().String(),
 	})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -124,14 +124,14 @@ func TestAnAgentOfflineDuringASecondAddressChange(t *testing.T) {
 		log = &lockedBuffer{}
 		cmd := exec.CommandContext(ctx, agentBin) //nolint:gosec // the binary this test just built
 		cmd.Env = []string{
-			"COAMING_AGENT_URL=" + agentURL,
-			"COAMING_AGENT_SOCKET=" + fake.SocketPath(),
-			"COAMING_AGENT_STATE_DIR=" + stateDir,
+			"TIERPLAN_AGENT_URL=" + agentURL,
+			"TIERPLAN_AGENT_SOCKET=" + fake.SocketPath(),
+			"TIERPLAN_AGENT_STATE_DIR=" + stateDir,
 			"SSL_CERT_FILE=" + certFile,
 			"PATH=" + os.Getenv("PATH"),
 		}
 		if joinToken != "" {
-			cmd.Env = append(cmd.Env, "COAMING_AGENT_JOIN_TOKEN="+joinToken)
+			cmd.Env = append(cmd.Env, "TIERPLAN_AGENT_JOIN_TOKEN="+joinToken)
 		}
 		cmd.Stdout, cmd.Stderr = log, log
 		if err := cmd.Start(); err != nil {

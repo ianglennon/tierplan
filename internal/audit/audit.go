@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package audit is Coaming's tamper-evident record of what happened (AUTH-08,
+// Package audit is TierPlan's tamper-evident record of what happened (AUTH-08,
 // D-39 to D-42).
 package audit
 
@@ -20,9 +20,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // ActorType says what kind of principal acted.
@@ -227,7 +227,7 @@ const (
 	// A person turned a git stack's automatic deploys on or off (D-18). The entry names the stack.
 	ActionGitAutoDeployEnabled  = "git.autodeploy_enabled"
 	ActionGitAutoDeployDisabled = "git.autodeploy_disabled"
-	// Coaming deployed a new commit of a git stack by itself, on the authority of the person who turned auto-deploy on
+	// TierPlan deployed a new commit of a git stack by itself, on the authority of the person who turned auto-deploy on
 	// (D-20). The actor is the system principal that ran it; the entry names the stack, the commit, what started it (poll
 	// or webhook) and the owner.
 	ActionGitAutoDeployed = "git.autodeployed"

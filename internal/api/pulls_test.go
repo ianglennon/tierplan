@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -17,15 +17,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Pull jobs (plan 05-01, RES-09, D-25, D-26, D-30, D-31). Docker is a fake daemon behind
@@ -439,7 +439,7 @@ func TestAFailedPullIsMappedToACodeAuditedAndNeverRetried(t *testing.T) {
 			if raw := string(f.getPull(t, started.JobID).body); strings.Contains(raw, "secret-registry-body") {
 				t.Errorf("the job carries the engine's answer: %s", raw)
 			}
-			// The pull is tried once: Coaming never retries a failed pull.
+			// The pull is tried once: TierPlan never retries a failed pull.
 			if w := f.fake.Writes(); len(w) != 1 {
 				t.Errorf("the engine saw %d writes, want exactly one: %v", len(w), w)
 			}

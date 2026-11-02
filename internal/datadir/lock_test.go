@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package datadir_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/datadir"
+	"github.com/ianglennon/tierplan/internal/datadir"
 )
 
 func TestLockRefusesASecondLockUntilTheFirstIsReleased(t *testing.T) {
@@ -68,7 +68,7 @@ func TestLockCreatesAMissingDirectory(t *testing.T) {
 // TestLockHelperProcess is the other process of TestLockIsHeldAcrossProcesses:
 // it takes the lock, says so, and holds it until its standard input closes.
 func TestLockHelperProcess(t *testing.T) {
-	dir := os.Getenv("COAMING_LOCK_HELPER_DIR")
+	dir := os.Getenv("TIERPLAN_LOCK_HELPER_DIR")
 	if dir == "" {
 		t.Skip("only runs as the helper process of TestLockIsHeldAcrossProcesses")
 	}
@@ -85,7 +85,7 @@ func TestLockHelperProcess(t *testing.T) {
 func TestLockIsHeldAcrossProcesses(t *testing.T) {
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLockHelperProcess$") //nolint:gosec // the test binary itself
-	cmd.Env = append(os.Environ(), "COAMING_LOCK_HELPER_DIR="+dir)
+	cmd.Env = append(os.Environ(), "TIERPLAN_LOCK_HELPER_DIR="+dir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

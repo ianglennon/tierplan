@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package vault_test
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 func testKey(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
@@ -36,7 +36,7 @@ func TestLoadOrCreateGeneratesKeyFile(t *testing.T) {
 	if v.KeySource() != "file" {
 		t.Fatalf("KeySource = %q, want file", v.KeySource())
 	}
-	path := filepath.Join(dir, "coaming.key")
+	path := filepath.Join(dir, "tierplan.key")
 	st, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("key file not created: %v", err)
@@ -72,7 +72,7 @@ func TestLoadOrCreateGeneratesKeyFile(t *testing.T) {
 
 func TestLoadOrCreateWarnsOnBroadKeyFileMode(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "coaming.key")
+	path := filepath.Join(dir, "tierplan.key")
 	if err := os.WriteFile(path, []byte(b64(testKey(7))+"\n"), 0o644); err != nil { //nolint:gosec // the test needs a broad mode
 		t.Fatal(err)
 	}
@@ -98,14 +98,14 @@ func TestConfigKeyWinsAndCreatesNoFile(t *testing.T) {
 	if v.KeySource() != "env" {
 		t.Fatalf("KeySource = %q, want env", v.KeySource())
 	}
-	if _, err := os.Stat(filepath.Join(dir, "coaming.key")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, "tierplan.key")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a key file was created for an env key: %v", err)
 	}
 }
 
 func TestSameKeyFromEnvAndFileHasSameID(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "coaming.key"), []byte(b64(testKey(9))+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tierplan.key"), []byte(b64(testKey(9))+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	log, _ := captureLog()
@@ -137,8 +137,8 @@ func TestConfigKeyMustBe32Bytes(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error")
 			}
-			if !strings.Contains(err.Error(), "COAMING_ENCRYPTION_KEY") {
-				t.Fatalf("error does not name COAMING_ENCRYPTION_KEY: %v", err)
+			if !strings.Contains(err.Error(), "TIERPLAN_ENCRYPTION_KEY") {
+				t.Fatalf("error does not name TIERPLAN_ENCRYPTION_KEY: %v", err)
 			}
 			if strings.Contains(err.Error(), bad) {
 				t.Fatalf("error leaks the supplied key: %v", err)
@@ -153,7 +153,7 @@ func TestLoadNeverGenerates(t *testing.T) {
 	if !errors.Is(err, vault.ErrNoKey) {
 		t.Fatalf("Load with no key = %v, want ErrNoKey", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "coaming.key")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, "tierplan.key")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Load created a key file: %v", err)
 	}
 	if _, err := vault.Load("", filepath.Join(dir, "missing")); !errors.Is(err, vault.ErrNoKey) {
@@ -233,19 +233,19 @@ func TestOpenFailuresAreDistinct(t *testing.T) {
 
 func TestSubkeys(t *testing.T) {
 	v := newVault(t)
-	a := v.Subkey("coaming/audit-hmac/v1")
-	c := v.Subkey("coaming/csrf/v1")
+	a := v.Subkey("tierplan/audit-hmac/v1")
+	c := v.Subkey("tierplan/csrf/v1")
 	if len(a) != 32 || len(c) != 32 {
 		t.Fatalf("subkey lengths = %d, %d, want 32", len(a), len(c))
 	}
 	if bytes.Equal(a, c) {
 		t.Fatal("different labels gave the same subkey")
 	}
-	if !bytes.Equal(a, v.Subkey("coaming/audit-hmac/v1")) {
+	if !bytes.Equal(a, v.Subkey("tierplan/audit-hmac/v1")) {
 		t.Fatal("Subkey is not deterministic")
 	}
 	a[0] ^= 0xff
-	if bytes.Equal(a, v.Subkey("coaming/audit-hmac/v1")) {
+	if bytes.Equal(a, v.Subkey("tierplan/audit-hmac/v1")) {
 		t.Fatal("mutating a returned subkey changed the cached value")
 	}
 
@@ -253,15 +253,15 @@ func TestSubkeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(other.Subkey("coaming/csrf/v1"), v.Subkey("coaming/csrf/v1")) {
+	if bytes.Equal(other.Subkey("tierplan/csrf/v1"), v.Subkey("tierplan/csrf/v1")) {
 		t.Fatal("different master keys gave the same subkey")
 	}
 
-	same, err := v.SubkeyFor(v.KeyID(), "coaming/csrf/v1")
-	if err != nil || !bytes.Equal(same, v.Subkey("coaming/csrf/v1")) {
+	same, err := v.SubkeyFor(v.KeyID(), "tierplan/csrf/v1")
+	if err != nil || !bytes.Equal(same, v.Subkey("tierplan/csrf/v1")) {
 		t.Fatalf("SubkeyFor(active) = %x, %v", same, err)
 	}
-	if _, err := v.SubkeyFor("k1-ffffffffffffffff", "coaming/csrf/v1"); !errors.Is(err, vault.ErrUnknownKey) {
+	if _, err := v.SubkeyFor("k1-ffffffffffffffff", "tierplan/csrf/v1"); !errors.Is(err, vault.ErrUnknownKey) {
 		t.Fatalf("SubkeyFor(unknown) = %v, want ErrUnknownKey", err)
 	}
 }

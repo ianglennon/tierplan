@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // The restart-loop tracker of standalone containers (plan 06-36, RES-13, D-15, D-16,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package rebuild_test
 
@@ -12,10 +12,10 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/stacks/rebuild"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -40,13 +40,13 @@ func coreService() rebuild.SwarmService {
 		Spec: swarm.ServiceSpec{
 			Annotations: swarm.Annotations{Name: "shop_web", Labels: map[string]string{
 				"com.docker.stack.namespace": "shop", "com.docker.stack.image": "nginx:1.27",
-				"coaming.stack.id": "stack-1", "team": "web",
+				"tierplan.stack.id": "stack-1", "team": "web",
 			}},
 			TaskTemplate: swarm.TaskSpec{
 				ContainerSpec: &swarm.ContainerSpec{
 					Image: "nginx:1.27@" + digest,
 					Labels: map[string]string{
-						"com.docker.stack.namespace": "shop", "coaming.stack.id": "stack-1", "tier": "front",
+						"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stack-1", "tier": "front",
 					},
 					Command: []string{"/entry.sh"},
 					Args:    []string{"nginx", "-g", "daemon off;"},
@@ -82,7 +82,7 @@ func TestSwarmRebuildsTheCore(t *testing.T) {
 			t.Errorf("the file lacks %q:\n%s", want, text)
 		}
 	}
-	for _, unwanted := range []string{"sha256", "com.docker.stack", "coaming", "networks:", "endpoint_mode", "mode: replicated", "shop_web"} {
+	for _, unwanted := range []string{"sha256", "com.docker.stack", "tierplan", "networks:", "endpoint_mode", "mode: replicated", "shop_web"} {
 		if strings.Contains(text, unwanted) {
 			t.Errorf("the file has %q, which a hand-written file would not:\n%s", unwanted, text)
 		}
@@ -259,7 +259,7 @@ func TestSwarmAnswersEachServicesPlatforms(t *testing.T) {
 
 // TestRoundTripWithPlatforms: services that carry platforms (as a swarm deploy writes them beside the pins) rebuild
 // exactly. Converting the rebuilt file and applying the platforms of the result gives the specs back, apart from
-// Coaming's own labels; the platforms are put on the planned spec the way a deploy puts them (the placement is made
+// TierPlan's own labels; the platforms are put on the planned spec the way a deploy puts them (the placement is made
 // when the service has none, and kept when it has constraints).
 func TestRoundTripWithPlatforms(t *testing.T) {
 	t.Parallel()

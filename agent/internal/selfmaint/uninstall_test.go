@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package selfmaint
 
@@ -15,18 +15,18 @@ import (
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/mount"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // uninstallServiceJSON is the agent's own service with its token secret, and one
 // secret that belongs to somebody else and must never be touched.
 const uninstallServiceJSON = `{
  "ID":"svc1","Version":{"Index":42},
- "Spec":{"Name":"coaming-agent","Labels":{"coaming.agent":"true"},
+ "Spec":{"Name":"tierplan-agent","Labels":{"tierplan.agent":"true"},
   "TaskTemplate":{"ContainerSpec":{"Image":"` + ownImage + `",
    "Secrets":[
-    {"File":{"Name":"coaming-agent-token","UID":"0","GID":"0","Mode":256},"SecretID":"sec-token","SecretName":"coaming-agent-token-g2"},
+    {"File":{"Name":"tierplan-agent-token","UID":"0","GID":"0","Mode":256},"SecretID":"sec-token","SecretName":"tierplan-agent-token-g2"},
     {"File":{"Name":"other","UID":"0","GID":"0","Mode":256},"SecretID":"sec-other","SecretName":"somebody-elses-secret"}
    ]}},
   "Mode":{"Global":{}}}}`
@@ -39,15 +39,15 @@ func swarmUninstallFixture(t *testing.T, manager bool, mut func(*Config)) (*fake
 	f.swarmControl = manager
 	f.serviceID, f.service = "svc1", uninstallServiceJSON
 	f.addContainer(container.InspectResponse{
-		ID: selfLong, Name: "/coaming-agent.1.abc", State: &container.State{Running: true, Status: "running"},
+		ID: selfLong, Name: "/tierplan-agent.1.abc", State: &container.State{Running: true, Status: "running"},
 		Config: &container.Config{
 			Hostname: selfShort, Image: ownImage,
-			Labels: map[string]string{"coaming.agent": "true", "com.docker.swarm.service.id": "svc1"},
-			Env:    []string{"COAMING_AGENT_DOCKER_GID=998", "COAMING_AGENT_URL=wss://x/agent/connect"},
+			Labels: map[string]string{"tierplan.agent": "true", "com.docker.swarm.service.id": "svc1"},
+			Env:    []string{"TIERPLAN_AGENT_DOCKER_GID=998", "TIERPLAN_AGENT_URL=wss://x/agent/connect"},
 		},
 		Mounts: []container.MountPoint{
 			{Type: mount.TypeBind, Source: sockPath, Destination: f.sock, RW: true},
-			{Type: mount.TypeVolume, Name: "coaming-agent", Destination: stateDir, RW: true},
+			{Type: mount.TypeVolume, Name: "tierplan-agent", Destination: stateDir, RW: true},
 			{Type: mount.TypeVolume, Name: "somebodys-data", Destination: "/data", RW: true},
 		},
 	})
@@ -86,16 +86,16 @@ func TestASwarmManagerToldToRemoveTheServiceRemovesOnlyItsOwnServiceAndTokenSecr
 		t.Fatalf("want one helper, got %d creates", len(f.creates))
 	}
 	h := f.creates[0].Req
-	if want := []string{"helper", "remove-volume", "--wait", selfLong, "--volume", "coaming-agent"}; !reflect.DeepEqual([]string(h.Cmd), want) {
+	if want := []string{"helper", "remove-volume", "--wait", selfLong, "--volume", "tierplan-agent"}; !reflect.DeepEqual([]string(h.Cmd), want) {
 		t.Errorf("helper command = %v, want %v", h.Cmd, want)
 	}
 	if h.Image != ownImage {
 		t.Errorf("the helper runs %q, want the agent's own image %q (nothing is pulled)", h.Image, ownImage)
 	}
-	if h.Labels["coaming.agent"] != "true" || h.Labels["coaming.agent.helper"] != "true" {
+	if h.Labels["tierplan.agent"] != "true" || h.Labels["tierplan.agent.helper"] != "true" {
 		t.Errorf("helper labels = %v", h.Labels)
 	}
-	if !slices.Contains(h.Env, "COAMING_AGENT_SOCKET="+f.sock) || !slices.Contains(h.Env, "COAMING_AGENT_DOCKER_GID=998") {
+	if !slices.Contains(h.Env, "TIERPLAN_AGENT_SOCKET="+f.sock) || !slices.Contains(h.Env, "TIERPLAN_AGENT_DOCKER_GID=998") {
 		t.Errorf("helper env = %v", h.Env)
 	}
 	if len(f.pulled) != 0 {
@@ -132,7 +132,7 @@ func TestASwarmAgentNotToldToRemoveTheServiceOnlyStartsItsVolumeHelper(t *testin
 		if len(f.creates) != 1 {
 			t.Fatalf("manager=%v: want one helper, got %d", manager, len(f.creates))
 		}
-		if want := []string{"helper", "remove-volume", "--wait", selfLong, "--volume", "coaming-agent"}; !reflect.DeepEqual([]string(f.creates[0].Req.Cmd), want) {
+		if want := []string{"helper", "remove-volume", "--wait", selfLong, "--volume", "tierplan-agent"}; !reflect.DeepEqual([]string(f.creates[0].Req.Cmd), want) {
 			t.Fatalf("helper command = %v", f.creates[0].Req.Cmd)
 		}
 	}
@@ -174,7 +174,7 @@ func TestAServiceThatCannotBeRemovedIsAnUpdateFailedAndItsSecretIsKept(t *testin
 
 func TestAServiceWithNoSecretOfTheAgentsOwnRemovesNoSecret(t *testing.T) {
 	f, m := swarmUninstallFixture(t, true, nil)
-	f.service = strings.Replace(uninstallServiceJSON, "coaming-agent-token-g2", "mine-not-coamings", 1)
+	f.service = strings.Replace(uninstallServiceJSON, "tierplan-agent-token-g2", "mine-not-tierplans", 1)
 	res := m.Uninstall(context.Background(), wire.Uninstall{T: wire.TypeUninstall, RemoveData: true, Service: true})
 	if !res.OK {
 		t.Fatalf("refused: %+v", res)
@@ -271,7 +271,7 @@ func TestAStandaloneAgentStartsAHelperThatRemovesItsContainerAndThenItsVolume(t 
 		t.Fatalf("want one helper, got %d", len(f.creates))
 	}
 	h := f.creates[0].Req
-	want := []string{"helper", "remove-volume", "--wait", oldLong, "--volume", "coaming-agent", "--remove-container"}
+	want := []string{"helper", "remove-volume", "--wait", oldLong, "--volume", "tierplan-agent", "--remove-container"}
 	if !reflect.DeepEqual([]string(h.Cmd), want) {
 		t.Fatalf("helper command = %v, want %v", h.Cmd, want)
 	}
@@ -295,7 +295,7 @@ func TestAStandaloneUninstallThatKeepsTheDataAddsKeepVolume(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("refused: %+v", res)
 	}
-	want := []string{"helper", "remove-volume", "--wait", oldLong, "--volume", "coaming-agent", "--remove-container", "--keep-volume"}
+	want := []string{"helper", "remove-volume", "--wait", oldLong, "--volume", "tierplan-agent", "--remove-container", "--keep-volume"}
 	if got := []string(f.creates[0].Req.Cmd); !reflect.DeepEqual(got, want) {
 		t.Fatalf("helper command = %v, want %v", got, want)
 	}

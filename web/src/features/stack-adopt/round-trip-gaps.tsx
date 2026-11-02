@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useEffect, useRef } from "react";
 
@@ -13,7 +13,7 @@ interface RoundTripGapsProps {
   showToken?: number;
 }
 
-// RoundTripGaps is the per-service list of what the first deploy of an adopted stack would change beyond Coaming's
+// RoundTripGaps is the per-service list of what the first deploy of an adopted stack would change beyond TierPlan's
 // ownership labels (UI-SPEC "Adopt page", D-20): the review's own list, with the columns "Setting", "Running now"
 // and "After the first deploy" and the caption "Differences in {service}". It is open by default when three or fewer
 // services differ. The server sends the values already masked for a reader without secrets.reveal.

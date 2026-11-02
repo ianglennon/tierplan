@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package hostroute reads the text of a Linux /proc/net/route file into the
 // IPv4 routes of a host. The agent parses the file it is given and the server

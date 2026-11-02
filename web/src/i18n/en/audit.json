@@ -8,7 +8,7 @@
     "scopedCaption": "Showing entries for the environments you administer.",
     "integrity": {
       "before": "Verify integrity with",
-      "command": "coaming audit verify",
+      "command": "tierplan audit verify",
       "after": "inside the container."
     },
     "filters": {

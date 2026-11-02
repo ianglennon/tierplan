@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 var statsContainerID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
@@ -26,7 +26,7 @@ var statsContainerID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 type StatsSource interface {
 	snapshotReader
 	statsNodes
-	// SwarmNodeTargets maps the swarm nodes Coaming can reach now to the node the hub asks
+	// SwarmNodeTargets maps the swarm nodes TierPlan can reach now to the node the hub asks
 	// (the service, services-list and node streams, plan 06-33).
 	SwarmNodeTargets(ctx context.Context, envID string) (map[string]envs.NodeRef, error)
 }

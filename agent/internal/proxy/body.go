@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -443,7 +443,7 @@ func validateVolumeCreate(raw []byte, env bodyEnv) (volume.CreateRequest, error)
 // validateSecretCreate decodes a secret to create into the engine's own swarm.SecretSpec with
 // unknown fields refused and rebuilds it from a name, labels and the value. A Driver or
 // Templating is refused: a secrets driver is a plugin that runs privileged code and a template
-// is evaluated by the swarm, and Coaming offers neither. The value is checked for size only; it
+// is evaluated by the swarm, and TierPlan offers neither. The value is checked for size only; it
 // is never logged, and a refusal names the rule and not the bytes.
 func validateSecretCreate(raw []byte) (swarm.SecretSpec, error) {
 	var in swarm.SecretSpec
@@ -533,7 +533,7 @@ func validateServiceSpec(raw []byte, env bodyEnv) (swarm.ServiceSpec, error) {
 	}
 	// Host access (D-36): a spec that mounts the host, adds capabilities, lowers
 	// the sandbox or joins the host network is refused unless the host owner allowed
-	// it with COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES.
+	// it with TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES.
 	if err := checkHostPolicy(in, env); err != nil {
 		return in, err
 	}
@@ -611,7 +611,7 @@ func validateContainerCreate(raw []byte, env bodyEnv) (container.CreateRequest, 
 	}
 	// Host access: a container create that gives the container the host's privileges, namespaces,
 	// devices or paths is refused unless the host owner allowed it with
-	// COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES (STK-02, D-36).
+	// TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (STK-02, D-36).
 	if err := checkContainerHostPolicy(clean, env); err != nil {
 		return in, err
 	}

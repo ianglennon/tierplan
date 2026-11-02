@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -9,9 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
 )
 
 // The labels the container list reads. They are the only labels that reach a
@@ -20,8 +20,8 @@ const (
 	labelProject = "com.docker.compose.project"
 	labelStack   = "com.docker.stack.namespace"
 	labelService = "com.docker.swarm.service.name"
-	// labelAgent marks a Coaming agent's own container (install.go labelPair).
-	labelAgent = "coaming.agent"
+	// labelAgent marks a TierPlan agent's own container (install.go labelPair).
+	labelAgent = "tierplan.agent"
 )
 
 // The values of the status filter. Unhealthy is a health, the others are states.
@@ -100,7 +100,7 @@ func statusCounts(rows []envs.ContainerRow) StatusCountsBody {
 	return c
 }
 
-// selfKindOf says whether a container is Coaming's own server ("server"), one of
+// selfKindOf says whether a container is TierPlan's own server ("server"), one of
 // its agents ("agent") or neither (""). A label can be set by anyone, so this only
 // adds care in the UI; the action endpoint decides ownership again from a fresh
 // inspect (T-04-32).

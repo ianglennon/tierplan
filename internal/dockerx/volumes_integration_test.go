@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -13,15 +13,15 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // runToExit runs a throwaway container to the end and returns its exit code, with the
 // binds it was given. The container is removed when the test ends.
 func runToExit(t *testing.T, ctx context.Context, raw *client.Client, binds []string, script string) int64 {
 	t.Helper()
-	name := "cm-vol-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "tp-vol-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       name,
 		Config:     &container.Config{Image: "busybox:1", Cmd: []string{"sh", "-c", script}},
@@ -66,7 +66,7 @@ func TestVolumeCreateHostFolder(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	folder := "/tmp/cm-hostfolder-" + suffix
+	folder := "/tmp/tp-hostfolder-" + suffix
 	// The folder is on the engine's host, which can be another machine than this one, so
 	// it is made there: a bind of a folder that does not exist makes it, and a file in it
 	// is what the volume must show.
@@ -74,7 +74,7 @@ func TestVolumeCreateHostFolder(t *testing.T) {
 		t.Fatalf("seeding the folder exited %d", code)
 	}
 
-	name := "cm-vol-" + suffix
+	name := "tp-vol-" + suffix
 	if ok, err := cli.VolumeExists(ctx, name); err != nil || ok {
 		t.Fatalf("VolumeExists before the create = %v, %v, want false", ok, err)
 	}
@@ -127,8 +127,8 @@ func TestVolumeRemoveInUse(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	vol := "cm-inuse-" + suffix
-	ctr := "cm-user-" + suffix
+	vol := "tp-inuse-" + suffix
+	ctr := "tp-user-" + suffix
 	if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: vol}); err != nil {
 		t.Fatalf("VolumeCreate: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestVolumeRemoveInUse(t *testing.T) {
 	}
 }
 
-// TestVolumeAnonymous proves against the engine COAMING_TEST_ENGINE names (29 and 24)
+// TestVolumeAnonymous proves against the engine TIERPLAN_TEST_ENGINE names (29 and 24)
 // that a volume Docker made for a container without a name is listed as anonymous, and a
 // named one is not (plan 04-17, RES-07, D-46): newer engines label such a volume and
 // older ones only give it a 64-hex name, and either is recognised.
@@ -195,8 +195,8 @@ func TestVolumeAnonymous(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	ctr := "cm-anon-" + suffix
-	named := "cm-named-" + suffix
+	ctr := "tp-anon-" + suffix
+	named := "tp-named-" + suffix
 	if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: named}); err != nil {
 		t.Fatalf("VolumeCreate: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestVolumeAnonymous(t *testing.T) {
 	}
 }
 
-// TestVolumeSizes proves against the engine COAMING_TEST_ENGINE names (29, which answers
+// TestVolumeSizes proves against the engine TIERPLAN_TEST_ENGINE names (29, which answers
 // the new disk usage shape, and 24, which answers the legacy one) that VolumeSizes reports a
 // real, non-zero size for a volume a container wrote 1 MiB into, none for an empty one, and
 // the container count of each (plan 04-18, RES-07, D-47).
@@ -266,7 +266,7 @@ func TestVolumeSizes(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	full, empty := "cm-sized-"+suffix, "cm-unsized-"+suffix
+	full, empty := "tp-sized-"+suffix, "tp-unsized-"+suffix
 	for _, name := range []string{full, empty} {
 		if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: name}); err != nil {
 			t.Fatalf("VolumeCreate %s: %v", name, err)

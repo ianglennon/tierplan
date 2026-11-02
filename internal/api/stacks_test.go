@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -17,12 +17,12 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Compose stacks (plan 07-01, STK-01, STK-02, STK-05). Docker is a fake swarm manager behind the real
@@ -81,7 +81,7 @@ type stackAnswer struct {
 	DraftSavedBy    string `json:"draftSavedBy"`
 	// Drift is the newest drift check, absent until the stack has one.
 	Drift *driftSummaryAnswer `json:"drift"`
-	// Managed is false for a stack found on the engine that Coaming did not make, which carries Unmanaged.
+	// Managed is false for a stack found on the engine that TierPlan did not make, which carries Unmanaged.
 	Managed   bool `json:"managed"`
 	Unmanaged *struct {
 		Orphan    bool   `json:"orphan"`
@@ -242,7 +242,7 @@ func TestDeployAOneServiceStackToALocalSwarmManagerEndToEnd(t *testing.T) {
 	}
 
 	nets := f.fake.NetworkCreates()
-	if len(nets) != 1 || nets[0].Name != "tracer_default" || nets[0].Labels["coaming.stack.id"] != st.ID || nets[0].Labels["com.docker.stack.namespace"] != "tracer" {
+	if len(nets) != 1 || nets[0].Name != "tracer_default" || nets[0].Labels["tierplan.stack.id"] != st.ID || nets[0].Labels["com.docker.stack.namespace"] != "tracer" {
 		t.Errorf("network creates = %+v", nets)
 	}
 	svcs := f.fake.ServiceCreates()
@@ -250,7 +250,7 @@ func TestDeployAOneServiceStackToALocalSwarmManagerEndToEnd(t *testing.T) {
 		t.Fatalf("service creates = %+v, want exactly one", svcs)
 	}
 	spec := svcs[0].Spec
-	if spec.Name != "tracer_web" || spec.Labels["com.docker.stack.namespace"] != "tracer" || spec.Labels["coaming.stack.id"] != st.ID || spec.Labels["com.docker.stack.image"] != "nginx:1.27-alpine" {
+	if spec.Name != "tracer_web" || spec.Labels["com.docker.stack.namespace"] != "tracer" || spec.Labels["tierplan.stack.id"] != st.ID || spec.Labels["com.docker.stack.image"] != "nginx:1.27-alpine" {
 		t.Errorf("service spec labels = %+v", spec.Labels)
 	}
 	if ports := spec.EndpointSpec.Ports; len(ports) != 1 || ports[0].PublishedPort != 9090 || ports[0].TargetPort != 80 {
@@ -667,7 +667,7 @@ func TestADeployToAStandaloneHostRunsTheComposeEngineAndIsAudited(t *testing.T) 
 	if up.calls != 1 || up.project == nil || !strings.Contains(up.project.Services["web"].Image, "@sha256:") {
 		t.Errorf("the Compose engine ran %d times with %+v, want once with a pinned image", up.calls, up.project)
 	}
-	// The only write the engine saw is Coaming's own pull of the pinned image (plan 07-21); the Compose
+	// The only write the engine saw is TierPlan's own pull of the pinned image (plan 07-21); the Compose
 	// engine's own writes are the stand-in's and none reached it.
 	if w := f.fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "POST /images/create?") {
 		t.Errorf("engine writes = %v, want the pull of the image alone", w)
@@ -761,7 +761,7 @@ func TestTheStackListShowsADraftThatWasSavedAfterTheLastDeploy(t *testing.T) {
 	}
 }
 
-// The state of a stack (plan 07-23, STK-10, UI-SPEC Defaults 11): derived from Coaming's records of the stack's
+// The state of a stack (plan 07-23, STK-10, UI-SPEC Defaults 11): derived from TierPlan's records of the stack's
 // operations and from what the engine runs, the same way on the list and on the page.
 
 func readStackAnswer(t *testing.T, c *roleCaller, id string) stackAnswer {
@@ -843,7 +843,7 @@ func ownedService(st stackAnswer, short string, running, desired uint64) dockert
 	return dockertest.FakeService{
 		ID: "svc-" + short, Name: st.Name + "_" + short, Mode: "replicated", Running: running, Desired: desired,
 		Image:  "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64),
-		Labels: map[string]string{"com.docker.stack.namespace": st.Name, "coaming.stack.id": st.ID, "coaming.stack.image": "nginx:1.27-alpine"},
+		Labels: map[string]string{"com.docker.stack.namespace": st.Name, "tierplan.stack.id": st.ID, "tierplan.stack.image": "nginx:1.27-alpine"},
 	}
 }
 
@@ -907,7 +907,7 @@ func TestAServiceOfTheSameNamespaceThatAnotherStackOwnsIsNotCountedForThisOne(t 
 	foreign := ownedService(st, "foreign", 0, 1)
 	foreign.Labels = map[string]string{"com.docker.stack.namespace": st.Name}
 	another := ownedService(st, "other", 0, 1)
-	another.Labels["coaming.stack.id"] = "someone-elses"
+	another.Labels["tierplan.stack.id"] = "someone-elses"
 
 	reconfigureSwarm(t, f, e, foreign, another)
 

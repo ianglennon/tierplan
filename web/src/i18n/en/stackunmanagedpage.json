@@ -1,21 +1,21 @@
 {
   "stackUnmanagedPage": {
-    "meta": "{{env}} · Not managed by Coaming",
+    "meta": "{{env}} · Not managed by TierPlan",
     "note": {
-      "title": "Coaming doesn't manage this stack",
-      "body": "You can look at it here. Adopt it to deploy, update and roll it back with Coaming. Adopting changes nothing until you deploy."
+      "title": "TierPlan doesn't manage this stack",
+      "body": "You can look at it here. Adopt it to deploy, update and roll it back with TierPlan. Adopting changes nothing until you deploy."
     },
     "orphan": {
-      "title": "Created by Coaming (another instance or a lost record)",
-      "body": "This stack carries a Coaming ID that this instance doesn't know. Adopting it works like any other stack, and the first deploy replaces the old ID labels."
+      "title": "Created by TierPlan (another instance or a lost record)",
+      "body": "This stack carries a TierPlan ID that this instance doesn't know. Adopting it works like any other stack, and the first deploy replaces the old ID labels."
     },
     "portainer": {
       "title": "This stack looks like it was created by Portainer",
-      "body": "Remove it from Portainer without deleting it, or the two tools will fight over it. Coaming doesn't contact Portainer."
+      "body": "Remove it from Portainer without deleting it, or the two tools will fight over it. TierPlan doesn't contact Portainer."
     },
     "owner": {
-      "coaming": "Coaming",
-      "agent": "Coaming agent"
+      "tierplan": "TierPlan",
+      "agent": "TierPlan agent"
     },
     "details": {
       "title": "Details",
@@ -37,7 +37,7 @@
     },
     "gone": {
       "heading": "This stack is gone",
-      "body": "It was removed outside Coaming, or it is now managed. Go back to the list to find it.",
+      "body": "It was removed outside TierPlan, or it is now managed. Go back to the list to find it.",
       "back": "Back to stacks",
       "open": "Open stack"
     },
@@ -50,7 +50,7 @@
       "open": "Open stack"
     },
     "link": {
-      "tooltip": "Not managed by Coaming."
+      "tooltip": "Not managed by TierPlan."
     }
   }
 }

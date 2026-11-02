@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
@@ -267,7 +267,7 @@ export function createAccessChangeHandler(deps: AccessChangeDeps) {
           await queryClient.cancelQueries({ queryKey: meKey });
           after = await queryClient.fetchQuery({ ...meQueryOptions, staleTime: 0 });
         } catch {
-          // Signed out (the 401 handler takes over) or Coaming unreachable: there
+          // Signed out (the 401 handler takes over) or TierPlan unreachable: there
           // is nothing to move to, and the pages show their own errors.
           return;
         }

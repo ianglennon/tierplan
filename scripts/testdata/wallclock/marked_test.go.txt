@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Fixture for scripts/test-scripts.sh (wallclock-check): stored as .txt so the tree's
 // Go tools never compile it. Every call below is allowed, each for its own reason.
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 func TestWaitsOnlyAsAllowed(t *testing.T) {

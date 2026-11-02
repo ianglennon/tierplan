@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -11,10 +11,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // The changes a node impact is asked for. Activate has no entry: it sends nothing away and needs
@@ -25,7 +25,7 @@ const (
 	impactPromote = "promote"
 	impactDemote  = "demote"
 	// impactLabels is the read a change of the node's labels needs: the tasks that run on the
-	// node, as a drain's, and nothing about managers or Coaming.
+	// node, as a drain's, and nothing about managers or TierPlan.
 	impactLabels = "labels"
 )
 
@@ -41,7 +41,7 @@ const (
 const (
 	warnQuorumAtRisk     = "quorum_at_risk"
 	warnEvenCount        = "even_count"
-	warnRunsCoaming      = "runs_coaming"
+	warnRunsTierPlan     = "runs_tierplan"
 	warnOnlyManagerAgent = "only_manager_agent"
 	warnFactsUnreadable  = "facts_unreadable"
 )
@@ -69,8 +69,8 @@ type NodeImpactBody struct {
 	Version      uint64             `json:"version" doc:"The node's object version as read for this judgement: the version a change made on the strength of it must send back"`
 	Tasks        []NodeImpactTask   `json:"tasks" doc:"For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise"`
 	Managers     NodeImpactManagers `json:"managers" doc:"The manager counts"`
-	Warnings     []string           `json:"warnings" doc:"What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_coaming (the node hosts Coaming), only_manager_agent (it has the only manager agent connected to Coaming), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null"`
-	NeedsConfirm bool               `json:"needsConfirm" doc:"True when the node's name must be typed to make the change: a drain or demote of Coaming's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it"`
+	Warnings     []string           `json:"warnings" doc:"What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null"`
+	NeedsConfirm bool               `json:"needsConfirm" doc:"True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it"`
 }
 
 // nodeImpactInput is everything nodeImpact judges.
@@ -84,8 +84,8 @@ type nodeImpactInput struct {
 	// Tasks are the node's tasks whose desired state is running.
 	Tasks []dockerx.TaskRow
 	// Services are the swarm's services by ID.
-	Services                      map[string]dockerx.ServiceRow
-	RunsCoaming, OnlyManagerAgent bool
+	Services                       map[string]dockerx.ServiceRow
+	RunsTierPlan, OnlyManagerAgent bool
 }
 
 // majority is how many of n managers make a quorum.
@@ -124,8 +124,8 @@ func nodeImpact(in nodeImpactInput) NodeImpactBody {
 	case impactDrain, impactPause:
 		b.Tasks = impactTasks(in)
 		if in.Action == impactDrain {
-			if in.RunsCoaming {
-				b.Warnings = append(b.Warnings, warnRunsCoaming)
+			if in.RunsTierPlan {
+				b.Warnings = append(b.Warnings, warnRunsTierPlan)
 			}
 			if in.OnlyManagerAgent {
 				b.Warnings = append(b.Warnings, warnOnlyManagerAgent)
@@ -154,8 +154,8 @@ func nodeImpact(in nodeImpactInput) NodeImpactBody {
 		if b.Managers.After > 0 && b.Managers.After%2 == 0 {
 			b.Warnings = append(b.Warnings, warnEvenCount)
 		}
-		if in.RunsCoaming {
-			b.Warnings = append(b.Warnings, warnRunsCoaming)
+		if in.RunsTierPlan {
+			b.Warnings = append(b.Warnings, warnRunsTierPlan)
 		}
 		if in.OnlyManagerAgent {
 			b.Warnings = append(b.Warnings, warnOnlyManagerAgent)
@@ -163,7 +163,7 @@ func nodeImpact(in nodeImpactInput) NodeImpactBody {
 		if unknown > 0 {
 			b.Warnings = append(b.Warnings, warnFactsUnreadable)
 		}
-		b.NeedsConfirm = atRisk || in.RunsCoaming || in.OnlyManagerAgent || unknown > 0
+		b.NeedsConfirm = atRisk || in.RunsTierPlan || in.OnlyManagerAgent || unknown > 0
 	}
 	return b
 }
@@ -219,9 +219,9 @@ func impactTasks(in nodeImpactInput) []NodeImpactTask {
 	return out
 }
 
-// onlyManagerAgent reports whether the node has the only manager connection Coaming has to the
+// onlyManagerAgent reports whether the node has the only manager connection TierPlan has to the
 // swarm: one agent of a manager is connected, and it is the node's. The local socket is not an
-// agent (Coaming's own node is warned of as that), but the host folded into a swarm
+// agent (TierPlan's own node is warned of as that), but the host folded into a swarm
 // environment is a connection, so it counts as another.
 func onlyManagerAgent(targets map[string]envs.NodeRef, envID, nodeID string) bool {
 	count, theNodes := 0, false
@@ -286,7 +286,7 @@ func gatherImpact(ctx context.Context, d NodesDeps, envID, nodeID, action string
 		return in, nil
 	}
 	targets := swarmNodeTargets(ctx, d.services(), envID)
-	in.RunsCoaming = coamingNode(ctx, d, envID, targets) == nodeID
+	in.RunsTierPlan = tierplanNode(ctx, d, envID, targets) == nodeID
 	in.OnlyManagerAgent = onlyManagerAgent(targets, envID, nodeID)
 	return in, nil
 }
@@ -310,7 +310,7 @@ func registerNodeImpact(r *httpx.Router, d NodesDeps) {
 		Summary: "What a change to a swarm node will do",
 		Description: "Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. " +
 			"For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). " +
-			"managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_coaming, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. " +
+			"managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. " +
 			"404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermNodesManage, Scope: rbac.ScopeEnvironment},

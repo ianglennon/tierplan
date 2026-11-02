@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -122,12 +122,12 @@ describe("the Pool guidance page", () => {
     );
     expect(
       screen.getByText(
-        "Plan address pools without touching your hosts. Coaming explains the steps and gives you commands to copy. It never runs them.",
+        "Plan address pools without touching your hosts. TierPlan explains the steps and gives you commands to copy. It never runs them.",
       ),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming never runs swarm init or swarm leave, and never edits daemon.json. Run the commands yourself on the right host.",
+        "TierPlan never runs swarm init or swarm leave, and never edits daemon.json. Run the commands yourself on the right host.",
       ),
     ).toBeTruthy();
     for (const name of ["Free up space", "New swarm", "Rebuild a swarm", "Standalone host"]) {
@@ -314,14 +314,14 @@ describe("Rebuild a swarm", () => {
       "Leave the swarm",
       "Create the swarm with the new pool",
       "Rejoin the nodes",
-      "Adopt the new swarm in Coaming",
+      "Adopt the new swarm in TierPlan",
       "Redeploy",
     ]);
     expect(screen.getByText("docker swarm leave --force")).toBeTruthy();
     expect(screen.getByText("docker swarm join-token worker")).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming sees a new cluster. Open this environment's settings and choose Adopt new cluster.",
+        "TierPlan sees a new cluster. Open this environment's settings and choose Adopt new cluster.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open settings" }).getAttribute("href")).toBe(
@@ -351,12 +351,12 @@ describe("Rebuild a swarm", () => {
     expect(block.textContent).toBe("docker stack rm web\ndocker stack rm shop_v2");
     expect(
       screen.getByText(
-        "Remove each stack from Coaming's Stacks page, or run the command below on a manager.",
+        "Remove each stack from TierPlan's Stacks page, or run the command below on a manager.",
       ),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "2 stacks have names that can't go in a command. Remove them from Coaming's Stacks page.",
+        "2 stacks have names that can't go in a command. Remove them from TierPlan's Stacks page.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/my stack/)).toBeNull();
@@ -366,7 +366,7 @@ describe("Rebuild a swarm", () => {
   it("gives only the sentence when no stack name is safe", async () => {
     stackNames = ["a b"];
     mount("rebuild");
-    expect(await screen.findByText("Remove each stack from Coaming's Stacks page.")).toBeTruthy();
+    expect(await screen.findByText("Remove each stack from TierPlan's Stacks page.")).toBeTruthy();
     expect(screen.queryByText(/docker stack rm/)).toBeNull();
   });
 

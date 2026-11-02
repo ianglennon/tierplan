@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useState } from "react";
@@ -36,7 +36,7 @@ interface AgentUpdatesCardProps {
 // AgentUpdatesCard is the "Agent updates" section (D-24, D-28): the switch
 // "Update agents automatically", and, while it is off, Update all agents ({n}) and
 // the progress "Updating agents ({done} of {total})" while an update rolls through
-// the nodes. A host whose owner turned self-update off, or whose agent Coaming
+// the nodes. A host whose owner turned self-update off, or whose agent TierPlan
 // cannot update, gets its manual command here. It is for someone holding
 // environments.configure on this environment (D-07) and only for an agent
 // environment; the server checks. Without the permission it renders nothing and
@@ -155,7 +155,7 @@ function AgentUpdatesBody({ env }: AgentUpdatesCardProps) {
   );
 }
 
-// ManualUpdate is the note and command block of a node Coaming cannot update: its
+// ManualUpdate is the note and command block of a node TierPlan cannot update: its
 // host owner turned self-update off, or the agent is outside the version window or
 // too old to update itself.
 function ManualUpdate({ agent }: { agent: AgentItem }) {

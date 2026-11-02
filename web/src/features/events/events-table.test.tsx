@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -152,9 +152,11 @@ describe("EventsTable", () => {
     expect(onFilterName).toHaveBeenCalledWith("web");
   });
 
-  it("names a row of Coaming's own by its message, with no link, details or menu", () => {
-    show([ev("1", { type: "coaming", name: "Manager moved to mgr-2", action: "", node: "mgr-2" })]);
-    expect(screen.getByText("Coaming")).toBeTruthy();
+  it("names a row of TierPlan's own by its message, with no link, details or menu", () => {
+    show([
+      ev("1", { type: "tierplan", name: "Manager moved to mgr-2", action: "", node: "mgr-2" }),
+    ]);
+    expect(screen.getByText("TierPlan")).toBeTruthy();
     expect(screen.getByText("Manager moved to mgr-2")).toBeTruthy();
     expect(screen.queryAllByRole("link")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: /Actions for/ })).toBeNull();

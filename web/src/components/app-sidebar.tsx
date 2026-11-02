@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link, useParams, useRouterState } from "@tanstack/react-router";
 import {
@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useEffect } from "react";
 import { EnvSwitcher } from "@/components/env-switcher";
+import { TierPlanLogo } from "@/components/tierplan-logo";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -184,6 +185,14 @@ export function AppSidebar() {
       mobileTitle={t("shell.sidebar.title")}
       mobileDescription={t("shell.sidebar.description")}
     >
+      {/* The brand row: the wordmark with room to spare, the square icon on the 3rem rail. It lines up
+          with the shell's h-12 top bar, and it is not a link, so it adds no tab stop. */}
+      <div className="flex h-12 shrink-0 items-center border-b border-sidebar-border px-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 max-md:px-4">
+        <TierPlanLogo
+          variant={footerHere ? "wordmark" : "icon"}
+          className={footerHere ? "h-7" : "size-6"}
+        />
+      </div>
       <SidebarHeader className="h-12 justify-center border-b border-sidebar-border p-2 max-md:h-14 max-md:flex-row max-md:items-center">
         <div className="min-w-0 flex-1">
           <EnvSwitcher />

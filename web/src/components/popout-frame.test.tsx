@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -23,8 +23,8 @@ function renderFrame() {
         version: "",
         commit: "abc1234abc1234abc1234abc1234abc1234abc12",
         display: "dev (abc1234)",
-        sourceUrl: "https://github.com/ianglennon/coaming",
-        sourceTreeUrl: "https://github.com/ianglennon/coaming/tree/abc1234",
+        sourceUrl: "https://github.com/ianglennon/tierplan",
+        sourceTreeUrl: "https://github.com/ianglennon/tierplan/tree/abc1234",
       }),
     ),
   );
@@ -57,7 +57,7 @@ describe("PopoutFrame", () => {
     expect(screen.getByRole("main").textContent).toBe("the viewer");
     expect(screen.queryByRole("navigation")).toBeNull();
     const link = await screen.findByRole("link", { name: /dev \(abc1234\)/ });
-    expect(link.getAttribute("href")).toBe("https://github.com/ianglennon/coaming/tree/abc1234");
+    expect(link.getAttribute("href")).toBe("https://github.com/ianglennon/tierplan/tree/abc1234");
     expect(screen.getByRole("contentinfo")).toBeTruthy();
   });
 

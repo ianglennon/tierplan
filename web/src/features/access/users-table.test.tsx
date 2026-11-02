@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -276,7 +276,7 @@ describe("Regenerate invite link", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Couldn't create the link. Try again, and check the Coaming logs if it keeps happening.",
+      "Couldn't create the link. Try again, and check the TierPlan logs if it keeps happening.",
     );
     expect(screen.getByRole("alertdialog")).toBeTruthy();
 
@@ -667,7 +667,7 @@ describe("Unlock and Delete user… in the row menu", () => {
     renderTable();
     await screen.findByText("admin");
     openMenu("admin");
-    const reason = "Coaming needs at least one active instance admin";
+    const reason = "TierPlan needs at least one active instance admin";
     for (const name of ["Disable", "Delete user…"]) {
       const item = await screen.findByRole("menuitem", { name });
       expect(item.getAttribute("aria-disabled")).toBe("true");

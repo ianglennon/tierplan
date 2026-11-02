@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The few Node APIs the helpers use. @types/node is not one of the packages
 // approved for this project (01-01 Task 1), so they are declared here.

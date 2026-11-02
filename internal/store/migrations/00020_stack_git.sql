@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
 -- Git-backed stacks (Phase 9, GIT-02, D-06, D-14). A stack with source kind git has one stack_git row: the

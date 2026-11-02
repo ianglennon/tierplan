@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package agents
 
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // The names an installed agent identifies itself by. The self-update and uninstall
@@ -19,19 +19,19 @@ import (
 // command promises and do not change once agents are in the field (D-21).
 const (
 	// ImageRepository is the agent image without a tag (D-16).
-	ImageRepository = "ghcr.io/ianglennon/coaming-agent"
+	ImageRepository = "ghcr.io/ianglennon/tierplan-agent"
 	// ServiceName is the swarm service and the standalone container.
-	ServiceName = "coaming-agent"
+	ServiceName = "tierplan-agent"
 	// VolumeName is the named volume that keeps the agent's key, certificate and pins.
-	VolumeName = "coaming-agent"
+	VolumeName = "tierplan-agent"
 	// SecretPrefix starts the name of every generation of the join token secret.
-	SecretPrefix = "coaming-agent-token-g"
+	SecretPrefix = "tierplan-agent-token-g" //nolint:gosec // G101: a secret name, not a credential
 
-	stateDir      = "/var/lib/coaming-agent"
+	stateDir      = "/var/lib/tierplan-agent"
 	dockerSock    = "/var/run/docker.sock"
-	secretTarget  = "coaming-agent-token"
+	secretTarget  = "tierplan-agent-token" //nolint:gosec // G101: a secret name, not a credential
 	tokenFilePath = "/run/secrets/" + secretTarget
-	labelPair     = "coaming.agent=true"
+	labelPair     = "tierplan.agent=true"
 
 	// hostRouteSrc and hostRouteDst are the one host file every install mounts, read-only: the
 	// host's IPv4 route table, which the agent reads for the subnet picker's host-route check
@@ -49,8 +49,8 @@ type InstallParams struct {
 	// Endpoint is the address the agent dials: wss:// (ws:// for plain http), the
 	// agent or public URL with its path, and /agent/connect (D-18).
 	Endpoint string
-	// Pin is the SPKI pin of Coaming's own self-signed certificate. Empty when
-	// Coaming serves a supplied certificate or plain HTTP, and then no command
+	// Pin is the SPKI pin of TierPlan's own self-signed certificate. Empty when
+	// TierPlan serves a supplied certificate or plain HTTP, and then no command
 	// carries one.
 	Pin string
 	// ServerVersion is the running server's version; it picks the image tag (D-17).
@@ -58,9 +58,9 @@ type InstallParams struct {
 	// Generation numbers the token (env_join_tokens.generation, from 1). It is in
 	// the name of the swarm secret so every rotation creates a fresh name.
 	Generation int
-	// AllowInsecure is the server's own COAMING_AGENT_ALLOW_INSECURE (development
+	// AllowInsecure is the server's own TIERPLAN_AGENT_ALLOW_INSECURE (development
 	// only). With it on and a ws:// Endpoint, every install text also sets
-	// COAMING_AGENT_ALLOW_INSECURE=true on the agent, which otherwise refuses to dial
+	// TIERPLAN_AGENT_ALLOW_INSECURE=true on the agent, which otherwise refuses to dial
 	// plain ws:// to another host (T-02-31). Nothing else may set it, and it never
 	// appears for a wss:// Endpoint. With it off, a ws:// Endpoint for a host that is
 	// not this machine is one agents refuse, so no install, manual update command or
@@ -70,7 +70,7 @@ type InstallParams struct {
 }
 
 // agentSwitch reports whether the commands built from p must carry the agent's
-// COAMING_AGENT_ALLOW_INSECURE: the server's switch is on and the address is plain.
+// TIERPLAN_AGENT_ALLOW_INSECURE: the server's switch is on and the address is plain.
 func (p InstallParams) agentSwitch() bool {
 	return p.AllowInsecure && strings.HasPrefix(p.Endpoint, "ws://")
 }
@@ -101,7 +101,7 @@ type Install struct {
 	SwarmRotateCommand string
 	// SwarmCleanup and StandaloneCleanup remove what the install created, for a host
 	// that is offline when its environment is removed or when the admin does not let
-	// Coaming uninstall the agents (D-30).
+	// TierPlan uninstall the agents (D-30).
 	SwarmCleanup      string
 	StandaloneCleanup string
 }
@@ -175,10 +175,10 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID" +
 		" --update-parallelism 1 --update-delay 10s" +
 		" --label " + labelPair + " --container-label " + labelPair +
-		envFlag("--env", "COAMING_AGENT_URL", p.Endpoint) +
+		envFlag("--env", "TIERPLAN_AGENT_URL", p.Endpoint) +
 		insecureFlag("--env", p) +
-		optionalEnvFlag("--env", "COAMING_AGENT_PIN", p.Pin) +
-		envFlag("--env", "COAMING_AGENT_JOIN_TOKEN_FILE", tokenFilePath) +
+		optionalEnvFlag("--env", "TIERPLAN_AGENT_PIN", p.Pin) +
+		envFlag("--env", "TIERPLAN_AGENT_JOIN_TOKEN_FILE", tokenFilePath) +
 		" " + image
 
 	in.StandaloneCommand = " docker run -d --name " + ServiceName + " --restart unless-stopped" +
@@ -186,10 +186,10 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" -v " + dockerSock + ":" + dockerSock + " -v " + VolumeName + ":" + stateDir +
 		" -v " + hostRouteSrc + ":" + hostRouteDst + ":ro" +
 		" --label " + labelPair +
-		envFlag("-e", "COAMING_AGENT_URL", p.Endpoint) +
+		envFlag("-e", "TIERPLAN_AGENT_URL", p.Endpoint) +
 		insecureFlag("-e", p) +
-		optionalEnvFlag("-e", "COAMING_AGENT_PIN", p.Pin) +
-		envFlag("-e", "COAMING_AGENT_JOIN_TOKEN", p.Token) +
+		optionalEnvFlag("-e", "TIERPLAN_AGENT_PIN", p.Pin) +
+		envFlag("-e", "TIERPLAN_AGENT_JOIN_TOKEN", p.Token) +
 		" " + image
 
 	if p.Generation > 1 {
@@ -207,7 +207,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 }
 
 // CleanupCommands are the commands that take the agent off a host by hand, for hosts
-// whose agent Coaming could not uninstall: offline, refusing self-update, or no answer
+// whose agent TierPlan could not uninstall: offline, refusing self-update, or no answer
 // (D-30). generation is the join token's current generation, which names the swarm
 // secret. They carry no join token.
 func CleanupCommands(generation int) (swarm, standalone string) {
@@ -222,7 +222,7 @@ func CleanupCommands(generation int) (swarm, standalone string) {
 // version_incompatible refusal shows (D-25). A swarm updates its service in
 // place and keeps its environment, so it needs no switch. A standalone host
 // recreates the container with the same flags, including the agent's
-// COAMING_AGENT_ALLOW_INSECURE when the install had it (a development server and a
+// TIERPLAN_AGENT_ALLOW_INSECURE when the install had it (a development server and a
 // plain address, T-02-31), so a recreated dev agent keeps dialing; its state
 // volume already holds the agent's identity, so no join token goes in. An
 // unknown type, a value that could escape its quotes, or a standalone endpoint
@@ -248,9 +248,9 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 			" -v " + dockerSock + ":" + dockerSock + " -v " + VolumeName + ":" + stateDir +
 			" -v " + hostRouteSrc + ":" + hostRouteDst + ":ro" +
 			" --label " + labelPair +
-			envFlag("-e", "COAMING_AGENT_URL", p.Endpoint) +
+			envFlag("-e", "TIERPLAN_AGENT_URL", p.Endpoint) +
 			insecureFlag("-e", p) +
-			optionalEnvFlag("-e", "COAMING_AGENT_PIN", p.Pin) +
+			optionalEnvFlag("-e", "TIERPLAN_AGENT_PIN", p.Pin) +
 			" " + image
 	}
 	return ""
@@ -321,7 +321,7 @@ func insecureFlag(flag string, p InstallParams) string {
 	if !p.agentSwitch() {
 		return ""
 	}
-	return envFlag(flag, "COAMING_AGENT_ALLOW_INSECURE", "true")
+	return envFlag(flag, "TIERPLAN_AGENT_ALLOW_INSECURE", "true")
 }
 
 // insecureYAML is the same switch as a line of a compose environment block.
@@ -329,7 +329,7 @@ func insecureYAML(p InstallParams) string {
 	if !p.agentSwitch() {
 		return ""
 	}
-	return "      COAMING_AGENT_ALLOW_INSECURE: " + yamlString("true") + "\n"
+	return "      TIERPLAN_AGENT_ALLOW_INSECURE: " + yamlString("true") + "\n"
 }
 
 func optionalEnvFlag(flag, name, value string) string {
@@ -352,21 +352,21 @@ func yamlString(v string) string {
 func swarmStack(p InstallParams, image, secret string) string {
 	var b strings.Builder
 	b.WriteString("# Create the secret first:  printf %s " + sq(p.Token) + " | docker secret create " + secret + " -\n")
-	b.WriteString("# Then deploy this file:  docker stack deploy -c coaming-agent.yml coaming\n")
+	b.WriteString("# Then deploy this file:  docker stack deploy -c tierplan-agent.yml tierplan\n")
 	b.WriteString("services:\n")
 	b.WriteString("  " + ServiceName + ":\n")
 	b.WriteString("    image: " + image + "\n")
 	b.WriteString("    read_only: true\n")
 	b.WriteString("    cap_drop:\n      - ALL\n")
 	b.WriteString("    cap_add:\n      - SETUID\n      - SETGID\n")
-	b.WriteString("    labels:\n      coaming.agent: \"true\"\n")
+	b.WriteString("    labels:\n      tierplan.agent: \"true\"\n")
 	b.WriteString("    environment:\n")
-	b.WriteString("      COAMING_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
+	b.WriteString("      TIERPLAN_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
 	b.WriteString(insecureYAML(p))
 	if p.Pin != "" {
-		b.WriteString("      COAMING_AGENT_PIN: " + yamlString(p.Pin) + "\n")
+		b.WriteString("      TIERPLAN_AGENT_PIN: " + yamlString(p.Pin) + "\n")
 	}
-	b.WriteString("      COAMING_AGENT_JOIN_TOKEN_FILE: " + tokenFilePath + "\n")
+	b.WriteString("      TIERPLAN_AGENT_JOIN_TOKEN_FILE: " + tokenFilePath + "\n")
 	b.WriteString("    volumes:\n")
 	b.WriteString("      - " + dockerSock + ":" + dockerSock + "\n")
 	b.WriteString("      - " + VolumeName + ":" + stateDir + "\n")
@@ -377,7 +377,7 @@ func swarmStack(p InstallParams, image, secret string) string {
 	b.WriteString("      mode: global\n")
 	b.WriteString("      placement:\n        constraints:\n          - node.platform.os == linux\n")
 	b.WriteString("      update_config:\n        parallelism: 1\n        delay: 10s\n")
-	b.WriteString("      labels:\n        coaming.agent: \"true\"\n")
+	b.WriteString("      labels:\n        tierplan.agent: \"true\"\n")
 	b.WriteString("volumes:\n  " + VolumeName + ":\n    name: " + VolumeName + "\n")
 	b.WriteString("secrets:\n  " + secret + ":\n    external: true\n")
 	return b.String()
@@ -385,7 +385,7 @@ func swarmStack(p InstallParams, image, secret string) string {
 
 func standaloneCompose(p InstallParams, image string) string {
 	var b strings.Builder
-	b.WriteString("# Start it with:  docker compose -f coaming-agent.yml up -d\n")
+	b.WriteString("# Start it with:  docker compose -f tierplan-agent.yml up -d\n")
 	b.WriteString("services:\n")
 	b.WriteString("  " + ServiceName + ":\n")
 	b.WriteString("    image: " + image + "\n")
@@ -395,14 +395,14 @@ func standaloneCompose(p InstallParams, image string) string {
 	b.WriteString("    cap_drop:\n      - ALL\n")
 	b.WriteString("    cap_add:\n      - SETUID\n      - SETGID\n")
 	b.WriteString("    security_opt:\n      - no-new-privileges:true\n")
-	b.WriteString("    labels:\n      coaming.agent: \"true\"\n")
+	b.WriteString("    labels:\n      tierplan.agent: \"true\"\n")
 	b.WriteString("    environment:\n")
-	b.WriteString("      COAMING_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
+	b.WriteString("      TIERPLAN_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
 	b.WriteString(insecureYAML(p))
 	if p.Pin != "" {
-		b.WriteString("      COAMING_AGENT_PIN: " + yamlString(p.Pin) + "\n")
+		b.WriteString("      TIERPLAN_AGENT_PIN: " + yamlString(p.Pin) + "\n")
 	}
-	b.WriteString("      COAMING_AGENT_JOIN_TOKEN: " + yamlString(p.Token) + "\n")
+	b.WriteString("      TIERPLAN_AGENT_JOIN_TOKEN: " + yamlString(p.Token) + "\n")
 	b.WriteString("    volumes:\n")
 	b.WriteString("      - " + dockerSock + ":" + dockerSock + "\n")
 	b.WriteString("      - " + VolumeName + ":" + stateDir + "\n")

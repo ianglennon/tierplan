@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -16,9 +16,9 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 )
 
 // Review and apply a full service spec (plan 06-18, RES-03, D-03, D-08, D-09, D-13). Docker is a
@@ -651,7 +651,7 @@ func TestApplyCleanupThatCouldNotFinishNamesWhatIsLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(prob.Detail, "Couldn't update api. Docker rejected these settings: ") ||
-		!strings.HasSuffix(prob.Detail, " Coaming couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs.") {
+		!strings.HasSuffix(prob.Detail, " TierPlan couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs.") {
 		t.Errorf("detail = %q, want the reason followed by what could not be removed", prob.Detail)
 	}
 	if !strings.HasPrefix(prob.at("notRemoved"), "secret:db-pass") {
@@ -1208,7 +1208,7 @@ func TestServiceApplyStagedNetworkNotAllocated(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
 		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
 	}
-	for _, want := range []string{"The swarm didn't give network front an address range", "Coaming removed it again", "network:front"} {
+	for _, want := range []string{"The swarm didn't give network front an address range", "TierPlan removed it again", "network:front"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("the problem lacks %q: %s", want, rec.Body)
 		}
@@ -1276,7 +1276,7 @@ func TestServiceApplyStagedNetworkNotAllocatedAndNotRemovable(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
 		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
 	}
-	if !strings.Contains(rec.Body.String(), "Coaming couldn't remove it, so delete front on the Networks page.") || strings.Contains(rec.Body.String(), "removed it again") {
+	if !strings.Contains(rec.Body.String(), "TierPlan couldn't remove it, so delete front on the Networks page.") || strings.Contains(rec.Body.String(), "removed it again") {
 		t.Errorf("the problem does not say the stub is left: %s", rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "network is busy") {

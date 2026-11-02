@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -17,8 +17,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/proto/hostroute"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/hostroute"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // HostNetSource reads the host routes of one connected agent through the tunnel.
@@ -69,8 +69,8 @@ type NodeRoutes struct {
 	// host.
 	Node, NodeID string
 	State        string
-	// Local is true for the host Coaming itself runs on, read from the route file
-	// mounted into Coaming's own container; the fix for State unmounted is then
+	// Local is true for the host TierPlan itself runs on, read from the route file
+	// mounted into TierPlan's own container; the fix for State unmounted is then
 	// worded for that container and not for an agent.
 	Local bool
 	// Routes are the node's routes, masked and sorted by address.
@@ -85,8 +85,8 @@ type HostRoutesOptions struct {
 	Now func() time.Time
 	// TTL is how long an agent's routes are kept; zero means 5 minutes.
 	TTL time.Duration
-	// LocalRouteFile is the host's route file as mounted into Coaming's own
-	// container, for an environment on Coaming's own host. Empty means none.
+	// LocalRouteFile is the host's route file as mounted into TierPlan's own
+	// container, for an environment on TierPlan's own host. Empty means none.
 	LocalRouteFile string
 	// Log receives what an agent sent that was refused; nil discards it.
 	Log *slog.Logger
@@ -322,16 +322,16 @@ func sortRoutes(routes []hostroute.Route) {
 	})
 }
 
-// readLocal answers for the host Coaming itself runs on from the route file mounted
-// read-only into Coaming's own container, parsed with the same limits as an agent's.
+// readLocal answers for the host TierPlan itself runs on from the route file mounted
+// read-only into TierPlan's own container, parsed with the same limits as an agent's.
 // A file that is missing, unreadable or over the limits is "unmounted": there is
-// nothing to check against, and the fix is to mount the file into Coaming's container.
+// nothing to check against, and the fix is to mount the file into TierPlan's container.
 func (h *HostRoutes) readLocal(node, nodeID string) NodeRoutes {
 	n := NodeRoutes{Node: node, NodeID: nodeID, Local: true, State: RouteCheckUnmounted}
 	if h.local == "" {
 		return n
 	}
-	f, err := os.Open(h.local) //nolint:gosec // the path is the operator's setting (COAMING_HOST_ROUTE_FILE), never a request's
+	f, err := os.Open(h.local) //nolint:gosec // the path is the operator's setting (TIERPLAN_HOST_ROUTE_FILE), never a request's
 	if err != nil {
 		return n
 	}

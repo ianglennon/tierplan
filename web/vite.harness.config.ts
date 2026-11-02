@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -18,7 +18,7 @@ export default defineConfig({
   },
   server: {
     // Vite otherwise answers only localhost and IP addresses. The suite opens
-    // the page as http://coaming.test, a LAN-style name (an insecure context).
-    allowedHosts: ["coaming.test"],
+    // the page as http://tierplan.test, a LAN-style name (an insecure context).
+    allowedHosts: ["tierplan.test"],
   },
 });

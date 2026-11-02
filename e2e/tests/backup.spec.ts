@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Golden path 7 (plan 03-29, ROADMAP Phase 3 success criterion 5): an encrypted
 // backup is downloaded from Settings > Backup, something is changed, and the
 // backup is restored over the running instance with the typed confirmation.
-// Coaming restarts into the backup, says "Backup restored", and the admin signs
+// TierPlan restarts into the backup, says "Backup restored", and the admin signs
 // in again with an account that came from the backup; what was made after the
 // backup is gone (PLAT-03).
 //
@@ -32,7 +32,7 @@ test("a backup is downloaded, restored over the running instance, and the admin 
 
   await test.step("download a backup with a passphrase", async () => {
     await page.goto(at("/settings/backup"));
-    await expect(page.getByRole("heading", { name: "Back up and restore Coaming" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Back up and restore TierPlan" })).toBeVisible();
     const card = page.getByRole("region", { name: "Download a backup" });
     await card.getByLabel("Passphrase", { exact: true }).fill(PASSPHRASE);
     await card.getByLabel("Confirm passphrase").fill(PASSPHRASE);
@@ -41,7 +41,7 @@ test("a backup is downloaded, restored over the running instance, and the admin 
       page.waitForEvent("download"),
       card.getByRole("button", { name: "Download backup" }).click(),
     ]);
-    expect(download.suggestedFilename()).toMatch(/^coaming-backup-\d{8}-\d{4}\.coaming$/);
+    expect(download.suggestedFilename()).toMatch(/^tierplan-backup-\d{8}-\d{4}\.tierplan$/);
     file = info.outputPath(download.suggestedFilename());
     await download.saveAs(file);
     await expect(page.getByText("Backup downloaded.")).toBeVisible();
@@ -66,7 +66,7 @@ test("a backup is downloaded, restored over the running instance, and the admin 
     await expect(card).toContainText(/\d+ users?/);
   });
 
-  await test.step("restore it with the instance name typed, and wait for Coaming to come back", async () => {
+  await test.step("restore it with the instance name typed, and wait for TierPlan to come back", async () => {
     const card = page.getByRole("region", { name: "Restore from a backup" });
     await card.getByRole("button", { name: "Restore backup" }).click();
 
@@ -89,7 +89,7 @@ test("a backup is downloaded, restored over the running instance, and the admin 
 
   await test.step("sign in as the admin from the backup", async () => {
     await page.getByRole("link", { name: "Go to sign-in" }).click();
-    await expect(page).toHaveURL(/\/coaming\/login/);
+    await expect(page).toHaveURL(/\/tierplan\/login/);
     // Right after the restart into the backup, a busy runner can answer the sign-in
     // page's first request with an error; press Retry as a person would.
     const username = page.getByLabel("Username");
@@ -120,7 +120,7 @@ test("a backup is downloaded, restored over the running instance, and the admin 
         .getByRole("cell", { name: "Restored backup", exact: true })
         .first(),
     ).toBeVisible();
-    expect(compose("exec", "-T", "coaming", "coaming", "audit", "verify")).toMatch(
+    expect(compose("exec", "-T", "tierplan", "tierplan", "audit", "verify")).toMatch(
       /^audit chain OK: \d+ entries/m,
     );
   });

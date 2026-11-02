@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -16,7 +16,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 func copyOf(compose string, vars ...stacks.Var) stacks.WorkingCopy {
@@ -28,12 +28,12 @@ func copyOf(compose string, vars ...stacks.Var) stacks.WorkingCopy {
 
 func TestServerEnvironmentNeverLeaks(t *testing.T) {
 	// Not parallel: t.Setenv changes the test process's environment.
-	t.Setenv("COAMING_LEAK_PROBE", "leaked")
+	t.Setenv("TIERPLAN_LEAK_PROBE", "leaked")
 	const compose = `services:
   web:
     image: nginx:1.27-alpine
     environment:
-      PROBE: ${COAMING_LEAK_PROBE:-unset}
+      PROBE: ${TIERPLAN_LEAK_PROBE:-unset}
       FROM_TABLE: ${FROM_TABLE:-none}
 `
 	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
@@ -192,10 +192,10 @@ func TestLoadNamesThePlainReferencesThatFoundNothing(t *testing.T) {
 
 func TestLoadAnswersTheSameWhateverTheServerEnvironmentHolds(t *testing.T) {
 	// Not parallel: t.Setenv changes the test process's environment.
-	t.Setenv("COAMING_LEAK_PROBE", "leaked")
+	t.Setenv("TIERPLAN_LEAK_PROBE", "leaked")
 	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
 		Name: "probe", Target: stacks.TargetSwarm,
-		Copy: copyOf("services:\n  web:\n    image: x:1\n    hostname: ${COAMING_LEAK_PROBE}\n"),
+		Copy: copyOf("services:\n  web:\n    image: x:1\n    hostname: ${TIERPLAN_LEAK_PROBE}\n"),
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -203,7 +203,7 @@ func TestLoadAnswersTheSameWhateverTheServerEnvironmentHolds(t *testing.T) {
 	if got := loaded.Project.Services["web"].Hostname; got != "" {
 		t.Errorf("hostname = %q: the server's own environment reached interpolation", got)
 	}
-	if !reflect.DeepEqual(loaded.Unset, []string{"COAMING_LEAK_PROBE"}) {
+	if !reflect.DeepEqual(loaded.Unset, []string{"TIERPLAN_LEAK_PROBE"}) {
 		t.Errorf("Unset = %v, want the probe named as unset: the table is the only source", loaded.Unset)
 	}
 }

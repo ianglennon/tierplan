@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -12,10 +12,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The secrets and configs of a swarm deploy, against the fake manager.
@@ -23,8 +23,8 @@ import (
 // ownedLabels are the labels the secret a stack made from a file carries.
 func ownedLabels(stack, id, object, content string) map[string]string {
 	return map[string]string{
-		"com.docker.stack.namespace": stack, "coaming.stack.id": id,
-		"coaming.stack.object": object, "coaming.stack.object.hash": stacks.ObjectHash(object, []byte(content)),
+		"com.docker.stack.namespace": stack, "tierplan.stack.id": id,
+		"tierplan.stack.object": object, "tierplan.stack.object.hash": stacks.ObjectHash(object, []byte(content)),
 	}
 }
 
@@ -70,8 +70,8 @@ func TestDeploySwarmCreatesAHashedConfigFromInlineContent(t *testing.T) {
 		t.Fatalf("config creates = %+v, want one named %s", creates, name)
 	}
 	labels := creates[0].Labels
-	if labels["coaming.stack.object"] != "conf" || labels["coaming.stack.object.hash"] != hash ||
-		labels["com.docker.stack.namespace"] != "web" || labels["coaming.stack.id"] != "stack-web" || labels["team"] != "web" {
+	if labels["tierplan.stack.object"] != "conf" || labels["tierplan.stack.object.hash"] != hash ||
+		labels["com.docker.stack.namespace"] != "web" || labels["tierplan.stack.id"] != "stack-web" || labels["team"] != "web" {
 		t.Errorf("config labels = %v, want the four stack labels over the file's own", labels)
 	}
 	refs := rig.fake.ServiceCreates()[0].Spec.TaskTemplate.ContainerSpec.Configs
@@ -218,7 +218,7 @@ func TestANameAnotherOwnerHoldsIsNotReusedOrReplaced(t *testing.T) {
 func TestAReplacedSecretIsKeptWhenAServiceUpdateFails(t *testing.T) {
 	t.Parallel()
 	oldName := hashedName("web", "tok", "one")
-	owned := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
+	owned := map[string]string{"com.docker.stack.namespace": "web", "tierplan.stack.id": "stack-web"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Secrets = []dockertest.FakeSecret{{ID: "oldsec", Name: oldName, Labels: ownedLabels("web", "stack-web", "tok", "one")}}
 	}, dockertest.FakeService{
@@ -268,7 +268,7 @@ func TestAReplacedSecretAServiceOfAnotherOwnerUsesIsLeftInPlace(t *testing.T) {
 func TestAnObjectTheStackDidNotMakeFromAFileIsNeverRemoved(t *testing.T) {
 	t.Parallel()
 	// Carries the stack's ID but not the object label: a person put it there.
-	mine := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
+	mine := map[string]string{"com.docker.stack.namespace": "web", "tierplan.stack.id": "stack-web"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Secrets = []dockertest.FakeSecret{{ID: "byhand", Name: "web_added_by_hand", Labels: mine}}
 	})
@@ -302,8 +302,8 @@ func (b *lockedBuffer) String() string {
 }
 
 // TestEnsureNetworksOwnsARecordedNetwork: a network an adopted stack recorded when it was adopted is the stack's
-// whatever coaming.stack.id it carries, so the deploy neither creates it nor answers network_conflict; a network of
-// the same name that a stack Coaming holds does not own is a conflict (D-18, T-08-61).
+// whatever tierplan.stack.id it carries, so the deploy neither creates it nor answers network_conflict; a network of
+// the same name that a stack TierPlan holds does not own is a conflict (D-18, T-08-61).
 func TestEnsureNetworksOwnsARecordedNetwork(t *testing.T) {
 	t.Parallel()
 	held := func(c *dockertest.FakeConfig) {

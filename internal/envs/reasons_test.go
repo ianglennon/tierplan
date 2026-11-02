@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // The mapping from an observation to its D-40 code (plan 02-11, ENV-08). The

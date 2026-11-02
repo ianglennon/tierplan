@@ -52,8 +52,8 @@
       },
       "unhealthy": "Unhealthy",
       "self": {
-        "server": "Coaming (this instance)",
-        "agent": "Coaming agent"
+        "server": "TierPlan (this instance)",
+        "agent": "TierPlan agent"
       },
       "ports": {
         "more": "+{{count}}"

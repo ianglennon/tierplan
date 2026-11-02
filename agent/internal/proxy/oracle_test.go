@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/coaming/proto/hostpath"
+	"github.com/ianglennon/tierplan/proto/hostpath"
 )
 
 // The oracle below is the fuzz invariant for local volumes. It is written from

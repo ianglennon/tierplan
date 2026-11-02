@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -16,13 +16,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 const (
@@ -209,13 +209,13 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 		Summary: "Deploy a stack's draft",
 		Description: "Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. " +
 			"draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). " +
-			"On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and coaming.stack.id, and coaming.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. " +
-			"On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and coaming.stack.id, and each service com.docker.stack.image with the image as written. " +
-			"A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to COAMING_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. " +
+			"On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and tierplan.stack.id, and tierplan.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. " +
+			"On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and tierplan.stack.id, and each service com.docker.stack.image with the image as written. " +
+			"A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to TIERPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
 			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
 			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
-			"A name that something Coaming does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). " +
+			"A name that something TierPlan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. " +
 			"Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). " +
 			"With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. " +
@@ -497,7 +497,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		}
 	}
 
-	// What the caller may not deploy and a name that something Coaming does not manage holds are
+	// What the caller may not deploy and a name that something TierPlan does not manage holds are
 	// judged next (07-18 judges them once more under the lock). Nothing is stored or sent until they pass.
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
 	pol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, plan)
@@ -1076,7 +1076,7 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		if err := repo.SetStopped(wctx, st.ID, false); err != nil {
 			d.Log.Warn("could not record that a deployed stack is running", "stack", st.ID, "error", err)
 		}
-		// The first good deploy of an adopted stack has put Coaming's labels on every service: the adoption is no
+		// The first good deploy of an adopted stack has put TierPlan's labels on every service: the adoption is no
 		// longer pending, and the workloads are owned by the stack's ID alone from now on (D-16).
 		if st.Adoption.Pending {
 			if err := repo.ClearAdoptionPending(wctx, st.ID); err != nil {
@@ -1235,7 +1235,7 @@ func rollbackPrepareProblem(err error, m stacks.Masker) error {
 	}
 }
 
-// nameClashProblem is the 409 for a name that something Coaming does not manage holds.
+// nameClashProblem is the 409 for a name that something TierPlan does not manage holds.
 func nameClashProblem(name string) error {
 	return &huma.ErrorModel{
 		Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,

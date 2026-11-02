@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package netspace is the address arithmetic of networks and address pools (NET-02): how
 // much of a pool is used, what the largest free block is, which state a meter is in, and

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package access_test
 
@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/access"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/access"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // The environment Access tab's data (plan 03-20, AUTH-06, D-06, D-12, D-25).

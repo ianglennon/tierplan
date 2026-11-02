@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { describe, expect, it } from "vitest";
 
@@ -72,7 +72,7 @@ describe("editRefusalOf an overlap the swarm refuses", () => {
 describe("editRefusalOf a network the swarm did not allocate", () => {
   it("shows the server's sentence, which names the network and says it was removed", () => {
     const detail =
-      "The swarm didn't give network front an address range, so Coaming removed it again. Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet.";
+      "The swarm didn't give network front an address range, so TierPlan removed it again. Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet.";
     const r = editRefusalOf(
       t,
       new ServiceActionError(422, "network_not_allocated", new Map(), detail),

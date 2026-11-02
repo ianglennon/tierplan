@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 
@@ -11,7 +11,7 @@ interface UnmanagedResourcesProps {
   name: string;
 }
 
-// UnmanagedResources is the Resources tab of a stack Coaming did not make (UI-SPEC "Unmanaged stack page"): the
+// UnmanagedResources is the Resources tab of a stack TierPlan did not make (UI-SPEC "Unmanaged stack page"): the
 // cards of a managed stack's tab over what the stack's services use. Its ownership badges preview adopting: a
 // network or a volume that carries the stack's label reads Stack, any other External, and a secret or a config
 // always External. A card with nothing in it is left out. Every name is Docker's own text, drawn as text.

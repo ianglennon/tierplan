@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import {
   Document,
@@ -29,7 +29,7 @@ export type ParseResult =
   | { ok: false; line: number; message: string };
 
 // The one thing kept in browser storage about the editor (UI-SPEC "Storage").
-export const SPEC_FORMAT_KEY = "coaming.spec-format";
+export const SPEC_FORMAT_KEY = "tierplan.spec-format";
 
 type Params = Record<string, unknown>;
 

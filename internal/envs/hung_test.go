@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -17,7 +17,7 @@ type hungTransport struct{ path string }
 
 func newHungTransport(t *testing.T) *hungTransport {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "cmhung")
+	dir, err := os.MkdirTemp("", "tphung")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package jobs_test
 
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
 func TestCleanRemovesControlCharactersExceptATab(t *testing.T) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Small stack subnets (Phase 10, D-20, NET-06) on the swarm engine: a deploy gives the networks it is about to
@@ -196,7 +196,7 @@ func TestSmallSubnetSkipsExisting(t *testing.T) {
 	if err := rig.deps.Aggregator.WriteOnManager(ctx, rig.envID, func(c *dockerx.Client) error {
 		_, _, e := c.NetworkCreate(ctx, dockerx.NetworkCreateSpec{
 			Name: "shop_backend", Driver: "overlay", Scope: "swarm", Subnet: "10.0.7.0/24",
-			Labels: map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": d.st.ID},
+			Labels: map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": d.st.ID},
 		})
 		return e
 	}); err != nil {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package agents owns what makes an agent trusted: the join token an admin
 // copies onto a host, the per-environment certificate authority, and the
@@ -31,15 +31,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // ErrInvalidName means an environment name is longer than 64 characters.
@@ -69,7 +69,7 @@ const (
 	// KindAgent is the kind of an environment reached through agents.
 	KindAgent = "agent"
 
-	tokenPrefix = "cmjt_"
+	tokenPrefix = "tpjt_"
 	// secretBytes is the entropy of a join token: 256 bits.
 	secretBytes = 32
 	maxNameLen  = 64
@@ -564,7 +564,7 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: rbac.System(enrolActor).AuditActor(), Action: audit.ActionAgentEnrolled,
 		TargetType: targetAgent, TargetID: agentID, EnvID: envID, Result: audit.ResultSuccess,
-		IP: req.IP, UserAgent: "coaming-agent/" + req.AgentVersion,
+		IP: req.IP, UserAgent: "tierplan-agent/" + req.AgentVersion,
 		Details: map[string]string{"fingerprint": fingerprint, "node": host, "serial": leaf.Serial},
 	}); err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("audit agent enrolled: %w", err)
@@ -1026,7 +1026,7 @@ func (s *Service) Renew(ctx context.Context, agentID, ip string) (tunnel.RenewRe
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: rbac.System(enrolActor).AuditActor(), Action: audit.ActionAgentCertRenewed,
 		TargetType: targetAgent, TargetID: agentID, EnvID: row.EnvID, Result: audit.ResultSuccess,
-		IP: ip, UserAgent: "coaming-agent/" + cur.AgentVersion,
+		IP: ip, UserAgent: "tierplan-agent/" + cur.AgentVersion,
 		Details: map[string]string{
 			"fingerprint": fingerprint, "node": cur.Name, "serial": leaf.Serial,
 			"not_after": leaf.NotAfter.Format(time.RFC3339), "previous_serial": cur.CertSerial,
@@ -1111,7 +1111,7 @@ func (s *Service) checkBlocked(ctx context.Context, q *sqlc.Queries, envID strin
 		if n > 0 {
 			return &tunnel.RefuseError{
 				Code:        wire.ReasonBlocked,
-				Detail:      "an administrator removed this host from the environment; it must be unblocked in Coaming before it can enrol again",
+				Detail:      "an administrator removed this host from the environment; it must be unblocked in TierPlan before it can enrol again",
 				AuditReason: "blocked_" + id.kind,
 			}
 		}
@@ -1239,7 +1239,7 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 		})
 		return tunnel.HelloResult{}, &tunnel.Refusal{
 			Code:        wire.ReasonUnknownAgent,
-			Detail:      "this agent was enrolled after the backup this Coaming was restored from",
+			Detail:      "this agent was enrolled after the backup this TierPlan was restored from",
 			AuditReason: wire.ReasonUnknownAgent,
 		}
 	case err != nil:
@@ -1273,7 +1273,7 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	return tunnel.HelloResult{AgentID: agentID, EnvID: envID, NotAfter: leaf.NotAfter}, nil
 }
 
-// newToken makes a join token cmjt_<envId>_<base64url of 32 random bytes> and
+// newToken makes a join token tpjt_<envId>_<base64url of 32 random bytes> and
 // returns it with its secret part, the only part that is hashed.
 func newToken(envID string) (token, secret string, err error) {
 	b := make([]byte, secretBytes)

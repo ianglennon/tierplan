@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// G-02-1a: Coaming opened over plain http by a LAN host name has no
+// G-02-1a: TierPlan opened over plain http by a LAN host name has no
 // navigator.clipboard, so Copy uses the legacy textarea fallback. Inside a
 // modal Dialog the focus trap used to steal the textarea's focus and nothing
-// was copied. These tests run on http://coaming.test (an insecure context) and
+// was copied. These tests run on http://tierplan.test (an insecure context) and
 // read the clipboard back from a localhost page.
 
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 // Copied from web/harness/copy/main.tsx.
-const TOKEN = "cmjt_harness_S3CRET";
-const COMMAND = ` docker run -d --name coaming-agent -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://coaming.test/agent/connect' ghcr.io/ianglennon/coaming-agent:edge`;
+const TOKEN = "tpjt_harness_S3CRET";
+const COMMAND = ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e TIERPLAN_AGENT_URL='wss://tierplan.test/agent/connect' ghcr.io/ianglennon/tierplan-agent:edge`;
 const SENTINEL = "SENTINEL-not-the-command";
 const COPY = "Copy the install command";
 const COPIED = "Copied the install command";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package convert
 
@@ -12,19 +12,19 @@ import (
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/mount"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // serviceMounts converts a service's volumes to swarm mounts, in the order the file lists them.
 //
 // The conversion is ported from cli/compose/convert/volume.go in docker/cli (Apache-2.0),
-// onto the compose-go v2 types, with three differences that are Coaming's:
+// onto the compose-go v2 types, with three differences that are TierPlan's:
 //
 //   - a bind source must be an absolute path (ErrRelativeBind): a stack's compose file is not on
 //     disk, so a relative source would only mean a path on the server (D-06);
 //   - a named pipe mount is refused: a Windows pipe has no meaning on the Linux nodes a swarm
 //     stack runs on here;
-//   - the volume's ownership labels include coaming.stack.id, and the stack's own labels win over
+//   - the volume's ownership labels include tierplan.stack.id, and the stack's own labels win over
 //     any the file sets under the same key.
 //
 // Options are written only when the file sets something for them, so a plain bind is a mount

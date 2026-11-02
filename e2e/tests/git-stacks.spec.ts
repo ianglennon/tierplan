@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Golden path 9 (plan 09-33): a stack from a git repository, end to end through the built image behind the reverse
-// proxy at /coaming. The git server is a service of this topology (e2e/gitserver) with a certificate of its own, so the
+// proxy at /tierplan. The git server is a service of this topology (e2e/gitserver) with a certificate of its own, so the
 // path is what a self-hoster with a private CA does: add the repository with its CA under Advanced, test it, create a
 // stack from a folder with the From git page, review and deploy it, push a change to the repository, press Check now,
 // see the stack Behind by one commit, press Review update, deploy, and see it In sync (GIT-01 to GIT-08).
 //
-// The engine Coaming manages has no route to a registry, and a stack pins every image to a digest a registry gave, so it
+// The engine TierPlan manages has no route to a registry, and a stack pins every image to a digest a registry gave, so it
 // runs a registry of its own on its loopback (seedStackImage), as the stacks spec does. The repository's compose file
 // names that image. Nothing here reaches the network outside the topology.
 
@@ -131,7 +131,7 @@ test("add a repository, create a stack from a folder, deploy it, and pull an upd
       await expect(page.getByText("Found 1 service")).toBeVisible({ timeout: 60_000 });
       await shot(page, "2-from-git");
       await page.getByRole("button", { name: "Create stack" }).click();
-      await expect(page).toHaveURL(new RegExp(`/coaming/env/${envId}/stacks/[^/]+`), {
+      await expect(page).toHaveURL(new RegExp(`/tierplan/env/${envId}/stacks/[^/]+`), {
         timeout: 60_000,
       });
     });

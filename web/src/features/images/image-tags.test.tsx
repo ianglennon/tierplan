@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -155,7 +155,7 @@ describe("ImageTags", () => {
     expect(await screen.findByText("No repository to browse")).toBeTruthy();
     expect(
       screen.getByText(
-        "This image has no name or registry digest, so Coaming can't tell where it came from.",
+        "This image has no name or registry digest, so TierPlan can't tell where it came from.",
       ),
     ).toBeTruthy();
     expect(listed).toEqual([]);

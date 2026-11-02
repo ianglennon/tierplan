@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup
 
@@ -33,9 +33,9 @@ func TestPreRestorePrunerKeepsTheNewestThreeAndTouchesNoOtherFile(t *testing.T) 
 	for _, name := range []string{
 		"prerestore-20260101T000000Z.db", "prerestore-20260102T000000Z.db", "prerestore-20260103T000000Z.db",
 		"prerestore-20260104T000000Z.db", "prerestore-20260105T000000Z.db",
-		"coaming-v0.1.0-20260101T000000Z.db", "coaming-v0.1.1-20260102T000000Z.db",
-		"coaming-v0.1.2-20260103T000000Z.db", "coaming-v0.1.3-20260104T000000Z.db",
-		"coaming-backup-20260101-0000.coaming", "prerestore-notes.txt",
+		"tierplan-v0.1.0-20260101T000000Z.db", "tierplan-v0.1.1-20260102T000000Z.db",
+		"tierplan-v0.1.2-20260103T000000Z.db", "tierplan-v0.1.3-20260104T000000Z.db",
+		"tierplan-backup-20260101-0000.tierplan", "prerestore-notes.txt",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
@@ -73,7 +73,7 @@ func TestPreRestorePrunerOnAMissingDirectoryIsNotAnError(t *testing.T) {
 func TestFallbackSnapshotKeepsTheWriteAheadLogBesideTheCopy(t *testing.T) {
 	dir := t.TempDir()
 	src := t.TempDir()
-	live, err := sql.Open("sqlite", "file:"+filepath.Join(src, "coaming.db")+"?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)")
+	live, err := sql.Open("sqlite", "file:"+filepath.Join(src, "tierplan.db")+"?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestFallbackSnapshotKeepsTheWriteAheadLogBesideTheCopy(t *testing.T) {
 		}
 	}
 	// Copy the files as a crashed instance would have left them.
-	for _, name := range []string{"coaming.db", "coaming.db-wal"} {
+	for _, name := range []string{"tierplan.db", "tierplan.db-wal"} {
 		b, err := os.ReadFile(filepath.Join(src, name)) //nolint:gosec // a file in the test directory
 		if err != nil {
 			t.Fatal(err)
@@ -96,7 +96,7 @@ func TestFallbackSnapshotKeepsTheWriteAheadLogBesideTheCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if info, err := os.Stat(filepath.Join(dir, "coaming.db-wal")); err != nil || info.Size() == 0 {
+	if info, err := os.Stat(filepath.Join(dir, "tierplan.db-wal")); err != nil || info.Size() == 0 {
 		t.Fatalf("the test needs an unfolded log: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestFallbackSnapshotKeepsTheWriteAheadLogBesideTheCopy(t *testing.T) {
 		t.Fatalf("the write-ahead log was not saved beside the fallback snapshot: %v", err)
 	}
 	// What Swap does next.
-	if err := os.Remove(filepath.Join(dir, "coaming.db-wal")); err != nil {
+	if err := os.Remove(filepath.Join(dir, "tierplan.db-wal")); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", "file:"+snap)

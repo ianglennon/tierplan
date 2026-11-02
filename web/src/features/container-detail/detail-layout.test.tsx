@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -54,7 +54,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     selfKind: "",
     project: "",
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     service: "",
     muted: false,
     ...extra,
@@ -244,10 +244,10 @@ describe("the page frame", () => {
     expect(screen.queryByRole("heading", { name: "web" })).toBeNull();
   });
 
-  it("marks Coaming's own containers with the badge", async () => {
+  it("marks TierPlan's own containers with the badge", async () => {
     answer = () => Response.json(detail({ selfKind: "server", isSelf: true }));
     renderAt();
-    expect(await screen.findByText("Coaming (this instance)")).toBeTruthy();
+    expect(await screen.findByText("TierPlan (this instance)")).toBeTruthy();
   });
 });
 
@@ -348,12 +348,12 @@ describe("the header actions follow the state", () => {
     expect(posts()[0]?.body).toEqual({ action: "stop", targets: [{ nodeId: "n1", id: "web-id" }] });
   });
 
-  it("asks for the name to be typed before touching Coaming's own container", async () => {
-    answer = () => Response.json(detail({ name: "coaming", selfKind: "server", isSelf: true }));
+  it("asks for the name to be typed before touching TierPlan's own container", async () => {
+    answer = () => Response.json(detail({ name: "tierplan", selfKind: "server", isSelf: true }));
     renderAt();
     fireEvent.click(await screen.findByRole("button", { name: "Restart" }));
-    const dialog = await screen.findByRole("alertdialog", { name: "Restart coaming?" });
-    expect(within(dialog).getByLabelText("Type coaming to confirm")).toBeTruthy();
+    const dialog = await screen.findByRole("alertdialog", { name: "Restart tierplan?" });
+    expect(within(dialog).getByLabelText("Type tierplan to confirm")).toBeTruthy();
     expect(posts()).toEqual([]);
   });
 
@@ -494,20 +494,20 @@ describe("the Shell tab", () => {
   });
 });
 
-describe("the Shell tab on Coaming's own containers (plan 04-23, D-36)", () => {
+describe("the Shell tab on TierPlan's own containers (plan 04-23, D-36)", () => {
   it.each(["server", "agent"] as const)(
     "is unavailable for %s containers, with the reason, and still shown",
     async (kind) => {
       me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });
       answer = () =>
-        Response.json(detail({ name: "coaming", selfKind: kind, isSelf: kind === "server" }));
+        Response.json(detail({ name: "tierplan", selfKind: kind, isSelf: kind === "server" }));
       renderAt();
-      await screen.findByRole("heading", { name: "coaming" });
+      await screen.findByRole("heading", { name: "tierplan" });
       const tab = await screen.findByRole("tab", { name: "Shell" });
       await waitFor(() => expect(tab.getAttribute("aria-disabled")).toBe("true"));
       expect(tab.textContent).toBe("Shell");
       expect(document.body.textContent).toContain(
-        "Coaming doesn't open shells in its own containers.",
+        "TierPlan doesn't open shells in its own containers.",
       );
     },
   );
@@ -517,7 +517,7 @@ describe("the Shell tab on Coaming's own containers (plan 04-23, D-36)", () => {
     renderAt();
     await screen.findByRole("heading", { name: "web" });
     expect(screen.getByRole("tab", { name: "Shell" }).getAttribute("aria-disabled")).toBeNull();
-    expect(document.body.textContent).not.toContain("Coaming doesn't open shells");
+    expect(document.body.textContent).not.toContain("TierPlan doesn't open shells");
   });
 });
 

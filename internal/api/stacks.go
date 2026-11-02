@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -15,20 +15,20 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/gitconn"
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/gitconn"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 const (
@@ -117,7 +117,7 @@ type StacksDeps struct {
 	Vault *vault.Vault
 	// Clock and ConvergeTimeout are what a swarm deploy waits on and for: the clock its polls and
 	// its timeout run on (nil is the wall clock), and how long each service gets to settle (zero is
-	// ten minutes; COAMING_STACK_CONVERGE_TIMEOUT).
+	// ten minutes; TIERPLAN_STACK_CONVERGE_TIMEOUT).
 	Clock           stackops.Clock
 	ConvergeTimeout time.Duration
 	// Platforms is the server's one memo of the platforms its image lookups found, by repository and digest (an answer of
@@ -167,8 +167,8 @@ type StacksDeps struct {
 	// Envs resolves the environment of a deploy that has no request (StackDeployer); the routes get theirs from the
 	// router. Nil makes such a deploy refuse with environment_not_found.
 	Envs httpx.EnvResolver
-	// SelfContainerID is the ID of the container Coaming runs in and SelfNamespace the swarm namespace of
-	// that container; either is empty when Coaming cannot tell. The lists flag the stack that holds them (D-49).
+	// SelfContainerID is the ID of the container TierPlan runs in and SelfNamespace the swarm namespace of
+	// that container; either is empty when TierPlan cannot tell. The lists flag the stack that holds them (D-49).
 	SelfContainerID, SelfNamespace string
 	// RevisionsKept is how many revisions of each stack are kept (D-01); the server passes the instance
 	// setting. Nil means the default of 20.
@@ -231,8 +231,8 @@ type StackItem struct {
 	ID             string `json:"id" doc:"The stack ID"`
 	Name           string `json:"name" doc:"The stack name, also its swarm namespace or compose project"`
 	Target         string `json:"target" enum:"swarm,standalone" doc:"Where the stack deploys: fixed when it was created, from the kind of the environment"`
-	Source         string `json:"source" enum:"inline,adopted,git,unmanaged" doc:"Where the stack's definition lives: inline (made in Coaming), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Coaming did not make (see unmanaged)"`
-	Managed        bool   `json:"managed" doc:"True for a stack Coaming manages; false for one found on the engine by its labels that Coaming did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy"`
+	Source         string `json:"source" enum:"inline,adopted,git,unmanaged" doc:"Where the stack's definition lives: inline (made in TierPlan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that TierPlan did not make (see unmanaged)"`
+	Managed        bool   `json:"managed" doc:"True for a stack TierPlan manages; false for one found on the engine by its labels that TierPlan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy"`
 	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopping,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
 	LastDeployedBy string `json:"lastDeployedBy" doc:"Who started it; empty when there is none"`
@@ -243,20 +243,20 @@ type StackItem struct {
 	// cache the lists use. They are left out for a stack that was never deployed and for one the engine could not be read for.
 	ServicesRunning *int `json:"servicesRunning,omitempty" doc:"Services of the stack that run now; left out for a stack not deployed and when the engine could not be read"`
 	ServicesTotal   *int `json:"servicesTotal,omitempty" doc:"Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read"`
-	// Drift is the newest drift check of a stack Coaming manages.
+	// Drift is the newest drift check of a stack TierPlan manages.
 	Drift *StackDriftSummaryBody `json:"drift,omitempty" doc:"Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services"`
 	// Git is where a git stack stands against its repository.
 	Git *StackGitSummary `json:"git,omitempty" doc:"Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers"`
-	// Unmanaged is set on a stack found on the engine that Coaming did not make (D-07).
+	// Unmanaged is set on a stack found on the engine that TierPlan did not make (D-07).
 	Unmanaged *StackUnmanagedBody `json:"unmanaged,omitempty" doc:"Set on an unmanaged stack only: what was found about it"`
 }
 
-// StackUnmanagedBody is what the lists say about a stack Coaming found on the engine and does not manage.
+// StackUnmanagedBody is what the lists say about a stack TierPlan found on the engine and does not manage.
 type StackUnmanagedBody struct {
-	Orphan    bool   `json:"orphan" doc:"True when an object of the stack carries a coaming.stack.id: Coaming made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack"`
+	Orphan    bool   `json:"orphan" doc:"True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack"`
 	Portainer bool   `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
-	Owner     string `json:"owner" enum:",coaming,agent" doc:"coaming for the stack the Coaming server itself runs in, agent for a stack that holds a Coaming agent, empty for any other"`
-	Adoptable bool   `json:"adoptable" doc:"False for Coaming's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
+	Owner     string `json:"owner" enum:",tierplan,agent" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other"`
+	Adoptable bool   `json:"adoptable" doc:"False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason    string `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
 }
 
@@ -264,8 +264,8 @@ type StackUnmanagedBody struct {
 // status filter and the kind, so the numbers never shrink with what was typed.
 type StackKindCountsBody struct {
 	All       int `json:"all" doc:"Managed and unmanaged stacks together"`
-	Managed   int `json:"managed" doc:"Stacks Coaming manages"`
-	Unmanaged int `json:"unmanaged" doc:"Stacks found on the engine that Coaming did not make"`
+	Managed   int `json:"managed" doc:"Stacks TierPlan manages"`
+	Unmanaged int `json:"unmanaged" doc:"Stacks found on the engine that TierPlan did not make"`
 }
 
 // StackListBody is the stacks of an environment.
@@ -308,7 +308,7 @@ type StackDetail struct {
 	Rollback StackRollbackBody `json:"rollback" doc:"Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it"`
 	// LastOperation is the newest operation, left out for a stack never deployed.
 	LastOperation *StackOperationBody `json:"lastOperation,omitempty" doc:"Left out for a stack that has had no operation: the newest one, which the state is read from"`
-	// Adoption is set on a stack Coaming adopted.
+	// Adoption is set on a stack TierPlan adopted.
 	Adoption *StackAdoptionBody `json:"adoption,omitempty" doc:"Left out unless the stack was adopted (source adopted): whether its first deploy is still to come"`
 	// DeployedRevision is the revision the stack stands at.
 	DeployedRevision int64 `json:"deployedRevision,omitempty" doc:"Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at"`
@@ -316,7 +316,7 @@ type StackDetail struct {
 
 // StackAdoptionBody is where an adopted stack stands.
 type StackAdoptionBody struct {
-	Pending     bool   `json:"pending" doc:"True until the stack's first good deploy: its services do not carry Coaming's ownership labels yet, and that deploy adds them and recreates each service (a brief restart)"`
+	Pending     bool   `json:"pending" doc:"True until the stack's first good deploy: its services do not carry TierPlan's ownership labels yet, and that deploy adds them and recreates each service (a brief restart)"`
 	AdoptedFrom string `json:"adoptedFrom" doc:"The name of the stack on the engine that was adopted"`
 }
 
@@ -403,10 +403,10 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStacks", Method: http.MethodGet, Path: "/api/env/{envId}/stacks",
-		Summary: "The stacks of an environment: those Coaming manages and those it found",
+		Summary: "The stacks of an environment: those TierPlan manages and those it found",
 		Description: "Every stack of the environment by name, with where it deploys, its state and when it was last deployed. " +
-			"The state comes from Coaming's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. " +
-			"Stacks Coaming did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; " +
+			"The state comes from TierPlan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. " +
+			"Stacks TierPlan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; " +
 			"they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. " +
 			"discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. " +
 			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort, " +
@@ -423,7 +423,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		Description: "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. " +
 			"The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. " +
 			"The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). " +
-			"A name that something Coaming does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's coaming.stack.id) is 409 stack_name_clash. " +
+			"A name that something TierPlan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's tierplan.stack.id) is 409 stack_name_clash. " +
 			"start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
@@ -526,7 +526,7 @@ func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow
 // latest is the newest operation of any kind and like the newest deploy, update or roll back: a stop or a start
 // after a deploy that failed must not hide the failure.
 func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, like stackops.DeployRow, hasLike bool, last stackops.DeployRow, hasLast, hasDraft bool) (StackItem, []stackops.ServiceRow) {
-	// A stack Coaming adopted runs on the engine from the start, with revision 1 as its good revision (D-14): it
+	// A stack TierPlan adopted runs on the engine from the start, with revision 1 as its good revision (D-14): it
 	// reads as deployed before any deploy of its own.
 	adopted := st.Source.Kind == stacks.SourceAdopted
 	in := stackops.StateInput{Stopped: st.Stopped, Deployed: hasLast || adopted}
@@ -676,8 +676,8 @@ func stackNameTakenProblem(name, envName string) error {
 	}
 }
 
-// stackNameFree refuses a name the environment already uses. A name the environment uses for something Coaming does
-// not manage is refused (D-12): Coaming never deploys into, takes over or changes such a stack. A name one of Coaming's
+// stackNameFree refuses a name the environment already uses. A name the environment uses for something TierPlan does
+// not manage is refused (D-12): TierPlan never deploys into, takes over or changes such a stack. A name one of TierPlan's
 // own stacks holds is 409 stack_name_taken, and its objects are never a clash.
 func (d StacksDeps) stackNameFree(ctx context.Context, envID, envName string, target stacks.Target, name string) error {
 	own, err := d.repo().Stacks(ctx, envID)

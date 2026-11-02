@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -265,9 +265,9 @@ describe("SubnetPicker", () => {
     );
   });
 
-  it("states the formula in 'How Coaming works this out'", () => {
+  it("states the formula in 'How TierPlan works this out'", () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "How Coaming works this out" }));
+    fireEvent.click(screen.getByRole("button", { name: "How TierPlan works this out" }));
     expect(
       screen.getByText(
         /Addresses needed = \(2 × tasks \+ services \+ nodes\) × 1\.25, rounded up, plus 3 reserved\./,
@@ -380,7 +380,7 @@ describe("SubnetPicker", () => {
     expect(box.getAttribute("aria-checked")).toBe("false");
     expect(
       screen.getByText(
-        "Some setups, such as macvlan, share a range on purpose. Coaming records that you chose this.",
+        "Some setups, such as macvlan, share a range on purpose. TierPlan records that you chose this.",
       ),
     ).toBeTruthy();
     // It is described by the finding.

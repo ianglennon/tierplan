@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package authn holds what both ends of the agent handshake compute: the signed
 // transcript, Ed25519 signing and verification, the SPKI pin of a server key,
@@ -24,10 +24,10 @@ import (
 const (
 	// transcriptDomain separates this signature from any other use of the same
 	// key, and carries the transcript version.
-	transcriptDomain = "coaming-agent-auth/v1\x00"
+	transcriptDomain = "tierplan-agent-auth/v1\x00"
 	// EKMLabel is the TLS exporter label of the channel binding (D-05). Both ends
 	// export with it, and the value is part of the signed transcript.
-	EKMLabel = "EXPORTER-coaming-agent-auth-v1"
+	EKMLabel = "EXPORTER-tierplan-agent-auth-v1"
 	// EKMLength is the length of the exported keying material.
 	EKMLength = 32
 	// maxField is the longest field a two-byte length prefix can describe.
@@ -149,7 +149,7 @@ func Audience(raw string) (string, error) {
 // IPv4-mapped address is unmapped (127.0.0.0/8, ::1, ::ffff:127.0.0.1). Anything
 // else is false, including localhost.example, the short form 127.1, 0.0.0.0 and
 // the empty string. The agent decides with it which plain ws:// address it may
-// dial and Coaming decides with it which plain address it admits, so the two ends
+// dial and TierPlan decides with it which plain address it admits, so the two ends
 // cannot disagree about which plain address never leaves the machine (T-02-140).
 func LoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {

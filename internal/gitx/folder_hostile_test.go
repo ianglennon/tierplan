@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx_test
 
@@ -16,7 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/gitx"
 )
 
 // Repositories no git client would make, written straight into a mirror: a server can send any objects, and go-git

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package access
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // EnvRow is a user's effective access to one environment, the "why" view of the

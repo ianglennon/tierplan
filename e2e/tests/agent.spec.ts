@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Golden path 5 (D-59, plan 02-32): a remote host joins through the reverse proxy.
-// Coaming is behind Caddy at https://127.0.0.1:<port>/coaming; the admin adds an
+// TierPlan is behind Caddy at https://127.0.0.1:<port>/tierplan; the admin adds an
 // environment, copies the Standalone command, and the test pastes it into a shell
 // on a second Docker host (agenthost) the way a person would on a server. The
-// agent dials Caddy by IP and trusts its certificate through COAMING_AGENT_PIN,
+// agent dials Caddy by IP and trusts its certificate through TIERPLAN_AGENT_PIN,
 // the documented private-CA proxy setting. The waiting panel goes live without a
 // reload and opens the environment, the overview and the switcher show it online,
 // its dashboard is read through the tunnel, and Revoke node ends it (ENV-01,
@@ -50,9 +50,9 @@ async function shot(page: Page, name: string): Promise<void> {
 // docs/agent.md tells an operator with a private-CA proxy to.
 function withPin(command: string, pin: string): string {
   const image = command.trim().split(/\s+/).at(-1) ?? "";
-  expect(image, "the last word of the command is the agent image").toMatch(/coaming-agent:/);
+  expect(image, "the last word of the command is the agent image").toMatch(/tierplan-agent:/);
   const at = command.lastIndexOf(image);
-  return `${command.slice(0, at)}-e 'COAMING_AGENT_PIN=${pin}' ${command.slice(at)}`;
+  return `${command.slice(0, at)}-e 'TIERPLAN_AGENT_PIN=${pin}' ${command.slice(at)}`;
 }
 
 test("a remote host joins through the proxy, shows online, opens, and is revoked", async ({
@@ -68,7 +68,7 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
   // identity it enrolled with) and the box it created are gone.
   dockerExec(
     "agenthost",
-    "docker rm -f coaming-agent e2e-remote-box >/dev/null 2>&1; docker volume rm -f coaming-agent >/dev/null 2>&1; true",
+    "docker rm -f tierplan-agent e2e-remote-box >/dev/null 2>&1; docker volume rm -f tierplan-agent >/dev/null 2>&1; true",
   );
 
   await test.step("add an environment and read the Standalone command", async () => {
@@ -85,22 +85,22 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     await dialog.getByRole("tab", { name: "Standalone" }).click();
     // The token is hidden until it is asked for.
     const block = dialog.getByRole("region", { name: "command" });
-    await expect(block).toContainText("COAMING_AGENT_JOIN_TOKEN=\u2022\u2022\u2022\u2022");
+    await expect(block).toContainText("TIERPLAN_AGENT_JOIN_TOKEN=\u2022\u2022\u2022\u2022");
     await dialog.getByRole("button", { name: "Show token" }).click();
     const code = block.locator("code");
-    await expect(code).toContainText("docker run -d --name coaming-agent");
+    await expect(code).toContainText("docker run -d --name tierplan-agent");
     // The agent dials the proxy by its compose address, under the subpath.
-    await expect(code).toContainText("COAMING_AGENT_URL=wss://172.30.0.10/coaming/agent/connect");
-    await expect(code).toContainText("COAMING_AGENT_JOIN_TOKEN=");
+    await expect(code).toContainText("TIERPLAN_AGENT_URL=wss://172.30.0.10/tierplan/agent/connect");
+    await expect(code).toContainText("TIERPLAN_AGENT_JOIN_TOKEN=");
 
     // The Copy button's text is what is run, not a transcription of the screen.
     await dialog.getByRole("button", { name: "Copy command" }).click();
     await expect(dialog.getByRole("button", { name: "Copied command" })).toBeVisible();
     command = await page.evaluate(() => navigator.clipboard.readText());
     expect(command.trim()).toBe(((await code.textContent()) ?? "").trim());
-    expect(command).toContain("docker run -d --name coaming-agent");
-    // A private-CA proxy's pin is not in the command Coaming shows.
-    expect(command).not.toContain("COAMING_AGENT_PIN");
+    expect(command).toContain("docker run -d --name tierplan-agent");
+    // A private-CA proxy's pin is not in the command TierPlan shows.
+    expect(command).not.toContain("TIERPLAN_AGENT_PIN");
 
     await expect(dialog.getByRole("status").filter({ hasText: "Waiting for the first agent" })).toBeVisible();
     await shot(page, "1-waiting-for-the-first-agent");
@@ -122,7 +122,7 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     await shot(page, "2-agent-online-panel");
 
     // Two seconds later the environment opens by itself.
-    await expect(page).toHaveURL(/\/coaming\/env\/[^/]+$/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/tierplan\/env\/[^/]+$/, { timeout: 15_000 });
     envId = /\/env\/([^/]+)$/.exec(new URL(page.url()).pathname)?.[1] ?? "";
     expect(envId).not.toBe("");
     expect(
@@ -142,7 +142,7 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     await expect(tileValue(page, "Images")).toHaveText(images);
 
     // The engine card shows the remote Engine's own version, so the run says which
-    // Engine it proved (COAMING_E2E_AGENTHOST_IMAGE picks another, 24 to 29).
+    // Engine it proved (TIERPLAN_E2E_AGENTHOST_IMAGE picks another, 24 to 29).
     const engine = dockerExec("agenthost", "docker version -f '{{.Server.Version}}'");
     expect(engine).toMatch(/^\d+\.\d+\.\d+/);
     await expect(page.getByText(engine, { exact: true }).first()).toBeVisible();
@@ -152,7 +152,7 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     // stream is read through the tunnel and the proxy as well.
     dockerExec(
       "agenthost",
-      "docker create --name e2e-remote-box --entrypoint /nothing ghcr.io/ianglennon/coaming-agent:edge",
+      "docker create --name e2e-remote-box --entrypoint /nothing ghcr.io/ianglennon/tierplan-agent:edge",
     );
     await expect(tileValue(page, "Containers")).toHaveText(String(Number(containers) + 1), {
       timeout: 15_000,
@@ -163,7 +163,7 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
   await test.step("the overview and the switcher show it online", async () => {
     await page.getByRole("button", { name: "Switch environment" }).click();
     await page.getByRole("option", { name: "All environments" }).click();
-    await expect(page).toHaveURL(/\/coaming\/environments$/);
+    await expect(page).toHaveURL(/\/tierplan\/environments$/);
 
     const row = page.getByRole("row").filter({ hasText: REMOTE });
     await expect(row).toBeVisible();
@@ -184,19 +184,19 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
       .filter({ hasNotText: "Manage environments" })
       .first()
       .click();
-    await expect(page).toHaveURL(/\/coaming\/env\/[^/]+$/);
+    await expect(page).toHaveURL(/\/tierplan\/env\/[^/]+$/);
     expect(page.url()).not.toContain(envId);
 
     await page.getByRole("button", { name: "Switch environment" }).click();
     await page.getByRole("option").filter({ hasText: REMOTE }).first().click();
-    await expect(page).toHaveURL(new RegExp(`/coaming/env/${envId}$`));
+    await expect(page).toHaveURL(new RegExp(`/tierplan/env/${envId}$`));
     await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
   });
 
   await test.step("Revoke node ends it and the environment says so", async () => {
     await page.goto(at("/settings/environments"));
     await page.getByRole("link", { name: `Manage ${REMOTE}` }).click();
-    await expect(page).toHaveURL(new RegExp(`/coaming/settings/environments/${envId}$`));
+    await expect(page).toHaveURL(new RegExp(`/tierplan/settings/environments/${envId}$`));
 
     const nodes = page.getByRole("table", { name: /nodes/i });
     await expect(nodes).toBeVisible();
@@ -221,12 +221,12 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     // agent's session, so its upgrade is in the log now.
     await expect
       .poll(() => compose("logs", "--no-color", "caddy"), { timeout: 30_000 })
-      .toMatch(/"uri":"\/coaming\/agent\/connect"[^\n]*"status":101|"status":101[^\n]*"uri":"\/coaming\/agent\/connect"/);
+      .toMatch(/"uri":"\/tierplan\/agent\/connect"[^\n]*"status":101|"status":101[^\n]*"uri":"\/tierplan\/agent\/connect"/);
     const log = compose("logs", "--no-color", "caddy");
-    expect(log).toContain('"uri":"/coaming/api/environments/stream"');
-    expect(log).toContain('"uri":"/coaming/assets/');
+    expect(log).toContain('"uri":"/tierplan/api/environments/stream"');
+    expect(log).toContain('"uri":"/tierplan/assets/');
 
-    // And Coaming found nothing wrong with the proxy through all of it: no
+    // And TierPlan found nothing wrong with the proxy through all of it: no
     // untrusted forwarder, no host or scheme mismatch, no failing WebSocket.
     const warnings = await page.request.get(at("/api/warnings"));
     expect(warnings.ok()).toBe(true);

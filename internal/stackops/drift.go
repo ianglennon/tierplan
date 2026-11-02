@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -12,10 +12,10 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // The states of a drift check (D-21).
@@ -54,8 +54,8 @@ type DriftService struct {
 
 // DriftResult is a drift check: the state, the revision it was made against, when, the services that differ, how many
 // settings differ in all, and a Fingerprint of what the engine held that changes whenever a service does. Latest is the
-// cause to name for the stack as a whole: the newest action of Coaming's own on a drifted service, or an adoption's
-// difference when there is no such action, nil when nothing is known. Causes is how many drifted services Coaming's own
+// cause to name for the stack as a whole: the newest action of TierPlan's own on a drifted service, or an adoption's
+// difference when there is no such action, nil when nothing is known. Causes is how many drifted services TierPlan's own
 // actions explain.
 type DriftResult struct {
 	State       string
@@ -70,7 +70,7 @@ type DriftResult struct {
 
 // DriftInput is a stack to check: the environment, the stack, its deployed revision (the newest good one, nil for none)
 // and the images that revision ran, by swarm service name. Audit is the store whose audit log names the causes of the
-// drift; nil leaves the causes of Coaming's own actions out. Raw leaves the settings of every row unmasked, which a
+// drift; nil leaves the causes of TierPlan's own actions out. Raw leaves the settings of every row unmasked, which a
 // review of a deploy compares with its own (RevertsDrift) and masks itself: a result made with it is never cached or
 // sent.
 type DriftInput struct {
@@ -85,7 +85,7 @@ type DriftInput struct {
 // Drift compares what runs with the deployed revision. The revision is prepared as a roll back to it is
 // (PrepareRollback, with the pins it stored) and converted against what the swarm holds, and each service is compared
 // with the one running by the review's own engine (stacks.DiffServices), minus what the swarm adds by itself and
-// Coaming's own labels (D-21, D-24). Current is what runs now and Next what the revision deployed, as a roll back review
+// TierPlan's own labels (D-21, D-24). Current is what runs now and Next what the revision deployed, as a roll back review
 // reads them.
 //
 // A stack on a standalone host is compared by driftStandalone.
@@ -152,7 +152,7 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 		byName[s.Name] = s
 	}
 	// The platforms of an image are not in the compose file: the revision recorded the ones it deployed with, and
-	// those are compared first, so platforms changed outside Coaming are a difference (T-08-112). A service the record
+	// those are compared first, so platforms changed outside TierPlan are a difference (T-08-112). A service the record
 	// says nothing for (a revision from before platforms were recorded) keeps those it runs while it runs the pinned
 	// digest, and one on another digest borrows none (G-08-4, T-08-97).
 	withStoredPlatforms(restored, in.Deployed.Platforms)

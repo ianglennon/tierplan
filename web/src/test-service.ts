@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { components } from "@/api/schema";
 import type { Me } from "@/hooks/use-me";
@@ -22,7 +22,7 @@ export function serviceDetail(extra: Partial<ServiceDetailBody> = {}): ServiceDe
     running: 2,
     desired: 3,
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     agent: false,
     createdAt: "2026-10-01T10:00:00Z",
     updatedAt: "2026-10-02T11:30:00Z",
@@ -150,7 +150,7 @@ export function specBody(extra: Partial<ServiceSpecBody> = {}): ServiceSpecBody 
     name: "api",
     mode: "replicated",
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     agent: false,
     masked: true,
     spec: editSpec(),

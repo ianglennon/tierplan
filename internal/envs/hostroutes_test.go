@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The route check says, for every node of an environment, either its validated host
@@ -387,8 +387,8 @@ func TestHostRoutesOneNodeFails(t *testing.T) {
 	}
 }
 
-// Coaming's own host has no agent: its routes come from the route file mounted into
-// Coaming's own container, and the answer says so (Local) so the fix is worded for it.
+// TierPlan's own host has no agent: its routes come from the route file mounted into
+// TierPlan's own container, and the answer says so (Local) so the fix is worded for it.
 func TestHostRoutesLocalSocket(t *testing.T) {
 	if binary.NativeEndian.Uint16([]byte{1, 0}) != 1 {
 		t.Skip("the fixture is a little-endian host's route table")

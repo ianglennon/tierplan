@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -21,18 +21,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // The restore routes (plan 03-25, D-30): upload, check and apply.
@@ -234,7 +234,7 @@ func TestRestoreApplyByAnInstanceAdminSwapsInTheBackupOnceTheServerHasStopped(t 
 	if len(f.restore.swaps) != 0 {
 		t.Fatal("a restart was requested for a refused confirmation")
 	}
-	if _, err := os.Stat(filepath.Join(f.dataInfo.Path, "coaming.db")); err == nil {
+	if _, err := os.Stat(filepath.Join(f.dataInfo.Path, "tierplan.db")); err == nil {
 		t.Fatal("a refused confirmation put a database in the data directory")
 	}
 
@@ -246,7 +246,7 @@ func TestRestoreApplyByAnInstanceAdminSwapsInTheBackupOnceTheServerHasStopped(t 
 		t.Fatalf("restarts requested = %d, want 1", len(f.restore.swaps))
 	}
 	// Nothing is live yet: the swap runs after the server has stopped.
-	if _, err := os.Stat(filepath.Join(f.dataInfo.Path, "coaming.db")); err == nil {
+	if _, err := os.Stat(filepath.Join(f.dataInfo.Path, "tierplan.db")); err == nil {
 		t.Fatal("the database was swapped before the server stopped")
 	}
 
@@ -379,7 +379,7 @@ func liveDatabase(t *testing.T, dir string) func() [32]byte {
 	}
 	sum := func() [32]byte {
 		t.Helper()
-		b, err := os.ReadFile(filepath.Join(dir, "coaming.db")) //nolint:gosec // a path the test made
+		b, err := os.ReadFile(filepath.Join(dir, "tierplan.db")) //nolint:gosec // a path the test made
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -407,7 +407,7 @@ func noTrace(t *testing.T, dir string, wantUpload bool) {
 	}
 }
 
-// newerBackupFile is a backup whose header says it was made by a Coaming with a
+// newerBackupFile is a backup whose header says it was made by a TierPlan with a
 // database schema this binary does not know.
 func newerBackupFile(t *testing.T) []byte {
 	t.Helper()
@@ -496,7 +496,7 @@ func TestRestoreRefusalsAnswerTheirOwnProblemAndLeaveEverythingAsItWas(t *testin
 			// That the hostile header is refused before a key is derived is proved in
 			// internal/backup (the kdfRuns counter), not by how long this answer took.
 			if sum() != before {
-				t.Error("coaming.db changed")
+				t.Error("tierplan.db changed")
 			}
 			if len(f.restore.swaps) != 0 {
 				t.Error("a restart was requested")
@@ -753,7 +753,7 @@ func TestWizardRestoreRoutesAnswer409SetupCompleteOnceAnyUserExists(t *testing.T
 	if len(w.restore.swaps) != 0 {
 		t.Fatal("a restart was requested after setup was complete")
 	}
-	if _, err := os.Stat(filepath.Join(w.dataDir, "coaming.db")); err == nil {
+	if _, err := os.Stat(filepath.Join(w.dataDir, "tierplan.db")); err == nil {
 		t.Fatal("a database was swapped in after setup was complete")
 	}
 }

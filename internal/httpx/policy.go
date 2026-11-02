@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package httpx
 
@@ -19,8 +19,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/realclientip/realclientip-go"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // Authenticator resolves the caller of a request. A nil principal with a nil
@@ -95,7 +95,7 @@ type (
 // client is what the clientIP middleware learned about the TCP peer.
 type client struct {
 	ip string
-	// trustedPeer is true when the TCP peer is inside COAMING_TRUSTED_PROXIES.
+	// trustedPeer is true when the TCP peer is inside TIERPLAN_TRUSTED_PROXIES.
 	trustedPeer bool
 	// scheme is the scheme the caller used, as EffectiveScheme works it out.
 	scheme string
@@ -192,10 +192,10 @@ func ClientIP(ctx context.Context) string {
 	return c.ip
 }
 
-// EffectiveScheme is the scheme the caller used to reach Coaming: https for a
+// EffectiveScheme is the scheme the caller used to reach TierPlan: https for a
 // request that arrived over TLS, the scheme a trusted proxy reports in
 // X-Forwarded-Proto, and http for everything else. The header of a peer that is
-// not in COAMING_TRUSTED_PROXIES is never read, and neither is any other
+// not in TIERPLAN_TRUSTED_PROXIES is never read, and neither is any other
 // forwarded header (D-51). Outside the client-address middleware it is http.
 func EffectiveScheme(ctx context.Context) string {
 	c, _ := ctx.Value(clientKey{}).(client)
@@ -212,7 +212,7 @@ const (
 
 // forwardedScheme is the scheme the last proxy in a chain put in
 // X-Forwarded-Proto, or "" when the header says nothing usable. The last value is
-// the one the trusted peer closest to Coaming added; the ones before it were
+// the one the trusted peer closest to TierPlan added; the ones before it were
 // supplied further out.
 func forwardedScheme(h http.Header) string {
 	vals := h.Values("X-Forwarded-Proto")
@@ -236,7 +236,7 @@ func peerTrusted(ctx context.Context) bool {
 }
 
 // PeerTrusted reports whether the TCP peer of the request is one of
-// COAMING_TRUSTED_PROXIES. The agent endpoint uses it to decide whether a
+// TIERPLAN_TRUSTED_PROXIES. The agent endpoint uses it to decide whether a
 // forwarded scheme and a TLS exporter value can be believed.
 func PeerTrusted(ctx context.Context) bool { return peerTrusted(ctx) }
 
@@ -458,7 +458,7 @@ func (r *Router) authorize(w http.ResponseWriter, req *http.Request, need rbac.R
 				"origin", truncate(got, 200), "expected", want,
 				"public_url", r.publicOrigin(), "path", req.URL.Path, "ip", ClientIP(ctx))
 			r.deny(w, req, p, http.StatusForbidden, problemOriginMismatch, reasonOriginMismatch, envID,
-				"The request did not come from this Coaming's public URL.")
+				"The request did not come from this TierPlan's public URL.")
 			return nil, nil, false
 		}
 		if p != nil && r.opts.MutationGuard != nil {

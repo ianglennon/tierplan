@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -257,15 +257,15 @@ describe("the alerts", () => {
     expect(screen.queryByText(/Stack /)).toBeNull();
   });
 
-  it("warns on Coaming's agent service, and badges it", async () => {
-    answerWith(serviceDetail({ agent: true, name: "coaming-agent" }));
+  it("warns on TierPlan's agent service, and badges it", async () => {
+    answerWith(serviceDetail({ agent: true, name: "tierplan-agent" }));
     renderAt();
     expect(
       await screen.findByText(
-        "This is Coaming's agent service. Removing or changing it can cut Coaming off from every node it runs on.",
+        "This is TierPlan's agent service. Removing or changing it can cut TierPlan off from every node it runs on.",
       ),
     ).toBeTruthy();
-    expect(screen.getAllByText("Coaming agent").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("TierPlan agent").length).toBeGreaterThanOrEqual(1);
   });
 });
 

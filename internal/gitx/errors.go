@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx
 
@@ -15,7 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 // Code is why a git call failed, as one of a fixed set. The screens word each one; no text from

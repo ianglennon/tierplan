@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
--- When Coaming first saw each network and last saw it in use (NET-04, D-09). Docker keeps no
+-- When TierPlan first saw each network and last saw it in use (NET-04, D-09). Docker keeps no
 -- such fact, and a network's creation time alone would flag a long-lived network the moment it
 -- is freed, so the orphan check measures its 24-hour grace period from the later of the two.
 -- node_id is '' for a swarm-scoped network, which is one network for the whole cluster, and
@@ -19,7 +19,7 @@ CREATE TABLE network_seen (
     PRIMARY KEY (env_id, node_id, network_id)
 );
 
--- Networks a person asked Coaming never to list as orphaned or unused (D-11). A keep is keyed
+-- Networks a person asked TierPlan never to list as orphaned or unused (D-11). A keep is keyed
 -- by the network's name (and its node, for a local one, '' for a swarm-scoped one) and not by
 -- its ID, so the exemption follows a network of the same name that is made again. kept_by is
 -- the user's ID. Timestamps are UTC unix nanoseconds.

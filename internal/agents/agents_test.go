@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package agents_test
 
@@ -22,16 +22,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 var fixedNow = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
@@ -172,9 +172,9 @@ func TestCreateEnvironmentStoresTheEnvironmentItsCAAndAHashedToken(t *testing.T)
 
 	envID, secret, ok := agents.ParseToken(c.JoinToken)
 	if !ok || envID != c.EnvID {
-		t.Fatalf("the returned token %q does not parse as cmjt_<envId>_<secret> for %s", c.JoinToken, c.EnvID)
+		t.Fatalf("the returned token %q does not parse as tpjt_<envId>_<secret> for %s", c.JoinToken, c.EnvID)
 	}
-	if !strings.HasPrefix(c.JoinToken, "cmjt_"+c.EnvID+"_") {
+	if !strings.HasPrefix(c.JoinToken, "tpjt_"+c.EnvID+"_") {
 		t.Fatalf("token %q has the wrong shape", c.JoinToken)
 	}
 	if raw, err := base64.RawURLEncoding.DecodeString(secret); err != nil || len(raw) != 32 {
@@ -220,7 +220,7 @@ func TestCreateEnvironmentRejectsAnOverlongNameAndWritesNothing(t *testing.T) {
 func TestEnrolIssuesACertificateFromTheEnvironmentsCA(t *testing.T) {
 	r := newRig(t)
 	c := r.create(t, "")
-	p := newProof(t, "coaming.example")
+	p := newProof(t, "tierplan.example")
 
 	res, err := r.svc.Enrol(r.ctx, p.request(c.JoinToken))
 	if err != nil {
@@ -253,7 +253,7 @@ func TestEnrolIssuesACertificateFromTheEnvironmentsCA(t *testing.T) {
 	if want := fixedNow.Add(30 * 24 * time.Hour); !leaf.NotAfter.Equal(want) || !res.NotAfter.Equal(want) {
 		t.Errorf("NotAfter = %v (result %v), want %v", leaf.NotAfter, res.NotAfter, want)
 	}
-	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != "coaming://agent/"+res.AgentID {
+	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != "tierplan://agent/"+res.AgentID {
 		t.Errorf("URI SANs = %v", leaf.URIs)
 	}
 	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !bytes.Equal(pub, p.pub) {
@@ -323,9 +323,9 @@ func TestEnrolRefusesAWrongTokenAndWritesNoAgent(t *testing.T) {
 	_, otherSecret, _ := agents.ParseToken(other.JoinToken)
 
 	for name, token := range map[string]string{
-		"a wrong secret":                     "cmjt_" + c.EnvID + "_" + otherSecret,
-		"a secret of zeros":                  "cmjt_" + c.EnvID + "_" + strings.Repeat("A", 43),
-		"an environment that does not exist": "cmjt_0197b8a0-0000-7000-8000-000000000000_" + secret,
+		"a wrong secret":                     "tpjt_" + c.EnvID + "_" + otherSecret,
+		"a secret of zeros":                  "tpjt_" + c.EnvID + "_" + strings.Repeat("A", 43),
+		"an environment that does not exist": "tpjt_0197b8a0-0000-7000-8000-000000000000_" + secret,
 		"no prefix":                          c.EnvID + "_" + secret,
 		"empty":                              "",
 		"truncated":                          c.JoinToken[:len(c.JoinToken)-5],
@@ -556,16 +556,16 @@ func TestParseToken(t *testing.T) {
 	for token, want := range map[string]bool{
 		c.JoinToken:      true,
 		"":               false,
-		"cmjt_":          false,
-		"cmjt_nope_AAAA": false,
-		"xpjt_" + strings.TrimPrefix(c.JoinToken, "cmjt_"): false,
-		"cmjt_" + c.EnvID:                                 false,
-		"cmjt_" + c.EnvID + "_":                           false,
-		"cmjt_" + c.EnvID + "_" + strings.Repeat("A", 42): false,
-		"cmjt_" + c.EnvID + "_" + strings.Repeat("A", 44): false,
-		"cmjt_" + c.EnvID + "_" + strings.Repeat("!", 43): false,
-		"cmjt_" + c.EnvID + "_" + strings.Repeat("A", 43): true,
-		"cmjt_" + c.EnvID + "_" + strings.Repeat("_", 43): true, // the secret alphabet includes _ and -
+		"tpjt_":          false,
+		"tpjt_nope_AAAA": false,
+		"xpjt_" + strings.TrimPrefix(c.JoinToken, "tpjt_"): false,
+		"tpjt_" + c.EnvID:                                 false,
+		"tpjt_" + c.EnvID + "_":                           false,
+		"tpjt_" + c.EnvID + "_" + strings.Repeat("A", 42): false,
+		"tpjt_" + c.EnvID + "_" + strings.Repeat("A", 44): false,
+		"tpjt_" + c.EnvID + "_" + strings.Repeat("!", 43): false,
+		"tpjt_" + c.EnvID + "_" + strings.Repeat("A", 43): true,
+		"tpjt_" + c.EnvID + "_" + strings.Repeat("_", 43): true, // the secret alphabet includes _ and -
 	} {
 		if _, _, ok := agents.ParseToken(token); ok != want {
 			t.Errorf("ParseToken(%q) ok = %v, want %v", token, ok, want)
@@ -575,13 +575,13 @@ func TestParseToken(t *testing.T) {
 
 func TestAgentURLFollowsThePublicURL(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://coaming.example":           "wss://coaming.example/agent/connect",
-		"https://coaming.example/":          "wss://coaming.example/agent/connect",
-		"https://example.com/coaming":       "wss://example.com/coaming/agent/connect",
-		"https://example.com/coaming/":      "wss://example.com/coaming/agent/connect",
-		"http://127.0.0.1:7480":             "ws://127.0.0.1:7480/agent/connect",
-		"https://coaming.example:8443/a/b":  "wss://coaming.example:8443/a/b/agent/connect",
-		"https://u:p@coaming.example/x?q=1": "wss://coaming.example/x/agent/connect",
+		"https://tierplan.example":           "wss://tierplan.example/agent/connect",
+		"https://tierplan.example/":          "wss://tierplan.example/agent/connect",
+		"https://example.com/tierplan":       "wss://example.com/tierplan/agent/connect",
+		"https://example.com/tierplan/":      "wss://example.com/tierplan/agent/connect",
+		"http://127.0.0.1:7480":              "ws://127.0.0.1:7480/agent/connect",
+		"https://tierplan.example:8443/a/b":  "wss://tierplan.example:8443/a/b/agent/connect",
+		"https://u:p@tierplan.example/x?q=1": "wss://tierplan.example/x/agent/connect",
 	} {
 		got, err := agents.AgentURL(in)
 		if err != nil || got != want {
@@ -1015,7 +1015,7 @@ func TestEnrolWithAWrongSecretIsStillATokenMismatchAfterARotation(t *testing.T) 
 		t.Fatal(err)
 	}
 	other, _, _ := agents.ParseToken(c.JoinToken)
-	forged := "cmjt_" + other + "_" + strings.Repeat("A", 43)
+	forged := "tpjt_" + other + "_" + strings.Repeat("A", 43)
 	_, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(forged))
 	var re *tunnel.RefuseError
 	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected || re.AuditReason != "token_mismatch" {

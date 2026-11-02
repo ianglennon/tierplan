@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx_test
 
 import (
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // An engine says x86_64 where the registry says amd64 (plan 05-03, IMG-02): the node

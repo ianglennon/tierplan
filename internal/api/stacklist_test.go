@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -17,11 +17,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The stack lists (plan 07-24, STK-10, STK-02, STK-01, UI-SPEC "Stack lists"): the All stacks list across
@@ -92,7 +92,7 @@ func twoStackEnvironments(t *testing.T, failB *atomic.Pointer[string]) (*envFix,
 			}
 		}
 	})
-	f.inst.Apply("Coaming", "https://example.com/coaming")
+	f.inst.Apply("TierPlan", "https://example.com/tierplan")
 	got, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
 		t.Fatalf("add the agent environment: %d %s", rec.code, rec.body)
@@ -532,7 +532,7 @@ func TestNameCheckAnswersAvailableTakenClashAndInvalid(t *testing.T) {
 	}{
 		{"fresh", "available", ""},
 		{"web", "taken", "A stack named web already exists on " + e.Name + "."},
-		{"legacy", "clash", "A stack named legacy already exists on this environment, not managed by Coaming."},
+		{"legacy", "clash", "A stack named legacy already exists on this environment, not managed by TierPlan."},
 		{"Bad Name", "invalid", swarmNameSentence},
 		{"Shop.Front", "invalid", swarmNameSentence},
 		{"-dash", "invalid", swarmNameSentence},
@@ -593,7 +593,7 @@ func TestNameCheckNeedsTheRightToCreateStacksOnThatEnvironment(t *testing.T) {
 	}
 }
 
-// foreignSwarmService is a service of a namespace no stack of Coaming's has, as `docker stack deploy` leaves it.
+// foreignSwarmService is a service of a namespace no stack of TierPlan's has, as `docker stack deploy` leaves it.
 func foreignSwarmService(namespace, short string, running, desired uint64, labels map[string]string) dockertest.FakeService {
 	l := map[string]string{"com.docker.stack.namespace": namespace}
 	for k, v := range labels {
@@ -613,7 +613,7 @@ func TestStackListIncludesUnmanaged(t *testing.T) {
 	reconfigureSwarm(t, f, e,
 		foreignSwarmService("legacy", "app", 2, 2, nil),
 		foreignSwarmService("legacy", "db", 0, 1, nil),
-		foreignSwarmService("lost", "app", 1, 1, map[string]string{"coaming.stack.id": "stack-old", "io.portainer.accesscontrol.teams": "x"}),
+		foreignSwarmService("lost", "app", 1, 1, map[string]string{"tierplan.stack.id": "stack-old", "io.portainer.accesscontrol.teams": "x"}),
 		foreignSwarmService("web", "app", 0, 1, nil), // the name of a managed stack: that stack's, not a second one
 	)
 	writesBefore := len(f.fake.Writes())
@@ -674,7 +674,7 @@ func TestStackListSearchFindsAnUnmanagedStackByItsServiceName(t *testing.T) {
 	}
 }
 
-// unmanagedMix makes a managed stack, web, and two stacks of the swarm that Coaming did not make, and returns
+// unmanagedMix makes a managed stack, web, and two stacks of the swarm that TierPlan did not make, and returns
 // the env Admin.
 func unmanagedMix(t *testing.T, f *envFix, e envBody) *roleCaller {
 	t.Helper()
@@ -941,7 +941,7 @@ func TestNameRuleIsTheSameForCreateAndAdopt(t *testing.T) {
 					if target == stacks.TargetStandalone {
 						where = "a standalone host"
 					}
-					want = "Coaming can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
+					want = "TierPlan can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
 				}
 				if it.Unmanaged.Adoptable != valid || it.Unmanaged.Reason != want {
 					t.Errorf("%q: adoptable %v reason %q, want adoptable %v reason %q", name, it.Unmanaged.Adoptable, it.Unmanaged.Reason, valid, want)

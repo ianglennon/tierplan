@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // Remove of a stack (plan 07-27, STK-11, D-20): a job on the operation lock, audited, that deletes what the
@@ -259,11 +259,11 @@ func TestRemoveStackTakesTheOperationLockAndIsRefusedWhileADeployRuns(t *testing
 func (f *envFix) putVolumes(stack, stackID string) {
 	cfg := swarmManagerEngine()
 	cfg.TasksFollowWrites = true
-	owned := map[string]string{"com.docker.stack.namespace": stack, "coaming.stack.id": stackID}
+	owned := map[string]string{"com.docker.stack.namespace": stack, "tierplan.stack.id": stackID}
 	cfg.Volumes = []dockertest.FakeVolume{
 		{Name: stack + "_data", Driver: "local", Labels: owned},
 		{Name: stack + "_cache", Driver: "local", Labels: owned},
-		{Name: "outside_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "outside", "coaming.stack.id": "someone-else"}},
+		{Name: "outside_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "outside", "tierplan.stack.id": "someone-else"}},
 		{Name: "shared_vol", Driver: "local"},
 	}
 	f.fake.Reconfigure(cfg)
@@ -382,13 +382,13 @@ func TestRemoveStackOfAStandaloneStackRunsTheSDKsDownThenRemovesTheTickedVolume(
 	}
 	cfg := swarmManagerEngine()
 	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
-	owned := map[string]string{"com.docker.compose.project": "solo", "coaming.stack.id": st.ID}
+	owned := map[string]string{"com.docker.compose.project": "solo", "tierplan.stack.id": st.ID}
 	cfg.Volumes = []dockertest.FakeVolume{
 		{Name: "solo_data", Driver: "local", Labels: owned}, {Name: "solo_keep", Driver: "local", Labels: owned}, {Name: "external_vol", Driver: "local"},
 	}
 	cfg.Containers = []dockertest.FakeContainer{{
 		ID: "c1", Names: []string{"/solo-web-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{"com.docker.compose.project": "solo", "com.docker.compose.service": "web", "coaming.stack.id": st.ID},
+		Labels: map[string]string{"com.docker.compose.project": "solo", "com.docker.compose.service": "web", "tierplan.stack.id": st.ID},
 	}}
 	f.fake.Reconfigure(cfg)
 	calls.after = func() {

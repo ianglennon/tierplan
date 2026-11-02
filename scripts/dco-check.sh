@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # DCO gate (D-69). Every non-merge commit in <base>..<head> must carry a
 # Signed-off-by trailer. Usage: scripts/dco-check.sh <base> <head>

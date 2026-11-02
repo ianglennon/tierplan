@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -12,10 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The health broker (plan 02-12, ENV-06, D-36, D-37, D-54): what the global stream
@@ -71,7 +71,7 @@ func startBroker(t *testing.T, r *tunRig) {
 
 // tamper is a join token for the same environment with a wrong secret.
 func tamper(token string) string {
-	i := len("cmjt_") + 36 + 1 // the first character of the secret
+	i := len("tpjt_") + 36 + 1 // the first character of the secret
 	c := byte('A')
 	if token[i] == 'A' {
 		c = 'B'

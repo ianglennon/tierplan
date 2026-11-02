@@ -22,11 +22,11 @@
       "usernameHelper": "Usernames can't be changed.",
       "displayName": "Display name",
       "email": "Email",
-      "emailHelper": "Nothing uses it yet. Coaming sends no email.",
+      "emailHelper": "Nothing uses it yet. TierPlan sends no email.",
       "save": "Save changes",
       "saving": "Saving…",
       "saved": "Profile saved.",
-      "failed": "Couldn't save the profile. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't save the profile. Try again, and check the TierPlan logs if it keeps happening."
     },
     "instanceAdmin": {
       "label": "Instance administrator",
@@ -44,7 +44,7 @@
         "pending": "Removing…"
       },
       "cancel": "Cancel",
-      "failed": "Couldn't change {{username}}. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't change {{username}}. Try again, and check the TierPlan logs if it keeps happening."
     },
     "account": {
       "reset": "Reset password",
@@ -63,7 +63,7 @@
       "confirm": "Disable user",
       "pending": "Disabling…",
       "done": "{{username}} is disabled.",
-      "failed": "Couldn't disable {{username}}. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't disable {{username}}. Try again, and check the TierPlan logs if it keeps happening."
     },
     "delete": {
       "title": "Delete {{username}}?",
@@ -73,14 +73,14 @@
       "confirm": "Delete user",
       "pending": "Deleting…",
       "done": "{{username}} was deleted.",
-      "failed": "Couldn't delete {{username}}. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't delete {{username}}. Try again, and check the TierPlan logs if it keeps happening."
     },
     "enabled": "{{username}} is enabled.",
-    "enableFailed": "Couldn't enable {{username}}. Try again, and check the Coaming logs if it keeps happening.",
+    "enableFailed": "Couldn't enable {{username}}. Try again, and check the TierPlan logs if it keeps happening.",
     "unlocked": "{{username}} can sign in again.",
-    "unlockFailed": "Couldn't unlock {{username}}. Try again, and check the Coaming logs if it keeps happening.",
+    "unlockFailed": "Couldn't unlock {{username}}. Try again, and check the TierPlan logs if it keeps happening.",
     "errors": {
-      "lastAdmin": "Coaming needs at least one active instance admin. Make someone else an instance admin first.",
+      "lastAdmin": "TierPlan needs at least one active instance admin. Make someone else an instance admin first.",
       "stale": "This changed while you were looking at it. Reload the page and try again.",
       "gone": "{{username}} no longer exists."
     },
@@ -92,7 +92,7 @@
       "pending": "Generating…",
       "disabled": "{{username}} is disabled. Enable them first, then reset their password.",
       "disabledReason": "Enable {{username}} first",
-      "failed": "Couldn't create the link. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't create the link. Try again, and check the TierPlan logs if it keeps happening."
     }
   }
 }

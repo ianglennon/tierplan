@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -20,14 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/datadir"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/datadir"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Restoring over a running server (plan 03-25, D-30): the process stops serving,
@@ -78,7 +78,7 @@ func seedAdmin(t *testing.T, srv *Server, name string) {
 func backupOf(t *testing.T, instanceName, admin string) []byte {
 	t.Helper()
 	dir := t.TempDir() + "/data"
-	src, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	src, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func (s *served) wait() error {
 
 func serveOn(t *testing.T, dir string) *served {
 	t.Helper()
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestRestoreRestartSwapsTheDatabaseKeepsTheLockUntilExecAndTheNextBuildServe
 	}
 
 	// What the re-executed process does: Build on the same directory.
-	srv2, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	srv2, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("Build after the restore: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRestartFailsBeforeExecWhenTheSwapFails(t *testing.T) {
 func TestRestartReportsAnExecThatFails(t *testing.T) {
 	stubExec(t, func() error { return errors.New("exec format error") })
 	err := Restart(RestartExec, RestartRequest{})
-	if err == nil || !strings.Contains(err.Error(), "exec format error") || !strings.Contains(err.Error(), "COAMING_RESTORE_RESTART=exit") {
+	if err == nil || !strings.Contains(err.Error(), "exec format error") || !strings.Contains(err.Error(), "TIERPLAN_RESTORE_RESTART=exit") {
 		t.Fatalf("Restart = %v, want the exec error and the way out", err)
 	}
 }
@@ -378,13 +378,13 @@ func TestOnlyTheFirstRestartRequestIsAccepted(t *testing.T) {
 
 // pendingRestore sets a data directory up as a swap leaves it: the old database
 // saved under backups/, a database that carries a schema newer than this binary
-// as coaming.db, and the restore-pending marker. The old database holds the
+// as tierplan.db, and the restore-pending marker. The old database holds the
 // admin "oldadmin"; the new one holds a setting the old one lacks.
 func pendingRestore(t *testing.T) (dir, snapshot string) {
 	t.Helper()
 	ctx := context.Background()
 	dir = t.TempDir() + "/data"
-	old, err := Build(ctx, testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	old, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestBootRollbackPutsThePreRestoreSnapshotBackWhenTheRestoredDatabaseCannotS
 	dir, snapshot := pendingRestore(t)
 
 	var logs bytes.Buffer
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatalf("Build with a restore pending whose database cannot start: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestBootRollbackDoesNotRunWhenNoRestoreIsPending(t *testing.T) {
 	}
 	// Without the marker a database that cannot start is an error to report, not
 	// something to quietly replace.
-	if _, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler)); err == nil {
+	if _, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("Build succeeded on a database newer than the binary")
 	}
 }
@@ -480,7 +480,7 @@ func TestBootRollbackReportsWhenThereIsNoSnapshotToGoBackTo(t *testing.T) {
 	if err := os.Remove(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	_, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "snapshot") {
 		t.Fatalf("Build = %v, want an error that says the snapshot is missing", err)
 	}
@@ -499,8 +499,8 @@ func TestBootRollbackIsNotTriggeredByAFailureUnrelatedToTheRestoredData(t *testi
 	dir, snapshot := pendingRestore(t)
 
 	_, err := Build(context.Background(), testConfig(t, map[string]string{
-		"COAMING_DATA_DIR":       dir,
-		"COAMING_ENCRYPTION_KEY": "this is not a key",
+		"TIERPLAN_DATA_DIR":       dir,
+		"TIERPLAN_ENCRYPTION_KEY": "this is not a key",
 	}), slog.New(slog.DiscardHandler))
 	if err == nil {
 		t.Fatal("Build succeeded with a bad encryption key")

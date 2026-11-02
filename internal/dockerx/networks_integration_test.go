@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -15,8 +15,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // TestNetworks creates and removes a bridge network with a subnet against a real engine
@@ -35,10 +35,10 @@ func TestNetworks(t *testing.T) {
 	raw := dockertest.RawClient(t, host)
 	pullImage(t, ctx, raw, "busybox:1")
 
-	name := "cm-net-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "tp-net-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	id, _, err := cli.NetworkCreate(ctx, dockerx.NetworkCreateSpec{
 		Name: name, Driver: dockerx.DriverBridge, Subnet: "10.231.77.0/24", Gateway: "10.231.77.1",
-		Labels: map[string]string{"com.docker.stack.namespace": "cm-test"},
+		Labels: map[string]string{"com.docker.stack.namespace": "tp-test"},
 	})
 	if err != nil {
 		t.Fatalf("NetworkCreate: %v", err)
@@ -63,13 +63,13 @@ func TestNetworks(t *testing.T) {
 		return dockerx.NetworkRow{}, false
 	}
 	n, ok := row()
-	if !ok || len(n.Subnets) != 1 || n.Subnets[0] != "10.231.77.0/24" || n.Labels["com.docker.stack.namespace"] != "cm-test" ||
+	if !ok || len(n.Subnets) != 1 || n.Subnets[0] != "10.231.77.0/24" || n.Labels["com.docker.stack.namespace"] != "tp-test" ||
 		dockerx.IsBuiltinNetwork(n.Name, n.Ingress) {
 		t.Fatalf("the created network is listed as %+v (%v)", n, ok)
 	}
 
 	// A running container on the network makes the engine refuse the remove.
-	cname := "cm-netuser-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	cname := "tp-netuser-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       cname,
 		Config:     &container.Config{Image: "busybox:1", Cmd: []string{"sleep", "300"}},
@@ -140,14 +140,14 @@ func TestNetworkConnect(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	stamp := strconv.FormatInt(time.Now().UnixNano(), 36)
-	name := "cm-conn-" + stamp
+	name := "tp-conn-" + stamp
 	netID, _, err := cli.NetworkCreate(ctx, dockerx.NetworkCreateSpec{
 		Name: name, Driver: dockerx.DriverBridge, Subnet: "10.231.78.0/24", Gateway: "10.231.78.1",
 	})
 	if err != nil {
 		t.Fatalf("NetworkCreate: %v", err)
 	}
-	cname := "cm-connctr-" + stamp
+	cname := "tp-connctr-" + stamp
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()

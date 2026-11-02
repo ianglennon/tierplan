@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -73,7 +73,7 @@ import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
-import { coamingStackIdOf, StackLink } from "@/features/stacks/stack-link";
+import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
@@ -431,7 +431,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
                     <StackLink
                       envId={envId}
                       name={g.name}
-                      coamingStackId={coamingStackIdOf(g.rows)}
+                      tierplanStackId={tierplanStackIdOf(g.rows)}
                     />
                   ) : undefined,
                 summary: t("services.list.group.healthy", { healthy: g.healthy, count: g.total }),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package storetest gives tests a real, migrated SQLite store in a temporary
 // directory. There is no fake: tests exercise the same SQL as production.
@@ -19,7 +19,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 var (
@@ -37,7 +37,7 @@ func template() ([]byte, error) {
 }
 
 func buildTemplate() (data []byte, err error) {
-	dir, err := os.MkdirTemp("", "coaming-storetest-*")
+	dir, err := os.MkdirTemp("", "tierplan-storetest-*")
 	if err != nil {
 		return nil, fmt.Errorf("create template directory: %w", err)
 	}

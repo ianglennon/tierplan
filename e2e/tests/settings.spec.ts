@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The Settings tabs against the real server (plans 23 and 26): saving the
 // instance name, renaming and removing the managed host with its confirmation
@@ -25,19 +25,19 @@ test("General saves the instance name and keeps it across a reload", async ({ pa
     .getByRole("button", { name: "Save settings" });
   // Nothing changed yet, so there is nothing to save.
   await expect(save).toBeDisabled();
-  // COAMING_PUBLIC_URL is set in this topology (the proxy's address with its
+  // TIERPLAN_PUBLIC_URL is set in this topology (the proxy's address with its
   // subpath), so the field is locked and says which variable holds it. The agent
   // URL is set too, so it is locked as well.
   await expect(page.getByRole("img", { name: "Locked" }).first()).toBeVisible();
-  await expect(page.getByText("Set by the COAMING_PUBLIC_URL environment variable.")).toBeVisible();
+  await expect(page.getByText("Set by the TIERPLAN_PUBLIC_URL environment variable.")).toBeVisible();
 
-  await name.fill("E2E Coaming");
+  await name.fill("E2E TierPlan");
   await expect(save).toBeEnabled();
   await save.click();
   await expect(page.getByText("Settings saved.")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("textbox", { name: "Instance name" })).toHaveValue("E2E Coaming");
+  await expect(page.getByRole("textbox", { name: "Instance name" })).toHaveValue("E2E TierPlan");
 });
 
 test("Environments renames the host, asks before removing it, and adds it back", async ({
@@ -86,7 +86,7 @@ test("About shows the version, the source links and the third-party notices", as
   const source = main.getByRole("link", { name: "Source code (opens in a new tab)" });
   await expect(source).toBeVisible();
   await expect(source).toHaveAttribute("target", "_blank");
-  await expect(source).toHaveAttribute("href", /^https:\/\/github\.com\/ianglennon\/coaming/);
+  await expect(source).toHaveAttribute("href", /^https:\/\/github\.com\/ianglennon\/tierplan/);
   await expect(main.getByRole("link", { name: /^Commit .* source tree/ })).toBeVisible();
   await expect(main.getByRole("region", { name: "Third-party notices list" })).toBeVisible();
 });

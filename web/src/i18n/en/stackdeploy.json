@@ -64,15 +64,15 @@
     },
     "failed": {
       "title": "Deploy failed",
-      "fallback": "Coaming stopped at {{step}}.",
-      "stopped_one": "Coaming stopped at {{step}}. {{done}} of {{count}} service was updated before it stopped, and nothing was rolled back.",
-      "stopped_other": "Coaming stopped at {{step}}. {{done}} of {{count}} services were updated before it stopped, and nothing was rolled back."
+      "fallback": "TierPlan stopped at {{step}}.",
+      "stopped_one": "TierPlan stopped at {{step}}. {{done}} of {{count}} service was updated before it stopped, and nothing was rolled back.",
+      "stopped_other": "TierPlan stopped at {{step}}. {{done}} of {{count}} services were updated before it stopped, and nothing was rolled back."
     },
     "cancelled": {
       "title": "Deploy cancelled",
-      "body": "Coaming stopped at the step it had reached.",
-      "stopped_one": "Coaming stopped at {{step}}. {{done}} of {{count}} service was already updated.",
-      "stopped_other": "Coaming stopped at {{step}}. {{done}} of {{count}} services were already updated."
+      "body": "TierPlan stopped at the step it had reached.",
+      "stopped_one": "TierPlan stopped at {{step}}. {{done}} of {{count}} service was already updated.",
+      "stopped_other": "TierPlan stopped at {{step}}. {{done}} of {{count}} services were already updated."
     },
     "openStack": "Open stack",
     "backToEditing": "Back to editing",
@@ -100,7 +100,7 @@
       "action": "Cancel deploy",
       "pending": "Cancelling…",
       "title": "Cancel this deploy?",
-      "body": "Coaming stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
+      "body": "TierPlan stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
       "keep": "Keep deploying",
       "confirm": "Cancel deploy",
       "finished": "This deploy has already ended.",
@@ -110,7 +110,7 @@
       "removed_one": "The {{count}} object created for this deploy that nothing uses was removed.",
       "removed_other": "The {{count}} objects created for this deploy that nothing uses were removed.",
       "removedCancelled": "Objects created for this deploy that nothing uses were removed.",
-      "left": "Coaming couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
+      "left": "TierPlan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
       "object": "{{kind}} {{name}}",
       "label": "Cleaned up"
     },
@@ -139,8 +139,8 @@
         "invalid": "That version can't be deployed again as it is. Open the editor to fix it, then deploy.",
         "tooMany": "You already have 5 jobs running. Wait for one to finish.",
         "target": "This environment is no longer the kind of target this stack was created for.",
-        "clash": "Something Coaming does not manage already uses this stack's name on this environment.",
-        "lost": "Coaming couldn't tell whether the roll back started. Open the stack to see where it stands.",
+        "clash": "Something TierPlan does not manage already uses this stack's name on this environment.",
+        "lost": "TierPlan couldn't tell whether the roll back started. Open the stack to see where it stands.",
         "generic": "Couldn't start the roll back. Try again."
       }
     },
@@ -149,12 +149,12 @@
       "titleCancelled": "The last deploy was cancelled",
       "titleRollback": "The last roll back failed",
       "titleRollbackCancelled": "The last roll back was cancelled",
-      "stoppedAt": "Coaming stopped at {{service}}: {{reason}}",
-      "stoppedAtCancelled": "Coaming stopped at {{service}}. Nothing was rolled back.",
-      "stoppedCancelled": "Coaming stopped at the step it had reached. Nothing was rolled back.",
-      "stopped": "Coaming stopped: {{reason}}",
-      "interrupted": "The deploy was interrupted when Coaming stopped. The swarm may be partly updated.",
-      "interruptedRollback": "The roll back was interrupted when Coaming stopped. The swarm may be partly updated.",
+      "stoppedAt": "TierPlan stopped at {{service}}: {{reason}}",
+      "stoppedAtCancelled": "TierPlan stopped at {{service}}. Nothing was rolled back.",
+      "stoppedCancelled": "TierPlan stopped at the step it had reached. Nothing was rolled back.",
+      "stopped": "TierPlan stopped: {{reason}}",
+      "interrupted": "The deploy was interrupted when TierPlan stopped. The swarm may be partly updated.",
+      "interruptedRollback": "The roll back was interrupted when TierPlan stopped. The swarm may be partly updated.",
       "openConsole": "Open console",
       "reason": {
         "service_rejected": "Docker rejected the service.",
@@ -169,18 +169,18 @@
         "image_unresolved": "An image could not be looked up.",
         "registry_unreachable": "A registry could not be reached.",
         "registry_unresolved": "The registry credential for an image could not be read.",
-        "no_manager_connected": "No manager of the swarm is connected to Coaming.",
+        "no_manager_connected": "No manager of the swarm is connected to TierPlan.",
         "agent_policy_denied": "The agent refused the request.",
-        "agent_host_policy": "The host's agent doesn't let Coaming deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
-        "host_read_only": "The host is read-only, so Coaming can't change it.",
+        "agent_host_policy": "The host's agent doesn't let TierPlan deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
+        "host_read_only": "The host is read-only, so TierPlan can't change it.",
         "network_conflict": "The swarm already has a network of that name that this stack does not own.",
         "network_failed": "The swarm could not create a network.",
-        "network_not_allocated": "The swarm didn't give a network of the stack an address range, so Coaming removed it again.",
+        "network_not_allocated": "The swarm didn't give a network of the stack an address range, so TierPlan removed it again.",
         "object_failed": "The swarm could not create a secret or config.",
         "object_invalid": "A secret or config of the stack has no usable content.",
         "object_name_taken": "The swarm already has a secret or config of that name that this stack does not own.",
         "external_missing": "A network, secret or config the stack names as external does not exist.",
-        "stack_name_clash": "A stack of that name already exists here that Coaming does not manage.",
+        "stack_name_clash": "A stack of that name already exists here that TierPlan does not manage.",
         "engine_error": "The engine could not complete the request.",
         "default": "The deploy didn't finish."
       }

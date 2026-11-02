@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -53,7 +53,7 @@ export interface ShellPanelProps {
   image?: string;
   // Whether the container runs; undefined until it has loaded.
   running?: boolean;
-  // The container as the list knows it: whether it is one of Coaming's own, whether its
+  // The container as the list knows it: whether it is one of TierPlan's own, whether its
   // host is read-only, and what the Not running panel starts. Undefined until it has
   // loaded.
   row?: ContainerRow;
@@ -295,7 +295,7 @@ function ShellPanelBody({
         } else if (c.type === "idle_warning") {
           setWarned(true);
         } else if (c.type === "closed" && c.reason === "no_shell") {
-          // The image has no shell where Coaming looked: the panel for that replaces the
+          // The image has no shell where TierPlan looked: the panel for that replaces the
           // terminal, which never had anything to show.
           drop();
           setState({ phase: "launcher", failure: new ShellOpenError(409, "no_shell") });

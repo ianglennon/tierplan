@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -17,8 +17,8 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 // The service suites (plan 06-37, RES-02 to RES-05, RES-11, D-36) run the phase's service routes through real
@@ -521,7 +521,7 @@ func TestSwarmHostPolicyRefused(t *testing.T) {
 			t.Errorf("service.created rows = %+v, want one failure with the code agent_host_policy", f.srv.AuditRows("service.created"))
 		}
 
-		// A service that has host access already (made on the manager, not through Coaming) cannot be scaled,
+		// A service that has host access already (made on the manager, not through TierPlan) cannot be scaled,
 		// because every update carries the whole spec.
 		sh(t, mgr, "docker service create --name policy-existing --no-resolve-image --detach --replicas 0 --mount type=bind,src=/,dst=/host,ro "+dockertest.ServiceTestImage+" sleep 3600")
 		code, body = f.srv.Do(http.MethodPost, base+"/services/scale", map[string]any{"targets": []map[string]any{{"serviceId": "policy-existing", "replicas": 1}}})

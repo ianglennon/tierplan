@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package wire is the contract between the Coaming server and its agents: the
+// Package wire is the contract between the TierPlan server and its agents: the
 // WebSocket subprotocol, the handshake messages, the reason codes and the kind
 // byte that opens every multiplexed stream. The server and the agent are built
 // from different modules and released together, so everything both sides must
 // agree on lives here and nowhere else. Standard library only.
 //
 // Every deployed agent speaks this handshake (D-05), so a change that an old
-// agent cannot follow ships as a new subprotocol name (coaming.agent.v2) and
+// agent cannot follow ships as a new subprotocol name (tierplan.agent.v2) and
 // the server accepts both for a window. That is what Subprotocol is for.
 package wire
 
@@ -16,8 +16,8 @@ import "time"
 
 const (
 	// Subprotocol names the handshake. It is also the version transition
-	// mechanism: an incompatible handshake becomes coaming.agent.v2.
-	Subprotocol = "coaming.agent.v1"
+	// mechanism: an incompatible handshake becomes tierplan.agent.v2.
+	Subprotocol = "tierplan.agent.v1"
 	// ProtoVersion is the protocol version carried in every handshake message
 	// and signed into the transcript.
 	ProtoVersion = 1
@@ -126,11 +126,11 @@ const (
 const (
 	// DeniedAllowlist means the request is not on the agent's allowlist.
 	DeniedAllowlist = "allowlist"
-	// DeniedReadOnly means the host set COAMING_AGENT_READ_ONLY and the request
+	// DeniedReadOnly means the host set TIERPLAN_AGENT_READ_ONLY and the request
 	// would change something.
 	DeniedReadOnly = "read_only_flag"
 	// DeniedHostPolicy means the host did not set
-	// COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES and the service spec, a volume it
+	// TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES and the service spec, a volume it
 	// mounts, or a volume create gives tasks host access.
 	DeniedHostPolicy = "host_policy"
 )
@@ -215,7 +215,7 @@ type PolicyFacts struct {
 	ReadOnly   bool `json:"readOnly"`
 	SelfUpdate bool `json:"selfUpdate"`
 	// PrivilegedServices is true when the host set
-	// COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES, so a manager's agent forwards
+	// TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, so a manager's agent forwards
 	// service specs that give tasks host access, and every agent-managed host's
 	// agent forwards the volume creates it would refuse (volume creates). Absent
 	// reads as false.
@@ -274,7 +274,7 @@ type Heartbeat struct {
 
 // Denied is the agent telling the server that its policy refused a request, with
 // what was asked and why. The server records it in the audit log (D-29): it means
-// a bug in Coaming or a server that is asking for more than it should. Method and
+// a bug in TierPlan or a server that is asking for more than it should. Method and
 // Path come from the server's own request, so they are capped on both ends.
 type Denied struct {
 	T      string `json:"t"`

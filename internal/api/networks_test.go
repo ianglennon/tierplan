@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Network create (plan 04-12, RES-06, D-39, D-40, D-51, P2 D-42). Docker is a fake
@@ -1705,7 +1705,7 @@ func TestDisconnectContainerOnASwarmGoesToTheContainersNodeOnly(t *testing.T) {
 	}
 }
 
-// Coaming's own containers (WR-05, D-11, D-12): a connect or disconnect of the server's
+// TierPlan's own containers (WR-05, D-11, D-12): a connect or disconnect of the server's
 // container or an agent's needs its name typed, from a fresh inspect, with the attempt
 // audited before the call and the outcome after it.
 
@@ -1718,9 +1718,9 @@ func ownNetworkEngine() dockertest.FakeConfig {
 			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}},
 		},
 		Containers: []dockertest.FakeContainer{
-			{ID: selfCtr, Names: []string{"/coaming"}, Image: "coaming:edge", State: "running", Networks: onApp},
-			{ID: agentID, Names: []string{"/coaming-agent"}, Image: "coaming-agent:edge", State: "running",
-				Labels: map[string]string{"coaming.agent": "true"}, Networks: onApp},
+			{ID: selfCtr, Names: []string{"/tierplan"}, Image: "tierplan:edge", State: "running", Networks: onApp},
+			{ID: agentID, Names: []string{"/tierplan-agent"}, Image: "tierplan-agent:edge", State: "running",
+				Labels: map[string]string{"tierplan.agent": "true"}, Networks: onApp},
 			{ID: "c1", Names: []string{"/web"}, State: "running"},
 		},
 	}
@@ -1754,8 +1754,8 @@ func TestDisconnectOfAnOwnContainerNeedsItsNameTypedAndSendsNothingWithout(t *te
 func TestDisconnectOfAnOwnContainerWithItsNameIsAuditedBeforeAndAfterTheCall(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ id, name, own string }{
-		{selfCtr, "coaming", "server"},
-		{agentID, "coaming-agent", "agent"},
+		{selfCtr, "tierplan", "server"},
+		{agentID, "tierplan-agent", "agent"},
 	} {
 		t.Run(c.own, func(t *testing.T) {
 			f, e := dashEnv(t, ownNetworkEngine())
@@ -1792,7 +1792,7 @@ func TestConnectOfAnOwnContainerNeedsItsNameTypedAndIsAuditedBeforeAndAfter(t *t
 	if w := f.fake.Writes(); len(w) != 0 {
 		t.Fatalf("the daemon saw %v, want nothing", w)
 	}
-	rec = f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q,"confirm":"coaming-agent"}`, agentID))
+	rec = f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q,"confirm":"tierplan-agent"}`, agentID))
 	if rec.code != http.StatusNoContent {
 		t.Fatalf("%d: %s", rec.code, rec.body)
 	}
@@ -1832,9 +1832,9 @@ func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsC
 	cfg := ownNetworkEngine()
 	cfg.DropWrites = true
 	f, e := dashEnv(t, cfg)
-	rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":"coaming"}`, selfCtr))
+	rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":"tierplan"}`, selfCtr))
 	if rec.code != http.StatusNoContent {
-		t.Fatalf("%d: %s, want 204: cutting Coaming off its network ends the call", rec.code, rec.body)
+		t.Fatalf("%d: %s, want 204: cutting TierPlan off its network ends the call", rec.code, rec.body)
 	}
 	rows := f.networkAudits(t)
 	if len(rows) != 2 || rows[0].Details["stage"] != "initiated" || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != string(audit.ResultSuccess) {
@@ -1944,7 +1944,7 @@ func TestCreateNetworkOverlapLocalScope(t *testing.T) {
 	}
 }
 
-// Two creates of one subnet through Coaming at once: one is made, the other refused (NET-05).
+// Two creates of one subnet through TierPlan at once: one is made, the other refused (NET-05).
 func TestCreateNetworkConcurrentSameSubnet(t *testing.T) {
 	t.Parallel()
 	s := subnetSwarm(t)
@@ -1985,7 +1985,7 @@ func TestCreateNetworkNotAllocatedIsRemoved(t *testing.T) {
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
 		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
 	}
-	for _, want := range []string{"The swarm didn't give stub an address range", "Coaming removed it again", "10.77.0.0/24"} {
+	for _, want := range []string{"The swarm didn't give stub an address range", "TierPlan removed it again", "10.77.0.0/24"} {
 		if !strings.Contains(string(rec.body), want) {
 			t.Errorf("the problem lacks %q: %s", want, rec.body)
 		}
@@ -2030,7 +2030,7 @@ func TestCreateNetworkNotAllocatedAndNotRemovable(t *testing.T) {
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
 		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
 	}
-	if !strings.Contains(string(rec.body), "Coaming couldn't remove it, so delete stub on the Networks page.") || strings.Contains(string(rec.body), "removed it again") {
+	if !strings.Contains(string(rec.body), "TierPlan couldn't remove it, so delete stub on the Networks page.") || strings.Contains(string(rec.body), "removed it again") {
 		t.Errorf("the problem does not say the stub is left: %s", rec.body)
 	}
 	if strings.Contains(string(rec.body), "network is busy") {

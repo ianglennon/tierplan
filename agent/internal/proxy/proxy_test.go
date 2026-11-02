@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -25,7 +25,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // fakeSocket is a Docker daemon stand-in on a unix socket. It records every
@@ -53,7 +53,7 @@ type fakeSocket struct {
 
 func newFakeSocket(t *testing.T) *fakeSocket {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "cmag")
+	dir, err := os.MkdirTemp("", "tpag")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestHopByHopAndForwardingHeadersDoNotReachTheEngine(t *testing.T) {
 }
 
 // The one thing opened up for plan 20 (D-27, T-02-70): GET and HEAD of
-// /containers/{id}/json, which Coaming reads only for a container's restart
+// /containers/{id}/json, which TierPlan reads only for a container's restart
 // policy. Phase 4 adds the lifecycle, the logs and the exec create under
 // /containers/{id}/ (routes_test.go, body_test.go) and Phase 6 the stats; the archive,
 // attach and export stay refused.
@@ -932,7 +932,7 @@ func TestHostPolicyAVolumeThatMountsTheHostIsRefusedSoAServiceCannotMountItByNam
 	})
 }
 
-// A volume that already exists (made outside Coaming, or while the host had opted in)
+// A volume that already exists (made outside TierPlan, or while the host had opted in)
 // is mounted as it is, so the agent asks its own engine what backs a name a service
 // mounts (S2-CR-01, plan 06-44).
 func TestHostPolicyAServiceCannotMountAPreExistingVolumeThatMountsTheHost(t *testing.T) {

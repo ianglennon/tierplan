@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package servertest runs the real Coaming server inside a test process, on an
+// Package servertest runs the real TierPlan server inside a test process, on an
 // address containers can reach, with an admin signed in. It exists for the
 // agent tests that run real agents in dind nodes: the node dials the address in
 // the install command, so the server cannot be on loopback.
@@ -30,13 +30,13 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/buildinfo"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/server"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/server"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 const adminPassword = "correct horse battery"
@@ -48,7 +48,7 @@ type Options struct {
 	// becomes the host of the public URL, which agents are told to dial and
 	// which the self-signed certificate covers. Required.
 	Host string
-	// Env is extra COAMING_* settings, applied over the defaults.
+	// Env is extra TIERPLAN_* settings, applied over the defaults.
 	Env map[string]string
 	// Version is the version the server reports, as a release build would: it sets
 	// buildinfo.Version for this test process before the server is built, and puts
@@ -62,7 +62,7 @@ type Options struct {
 	AddressSpaceClock func() time.Time
 }
 
-// Server is a running Coaming with an admin signed in.
+// Server is a running TierPlan with an admin signed in.
 type Server struct {
 	// URL is the public URL, https://<host>:<port>.
 	URL string
@@ -75,7 +75,7 @@ type Server struct {
 	cookie *http.Cookie
 	csrf   string
 
-	// env is the COAMING_* settings the server was built from, kept so Restart builds
+	// env is the TIERPLAN_* settings the server was built from, kept so Restart builds
 	// the same one on the same address. cancel and done stop the running server.
 	env    map[string]string
 	opts   []server.Option
@@ -123,10 +123,10 @@ func Start(t testing.TB, o Options) *Server {
 		s.URL = "https://" + net.JoinHostPort(o.Host, strconv.Itoa(port))
 
 		s.env = map[string]string{
-			"COAMING_DATA_DIR":        dataDir,
-			"COAMING_LISTEN":          "0.0.0.0:" + strconv.Itoa(port),
-			"COAMING_PUBLIC_URL":      s.URL,
-			"COAMING_TLS_SELF_SIGNED": "true",
+			"TIERPLAN_DATA_DIR":        dataDir,
+			"TIERPLAN_LISTEN":          "0.0.0.0:" + strconv.Itoa(port),
+			"TIERPLAN_PUBLIC_URL":      s.URL,
+			"TIERPLAN_TLS_SELF_SIGNED": "true",
 		}
 		for k, v := range o.Env {
 			s.env[k] = v
@@ -222,10 +222,10 @@ func (s *Server) Restart(version string) {
 }
 
 // serverLog is where the server under test writes its log: nowhere, unless
-// COAMING_TEST_SERVER_LOG is set, which sends it to stderr at debug level for
+// TIERPLAN_TEST_SERVER_LOG is set, which sends it to stderr at debug level for
 // someone working out why a real-engine run did what it did.
 func serverLog() *slog.Logger {
-	if os.Getenv("COAMING_TEST_SERVER_LOG") == "" {
+	if os.Getenv("TIERPLAN_TEST_SERVER_LOG") == "" {
 		return slog.New(slog.DiscardHandler)
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -605,7 +605,7 @@ type ContainerList struct {
 }
 
 // Containers lists the containers of an environment. query is a raw query
-// string without the question mark, such as "node=cm-w1".
+// string without the question mark, such as "node=tp-w1".
 func (s *Server) Containers(id, query string) (ContainerList, int, []byte) {
 	s.t.Helper()
 	path := "/api/env/" + id + "/containers"

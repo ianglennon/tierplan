@@ -67,14 +67,14 @@
       "states": {
         "pending": {
           "text": "No agent has connected yet.",
-          "hint": "Install the Coaming agent on a host to start managing it."
+          "hint": "Install the TierPlan agent on a host to start managing it."
         },
         "reconnecting": {
-          "text": "Coaming just started and is waiting for the agent to reconnect.",
+          "text": "TierPlan just started and is waiting for the agent to reconnect.",
           "hint": "This usually takes under a minute."
         },
         "offline": {
-          "text": "Coaming can't reach this environment.",
+          "text": "TierPlan can't reach this environment.",
           "hint": "Open it to see why."
         },
         "degraded": {
@@ -91,7 +91,7 @@
         },
         "unsupported": {
           "text": "This Docker setup isn't supported.",
-          "hint": "Coaming manages Docker Engine 24 or later."
+          "hint": "TierPlan manages Docker Engine 24 or later."
         }
       }
     }

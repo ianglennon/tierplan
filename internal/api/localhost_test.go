@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // GET /api/local-host (plan 15, D-19). The fake daemon is a real unix socket,
@@ -127,7 +127,7 @@ func TestLocalHostNamesAnUnsupportedEngine(t *testing.T) {
 func TestLocalHostReportsASocketNobodyAnswersOnAsUnreachable(t *testing.T) {
 	t.Parallel()
 	// A socket that accepts and hangs up: it exists, but nothing speaks Docker.
-	dir, err := os.MkdirTemp("", "cmlh")
+	dir, err := os.MkdirTemp("", "tplh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestLocalHostReportsASocketNobodyAnswersOnAsUnreachable(t *testing.T) {
 
 func TestLocalHostGivesUpOnAnEngineThatAcceptsAndNeverAnswers(t *testing.T) {
 	t.Parallel()
-	dir, err := os.MkdirTemp("", "cmlh")
+	dir, err := os.MkdirTemp("", "tplh")
 	if err != nil {
 		t.Fatal(err)
 	}

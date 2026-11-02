@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package vault
 
@@ -27,7 +27,7 @@ func keyLine(k []byte) string { return base64.StdEncoding.EncodeToString(k) + "\
 func TestWriteKeyFileWithoutHardLinksCreatesExclusively(t *testing.T) {
 	noHardLinks(t, syscall.EPERM)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "coaming.key")
+	path := filepath.Join(dir, "tierplan.key")
 	key := bytes.Repeat([]byte{7}, 32)
 
 	created, err := writeKeyFile(path, key)
@@ -46,13 +46,13 @@ func TestWriteKeyFileWithoutHardLinksCreatesExclusively(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 {
-		t.Fatalf("directory holds %d entries, want only coaming.key (no temporary file left)", len(entries))
+		t.Fatalf("directory holds %d entries, want only tierplan.key (no temporary file left)", len(entries))
 	}
 }
 
 func TestWriteKeyFileWithoutHardLinksNeverReplacesAnExistingKey(t *testing.T) {
 	noHardLinks(t, syscall.EPERM)
-	path := filepath.Join(t.TempDir(), "coaming.key")
+	path := filepath.Join(t.TempDir(), "tierplan.key")
 	keyA, keyB := bytes.Repeat([]byte{'A'}, 32), bytes.Repeat([]byte{'B'}, 32)
 	if err := os.WriteFile(path, []byte(keyLine(keyA)), 0o600); err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestWriteKeyFileWithoutHardLinksNeverReplacesAnExistingKey(t *testing.T) {
 
 func TestWriteKeyFileLinkSaysExistsMeansTheOtherProcessWon(t *testing.T) {
 	noHardLinks(t, fs.ErrExist)
-	path := filepath.Join(t.TempDir(), "coaming.key")
+	path := filepath.Join(t.TempDir(), "tierplan.key")
 	keyA, keyB := bytes.Repeat([]byte{'A'}, 32), bytes.Repeat([]byte{'B'}, 32)
 	if err := os.WriteFile(path, []byte(keyLine(keyA)), 0o600); err != nil {
 		t.Fatal(err)

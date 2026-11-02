@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // ModeRemove is the Mode of a removal job and the kind of its row in stack_deploys.
@@ -47,7 +47,7 @@ const (
 )
 
 func init() {
-	codeMessages[CodeTasksRemain] = "Tasks were still running when Coaming stopped waiting, so nothing after this was removed. Docker may still finish stopping them."
+	codeMessages[CodeTasksRemain] = "Tasks were still running when TierPlan stopped waiting, so nothing after this was removed. Docker may still finish stopping them."
 	codeMessages[CodeInUse] = "Something outside this stack still uses it, so it was left in place."
 	codeMessages[CodeVolumeNotOwned] = "That volume isn't one of this stack's, so it was left alone."
 	codeMessages[CodeDefinitionFailed] = "The stack's definition could not be deleted."
@@ -58,7 +58,7 @@ func init() {
 type VolumeChoice struct {
 	Name, NodeID, NodeName string
 	// UsedOutside counts the containers on the node that mount the volume and are not the stack's own. Zero when
-	// nothing does or when Coaming could not tell.
+	// nothing does or when TierPlan could not tell.
 	UsedOutside int
 }
 
@@ -115,7 +115,7 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			// The stack's own containers and the ones someone added to its project from the host CLI (docker compose up
-			// --scale, no coaming.stack.id) are what a removal takes; another stack's and a project the stack owns none
+			// --scale, no tierplan.stack.id) are what a removal takes; another stack's and a project the stack owns none
 			// of are not (SplitProject, G-08-6).
 			mine, added, _ := SplitProject(own, cs, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
 			out.containers = append(mine, added...)
@@ -535,7 +535,7 @@ func (d Deps) Remove(ctx context.Context, in RemoveInput, r *jobs.Reporter) (res
 
 // check reads what the stack owns and refuses a removal that would touch something that is not the stack's: a
 // ticked volume that exists on its node under another owner, a host that is read-only, a Compose project of the
-// same name that Coaming does not manage.
+// same name that TierPlan does not manage.
 func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 	d, in := x.d, x.in
 	x.begin(ItemCheck)
@@ -730,7 +730,7 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 }
 
 // containersOn counts the containers of the swarm stack on one node, in any state: they are found by the stack's
-// namespace and kept only when they also carry its Coaming ID.
+// namespace and kept only when they also carry its TierPlan ID.
 func (x *removal) containersOn(ctx context.Context, nodeID string) (int, error) {
 	var n int
 	err := x.d.Aggregator.OnNode(ctx, x.in.EnvID, nodeID, func(c *dockerx.Client) error {

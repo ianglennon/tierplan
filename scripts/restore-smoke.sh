@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # The PID 1 spike for a restore from the web UI (D-30, PLAT-03, RESEARCH A3 and
-# A5). After Settings > Backup > Restore swaps the database, Coaming restarts by
+# A5). After Settings > Backup > Restore swaps the database, TierPlan restarts by
 # re-executing itself (syscall.Exec), so the container's PID 1 survives and the
 # container needs no restart policy. Whether exec works for PID 1 after the
 # privilege drop (root to UID 1000 inside a distroless image) can only be
@@ -15,31 +15,31 @@
 #      backup, then creates user member2 the same way, so member2 is not in the backup;
 #   3. records `docker inspect` State.Pid, State.StartedAt and RestartCount;
 #   4. uploads the backup, checks it and applies it with the instance name, then
-#      waits until Coaming has restarted into the restored state (the log says
+#      waits until TierPlan has restarted into the restored state (the log says
 #      "restore completed" and /readyz answers 200, up to RESTORE_WAIT seconds);
 #   5. asserts the container is still running with the same State.Pid,
 #      State.StartedAt and RestartCount (the same process tree: exec kept PID 1),
 #      the session from before the restore is refused, the admin and member1 sign in,
 #      member2 is refused, the pre-restore snapshot is in /data/backups, the
-#      restore-pending marker is gone, and `coaming audit verify` prints
+#      restore-pending marker is gone, and `tierplan audit verify` prints
 #      "audit chain OK".
 #
 # The decision rule (plan 03-25): if this passes, exec stays the default of
-# COAMING_RESTORE_RESTART. If the exec step fails in the image (the container
+# TIERPLAN_RESTORE_RESTART. If the exec step fails in the image (the container
 # exits or restarts), the default becomes "exit" and this script is run with
 # RESTART_MODE=exit, which starts the container with --restart unless-stopped and
-# COAMING_RESTORE_RESTART=exit and expects exactly one restart (RestartCount up by
+# TIERPLAN_RESTORE_RESTART=exit and expects exactly one restart (RestartCount up by
 # one, a new StartedAt) instead. Both modes stay tested.
 #
 # One PASS or FAIL line per check. A failing check prints "RESTORE SMOKE FAIL: ..."
 # with the last 50 log lines and exits 1; a clean run ends with the line
 # "RESTORE SMOKE PASS". The container and volume are removed on exit.
 #
-# Environment: IMAGE (default coaming:e2e, built by `make e2e-image`),
+# Environment: IMAGE (default tierplan:e2e, built by `make e2e-image`),
 # SMOKE_PORT (default: unset, so Docker assigns the loopback host port and the script
 # reads it back, again after the restart in exit mode; the public URL the server is
 # told is a fixed one that does not name it), RESTORE_WAIT (90) and RESTART_MODE (exec or exit; default exec). The
-# container and volume carry the label coaming.ci.owner=$COAMING_CI_OWNER
+# container and volume carry the label tierplan.ci.owner=$TIERPLAN_CI_OWNER
 # (local-<pid> when unset) so `make ci-clean` removes them after a cancelled CI job
 # (D-23). Needs Docker, curl, jq and tar. The passwords
 # belong to a container that is destroyed at the end; no repository secret is
@@ -48,8 +48,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-IMAGE="${IMAGE:-coaming:e2e}"
-OWNER_LABEL="coaming.ci.owner=${COAMING_CI_OWNER:-local-$$}"
+IMAGE="${IMAGE:-tierplan:e2e}"
+OWNER_LABEL="tierplan.ci.owner=${TIERPLAN_CI_OWNER:-local-$$}"
 RESTORE_WAIT="${RESTORE_WAIT:-90}"
 RESTART_MODE="${RESTART_MODE:-exec}"
 case "${RESTART_MODE}" in
@@ -63,7 +63,7 @@ done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 \
   || { echo "RESTORE SMOKE FAIL: the image ${IMAGE} is not built; run make restore-smoke" >&2; exit 1; }
 
-NAME="coaming-restore-smoke-$$"
+NAME="tierplan-restore-smoke-$$"
 VOLUME="${NAME}"
 # The public URL the server is told is fixed, and is the Origin of every request. The
 # host port Docker assigns is never probed for beforehand (two runners share each VM,
@@ -160,7 +160,7 @@ docker volume create --label "${OWNER_LABEL}" "${VOLUME}" >/dev/null
 
 RUN_ARGS=()
 if [ "${RESTART_MODE}" = "exit" ]; then
-  RUN_ARGS+=(--restart unless-stopped -e COAMING_RESTORE_RESTART=exit)
+  RUN_ARGS+=(--restart unless-stopped -e TIERPLAN_RESTORE_RESTART=exit)
 fi
 # The 3 second health interval only speeds up the wait; the probe is the one
 # baked into the image. There is deliberately no restart policy in exec mode.
@@ -168,7 +168,7 @@ docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
   -p "127.0.0.1:${SMOKE_PORT:-}:7480" \
   -v "${VOLUME}:/data" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e "COAMING_PUBLIC_URL=${PUBLIC}" \
+  -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" \
   --health-interval 3s --health-start-period 0s --health-retries 5 \
   ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} \
   "${IMAGE}" >/dev/null || fail "image starts" "docker run failed"
@@ -178,7 +178,7 @@ pass "image healthy (${IMAGE}, restart mode ${RESTART_MODE})"
 
 # ---- 1. setup, two members and a backup in between ----
 
-TOKEN="$(docker exec "${NAME}" /usr/local/bin/coaming setup-token)" || fail "setup token" "docker exec coaming setup-token failed"
+TOKEN="$(docker exec "${NAME}" /usr/local/bin/tierplan setup-token)" || fail "setup token" "docker exec tierplan setup-token failed"
 code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${ADMIN_PW}\",\"instanceName\":\"${INSTANCE}\",\"publicUrl\":\"${PUBLIC}\"}" \
   "${HOST_URL}/api/setup/complete")" || code="curl-failed"
@@ -191,11 +191,11 @@ pass "setup done"
 new_member member1 "${M1_PW}"
 pass "user member1 created"
 
-code="$(curl -sS -o "${WORK}/backup.coaming" -w '%{http_code}' -X POST -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+code="$(curl -sS -o "${WORK}/backup.tierplan" -w '%{http_code}' -X POST -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" -d "{\"passphrase\":\"${BACKUP_PW}\"}" "${HOST_URL}/api/backup/export")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "backup exported" "POST /api/backup/export returned ${code}"
-[ -s "${WORK}/backup.coaming" ] || fail "backup exported" "the downloaded file is empty"
-pass "backup exported ($(wc -c <"${WORK}/backup.coaming") bytes)"
+[ -s "${WORK}/backup.tierplan" ] || fail "backup exported" "the downloaded file is empty"
+pass "backup exported ($(wc -c <"${WORK}/backup.tierplan") bytes)"
 
 new_member member2 "${M2_PW}"
 pass "user member2 created after the backup"
@@ -210,7 +210,7 @@ pass "container state recorded (pid ${BEFORE_PID}, started ${BEFORE_STARTED}, re
 OLD_COOKIE="${COOKIE}"
 
 code="$(curl -sS -o "${WORK}/upload.json" -w '%{http_code}' -X POST -H "Content-Type: application/octet-stream" -H "Origin: ${PUBLIC}" \
-  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" --data-binary "@${WORK}/backup.coaming" "${HOST_URL}/api/backup/restore/upload")" || code="curl-failed"
+  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" --data-binary "@${WORK}/backup.tierplan" "${HOST_URL}/api/backup/restore/upload")" || code="curl-failed"
 [ "${code}" = "201" ] || fail "backup uploaded" "upload returned ${code}: $(cat "${WORK}/upload.json" 2>/dev/null)"
 UPLOAD_ID="$(jq -r .uploadId "${WORK}/upload.json")"
 [ -n "${UPLOAD_ID}" ] && [ "${UPLOAD_ID}" != null ] || fail "backup uploaded" "the answer carries no upload ID"
@@ -226,7 +226,7 @@ api POST /api/backup/restore/apply "{\"uploadId\":\"${UPLOAD_ID}\",\"passphrase\
 [ "${HTTP_CODE}" = "202" ] || fail "restore accepted" "apply returned ${HTTP_CODE}: ${API_BODY}"
 pass "restore accepted (202)"
 
-# Wait for the restored Coaming: the log says so, and it answers. The log is the
+# Wait for the restored TierPlan: the log says so, and it answers. The log is the
 # container's, so it holds the old process and the new one.
 RESTORED=false
 for _ in $(seq 1 "${RESTORE_WAIT}"); do
@@ -287,7 +287,7 @@ if docker cp "${NAME}:/data/restore-pending" - >/dev/null 2>&1; then
 fi
 pass "restore marker removed"
 
-docker exec "${NAME}" /usr/local/bin/coaming audit verify 2>&1 | tee "${WORK}/audit.out" \
+docker exec "${NAME}" /usr/local/bin/tierplan audit verify 2>&1 | tee "${WORK}/audit.out" \
   | grep -Eq '^audit chain OK: [0-9]+ entries$' || fail "audit verify" "$(cat "${WORK}/audit.out")"
 pass "audit verify (audit chain OK)"
 

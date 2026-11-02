@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // runningAgentLog is the log of the agent containers running on a node now. Exited
@@ -19,7 +19,7 @@ import (
 // here was written by an agent of the current spec.
 func runningAgentLog(t *testing.T, n *dockertest.Node) string {
 	t.Helper()
-	out, _ := n.Sh(execCtx(t, time.Minute), "for c in $(docker ps -q --filter label=coaming.agent=true); do docker logs $c 2>&1; done")
+	out, _ := n.Sh(execCtx(t, time.Minute), "for c in $(docker ps -q --filter label=tierplan.agent=true); do docker logs $c 2>&1; done")
 	return out
 }
 
@@ -44,7 +44,7 @@ func waitServiceUpdated(t *testing.T, mgr *dockertest.Node) {
 }
 
 // TestSwarmAgentsRestartWithoutAJoinToken takes the join-token secret and the
-// COAMING_AGENT_JOIN_TOKEN_FILE variable off a running swarm service, as
+// TIERPLAN_AGENT_JOIN_TOKEN_FILE variable off a running swarm service, as
 // docs/agent.md says an operator may once every agent is enrolled, and expects
 // every agent to restart as the same agent with no new enrolment (G-02-5, UAT
 // test 5, D-03). The service keeps the install's capability set (all dropped but
@@ -71,7 +71,7 @@ func TestSwarmAgentsRestartWithoutAJoinToken(t *testing.T) {
 	}
 
 	// The commands docs/agent.md shows ("Run enrolled agents without the join token").
-	t.Logf("service update:\n%s", quiet(sh(t, mgr, " docker service update --secret-rm "+f.env.Install.SecretName+" --env-rm COAMING_AGENT_JOIN_TOKEN_FILE "+agentName)))
+	t.Logf("service update:\n%s", quiet(sh(t, mgr, " docker service update --secret-rm "+f.env.Install.SecretName+" --env-rm TIERPLAN_AGENT_JOIN_TOKEN_FILE "+agentName)))
 	sh(t, mgr, " docker secret rm "+f.env.Install.SecretName)
 	waitServiceUpdated(t, mgr)
 
@@ -80,7 +80,7 @@ func TestSwarmAgentsRestartWithoutAJoinToken(t *testing.T) {
 		t.Errorf("service secrets = %+v, want none", spec.TaskTemplate.ContainerSpec.Secrets)
 	}
 	for _, e := range spec.TaskTemplate.ContainerSpec.Env {
-		if strings.HasPrefix(e, "COAMING_AGENT_JOIN_TOKEN") {
+		if strings.HasPrefix(e, "TIERPLAN_AGENT_JOIN_TOKEN") {
 			t.Errorf("the service still carries %s", e)
 		}
 	}
@@ -91,12 +91,12 @@ func TestSwarmAgentsRestartWithoutAJoinToken(t *testing.T) {
 	f.waitSwarmOnline(t, 2)
 	for _, n := range f.sw.Nodes() {
 		log := runningAgentLog(t, n)
-		for _, want := range []string{"token_present=false", "enrolled=true", "connected to Coaming"} {
+		for _, want := range []string{"token_present=false", "enrolled=true", "connected to TierPlan"} {
 			if !strings.Contains(log, want) {
 				t.Errorf("%s: the running agent's log lacks %q:\n%s", n.Hostname, want, log)
 			}
 		}
-		for _, bad := range []string{"read the enrolled state", "enrolled with Coaming"} {
+		for _, bad := range []string{"read the enrolled state", "enrolled with TierPlan"} {
 			if strings.Contains(log, bad) {
 				t.Errorf("%s: the running agent's log has %q:\n%s", n.Hostname, bad, log)
 			}
@@ -113,15 +113,15 @@ func TestSwarmAgentsRestartWithoutAJoinToken(t *testing.T) {
 	// not used: it reads the current secret from the service and fails with none.
 	rot := f.srv.RotateToken(f.env.ID)
 	t.Logf("add the token back:\n%s", quiet(sh(t, mgr, " printf %s '"+rot.Install.JoinToken+"' | docker secret create "+rot.Install.SecretName+" - "+
-		"&& docker service update --secret-add source="+rot.Install.SecretName+",target=coaming-agent-token,mode=0400 --env-add COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/coaming-agent-token "+agentName)))
+		"&& docker service update --secret-add source="+rot.Install.SecretName+",target=tierplan-agent-token,mode=0400 --env-add TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token "+agentName)))
 	waitServiceUpdated(t, mgr)
 	spec = inspectService(t, mgr, agentName)
 	secrets := spec.TaskTemplate.ContainerSpec.Secrets
 	if len(secrets) != 1 || secrets[0].SecretName != rot.Install.SecretName || secrets[0].File.Mode != 0o400 {
 		t.Errorf("service secrets = %+v, want only %s with mode 0400", secrets, rot.Install.SecretName)
 	}
-	if !slices.Contains(spec.TaskTemplate.ContainerSpec.Env, "COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/coaming-agent-token") {
-		t.Errorf("service env = %v, want COAMING_AGENT_JOIN_TOKEN_FILE", spec.TaskTemplate.ContainerSpec.Env)
+	if !slices.Contains(spec.TaskTemplate.ContainerSpec.Env, "TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token") {
+		t.Errorf("service env = %v, want TIERPLAN_AGENT_JOIN_TOKEN_FILE", spec.TaskTemplate.ContainerSpec.Env)
 	}
 	f.waitSwarmOnline(t, 2)
 	for _, n := range f.sw.Nodes() {

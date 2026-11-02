@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package registry owns image references, registry credentials, the resolver that
 // chooses which credential an image uses, and the registry client. It never reads
 // ~/.docker/config.json, a credential helper or a daemon setting: a credential is one
-// Coaming stored, chosen by Coaming, and nothing on the host leaks into a pull
+// TierPlan stored, chosen by TierPlan, and nothing on the host leaks into a pull
 // (Phase 5, D-25).
 //
 // # Using the resolver (Phases 6, 7 and 12)
@@ -19,7 +19,7 @@
 //   - Pass RegistryAuthFrom: "spec" only when AuthFor returns no credential, so the engine
 //     reuses what the service was last written with instead of dropping it.
 //   - A service updated without a header keeps the auth it has, so a credential rotated in
-//     Coaming reaches a running service only on that service's next update. The engine does
+//     TierPlan reaches a running service only on that service's next update. The engine does
 //     not return the auth from service inspect, and a node that has never logged in pulls
 //     with it (verified on a real swarm).
 //   - Never log, audit, store or return the header, and never put it in an error: it carries

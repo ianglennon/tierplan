@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -16,14 +16,14 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/swarmops"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/swarmops"
 )
 
 const (
@@ -44,15 +44,15 @@ const (
 // ServiceSpecBody is the spec of one service and the one before its last update, for the
 // editor and the rollback diff.
 type ServiceSpecBody struct {
-	Version        uint64         `json:"version" doc:"The service's version: what an update or a rollback must send back to be accepted"`
-	Name           string         `json:"name" doc:"The service name"`
-	Mode           string         `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
-	Stack          string         `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
-	CoamingStackID string         `json:"coamingStackId" doc:"The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
-	Agent          bool           `json:"agent" doc:"True for a Coaming agent service"`
-	Masked         bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
-	Spec           map[string]any `json:"spec" doc:"The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal"`
-	PreviousSpec   map[string]any `json:"previousSpec,omitempty" doc:"The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to"`
+	Version         uint64         `json:"version" doc:"The service's version: what an update or a rollback must send back to be accepted"`
+	Name            string         `json:"name" doc:"The service name"`
+	Mode            string         `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
+	Stack           string         `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
+	TierPlanStackID string         `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
+	Agent           bool           `json:"agent" doc:"True for a TierPlan agent service"`
+	Masked          bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+	Spec            map[string]any `json:"spec" doc:"The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal"`
+	PreviousSpec    map[string]any `json:"previousSpec,omitempty" doc:"The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to"`
 }
 
 // ServiceSpecOutput wraps ServiceSpecBody for huma.
@@ -79,7 +79,7 @@ type ServiceForceUpdateInput struct {
 type ServiceForceUpdateBody struct {
 	Image         string `json:"image" doc:"The image the service now names: tag@sha256:digest when the tag was resolved, else what it named"`
 	Digest        string `json:"digest" doc:"The digest the image is pinned to; empty when it names none"`
-	Pinned        bool   `json:"pinned" doc:"True when Coaming resolved the tag and wrote the digest into the spec"`
+	Pinned        bool   `json:"pinned" doc:"True when TierPlan resolved the tag and wrote the digest into the spec"`
 	PreviousImage string `json:"previousImage" doc:"The image the service named before"`
 	Reason        string `json:"reason,omitempty" enum:"digest_only,no_image" doc:"Why nothing was pinned. digest_only: the image names a digest and no tag, so it already is the exact image. no_image: the spec has no container image"`
 }
@@ -117,7 +117,7 @@ type ServiceRollbackOutput struct {
 // ServiceRemoveInput is the path and query of DELETE .../services/{serviceId}.
 type ServiceRemoveInput struct {
 	ServiceDetailInput
-	Confirm string `query:"confirm" maxLength:"128" doc:"The service's name, typed. Needed only to remove Coaming's own agent service; ignored for any other service"`
+	Confirm string `query:"confirm" maxLength:"128" doc:"The service's name, typed. Needed only to remove TierPlan's own agent service; ignored for any other service"`
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
@@ -128,7 +128,7 @@ func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 		OperationID: "forceUpdateService", Method: http.MethodPost, Path: "/api/env/{envId}/services/{serviceId}/force-update",
 		Summary: "Force a service update",
 		Description: "Replaces every task of a service again with the settings it has now, once and never retried. " +
-			"Coaming strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. " +
+			"TierPlan strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. " +
 			"A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. " +
 			"An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. " +
 			"A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. " +
@@ -180,7 +180,7 @@ func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 		Summary: "Remove a service",
 		Description: "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. " +
 			"A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. " +
-			"Coaming's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. " +
+			"TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. " +
 			"404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. " +
 			"Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -385,7 +385,7 @@ type serviceRemoveRefusedError struct {
 func (e *serviceRemoveRefusedError) Error() string { return "remove refused: " + e.code }
 
 // removeService removes one service. In one write call on a manager it reads the service,
-// refuses one a stack owns (D-05) and Coaming's own agent service unless its name was typed,
+// refuses one a stack owns (D-05) and TierPlan's own agent service unless its name was typed,
 // and otherwise removes it, once and never retried. Every attempt on a service that exists
 // is audited.
 func removeService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceRemoveInput) error {
@@ -414,7 +414,7 @@ func removeService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 		}
 		if agent && !confirmed {
 			return &serviceRemoveRefusedError{code: codeConfirmationRequired, problem: httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired,
-				"This is Coaming's agent service. Removing it disconnects every node it runs on. Type its name, "+detail.Name+", to confirm.")}
+				"This is TierPlan's agent service. Removing it disconnects every node it runs on. Type its name, "+detail.Name+", to confirm.")}
 		}
 		return c.ServiceRemove(writeCtx, detail.ID)
 	})

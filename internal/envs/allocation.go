@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -8,8 +8,8 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/netspace"
 )
 
 // SmallSubnetSetting is the environment's small stack subnet opt-in: whether a stack deploy gives
@@ -37,7 +37,7 @@ type AllocationInputs struct {
 }
 
 // AllocationInputs reads them. With fresh true the cached snapshot of every node is dropped first,
-// so a network made a moment ago, through Coaming or not, is seen; a caller holds LockAllocation
+// so a network made a moment ago, through TierPlan or not, is seen; a caller holds LockAllocation
 // across the read and the create that follows. A swarm no manager answers for is ErrNoManager. A
 // standalone host's pools are the ones a person entered, else the daemon's, else Docker's defaults, and
 // only its local networks count.

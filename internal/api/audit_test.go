@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // The audit log endpoints (plan 24, AUTH-09, AUTH-08, D-39, D-43, D-49,
@@ -235,7 +235,7 @@ func TestAuditExportCSVIsADownloadThatCannotInjectFormulas(t *testing.T) {
 	if ct := rec.header.Get("Content-Type"); !strings.HasPrefix(ct, "text/csv") {
 		t.Errorf("Content-Type = %q", ct)
 	}
-	if cd := rec.header.Get("Content-Disposition"); cd != `attachment; filename="coaming-audit-20260101T080405Z.csv"` {
+	if cd := rec.header.Get("Content-Disposition"); cd != `attachment; filename="tierplan-audit-20260101T080405Z.csv"` {
 		t.Errorf("Content-Disposition = %q", cd)
 	}
 	recs, err := csv.NewReader(strings.NewReader(rec.body)).ReadAll()
@@ -261,7 +261,7 @@ func TestAuditExportJSONStreamsTheFilteredEntriesAndRefusesOtherFormats(t *testi
 	f.log(t, at, "bob", "auth.login", "ua")
 	rec := f.get(t, "/api/audit/export?format=json&user=alice", f.cookie)
 	if rec.code != http.StatusOK || rec.header.Get("Content-Type") != "application/json" ||
-		rec.header.Get("Content-Disposition") != `attachment; filename="coaming-audit-20260101T080405Z.json"` {
+		rec.header.Get("Content-Disposition") != `attachment; filename="tierplan-audit-20260101T080405Z.json"` {
 		t.Fatalf("status %d, headers %v", rec.code, rec.header)
 	}
 	var got []map[string]any

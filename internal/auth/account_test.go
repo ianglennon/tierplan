@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package auth_test
 
@@ -20,11 +20,11 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // --- usernames -------------------------------------------------------------
@@ -392,7 +392,7 @@ func TestDeletingAUserDeletesTheirSessions(t *testing.T) {
 func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 	f := newSessionFixture(t)
 	c := f.m.Cookie("rawid", false, auth.CookieScope{Secure: true})
-	if c.Name != "__Host-coaming_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
+	if c.Name != "__Host-tierplan_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
 		t.Fatalf("https cookie = %+v", c)
 	}
 	if c.Value != "rawid" {
@@ -401,7 +401,7 @@ func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 	if c.MaxAge != 0 || !c.Expires.IsZero() {
 		t.Fatalf("a browser-session cookie must carry no lifetime: MaxAge %d, Expires %v", c.MaxAge, c.Expires)
 	}
-	if auth.CookieName(auth.CookieScope{Secure: true}) != "__Host-coaming_session" {
+	if auth.CookieName(auth.CookieScope{Secure: true}) != "__Host-tierplan_session" {
 		t.Fatalf("CookieName(secure) = %q", auth.CookieName(auth.CookieScope{Secure: true}))
 	}
 }
@@ -417,10 +417,10 @@ func TestCookieWithRememberCarriesTheRememberLifetime(t *testing.T) {
 func TestCookieOverPlainHTTPDropsThePrefixAndSecure(t *testing.T) {
 	f := newSessionFixture(t)
 	c := f.m.Cookie("rawid", false, auth.CookieScope{Secure: false})
-	if c.Name != "coaming_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
+	if c.Name != "tierplan_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
 		t.Fatalf("http cookie = %+v", c)
 	}
-	if auth.CookieName(auth.CookieScope{Secure: false}) != "coaming_session" {
+	if auth.CookieName(auth.CookieScope{Secure: false}) != "tierplan_session" {
 		t.Fatalf("CookieName(plain) = %q", auth.CookieName(auth.CookieScope{Secure: false}))
 	}
 }
@@ -441,7 +441,7 @@ func TestCookieHeaderCarriesTheHardeningAttributesAndNoDomain(t *testing.T) {
 	f := newSessionFixture(t)
 	c := f.m.Cookie("rawid", true, auth.CookieScope{Secure: true})
 	s := c.String()
-	for _, want := range []string{"__Host-coaming_session=rawid", "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=2592000"} {
+	for _, want := range []string{"__Host-tierplan_session=rawid", "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=2592000"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Set-Cookie %q lacks %q", s, want)
 		}

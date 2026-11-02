@@ -57,7 +57,7 @@ func (q *Queries) TrimRecentEnvironments(ctx context.Context, userID string) err
 
 const upsertRecentEnvironment = `-- name: UpsertRecentEnvironment :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 INSERT INTO user_recent_environments (user_id, env_id, used_at)
 VALUES (?, ?, ?)

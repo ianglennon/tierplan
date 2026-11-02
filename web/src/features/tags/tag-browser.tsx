@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -448,7 +448,7 @@ function TagError({ error, repo, onRetry }: TagErrorProps) {
   const canAddInstance = usePermission("registries.instance");
   const canAddEnvironment = useAnyEnvironmentPermission("registries.manage");
   const err = error instanceof TagsRequestError ? error : new TagsRequestError(0);
-  // Coaming's own limit on tag requests (429) is not the registry's (a 502 rate_limited): it is
+  // TierPlan's own limit on tag requests (429) is not the registry's (a 502 rate_limited): it is
   // about how often this person asks, not about the host named in the other sentence.
   const kind: TagErrorType | "too_fast" | "ref_invalid" | "generic" =
     err.status === 429 && err.type === "rate_limited"

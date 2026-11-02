@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -31,7 +31,7 @@ function row(extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     service: "",
     health: "none",
     selfKind: "",
@@ -232,7 +232,7 @@ describe("Stop", () => {
     [
       "own_container",
       { code: "own_container" },
-      "web is one of Coaming's own containers. Stopping it would cut Coaming off from the host, so it can't be done from this list.",
+      "web is one of TierPlan's own containers. Stopping it would cut TierPlan off from the host, so it can't be done from this list.",
     ],
     [
       "node_unreachable",
@@ -294,7 +294,7 @@ describe("Stop", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
     const alert = await within(dialog).findByRole("alert");
     expect(alert.textContent).toBe(
-      "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+      "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening.",
     );
     expect(posts()).toHaveLength(1);
   });
@@ -310,7 +310,7 @@ describe("Stop", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Stop container" }));
     expect(
       await screen.findByText(
-        "The connection dropped before Coaming answered the request to stop web. The list shows whether it happened.",
+        "The connection dropped before TierPlan answered the request to stop web. The list shows whether it happened.",
       ),
     ).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -353,7 +353,7 @@ describe("Start", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));
     expect(
       await screen.findByText(
-        "The connection dropped before Coaming answered the request to start web. The list shows whether it happened.",
+        "The connection dropped before TierPlan answered the request to start web. The list shows whether it happened.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Couldn't start web/)).toBeNull();
@@ -605,34 +605,34 @@ describe("Kill and Remove", () => {
   });
 });
 
-describe("Coaming's own containers", () => {
+describe("TierPlan's own containers", () => {
   const own = (extra: Partial<ContainerRow> = {}) =>
-    row({ name: "coaming", id: "cm-id", selfKind: "server", isSelf: true, ...extra });
+    row({ name: "tierplan", id: "tp-id", selfKind: "server", isSelf: true, ...extra });
 
   it.each([
-    ["Stop", "Stop coaming?"],
-    ["Restart", "Restart coaming?"],
-    ["Pause", "Pause coaming?"],
-    ["Kill…", "Kill coaming?"],
-    ["Remove…", "Remove coaming?"],
+    ["Stop", "Stop tierplan?"],
+    ["Restart", "Restart tierplan?"],
+    ["Pause", "Pause tierplan?"],
+    ["Kill…", "Kill tierplan?"],
+    ["Remove…", "Remove tierplan?"],
   ])(
     "%s opens the own-container dialog with the name to type, and sends nothing",
     async (label, title) => {
       mount(own());
-      await openMenu("coaming");
+      await openMenu("tierplan");
       fireEvent.click(await screen.findByRole("menuitem", { name: label }));
       const dialog = await screen.findByRole("alertdialog", { name: title });
-      expect(within(dialog).getByLabelText("Type coaming to confirm")).toBeTruthy();
-      expect(dialog.textContent).toContain("cuts Coaming off from this host");
+      expect(within(dialog).getByLabelText("Type tierplan to confirm")).toBeTruthy();
+      expect(dialog.textContent).toContain("cuts TierPlan off from this host");
       expect(posts()).toEqual([]);
     },
   );
 
   it("starts an own container that is stopped at once, as for any other", async () => {
     answer = () =>
-      Response.json({ results: [{ nodeId: "n1", id: "cm-id", name: "coaming", result: "done" }] });
+      Response.json({ results: [{ nodeId: "n1", id: "tp-id", name: "tierplan", result: "done" }] });
     mount(own({ state: "exited" }));
-    await openMenu("coaming");
+    await openMenu("tierplan");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(screen.queryByRole("alertdialog")).toBeNull();

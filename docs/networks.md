@@ -1,17 +1,17 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
-<!-- SPDX-FileCopyrightText: 2026 The Coaming Authors -->
+<!-- SPDX-FileCopyrightText: 2026 The TierPlan Authors -->
 
 # Networks and address pools
 
 Every Docker network takes a block of addresses from a pool. When a pool runs out, nothing new can be created, and
 on a swarm a service that cannot get an address on its overlay cannot start a task. This page explains how
-Coaming shows where an environment's address space has gone, when it warns you, which networks it calls orphaned or
+TierPlan shows where an environment's address space has gone, when it warns you, which networks it calls orphaned or
 unused, how the subnet picker chooses a subnet, how the small stack subnets setting works, and what the pool
 guidance covers. The plain list of networks, with create and delete, is in [containers.md](containers.md); this page
 is about the space.
 
 The exact list of what each role may do is in [permissions.md](permissions.md), which is generated from the code.
-[threat-model.md](threat-model.md) says what this adds to the risks of running Coaming.
+[threat-model.md](threat-model.md) says what this adds to the risks of running TierPlan.
 
 - [The Address space page](#the-address-space-page)
 - [Pools](#pools)
@@ -34,7 +34,7 @@ permission on the environment (a Viewer has it). From top to bottom it shows:
 3. **The subnet map**: every network of the environment, with its subnet, owner and use.
 4. **Orphaned and unused networks**, and the networks you chose to keep.
 
-The page refreshes by itself when a network, container or service changes. Docker is the source of truth: Coaming
+The page refreshes by itself when a network, container or service changes. Docker is the source of truth: TierPlan
 reads the numbers from the engines, keeps them for a few seconds, and does not store a copy.
 
 ## Pools
@@ -45,26 +45,26 @@ made with a custom subnet can sit in the middle of a pool and split it, so the l
 than the free space suggests.
 
 - **A swarm's pool is fixed when the swarm is created.** It is the `--default-addr-pool` given to `docker swarm
-  init`, or `10.0.0.0/8` cut into `/24` subnets when none was given. Coaming reads it from a manager and the
+  init`, or `10.0.0.0/8` cut into `/24` subnets when none was given. TierPlan reads it from a manager and the
   figures are measured. A swarm cannot change its pool afterwards; see [Pool guidance](#pool-guidance).
 - **The ingress network** has its own row. It can sit outside the default pool, and the row says so when it does;
   when it sits inside a pool it is counted there once.
-- **A standalone host's pools are always labelled Estimated.** The Docker API does not tell Coaming a host's
-  `default-address-pools`. Coaming uses, in this order, the pools you entered for the environment (**Settings >
+- **A standalone host's pools are always labelled Estimated.** The Docker API does not tell TierPlan a host's
+  `default-address-pools`. TierPlan uses, in this order, the pools you entered for the environment (**Settings >
   Environments > the environment > Address pools**), the pools the daemon reports when it reports any, and
   Docker's own documented defaults (`172.17.0.0/16`, `172.18.0.0/16`, `172.19.0.0/16`, `172.20.0.0/14`,
   `172.24.0.0/14` and `172.28.0.0/14` cut into `/16` subnets, then `192.168.0.0/16` cut into `/20`s). It counts the subnets of the host's networks against those pools. If the host's `daemon.json` sets
   `default-address-pools`, enter the same pools in the settings and the estimate becomes a good one. The row says
   where the pools came from.
 - **Host routes count as used.** On a standalone host, a block that a route of the host already takes (a VPN, for
-  instance) is counted as taken when Coaming has read the host's routes (see [the subnet picker](#the-subnet-picker)).
+  instance) is counted as taken when TierPlan has read the host's routes (see [the subnet picker](#the-subnet-picker)).
 
 **On a swarm, the meters are for the swarm pool only.** Each node's own local networks (`docker_gwbridge` and the
 bridges of standalone containers) take their subnets from that node's daemon pools, not from the swarm pool, and
-Coaming 0.1 **does not meter** those node-local pools. Their networks still appear in the subnet map and count in
+TierPlan 0.1 **does not meter** those node-local pools. Their networks still appear in the subnet map and count in
 the subnet picker's overlap checks. See [What is not metered](#what-is-not-metered).
 
-A node that is not reporting is named on the page. The numbers are then partial, and Coaming says so instead of
+A node that is not reporting is named on the page. The numbers are then partial, and TierPlan says so instead of
 showing a smaller figure. If no manager answers, the swarm's pool rows read **Not measured**.
 
 ## Warnings
@@ -98,7 +98,7 @@ Every task, every service virtual IP and every node's endpoint takes an address,
 old and the new tasks together. A `/24` overlay holds 253 of them, and a stack of 100 replicas with a start-first
 rollout will run it dry.
 
-Coaming counts the used addresses of each swarm overlay and applies the same 70% and 90% states to it. The
+TierPlan counts the used addresses of each swarm overlay and applies the same 70% and 90% states to it. The
 warning names the network. This needs **Docker Engine 29**: older engines do not report address counts, so on
 Engine 24 to 28 an overlay reads **Not measured** and has no number. The pool meters still work on those engines.
 The **Networks** list shows the same figure in its **Addresses used** column.
@@ -115,13 +115,13 @@ how many things are attached, its age, and for an overlay a used-of-capacity bar
 - **Filters**: type to search by name, subnet or owner, show **All**, **Overlays**, **Local**, **Filling up** or
   **Overlapping** networks, and on a swarm choose one node. Rows that are orphaned, unused or kept carry a badge. Column headers sort. The table draws 500 rows at a time; narrow it
   with a filter to see the rest. The map reads at most 5,000 networks.
-- The owner link goes to the Coaming stack only when the network's label names a stack that Coaming holds. A label
+- The owner link goes to the TierPlan stack only when the network's label names a stack that TierPlan holds. A label
   alone is not trusted to make a link.
 
 ## Orphaned and unused networks
 
-The first goal of Coaming is that removing a stack leaves nothing behind. This section finds what was left behind
-by something else: a stack removed outside Coaming, a network someone created and forgot.
+The first goal of TierPlan is that removing a stack leaves nothing behind. This section finds what was left behind
+by something else: a stack removed outside TierPlan, a network someone created and forgot.
 
 **The two classes**
 
@@ -129,7 +129,7 @@ by something else: a stack removed outside Coaming, a network someone created an
   the stack with that name no longer exists, and nothing uses the network.
 - **Unused**: no stack ever labelled it, and nothing uses it. This is information, not a fault.
 
-**What counts as "nothing uses it".** Coaming looks at all of these, on **every node**:
+**What counts as "nothing uses it".** TierPlan looks at all of these, on **every node**:
 
 - containers attached to the network, on each node;
 - the current spec of every service, **and its previous spec** (a rolling update that has not finished, or can be
@@ -143,26 +143,26 @@ A network is never listed when any of these uses it.
 - Docker's own networks: `bridge`, `host`, `none`, `ingress` and `docker_gwbridge`, matched by name and by what
   `docker network inspect` says about them (the ingress flag, config-only networks and the networks a
   `config-from` points to).
-- A network that a stack Coaming holds declares `external: true`.
-- A network owned by a stack that Coaming is deploying or changing right now.
+- A network that a stack TierPlan holds declares `external: true`.
+- A network owned by a stack that TierPlan is deploying or changing right now.
 - A network younger than the **grace period**.
 - A network you chose to keep (below).
 
 **The 24 hours.** A network is listed only after it has been idle for 24 hours. The clock starts at the later of the
-network's creation and **the last time Coaming saw it in use**. Coaming records that in its own database, because
+network's creation and **the last time TierPlan saw it in use**. TierPlan records that in its own database, because
 Docker does not. A network that was busy until an hour ago is therefore not listed today, and a long-lived
 network is not flagged the moment it is freed.
 
-**Can't tell yet.** Coaming does not judge a network when its picture is incomplete: a node that could hold an
+**Can't tell yet.** TierPlan does not judge a network when its picture is incomplete: a node that could hold an
 attachment is not reporting, no manager answered, or a stack of the environment did not load, so what it declares
 external is unknown. The row says **Can't tell yet** with the reason and cannot be selected or deleted. Bring the node back
 or fix the stack and the next check decides. The page says how many networks are withheld.
 
 **Keeping a network.** Two ways, both honoured by every check:
 
-- give the network the label **`coaming.keep=true`**. It is never listed. Remove the label to list it again.
+- give the network the label **`tierplan.keep=true`**. It is never listed. Remove the label to list it again.
 - press **Keep** on an orphaned or unused row (permission `networks.keep`, Env Admin). A label cannot be added to a
-  network that exists, so Coaming records the exemption by name in its database. **Stop keeping** removes it. The
+  network that exists, so TierPlan records the exemption by name in its database. **Stop keeping** removes it. The
   **Kept** list at the bottom of the card shows both kinds and says which it is. A network that has both is shown
   once as kept by label.
 
@@ -172,13 +172,13 @@ one is created with the same name, it is kept too.
 **Deleting.** **Delete…** on a row, or a selection of rows, needs `networks.manage` (Env Admin). Each network is
 handled on its own:
 
-1. Coaming reads everything again, fresh, and judges the one network again. If it is in use now, no longer
+1. TierPlan reads everything again, fresh, and judges the one network again. If it is in use now, no longer
    orphaned, or a node is missing, nothing is removed and the report says **Kept** with the reason.
 2. It saves the network's **full `docker network inspect` to the audit log** as `network.inspect_saved`, with
    secret-like values in its labels and options masked (a label or option block of an unexpected shape is withheld whole). If the audit log
    cannot take it, the network is not deleted.
 3. It sends one delete. If Docker refuses because the network is in use, that counts as a safe result (**Kept**), and
-   Coaming does not try again or force it.
+   TierPlan does not try again or force it.
 
 **A network whose details are over 64 KB** (a network with a very large number of attached endpoints) is not
 deleted from this page: the whole inspect could not be saved. Remove it with the Docker CLI after reading what it
@@ -195,7 +195,7 @@ warns about a subnet written in the file.
 
 - **Size.** Choose `/24`, `/25`, `/26`, `/27` or `/28`, each with its usable address count (`2^(32 - mask) - 3`: the
   network, broadcast and gateway addresses are not usable). On a swarm overlay the default is the pool's own mask.
-- **Expected tasks.** Type how many tasks the network will carry and Coaming recommends the smallest size that
+- **Expected tasks.** Type how many tasks the network will carry and TierPlan recommends the smallest size that
   fits. The number it needs is
   `ceil((2 x tasks + services + nodes) x 1.25) + 3`: twice the tasks for a start-first update, one virtual IP for each
   service (1 unless you say otherwise), one endpoint for each node (the swarm's node count unless you say
@@ -224,20 +224,20 @@ One more note, **outside the pool**, says when a subnet you typed is not inside 
 request and then never give the network an address range, so a service on it would never start a task. The server
 answers `subnet_overlap_swarm` whatever the box says. Every other overlap can be created anyway: a bridge,
 macvlan or ipvlan network on one node over a swarm network, or over a network of another node. Docker itself may still
-refuse such a network (two bridges on one subnet on the same host, for example), and then Coaming says Docker refused the
+refuse such a network (two bridges on one subnet on the same host, for example), and then TierPlan says Docker refused the
 subnet. The service editor's new networks follow the same rule.
 
-**Checked after the create.** After Coaming creates a swarm network (from the Create network dialog, the service editor,
+**Checked after the create.** After TierPlan creates a swarm network (from the Create network dialog, the service editor,
 or a stack deploy or **Start**) it reads the network back for up to about 6 seconds to see that the swarm gave it an
-address range. A network the swarm never allocates, because its subnet overlaps a swarm network Coaming could not see or
+address range. A network the swarm never allocates, because its subnet overlaps a swarm network TierPlan could not see or
 because the pools are full, is removed again straight away, by the ID the create returned, with a message saying why
 and two audit rows (`network.created` failed with `not_allocated`, then `network.removed` from `allocation_check`).
 A service apply or create stops before the service is changed. A stack deploy stops at its networks step, before any
-service is created or updated; a small-subnet block that came back unallocated is chosen again once. If Coaming cannot
+service is created or updated; a small-subnet block that came back unallocated is chosen again once. If TierPlan cannot
 remove the leftover network, the message names it so you can delete it on the Networks page; a deploy tries once more
 to remove it and lists it in its result, while **Start** does not retry. Nothing is left that a service could hang on.
 
-Coaming does not warn about a subnet only because it lies in a private (RFC 1918) range such as `10.0.0.0/8`,
+TierPlan does not warn about a subnet only because it lies in a private (RFC 1918) range such as `10.0.0.0/8`,
 `172.16.0.0/12` or `192.168.0.0/16`. Docker's own pools and most networks use those ranges, so such a warning would sit on
 nearly every subnet. A subnet that really clashes with a LAN or VPN shows up as a host route, read from the host itself.
 
@@ -247,8 +247,8 @@ networks at the same moment cannot take the same block. Creating from the servic
 **Host routes and the agent mount.** To read a host's routes, the agent needs one read-only file mounted:
 `/proc/1/net/route` at `/host/route`. New agent install commands carry it. An agent installed before this release
 has no such mount, and the picker says it **can't read that host's routes** and gives the one command that adds it
-(see [agent.md](agent.md#host-routes)). Coaming's own host has no agent; add `-v /proc/1/net/route:/host/route:ro`
-to the `docker run` of Coaming itself. Without the mount that check is skipped with a note, and nothing else changes.
+(see [agent.md](agent.md#host-routes)). TierPlan's own host has no agent; add `-v /proc/1/net/route:/host/route:ro`
+to the `docker run` of TierPlan itself. Without the mount that check is skipped with a note, and nothing else changes.
 
 ## Small stack subnets
 
@@ -272,7 +272,7 @@ recorded in the audit log) gives each new stack network a small subnet instead.
   inside a pool, otherwise the next free one. The History tab lists them under **Networks**, and marks them
   **reused on rollback** on a rollback revision. Because History keeps only the network name and subnet, a block
   that a rollback had to re-pick is marked as reused too.
-- **Standalone hosts.** The same setting applies to a standalone stack's networks. Coaming adds the recorded subnet
+- **Standalone hosts.** The same setting applies to a standalone stack's networks. TierPlan adds the recorded subnet
   to a network on every later deploy, whether the setting is on or off, so the Compose engine's own
   configuration hash for the network never changes and a later deploy does not recreate it. A real engine test checks that.
   Networks that already exist keep their subnets. A standalone network with an `ipam` block, or one that is not a
@@ -282,7 +282,7 @@ recorded in the audit log) gives each new stack network a small subnet instead.
   that scale, or write an `ipam` subnet in the file for the one network.
 
 **A known gap.** Starting a **stopped swarm stack** that must make a missing network again (**Start** on the stack
-page, after the network was removed behind Coaming's back) creates it without a small subnet: it takes the swarm's
+page, after the network was removed behind TierPlan's back) creates it without a small subnet: it takes the swarm's
 default size. A normal deploy is unaffected. Deploy the stack instead of starting it if you need the small block.
 
 The same **Start** path does not retry a network it could not remove after the swarm refused to allocate it; the step
@@ -291,7 +291,7 @@ fails with `network_not_allocated` and the leftover is deleted on the Networks p
 ## Pool guidance
 
 A swarm's address pool cannot be changed in place. The only way to change it is to rebuild the swarm. A
-standalone host's pools live in `daemon.json`. **Coaming never runs `docker swarm init` or `docker swarm leave`, and
+standalone host's pools live in `daemon.json`. **TierPlan never runs `docker swarm init` or `docker swarm leave`, and
 never edits `daemon.json`**: there is no *edit pool* button anywhere. The **Pool guidance** page (the button in the
 Address space header, and the links from the warnings) explains and generates commands you copy and run yourself. It has four parts:
 
@@ -304,7 +304,7 @@ Address space header, and the links from the warnings) explains and generates co
    that the pool is fixed at init.
 3. **Rebuild a swarm.** A runbook for an existing swarm: back up, remove stacks, leave and re-init on the new pool,
    rejoin the nodes, redeploy. It says plainly that **this means downtime**. It prints a `docker stack rm` for each
-   Coaming stack whose name is plain; the rest it sends you to the Stacks page for.
+   TierPlan stack whose name is plain; the rest it sends you to the Stacks page for.
 4. **Standalone host.** A `daemon.json` `default-address-pools` snippet built from the pools you type (they are
    checked the way the settings card checks them), the note that the Docker daemon must be restarted, and a link to enter the same
    pools in the environment settings so the estimate is good.
@@ -315,7 +315,7 @@ error line instead of a command.
 ## What is not metered
 
 - **Each swarm node's own local networks.** On a swarm, `docker_gwbridge` and the bridge networks of standalone
-  containers take their subnets from **that node's own daemon pools**, not from the swarm pool. Coaming 0.1 **does not meter** those node-local pools. Their networks still appear in the subnet map and count in the subnet picker's
+  containers take their subnets from **that node's own daemon pools**, not from the swarm pool. TierPlan 0.1 **does not meter** those node-local pools. Their networks still appear in the subnet map and count in the subnet picker's
   overlap checks, but a node whose local pool is running dry gives **no warning**. Watch for it if you run many
   standalone containers on swarm nodes.
 - **VXLAN IDs** and anything else that is not an address.

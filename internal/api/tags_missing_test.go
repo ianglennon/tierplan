@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 // The missing-platform flag (plan 05-20 task 2, IMG-03, D-23): the architectures an

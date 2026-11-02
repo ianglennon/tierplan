@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package webui_test
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/ianglennon/coaming/internal/webui"
+	"github.com/ianglennon/tierplan/internal/webui"
 )
 
 const fixtureIndex = `<!doctype html><html><head><meta charset="utf-8">` +
@@ -33,17 +33,17 @@ func fetch(t *testing.T, h http.Handler, target string) *httptest.ResponseRecord
 }
 
 func TestIndexForBasePathRewritesAssetsAndAddsTheMeta(t *testing.T) {
-	h := webui.Handler(fixture(), func() string { return "/coaming" })
+	h := webui.Handler(fixture(), func() string { return "/tierplan" })
 	rec := fetch(t, h, "/")
 	body := rec.Body.String()
 	for _, want := range []string{
-		`<meta name="coaming-base" content="/coaming">`,
-		`src="/coaming/assets/app.js"`,
-		`src="/coaming/theme-init.js"`,
-		`href="/coaming/assets/app.css"`,
+		`<meta name="tierplan-base" content="/tierplan">`,
+		`src="/tierplan/assets/app.js"`,
+		`src="/tierplan/theme-init.js"`,
+		`href="/tierplan/assets/app.css"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("index at /coaming is missing %q:\n%s", want, body)
+			t.Errorf("index at /tierplan is missing %q:\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, `"./`) {
@@ -55,7 +55,7 @@ func TestIndexForBasePathRewritesAssetsAndAddsTheMeta(t *testing.T) {
 	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
 		t.Errorf("Cache-Control = %q, want no-cache", got)
 	}
-	if !strings.HasPrefix(body, `<!doctype html><html><head><meta name="coaming-base"`) {
+	if !strings.HasPrefix(body, `<!doctype html><html><head><meta name="tierplan-base"`) {
 		t.Errorf("the meta must come immediately after <head>:\n%s", body)
 	}
 }
@@ -64,7 +64,7 @@ func TestIndexForBasePathEmptyBaseUsesRootURLs(t *testing.T) {
 	h := webui.Handler(fixture(), func() string { return "" })
 	body := fetch(t, h, "/").Body.String()
 	for _, want := range []string{
-		`<meta name="coaming-base" content="">`,
+		`<meta name="tierplan-base" content="">`,
 		`src="/assets/app.js"`,
 		`src="/theme-init.js"`,
 		`href="/assets/app.css"`,
@@ -87,8 +87,8 @@ func TestIndexForBasePathEscapesTheBase(t *testing.T) {
 }
 
 func TestIndexForBasePathServesSPARoutesAndAssetsAsBefore(t *testing.T) {
-	h := webui.Handler(fixture(), func() string { return "/coaming" })
-	if body := fetch(t, h, "/environments").Body.String(); !strings.Contains(body, "coaming-base") {
+	h := webui.Handler(fixture(), func() string { return "/tierplan" })
+	if body := fetch(t, h, "/environments").Body.String(); !strings.Contains(body, "tierplan-base") {
 		t.Errorf("a client-side route must get the rendered index:\n%s", body)
 	}
 	rec := fetch(t, h, "/assets/app.js")

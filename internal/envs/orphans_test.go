@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // orphanEpoch is the instant the rigs' clocks start at; a network made before it by more than a day is
@@ -197,9 +197,9 @@ func TestOrphansSpecialNetworksExcluded(t *testing.T) {
 func TestOrphansKeepLabelAndRow(t *testing.T) {
 	r, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
 		return []dockertest.FakeNetwork{
-			oldNet(dockertest.FakeNetwork{ID: "k1", Name: "kept_by_label", Driver: "bridge", Scope: "local", Labels: map[string]string{"coaming.keep": "true"}}),
+			oldNet(dockertest.FakeNetwork{ID: "k1", Name: "kept_by_label", Driver: "bridge", Scope: "local", Labels: map[string]string{"tierplan.keep": "true"}}),
 			oldNet(dockertest.FakeNetwork{ID: "k2", Name: "kept_by_row", Driver: "bridge", Scope: "local"}),
-			oldNet(dockertest.FakeNetwork{ID: "k3", Name: "label_not_true", Driver: "bridge", Scope: "local", Labels: map[string]string{"coaming.keep": "false"}}),
+			oldNet(dockertest.FakeNetwork{ID: "k3", Name: "label_not_true", Driver: "bridge", Scope: "local", Labels: map[string]string{"tierplan.keep": "false"}}),
 			oldNet(dockertest.FakeNetwork{ID: "k4", Name: "other", Driver: "bridge", Scope: "local"}),
 		}
 	})

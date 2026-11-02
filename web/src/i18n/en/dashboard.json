@@ -2,8 +2,8 @@
   "dashboard": {
     "tabTitle": "Dashboard",
     "environmentFallback": "this environment",
-    "selfBadge": "Coaming (this instance)",
-    "workerNotice": "This host is a swarm worker. Pin Coaming to a manager node to manage the swarm. Showing node-local data only.",
+    "selfBadge": "TierPlan (this instance)",
+    "workerNotice": "This host is a swarm worker. Pin TierPlan to a manager node to manage the swarm. Showing node-local data only.",
     "tiles": {
       "containers": "Containers",
       "containersSubline": "{{running}} running · {{stopped}} stopped",
@@ -33,7 +33,7 @@
       "estimatedBadge": "Estimated",
       "estimatedHealth": "Estimated, so the environment's health isn't affected.",
       "notMeasured": "Not measured yet",
-      "notMeasuredBody": "Coaming reads the pools from a manager, or estimates them on a standalone host.",
+      "notMeasuredBody": "TierPlan reads the pools from a manager, or estimates them on a standalone host.",
       "loading": "Loading the address space",
       "error": "Couldn't read the address space."
     },
@@ -50,7 +50,7 @@
         "node": "Node",
         "secret": "Secret",
         "config": "Config",
-        "coaming": "Coaming"
+        "tierplan": "TierPlan"
       },
       "live": "Live",
       "reconnecting": "Reconnecting…",
@@ -74,15 +74,15 @@
       "attempted": "Attempted {{when}}",
       "offline": {
         "heading": "Docker isn't reachable",
-        "body": "Coaming lost its connection to {{name}} at {{time}}. Check that /var/run/docker.sock is mounted into the Coaming container and that the Docker daemon is running.",
-        "bodyNoTime": "Coaming lost its connection to {{name}}. Check that /var/run/docker.sock is mounted into the Coaming container and that the Docker daemon is running."
+        "body": "TierPlan lost its connection to {{name}} at {{time}}. Check that /var/run/docker.sock is mounted into the TierPlan container and that the Docker daemon is running.",
+        "bodyNoTime": "TierPlan lost its connection to {{name}}. Check that /var/run/docker.sock is mounted into the TierPlan container and that the Docker daemon is running."
       },
       "unsupported": {
         "heading": "This engine isn't supported",
-        "body": "{{engine}} {{version}} (API {{api}}) is below the minimum Coaming supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
-        "bodyOther": "{{engine}} {{version}} (API {{api}}) isn't a setup Coaming supports. Coaming manages Docker Engine 24 or later.",
+        "body": "{{engine}} {{version}} (API {{api}}) is below the minimum TierPlan supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
+        "bodyOther": "{{engine}} {{version}} (API {{api}}) isn't a setup TierPlan supports. TierPlan manages Docker Engine 24 or later.",
         "podmanHeading": "Podman isn't supported",
-        "podmanBody": "Coaming manages Docker Engine only.",
+        "podmanBody": "TierPlan manages Docker Engine only.",
         "engineFallback": "This engine"
       }
     },

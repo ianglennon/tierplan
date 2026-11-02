@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -207,20 +207,20 @@ describe("the page frame", () => {
     expect(within(header).getByText("Ready")).toBeTruthy();
     expect(within(header).getByText("Manager")).toBeTruthy();
     expect(within(header).getByText("Leader")).toBeTruthy();
-    expect(within(header).getByText("Runs Coaming")).toBeTruthy();
+    expect(within(header).getByText("Runs TierPlan")).toBeTruthy();
     expect(within(header).getByText("10.0.0.1 · Docker 29.1.0")).toBeTruthy();
     expect(document.title).toBe("mgr-1 · Lab");
   });
 
-  it("shows a worker as Worker, with no Leader and no Runs Coaming badge", async () => {
+  it("shows a worker as Worker, with no Leader and no Runs TierPlan badge", async () => {
     state.detail = () =>
-      node(nodeDetail({ role: "worker", leader: false, runsCoaming: false, reachability: "" }));
+      node(nodeDetail({ role: "worker", leader: false, runsTierPlan: false, reachability: "" }));
     renderAt();
     await screen.findByRole("heading", { name: "mgr-1" });
     const header = headerOf();
     expect(within(header).getByText("Worker")).toBeTruthy();
     expect(within(header).queryByText("Leader")).toBeNull();
-    expect(within(header).queryByText("Runs Coaming")).toBeNull();
+    expect(within(header).queryByText("Runs TierPlan")).toBeNull();
   });
 
   it("shows a node that is down with the offline word", async () => {
@@ -270,7 +270,7 @@ describe("the page frame", () => {
     expect(
       await screen.findByRole("heading", { name: "<img src=x onerror=alert(1)>" }),
     ).toBeTruthy();
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
   });
 
   it("shows no permission to a user who cannot read nodes", async () => {
@@ -367,9 +367,9 @@ describe("the Overview tab", () => {
     expect(screen.queryByRole("region", { name: "Manager" })).toBeNull();
   });
 
-  it("shows the Coaming agent card with Reporting, the version and when it was last seen", async () => {
+  it("shows the TierPlan agent card with Reporting, the version and when it was last seen", async () => {
     renderAt();
-    const agent = within(await screen.findByRole("region", { name: "Coaming agent" }));
+    const agent = within(await screen.findByRole("region", { name: "TierPlan agent" }));
     expect(agent.getByRole("cell", { name: "Reporting" })).toBeTruthy();
     expect(agent.getByText("Yes")).toBeTruthy();
     expect(agent.getByText("0.1.0")).toBeTruthy();
@@ -380,7 +380,7 @@ describe("the Overview tab", () => {
     state.detail = () =>
       node(nodeDetail({ agent: { reporting: false, version: "", lastSeen: "" } }));
     renderAt();
-    const agent = within(await screen.findByRole("region", { name: "Coaming agent" }));
+    const agent = within(await screen.findByRole("region", { name: "TierPlan agent" }));
     expect(agent.getByText("No")).toBeTruthy();
     expect(agent.getAllByText("—").length).toBe(2);
   });
@@ -391,7 +391,7 @@ describe("the Overview tab", () => {
     expect(labels.getByText("provider")).toBeTruthy();
     expect(labels.getByText("homelab")).toBeTruthy();
     expect(
-      labels.getByText("Set in the node's Docker daemon settings. Coaming can't change them."),
+      labels.getByText("Set in the node's Docker daemon settings. TierPlan can't change them."),
     ).toBeTruthy();
   });
 
@@ -406,7 +406,7 @@ describe("the Overview tab", () => {
     state.detail = () => node(nodeDetail({ engineLabels: { "<b>k</b>": "<img src=x>" } }));
     renderAt();
     await screen.findByRole("region", { name: "Engine labels" });
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
     expect(document.querySelector("b")).toBeNull();
   });
 });
@@ -499,7 +499,7 @@ describe("the Tasks tab", () => {
       );
     renderAt(`${PAGE}/tasks`);
     expect(await screen.findByText("<b>boom</b>")).toBeTruthy();
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
     expect(document.querySelector("b")).toBeNull();
   });
 });
@@ -586,7 +586,7 @@ describe("the node's actions", () => {
         nodeDetail({
           role: "worker",
           leader: false,
-          runsCoaming: false,
+          runsTierPlan: false,
           reachability: "",
           availability: "pause",
         }),
@@ -684,7 +684,7 @@ describe("the node's actions", () => {
 
   it("disables Remove… for a worker that is not down, with the reason", async () => {
     state.detail = () =>
-      node(nodeDetail({ role: "worker", leader: false, runsCoaming: false, reachability: "" }));
+      node(nodeDetail({ role: "worker", leader: false, runsTierPlan: false, reachability: "" }));
     renderAt();
     await screen.findByRole("heading", { name: "mgr-1" });
     const menu = await openMore();
@@ -703,7 +703,7 @@ describe("the node's actions", () => {
         nodeDetail({
           role: "worker",
           leader: false,
-          runsCoaming: false,
+          runsTierPlan: false,
           reachability: "",
           state: "down",
         }),
@@ -730,7 +730,7 @@ describe("the node's actions", () => {
         nodeDetail({
           role: "worker",
           leader: false,
-          runsCoaming: false,
+          runsTierPlan: false,
           reachability: "",
           state: "down",
         }),

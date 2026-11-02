@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package connect
 
@@ -30,10 +30,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/agent/internal/state"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/agent/internal/state"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // certPair is a certificate with its key.
@@ -206,7 +206,7 @@ func TestTLSPinOfACAIsNotEnoughWhenTheLeafDoesNotChainToIt(t *testing.T) {
 }
 
 func TestTLSWithPinsStillTrustsACertificateFromTheSystemRoots(t *testing.T) {
-	// An administrator who moves Coaming from its self-signed certificate to a
+	// An administrator who moves TierPlan from its self-signed certificate to a
 	// public one must not strand agents that stored the old pin.
 	ca := issue(t, "test root", true, nil)
 	leaf := issue(t, "server", false, &ca)
@@ -277,7 +277,7 @@ func TestTLSVerifyConnectionRefusesAnEmptyPeerCertificateList(t *testing.T) {
 }
 
 func TestTheDialClientUsesTheEnvironmentProxy(t *testing.T) {
-	c := newHTTPClient(nil, nil, nil, "coaming.example")
+	c := newHTTPClient(nil, nil, nil, "tierplan.example")
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok || tr.Proxy == nil {
 		t.Fatalf("transport = %#v, want an http.Transport with a proxy function", c.Transport)
@@ -345,7 +345,7 @@ func TestTheAgentRefusesAnUnpinnedSelfSignedServerSaysSoOnceAndKeepsBackingOff(t
 	env, rounds := countingEnv()
 	logs := &lockedBuffer{}
 
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
 	for i := range 3 {
 		testsupport.Await(t, fmt.Sprintf("refused attempt %d", i+1), rounds)
 	}
@@ -360,7 +360,7 @@ func TestTheAgentRefusesAnUnpinnedSelfSignedServerSaysSoOnceAndKeepsBackingOff(t
 	if !strings.Contains(out, "hint=") || !strings.Contains(out, "Show install command") {
 		t.Errorf("the line carries no fix hint:\n%s", out)
 	}
-	if strings.Contains(out, "cmjt_x") {
+	if strings.Contains(out, "tpjt_x") {
 		t.Errorf("the join token is in the log:\n%s", out)
 	}
 }
@@ -371,7 +371,7 @@ func TestTheAgentRefusesAServerWhosePinIsWrong(t *testing.T) {
 	logs := &lockedBuffer{}
 
 	wrong := "sha256/" + strings.Repeat("A", 43) + "="
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", InstallPins: []string{wrong}, Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{wrong}, Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
 	for i := range 2 {
 		testsupport.Await(t, fmt.Sprintf("refused attempt %d", i+1), rounds)
 	}
@@ -389,7 +389,7 @@ func TestTheAgentWithTheInstallPinConnectsAndKeepsTheWelcomePins(t *testing.T) {
 	f = newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{pins: []string{serverPin(f), other}} })
 	dir := t.TempDir()
 
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 1) // the welcome's pins are stored before the first heartbeat
 	ps, err := state.LoadPins(dir)
@@ -407,7 +407,7 @@ func TestStoredPinsLetARestartedAgentConnectWithoutTheInstallPin(t *testing.T) {
 	f = newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{pins: []string{serverPin(f)}} })
 	dir := t.TempDir()
 
-	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
+	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 1) // the identity and the pins are stored before the first heartbeat
 	if ps, err := state.LoadPins(dir); err != nil || len(ps) != 1 {
@@ -431,7 +431,7 @@ func TestPinsFromAPlainSessionAreNeverStored(t *testing.T) {
 		return reply{pins: []string{"sha256/" + strings.Repeat("Z", 43) + "="}}
 	})
 	dir := t.TempDir()
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 2) // the welcome was handled, and its pins ignored, before the first heartbeat
 	if _, err := os.Stat(filepath.Join(dir, state.PinsFile)); err == nil {

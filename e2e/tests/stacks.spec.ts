@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Golden path 7 (plan 07-31): compose stacks, end to end through the built image behind the
-// reverse proxy at /coaming. The first test writes a stack on the engine Coaming manages through
+// reverse proxy at /tierplan. The first test writes a stack on the engine TierPlan manages through
 // its socket, is told about a YAML mistake and fixes it, sets a variable, reviews, deploys, watches
 // the console, sees the stack running, edits a value, sees a one-service change and removes the
 // stack with the typed confirm (STK-01 to STK-07, STK-09 to STK-11). The second deploys a stack
@@ -251,7 +251,7 @@ test("deploy a stack with a secret file to the agent host", async ({ page }) => 
     await removeRemoteEnvironments(page.context());
     dockerExec(
       "agenthost",
-      "docker rm -f coaming-agent >/dev/null 2>&1; docker volume rm -f coaming-agent >/dev/null 2>&1; true",
+      "docker rm -f tierplan-agent >/dev/null 2>&1; docker volume rm -f tierplan-agent >/dev/null 2>&1; true",
     );
   }
 });

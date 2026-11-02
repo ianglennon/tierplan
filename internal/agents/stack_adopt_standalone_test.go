@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The real-engine oracles of plan 08-28 for a standalone host (STK-13, STK-12, STK-08, STK-14, D-20, D-46): a
-// Compose project made by the real `docker compose up` is listed, adopted and deployed by Coaming with its volume
-// data and network intact; a roll back puts the older image back; a container added outside Coaming is drift.
+// Compose project made by the real `docker compose up` is listed, adopted and deployed by TierPlan with its volume
+// data and network intact; a roll back puts the older image back; a container added outside TierPlan is drift.
 
 // requireComposeCLI returns the version of the Compose plugin of the dind host, and fails the test when the host
 // has none. Every docker:<N>-dind image from 24 to 29 ships it, so a host without it is a broken fixture: the
@@ -35,7 +35,7 @@ func requireComposeCLI(t *testing.T, host *dockertest.Node) string {
 }
 
 // composeUp writes the compose file into the host and runs the real `docker compose -p {project} up -d` on it,
-// with the extra flags given. It is the only way these tests make a project that Coaming did not (D-20), and
+// with the extra flags given. It is the only way these tests make a project that TierPlan did not (D-20), and
 // it fails the test when the CLI does. The Compose version is logged, so a run on an older Engine records a
 // project made by an older Compose.
 func composeUp(t *testing.T, f *saFix, project, compose string, flags ...string) {
@@ -76,7 +76,7 @@ func (f *saFix) adoptCheck(t *testing.T, name string) saAdoptCheck {
 	return out
 }
 
-// adopt adopts the unmanaged project as the check read it and returns the ID of the stack Coaming holds now.
+// adopt adopts the unmanaged project as the check read it and returns the ID of the stack TierPlan holds now.
 func (f *saFix) adopt(t *testing.T, name, fingerprint string) string {
 	t.Helper()
 	code, body := f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/unmanaged-stacks/"+name+"/adopt", map[string]any{"fingerprint": fingerprint})
@@ -93,11 +93,11 @@ func (f *saFix) adopt(t *testing.T, name, fingerprint string) string {
 	return st.ID
 }
 
-// waitUnmanaged waits until the environment's stack list shows the project as one Coaming did not make. The
+// waitUnmanaged waits until the environment's stack list shows the project as one TierPlan did not make. The
 // list reads the host through the environment's cache, so it is refreshed on every look.
 func (f *saFix) waitUnmanaged(t *testing.T, name string) {
 	t.Helper()
-	testsupport.Poll(t, 2*time.Minute, "Coaming to list "+name+" as unmanaged", func() (bool, string) {
+	testsupport.Poll(t, 2*time.Minute, "TierPlan to list "+name+" as unmanaged", func() (bool, string) {
 		f.srv.RefreshCluster(f.env.ID)
 		code, body := f.srv.Do(http.MethodGet, f.api()+"?kind=unmanaged", nil)
 		var list struct {
@@ -209,7 +209,7 @@ func (f *saFix) networkID(t *testing.T, name string) string {
 // D-20, D-46, D-18, ROADMAP SC3). A Compose project made by the real `docker compose up -d` (two services with
 // depends_on, a named volume holding data, a user network) is, through a real agent:
 //
-//   - listed by Coaming as unmanaged and adoptable;
+//   - listed by TierPlan as unmanaged and adoptable;
 //   - checked: the first deploy differs from what runs in nothing but the ownership labels, in both services;
 //   - adopted without a write to the host: the containers are the very ones they were;
 //   - reviewed: both services are ownership-only changes, and no network or volume is listed;
@@ -218,7 +218,7 @@ func (f *saFix) networkID(t *testing.T, name string) string {
 //   - reviewed again: nothing is left to change, and a second deploy would touch no container.
 func TestStandaloneAdoptThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const project, volume, network = "legacy", "legacy_data", "legacy_back"
@@ -299,7 +299,7 @@ func TestStandaloneAdoptThroughAnAgent(t *testing.T) {
 		}
 	}
 
-	// The first deploy: Coaming takes ownership. Each container is recreated once and runs; the volume and the
+	// The first deploy: TierPlan takes ownership. Each container is recreated once and runs; the volume and the
 	// network are the very objects that were there, so the data is.
 	job := f.deployOK(t, id)
 	after := f.states(t, project)
@@ -317,8 +317,8 @@ func TestStandaloneAdoptThroughAnAgent(t *testing.T) {
 		if got := f.containers(t, project)[svc]; len(got) != 1 || !strings.HasSuffix(got[0], " running") {
 			t.Errorf("containers of %s after the first deploy = %v, want one running", svc, got)
 		}
-		if got := strings.TrimSpace(sh(t, f.host, `docker inspect -f '{{index .Config.Labels "coaming.stack.id"}}' `+after[svc].ID)); got != id {
-			t.Errorf("%s carries coaming.stack.id %q after the first deploy, want %s", svc, got, id)
+		if got := strings.TrimSpace(sh(t, f.host, `docker inspect -f '{{index .Config.Labels "tierplan.stack.id"}}' `+after[svc].ID)); got != id {
+			t.Errorf("%s carries tierplan.stack.id %q after the first deploy, want %s", svc, got, id)
 		}
 		if n := strings.Count(lines, "Recreated container "+project+"-"+svc+"-1"); n != 1 {
 			t.Errorf("the deploy's output says %d times that %s-%s-1 was recreated, want once:\n%s", n, project, svc, lines)
@@ -526,13 +526,13 @@ func (f *saFix) driftNow(t *testing.T, stackID string) (saDrift, string) {
 }
 
 // TestStandaloneDriftThroughAnAgent proves drift on a real standalone host (STK-14, D-21, D-22, D-23, G-08-6): a
-// stack deployed by Coaming reads no drift; a second container of its service made from the person's own file with
-// the Compose CLI alone (up --scale web=2 --no-recreate, no label of Coaming's on it) is the stack's: drift, a second
+// stack deployed by TierPlan reads no drift; a second container of its service made from the person's own file with
+// the Compose CLI alone (up --scale web=2 --no-recreate, no label of TierPlan's on it) is the stack's: drift, a second
 // container of web on the stack's page, gone again after a restore. After a second such scale, a Remove through
-// Coaming lists that container, waits for it and leaves no container of the project.
+// TierPlan lists that container, waits for it and leaves no container of the project.
 func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const name = "sdr"
@@ -550,14 +550,14 @@ func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 	}
 
 	// A person adds a second container of web from their own file with the Compose CLI alone, as UAT test 6 Part G
-	// does: the file carries no label of Coaming's, and the first container is left as it is.
+	// does: the file carries no label of TierPlan's, and the first container is left as it is.
 	composeUp(t, f, name, compose(""), "--scale", "web=2", "--no-recreate")
 	if got := f.containers(t, name)["web"]; len(got) != 2 {
 		t.Fatalf("containers of web after up --scale web=2 = %v, want two", got)
 	}
 	if out := strings.TrimSpace(sh(t, f.host, `docker ps -a --filter label=com.docker.compose.project=`+name+
-		` --filter label=coaming.stack.id --format '{{.Names}}'`)); out != name+"-web-1" {
-		t.Fatalf("containers of the project that carry coaming.stack.id = %q, want only %s-web-1: the added one carries none", out, name)
+		` --filter label=tierplan.stack.id --format '{{.Names}}'`)); out != name+"-web-1" {
+		t.Fatalf("containers of the project that carry tierplan.stack.id = %q, want only %s-web-1: the added one carries none", out, name)
 	}
 	testsupport.Poll(t, 2*time.Minute, "a fresh drift check to find web changed", func() (bool, string) {
 		d, raw := f.driftNow(t, id)
@@ -592,7 +592,7 @@ func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 		t.Errorf("web after the restore is container %s, want the first one, %s, left alone", after["web"].ID, first["web"].ID)
 	}
 
-	// Scaled again from the person's file, the stack is removed through Coaming: the dialog lists the added container,
+	// Scaled again from the person's file, the stack is removed through TierPlan: the dialog lists the added container,
 	// and nothing of the project is left.
 	composeUp(t, f, name, compose(""), "--scale", "web=2", "--no-recreate")
 	if got := f.containers(t, name)["web"]; len(got) != 2 {

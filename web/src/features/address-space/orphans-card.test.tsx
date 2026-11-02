@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -176,12 +176,12 @@ describe("OrphansCard", () => {
     expect(within(table).getByRole("columnheader", { name: "Former stack" })).toBeTruthy();
     expect(
       within(table).getAllByRole("img", {
-        name: /The last time Coaming saw this network in use/,
+        name: /The last time TierPlan saw this network in use/,
       }),
     ).toHaveLength(2);
     expect(
       within(table).getByRole("img", {
-        name: /Coaming hasn't seen this network in use. This is when it was created./,
+        name: /TierPlan hasn't seen this network in use. This is when it was created./,
       }),
     ).toBeTruthy();
   });
@@ -198,7 +198,7 @@ describe("OrphansCard", () => {
     expect(within(dialog).getByText("Delete “old-net”?")).toBeTruthy();
     expect(
       within(dialog).getByText(
-        /Coaming checks again just before it deletes the network, and keeps it if something started using it\. The network's details are saved in the audit log first\./,
+        /TierPlan checks again just before it deletes the network, and keeps it if something started using it\. The network's details are saved in the audit log first\./,
       ),
     ).toBeTruthy();
     await waitFor(() => expect(deletes()).toHaveLength(1));
@@ -210,11 +210,11 @@ describe("OrphansCard", () => {
     toast.dismiss();
 
     for (const [reason, text] of [
-      ["in_use_again", "old-net is in use again, so Coaming kept it."],
-      ["not_orphaned", "old-net is no longer orphaned, so Coaming kept it."],
+      ["in_use_again", "old-net is in use again, so TierPlan kept it."],
+      ["not_orphaned", "old-net is no longer orphaned, so TierPlan kept it."],
       [
         "node_missing",
-        "Couldn't confirm old-net is unused: worker-2 isn't reporting. Coaming kept it.",
+        "Couldn't confirm old-net is unused: worker-2 isn't reporting. TierPlan kept it.",
       ],
     ] as const) {
       sent = [];
@@ -237,7 +237,7 @@ describe("OrphansCard", () => {
     answer = problem(409, "network_in_use");
     mount({ orphans: [orphan("old-net")] });
     await confirmDelete("old-net");
-    expect(await screen.findByText("old-net is in use again, so Coaming kept it.")).toBeTruthy();
+    expect(await screen.findByText("old-net is in use again, so TierPlan kept it.")).toBeTruthy();
     expect(deletes()).toHaveLength(1);
   });
 
@@ -247,7 +247,7 @@ describe("OrphansCard", () => {
     await confirmDelete("old-net");
     expect(
       await screen.findByText(
-        "Coaming didn't delete old-net: its details are over 64 KB, too large to save in the audit log first.",
+        "TierPlan didn't delete old-net: its details are over 64 KB, too large to save in the audit log first.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("alert")).toBeTruthy();
@@ -292,7 +292,7 @@ describe("OrphansCard (several)", () => {
     expect(within(dialog).getByText("Delete 3 networks?")).toBeTruthy();
     expect(
       within(dialog).getByText(
-        /Coaming checks each one again just before it deletes it, and keeps any that something started using\./,
+        /TierPlan checks each one again just before it deletes it, and keeps any that something started using\./,
       ),
     ).toBeTruthy();
     // The targets are listed, and Cancel has focus.
@@ -319,9 +319,9 @@ describe("OrphansCard (several)", () => {
         "c",
         "Cluster",
         "Failed",
-        "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+        "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening.",
       ],
-      ["b", "Cluster", "Kept", "b is in use again, so Coaming kept it."],
+      ["b", "Cluster", "Kept", "b is in use again, so TierPlan kept it."],
     ]);
     // The selection is cleared.
     expect(screen.queryByRole("toolbar")).toBeNull();
@@ -341,7 +341,7 @@ describe("OrphansCard (several)", () => {
     const results = await screen.findByRole("dialog");
     expect(
       within(results).getByText(
-        "Coaming didn't delete a: its details are over 64 KB, too large to save in the audit log first.",
+        "TierPlan didn't delete a: its details are over 64 KB, too large to save in the audit log first.",
       ),
     ).toBeTruthy();
     expect(deletes()).toHaveLength(2);
@@ -388,7 +388,7 @@ describe("OrphansCard (several)", () => {
       ),
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Keep" }));
-    expect(await screen.findByText("Keeping a. Coaming won't list it again.")).toBeTruthy();
+    expect(await screen.findByText("Keeping a. TierPlan won't list it again.")).toBeTruthy();
   });
 
   it("disables cant-tell rows with the reason", async () => {
@@ -397,7 +397,7 @@ describe("OrphansCard (several)", () => {
       withheld: { managerMissing: false, nodes: ["worker-2"], stacks: [] },
     });
     const reason =
-      "Waiting for worker-2 to report. Coaming won't remove a network until every node has answered.";
+      "Waiting for worker-2 to report. TierPlan won't remove a network until every node has answered.";
     // The row cannot be chosen, and the reason is its description.
     const maybe = box("Select maybe");
     expect(maybe.getAttribute("aria-disabled")).toBe("true");
@@ -424,7 +424,7 @@ describe("OrphansCard (states)", () => {
     mount({ orphans: [] });
     expect(screen.getByText("No orphaned or unused networks")).toBeTruthy();
     expect(
-      screen.getByText("Coaming lists a network here when nothing has used it for 24 hours."),
+      screen.getByText("TierPlan lists a network here when nothing has used it for 24 hours."),
     ).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });

@@ -1,8 +1,8 @@
-# Start it with:  docker compose -f coaming-agent.yml up -d
+# Start it with:  docker compose -f tierplan-agent.yml up -d
 services:
-  coaming-agent:
-    image: ghcr.io/ianglennon/coaming-agent:0.2.0
-    container_name: coaming-agent
+  tierplan-agent:
+    image: ghcr.io/ianglennon/tierplan-agent:0.2.0
+    container_name: tierplan-agent
     restart: unless-stopped
     read_only: true
     cap_drop:
@@ -13,15 +13,15 @@ services:
     security_opt:
       - no-new-privileges:true
     labels:
-      coaming.agent: "true"
+      tierplan.agent: "true"
     environment:
-      COAMING_AGENT_URL: "wss://example.com/coaming/agent/connect"
-      COAMING_AGENT_PIN: "sha256/P"
-      COAMING_AGENT_JOIN_TOKEN: "cmjt_E_S"
+      TIERPLAN_AGENT_URL: "wss://example.com/tierplan/agent/connect"
+      TIERPLAN_AGENT_PIN: "sha256/P"
+      TIERPLAN_AGENT_JOIN_TOKEN: "tpjt_E_S"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - coaming-agent:/var/lib/coaming-agent
+      - tierplan-agent:/var/lib/tierplan-agent
       - /proc/1/net/route:/host/route:ro
 volumes:
-  coaming-agent:
-    name: coaming-agent
+  tierplan-agent:
+    name: tierplan-agent

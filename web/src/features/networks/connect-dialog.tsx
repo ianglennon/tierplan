@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronsUpDown, Info } from "lucide-react";
@@ -59,7 +59,7 @@ export interface ConnectContainer {
   id: string;
   name: string;
   nodeId: string;
-  // server or agent for one of Coaming's own containers, when the page knows it.
+  // server or agent for one of TierPlan's own containers, when the page knows it.
   selfKind?: string;
 }
 
@@ -81,7 +81,7 @@ interface Choice {
   nodeId: string;
   // The node's name, shown beside the name on a swarm.
   node: string;
-  // server or agent for one of Coaming's own containers; empty for anything else.
+  // server or agent for one of TierPlan's own containers; empty for anything else.
   selfKind: string;
 }
 
@@ -217,7 +217,7 @@ function ConnectForm(props: FormProps) {
   const [errors, setErrors] = useState<{ ipv4?: string; ipv6?: string }>({});
   const [refusal, setRefusal] = useState<string | null>(null);
   const [agentPolicy, setAgentPolicy] = useState(false);
-  // Coaming's own server and agent containers join a network only with their name typed.
+  // TierPlan's own server and agent containers join a network only with their name typed.
   // The page may know the container is one; if it did not, the server's
   // confirmation_required makes the field appear.
   const [typed, setTyped] = useState("");

@@ -287,7 +287,7 @@ func (q *Queries) InsertPendingStackGit(ctx context.Context, arg InsertPendingSt
 
 const insertStackGit = `-- name: InsertStackGit :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 INSERT INTO stack_git (stack_id, repo_id, ref_kind, ref, folder, compose_files, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)

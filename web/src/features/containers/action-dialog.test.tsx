@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -33,7 +33,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     service: "",
     health: "none",
     selfKind: "",
@@ -549,75 +549,75 @@ describe("ActionDialog warnings for swarm tasks and projects", () => {
   });
 });
 
-describe("ActionDialog on Coaming's own containers", () => {
+describe("ActionDialog on TierPlan's own containers", () => {
   const own = (extra: Partial<ContainerRow> = {}) =>
-    row("coaming", { selfKind: "server", isSelf: true, ...extra });
+    row("tierplan", { selfKind: "server", isSelf: true, ...extra });
 
   it("warns, asks for the name, keeps the destructive confirm disabled until it matches, and sends it", async () => {
     mount([own()]);
-    const dialog = await dialogOf("Stop coaming?");
+    const dialog = await dialogOf("Stop tierplan?");
     expect(dialog.textContent).toContain(
-      "This is Coaming's own container. Stopping it cuts Coaming off from this host, and you can't start it again from here.",
+      "This is TierPlan's own container. Stopping it cuts TierPlan off from this host, and you can't start it again from here.",
     );
-    const confirm = within(dialog).getByRole("button", { name: "Stop Coaming" });
+    const confirm = within(dialog).getByRole("button", { name: "Stop TierPlan" });
     expect(confirm.className).toContain("bg-destructive-fill");
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
-    const field = within(dialog).getByLabelText("Type coaming to confirm");
+    const field = within(dialog).getByLabelText("Type tierplan to confirm");
     // Focus starts on Cancel, not on the field.
     await waitFor(() =>
       expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })),
     );
     fireEvent.click(confirm);
     expect(posts()).toEqual([]);
-    fireEvent.change(field, { target: { value: "coaming-x" } });
+    fireEvent.change(field, { target: { value: "tierplan-x" } });
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(field, { key: "Enter" });
     expect(posts()).toEqual([]);
-    fireEvent.change(field, { target: { value: "coaming" } });
+    fireEvent.change(field, { target: { value: "tierplan" } });
     expect(confirm.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.click(confirm);
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(body()).toEqual({
       action: "stop",
-      confirm: "coaming",
-      targets: [{ nodeId: "n1", id: "id-coaming" }],
+      confirm: "tierplan",
+      targets: [{ nodeId: "n1", id: "id-tierplan" }],
     });
   });
 
   it("has no Advanced section for it", async () => {
     mount([own()]);
-    const dialog = await dialogOf("Stop coaming?");
+    const dialog = await dialogOf("Stop tierplan?");
     expect(within(dialog).queryByRole("button", { name: "Advanced" })).toBeNull();
   });
 
   it("names the node for an agent and its own confirm 'Kill agent'", async () => {
-    mount([row("coaming-agent", { selfKind: "agent" })], { verb: "kill" });
-    const dialog = await dialogOf("Kill coaming-agent?");
+    mount([row("tierplan-agent", { selfKind: "agent" })], { verb: "kill" });
+    const dialog = await dialogOf("Kill tierplan-agent?");
     expect(dialog.textContent).toContain(
-      "This is the Coaming agent on node-1. Killing it cuts Coaming off from node-1.",
+      "This is the TierPlan agent on node-1. Killing it cuts TierPlan off from node-1.",
     );
     expect(within(dialog).getByRole("button", { name: "Kill agent" })).toBeTruthy();
   });
 
   it.each([
-    ["restart", "Restart coaming?", "Restarting it", "Restart Coaming"],
-    ["pause", "Pause coaming?", "Pausing it", "Pause Coaming"],
-    ["remove", "Remove coaming?", "Removing it", "Remove Coaming"],
+    ["restart", "Restart tierplan?", "Restarting it", "Restart TierPlan"],
+    ["pause", "Pause tierplan?", "Pausing it", "Pause TierPlan"],
+    ["remove", "Remove tierplan?", "Removing it", "Remove TierPlan"],
   ] as const)("words %s for it", async (verb, title, gerund, button) => {
     mount([own({ state: verb === "remove" ? "exited" : "running" })], { verb });
     const dialog = await dialogOf(title);
-    expect(dialog.textContent).toContain(`${gerund} cuts Coaming off from this host`);
+    expect(dialog.textContent).toContain(`${gerund} cuts TierPlan off from this host`);
     expect(within(dialog).getByRole("button", { name: button })).toBeTruthy();
   });
 
   it("says to type the name when the server still wants it", async () => {
     answer = () => Response.json({ status: 422, type: "confirmation_required" }, { status: 422 });
     mount([own()]);
-    const dialog = await dialogOf("Stop coaming?");
-    fireEvent.change(within(dialog).getByLabelText("Type coaming to confirm"), {
-      target: { value: "coaming" },
+    const dialog = await dialogOf("Stop tierplan?");
+    fireEvent.change(within(dialog).getByLabelText("Type tierplan to confirm"), {
+      target: { value: "tierplan" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Stop Coaming" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop TierPlan" }));
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "Type the container's name to confirm this.",
     );
@@ -659,7 +659,7 @@ describe("ActionDialog results", () => {
         "c",
         "node-1",
         "Skipped",
-        "c is one of Coaming's own containers. Stopping it would cut Coaming off from the host, so it can't be done from this list.",
+        "c is one of TierPlan's own containers. Stopping it would cut TierPlan off from the host, so it can't be done from this list.",
       ],
     ]);
     expect(results.textContent).not.toContain("node_unreachable");

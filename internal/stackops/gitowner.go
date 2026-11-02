@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // ResumeAutoDeployFromOwner lifts the pause of a git stack's automatic deploys that was set because their owner lacked

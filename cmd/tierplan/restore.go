@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package main
 
@@ -14,11 +14,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/buildinfo"
-	"github.com/ianglennon/coaming/internal/datadir"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/datadir"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // exitCodeError makes main exit with a code other than 1.
@@ -42,10 +42,10 @@ func newRestoreCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "restore <file>",
-		Short: "Restore an encrypted backup into the data directory, with Coaming stopped",
-		Long: "Restores a .coaming file made by Settings > Backup or `coaming backup`. Coaming must not be running: stop it, then run this as a " +
+		Short: "Restore an encrypted backup into the data directory, with TierPlan stopped",
+		Long: "Restores a .tierplan file made by Settings > Backup or `tierplan backup`. TierPlan must not be running: stop it, then run this as a " +
 			"one-off container on the same volume, for example:\n" +
-			"  docker run --rm -i -v coaming:/data ghcr.io/ianglennon/coaming restore --yes /data/backups/<file>\n" +
+			"  docker run --rm -i -v tierplan:/data ghcr.io/ianglennon/tierplan restore --yes /data/backups/<file>\n" +
 			"The passphrase is read from the file named by " + passphraseFileEnv + ", or else from the first line of standard input; it is never a flag.\n" +
 			"The backup is checked, migrated to this version and re-keyed to this instance's master key on a private copy first; the data " +
 			"directory changes only when all of that has worked. A database that is replaced is first saved as backups/prerestore-<time>.db.\n" +
@@ -105,8 +105,8 @@ func runRestore(cmd *cobra.Command, file string, yes bool) error {
 	// It is taken before the key is loaded, so a refused restore creates nothing.
 	release, err := datadir.Lock(cfg.DataDir)
 	if errors.Is(err, datadir.ErrLocked) {
-		fmt.Fprintln(cmd.ErrOrStderr(), "restore: Coaming is running on this data directory ("+err.Error()+")")
-		fmt.Fprintln(cmd.ErrOrStderr(), "stop it, then run: docker run --rm -i -v <volume>:/data ghcr.io/ianglennon/coaming restore --yes <file>")
+		fmt.Fprintln(cmd.ErrOrStderr(), "restore: TierPlan is running on this data directory ("+err.Error()+")")
+		fmt.Fprintln(cmd.ErrOrStderr(), "stop it, then run: docker run --rm -i -v <volume>:/data ghcr.io/ianglennon/tierplan restore --yes <file>")
 		return &exitCodeError{code: 1, msg: "restore: " + err.Error()}
 	}
 	if err != nil {
@@ -144,7 +144,7 @@ func runRestore(cmd *cobra.Command, file string, yes bool) error {
 	if snapshot != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "The previous database was saved as %s\n", snapshot)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "Restored. Start Coaming and sign in with an account from the backup.")
+	fmt.Fprintln(cmd.OutOrStdout(), "Restored. Start TierPlan and sign in with an account from the backup.")
 	return nil
 }
 
@@ -161,7 +161,7 @@ func inspectRestoreFile(file string, passphrase []byte, binarySchema int64) (bac
 func describeRestoreError(file string, err error) error {
 	switch {
 	case errors.Is(err, backup.ErrNotBackup):
-		return fmt.Errorf("%s is not a Coaming backup file", file)
+		return fmt.Errorf("%s is not a TierPlan backup file", file)
 	case errors.Is(err, backup.ErrNewerBackup), errors.Is(err, backup.ErrNewerFormat):
 		return err
 	case errors.Is(err, backup.ErrUnreadable), errors.Is(err, backup.ErrHeaderLimits):
@@ -180,7 +180,7 @@ func printBackupSummary(cmd *cobra.Command, file string, in backup.Inspection) {
 	}
 	fmt.Fprintf(out, "From instance: %s\n", name)
 	fmt.Fprintf(out, "Made:          %s\n", m.Created.UTC().Format(time.RFC3339))
-	fmt.Fprintf(out, "Coaming:       %s (schema %d)\n", m.AppVersion, m.Schema)
+	fmt.Fprintf(out, "TierPlan:       %s (schema %d)\n", m.AppVersion, m.Schema)
 	fmt.Fprintf(out, "Contains:      %d users, %d teams, %d environments, %d audit entries\n",
 		m.Counts.Users, m.Counts.Teams, m.Counts.Environments, m.Counts.AuditEntries)
 	if !m.ChainVerified {

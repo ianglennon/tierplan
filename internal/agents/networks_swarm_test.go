@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // networkIDs reads the IDs of the networks called name on a node, as Docker itself lists
@@ -56,10 +56,10 @@ func sharedNetworks(t *testing.T, f *swarmFix) {
 	}
 
 	// An overlay made through the API exists on the managers, once each.
-	overlayID := post(map[string]any{"name": "cm-ovl", "driver": "overlay"})
+	overlayID := post(map[string]any{"name": "tp-ovl", "driver": "overlay"})
 	for _, m := range f.sw.Managers {
 		f.srv.WaitFor("the overlay on "+m.Hostname, 30*time.Second, func() (bool, string) {
-			ids := networkIDs(t, m, "cm-ovl")
+			ids := networkIDs(t, m, "tp-ovl")
 			return len(ids) == 1 && ids[0] == overlayID, strings.Join(ids, ",")
 		})
 	}
@@ -74,12 +74,12 @@ func sharedNetworks(t *testing.T, f *swarmFix) {
 	if workerAgent == "" {
 		t.Fatalf("no agent for the worker %s", worker.Hostname)
 	}
-	bridgeID := post(map[string]any{"name": "cm-br", "driver": "bridge", "nodeId": workerAgent})
-	if ids := networkIDs(t, worker, "cm-br"); len(ids) != 1 || ids[0] != bridgeID {
-		t.Fatalf("the worker's networks called cm-br = %v, want %s", ids, bridgeID)
+	bridgeID := post(map[string]any{"name": "tp-br", "driver": "bridge", "nodeId": workerAgent})
+	if ids := networkIDs(t, worker, "tp-br"); len(ids) != 1 || ids[0] != bridgeID {
+		t.Fatalf("the worker's networks called tp-br = %v, want %s", ids, bridgeID)
 	}
 	for _, m := range f.sw.Managers {
-		if ids := networkIDs(t, m, "cm-br"); len(ids) != 0 {
+		if ids := networkIDs(t, m, "tp-br"); len(ids) != 0 {
 			t.Errorf("%s has the worker's bridge: %v", m.Hostname, ids)
 		}
 	}
@@ -112,17 +112,17 @@ func sharedNetworks(t *testing.T, f *swarmFix) {
 	}
 
 	// A service scaled to zero that mentions the overlay blocks its delete.
-	sh(t, mgr, "docker service create --name cm-idle --replicas 0 --network cm-ovl busybox sleep 600")
+	sh(t, mgr, "docker service create --name tp-idle --replicas 0 --network tp-ovl busybox sleep 600")
 	code, body := f.srv.Do(http.MethodDelete, base+"/"+overlayID, nil)
-	if code != http.StatusConflict || !strings.Contains(string(body), "network_in_use") || !strings.Contains(string(body), "cm-idle") {
-		t.Fatalf("deleting the overlay with a service at zero replicas: %d %s, want 409 network_in_use naming cm-idle", code, body)
+	if code != http.StatusConflict || !strings.Contains(string(body), "network_in_use") || !strings.Contains(string(body), "tp-idle") {
+		t.Fatalf("deleting the overlay with a service at zero replicas: %d %s, want 409 network_in_use naming tp-idle", code, body)
 	}
-	if ids := networkIDs(t, mgr, "cm-ovl"); len(ids) != 1 {
+	if ids := networkIDs(t, mgr, "tp-ovl"); len(ids) != 1 {
 		t.Fatalf("the refused delete took the overlay away: %v", ids)
 	}
 
 	// With the service gone, the delete goes through.
-	sh(t, mgr, "docker service rm cm-idle")
+	sh(t, mgr, "docker service rm tp-idle")
 	f.srv.WaitFor("the overlay to be deletable once the service is gone", 90*time.Second, func() (bool, string) {
 		code, body := f.srv.Do(http.MethodDelete, base+"/"+overlayID, nil)
 		switch code {
@@ -135,7 +135,7 @@ func sharedNetworks(t *testing.T, f *swarmFix) {
 		return false, ""
 	})
 	for _, m := range f.sw.Managers {
-		if ids := networkIDs(t, m, "cm-ovl"); len(ids) != 0 {
+		if ids := networkIDs(t, m, "tp-ovl"); len(ids) != 0 {
 			t.Errorf("%s still has the overlay: %v", m.Hostname, ids)
 		}
 	}
@@ -144,7 +144,7 @@ func sharedNetworks(t *testing.T, f *swarmFix) {
 	if code, body := f.srv.Do(http.MethodDelete, base+"/"+bridgeID+"?nodeId="+workerAgent, nil); code != http.StatusNoContent {
 		t.Fatalf("deleting the worker's bridge: %d %s", code, body)
 	}
-	if ids := networkIDs(t, worker, "cm-br"); len(ids) != 0 {
+	if ids := networkIDs(t, worker, "tp-br"); len(ids) != 0 {
 		t.Errorf("the worker still has the bridge: %v", ids)
 	}
 	if code, _ := f.srv.Do(http.MethodDelete, base+"/"+bridgeID+"?nodeId="+workerAgent, nil); code != http.StatusNotFound {
@@ -178,7 +178,7 @@ func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 	}
 
 	// An attachable overlay made through the API, and a standalone container on the worker.
-	code, raw := f.srv.Do(http.MethodPost, base, map[string]any{"name": "cm-attach", "driver": "overlay", "attachable": true})
+	code, raw := f.srv.Do(http.MethodPost, base, map[string]any{"name": "tp-attach", "driver": "overlay", "attachable": true})
 	if code != http.StatusCreated {
 		t.Fatalf("create the overlay: %d %s", code, raw)
 	}
@@ -186,8 +186,8 @@ func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 	if err := json.Unmarshal(raw, &made); err != nil || made.ID == "" {
 		t.Fatalf("create answer %s (%v)", raw, err)
 	}
-	sh(t, worker, "docker run -d --name cm-wk busybox sleep 600")
-	containerID := strings.TrimSpace(sh(t, worker, "docker inspect -f '{{.Id}}' cm-wk"))
+	sh(t, worker, "docker run -d --name tp-wk busybox sleep 600")
+	containerID := strings.TrimSpace(sh(t, worker, "docker inspect -f '{{.Id}}' tp-wk"))
 
 	// The list has to know the container, on its node, before the API can find it.
 	f.srv.WaitFor("the list to show the worker's container", 60*time.Second, func() (bool, string) {
@@ -196,7 +196,7 @@ func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 	})
 
 	endpoints := func() string {
-		return sh(t, worker, "docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}={{$v.Aliases}} {{end}}' cm-wk")
+		return sh(t, worker, "docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}={{$v.Aliases}} {{end}}' tp-wk")
 	}
 	connect := func() (int, []byte) {
 		return f.srv.Do(http.MethodPost, base+"/"+made.ID+"/connect",
@@ -209,9 +209,9 @@ func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 		t.Logf("RESEARCH A5: the worker accepted a connect to an attachable overlay it had no task on")
 	case code == http.StatusConflict && strings.Contains(string(raw), "network_unavailable_on_node"):
 		t.Logf("RESEARCH A5: the worker answered network_unavailable_on_node before it had a task on the overlay: %s", raw)
-		sh(t, mgr, "docker service create --name cm-anchor --replicas 1 --constraint node.hostname=="+worker.Hostname+" --network cm-attach busybox sleep 600")
+		sh(t, mgr, "docker service create --name tp-anchor --replicas 1 --constraint node.hostname=="+worker.Hostname+" --network tp-attach busybox sleep 600")
 		f.srv.WaitFor("a task of the service on the worker", 120*time.Second, func() (bool, string) {
-			out := sh(t, mgr, "docker service ps cm-anchor --filter desired-state=running --format '{{.Node}} {{.CurrentState}}'")
+			out := sh(t, mgr, "docker service ps tp-anchor --filter desired-state=running --format '{{.Node}} {{.CurrentState}}'")
 			return strings.Contains(out, worker.Hostname) && strings.Contains(out, "Running"), out
 		})
 		f.srv.WaitFor("the connect to go through once the worker has a task on the overlay", 90*time.Second, func() (bool, string) {
@@ -229,8 +229,8 @@ func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 	default:
 		t.Fatalf("connect: %d %s, want 204 or 409 network_unavailable_on_node", code, raw)
 	}
-	if got := endpoints(); !strings.Contains(got, "cm-attach=[") || !strings.Contains(got, "wk") {
-		t.Fatalf("the container's endpoints on the worker = %q, want cm-attach with the alias wk", got)
+	if got := endpoints(); !strings.Contains(got, "tp-attach=[") || !strings.Contains(got, "wk") {
+		t.Fatalf("the container's endpoints on the worker = %q, want tp-attach with the alias wk", got)
 	}
 
 	// A second connect is the engine's, mapped refusal, and nothing is added.
@@ -243,7 +243,7 @@ func sharedNetworkConnect(t *testing.T, f *swarmFix) {
 	if code != http.StatusNoContent {
 		t.Fatalf("disconnect: %d %s", code, raw)
 	}
-	if got := endpoints(); strings.Contains(got, "cm-attach") {
-		t.Errorf("the container's endpoints after the disconnect = %q, want cm-attach gone", got)
+	if got := endpoints(); strings.Contains(got, "tp-attach") {
+		t.Errorf("the container's endpoints after the disconnect = %q, want tp-attach gone", got)
 	}
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -20,29 +20,29 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/access"
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/datadir"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/gitconn"
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/shells"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/access"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/datadir"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/gitconn"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/shells"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Sign-in, sign-out and /api/me (plan 12, AUTH-02, AUTH-03, AUTH-08). Negative
@@ -226,10 +226,10 @@ type authFixture struct {
 	envStreamMaxLifetime time.Duration
 	// auditRetention feeds GET /api/audit (plan 24).
 	auditRetention int
-	// tlsPin is the pin Coaming's own self-signed certificate would have; empty
+	// tlsPin is the pin TierPlan's own self-signed certificate would have; empty
 	// means it serves none (plan 02-09).
 	tlsPin string
-	// agentAllowInsecure is the server's COAMING_AGENT_ALLOW_INSECURE as the
+	// agentAllowInsecure is the server's TIERPLAN_AGENT_ALLOW_INSECURE as the
 	// environment, agent and settings routes see it; false unless a test sets it
 	// before build (plans 02-42, 02-45).
 	agentAllowInsecure bool
@@ -241,7 +241,7 @@ type authFixture struct {
 	liveAgents api.AgentSessions
 	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
 	clusters *envs.Clusters
-	// hostRouteFile is the route file mounted into Coaming's own container, as the subnet check
+	// hostRouteFile is the route file mounted into TierPlan's own container, as the subnet check
 	// reads it for the local host; empty means none is mounted.
 	hostRouteFile string
 	// agentCluster says which agent leads a swarm, for the role in the node list.
@@ -254,7 +254,7 @@ type authFixture struct {
 	settingsAgents api.SettingsAgents
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
-	// inviteTTL is COAMING_INVITE_TTL as the access service sees it; zero is the 72 hour
+	// inviteTTL is TIERPLAN_INVITE_TTL as the access service sees it; zero is the 72 hour
 	// default. inviteLimiter throttles the public invite routes per address and
 	// inviteAudit records their refusals; nil means a generous limiter and the writer
 	// itself (plan 03-11).
@@ -678,7 +678,7 @@ func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *t
 		t.Fatalf("body = %s, want no role field", rec.Body)
 	}
 	c := sessionCookie(rec)
-	if c == nil || c.Name != "coaming_session" || c.Value == "" {
+	if c == nil || c.Name != "tierplan_session" || c.Value == "" {
 		t.Fatalf("cookie = %+v", c)
 	}
 	if c.MaxAge != 0 || !c.Expires.IsZero() {
@@ -714,13 +714,13 @@ func TestLoginRememberMeSetsAThirtyDayCookieAndSession(t *testing.T) {
 
 func TestLoginOverHTTPSUsesTheHostPrefixedSecureCookie(t *testing.T) {
 	t.Parallel()
-	f := newAuthFixture(t, config.Config{PublicURL: "https://coaming.example"})
+	f := newAuthFixture(t, config.Config{PublicURL: "https://tierplan.example"})
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/auth/login", body: loginBody("admin", goodPassword, false)})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	c := sessionCookie(rec)
-	if c == nil || c.Name != "__Host-coaming_session" || !c.Secure || !c.HttpOnly || c.Domain != "" {
+	if c == nil || c.Name != "__Host-tierplan_session" || !c.Secure || !c.HttpOnly || c.Domain != "" {
 		t.Fatalf("cookie = %+v", c)
 	}
 }
@@ -1217,7 +1217,7 @@ func TestMeWithAGarbageOrForeignCookieIs401(t *testing.T) {
 
 func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
 	t.Parallel()
-	f := newAuthFixture(t, config.Config{PublicURL: "https://coaming.example"})
+	f := newAuthFixture(t, config.Config{PublicURL: "https://tierplan.example"})
 	raw, _ := f.signIn(t, "admin", false)
 	me := func(name string) int {
 		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
@@ -1227,10 +1227,10 @@ func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
 		f.h.ServeHTTP(rec, req)
 		return rec.Code
 	}
-	if got := me("coaming_session"); got != http.StatusUnauthorized {
+	if got := me("tierplan_session"); got != http.StatusUnauthorized {
 		t.Fatalf("a bare cookie on https: %d, want 401 (WR-01)", got)
 	}
-	if got := me("__Host-coaming_session"); got != http.StatusOK {
+	if got := me("__Host-tierplan_session"); got != http.StatusOK {
 		t.Fatalf("the __Host- cookie on https: %d, want 200", got)
 	}
 }
@@ -1247,10 +1247,10 @@ func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
 		f.h.ServeHTTP(rec, req)
 		return rec.Code
 	}
-	if got := me("__Host-coaming_session"); got != http.StatusUnauthorized {
+	if got := me("__Host-tierplan_session"); got != http.StatusUnauthorized {
 		t.Fatalf("a __Host- cookie on plain http: %d, want 401", got)
 	}
-	if got := me("coaming_session"); got != http.StatusOK {
+	if got := me("tierplan_session"); got != http.StatusOK {
 		t.Fatalf("the bare cookie on plain http: %d, want 200", got)
 	}
 }
@@ -1366,7 +1366,7 @@ func TestLogoutWithoutASessionOrWithAnExpiredOneIs401(t *testing.T) {
 
 func TestMutationFromAnotherOriginIsRefusedBeforeLogin(t *testing.T) {
 	t.Parallel()
-	f := newAuthFixture(t, config.Config{PublicURL: "https://coaming.example"})
+	f := newAuthFixture(t, config.Config{PublicURL: "https://tierplan.example"})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody("admin", goodPassword, false)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "https://evil.example")

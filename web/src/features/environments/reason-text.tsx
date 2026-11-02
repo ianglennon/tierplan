@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { CopyableCode } from "@/components/copyable-code";
 import { TickedText } from "@/components/ticked-text";
@@ -100,8 +100,8 @@ function addressSpaceKey(params: ReasonParams): "textPool" | "textNetwork" | "te
   return pool ? "textPool" : "textNetwork";
 }
 
-const STANDALONE_CHECK = "docker ps --filter name=coaming-agent";
-const SWARM_CHECK = "docker service ps coaming-agent";
+const STANDALONE_CHECK = "docker ps --filter name=tierplan-agent";
+const SWARM_CHECK = "docker service ps tierplan-agent";
 
 type Translate = ReturnType<typeof useT>;
 

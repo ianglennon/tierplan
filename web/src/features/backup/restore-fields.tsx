@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
@@ -56,7 +56,7 @@ export function RestoreFields({
             key={fileKey}
             id={fileId}
             type="file"
-            accept=".coaming"
+            accept=".tierplan"
             disabled={disabled}
             aria-describedby={`${fileId}-helper`}
             className="peer sr-only"

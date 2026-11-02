@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -14,9 +14,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // Limits of the events routes.
@@ -72,10 +72,10 @@ type EventsDeps struct {
 // stream frame and the item of the recent-events list. It carries no labels or
 // environment beyond the small allowlist in dockerx (D-61, T-01-88).
 type EventDTO struct {
-	Node       string            `json:"node" doc:"The node the event happened on; for a row of Coaming's own, the node it concerns, such as the manager that took over"`
+	Node       string            `json:"node" doc:"The node the event happened on; for a row of TierPlan's own, the node it concerns, such as the manager that took over"`
 	ID         string            `json:"id" doc:"A stable ID for the event; the SSE frame id, and what a repeated event is recognised by"`
 	Time       string            `json:"time" format:"date-time" doc:"When it happened, in UTC, with sub-second precision"`
-	Type       string            `json:"type" enum:"container,image,network,volume,service,node,secret,config,coaming" doc:"What kind of object it is about. service, node, secret and config come from a swarm manager only. coaming is a row of Coaming's own, such as a manager failover, not a Docker event"`
+	Type       string            `json:"type" enum:"container,image,network,volume,service,node,secret,config,tierplan" doc:"What kind of object it is about. service, node, secret and config come from a swarm manager only. tierplan is a row of TierPlan's own, such as a manager failover, not a Docker event"`
 	Action     string            `json:"action" doc:"What happened, for example start, die, pull, connect or create"`
 	ActorID    string            `json:"actorId" doc:"The ID of the container, image, network, volume, service, node, secret or config"`
 	Name       string            `json:"name" doc:"The object's name; empty when Docker gave none"`
@@ -174,7 +174,7 @@ func RegisterEvents(r *httpx.Router, d EventsDeps) {
 		OperationID: "listRecentEvents", Method: http.MethodGet, Path: "/api/env/{envId}/events",
 		Summary: "The recent Docker events of an environment",
 		Description: "The newest container, image, network, volume and (from a swarm manager) service, node, secret and " +
-			"config events Coaming has seen on this environment, newest first, for clients that cannot hold a stream " +
+			"config events TierPlan has seen on this environment, newest first, for clients that cannot hold a stream " +
 			"open and for the Events page. since keeps only events at or after that time, at most 24 hours back; " +
 			"limit is 1 to 1000 and defaults to 50. Events are kept in memory only: the list is empty after a " +
 			"restart until Docker reports something, apart from what the daemon still remembers (about its last 256 " +
@@ -267,7 +267,7 @@ func serveEventStream(w http.ResponseWriter, req *http.Request, d EventsDeps, li
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	// Tells nginx not to buffer the response, which would hold events back until
-	// a buffer fills (Pitfall 8). Nothing in Coaming compresses this response.
+	// a buffer fills (Pitfall 8). Nothing in TierPlan compresses this response.
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	if rc.Flush() != nil {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -100,7 +100,7 @@ describe("RestartLoopCard", () => {
     await failures();
     expect(
       screen.getByText(
-        "Docker keeps 4 failed tasks per slot. Coaming also counts failures it saw in earlier checks, so a value above 4 is met reliably only by loops slower than its 15-second check.",
+        "Docker keeps 4 failed tasks per slot. TierPlan also counts failures it saw in earlier checks, so a value above 4 is met reliably only by loops slower than its 15-second check.",
       ),
     ).toBeTruthy();
   });

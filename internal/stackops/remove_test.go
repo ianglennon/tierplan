@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -13,14 +13,14 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Remove of a swarm stack runs against the fake swarm manager, over a swarm that already holds the stack's
@@ -30,12 +30,12 @@ const rmID = "stack-rm"
 
 // rmOwned are the labels an object of the stack "rm" carries.
 func rmOwned() map[string]string {
-	return map[string]string{"com.docker.stack.namespace": "rm", "coaming.stack.id": rmID}
+	return map[string]string{"com.docker.stack.namespace": "rm", "tierplan.stack.id": rmID}
 }
 
 // rmOther are the labels of an object of another stack of the same swarm.
 func rmOther() map[string]string {
-	return map[string]string{"com.docker.stack.namespace": "other", "coaming.stack.id": "stack-other"}
+	return map[string]string{"com.docker.stack.namespace": "other", "tierplan.stack.id": "stack-other"}
 }
 
 // removeStore plays the stored side of a removal and remembers what it was asked.
@@ -646,7 +646,7 @@ func TestRemoveLeavesATickedVolumeTheEngineRefusesAsInUseAndSaysSo(t *testing.T)
 // networks and never a volume; the volumes the person ticked are removed on the node afterwards.
 
 func hostOwned() map[string]string {
-	return map[string]string{"com.docker.compose.project": "plain", "coaming.stack.id": "stack-plain"}
+	return map[string]string{"com.docker.compose.project": "plain", "tierplan.stack.id": "stack-plain"}
 }
 
 func TestStandaloneRemoveRunsDownWithoutVolumesThenRemovesTheTickedVolumesOnTheNode(t *testing.T) {
@@ -743,7 +743,7 @@ func TestStandaloneRemoveOfAProjectAnotherOwnerMadeFailsTheCheckAndRunsNothing(t
 }
 
 // hostCLIAdded is what `docker compose -f <the person's file> up -d --scale web=2 --no-recreate` adds to a stack's
-// project: a container of the project and the service with none of Coaming's labels (G-08-6, the debug session
+// project: a container of the project and the service with none of TierPlan's labels (G-08-6, the debug session
 // standalone-cli-scale-not-drift).
 func hostCLIAdded(id, name string, mounts ...string) dockertest.FakeContainer {
 	return dockertest.FakeContainer{
@@ -819,7 +819,7 @@ func TestStandaloneRemoveStillFailsTheCheckForAnotherStacksContainerBesideItsOwn
 	t.Parallel()
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		stranger := hostCLIAdded("c3", "plain-web-3")
-		stranger.Labels["coaming.stack.id"] = "stack-stranger"
+		stranger.Labels["tierplan.stack.id"] = "stack-stranger"
 		c.Containers = []dockertest.FakeContainer{
 			{ID: "c1", Names: []string{"/plain-web-1"}, Image: "nginx", State: "running", Labels: withLabel(hostOwned(), "com.docker.compose.service", "web")},
 			hostCLIAdded("c2", "plain-web-2"),
@@ -924,14 +924,14 @@ func adoptedRm(pending bool) stackops.Stack {
 	return st
 }
 
-// rmNamespaceOnly are the labels docker stack deploy puts on an object: the namespace and nothing of Coaming's.
+// rmNamespaceOnly are the labels docker stack deploy puts on an object: the namespace and nothing of TierPlan's.
 func rmNamespaceOnly() map[string]string {
 	return map[string]string{"com.docker.stack.namespace": "rm"}
 }
 
 // adoptedRemoveRig is a swarm that runs the adopted stack "rm", with the services labelled as pending says: with the
 // namespace alone before its first deploy, with the stack's ID after. Its networks and volumes carry the namespace and
-// no Coaming ID, or a stale one; the secret and the config it made carry its ID; the ones it references carry only the
+// no TierPlan ID, or a stale one; the secret and the config it made carry its ID; the ones it references carry only the
 // namespace. Beside them are an external network and volume and another stack's service.
 func adoptedRemoveRig(t *testing.T, pending bool, tune func(*dockertest.FakeConfig)) *swarmRig {
 	t.Helper()
@@ -947,7 +947,7 @@ func adoptedRemoveRig(t *testing.T, pending bool, tune func(*dockertest.FakeConf
 		}
 		c.Networks = []dockertest.FakeNetwork{
 			{ID: "net-front", Name: "rm_front", Driver: "overlay", Scope: "swarm", Labels: rmNamespaceOnly()},
-			{ID: "net-back", Name: "rm_back", Driver: "overlay", Scope: "swarm", Labels: withLabel(rmNamespaceOnly(), "coaming.stack.id", "stale-id")},
+			{ID: "net-back", Name: "rm_back", Driver: "overlay", Scope: "swarm", Labels: withLabel(rmNamespaceOnly(), "tierplan.stack.id", "stale-id")},
 			{ID: "net-shared", Name: "shared", Driver: "overlay", Scope: "swarm"},
 			{ID: "net-other", Name: "other_net", Driver: "overlay", Scope: "swarm", Labels: rmOther()},
 		}
@@ -961,7 +961,7 @@ func adoptedRemoveRig(t *testing.T, pending bool, tune func(*dockertest.FakeConf
 		}
 		c.Volumes = []dockertest.FakeVolume{
 			{Name: "rm_data", Driver: "local", Labels: rmNamespaceOnly()},
-			{Name: "rm_cache", Driver: "local", Labels: withLabel(rmNamespaceOnly(), "coaming.stack.id", "stale-id")},
+			{Name: "rm_cache", Driver: "local", Labels: withLabel(rmNamespaceOnly(), "tierplan.stack.id", "stale-id")},
 			{Name: "shared_vol", Driver: "local"},
 			{Name: "other_data", Driver: "local", Labels: rmOther()},
 		}
@@ -1059,15 +1059,15 @@ func TestRemovalPreviewOfAdoptedStack(t *testing.T) {
 func TestRemoveLeavesAForeignLateService(t *testing.T) {
 	t.Parallel()
 	// After the first deploy the stack's services carry its ID. Two services of the namespace appeared since, one with
-	// no Coaming ID and one with another stack's: neither is the stack's, and their running tasks are not waited for.
+	// no TierPlan ID and one with another stack's: neither is the stack's, and their running tasks are not waited for.
 	rig := adoptedRemoveRig(t, false, func(c *dockertest.FakeConfig) {
 		c.ServiceRows = append(c.ServiceRows,
 			dockertest.FakeService{ID: "svc-late", Name: "rm_late", Mode: "replicated", Image: "nginx:1.28", Version: 1, Labels: rmNamespaceOnly(), Desired: 1, Running: 1},
-			dockertest.FakeService{ID: "svc-alien", Name: "rm_alien", Mode: "replicated", Image: "nginx:1.28", Version: 1, Labels: withLabel(rmNamespaceOnly(), "coaming.stack.id", "stack-alien"), Desired: 1, Running: 1},
+			dockertest.FakeService{ID: "svc-alien", Name: "rm_alien", Mode: "replicated", Image: "nginx:1.28", Version: 1, Labels: withLabel(rmNamespaceOnly(), "tierplan.stack.id", "stack-alien"), Desired: 1, Running: 1},
 		)
 		c.Tasks = []swarm.Task{
 			{ID: "t-late", ServiceID: "svc-late", DesiredState: swarm.TaskStateRunning, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, Annotations: swarm.Annotations{Labels: rmNamespaceOnly()}},
-			{ID: "t-alien", ServiceID: "svc-alien", DesiredState: swarm.TaskStateRunning, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, Annotations: swarm.Annotations{Labels: withLabel(rmNamespaceOnly(), "coaming.stack.id", "stack-alien")}},
+			{ID: "t-alien", ServiceID: "svc-alien", DesiredState: swarm.TaskStateRunning, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, Annotations: swarm.Annotations{Labels: withLabel(rmNamespaceOnly(), "tierplan.stack.id", "stack-alien")}},
 		}
 	})
 	rig.deps.ConvergeTimeout = 2 * time.Second

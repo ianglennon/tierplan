@@ -53,7 +53,7 @@
       "windowHelper": "The flag clears after a full window with no new failures.",
       "failuresInvalid": "Enter a whole number from 2 to 50.",
       "windowInvalid": "Enter a whole number from 1 to 120.",
-      "retention": "Docker keeps {{kept}} failed tasks per slot. Coaming also counts failures it saw in earlier checks, so a value above {{kept}} is met reliably only by loops slower than its 15-second check.",
+      "retention": "Docker keeps {{kept}} failed tasks per slot. TierPlan also counts failures it saw in earlier checks, so a value above {{kept}} is met reliably only by loops slower than its 15-second check.",
       "save": "Save settings",
       "saving": "Saving…",
       "saved": "Settings saved.",

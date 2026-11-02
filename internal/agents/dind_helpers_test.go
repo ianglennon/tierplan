@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration || swarm
 
 package agents_test
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // execCtx is the context a command run in a dind node gets.
@@ -60,7 +60,7 @@ func dumpOnFailure(t *testing.T, nodes ...*dockertest.Node) {
 			for _, line := range []string{
 				"docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}'",
 				// Every agent container, a standalone one or a swarm task's, by its label.
-				"for c in $(docker ps -aq --filter label=coaming.agent=true); do docker logs --tail 40 $c 2>&1; done",
+				"for c in $(docker ps -aq --filter label=tierplan.agent=true); do docker logs --tail 40 $c 2>&1; done",
 				"if [ \"$(docker info -f '{{.Swarm.ControlAvailable}}')\" = true ]; then docker service ls; docker service ps --no-trunc $(docker service ls -q) 2>&1 | head -30; fi",
 			} {
 				out, _ := n.Sh(ctx, line)

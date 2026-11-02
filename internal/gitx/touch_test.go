@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx_test
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/gitx/gittest"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/gitx/gittest"
 )
 
 // Counting the commits that changed one folder (plan 09-14, GIT-03, D-13): a monorepo's other folders do not move a
@@ -111,7 +111,7 @@ func TestCommitsTouchingOrderAndSubjects(t *testing.T) {
 	for _, c := range got.Commits {
 		switch c.SHA {
 		case f.second:
-			if c.Subject != "second" || c.Author != "Coaming Test" {
+			if c.Subject != "second" || c.Author != "TierPlan Test" {
 				t.Errorf("second = %+v, want the first line only and the author's name", c)
 			}
 		case f.fourth:

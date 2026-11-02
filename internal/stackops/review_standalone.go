@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -16,9 +16,9 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // CodeExternalFileObject is the code of the blocking problem for an external secret or config on a
@@ -130,7 +130,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		return err
 	}
 	if own := OwnershipOf(in.Stack); own.Adopted && own.Pending {
-		// The first deploy of an adopted project changes the config hash of every container (Coaming's labels are
+		// The first deploy of an adopted project changes the config hash of every container (TierPlan's labels are
 		// in it), so it recreates them: a service that differs in nothing the person wrote is told apart from a
 		// real change (D-16). A managed stack's review is as it was in Phase 7.
 		classifyOwnershipOnly(cmp, rv)
@@ -178,11 +178,11 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 // Sentences of a network or a volume whose settings differ from the compose file (D-46, D-56).
 const (
 	detailNetworkRecreated = "Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it."
-	detailVolumeKept       = "Its settings differ from the compose file. Coaming keeps it as it is."
+	detailVolumeKept       = "Its settings differ from the compose file. TierPlan keeps it as it is."
 )
 
 // classifyOwnershipOnly adds the compared services of an adopted project to rv, the ones that differ in nothing but
-// the config hash Coaming's labels change marked OwnershipOnly (plan 08-14 does the same for the adopt check): a
+// the config hash TierPlan's labels change marked OwnershipOnly (plan 08-14 does the same for the adopt check): a
 // service with containers whose hash differs, with no setting that differs and no hidden change, and that was not
 // forced. What a recreate carries with it is ownership-only when the service that causes it is.
 func classifyOwnershipOnly(cmp standaloneComparison, rv *Review) {
@@ -204,7 +204,7 @@ func classifyOwnershipOnly(cmp standaloneComparison, rv *Review) {
 // changedObjects are the networks and the volumes the project owns that the host holds with a
 // com.docker.compose.config-hash label other than the hash of the object as the project declares it now: the pre-flight
 // of what the SDK's up would do. The SDK recreates a network whose hash differs, so the row warns of the containers
-// attached to it that restart; a volume is never recreated by Coaming, which keeps the data (T-08-65). An object with
+// attached to it that restart; a volume is never recreated by TierPlan, which keeps the data (T-08-65). An object with
 // no label (not made by the SDK) says nothing about its settings and is left out. The rows are in name order,
 // networks first.
 func changedObjects(p *types.Project, live standaloneLive) []ObjectChange {

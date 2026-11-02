@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
 
@@ -32,7 +32,7 @@ export const environmentsQuery = queryOptions({
 });
 
 // The ["unknown-agents"] query: the agents that tried to connect with a certificate
-// the environment issued but are not in this Coaming's database, as after a restore
+// the environment issued but are not in this TierPlan's database, as after a restore
 // from an older backup (D-31). The server keeps the list in memory and ages it out
 // 24 hours after an agent stops trying, so it is read again now and then. Only an
 // instance admin may read it.
@@ -141,7 +141,7 @@ export class EnvironmentProblemError extends Error {
     }
   }
 
-  // The problem `type` is what tells an environment that is down from Coaming
+  // The problem `type` is what tells an environment that is down from TierPlan
   // itself being unreachable behind a proxy, which also answers 503.
   get failure(): EnvironmentFailure {
     if (this.type === "environment_offline") return "offline";
@@ -202,7 +202,7 @@ export class InstallRequestError extends Error {
 
   // Agents would be given a plain ws:// address for another host, which they
   // refuse. The admin fixes the URL in Settings (or, for development only,
-  // sets the server's COAMING_AGENT_ALLOW_INSECURE).
+  // sets the server's TIERPLAN_AGENT_ALLOW_INSECURE).
   get insecureAgentUrl(): boolean {
     return this.status === 409 && this.type === "insecure_agent_url";
   }
@@ -292,7 +292,7 @@ export class FoldLocalError extends Error {
   }
 }
 
-// foldLocal folds this Coaming host into the swarm environment envId (D-48): the swarm
+// foldLocal folds this TierPlan host into the swarm environment envId (D-48): the swarm
 // reaches the node through the Docker socket and the separate local environment is
 // retired. It is audited on the server. The caller reads the lists again afterwards
 // with refreshAfterFold.

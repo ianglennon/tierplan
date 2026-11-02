@@ -4,7 +4,7 @@
       "breadcrumbRoot": "Stacks",
       "breadcrumbCurrent": "New from git",
       "title": "Create {{name}} from git",
-      "body": "Coaming keeps {{name}} in sync with a folder in a git repository. Nothing is deployed until you review and deploy it.",
+      "body": "TierPlan keeps {{name}} in sync with a folder in a git repository. Nothing is deployed until you review and deploy it.",
       "documentTitle": "New stack from git"
     },
     "card1": {
@@ -46,8 +46,8 @@
         "tag": "Tags"
       },
       "helper": {
-        "branch": "Coaming follows this branch.",
-        "tag": "Coaming follows this tag. If the tag is moved to another commit, that counts as a change.",
+        "branch": "TierPlan follows this branch.",
+        "tag": "TierPlan follows this tag. If the tag is moved to another commit, that counts as a change.",
         "commit": "A fixed commit is never behind. Change the ref to move it."
       },
       "commitHelper": "7 to 40 hex characters.",
@@ -67,7 +67,7 @@
     },
     "card2": {
       "title": "Folder and compose files",
-      "body": "The folder is the stack's root. Coaming only reads files inside it.",
+      "body": "The folder is the stack's root. TierPlan only reads files inside it.",
       "firstRepository": "Choose a repository first.",
       "firstRef": "Choose a ref first."
     },
@@ -87,7 +87,7 @@
       "noComposeBody": "Open a folder, or pick this folder if its compose file has another name.",
       "hasCompose": "Has compose file",
       "submodule": "Submodule",
-      "submoduleTip": "Coaming doesn't support submodules.",
+      "submoduleTip": "TierPlan doesn't support submodules.",
       "link": "Link",
       "linkTip": "Links aren't followed.",
       "capped": "Showing the first {{shown}} of {{n}}. Filter to find the rest.",
@@ -120,7 +120,7 @@
       "ref_invalid": "That isn't a ref name git accepts.",
       "offline": "The server didn't answer. Check the connection and try again.",
       "permission": "You don't have permission to read this repository.",
-      "unknown": "Coaming couldn't read the repository. Try again.",
+      "unknown": "TierPlan couldn't read the repository. Try again.",
       "compose_file_missing": "A compose file you chose isn't in that folder at this ref.",
       "compose_path_invalid": "A compose file path is outside the stack folder or is named twice.",
       "file_path_invalid": "An overlay file path isn't a path inside the stack folder.",
@@ -164,7 +164,7 @@
     },
     "overlay": {
       "title": "Overlay files",
-      "body": "Files the repository doesn't have, such as a secret or a config. Coaming keeps them encrypted.",
+      "body": "Files the repository doesn't have, such as a secret or a config. TierPlan keeps them encrypted.",
       "list": "Overlay files",
       "missing": "Missing",
       "added": "Added",
@@ -202,7 +202,7 @@
     "errors": {
       "createFailed": "Couldn't create the stack from that folder. Check the repository, ref, folder and files, then try again.",
       "nameInvalid": "Use only letters, numbers, dash and underscore, starting with a letter or number.",
-      "commitMoved": "The branch or tag moved after it was checked, so nothing was created. Coaming is reading it again: look over the result, then create the stack."
+      "commitMoved": "The branch or tag moved after it was checked, so nothing was created. TierPlan is reading it again: look over the result, then create the stack."
     },
     "guard": {
       "title": "Discard this stack?",

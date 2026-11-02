@@ -51,7 +51,7 @@
       "reload": "Reload"
     },
     "addressPools": {
-      "description": "Optional. Coaming reads the address pools the daemon reports, or Docker's defaults when daemon.json sets none. Enter pools here only if Coaming should measure against different ones.",
+      "description": "Optional. TierPlan reads the address pools the daemon reports, or Docker's defaults when daemon.json sets none. Enter pools here only if TierPlan should measure against different ones.",
       "tableLabel": "Address pools",
       "base": "Base",
       "size": "Size",
@@ -71,7 +71,7 @@
       "loading": "Loading the address pools…",
       "loadFailed": "Couldn't load the address pools.",
       "emptyTitle": "Using the daemon's pools",
-      "emptyBody": "Coaming reads the address pools the daemon reports, or Docker's defaults when it sets none. Add pools here only to measure against different ones.",
+      "emptyBody": "TierPlan reads the address pools the daemon reports, or Docker's defaults when it sets none. Add pools here only to measure against different ones.",
       "baseInvalid": "Enter a base like 10.20.0.0/16.",
       "sizeInvalid": "Size must be between {{min}} and 30.",
       "overlap": "{{base}} overlaps another pool you entered."
@@ -139,7 +139,7 @@
         "revoked": "Revoked",
         "blocked": "Blocked",
         "readOnly": "Read-only (set on host)",
-        "readOnlyTip": "COAMING_AGENT_READ_ONLY is set on this host. The agent refuses every change Coaming asks for."
+        "readOnlyTip": "TIERPLAN_AGENT_READ_ONLY is set on this host. The agent refuses every change TierPlan asks for."
       },
       "actionsFor": "Actions for {{node}}",
       "revokeNode": "Revoke node",
@@ -195,10 +195,10 @@
     },
     "fold": {
       "title": "Local host",
-      "alert": "This Coaming host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
+      "alert": "This TierPlan host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
       "button": "Fold into {{swarm}}",
       "dialogTitle": "Fold this host into {{swarm}}?",
-      "body": "Coaming will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
+      "body": "TierPlan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
       "cancel": "Cancel",
       "confirm": "Fold into {{swarm}}",
       "pending": "Folding…",
@@ -208,14 +208,14 @@
     },
     "updates": {
       "autoLabel": "Update agents automatically",
-      "autoHelper": "After a Coaming upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.",
+      "autoHelper": "After a TierPlan upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.",
       "autoFailed": "Couldn't change the setting. Try again.",
       "updateAll": "Update all agents ({{count}})",
       "starting": "Starting…",
       "progress": "Updating agents ({{done}} of {{total}})",
       "swarmNote": "In a swarm one update rolls every node's agent, one after the other, so Update agent on one node updates them all.",
       "manualOff": "Self-update is turned off on {{node}}. Update it by hand:",
-      "manualOther": "Coaming can't update {{node}} by itself. Update it by hand:",
+      "manualOther": "TierPlan can't update {{node}} by itself. Update it by hand:",
       "manualLabel": "the update command for {{node}}"
     },
     "updateReasons": {
@@ -241,12 +241,12 @@
       "failed": "Couldn't start the update. Try again."
     },
     "remove": {
-      "cardBody": "Coaming stops managing this environment, revokes every agent and disables the join token. You can also have it uninstall the agent from the hosts.",
-      "cardBodyLocal": "Coaming stops managing this host. Nothing on it is changed.",
+      "cardBody": "TierPlan stops managing this environment, revokes every agent and disables the join token. You can also have it uninstall the agent from the hosts.",
+      "cardBodyLocal": "TierPlan stops managing this host. Nothing on it is changed.",
       "button": "Remove environment",
       "buttonLocal": "Remove host",
       "title": "Remove {{name}}?",
-      "body": "Coaming will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
+      "body": "TierPlan will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
       "uninstall": "Also uninstall the agent from the hosts",
       "helperSome": "{{online}} of {{total}} agents are online. The others need the manual command below.",
       "helperAll": "All {{total}} agents are online.",
@@ -267,9 +267,9 @@
       "done": "{{name}} was removed."
     },
     "unknownAgents": {
-      "title": "Agents Coaming doesn't know",
-      "body": "These agents were installed after the backup was taken, so this Coaming refused them. Reinstall each one with its environment's install command.",
-      "tableLabel": "Agents Coaming doesn't know",
+      "title": "Agents TierPlan doesn't know",
+      "body": "These agents were installed after the backup was taken, so this TierPlan refused them. Reinstall each one with its environment's install command.",
+      "tableLabel": "Agents TierPlan doesn't know",
       "columns": {
         "node": "Node",
         "environment": "Environment",

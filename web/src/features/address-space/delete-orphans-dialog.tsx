@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -40,14 +40,14 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
-// What one delete came to. "kept" is a safe answer, never an error: Coaming checked again just
+// What one delete came to. "kept" is a safe answer, never an error: TierPlan checked again just
 // before and left the network alone. A refusal is a failure with the words that explain it.
 export type OrphanResult =
   | { kind: "deleted" }
   | { kind: "kept"; reason: string }
   | { kind: "failed"; reason: string; gone?: boolean };
 
-// keptReason is why Coaming kept a network, in the UI's words. node is who did not answer.
+// keptReason is why TierPlan kept a network, in the UI's words. node is who did not answer.
 export function keptReason(
   t: Translate,
   name: string,

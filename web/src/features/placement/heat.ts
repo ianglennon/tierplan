@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The shading of the placement grid (RES-12, D-18, UI-SPEC "Placement heat"). A cell is tinted by
 // its task count relative to the largest count in its row, in four steps. The shade only

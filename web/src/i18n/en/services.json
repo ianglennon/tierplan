@@ -37,7 +37,7 @@
       "stateTooltip": "{{running, number}} of {{desired, number}} replicas running",
       "noManager": {
         "title": "No manager is connected",
-        "body": "Swarm changes are off until a manager node's agent reconnects. You can still look at what Coaming last saw."
+        "body": "Swarm changes are off until a manager node's agent reconnects. You can still look at what TierPlan last saw."
       },
       "menu": {
         "scale": "Scale…",
@@ -93,7 +93,7 @@
       "changes_other": "{{count}} changes waiting",
       "showChanges": "Show changes",
       "self": {
-        "agentService": "Coaming agent"
+        "agentService": "TierPlan agent"
       },
       "select": {
         "all": "Select all services"
@@ -127,9 +127,9 @@
         "not_scalable_job": "Jobs can't be scaled here.",
         "no_manager_connected": "No manager is connected for {{environment}}, so this swarm can't be changed right now. Reconnect a manager's agent and try again.",
         "no_quorum": "The swarm has lost its quorum, so it can't be changed right now. Bring its managers back and try again.",
-        "registry_unresolved": "Coaming couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
+        "registry_unresolved": "TierPlan couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
         "permission": "You no longer have permission to do that. Your access may have changed.",
-        "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening."
+        "generic": "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening."
       },
       "bulkTitle": "Scale {{count}} services",
       "bulkBody": "Set how many tasks each service should run.",
@@ -156,11 +156,11 @@
       }
     },
     "problems": {
-      "agent_host_policy": "This swarm's manager agents don't let Coaming change services with host access. Set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it."
+      "agent_host_policy": "This swarm's manager agents don't let TierPlan change services with host access. Set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it."
     },
     "forceUpdate": {
       "title": "Force update {{name}}?",
-      "body": "Swarm replaces every task, a batch at a time, using the service's update settings. Coaming looks up the image again, so a tag that has moved is picked up.",
+      "body": "Swarm replaces every task, a batch at a time, using the service's update settings. TierPlan looks up the image again, so a tag that has moved is picked up.",
       "cancel": "Cancel",
       "submit": "Force update",
       "pending": "Updating…",
@@ -191,7 +191,7 @@
       "title": "Remove {{name}}?",
       "body_one": "Swarm stops its {{count}} task and deletes the service. Its images, volumes, networks, secrets and configs stay.",
       "body_other": "Swarm stops its {{count}} tasks and deletes the service. Its images, volumes, networks, secrets and configs stay.",
-      "agentWarning": "This is Coaming's agent service. Removing it cuts Coaming off from every node it runs on.",
+      "agentWarning": "This is TierPlan's agent service. Removing it cuts TierPlan off from every node it runs on.",
       "cancel": "Cancel",
       "confirm": "Remove service",
       "confirmAgent": "Remove agent service",
@@ -199,7 +199,7 @@
       "done": "Removed {{name}}.",
       "gone": "{{name}} is already gone.",
       "stackOwned": "Managed by stack {{stack}}. Change it through the stack.",
-      "confirmRequired": "Type {{name}} to remove Coaming's agent service."
+      "confirmRequired": "Type {{name}} to remove TierPlan's agent service."
     },
     "refusal": {
       "image_unresolved": "Couldn't look up {{ref}} on {{host}} to pin it to a digest. Check the name, the tag and the credential, then try again.",
@@ -207,9 +207,9 @@
       "service_not_found": "This service is gone. It was removed, or a stack deploy replaced it.",
       "no_manager_connected": "No manager is connected for {{environment}}, so this swarm can't be changed right now. Reconnect a manager's agent and try again.",
       "no_quorum": "The swarm has lost its quorum, so it can't be changed right now. Bring its managers back and try again.",
-      "registry_unresolved": "Coaming couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
+      "registry_unresolved": "TierPlan couldn't read the registry credential for this service's image, so nothing was sent. Check the credential under Registries, then try again.",
       "permission": "You no longer have permission to do that. Your access may have changed.",
-      "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+      "generic": "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening.",
       "rollback_object_missing": "Can't roll back: {{object}} no longer exists. Create it again or edit the service instead.",
       "rollback_object_unnamed": "something the earlier version uses",
       "privileged_rollback": "Can't roll back: the earlier version uses settings that need Admin ({{list}}). Ask an administrator to roll it back.",

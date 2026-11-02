@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
-<!-- SPDX-FileCopyrightText: 2026 The Coaming Authors -->
+<!-- SPDX-FileCopyrightText: 2026 The TierPlan Authors -->
 
 # Team access
 
-Coaming has users, teams and three roles. This page explains who can do what, how to
+TierPlan has users, teams and three roles. This page explains who can do what, how to
 give people access, and how to get someone back in when they have lost their password.
 The exact list of what each role may do is in [permissions.md](permissions.md), which is
 generated from the code and cannot drift from it.
@@ -18,10 +18,10 @@ join tokens. On every environment they hold Admin with every extra permission.
   given through a team, so the list of people with full control is always one visible list.
 - The first account you create at setup is an instance admin. So is the Admin of a database
   that came from before roles existed.
-- **Coaming always keeps at least one active instance admin.** The last one cannot be
+- **TierPlan always keeps at least one active instance admin.** The last one cannot be
   demoted, disabled or deleted. The server refuses it, and the buttons are disabled with the
   reason. Make someone else an instance admin first.
-- An instance admin can use every part of Coaming, including container shells and secrets.
+- An instance admin can use every part of TierPlan, including container shells and secrets.
   To separate duties, give people environment roles instead of the flag.
 
 ## Roles and what they allow
@@ -52,7 +52,7 @@ entry itself, so "Operator on production, with container shell" is a single row:
 
 - An **Admin** always holds all four. An **Operator** holds only the ones ticked. A **Viewer**
   can never hold any: the server refuses a Viewer with extras.
-- Holding the permission is enough. Coaming does not ask for the password again. Every use is
+- Holding the permission is enough. TierPlan does not ask for the password again. Every use is
   audited, and destructive actions ask you to type the resource's name.
 
 ## All environments, and how access adds up
@@ -118,14 +118,14 @@ changes.
 ## Adding people
 
 An instance admin creates a user in **Settings, Access, Users, Create user** with a username,
-and optionally a display name and an email. Nothing uses the email yet, and **Coaming sends no
+and optionally a display name and an email. Nothing uses the email yet, and **TierPlan sends no
 email**.
 
-- Coaming then shows a **one-time invite link**. It is hidden until you choose Show link.
+- TierPlan then shows a **one-time invite link**. It is hidden until you choose Show link.
   Send it to the person yourself, privately, because anyone who has it can set the password.
   The dialog cannot show it again once closed.
-- The link works once and expires after 72 hours. Change the time with `COAMING_INVITE_TTL`
-  (from `1h` to `720h`). The token sits after a `#` in the link, so it is not sent to Coaming's
+- The link works once and expires after 72 hours. Change the time with `TIERPLAN_INVITE_TTL`
+  (from `1h` to `720h`). The token sits after a `#` in the link, so it is not sent to TierPlan's
   server or a reverse proxy in the request, and it is stored only as a hash.
 - The person opens the link, chooses a password (12 characters or more) and is sent to the
   sign-in page. The link never signs anyone in by itself.
@@ -137,21 +137,21 @@ email**.
 ## Lost passwords
 
 There is no "forgot password" page. An instance admin opens the user's page or the row menu and
-chooses **Reset password**. Their sessions end, and Coaming shows a one-time link to give them,
-exactly like an invite link. The setting `COAMING_INVITE_TTL` applies to it too.
+chooses **Reset password**. Their sessions end, and TierPlan shows a one-time link to give them,
+exactly like an invite link. The setting `TIERPLAN_INVITE_TTL` applies to it too.
 
 If the person who lost their password is the only instance admin, use the command line on the
 host:
 
 ```sh
-docker exec coaming coaming user reset-password <username>
+docker exec tierplan tierplan user reset-password <username>
 ```
 
 It ends their sessions and prints a one-time link. The link is built from the stored public URL
 and base path. Without a stored public URL it prints `/invite#token=…` for you to open on your
-Coaming address. The command is recorded in the audit log as `system:cli`. If an account is
+TierPlan address. The command is recorded in the audit log as `system:cli`. If an account is
 locked after too many failed sign-ins (five failures lock it for 30 minutes), use **Unlock** on
-the user's page or `docker exec coaming coaming user unlock <username>`.
+the user's page or `docker exec tierplan tierplan user unlock <username>`.
 
 ## Disabling and deleting
 
@@ -174,7 +174,7 @@ Changing a password, resetting one, disabling a user and restoring a backup also
 ## Automations and ownership
 
 Git syncs and webhooks (added in later phases) run with the permissions of the user who set them
-up, and Coaming checks those permissions again on every run. If the owner is disabled, deleted,
+up, and TierPlan checks those permissions again on every run. If the owner is disabled, deleted,
 or no longer holds enough access, the automation **pauses** with a visible reason and an audit
 entry. An instance admin can **transfer ownership** to another user who has enough access, from
 the owner's page or when deleting the owner. The delete dialog lists what the user owns and lets
@@ -193,7 +193,7 @@ normal one has over the host:
 - a `security_opt` that turns confinement off;
 - volumes that mount the Docker socket or runtime sockets, the host's root or Docker data
   directories;
-- any value that holds an interpolation Coaming cannot resolve before deploying, because it
+- any value that holds an interpolation TierPlan cannot resolve before deploying, because it
   could be any of the above.
 
 The check is deliberately cautious: a false alarm costs an Admin one click, and a miss costs a

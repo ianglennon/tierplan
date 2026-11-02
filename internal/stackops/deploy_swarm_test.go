@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -19,18 +19,18 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The swarm deploy runs against a fake swarm manager behind the real monitor, aggregator and
@@ -234,7 +234,7 @@ func TestDeploySwarmCreatesTheNetworkAndTheServiceWithTheOwnershipLabels(t *test
 		t.Errorf("job = %s %v, want done", job.State, itemStates(job))
 	}
 	nets := rig.fake.NetworkCreates()
-	if len(nets) != 1 || nets[0].Name != "tracer_default" || nets[0].Driver != "overlay" || nets[0].Labels["coaming.stack.id"] != "stack-tracer" ||
+	if len(nets) != 1 || nets[0].Name != "tracer_default" || nets[0].Driver != "overlay" || nets[0].Labels["tierplan.stack.id"] != "stack-tracer" ||
 		nets[0].Labels["com.docker.stack.namespace"] != "tracer" {
 		t.Errorf("network creates = %+v", nets)
 	}
@@ -243,7 +243,7 @@ func TestDeploySwarmCreatesTheNetworkAndTheServiceWithTheOwnershipLabels(t *test
 		t.Fatalf("service creates = %+v, want one", svcs)
 	}
 	spec := svcs[0].Spec
-	if spec.Name != "tracer_web" || spec.Labels["com.docker.stack.namespace"] != "tracer" || spec.Labels["coaming.stack.id"] != "stack-tracer" ||
+	if spec.Name != "tracer_web" || spec.Labels["com.docker.stack.namespace"] != "tracer" || spec.Labels["tierplan.stack.id"] != "stack-tracer" ||
 		spec.Labels["com.docker.stack.image"] != "nginx:1.27-alpine" || spec.TaskTemplate.ContainerSpec.Image != "nginx:1.27-alpine@"+dockertest.FakeDigestOf("docker.io/library/nginx:1.27-alpine") {
 		t.Errorf("service spec = %+v", spec)
 	}
@@ -254,7 +254,7 @@ func TestDeploySwarmCreatesTheNetworkAndTheServiceWithTheOwnershipLabels(t *test
 
 func TestDeploySwarmUpdatesAnOwnedServiceAtTheVersionItRead(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "tracer", "coaming.stack.id": "stack-tracer"}
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "tierplan.stack.id": "stack-tracer"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
 	}, dockertest.FakeService{ID: "svc-web", Name: "tracer_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned})
@@ -280,7 +280,7 @@ func TestDeploySwarmRefusesANameAnotherStackOwns(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil, dockertest.FakeService{
 		ID: "svc-x", Name: "tracer_web", Mode: "replicated", Image: "nginx:1", Version: 1,
-		Labels: map[string]string{"com.docker.stack.namespace": "tracer"}, // made by docker stack deploy, not by Coaming
+		Labels: map[string]string{"com.docker.stack.namespace": "tracer"}, // made by docker stack deploy, not by TierPlan
 	})
 	_, in := starterPlan(t, "tracer")
 	res, job := rig.deploy(t, in)
@@ -352,7 +352,7 @@ func TestDeploySwarmNamesAHostPolicyRefusal(t *testing.T) {
 	if row.Code != stackops.CodeAgentHostPolicy || row.Message != stackops.CodeMessage(stackops.CodeAgentHostPolicy) {
 		t.Errorf("service row = %+v, want the host-policy code and its sentence", row)
 	}
-	if !strings.Contains(row.Message, "COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES") {
+	if !strings.Contains(row.Message, "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES") {
 		t.Errorf("message = %q, want it to name the agent setting", row.Message)
 	}
 }
@@ -480,8 +480,8 @@ func TestDeploySwarmCreatesAHashedSecretFromAStackFile(t *testing.T) {
 	}
 	got := creates[0]
 	wantLabels := map[string]string{
-		"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web",
-		"coaming.stack.object": "tok", "coaming.stack.object.hash": hash,
+		"com.docker.stack.namespace": "web", "tierplan.stack.id": "stack-web",
+		"tierplan.stack.object": "tok", "tierplan.stack.object.hash": hash,
 	}
 	if got.Name != name || got.DataBytes != len("s3cret") || !maps.Equal(got.Labels, wantLabels) {
 		t.Errorf("secret create = %+v, want %s with labels %v", got, name, wantLabels)
@@ -603,7 +603,7 @@ func TestStackNetworkKeepsEveryPool(t *testing.T) {
 	if n.Name != "web_backend" || n.Driver != "overlay" || !n.Internal || !n.Attachable || n.Options["encrypted"] != "true" {
 		t.Errorf("network = %+v", n)
 	}
-	if n.Labels["team"] != "web" || n.Labels["com.docker.stack.namespace"] != "web" || n.Labels["coaming.stack.id"] != "stack-web" {
+	if n.Labels["team"] != "web" || n.Labels["com.docker.stack.namespace"] != "web" || n.Labels["tierplan.stack.id"] != "stack-web" {
 		t.Errorf("labels = %v, want the file's own and the stack's", n.Labels)
 	}
 	if n.IPAM == nil || n.IPAM.Driver != "default" || len(n.IPAM.Config) != 2 {
@@ -620,7 +620,7 @@ func TestStackNetworkKeepsEveryPool(t *testing.T) {
 
 func TestAnExistingStackNetworkIsNeverRecreatedEvenIfItsOptionsDiffer(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
+	owned := map[string]string{"com.docker.stack.namespace": "web", "tierplan.stack.id": "stack-web"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		// The file now asks for two pools and an internal network; the one on the swarm has neither.
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "web_backend", Driver: "overlay", Scope: "swarm", Labels: owned, Subnets: []string{"10.99.0.0/24"}}}
@@ -696,8 +696,8 @@ func TestExternalNetworkOfSwarmScopeIsUsedAndNeverCreatedOrRemoved(t *testing.T)
 // longer declares, a second stack and a service of nobody's stack.
 func pruneRig(t *testing.T, updateError string) *swarmRig {
 	t.Helper()
-	owned := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
-	blog := map[string]string{"com.docker.stack.namespace": "blog", "coaming.stack.id": "stack-blog"}
+	owned := map[string]string{"com.docker.stack.namespace": "web", "tierplan.stack.id": "stack-web"}
+	blog := map[string]string{"com.docker.stack.namespace": "blog", "tierplan.stack.id": "stack-blog"}
 	return newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{
 			{ID: "n1", Name: "web_default", Driver: "overlay", Scope: "swarm", Labels: owned},
@@ -852,15 +852,15 @@ func TestDeployStoresThePlatformsItSentWithTheRevision(t *testing.T) {
 	}
 }
 
-// siteWeb is the service of pinCompose in a stack named site that docker stack deploy (or Coaming) left running the image
-// ref, written as nginx:1.27, with no platforms: someone took them off outside Coaming.
+// siteWeb is the service of pinCompose in a stack named site that docker stack deploy (or TierPlan) left running the image
+// ref, written as nginx:1.27, with no platforms: someone took them off outside TierPlan.
 func siteWeb(ref string) dockertest.FakeService {
-	owned := map[string]string{"com.docker.stack.namespace": "site", "coaming.stack.id": "stack-site", stacks.LabelSwarmImage: "nginx:1.27"}
+	owned := map[string]string{"com.docker.stack.namespace": "site", "tierplan.stack.id": "stack-site", stacks.LabelSwarmImage: "nginx:1.27"}
 	return dockertest.FakeService{ID: "svc-web", Name: "site_web", Mode: "replicated", Image: ref, Version: 3, Labels: owned, Desired: 1, Running: 1}
 }
 
 // TestADeployPutsBackThePlatformsRecordedForAKeptDigest (G-08-4, P7 D-18, T-08-111): the platforms belong to the image,
-// and what Coaming recorded for a digest comes before what a service happens to run. A service that keeps its digest is
+// and what TierPlan recorded for a digest comes before what a service happens to run. A service that keeps its digest is
 // sent the platforms the stack's last good revision recorded for that digest, so an outside change is put back; with
 // nothing recorded it keeps the ones it runs; a record of another digest is never applied; and no registry is asked.
 func TestADeployPutsBackThePlatformsRecordedForAKeptDigest(t *testing.T) {
@@ -1139,7 +1139,7 @@ func TestChangedReferenceResolvesANewDigest(t *testing.T) {
 
 func TestADeployKeepsTheForceUpdateCounterOfARunningService(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "site", "coaming.stack.id": "stack-site", "com.docker.stack.image": "nginx:1.27"}
+	owned := map[string]string{"com.docker.stack.namespace": "site", "tierplan.stack.id": "stack-site", "com.docker.stack.image": "nginx:1.27"}
 	live := swarm.ServiceSpec{
 		Annotations: swarm.Annotations{Name: "site_web", Labels: owned},
 		TaskTemplate: swarm.TaskSpec{
@@ -1247,7 +1247,7 @@ func TestPinDeployStopsAtTheLookupNamingTheHostAndTheServiceAndWritesNothing(t *
 		t.Errorf("items = %v, want the deploy to stop at the lookup", got)
 	}
 	for _, it := range job.Items {
-		if it.ID == stackops.ItemLookup && it.Message != "Coaming can't reach registry.example:5000, and app needs a fresh lookup. Services that are already pinned don't need the registry." {
+		if it.ID == stackops.ItemLookup && it.Message != "TierPlan can't reach registry.example:5000, and app needs a fresh lookup. Services that are already pinned don't need the registry." {
 			t.Errorf("lookup message = %q", it.Message)
 		}
 	}
@@ -1410,7 +1410,7 @@ func TestDeploySwarmAddsAnItemForEachNetworkObjectAndServiceWithTheConsoleLabels
 
 func TestDeploySwarmAddsNoStepForANetworkThatExistsAndCallsAnOwnedServiceUpdated(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "tracer", "coaming.stack.id": "stack-tracer"}
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "tierplan.stack.id": "stack-tracer"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
 	}, dockertest.FakeService{ID: "svc-web", Name: "tracer_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned})
@@ -1493,7 +1493,7 @@ func TestDeploySwarmWritesOneOutputLineForEachWrite(t *testing.T) {
 
 func TestDeploySwarmWritesUpdatedAndRemovedLines(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "tracer", "coaming.stack.id": "stack-tracer"}
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "tierplan.stack.id": "stack-tracer"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
 	},
@@ -1678,8 +1678,8 @@ func adoptCorpus(t *testing.T, edit func(short string, spec *swarm.ServiceSpec))
 	return adoptRig(t, corpusRig(t, "deploy.yaml", edit))
 }
 
-// adoptCorpusStale is adoptCorpus for a stack Coaming made once for a record this instance does not hold: its
-// services and their containers, and its networks, carry the coaming.stack.id staleID (D-11).
+// adoptCorpusStale is adoptCorpus for a stack TierPlan made once for a record this instance does not hold: its
+// services and their containers, and its networks, carry the tierplan.stack.id staleID (D-11).
 func adoptCorpusStale(t *testing.T, staleID string) *adopted {
 	t.Helper()
 	edit := func(_ string, spec *swarm.ServiceSpec) {
@@ -1777,7 +1777,7 @@ func writesNamed(fake *dockertest.Fake, words ...string) []string {
 	return out
 }
 
-// TestFirstDeployOfAnAdoptedSwarmStack: the first deploy sends one service update per service carrying Coaming's
+// TestFirstDeployOfAnAdoptedSwarmStack: the first deploy sends one service update per service carrying TierPlan's
 // ID, and creates, removes or conflicts with no network, secret or config that was there at adoption (T-08-61).
 func TestFirstDeployOfAnAdoptedSwarmStack(t *testing.T) {
 	t.Parallel()
@@ -1819,7 +1819,7 @@ func TestFirstDeployOfAnAdoptedSwarmStack(t *testing.T) {
 	for _, u := range a.rig.fake.ServiceUpdates() {
 		spec := u.Spec
 		if spec.Labels[stacks.LabelStackID] != a.stack.ID || spec.TaskTemplate.ContainerSpec.Labels[stacks.LabelStackID] != a.stack.ID {
-			t.Errorf("service %s was updated without Coaming's ID on the service and its containers: %v", spec.Name, spec.Labels)
+			t.Errorf("service %s was updated without TierPlan's ID on the service and its containers: %v", spec.Name, spec.Labels)
 		}
 	}
 
@@ -1843,7 +1843,7 @@ func TestFirstDeployOfAnAdoptedSwarmStack(t *testing.T) {
 	}
 }
 
-// TestFirstDeployRelabelsAStaleID: a service that carried a stale coaming.stack.id at adoption gets the new
+// TestFirstDeployRelabelsAStaleID: a service that carried a stale tierplan.stack.id at adoption gets the new
 // stack's ID, and its network, which keeps the stale label, is neither a conflict nor touched (D-11).
 func TestFirstDeployRelabelsAStaleID(t *testing.T) {
 	t.Parallel()
@@ -1950,7 +1950,7 @@ func TestFirstReviewAndDeployOfAnAdoptedStackKeepItsPlatforms(t *testing.T) {
 }
 
 // TestADeployThatLooksAnImageUpSendsThePlatformsOfTheImage (G-08-4, user decision 2026-10-27): docker stack deploy sends
-// each service with the platforms of its image, and so does Coaming, filled from the answer of the lookup that pinned
+// each service with the platforms of its image, and so does TierPlan, filled from the answer of the lookup that pinned
 // the digest (the fake's registry answers linux/amd64 and linux/arm64/v8 and two unknown/unknown entries). A redeploy
 // with no edit sends the same platforms and asks no registry (P7 D-18); an image pinned to a local ID has none.
 func TestADeployThatLooksAnImageUpSendsThePlatformsOfTheImage(t *testing.T) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package vault
 
@@ -14,14 +14,14 @@ import (
 )
 
 const (
-	// NewKeyFile is where `coaming key rotate` puts the new master key before
+	// NewKeyFile is where `tierplan key rotate` puts the new master key before
 	// it commits. After the commit it is renamed to KeyFile (a file-sourced
-	// key) or left for the operator to move into COAMING_ENCRYPTION_KEY.
-	NewKeyFile = "coaming.key.new"
+	// key) or left for the operator to move into TIERPLAN_ENCRYPTION_KEY.
+	NewKeyFile = "tierplan.key.new"
 	// OldKeyFile keeps the previous master key after a rotation until the admin
 	// deletes it. The vault loads it as a non-active key, which is what lets the
 	// rotation's attestation be checked (D-33).
-	OldKeyFile = "coaming.key.old"
+	OldKeyFile = "tierplan.key.old"
 
 	// MetaActiveKeyID is the app_meta key that names the master key the database
 	// was last rotated to. It is absent until the first rotation.
@@ -39,7 +39,7 @@ func WriteKeyFile(dir, name string, key []byte) error {
 	if len(key) != keyLen {
 		return fmt.Errorf("vault: the key must be exactly %d bytes, got %d", keyLen, len(key))
 	}
-	tmp, err := os.CreateTemp(dir, ".coaming.key-*")
+	tmp, err := os.CreateTemp(dir, ".tierplan.key-*")
 	if err != nil {
 		return fmt.Errorf("write key file %s: %w", name, err)
 	}
@@ -110,21 +110,21 @@ func RenameKeyFile(dir, from, to string) error {
 // short, before the vault is loaded. It must run with the data-directory lock
 // held. activeKID reports the key ID the database names as active (app_meta
 // active_key_id; empty when there is no database or no rotation yet), and
-// keyFromEnv says the running key comes from COAMING_ENCRYPTION_KEY. It reports
+// keyFromEnv says the running key comes from TIERPLAN_ENCRYPTION_KEY. It reports
 // whether it changed anything.
 //
 // The commit of the database is the point of no return, and it decides:
 //
-//   - coaming.key.new absent: nothing to do.
-//   - coaming.key absent and coaming.key.old present: the crash came between the
-//     two renames, so coaming.key.new becomes coaming.key. The database is not
+//   - tierplan.key.new absent: nothing to do.
+//   - tierplan.key absent and tierplan.key.old present: the crash came between the
+//     two renames, so tierplan.key.new becomes tierplan.key. The database is not
 //     asked. Starting without this would let LoadOrCreate mint a fresh key.
-//   - the database names the key in coaming.key.new: the commit happened, so the
-//     renames are finished (coaming.key to coaming.key.old, then coaming.key.new
-//     to coaming.key).
-//   - otherwise the commit never happened and coaming.key.new is deleted.
+//   - the database names the key in tierplan.key.new: the commit happened, so the
+//     renames are finished (tierplan.key to tierplan.key.old, then tierplan.key.new
+//     to tierplan.key).
+//   - otherwise the commit never happened and tierplan.key.new is deleted.
 //
-// A key from the environment is never replaced by a file: coaming.key.new stays
+// A key from the environment is never replaced by a file: tierplan.key.new stays
 // for the operator while the database names it, and is deleted only when it is a
 // leftover of a rotation that never committed.
 func RecoverRotation(ctx context.Context, dataDir string, keyFromEnv bool, activeKID func(context.Context) (string, error)) (changed bool, err error) {

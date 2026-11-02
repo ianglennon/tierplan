@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -7,17 +7,17 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // How a pull is told in a job, shared by the pull routes of Phase 5 (internal/api) and the pre-pull of a
 // standalone deploy: the same progress folded into an item, the same failure codes and the same sentences.
 
 const (
-	// CodeNodeUnreachable is the code of a pull whose node is not connected to Coaming.
+	// CodeNodeUnreachable is the code of a pull whose node is not connected to TierPlan.
 	CodeNodeUnreachable = "node_unreachable"
 
 	// maxPullLayers bounds the layers one item lists; an image has a few dozen.
@@ -41,8 +41,8 @@ var PullMessages = map[string]string{
 	dockerx.PullCodeRegistryHTTPFallback: "The registry's real answer was hidden by a retry over plain HTTP. Check the name, the tag and the sign-in.",
 	dockerx.PullCodeCancelled:            "The pull was cancelled.",
 	dockerx.PullCodeFailed:               "The pull failed.",
-	CodeNodeUnreachable:                  "The node is not connected to Coaming.",
-	CodeHostReadOnly:                     "This host is read-only, so Coaming cannot pull on it.",
+	CodeNodeUnreachable:                  "The node is not connected to TierPlan.",
+	CodeHostReadOnly:                     "This host is read-only, so TierPlan cannot pull on it.",
 	CodeAgentPolicyDenied:                "The node's agent refused the request.",
 }
 

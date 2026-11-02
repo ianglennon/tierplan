@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -15,7 +15,7 @@ import { DriftBadge } from "@/features/stacks/drift-badge";
 import "@/i18n";
 import { TestRouter } from "@/test-router";
 
-// The cause of drift (plan 08-22, STK-14, D-24): who changed a service in Coaming and when, how many changes, that it
+// The cause of drift (plan 08-22, STK-14, D-24): who changed a service in TierPlan and when, how many changes, that it
 // came from outside, and that it was there when the stack was adopted. The clock is held, so a relative time reads the
 // same on every run.
 
@@ -62,34 +62,34 @@ function sentence(cause: StackDriftCause | null | undefined, count?: number, sta
 }
 
 describe("the cause line", () => {
-  it("says who scaled a service, from what to what, in Coaming, and when", () => {
-    expect(sentence(scaled)).toBe("web was scaled from 1 to 2 by alice in Coaming, 2 h ago.");
+  it("says who scaled a service, from what to what, in TierPlan, and when", () => {
+    expect(sentence(scaled)).toBe("web was scaled from 1 to 2 by alice in TierPlan, 2 h ago.");
   });
 
   it("leaves the old count out when the audit row did not say it", () => {
     expect(sentence({ ...scaled, from: "" })).toBe(
-      "web was scaled to 2 by alice in Coaming, 2 h ago.",
+      "web was scaled to 2 by alice in TierPlan, 2 h ago.",
     );
   });
 
   it("says a service was rolled back or edited", () => {
     expect(sentence({ ...scaled, action: "rolled_back", from: "", to: "" })).toBe(
-      "web was rolled back by alice in Coaming, 2 h ago.",
+      "web was rolled back by alice in TierPlan, 2 h ago.",
     );
     cleanup();
     expect(sentence({ ...scaled, action: "edited", from: "", to: "" })).toBe(
-      "web was edited by alice in Coaming, 2 h ago.",
+      "web was edited by alice in TierPlan, 2 h ago.",
     );
   });
 
   it("counts the changes and names the latest when there are several", () => {
-    expect(sentence(scaled, 3)).toBe("3 changes, the latest by alice in Coaming, 2 h ago.");
+    expect(sentence(scaled, 3)).toBe("3 changes, the latest by alice in TierPlan, 2 h ago.");
   });
 
   it("says a change came from outside when nothing is known", () => {
-    expect(sentence(undefined)).toBe("Changed outside Coaming.");
+    expect(sentence(undefined)).toBe("Changed outside TierPlan.");
     cleanup();
-    expect(sentence(null, 0)).toBe("Changed outside Coaming.");
+    expect(sentence(null, 0)).toBe("Changed outside TierPlan.");
   });
 
   it("says a difference was there when the stack was adopted", () => {
@@ -100,7 +100,7 @@ describe("the cause line", () => {
 
   it("shows a name as text and not as markup", () => {
     expect(sentence({ ...scaled, by: "<b>mallory</b>" })).toBe(
-      "web was scaled from 1 to 2 by <b>mallory</b> in Coaming, 2 h ago.",
+      "web was scaled from 1 to 2 by <b>mallory</b> in TierPlan, 2 h ago.",
     );
     expect(screen.getByTestId("line").querySelector("b")).toBeNull();
   });
@@ -130,15 +130,15 @@ function described(drift: StackItem["drift"]) {
 }
 
 describe("the Drifted badge", () => {
-  it("adds who changed what in Coaming to its Tooltip", () => {
+  it("adds who changed what in TierPlan to its Tooltip", () => {
     expect(described(item({ cause: scaled, causes: 1 }))).toBe(
-      "Running state no longer matches revision #3. web was scaled by alice in Coaming.",
+      "Running state no longer matches revision #3. web was scaled by alice in TierPlan.",
     );
   });
 
   it("counts the changes when there are several", () => {
     expect(described(item({ count: 4, cause: scaled, causes: 2 }))).toBe(
-      "Running state no longer matches revision #3. 2 changes, the latest by alice in Coaming.",
+      "Running state no longer matches revision #3. 2 changes, the latest by alice in TierPlan.",
     );
   });
 
@@ -161,7 +161,7 @@ function service(short: string, over: Partial<StackDriftService> = {}): StackDri
 }
 
 describe("the drifted services", () => {
-  it("say why each differs, or that it changed outside Coaming", () => {
+  it("say why each differs, or that it changed outside TierPlan", () => {
     render(
       <TooltipProvider>
         <DriftServiceList
@@ -180,9 +180,9 @@ describe("the drifted services", () => {
       const row = screen.getByText(name, { selector: '[data-slot="service-name"]' }).closest("li");
       return (row as HTMLElement).querySelector('[data-slot="drift-cause"]')?.textContent;
     };
-    expect(lines("web")).toBe("web was scaled from 1 to 2 by alice in Coaming, 2 h ago.");
-    expect(lines("api")).toBe("Changed outside Coaming.");
-    expect(lines("db")).toBe("Changed outside Coaming.");
+    expect(lines("web")).toBe("web was scaled from 1 to 2 by alice in TierPlan, 2 h ago.");
+    expect(lines("api")).toBe("Changed outside TierPlan.");
+    expect(lines("db")).toBe("Changed outside TierPlan.");
     expect(lines("cache")).toBe("Differed from the rebuilt definition when tracer was adopted.");
   });
 
@@ -241,11 +241,11 @@ describe("the Overview alert", () => {
 
   it("names the cause", () => {
     expect(alert({ cause: scaled, causes: 1 })).toBe(
-      "web was scaled from 1 to 2 by alice in Coaming, 2 h ago.",
+      "web was scaled from 1 to 2 by alice in TierPlan, 2 h ago.",
     );
   });
 
-  it("says the change came from outside Coaming when nothing is known", () => {
-    expect(alert({})).toBe("Changed outside Coaming.");
+  it("says the change came from outside TierPlan when nothing is known", () => {
+    expect(alert({})).toBe("Changed outside TierPlan.");
   });
 });

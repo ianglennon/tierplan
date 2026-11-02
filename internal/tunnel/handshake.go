@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package tunnel
 
@@ -18,27 +18,27 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // maxCertBytes bounds a certificate in a hello. A real one is under 1 KiB; the
 // handshake read limit is the outer bound, this keeps parsing cheap.
 const maxCertBytes = 8 << 10
 
-// joinTokenPrefix starts every join token: cmjt_<environment ID>_<secret>. The
+// joinTokenPrefix starts every join token: tpjt_<environment ID>_<secret>. The
 // agents package makes them; the hub only reads the environment ID out of a
 // refused one, to say where the refusal happened.
-const joinTokenPrefix = "cmjt_"
+const joinTokenPrefix = "tpjt_"
 
 // peerInfo is what the handler knows about the connection that the signed
 // handshake must agree with.
 type peerInfo struct {
 	ip string
-	// tls is the connection state when Coaming terminates TLS itself.
+	// tls is the connection state when TierPlan terminates TLS itself.
 	tls *tls.ConnectionState
-	// trusted is true when the peer is a proxy in COAMING_TRUSTED_PROXIES.
+	// trusted is true when the peer is a proxy in TIERPLAN_TRUSTED_PROXIES.
 	trusted bool
 	// aud is the host[:port] the agent must have addressed.
 	aud string
@@ -183,19 +183,19 @@ func (h *Hub) verifyAuth(ctx context.Context, a wire.Auth, serverNonce []byte, p
 		}
 	}
 
-	// Channel binding (D-05). When Coaming terminates TLS itself both ends compute
+	// Channel binding (D-05). When TierPlan terminates TLS itself both ends compute
 	// the same exporter value, authn.EKM over tls.ConnectionState.ExportKeyingMaterial; behind a TLS-terminating proxy they cannot, so the
 	// comparison is made only for a peer that is not a trusted proxy (RESEARCH
 	// Pattern 2). A mismatch for such a peer means a proxy that is not listed in
-	// COAMING_TRUSTED_PROXIES, or a relay.
+	// TIERPLAN_TRUSTED_PROXIES, or a relay.
 	ekm := a.EKM
 	if p.tls != nil && !p.trusted {
 		ekm = authn.EKM(p.tls)
 		if !authn.EKMEqual(a.EKM, ekm) {
-			h.log.Warn("agent handshake is not bound to this TLS connection; a TLS-terminating proxy may be missing from COAMING_TRUSTED_PROXIES", "ip", p.ip)
+			h.log.Warn("agent handshake is not bound to this TLS connection; a TLS-terminating proxy may be missing from TIERPLAN_TRUSTED_PROXIES", "ip", p.ip)
 			return accepted{}, &RefuseError{
 				Code:        wire.ReasonAuthRejected,
-				Detail:      "the handshake is not bound to this TLS connection; if a reverse proxy terminates TLS, add it to COAMING_TRUSTED_PROXIES",
+				Detail:      "the handshake is not bound to this TLS connection; if a reverse proxy terminates TLS, add it to TIERPLAN_TRUSTED_PROXIES",
 				AuditReason: "channel_binding",
 			}
 		}

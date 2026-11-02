@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The tabs of the image detail page, in the order they show (UI-SPEC "Image detail"):
 // Overview, Used by, Layers, Tags, Inspect. Each plan adds its own entry here, in that

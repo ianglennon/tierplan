@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package config
 
@@ -29,30 +29,30 @@ func files(m map[string]string) func(string) ([]byte, error) {
 	}
 }
 
-const goodURL = "wss://coaming.example/agent/connect"
+const goodURL = "wss://tierplan.example/agent/connect"
 
 func TestLoadTrimsTheTokenFileNewline(t *testing.T) {
 	cfg, err := Load(
 		env(map[string]string{ //nolint:gosec // a test fixture, not a credential
-			"COAMING_AGENT_URL":             goodURL,
-			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
+			"TIERPLAN_AGENT_URL":             goodURL,
+			"TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/tierplan-agent-token",
 		}),
-		files(map[string]string{"/run/secrets/coaming-agent-token": "cmjt_x_y\n"}), //nolint:gosec // a test fixture, not a credential
+		files(map[string]string{"/run/secrets/tierplan-agent-token": "tpjt_x_y\n"}), //nolint:gosec // a test fixture, not a credential
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JoinToken != "cmjt_x_y" {
-		t.Fatalf("JoinToken = %q, want cmjt_x_y", cfg.JoinToken)
+	if cfg.JoinToken != "tpjt_x_y" {
+		t.Fatalf("JoinToken = %q, want tpjt_x_y", cfg.JoinToken)
 	}
 }
 
 func TestLoadPrefersTheTokenFileOverTheEnvironmentVariable(t *testing.T) {
 	cfg, err := Load(
 		env(map[string]string{ //nolint:gosec // a test fixture, not a credential
-			"COAMING_AGENT_URL":             goodURL,
-			"COAMING_AGENT_JOIN_TOKEN":      "from-env",
-			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t",
+			"TIERPLAN_AGENT_URL":             goodURL,
+			"TIERPLAN_AGENT_JOIN_TOKEN":      "from-env",
+			"TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t",
 		}),
 		files(map[string]string{"/run/secrets/t": "from-file\n"}),
 	)
@@ -66,14 +66,14 @@ func TestLoadPrefersTheTokenFileOverTheEnvironmentVariable(t *testing.T) {
 
 func TestLoadUsesTheEnvironmentTokenWhenThereIsNoFile(t *testing.T) {
 	cfg, err := Load(
-		env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_a_b"}), //nolint:gosec // a test fixture, not a credential
+		env(map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tpjt_a_b"}), //nolint:gosec // a test fixture, not a credential
 		files(nil),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JoinToken != "cmjt_a_b" {
-		t.Fatalf("JoinToken = %q, want cmjt_a_b", cfg.JoinToken)
+	if cfg.JoinToken != "tpjt_a_b" {
+		t.Fatalf("JoinToken = %q, want tpjt_a_b", cfg.JoinToken)
 	}
 }
 
@@ -89,12 +89,12 @@ func load(t *testing.T, m map[string]string) Config {
 }
 
 func TestCheckEnrolledWithoutATokenOrAnIdentityNamesBothVariables(t *testing.T) {
-	cfg := load(t, map[string]string{"COAMING_AGENT_URL": goodURL})
+	cfg := load(t, map[string]string{"TIERPLAN_AGENT_URL": goodURL})
 	err := cfg.CheckEnrolled(files(nil))
 	if err == nil {
 		t.Fatal("want an error when there is no token and no enrolled state")
 	}
-	for _, name := range []string{"COAMING_AGENT_JOIN_TOKEN_FILE", "COAMING_AGENT_JOIN_TOKEN"} {
+	for _, name := range []string{"TIERPLAN_AGENT_JOIN_TOKEN_FILE", "TIERPLAN_AGENT_JOIN_TOKEN"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("the error %q does not name %s", err, name)
 		}
@@ -105,8 +105,8 @@ func TestCheckEnrolledWithoutATokenOrAnIdentityNamesBothVariables(t *testing.T) 
 }
 
 func TestCheckEnrolledAcceptsAnIdentityWithoutAToken(t *testing.T) {
-	cfg := load(t, map[string]string{"COAMING_AGENT_URL": goodURL})
-	if err := cfg.CheckEnrolled(files(map[string]string{"/var/lib/coaming-agent/identity.json": "{}"})); err != nil {
+	cfg := load(t, map[string]string{"TIERPLAN_AGENT_URL": goodURL})
+	if err := cfg.CheckEnrolled(files(map[string]string{"/var/lib/tierplan-agent/identity.json": "{}"})); err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.Enrolled {
@@ -118,7 +118,7 @@ func TestCheckEnrolledAcceptsAnIdentityWithoutAToken(t *testing.T) {
 }
 
 func TestCheckEnrolledFindsTheIdentityInACustomStateDirectory(t *testing.T) {
-	cfg := load(t, map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_STATE_DIR": "/state"})
+	cfg := load(t, map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_STATE_DIR": "/state"})
 	if err := cfg.CheckEnrolled(files(map[string]string{"/state/identity.json": "{}"})); err != nil {
 		t.Fatal(err)
 	}
@@ -140,8 +140,8 @@ func (r *recorded) read(name string) ([]byte, error) {
 // directory, so Load must not try, with or without a token.
 func TestLoadReadsNothingInTheStateDirectory(t *testing.T) {
 	for name, m := range map[string]map[string]string{
-		"default": {"COAMING_AGENT_URL": goodURL},
-		"custom":  {"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_STATE_DIR": "/state"},
+		"default": {"TIERPLAN_AGENT_URL": goodURL},
+		"custom":  {"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_STATE_DIR": "/state"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var r recorded
@@ -164,10 +164,10 @@ func TestCheckEnrolledWithATokenReadsNothing(t *testing.T) {
 		env   map[string]string
 		files map[string]string
 	}{
-		"variable": {map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_a_b"}, nil}, //nolint:gosec // a test fixture, not a credential
+		"variable": {map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tpjt_a_b"}, nil}, //nolint:gosec // a test fixture, not a credential
 		"file": {
-			map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t"}, //nolint:gosec // a test fixture, not a credential
-			map[string]string{"/run/secrets/t": "cmjt_a_b\n"},                                                  //nolint:gosec // a test fixture, not a credential
+			map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t"}, //nolint:gosec // a test fixture, not a credential
+			map[string]string{"/run/secrets/t": "tpjt_a_b\n"},                                                    //nolint:gosec // a test fixture, not a credential
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -190,7 +190,7 @@ func TestCheckEnrolledWithATokenReadsNothing(t *testing.T) {
 }
 
 func TestCheckEnrolledReportsAStateDirectoryItCannotRead(t *testing.T) {
-	cfg := load(t, map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_STATE_DIR": "/state"})
+	cfg := load(t, map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_STATE_DIR": "/state"})
 	err := cfg.CheckEnrolled(func(name string) ([]byte, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
 	})
@@ -203,7 +203,7 @@ func TestCheckEnrolledReportsAStateDirectoryItCannotRead(t *testing.T) {
 	if !strings.Contains(err.Error(), "read the enrolled state in /state") {
 		t.Errorf("the error %q does not name the state directory", err)
 	}
-	if strings.Contains(err.Error(), "cmjt_") {
+	if strings.Contains(err.Error(), "tpjt_") {
 		t.Errorf("the error carries a token: %q", err)
 	}
 	if cfg.Enrolled {
@@ -219,39 +219,39 @@ func TestLoadRefusesAnEmptyOrUnreadableTokenFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(
 				env(map[string]string{ //nolint:gosec // a test fixture, not a credential
-					"COAMING_AGENT_URL":             goodURL,
-					"COAMING_AGENT_JOIN_TOKEN":      "from-env",
-					"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t",
+					"TIERPLAN_AGENT_URL":             goodURL,
+					"TIERPLAN_AGENT_JOIN_TOKEN":      "from-env",
+					"TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t",
 				}),
 				files(fsys),
 			)
 			if err == nil {
 				t.Fatal("want an error: a named token file that cannot give a token must not fall back silently")
 			}
-			if !strings.Contains(err.Error(), "COAMING_AGENT_JOIN_TOKEN_FILE") {
-				t.Errorf("the error %q does not name COAMING_AGENT_JOIN_TOKEN_FILE", err)
+			if !strings.Contains(err.Error(), "TIERPLAN_AGENT_JOIN_TOKEN_FILE") {
+				t.Errorf("the error %q does not name TIERPLAN_AGENT_JOIN_TOKEN_FILE", err)
 			}
 		})
 	}
 }
 
 func TestLoadRequiresAWebSocketURL(t *testing.T) {
-	for _, u := range []string{"", "https://coaming.example/agent/connect", "coaming.example", "ftp://x"} {
+	for _, u := range []string{"", "https://tierplan.example/agent/connect", "tierplan.example", "ftp://x"} {
 		_, err := Load(
-			env(map[string]string{"COAMING_AGENT_URL": u, "COAMING_AGENT_JOIN_TOKEN": "tok"}),
+			env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}),
 			files(nil),
 		)
 		if err == nil {
 			t.Errorf("URL %q: want an error", u)
 			continue
 		}
-		if !strings.Contains(err.Error(), "COAMING_AGENT_URL") {
-			t.Errorf("URL %q: the error %q does not name COAMING_AGENT_URL", u, err)
+		if !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
+			t.Errorf("URL %q: the error %q does not name TIERPLAN_AGENT_URL", u, err)
 		}
 	}
 	for _, u := range []string{"ws://127.0.0.1:7480/agent/connect", goodURL} {
 		if _, err := Load(
-			env(map[string]string{"COAMING_AGENT_URL": u, "COAMING_AGENT_JOIN_TOKEN": "tok"}),
+			env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}),
 			files(nil),
 		); err != nil {
 			t.Errorf("URL %q: %v", u, err)
@@ -260,9 +260,9 @@ func TestLoadRequiresAWebSocketURL(t *testing.T) {
 }
 
 func TestLoadParsesTheDockerGID(t *testing.T) {
-	base := map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok"}
+	base := map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}
 	with := func(v string) map[string]string {
-		m := map[string]string{"COAMING_AGENT_DOCKER_GID": v}
+		m := map[string]string{"TIERPLAN_AGENT_DOCKER_GID": v}
 		for k, x := range base {
 			m[k] = x
 		}
@@ -293,23 +293,23 @@ func TestLoadParsesTheDockerGID(t *testing.T) {
 			t.Errorf("GID %q: want an error", v)
 			continue
 		}
-		if !strings.Contains(err.Error(), "COAMING_AGENT_DOCKER_GID") {
-			t.Errorf("GID %q: the error %q does not name COAMING_AGENT_DOCKER_GID", v, err)
+		if !strings.Contains(err.Error(), "TIERPLAN_AGENT_DOCKER_GID") {
+			t.Errorf("GID %q: the error %q does not name TIERPLAN_AGENT_DOCKER_GID", v, err)
 		}
 	}
 }
 
 func TestLoadDefaultsAndOverrides(t *testing.T) {
-	base := map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok"}
+	base := map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}
 	cfg, err := Load(env(base), files(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SocketPath != "/var/run/docker.sock" || cfg.StateDir != "/var/lib/coaming-agent" {
+	if cfg.SocketPath != "/var/run/docker.sock" || cfg.StateDir != "/var/lib/tierplan-agent" {
 		t.Fatalf("defaults: SocketPath=%q StateDir=%q", cfg.SocketPath, cfg.StateDir)
 	}
-	base["COAMING_AGENT_SOCKET"] = "/run/docker.sock"
-	base["COAMING_AGENT_STATE_DIR"] = "/data"
+	base["TIERPLAN_AGENT_SOCKET"] = "/run/docker.sock"
+	base["TIERPLAN_AGENT_STATE_DIR"] = "/data"
 	cfg, err = Load(env(base), files(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -321,17 +321,17 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 
 // The secret must not leak through an error or a log line (T-02-18).
 func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
-	const secret = "cmjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
+	const secret = "tpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	cases := []map[string]string{
-		{"COAMING_AGENT_URL": "https://wrong", "COAMING_AGENT_JOIN_TOKEN": secret},
-		{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": secret, "COAMING_AGENT_DOCKER_GID": "nope"},
-		{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": secret},
-		{"COAMING_AGENT_URL": "ws://coaming.example/agent/connect", "COAMING_AGENT_JOIN_TOKEN": secret},
+		{"TIERPLAN_AGENT_URL": "https://wrong", "TIERPLAN_AGENT_JOIN_TOKEN": secret},
+		{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": secret, "TIERPLAN_AGENT_DOCKER_GID": "nope"},
+		{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": secret},
+		{"TIERPLAN_AGENT_URL": "ws://tierplan.example/agent/connect", "TIERPLAN_AGENT_JOIN_TOKEN": secret},
 	}
 	for _, c := range cases {
 		_, err := Load(env(c), files(nil))
@@ -341,7 +341,7 @@ func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
 	}
 	// The file form, read successfully and then failing on the URL.
 	_, err := Load(
-		env(map[string]string{"COAMING_AGENT_URL": "nope", "COAMING_AGENT_JOIN_TOKEN_FILE": "/t"}),
+		env(map[string]string{"TIERPLAN_AGENT_URL": "nope", "TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/t"}),
 		files(map[string]string{"/t": secret + "\n"}),
 	)
 	if err == nil {
@@ -356,7 +356,7 @@ func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
 }
 
 func TestLoadDefaultsTheReconnectBackoffToOneAndSixtySeconds(t *testing.T) {
-	cfg, err := Load(env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "t"}), files(nil))
+	cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "t"}), files(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,8 +367,8 @@ func TestLoadDefaultsTheReconnectBackoffToOneAndSixtySeconds(t *testing.T) {
 
 func TestLoadReadsTheBackoffOverrides(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "t",
-		"COAMING_AGENT_BACKOFF_MIN": "250ms", "COAMING_AGENT_BACKOFF_MAX": "5s",
+		"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "t",
+		"TIERPLAN_AGENT_BACKOFF_MIN": "250ms", "TIERPLAN_AGENT_BACKOFF_MAX": "5s",
 	}), files(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -380,23 +380,23 @@ func TestLoadReadsTheBackoffOverrides(t *testing.T) {
 
 func TestLoadRejectsABackoffThatIsInvalidOrInverted(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
-		"min above max":             {"COAMING_AGENT_BACKOFF_MIN": "30s", "COAMING_AGENT_BACKOFF_MAX": "10s"},
-		"min not a time":            {"COAMING_AGENT_BACKOFF_MIN": "soon"},
-		"max not a time":            {"COAMING_AGENT_BACKOFF_MAX": "1 minute"},
-		"min zero":                  {"COAMING_AGENT_BACKOFF_MIN": "0s"},
-		"max negative":              {"COAMING_AGENT_BACKOFF_MAX": "-5s"},
-		"min above the default max": {"COAMING_AGENT_BACKOFF_MIN": "2m"},
+		"min above max":             {"TIERPLAN_AGENT_BACKOFF_MIN": "30s", "TIERPLAN_AGENT_BACKOFF_MAX": "10s"},
+		"min not a time":            {"TIERPLAN_AGENT_BACKOFF_MIN": "soon"},
+		"max not a time":            {"TIERPLAN_AGENT_BACKOFF_MAX": "1 minute"},
+		"min zero":                  {"TIERPLAN_AGENT_BACKOFF_MIN": "0s"},
+		"max negative":              {"TIERPLAN_AGENT_BACKOFF_MAX": "-5s"},
+		"min above the default max": {"TIERPLAN_AGENT_BACKOFF_MIN": "2m"},
 	} {
-		vars["COAMING_AGENT_URL"], vars["COAMING_AGENT_JOIN_TOKEN"] = goodURL, "t"
+		vars["TIERPLAN_AGENT_URL"], vars["TIERPLAN_AGENT_JOIN_TOKEN"] = goodURL, "t"
 		_, err := Load(env(vars), files(nil))
-		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_BACKOFF") {
-			t.Errorf("%s: Load error = %v, want one naming COAMING_AGENT_BACKOFF_*", name, err)
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_BACKOFF") {
+			t.Errorf("%s: Load error = %v, want one naming TIERPLAN_AGENT_BACKOFF_*", name, err)
 		}
 	}
 }
 
 func TestLoadDefaultsToReadWriteAllowedAndSelfUpdateOn(t *testing.T) {
-	cfg, err := Load(env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+	cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,9 +407,9 @@ func TestLoadDefaultsToReadWriteAllowedAndSelfUpdateOn(t *testing.T) {
 
 func TestLoadReadsTheHostPolicyFlags(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok",
-		"COAMING_AGENT_READ_ONLY": "true", "COAMING_AGENT_SELF_UPDATE": "false",
-		"COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES": "true",
+		"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok",
+		"TIERPLAN_AGENT_READ_ONLY": "true", "TIERPLAN_AGENT_SELF_UPDATE": "false",
+		"TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES": "true",
 	}), files(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -422,10 +422,10 @@ func TestLoadReadsTheHostPolicyFlags(t *testing.T) {
 // A flag that is meant to restrict must not be silently ignored because it was
 // misspelled: the agent refuses to start and names the variable.
 func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
-	for _, name := range []string{"COAMING_AGENT_READ_ONLY", "COAMING_AGENT_SELF_UPDATE", "COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES"} {
+	for _, name := range []string{"TIERPLAN_AGENT_READ_ONLY", "TIERPLAN_AGENT_SELF_UPDATE", "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"} {
 		for _, value := range []string{"sure", "yes", "on", "TRUE-ish"} {
 			_, err := Load(env(map[string]string{
-				"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok", name: value,
+				"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", name: value,
 			}), files(nil))
 			if err == nil || !strings.Contains(err.Error(), name) {
 				t.Errorf("%s=%s: error = %v, want one naming the variable", name, value, err)
@@ -437,9 +437,9 @@ func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
 func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
 	a := "sha256/" + strings.Repeat("A", 43) + "="
 	b := "sha256/" + strings.Repeat("B", 43) + "="
-	base := map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_x_y"} //nolint:gosec // a test fixture, not a credential
+	base := map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tpjt_x_y"} //nolint:gosec // a test fixture, not a credential
 	load := func(pin string) (Config, error) {
-		m := map[string]string{"COAMING_AGENT_PIN": pin}
+		m := map[string]string{"TIERPLAN_AGENT_PIN": pin}
 		for k, v := range base {
 			m[k] = v
 		}
@@ -463,10 +463,10 @@ func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
 func TestLoadRefusesAPinThatIsNotASHA256Pin(t *testing.T) {
 	for _, bad := range []string{"sha1/abc", "AAAA", "sha256/short", "sha256/" + strings.Repeat("A", 44), "sha256/" + strings.Repeat("!", 43) + "="} {
 		_, err := Load(env(map[string]string{ //nolint:gosec // a test fixture, not a credential
-			"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_x_y", "COAMING_AGENT_PIN": bad,
+			"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tpjt_x_y", "TIERPLAN_AGENT_PIN": bad,
 		}), files(nil))
-		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_PIN") {
-			t.Errorf("pin %q: error = %v, want one naming COAMING_AGENT_PIN", bad, err)
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_PIN") {
+			t.Errorf("pin %q: error = %v, want one naming TIERPLAN_AGENT_PIN", bad, err)
 		}
 	}
 }
@@ -483,7 +483,7 @@ func TestLoadHelperNeedsNoURLAndNoToken(t *testing.T) {
 
 func TestLoadHelperReadsTheSocketTheStateDirectoryAndTheGroup(t *testing.T) {
 	cfg, err := LoadHelper(env(map[string]string{
-		"COAMING_AGENT_SOCKET": "/x/d.sock", "COAMING_AGENT_STATE_DIR": "/x/state", "COAMING_AGENT_DOCKER_GID": "7",
+		"TIERPLAN_AGENT_SOCKET": "/x/d.sock", "TIERPLAN_AGENT_STATE_DIR": "/x/state", "TIERPLAN_AGENT_DOCKER_GID": "7",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -494,30 +494,30 @@ func TestLoadHelperReadsTheSocketTheStateDirectoryAndTheGroup(t *testing.T) {
 }
 
 func TestLoadHelperRefusesAGroupThatIsNotANumber(t *testing.T) {
-	if _, err := LoadHelper(env(map[string]string{"COAMING_AGENT_DOCKER_GID": "docker"})); err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_DOCKER_GID") {
+	if _, err := LoadHelper(env(map[string]string{"TIERPLAN_AGENT_DOCKER_GID": "docker"})); err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_DOCKER_GID") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestLoadRefusesPlainWSToAnotherHostWithoutTheSwitch(t *testing.T) {
-	for _, u := range []string{"ws://coaming.example/agent/connect", "ws://192.168.1.10:7480/agent/connect", "ws://[2001:db8::1]/agent/connect"} {
-		_, err := Load(env(map[string]string{"COAMING_AGENT_URL": u, "COAMING_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+	for _, u := range []string{"ws://tierplan.example/agent/connect", "ws://192.168.1.10:7480/agent/connect", "ws://[2001:db8::1]/agent/connect"} {
+		_, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
 		if err == nil {
 			t.Errorf("URL %q without the switch: want an error", u)
 			continue
 		}
-		for _, want := range []string{"COAMING_AGENT_URL", "COAMING_AGENT_ALLOW_INSECURE", "wss://", "development"} {
+		for _, want := range []string{"TIERPLAN_AGENT_URL", "TIERPLAN_AGENT_ALLOW_INSECURE", "wss://", "development"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("URL %q: the error %q does not mention %s", u, err, want)
 			}
 		}
-		cfg, err := Load(env(map[string]string{"COAMING_AGENT_URL": u, "COAMING_AGENT_JOIN_TOKEN": "tok", "COAMING_AGENT_ALLOW_INSECURE": "true"}), files(nil))
+		cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", "TIERPLAN_AGENT_ALLOW_INSECURE": "true"}), files(nil))
 		if err != nil || !cfg.AllowInsecure {
 			t.Errorf("URL %q with the switch: cfg.AllowInsecure %v, err %v; want it loaded", u, cfg.AllowInsecure, err)
 		}
 	}
 	for _, u := range []string{"ws://127.0.0.1:7480/agent/connect", "ws://localhost/agent/connect", goodURL} {
-		cfg, err := Load(env(map[string]string{"COAMING_AGENT_URL": u, "COAMING_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+		cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
 		if err != nil || cfg.AllowInsecure {
 			t.Errorf("URL %q without the switch: cfg.AllowInsecure %v, err %v; want it loaded with the switch off", u, cfg.AllowInsecure, err)
 		}
@@ -525,13 +525,13 @@ func TestLoadRefusesPlainWSToAnotherHostWithoutTheSwitch(t *testing.T) {
 }
 
 func TestLoadReadsTheAllowInsecureSwitchStrictly(t *testing.T) {
-	base := map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok"}
+	base := map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}
 	cfg, err := Load(env(base), files(nil))
 	if err != nil || cfg.AllowInsecure {
 		t.Fatalf("default: AllowInsecure %v, err %v; want false", cfg.AllowInsecure, err)
 	}
 	for v, want := range map[string]bool{"true": true, "TRUE": true, "1": true, "false": false, "0": false} {
-		m := map[string]string{"COAMING_AGENT_ALLOW_INSECURE": v}
+		m := map[string]string{"TIERPLAN_AGENT_ALLOW_INSECURE": v}
 		for k, x := range base {
 			m[k] = x
 		}
@@ -540,31 +540,31 @@ func TestLoadReadsTheAllowInsecureSwitchStrictly(t *testing.T) {
 			t.Errorf("value %q: AllowInsecure %v, err %v; want %v", v, cfg.AllowInsecure, err, want)
 		}
 	}
-	m := map[string]string{"COAMING_AGENT_ALLOW_INSECURE": "yes please"}
+	m := map[string]string{"TIERPLAN_AGENT_ALLOW_INSECURE": "yes please"}
 	for k, x := range base {
 		m[k] = x
 	}
 	_, err = Load(env(m), files(nil))
-	if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_ALLOW_INSECURE") {
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_ALLOW_INSECURE") {
 		t.Fatalf("a switch that is not a boolean: err = %v, want one naming the variable", err)
 	}
 }
 
 func TestLoadRefusesAURLWithUserInfoAQueryOrAFragmentWithoutRepeatingIt(t *testing.T) {
 	for _, u := range []string{
-		"wss://user:hunter2@coaming.example/agent/connect",
-		"wss://hunter2@coaming.example/agent/connect",
-		"wss://coaming.example/agent/connect?token=hunter2",
-		"wss://coaming.example/agent/connect#hunter2",
+		"wss://user:hunter2@tierplan.example/agent/connect",
+		"wss://hunter2@tierplan.example/agent/connect",
+		"wss://tierplan.example/agent/connect?token=hunter2",
+		"wss://tierplan.example/agent/connect#hunter2",
 		"ws://user:hunter2@127.0.0.1/agent/connect",
 	} {
-		_, err := Load(env(map[string]string{"COAMING_AGENT_URL": u, "COAMING_AGENT_JOIN_TOKEN": "tok", "COAMING_AGENT_ALLOW_INSECURE": "true"}), files(nil))
+		_, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", "TIERPLAN_AGENT_ALLOW_INSECURE": "true"}), files(nil))
 		if err == nil {
 			t.Errorf("URL %q: want an error", u)
 			continue
 		}
-		if !strings.Contains(err.Error(), "COAMING_AGENT_URL") {
-			t.Errorf("URL %q: the error %q does not name COAMING_AGENT_URL", u, err)
+		if !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
+			t.Errorf("URL %q: the error %q does not name TIERPLAN_AGENT_URL", u, err)
 		}
 		if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "user:") {
 			t.Errorf("URL %q: the error repeats part of the value: %v", u, err)
@@ -573,7 +573,7 @@ func TestLoadRefusesAURLWithUserInfoAQueryOrAFragmentWithoutRepeatingIt(t *testi
 }
 
 func TestLoadDefaultsTheHostRouteFile(t *testing.T) {
-	cfg, err := Load(env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+	cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestLoadDefaultsTheHostRouteFile(t *testing.T) {
 
 func TestLoadReadsACustomHostRouteFile(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok", "COAMING_AGENT_HOST_ROUTE_FILE": " /mnt/route ",
+		"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", "TIERPLAN_AGENT_HOST_ROUTE_FILE": " /mnt/route ",
 	}), files(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -597,9 +597,9 @@ func TestLoadReadsACustomHostRouteFile(t *testing.T) {
 func TestLoadRefusesAHostRouteFileThatIsNotAnAbsoluteCleanPath(t *testing.T) {
 	for _, bad := range []string{"route", "./route", "../etc/route", "/host/../etc/route", "/host//route", "/host/route/"} {
 		_, err := Load(env(map[string]string{
-			"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok", "COAMING_AGENT_HOST_ROUTE_FILE": bad,
+			"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", "TIERPLAN_AGENT_HOST_ROUTE_FILE": bad,
 		}), files(nil))
-		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_HOST_ROUTE_FILE") {
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_HOST_ROUTE_FILE") {
 			t.Errorf("%q: error = %v, want one naming the variable", bad, err)
 		}
 	}

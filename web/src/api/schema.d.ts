@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * Export the audit log as CSV or JSON
-         * @description Streams every entry matching the filters, newest first, as a download named coaming-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Under the same scope as the list: an Admin of environments exports only the entries on those environments. 403 as for the list.
+         * @description Streams every entry matching the filters, newest first, as a download named tierplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are reads and are not audited. Under the same scope as the list: an Admin of environments exports only the entries on those environments. 403 as for the list.
          */
         get: operations["exportAudit"];
         put?: never;
@@ -115,7 +115,7 @@ export interface paths {
         put?: never;
         /**
          * Download an encrypted backup
-         * @description Takes a consistent copy of the database while Coaming runs and answers with it as a download named coaming-backup-<UTC YYYYMMDD-HHMM>.coaming, locked with the passphrase in the body. The backup holds users, teams, access, settings, environments and the audit log. It does not hold the master key, sessions, invite or reset links or pending join tokens, and every secret in it is sealed under a key that is only inside the encrypted file. The passphrase is sent in the body, is never stored or logged, and is not in the audit entry. 422 passphrase_too_short for fewer than 16 characters; 409 audit_chain_broken when the audit log does not verify; 409 backup_busy while another backup is being prepared. Audited as backup.exported. Needs backup.manage.
+         * @description Takes a consistent copy of the database while TierPlan runs and answers with it as a download named tierplan-backup-<UTC YYYYMMDD-HHMM>.tierplan, locked with the passphrase in the body. The backup holds users, teams, access, settings, environments and the audit log. It does not hold the master key, sessions, invite or reset links or pending join tokens, and every secret in it is sealed under a key that is only inside the encrypted file. The passphrase is sent in the body, is never stored or logged, and is not in the audit entry. 422 passphrase_too_short for fewer than 16 characters; 409 audit_chain_broken when the audit log does not verify; 409 backup_busy while another backup is being prepared. Audited as backup.exported. Needs backup.manage.
          */
         post: operations["exportBackup"];
         delete?: never;
@@ -153,7 +153,7 @@ export interface paths {
         };
         /**
          * Download a scheduled backup
-         * @description The encrypted backup file as it is on disk. Only names of the form coaming-backup-YYYYMMDD-HHMM.coaming are served; any other name is 404 and is never looked up in the file system. Audited as backup.exported with source saved. Needs backup.manage.
+         * @description The encrypted backup file as it is on disk. Only names of the form tierplan-backup-YYYYMMDD-HHMM.tierplan are served; any other name is 404 and is never looked up in the file system. Audited as backup.exported with source saved. Needs backup.manage.
          */
         get: operations["downloadBackupFile"];
         put?: never;
@@ -195,7 +195,7 @@ export interface paths {
         put?: never;
         /**
          * Restore an uploaded backup over this instance
-         * @description Replaces everything in this Coaming with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then Coaming saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts itself. The answer is 202 and Coaming is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was, and 429 rate_limited when the caller has used their attempts. Audited in the restored log as audit.reanchored then backup.restored; a refused restore is recorded in this log as backup.failed (stage restore_apply) with a reason. Needs backup.manage.
+         * @description Replaces everything in this TierPlan with the uploaded backup. The backup is opened, migrated to this version, re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has worked. Then TierPlan saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts itself. The answer is 202 and TierPlan is unreachable for a moment; everyone is signed out, including the caller. confirm must be this instance's name (422 confirm_mismatch). The same refusals as the check apply and leave everything as it was, and 429 rate_limited when the caller has used their attempts. Audited in the restored log as audit.reanchored then backup.restored; a refused restore is recorded in this log as backup.failed (stage restore_apply) with a reason. Needs backup.manage.
          */
         post: operations["applyRestore"];
         delete?: never;
@@ -215,7 +215,7 @@ export interface paths {
         put?: never;
         /**
          * Check an uploaded backup
-         * @description Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer Coaming, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs, 429 rate_limited when the caller has used their attempts. Audited as backup.checked; a refused check is recorded too, with result failure and a reason (unreadable, not_a_backup, newer, rate_limited). Needs backup.manage.
+         * @description Opens the uploaded file with the passphrase and answers what is in it, without changing anything. 422 backup_unreadable for a wrong passphrase or a damaged file, 422 not_a_backup for a file that is not a backup, 409 backup_newer for a backup from a newer TierPlan, 404 upload_not_found for an upload that is gone or expired, 409 restore_busy while another check or restore runs, 429 rate_limited when the caller has used their attempts. Audited as backup.checked; a refused check is recorded too, with result failure and a reason (unreadable, not_a_backup, newer, rate_limited). Needs backup.manage.
          */
         post: operations["checkRestore"];
         delete?: never;
@@ -253,7 +253,7 @@ export interface paths {
         };
         /**
          * Get the backup schedule
-         * @description Whether Coaming makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due and how the last runs went. Whether a passphrase is saved is reported; the passphrase never is. Needs backup.manage.
+         * @description Whether TierPlan makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due and how the last runs went. Whether a passphrase is saved is reported; the passphrase never is. Needs backup.manage.
          */
         get: operations["getBackupSchedule"];
         /**
@@ -464,7 +464,7 @@ export interface paths {
         post?: never;
         /**
          * Stop keeping a network out of the orphan list
-         * @description Removes the keep of one network, audited as network.unkept. 404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the coaming.keep=true label on it, which only its owner can remove. 422 node_required when a local network of that name is on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.
+         * @description Removes the keep of one network, audited as network.unkept. 404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the tierplan.keep=true label on it, which only its owner can remove. 422 node_required when a local network of that name is on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.
          */
         delete: operations["unkeepNetwork"];
         options?: never;
@@ -484,7 +484,7 @@ export interface paths {
         post?: never;
         /**
          * Delete an orphaned or unused network
-         * @description Removes one network from the orphan list, once and never retried. Coaming first reads the environment again and judges this one network from that fresh read, so a network that something started using, whose stack exists again, that was kept, or that sits on a node or manager that stopped answering is kept and not removed: 200 with outcome kept and the reason (in_use_again, not_orphaned or node_missing). The engine refusing the remove because the network is in use is also kept (in_use_again), not an error. Before the remove, the network's whole inspect document as the engine returned it, with secret-like values in its labels and options masked, is written to the audit log as network.inspect_saved. A document over 64 KB cannot be stored whole, so the delete is refused: 409 inspect_too_large and nothing is removed. A failure to write it is a 500 and nothing is removed. 200 with outcome deleted when the network was removed, audited as network.removed with source orphan_cleanup. 404 network_not_found when the network is not there; 409 network_builtin for the engine's own networks; 422 node_required when two nodes have a local network with that ID. Needs networks.manage (Admin) on the environment.
+         * @description Removes one network from the orphan list, once and never retried. TierPlan first reads the environment again and judges this one network from that fresh read, so a network that something started using, whose stack exists again, that was kept, or that sits on a node or manager that stopped answering is kept and not removed: 200 with outcome kept and the reason (in_use_again, not_orphaned or node_missing). The engine refusing the remove because the network is in use is also kept (in_use_again), not an error. Before the remove, the network's whole inspect document as the engine returned it, with secret-like values in its labels and options masked, is written to the audit log as network.inspect_saved. A document over 64 KB cannot be stored whole, so the delete is refused: 409 inspect_too_large and nothing is removed. A failure to write it is a 500 and nothing is removed. 200 with outcome deleted when the network was removed, audited as network.removed with source orphan_cleanup. 404 network_not_found when the network is not there; 409 network_builtin for the engine's own networks; 422 node_required when two nodes have a local network with that ID. Needs networks.manage (Admin) on the environment.
          */
         delete: operations["deleteOrphanNetwork"];
         options?: never;
@@ -502,7 +502,7 @@ export interface paths {
         get?: never;
         /**
          * Enter the address pools of a standalone host
-         * @description An override for a standalone host whose daemon's pools Coaming cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.address_pools_saved, with the new and the previous pools.
+         * @description An override for a standalone host whose daemon's pools TierPlan cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.address_pools_saved, with the new and the previous pools.
          */
         put: operations["setAddressPools"];
         post?: never;
@@ -681,7 +681,7 @@ export interface paths {
         };
         /**
          * List the swarm configs of an environment
-         * @description The configs of a swarm environment with their labels, times, templating, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has content: the manager sends every config's content with the list and Coaming drops it, so the content is read on one config's own route. Optionally a search (q) that runs before the 500-row cap. 502 config_list_too_large when the configs are too many or too large for one answer; 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs configs.read (Viewer) on the environment.
+         * @description The configs of a swarm environment with their labels, times, templating, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. No row has content: the manager sends every config's content with the list and TierPlan drops it, so the content is read on one config's own route. Optionally a search (q) that runs before the 500-row cap. 502 config_list_too_large when the configs are too many or too large for one answer; 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. Needs configs.read (Viewer) on the environment.
          */
         get: operations["listConfigs"];
         put?: never;
@@ -789,7 +789,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for Coaming's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Coaming manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -811,7 +811,7 @@ export interface paths {
         put?: never;
         /**
          * Start, stop, restart, kill, pause or unpause containers
-         * @description Does one action to up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. The actions are start, stop, restart, kill, pause and unpause. A stop or restart uses the container's own stop timeout and signal and a kill sends SIGKILL; a request with exactly one target may set timeout or signal, and a request with more is refused 422 options_single_only. Starting a running container or stopping a stopped one is answered done, and a container removed meanwhile is not_found, so repeating an action is safe. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. Coaming's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. A node whose agent runs read-only (COAMING_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
+         * @description Does one action to up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order. The actions are start, stop, restart, kill, pause and unpause. A stop or restart uses the container's own stop timeout and signal and a kill sends SIGKILL; a request with exactly one target may set timeout or signal, and a request with more is refused 422 options_single_only. Starting a running container or stopping a stopped one is answered done, and a container removed meanwhile is not_found, so repeating an action is safe. A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. At most 4 calls run at once on one node and 16 targets at once overall. With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. TierPlan's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. A node whose agent runs read-only (TIERPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. Needs containers.control (Operator) on the environment.
          */
         post: operations["actOnContainers"];
         delete?: never;
@@ -831,7 +831,7 @@ export interface paths {
         put?: never;
         /**
          * Remove containers
-         * @description Removes up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order, as the actions route does. A running container is refused with container_running unless force is true, and nothing is sent for it. Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: a caller without it is refused 403 before any call and the refusal is audited as permission.denied. Coaming's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. Each target is audited as container.removed with its force and volumes choices. Needs containers.remove (Operator) on the environment.
+         * @description Removes up to 25 containers, each named by its node ID and container ID, and answers one result per target in request order, as the actions route does. A running container is refused with container_running unless force is true, and nothing is sent for it. Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: a caller without it is refused 403 before any call and the refusal is audited as permission.denied. TierPlan's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. Each target is audited as container.removed with its force and volumes choices. Needs containers.remove (Operator) on the environment.
          */
         post: operations["removeContainers"];
         delete?: never;
@@ -935,7 +935,7 @@ export interface paths {
         put?: never;
         /**
          * Open a shell in a container
-         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for Coaming's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
+         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
          */
         post: operations["openShell"];
         delete?: never;
@@ -953,7 +953,7 @@ export interface paths {
         };
         /**
          * The recent Docker events of an environment
-         * @description The newest container, image, network, volume and (from a swarm manager) service, node, secret and config events Coaming has seen on this environment, newest first, for clients that cannot hold a stream open and for the Events page. since keeps only events at or after that time, at most 24 hours back; limit is 1 to 1000 and defaults to 50. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers (about its last 256 events, and none across its own restart). The live version of this list is a server-sent events stream with the same event data.
+         * @description The newest container, image, network, volume and (from a swarm manager) service, node, secret and config events TierPlan has seen on this environment, newest first, for clients that cannot hold a stream open and for the Events page. since keeps only events at or after that time, at most 24 hours back; limit is 1 to 1000 and defaults to 50. Events are kept in memory only: the list is empty after a restart until Docker reports something, apart from what the daemon still remembers (about its last 256 events, and none across its own restart). The live version of this list is a server-sent events stream with the same event data.
          */
         get: operations["listRecentEvents"];
         put?: never;
@@ -975,7 +975,7 @@ export interface paths {
         put?: never;
         /**
          * Create a stack from a folder of a git repository
-         * @description Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. The name follows the rules of creating a stack in Coaming (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).
+         * @description Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. The name follows the rules of creating a stack in TierPlan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).
          */
         post: operations["createGitStack"];
         delete?: never;
@@ -1217,7 +1217,7 @@ export interface paths {
         };
         /**
          * List the images of an environment
-         * @description Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Coaming manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.
+         * @description Newest first, ties by image ID. An untagged image is listed as <none> and marked dangling. view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.
          */
         get: operations["listImages"];
         put?: never;
@@ -1239,7 +1239,7 @@ export interface paths {
         put?: never;
         /**
          * Pull an image on the nodes of an environment
-         * @description Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. A node that is not connected to Coaming gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.
+         * @description Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. A node that is not connected to TierPlan gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.
          */
         post: operations["startPull"];
         delete?: never;
@@ -1257,7 +1257,7 @@ export interface paths {
         };
         /**
          * The nodes a pull can run on
-         * @description Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to Coaming now. A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.
+         * @description Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to TierPlan now. A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.
          */
         get: operations["listPullTargets"];
         put?: never;
@@ -1437,13 +1437,13 @@ export interface paths {
         };
         /**
          * List the networks of an environment
-         * @description By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Coaming manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name. On a swarm a swarm-wide network is listed once, from the manager in use, with node Cluster; local networks are listed per node. Optionally only one node's (node). At most 500 rows, after the filter, with the total. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listNetworks"];
         put?: never;
         /**
          * Create a network
-         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network Coaming could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. A subnet the engine refuses at once because it overlaps another network is 422 subnet_refused. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
+         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network TierPlan could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. A subnet the engine refuses at once because it overlaps another network is 422 subnet_refused. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
          */
         post: operations["createNetwork"];
         delete?: never;
@@ -1487,7 +1487,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a container to a network
-         * @description Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. Coaming's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.
+         * @description Connects one container to one network, once and never retried, with an optional alias and fixed addresses. The call goes to the node the container is on, named by nodeId. A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. TierPlan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). 404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.
          */
         post: operations["connectContainer"];
         delete?: never;
@@ -1507,7 +1507,7 @@ export interface paths {
         put?: never;
         /**
          * Disconnect a container from a network
-         * @description Disconnects one container from one network, once, never retried and never forced. The call goes to the node the container is on, named by nodeId. A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, Coaming's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Coaming off its own network does, is answered 204 and audited as stage connection_lost with result success. 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.
+         * @description Disconnects one container from one network, once, never retried and never forced. The call goes to the node the container is on, named by nodeId. A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, TierPlan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting TierPlan off its own network does, is answered 204 and audited as stage connection_lost with result success. 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.
          */
         post: operations["disconnectContainer"];
         delete?: never;
@@ -1545,7 +1545,7 @@ export interface paths {
         };
         /**
          * List the nodes of a swarm
-         * @description Every node of a swarm with the facts the Nodes list shows: role, leader, state, availability, address, engine, platform, CPUs, memory, how many tasks run there and whether a Coaming agent reports from it, read through a manager's agent or through the local socket of a swarm manager, sorted by host name then ID. runsCoaming marks the node whose engine hosts Coaming's own container. Optionally a search (q) and a status filter (status: managers, workers, drained, down); counts are the chip numbers before them. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. A task counts as running only on a node that is ready. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         * @description Every node of a swarm with the facts the Nodes list shows: role, leader, state, availability, address, engine, platform, CPUs, memory, how many tasks run there and whether a TierPlan agent reports from it, read through a manager's agent or through the local socket of a swarm manager, sorted by host name then ID. runsTierPlan marks the node whose engine hosts TierPlan's own container. Optionally a search (q) and a status filter (status: managers, workers, drained, down); counts are the chip numbers before them. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. A task counts as running only on a node that is ready. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
          */
         get: operations["listNodes"];
         put?: never;
@@ -1565,14 +1565,14 @@ export interface paths {
         };
         /**
          * One swarm node
-         * @description The facts of one node read live from a manager: its object version, role, state, availability, manager status, platform, resources, labels and engine labels, when it was created and last changed, and the Coaming agent on it (whether it reports, its version, when it was last seen). 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
+         * @description The facts of one node read live from a manager: its object version, role, state, availability, manager status, platform, resources, labels and engine labels, when it was created and last changed, and the TierPlan agent on it (whether it reports, its version, when it was last seen). 404 node_not_found when the swarm has no such node. 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.read (Viewer) on the environment.
          */
         get: operations["getNode"];
         put?: never;
         post?: never;
         /**
          * Remove a node that is down
-         * @description Removes one node from the swarm, never forced. Only a worker whose state is down is removed: a manager is refused 409 node_is_manager (demote it first) and a node that is not down 409 node_not_down, both before anything is written, and the query's confirm must be the node's host name, else 422 confirmation_required. The remove is sent once on a manager and never retried; the request to the agent carries no force key, so a node that is still up cannot be removed by any means. The swarm forgets the node, and Coaming revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; a revoke that fails after the node is gone is logged and left to the reaper, which revokes the agent of a node missing from two node lists. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected; Docker's own refusal comes back as 409 node_not_down or 502 node_remove_failed with Docker's words. Every attempt on a node that exists is audited as node.removed with the host name, the agent revoked and the code. Needs nodes.manage (Admin) on the environment.
+         * @description Removes one node from the swarm, never forced. Only a worker whose state is down is removed: a manager is refused 409 node_is_manager (demote it first) and a node that is not down 409 node_not_down, both before anything is written, and the query's confirm must be the node's host name, else 422 confirmation_required. The remove is sent once on a manager and never retried; the request to the agent carries no force key, so a node that is still up cannot be removed by any means. The swarm forgets the node, and TierPlan revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; a revoke that fails after the node is gone is logged and left to the reaper, which revokes the agent of a node missing from two node lists. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected; Docker's own refusal comes back as 409 node_not_down or 502 node_remove_failed with Docker's words. Every attempt on a node that exists is audited as node.removed with the host name, the agent revoked and the code. Needs nodes.manage (Admin) on the environment.
          */
         delete: operations["removeNode"];
         options?: never;
@@ -1591,7 +1591,7 @@ export interface paths {
         put?: never;
         /**
          * Drain, pause or activate a node
-         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs Coaming or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Coaming itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. TierPlan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.
          */
         post: operations["setNodeAvailability"];
         delete?: never;
@@ -1609,7 +1609,7 @@ export interface paths {
         };
         /**
          * What a change to a swarm node will do
-         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_coaming, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
          */
         get: operations["getNodeActionImpact"];
         put?: never;
@@ -1650,7 +1650,7 @@ export interface paths {
         get?: never;
         /**
          * Replace a node's labels
-         * @description Replaces the labels of one node, once. The server reads the node fresh and sends its whole spec with only the labels changed and the version sent, so nothing else about the node changes. A node whose version is not the one sent is 409 node_changed and nothing is retried; Docker's own refusals are 502 node_update_failed with Docker's words. Whether a constraint would stop matching is the caller's to confirm: Coaming does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         * @description Replaces the labels of one node, once. The server reads the node fresh and sends its whole spec with only the labels changed and the version sent, so nothing else about the node changes. A node whose version is not the one sent is 409 node_changed and nothing is retried; Docker's own refusals are 502 node_update_failed with Docker's words. Whether a constraint would stop matching is the caller's to confirm: TierPlan does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. 422 label_reserved for a name starting with com.docker., io.docker. or org.dockerproject. (without regard to case; Docker itself accepts them), 422 label_invalid for a name of 0 or over 256 bytes, a value over 4096 bytes or more than 64 labels; 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
          */
         put: operations["setNodeLabels"];
         post?: never;
@@ -1691,7 +1691,7 @@ export interface paths {
         put?: never;
         /**
          * Promote a worker or demote a manager
-         * @description Sets the role of one node to manager or worker, once. The server reads the node fresh and sends its whole spec with only the role changed and the version sent. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs Coaming, of the only connected manager agent, or with the managers' state unreadable) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Coaming itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.role_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         * @description Sets the role of one node to manager or worker, once. The server reads the node fresh and sends its whole spec with only the role changed and the version sent. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs TierPlan, of the only connected manager agent, or with the managers' state unreadable) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. TierPlan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.role_changed with the name, from, to, whether the name was typed, the warnings and the code.
          */
         post: operations["setNodeRole"];
         delete?: never;
@@ -1811,7 +1811,7 @@ export interface paths {
         put?: never;
         /**
          * Test an environment registry sign-in from the server
-         * @description As testing an instance sign-in, for the credentials of one environment: the same three steps from the Coaming server, on unsaved values or on a stored credential of this environment (credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). Audited as registry.credential_tested with the environment, never the secret.
+         * @description As testing an instance sign-in, for the credentials of one environment: the same three steps from the TierPlan server, on unsaved values or on a stored credential of this environment (credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). Audited as registry.credential_tested with the environment, never the secret.
          */
         post: operations["testEnvCredential"];
         delete?: never;
@@ -1903,7 +1903,7 @@ export interface paths {
         put?: never;
         /**
          * Create a swarm secret
-         * @description Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: Coaming does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; a value that is missing or empty is 422 value_required; one of 512,000 bytes or more is 422 value_too_large (a value of 511,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 1 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs secrets.manage (Admin) on the environment. Every attempt is audited as secret.created with the name, the number of labels, the size in bytes and where the request came from, never the value; a refusal is a failure row with its code.
+         * @description Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: TierPlan does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; a value that is missing or empty is 422 value_required; one of 512,000 bytes or more is 422 value_too_large (a value of 511,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. A request body over 1 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. Needs secrets.manage (Admin) on the environment. Every attempt is audited as secret.created with the name, the number of labels, the size in bytes and where the request came from, never the value; a refusal is a failure row with its code.
          */
         post: operations["createSecret"];
         delete?: never;
@@ -2076,7 +2076,7 @@ export interface paths {
         post?: never;
         /**
          * Remove a service
-         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. Coaming's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
+         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
          */
         delete: operations["removeService"];
         options?: never;
@@ -2115,7 +2115,7 @@ export interface paths {
         put?: never;
         /**
          * Force a service update
-         * @description Replaces every task of a service again with the settings it has now, once and never retried. Coaming strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Repeating it replaces every task again: each call is its own rollout. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.force_updated.
+         * @description Replaces every task of a service again with the settings it has now, once and never retried. TierPlan strips any digest from the spec's image, resolves the tag to its current digest through the manager with the stored registry credential, writes tag@sha256 into the spec, raises the spec's ForceUpdate counter and sends the update with the version just read, so a tag that moved is picked up. A lookup that fails is 422 image_unresolved (errors name image.ref, image.host and reason) and nothing is sent: a force update never falls back to the unpinned tag. An image that names a digest and no tag is not re-pinned: the answer says pinned false with reason digest_only. A version that is not the current one is 409 service_changed; 409 not_a_swarm for a standalone host. Works on a service that belongs to a stack. Repeating it replaces every task again: each call is its own rollout. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.force_updated.
          */
         post: operations["forceUpdateService"];
         delete?: never;
@@ -2336,14 +2336,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The stacks of an environment: those Coaming manages and those it found
-         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Coaming's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Coaming did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
+         * The stacks of an environment: those TierPlan manages and those it found
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from TierPlan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks TierPlan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
          */
         get: operations["listStacks"];
         put?: never;
         /**
          * Create a stack
-         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). A name that something Coaming does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's coaming.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
+         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). A name that something TierPlan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's tierplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
          */
         post: operations["createStack"];
         delete?: never;
@@ -2361,7 +2361,7 @@ export interface paths {
         };
         /**
          * Whether a stack name can be used on an environment
-         * @description Answers available, taken (a stack of Coaming's has it on this environment), clash (something Coaming does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.
+         * @description Answers available, taken (a stack of TierPlan's has it on this environment), clash (something TierPlan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.
          */
         get: operations["checkStackName"];
         put?: never;
@@ -2403,7 +2403,7 @@ export interface paths {
         put?: never;
         /**
          * Check a stack's working copy
-         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing and writes nothing. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. An explicit network subnet is compared with the networks and address pools the environment already shows (a read-only look at the environment's cached listing): a warning when it overlaps another network of the environment or lies outside every pool. The stack's own networks are left out of the comparison, and when the environment cannot be read the check answers without these two warnings. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
+         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the TierPlan server, fetches nothing and writes nothing. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. An explicit network subnet is compared with the networks and address pools the environment already shows (a read-only look at the environment's cached listing): a warning when it overlaps another network of the environment or lies outside every pool. The stack's own networks are left out of the comparison, and when the environment cannot be read the check answers without these two warnings. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
          */
         post: operations["checkStack"];
         delete?: never;
@@ -2443,7 +2443,7 @@ export interface paths {
         put?: never;
         /**
          * Deploy a stack's draft
-         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and coaming.stack.id, and coaming.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and coaming.stack.id, and each service com.docker.stack.image with the image as written. A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to COAMING_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something Coaming does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. Writes one stack.deployed audit row, with the mode and the result, when the job ends. Needs stacks.deploy (Operator).
+         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and tierplan.stack.id, and tierplan.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and tierplan.stack.id, and each service com.docker.stack.image with the image as written. A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to TIERPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something TierPlan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. Writes one stack.deployed audit row, with the mode and the result, when the job ends. Needs stacks.deploy (Operator).
          */
         post: operations["deployStack"];
         delete?: never;
@@ -2529,7 +2529,7 @@ export interface paths {
         };
         /**
          * How what runs compares with the deployed revision
-         * @description Drift is any difference between the stack's deployed revision (the newest one that deployed, converted with the images it stored) and what the swarm runs: replicas, image, environment, ports, labels, mounts, placement, and services added or missing under the stack's ownership. What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, Coaming's own coaming.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. The newest check is answered unless fresh is true or there is none; callers that ask for a fresh check of one stack at the same moment share one read. Nothing is changed on any engine. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two reads running; a third is 429 check_busy. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         * @description Drift is any difference between the stack's deployed revision (the newest one that deployed, converted with the images it stored) and what the swarm runs: replicas, image, environment, ports, labels, mounts, placement, and services added or missing under the stack's ownership. What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, TierPlan's own tierplan.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. The newest check is answered unless fresh is true or there is none; callers that ask for a fresh check of one stack at the same moment share one read. Nothing is changed on any engine. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two reads running; a third is 429 check_busy. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["getStackDrift"];
         put?: never;
@@ -2610,7 +2610,7 @@ export interface paths {
         get?: never;
         /**
          * Turn a git stack's auto-deploy on or off
-         * @description Off by default: a new commit that changes the stack's folder makes the stack show as behind and waits for someone to review and deploy it. With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: Coaming rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, so an Operator's auto-deploy never deploys host access that needs an Admin, and an owner who loses the permission pauses it. It takes the same operation lock, revision, job and console as a deploy a person starts, and is audited as git.autodeployed. A commit that fails a check, a pending draft with unreviewed changes to the variables or overlay files, or a deploy the stack's policy would refuse is not deployed: the stack goes to error auto_deploy_blocked and waits for a person. A deploy that fails sets auto_deploy_failed; the last good version keeps running and nothing is rolled back. Turning it on makes the caller the owner (and resumes a paused one), registers the automation to them and starts a check; turning it off forgets the owner. Turning it on or off is audited as git.autodeploy_enabled or git.autodeploy_disabled, and a request that changes nothing records nothing. Answers the stack's git summary. 403 owner_lacks_permission when the caller could not run it themselves; a stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         * @description Off by default: a new commit that changes the stack's folder makes the stack show as behind and waits for someone to review and deploy it. With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: TierPlan rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, so an Operator's auto-deploy never deploys host access that needs an Admin, and an owner who loses the permission pauses it. It takes the same operation lock, revision, job and console as a deploy a person starts, and is audited as git.autodeployed. A commit that fails a check, a pending draft with unreviewed changes to the variables or overlay files, or a deploy the stack's policy would refuse is not deployed: the stack goes to error auto_deploy_blocked and waits for a person. A deploy that fails sets auto_deploy_failed; the last good version keeps running and nothing is rolled back. Turning it on makes the caller the owner (and resumes a paused one), registers the automation to them and starts a check; turning it off forgets the owner. Turning it on or off is audited as git.autodeploy_enabled or git.autodeploy_disabled, and a request that changes nothing records nothing. Answers the stack's git summary. 403 owner_lacks_permission when the caller could not run it themselves; a stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
          */
         put: operations["setStackGitAutoDeploy"];
         post?: never;
@@ -2671,7 +2671,7 @@ export interface paths {
         put?: never;
         /**
          * Detach a git stack from its repository
-         * @description Turns the stack back into an inline stack you edit in Coaming (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. Coaming stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).
+         * @description Turns the stack back into an inline stack you edit in TierPlan (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. TierPlan stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).
          */
         post: operations["detachStackGit"];
         delete?: never;
@@ -2691,7 +2691,7 @@ export interface paths {
         put?: never;
         /**
          * Pull a git stack's newest commit into its draft
-         * @description Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. Coaming's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; 422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.pulled with the stack, the repository, the ref, the folder and the commit. Needs stacks.deploy (Operator).
+         * @description Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. TierPlan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; 422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.pulled with the stack, the repository, the ref, the folder and the commit. Needs stacks.deploy (Operator).
          */
         post: operations["pullStackGit"];
         delete?: never;
@@ -2730,7 +2730,7 @@ export interface paths {
         get?: never;
         /**
          * Turn a git stack's polling on or off and set how often it is checked
-         * @description Sets whether Coaming checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll records the new head and how far behind the stack is, and deploys nothing unless the stack has auto-deploy on. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         * @description Sets whether TierPlan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll records the new head and how far behind the stack is, and deploys nothing unless the stack has auto-deploy on. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
          */
         put: operations["updateStackGitUpdates"];
         post?: never;
@@ -2751,7 +2751,7 @@ export interface paths {
         put?: never;
         /**
          * Give a git stack a webhook
-         * @description Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. Coaming keeps the token only as a hash and the secret sealed. A webhook only asks Coaming to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).
+         * @description Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. TierPlan keeps the token only as a hash and the secret sealed. A webhook only asks TierPlan to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).
          */
         post: operations["createStackGitWebhook"];
         /**
@@ -2793,7 +2793,7 @@ export interface paths {
         };
         /**
          * What removing a stack would delete
-         * @description Lists the services (or containers), networks, secrets and configs that carry the stack's own labels, the stack's volumes one for each node that holds one, and the external objects the compose file names, which a removal never touches. An object is the stack's only when it carries both its namespace and its Coaming stack ID. Each volume says how many containers outside the stack mount it. It is a read. Needs stacks.delete (Env Admin).
+         * @description Lists the services (or containers), networks, secrets and configs that carry the stack's own labels, the stack's volumes one for each node that holds one, and the external objects the compose file names, which a removal never touches. An object is the stack's only when it carries both its namespace and its TierPlan stack ID. Each volume says how many containers outside the stack mount it. It is a read. Needs stacks.delete (Env Admin).
          */
         get: operations["removalPreview"];
         put?: never;
@@ -2853,7 +2853,7 @@ export interface paths {
         };
         /**
          * What a stack owns on its environment
-         * @description The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Coaming ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Objects the deployed compose file refers to that were made outside the stack are listed with ownership external. A standalone stack's secrets and configs are read from its deployed definition, because they are files in the containers. Each card is read on its own and carries its own error (a code, never the engine's text), so one read that fails never hides the others. No secret value and no config content is read. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         * @description The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its TierPlan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. Objects the deployed compose file refers to that were made outside the stack are listed with ownership external. A standalone stack's secrets and configs are read from its deployed definition, because they are files in the containers. Each card is read on its own and carries its own error (a code, never the engine's text), so one read that fails never hides the others. No secret value and no config content is read. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["listStackResources"];
         put?: never;
@@ -2875,7 +2875,7 @@ export interface paths {
         put?: never;
         /**
          * Review what a deploy of a stack would do
-         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. A caller who does not hold secrets.reveal gets, in every mode, every environment value, command, argument, health check command and log option of the running service and of the next spec as <hidden> (the names and paths stay), and the live and desired text of a revertsDrift row at such a path as <hidden>, as the drift route does. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Coaming does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). The review is of that revision, not of the draft: it is converted, judged for host access for the caller and compared with the services, networks, secrets and configs that run now, with each image set to the digest the revision stored (state pinned, note revision), and no registry is asked. yaml is the revision's rendering against the deployed revision's, and concurrent is never set. deployedSeq is the newest good revision's number, to send as expectedDeployed. On a standalone host the revision is compared with the host's containers by config hash and field diff, as a draft's review is, with each image set to the reference the revision stored; a network or volume a later revision added stays on the host and is not listed. In mode restore the revision is the stack's deployed one, which the review takes itself (409 no_deployed_revision for a stack with none), and the review is the same as a roll back to it: what it lists is what changed outside the stack, revision and deployedSeq are both the deployed revision's number, and nothing is looked up. A revision that cannot be redeployed as it stands is one blocking revision_not_deployable problem. Needs stacks.deploy (Operator).
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. A caller who does not hold secrets.reveal gets, in every mode, every environment value, command, argument, health check command and log option of the running service and of the next spec as <hidden> (the names and paths stay), and the live and desired text of a revertsDrift row at such a path as <hidden>, as the drift route does. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something TierPlan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). The review is of that revision, not of the draft: it is converted, judged for host access for the caller and compared with the services, networks, secrets and configs that run now, with each image set to the digest the revision stored (state pinned, note revision), and no registry is asked. yaml is the revision's rendering against the deployed revision's, and concurrent is never set. deployedSeq is the newest good revision's number, to send as expectedDeployed. On a standalone host the revision is compared with the host's containers by config hash and field diff, as a draft's review is, with each image set to the reference the revision stored; a network or volume a later revision added stays on the host and is not listed. In mode restore the revision is the stack's deployed one, which the review takes itself (409 no_deployed_revision for a stack with none), and the review is the same as a roll back to it: what it lists is what changed outside the stack, revision and deployedSeq are both the deployed revision's number, and nothing is looked up. A revision that cannot be redeployed as it stands is one blocking revision_not_deployable problem. Needs stacks.deploy (Operator).
          */
         post: operations["reviewStack"];
         delete?: never;
@@ -2973,7 +2973,7 @@ export interface paths {
         };
         /**
          * What a stack runs now
-         * @description The services the stack owns on the engine, read now: on a swarm each service with its task counts, its image as written and as pinned and its published ports; on a standalone host each service with its containers. A service the engine holds under the stack's name that Coaming did not make is not listed. A stack that was never deployed answers an empty list. A stack ID of another environment is 404 stack_not_found. An environment that cannot be read is the environment's own problem answer. Needs stacks.read (Viewer).
+         * @description The services the stack owns on the engine, read now: on a swarm each service with its task counts, its image as written and as pinned and its published ports; on a standalone host each service with its containers. A service the engine holds under the stack's name that TierPlan did not make is not listed. A stack that was never deployed answers an empty list. A stack ID of another environment is 404 stack_not_found. An environment that cannot be read is the environment's own problem answer. Needs stacks.read (Viewer).
          */
         get: operations["listStackServices"];
         put?: never;
@@ -3015,7 +3015,7 @@ export interface paths {
         put?: never;
         /**
          * Stop a stack
-         * @description Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label coaming.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. The stack is marked stopped once everything has stopped; a stop that fails stops where it failed and what already stopped stays stopped. A stack that is stopped already, was never deployed or has nothing running is 409 nothing_running. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked naming it and nothing is stored. Writes one stack.stopped audit row when the job ends. Needs stacks.deploy (Operator).
+         * @description Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label tierplan.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. The stack is marked stopped once everything has stopped; a stop that fails stops where it failed and what already stopped stays stopped. A stack that is stopped already, was never deployed or has nothing running is 409 nothing_running. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked naming it and nothing is stored. Writes one stack.stopped audit row when the job ends. Needs stacks.deploy (Operator).
          */
         post: operations["stopStack"];
         delete?: never;
@@ -3053,7 +3053,7 @@ export interface paths {
         };
         /**
          * The dashboard of an environment
-         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Coaming manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["getEnvironmentSummary"];
         put?: never;
@@ -3072,8 +3072,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * A stack Coaming did not make
-         * @description The services of a swarm namespace or a Compose project that Coaming does not manage, found by that label and read now, with what its labels say about it: an orphan Coaming ID (it carries a coaming.stack.id, which is never sent), a Portainer marker, whether it is Coaming's own stack or its agent's. Only names, states, images and published ports are part of the answer: no environment value, command or log option. Nothing is stored and no engine is written to. A name no labelled service or container carries is 404 unmanaged_stack_not_found; so is a name one of Coaming's stacks holds now, with that stack's ID in errors as managedStackId. Needs stacks.read (Viewer).
+         * A stack TierPlan did not make
+         * @description The services of a swarm namespace or a Compose project that TierPlan does not manage, found by that label and read now, with what its labels say about it: an orphan TierPlan ID (it carries a tierplan.stack.id, which is never sent), a Portainer marker, whether it is TierPlan's own stack or its agent's. Only names, states, images and published ports are part of the answer: no environment value, command or log option. Nothing is stored and no engine is written to. A name no labelled service or container carries is 404 unmanaged_stack_not_found; so is a name one of TierPlan's stacks holds now, with that stack's ID in errors as managedStackId. Needs stacks.read (Viewer).
          */
         get: operations["getUnmanagedStack"];
         put?: never;
@@ -3094,8 +3094,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Adopt a stack Coaming did not make
-         * @description Takes over a swarm namespace or a Compose project that Coaming does not manage. Coaming reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Coaming's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. A stack that is Coaming's own, runs Coaming's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Coaming already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).
+         * Adopt a stack TierPlan did not make
+         * @description Takes over a swarm namespace or a Compose project that TierPlan does not manage. TierPlan reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get TierPlan's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. A stack that is TierPlan's own, runs TierPlan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name TierPlan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).
          */
         post: operations["adoptStack"];
         delete?: never;
@@ -3115,7 +3115,7 @@ export interface paths {
         put?: never;
         /**
          * Check what adopting a stack would change on its first deploy
-         * @description Rebuilds the compose definition of a stack Coaming does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Coaming's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. The comparison is made on the real values, so a pasted file is compared only for a caller who holds secrets.reveal on the environment (Env Admin, or an Operator granted it): any other caller is 403 secret_reveal_required with nothing compared, because the answer would tell whether a guessed value is the running one. The rebuild stays open to every caller with stacks.read. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. A stack that is Coaming's own, runs Coaming's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Coaming already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer); source paste also needs secrets.reveal.
+         * @description Rebuilds the compose definition of a stack TierPlan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of TierPlan's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. The comparison is made on the real values, so a pasted file is compared only for a caller who holds secrets.reveal on the environment (Env Admin, or an Operator granted it): any other caller is 403 secret_reveal_required with nothing compared, because the answer would tell whether a guessed value is the running one. The rebuild stays open to every caller with stacks.read. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. A stack that is TierPlan's own, runs TierPlan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name TierPlan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer); source paste also needs secrets.reveal.
          */
         post: operations["checkAdoption"];
         delete?: never;
@@ -3132,8 +3132,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The compose file Coaming would use if it adopted the stack
-         * @description The compose file rebuilt from the running services of a swarm stack, or from the containers of a docker compose project, that Coaming does not manage, read now. It is a preview: nothing is stored and no engine is written to. Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing swarm secrets and configs are external, by name: their values are never read. Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. The services pass through the same mask as the service detail and the container inspect: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. A stack whose services cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason. A name no labelled service or container carries, or one a stack of Coaming's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
+         * The compose file TierPlan would use if it adopted the stack
+         * @description The compose file rebuilt from the running services of a swarm stack, or from the containers of a docker compose project, that TierPlan does not manage, read now. It is a preview: nothing is stored and no engine is written to. Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing swarm secrets and configs are external, by name: their values are never read. Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. The services pass through the same mask as the service detail and the container inspect: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. A stack whose services cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason. A name no labelled service or container carries, or one a stack of TierPlan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["getGeneratedCompose"];
         put?: never;
@@ -3153,7 +3153,7 @@ export interface paths {
         };
         /**
          * What an unmanaged stack uses, and what adopting it would own
-         * @description The tasks (a swarm) or containers (a standalone host) of the services found by the label, and the networks, volumes, secrets and configs they use. The ownership of each is a preview of adopting: a network or a volume that carries the stack's namespace or project label reads stack, any other external; a secret or a config is always external. Each card is read on its own and carries its own error (a code, never the engine's text). No secret value, config content or label is part of the answer, and no engine is written to. A name no labelled service or container carries, or one a stack of Coaming's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
+         * @description The tasks (a swarm) or containers (a standalone host) of the services found by the label, and the networks, volumes, secrets and configs they use. The ownership of each is a preview of adopting: a network or a volume that carries the stack's namespace or project label reads stack, any other external; a secret or a config is always external. Each card is read on its own and carries its own error (a code, never the engine's text). No secret value, config content or label is part of the answer, and no engine is written to. A name no labelled service or container carries, or one a stack of TierPlan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["listUnmanagedStackResources"];
         put?: never;
@@ -3193,13 +3193,13 @@ export interface paths {
         };
         /**
          * List the volumes of an environment
-         * @description By name, then node. On a swarm every node's volumes, each with its node: the same name on two nodes is two volumes. Each row says what uses it (usedByContainers: containers on its node, stopped ones included; usedByServices: swarm services whose spec mounts that name), whether Docker made it without a name (anonymous), and its compose project and stack. Optionally only one node's (node), a search (q) and a usage filter (usage: used or unused). The node, the search and the usage filter run on the server before the 500-row cap, so at most 500 rows come back after them, with the total the number that matched. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Coaming manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description By name, then node. On a swarm every node's volumes, each with its node: the same name on two nodes is two volumes. Each row says what uses it (usedByContainers: containers on its node, stopped ones included; usedByServices: swarm services whose spec mounts that name), whether Docker made it without a name (anonymous), and its compose project and stack. Optionally only one node's (node), a search (q) and a usage filter (usage: used or unused). The node, the search and the usage filter run on the server before the 500-row cap, so at most 500 rows come back after them, with the total the number that matched. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listVolumes"];
         put?: never;
         /**
          * Create a volume
-         * @description Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 409 agent_host_policy when the node's agent refuses a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device or uses a volume plugin, because its owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.
+         * @description Creates a volume on one node, once and never retried. Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). The driver is local unless one is named. 409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, 409 agent_host_policy when the node's agent refuses a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device or uses a volume plugin, because its owner did not set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, 503 node_unavailable when the node is not a connected node of the environment. Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. The audit row carries the driver option names and values with any password-like part replaced.
          */
         post: operations["createVolume"];
         delete?: never;
@@ -3303,7 +3303,7 @@ export interface paths {
         put?: never;
         /**
          * Add an environment
-         * @description kind local is the admin's explicit opt-in to managing the Docker host Coaming runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the Coaming agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when Coaming has neither, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and COAMING_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
+         * @description kind local is the admin's explicit opt-in to managing the Docker host TierPlan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when TierPlan has neither, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and TIERPLAN_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
          */
         post: operations["addEnvironment"];
         delete?: never;
@@ -3320,7 +3320,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the agents Coaming does not know
+         * List the agents TierPlan does not know
          * @description After a restore from a backup, agents that were installed after the backup was taken present a certificate the environment issued but are not in the restored database, and are refused unknown_agent. This lists the ones that tried in the last 24 hours, newest first, from memory: it is empty after a restart until they try again, and an agent drops off 24 hours after it stops trying. Each is reinstalled with its environment's install command. Needs environments.token (instance admin).
          */
         get: operations["listUnknownAgents"];
@@ -3382,8 +3382,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Fold this Coaming host into a swarm environment
-         * @description Offered when the Docker host Coaming runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.
+         * Fold this TierPlan host into a swarm environment
+         * @description Offered when the Docker host TierPlan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.
          */
         post: operations["foldLocalHost"];
         delete?: never;
@@ -3407,7 +3407,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate an environment's join token
-         * @description Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when Coaming has no address to give agents, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and COAMING_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.
+         * @description Makes a new join token and retires the current one in the same transaction. The old install command stops enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents it carries the one-line rotate command. 404 environment_not_found; 409 public_url_required when TierPlan has no address to give agents, and 409 insecure_agent_url when that address is plain ws:// for a host that is not this machine and TIERPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.
          */
         post: operations["rotateEnvironmentToken"];
         /**
@@ -3507,7 +3507,7 @@ export interface paths {
         put?: never;
         /**
          * Test a git repository address from the server
-         * @description Lists the branches and tags of a repository over HTTPS from the Coaming server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), the first 20 branch names and tag names with their counts, and the default branch. It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA fails with cert_untrusted unless caPem carries that CA. Needs git.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).
+         * @description Lists the branches and tags of a repository over HTTPS from the TierPlan server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), the first 20 branch names and tag names with their counts, and the default branch. It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA fails with cert_untrusted unless caPem carries that CA. Needs git.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).
          */
         post: operations["testGitAddressInstance"];
         delete?: never;
@@ -4037,7 +4037,7 @@ export interface paths {
         put?: never;
         /**
          * Test a registry sign-in from the server
-         * @description Runs the registry's own flow from the Coaming server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's COAMING_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. A stored credential's secret is lent only to the host, type, username, CA and insecure switch it was stored with: a test that changes any of them needs a secret typed now (422 secret_required). Audited as registry.credential_tested with each step's result, never the secret.
+         * @description Runs the registry's own flow from the TierPlan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's TIERPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. A stored credential's secret is lent only to the host, type, username, CA and insecure switch it was stored with: a test that changes any of them needs a secret typed now (422 secret_required). Audited as registry.credential_tested with each step's result, never the secret.
          */
         post: operations["testInstanceCredential"];
         delete?: never;
@@ -4057,7 +4057,7 @@ export interface paths {
         put?: never;
         /**
          * Test a registry sign-in from an environment's node
-         * @description Asks one node of the environment envId to read the manifest of repository:tag (latest when left out) from the credential's registry with the credential, through its agent and its own engine. A firewall, an internal DNS name or a certificate authority that only the node has shows up here and cannot show up in the server's own test. The engine reads the manifest with a HEAD, which Docker Hub does not count as a pull. On a swarm the check runs on one connected manager, else on the one node; the answer names the node. Works on values that are not saved, or on a stored instance credential (credentialId). The answer is 200 whether the node could pull or not: state is passed or failed, and a failed one carries a code (pull_denied, pull_unauthorized, image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). A host that is, or resolves on the server to, an address the server's egress policy refuses (cloud metadata, link-local, COAMING_REGISTRY_BLOCK_CIDRS) is not sent to the node: the answer is failed with registry_unreachable. Audited as registry.credential_tested with the environment, the node and via env, never the secret.
+         * @description Asks one node of the environment envId to read the manifest of repository:tag (latest when left out) from the credential's registry with the credential, through its agent and its own engine. A firewall, an internal DNS name or a certificate authority that only the node has shows up here and cannot show up in the server's own test. The engine reads the manifest with a HEAD, which Docker Hub does not count as a pull. On a swarm the check runs on one connected manager, else on the one node; the answer names the node. Works on values that are not saved, or on a stored instance credential (credentialId). The answer is 200 whether the node could pull or not: state is passed or failed, and a failed one carries a code (pull_denied, pull_unauthorized, image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). A host that is, or resolves on the server to, an address the server's egress policy refuses (cloud metadata, link-local, TIERPLAN_REGISTRY_BLOCK_CIDRS) is not sent to the node: the answer is failed with registry_unreachable. Audited as registry.credential_tested with the environment, the node and via env, never the secret.
          */
         post: operations["testInstanceCredentialFromEnv"];
         delete?: never;
@@ -4103,7 +4103,7 @@ export interface paths {
         };
         /**
          * Get the instance name, public URL and agent URL
-         * @description publicUrlLocked is true when the COAMING_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when COAMING_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and COAMING_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).
+         * @description publicUrlLocked is true when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when TIERPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws:// for a host that is not this machine and TIERPLAN_AGENT_ALLOW_INSECURE is off: agents cannot connect to it (G-02-R4-3).
          */
         get: operations["getSettings"];
         put?: never;
@@ -4113,7 +4113,7 @@ export interface paths {
         head?: never;
         /**
          * Change the instance name, the public URL or the agent URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http for a host that is not this machine answers 422 insecure_agent_url unless COAMING_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, and an http public URL are accepted. A different public URL while COAMING_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while COAMING_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http for a host that is not this machine answers 422 insecure_agent_url unless TIERPLAN_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, and an http public URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -4151,7 +4151,7 @@ export interface paths {
         };
         /**
          * Get how many revisions of each stack are kept
-         * @description kept is how many revisions of each stack Coaming keeps (5 to 200, default 20). The deployed revision and any revision still deploying are kept besides. Older revisions are deleted, with their variables and secret files.
+         * @description kept is how many revisions of each stack TierPlan keeps (5 to 200, default 20). The deployed revision and any revision still deploying are kept besides. Older revisions are deleted, with their variables and secret files.
          */
         get: operations["getStackHistorySettings"];
         put?: never;
@@ -4292,7 +4292,7 @@ export interface paths {
         };
         /**
          * The stacks of every environment the caller may read them on, managed or found
-         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Coaming did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks TierPlan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
          */
         get: operations["listAllStacks"];
         put?: never;
@@ -4494,7 +4494,7 @@ export interface paths {
         put?: never;
         /**
          * Create a user and a one-time invite link
-         * @description The user has no password. The response carries a link, valid for COAMING_INVITE_TTL (72 hours by default), that opens a page where they choose one. Coaming sends no email: the admin hands the link over. A username that belonged to a deleted user answers 409 username_reserved.
+         * @description The user has no password. The response carries a link, valid for TIERPLAN_INVITE_TTL (72 hours by default), that opens a page where they choose one. TierPlan sends no email: the admin hands the link over. A username that belonged to a deleted user answers 409 username_reserved.
          */
         post: operations["createUser"];
         delete?: never;
@@ -4682,7 +4682,7 @@ export interface paths {
         put?: never;
         /**
          * Replace a user's invite link
-         * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for COAMING_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
+         * @description For a user who has not yet set a password. The new link replaces the previous one, which stops working at once, and is valid for TIERPLAN_INVITE_TTL. A user who has already set a password answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.
          */
         post: operations["regenerateInvite"];
         delete?: never;
@@ -4722,7 +4722,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a password reset link
-         * @description Ends every session of the user at once, in the same step that makes the link, and answers a one-time link built like an invite's that lets them choose a new password. It is valid for COAMING_INVITE_TTL (72 hours by default) and replaces any link they held. Coaming sends no email: the admin hands the link over. A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. Audited as user.password_reset_issued with the number of sessions ended.
+         * @description Ends every session of the user at once, in the same step that makes the link, and answers a one-time link built like an invite's that lets them choose a new password. It is valid for TIERPLAN_INVITE_TTL (72 hours by default) and replaces any link they held. TierPlan sends no email: the admin hands the link over. A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. Audited as user.password_reset_issued with the number of sessions ended.
          */
         post: operations["resetUserPassword"];
         delete?: never;
@@ -4798,7 +4798,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get the running Coaming version and source link */
+        /** Get the running TierPlan version and source link */
         get: operations["getVersion"];
         put?: never;
         post?: never;
@@ -4817,7 +4817,7 @@ export interface paths {
         };
         /**
          * List the instance warnings that need an admin's attention
-         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key Coaming generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while Coaming has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Coaming was restored from keep trying; count is how many (D-31). The plain-HTTP warning is the browser's to compute and is not listed.
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key TierPlan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while TierPlan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). unknown_agents is listed, for instance admins only, while agents that were installed after the backup this TierPlan was restored from keep trying; count is how many (D-31). The plain-HTTP warning is the browser's to compute and is not listed.
          */
         get: operations["listWarnings"];
         put?: never;
@@ -4865,7 +4865,7 @@ export interface components {
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
             agents: components["schemas"]["EnvironmentAgentsBody"] | null;
-            /** @description Whether Coaming updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
+            /** @description Whether TierPlan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
             autoUpdate?: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -4880,18 +4880,18 @@ export interface components {
             envType?: "swarm" | "standalone";
             /** @description Failing and total services; null until service data is known */
             failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
-            /** @description True on both the local socket environment and the swarm environment while this Coaming host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            /** @description True on both the local socket environment and the swarm environment while this TierPlan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
             foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
             /** @description Present for an agent environment only: the join token, the address the agent dials, and the commands and files that install it */
             install?: components["schemas"]["InstallBody"];
-            /** @description True for the Docker socket on the host Coaming runs on, as opposed to hosts that dial in through an agent */
+            /** @description True for the Docker socket on the host TierPlan runs on, as opposed to hosts that dial in through an agent */
             isLocalSocket: boolean;
-            /** @description True for the Docker host Coaming itself runs on */
+            /** @description True for the Docker host TierPlan itself runs on */
             isSelfHost: boolean;
             /**
-             * @description local: the Docker socket on the host Coaming runs on. agent: one or more hosts that dial in through an agent
+             * @description local: the Docker socket on the host TierPlan runs on. agent: one or more hosts that dial in through an agent
              * @enum {string}
              */
             kind: "local" | "agent";
@@ -4919,7 +4919,7 @@ export interface components {
             /** @description Local only: add the host even though its engine is not supported; it is stored and shown as unsupported */
             allowUnsupported?: boolean;
             /**
-             * @description local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Coaming agent and dial in; the answer carries the join token
+             * @description local: the Docker socket on this server's own host. agent: a new environment whose hosts run the TierPlan agent and dial in; the answer carries the join token
              * @enum {string}
              */
             kind: "local" | "agent";
@@ -4976,7 +4976,7 @@ export interface components {
              * @enum {string}
              */
             ownerKind: "stack" | "project" | "service" | "none";
-            /** @description The ID of the Coaming stack of this environment the network belongs to, so the page can link to it. Empty when no Coaming stack of the environment owns it */
+            /** @description The ID of the TierPlan stack of this environment the network belongs to, so the page can link to it. Empty when no TierPlan stack of the environment owns it */
             ownerStackId: string;
             /**
              * @description swarm for a cluster-wide network, local for every other
@@ -5065,7 +5065,7 @@ export interface components {
             envType: "swarm" | "standalone";
             /** @description The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none */
             ingress?: components["schemas"]["OverlayUsageBody"];
-            /** @description The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the coaming.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name */
+            /** @description The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the tierplan.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name */
             kept: components["schemas"]["KeptRowBody"][] | null;
             /** @description True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set */
             measured: boolean;
@@ -5085,7 +5085,7 @@ export interface components {
             notMeasured?: "no_manager";
             /** @description The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered */
             notReporting: string[] | null;
-            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (Coaming cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time Coaming saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a Coaming stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
+            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time TierPlan saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
             orphans: components["schemas"]["OrphanRowBody"][] | null;
             /** @description Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld */
             orphansWithheld?: components["schemas"]["OrphansWithheldBody"];
@@ -5097,7 +5097,7 @@ export interface components {
         AdoptCheckBody: {
             /** @description True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty */
             blocked: boolean;
-            /** @description True when nothing will change on the first deploy except Coaming's ownership labels */
+            /** @description True when nothing will change on the first deploy except TierPlan's ownership labels */
             clean: boolean;
             /** @description How many objects of each kind there are */
             counts: components["schemas"]["AdoptCheckCountsBody"];
@@ -5110,15 +5110,15 @@ export interface components {
             gapCount: number;
             /** @description The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges */
             gaps: components["schemas"]["StackReviewServiceBody"][] | null;
-            /** @description True when a pasted file differs from what runs in nothing but Coaming's ownership labels. Always false for the rebuild */
+            /** @description True when a pasted file differs from what runs in nothing but TierPlan's ownership labels. Always false for the rebuild */
             matches: boolean;
             /** @description What the rebuild could not say plainly, by service then code. Empty for a pasted file */
             notes: components["schemas"]["GeneratedNoteBody"][] | null;
             /** @description The networks, volumes, secrets and configs of the stack and how each is treated, by kind then name */
             objects: components["schemas"]["AdoptCheckObjectBody"][] | null;
-            /** @description True when an object of the stack carries the ID of a Coaming stack this instance does not hold */
+            /** @description True when an object of the stack carries the ID of a TierPlan stack this instance does not hold */
             orphan: boolean;
-            /** @description The names, in the compose file, of the services that differ from what runs in nothing but Coaming's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else */
+            /** @description The names, in the compose file, of the services that differ from what runs in nothing but TierPlan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else */
             ownershipOnly: string[] | null;
             /** @description The host-access settings of the stack, listed for every caller whatever their role. They block nothing here: they say what a later deploy needs an Admin for */
             policy: components["schemas"]["AdoptCheckPolicyBody"];
@@ -5165,7 +5165,7 @@ export interface components {
             /** @description Its name on the engine */
             name: string;
             /**
-             * @description owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and Coaming never changes it (any other network or volume, and every existing secret and config)
+             * @description owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and TierPlan never changes it (any other network or volume, and every existing secret and config)
              * @enum {string}
              */
             treatment: "owned" | "external";
@@ -5184,7 +5184,7 @@ export interface components {
             /** @description For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) */
             compose?: string;
             /**
-             * @description rebuild: Coaming writes the definition from what runs. paste: check the compose file in compose against what runs; needs secrets.reveal on the environment, because the comparison is made on the real values
+             * @description rebuild: TierPlan writes the definition from what runs. paste: check the compose file in compose against what runs; needs secrets.reveal on the environment, because the comparison is made on the real values
              * @default rebuild
              * @enum {string}
              */
@@ -5204,7 +5204,7 @@ export interface components {
             /** @description The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored */
             fingerprint: string;
             /**
-             * @description rebuild: Coaming writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written
+             * @description rebuild: TierPlan writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written
              * @default rebuild
              * @enum {string}
              */
@@ -5242,7 +5242,7 @@ export interface components {
              * @description When the agent was last heard from. Absent if it never has been
              */
             lastSeen?: string;
-            /** @description The one-line command that updates this agent by hand, present when the agent is behind and Coaming cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off */
+            /** @description The one-line command that updates this agent by hand, present when the agent is behind and TierPlan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off */
             manualUpdateCommand?: string;
             /** @description The hostname the agent reported when it enrolled */
             node: string;
@@ -5258,7 +5258,7 @@ export interface components {
              */
             revokedAt?: string;
             /**
-             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Coaming host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it
+             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it
              * @enum {string}
              */
             role: "leader" | "manager" | "worker" | "standalone" | "local";
@@ -5277,7 +5277,7 @@ export interface components {
         AgentListBody: {
             /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
             items: components["schemas"]["AgentBody"][] | null;
-            /** @description The commands that take the agent off a host by hand, for the hosts Coaming cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
+            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AllStacksBody: {
@@ -5380,7 +5380,7 @@ export interface components {
              * @description When it was made, from its name (UTC, to the minute)
              */
             created: string;
-            /** @description The file name, coaming-backup-YYYYMMDD-HHMM.coaming */
+            /** @description The file name, tierplan-backup-YYYYMMDD-HHMM.tierplan */
             name: string;
             /**
              * Format: int64
@@ -5407,9 +5407,9 @@ export interface components {
             minPassphraseLength: number;
         };
         BackupScheduleBody: {
-            /** @description The folder the backups are written into on the Coaming host */
+            /** @description The folder the backups are written into on the TierPlan host */
             dir: string;
-            /** @description Whether Coaming makes a backup by itself */
+            /** @description Whether TierPlan makes a backup by itself */
             enabled: boolean;
             /**
              * @description How often
@@ -5471,7 +5471,7 @@ export interface components {
             instanceName: string;
             /** @description The public URL in effect */
             publicUrl: string;
-            /** @description True when COAMING_PUBLIC_URL fixed the public URL and the submitted one was ignored */
+            /** @description True when TIERPLAN_PUBLIC_URL fixed the public URL and the submitted one was ignored */
             publicUrlLocked: boolean;
             /** @description The admin account that was created */
             user: components["schemas"]["SetupUserBody"];
@@ -5481,7 +5481,7 @@ export interface components {
             instanceName: string;
             /** @description At least 12 characters, not on the common-password list and not containing the username */
             password: string;
-            /** @description The address people use to reach Coaming; ignored when COAMING_PUBLIC_URL fixes it */
+            /** @description The address people use to reach TierPlan; ignored when TIERPLAN_PUBLIC_URL fixes it */
             publicUrl: string;
             /** @description The setup token printed in the container log */
             token: string;
@@ -5512,8 +5512,6 @@ export interface components {
             templating?: string;
         };
         ConfigDetailBody: {
-            /** @description The ID of the Coaming stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -5548,6 +5546,8 @@ export interface components {
             templating: "none" | "golang";
             /** @description The content as text; null when it is not valid UTF-8, which the page shows as a file to download */
             text: string | null;
+            /** @description The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was last updated
@@ -5568,8 +5568,6 @@ export interface components {
             };
         };
         ConfigItem: {
-            /** @description The ID of the Coaming stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -5595,6 +5593,8 @@ export interface components {
              * @enum {string}
              */
             templating: "none" | "golang";
+            /** @description The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was last updated
@@ -5674,7 +5674,7 @@ export interface components {
              * @description Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it
              */
             bulkId?: string;
-            /** @description The container's name, typed. Needed to stop, kill, restart or pause Coaming's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
+            /** @description The container's name, typed. Needed to stop, kill, restart or pause TierPlan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
             confirm?: string;
             /** @description The signal a stop, restart or kill sends, for example SIGTERM. Only with exactly one target (else 422 options_single_only); ignored by the other actions */
             signal?: string;
@@ -5694,7 +5694,7 @@ export interface components {
         };
         ContainerActionResult: {
             /**
-             * @description Why a target failed. own_container (with result skipped): Coaming's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of Coaming's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the node's agent, so Coaming refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
             code?: "own_container" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "connection_lost" | "action_failed";
@@ -5707,7 +5707,7 @@ export interface components {
             /** @description The node ID the request named */
             nodeId: string;
             /**
-             * @description done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of Coaming's own containers in a bulk
+             * @description done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of TierPlan's own containers in a bulk
              * @enum {string}
              */
             result: "done" | "failed" | "skipped";
@@ -5719,8 +5719,6 @@ export interface components {
             nodeId: string;
         };
         ContainerDetailBody: {
-            /** @description The ID of the Coaming stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (coaming.stack.id). Empty for a stack or project Coaming does not manage */
-            coamingStackId: string;
             /** @description The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token */
             command: string[] | null;
             /** @description True when command or entrypoint was withheld because the caller may not reveal secrets on this environment */
@@ -5751,7 +5749,7 @@ export interface components {
             image: string;
             /** @description The ID of the image it runs */
             imageId: string;
-            /** @description True for the container Coaming itself runs in */
+            /** @description True for the container TierPlan itself runs in */
             isSelf: boolean;
             /** @description Every label, as the engine reports them. Do not put secrets in labels */
             labels: {
@@ -5793,7 +5791,7 @@ export interface components {
             /** @enum {string} */
             restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
             /**
-             * @description server for the container Coaming itself runs in, agent for a Coaming agent's container, empty otherwise
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise
              * @enum {string}
              */
             selfKind: "" | "server" | "agent";
@@ -5817,6 +5815,8 @@ export interface components {
              * @description Seconds the container's own setting waits before a kill; absent when it sets none
              */
             stopTimeout?: number;
+            /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
+            tierplanStackId: string;
             user?: string;
             workingDir?: string;
         };
@@ -5829,8 +5829,6 @@ export interface components {
             masked: boolean;
         };
         ContainerItem: {
-            /** @description The ID of the Coaming stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (coaming.stack.id). Empty for a stack or project Coaming does not manage */
-            coamingStackId: string;
             /** Format: date-time */
             created?: string;
             /**
@@ -5842,7 +5840,7 @@ export interface components {
             id: string;
             /** @description The image the container was created from */
             image: string;
-            /** @description True for the container Coaming itself runs in (D-27) */
+            /** @description True for the container TierPlan itself runs in (D-27) */
             isSelf: boolean;
             /** @description The container name without the leading slash */
             name: string;
@@ -5859,7 +5857,7 @@ export interface components {
             /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
             restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
-             * @description server for the container Coaming itself runs in, agent for a Coaming agent's container (marked by the label coaming.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
              */
             selfKind: "" | "server" | "agent";
@@ -5874,6 +5872,8 @@ export interface components {
             state: "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead";
             /** @description The engine's status text, for example Up 3 hours */
             status: string;
+            /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
+            tierplanStackId: string;
         };
         ContainerListBody: {
             /** @description At most 500 rows */
@@ -5951,7 +5951,7 @@ export interface components {
              * @description Groups the audit rows of one bulk request, as for the actions route
              */
             bulkId?: string;
-            /** @description The container's name, typed. Needed to remove Coaming's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
+            /** @description The container's name, typed. Needed to remove TierPlan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only */
             confirm?: string;
             /** @description Remove a running container too. Without it a running container is refused with container_running */
             force: boolean;
@@ -6004,7 +6004,7 @@ export interface components {
         CreateUserInputBody: {
             /** @description Optional; at most 64 characters */
             displayName?: string;
-            /** @description Optional; a bare address. Coaming never sends mail */
+            /** @description Optional; a bare address. TierPlan never sends mail */
             email?: string;
             /** @description 3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case */
             username: string;
@@ -6063,7 +6063,7 @@ export interface components {
             hubFallback: boolean;
             /** @description The credential's ID */
             id: string;
-            /** @description Whether Coaming's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected */
+            /** @description Whether TierPlan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected */
             insecure: boolean;
             /** @description The last 4 characters of the secret, or empty when the secret is shorter than 12 characters. The page shows •••• before it */
             last4: string;
@@ -6112,7 +6112,7 @@ export interface components {
             host?: string;
             /** @description Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
             hubFallback?: boolean;
-            /** @description Whether Coaming's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry */
+            /** @description Whether TierPlan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry */
             insecure?: boolean;
             /** @description A new name, unique among the instance credentials. Same rules as when adding; 422 name_required or name_invalid */
             name?: string;
@@ -6126,7 +6126,7 @@ export interface components {
             username?: string;
         };
         CredentialRequest: {
-            /** @description An optional certificate authority, in PEM, that Coaming's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node */
+            /** @description An optional certificate authority, in PEM, that TierPlan's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node */
             caPem?: string;
             /** @description An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone */
             expires?: string;
@@ -6134,7 +6134,7 @@ export interface components {
             host?: string;
             /** @description Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken) */
             hubFallback?: boolean;
-            /** @description Let Coaming's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup */
+            /** @description Let TierPlan's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup */
             insecure?: boolean;
             /** @description What the credential is called, unique among the instance credentials. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
             name?: string;
@@ -6271,7 +6271,7 @@ export interface components {
             /** @description The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content */
             content: string;
             /**
-             * @description Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Coaming holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored
+             * @description Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file TierPlan holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored
              * @enum {string}
              */
             origin?: "repo" | "overlay";
@@ -6572,7 +6572,7 @@ export interface components {
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
             agents: components["schemas"]["EnvironmentAgentsBody"] | null;
-            /** @description Whether Coaming updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
+            /** @description Whether TierPlan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent */
             autoUpdate?: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -6587,16 +6587,16 @@ export interface components {
             envType?: "swarm" | "standalone";
             /** @description Failing and total services; null until service data is known */
             failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
-            /** @description True on both the local socket environment and the swarm environment while this Coaming host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            /** @description True on both the local socket environment and the swarm environment while this TierPlan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
             foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
-            /** @description True for the Docker socket on the host Coaming runs on, as opposed to hosts that dial in through an agent */
+            /** @description True for the Docker socket on the host TierPlan runs on, as opposed to hosts that dial in through an agent */
             isLocalSocket: boolean;
-            /** @description True for the Docker host Coaming itself runs on */
+            /** @description True for the Docker host TierPlan itself runs on */
             isSelfHost: boolean;
             /**
-             * @description local: the Docker socket on the host Coaming runs on. agent: one or more hosts that dial in through an agent
+             * @description local: the Docker socket on the host TierPlan runs on. agent: one or more hosts that dial in through an agent
              * @enum {string}
              */
             kind: "local" | "agent";
@@ -6625,7 +6625,7 @@ export interface components {
             apiVersion?: string;
             /** @description For example Docker Engine */
             name?: string;
-            /** @description The API version Coaming uses with it */
+            /** @description The API version TierPlan uses with it */
             negotiatedApi?: string;
             /** @description The engine version */
             version?: string;
@@ -6746,7 +6746,7 @@ export interface components {
              */
             since?: string;
             /**
-             * @description online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Coaming does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet
+             * @description online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but TierPlan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet
              * @enum {string}
              */
             state: "unknown" | "online" | "offline" | "unsupported" | "pending" | "reconnecting" | "degraded" | "revoked" | "cluster_changed";
@@ -6768,7 +6768,7 @@ export interface components {
             notReporting: string[] | null;
             /** @description Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum */
             restartLoops?: components["schemas"]["RestartLoopCountsBody"];
-            /** @description The ID of Coaming's own container, when it can tell (D-27) */
+            /** @description The ID of TierPlan's own container, when it can tell (D-27) */
             selfContainerId?: string;
         };
         ErrorDetail: {
@@ -6825,7 +6825,7 @@ export interface components {
             id: string;
             /** @description The object's name; empty when Docker gave none */
             name: string;
-            /** @description The node the event happened on; for a row of Coaming's own, the node it concerns, such as the manager that took over */
+            /** @description The node the event happened on; for a row of TierPlan's own, the node it concerns, such as the manager that took over */
             node: string;
             /**
              * Format: date-time
@@ -6833,17 +6833,17 @@ export interface components {
              */
             time: string;
             /**
-             * @description What kind of object it is about. service, node, secret and config come from a swarm manager only. coaming is a row of Coaming's own, such as a manager failover, not a Docker event
+             * @description What kind of object it is about. service, node, secret and config come from a swarm manager only. tierplan is a row of TierPlan's own, such as a manager failover, not a Docker event
              * @enum {string}
              */
-            type: "container" | "image" | "network" | "volume" | "service" | "node" | "secret" | "config" | "coaming";
+            type: "container" | "image" | "network" | "volume" | "service" | "node" | "secret" | "config" | "tierplan";
         };
         EventListBody: {
             /** @description At most limit events (50 unless asked otherwise, never more than 1000), newest first */
             items: components["schemas"]["EventDTO"][] | null;
         };
         ExportBackupInputBody: {
-            /** @description Locks the backup. At least 16 characters; Coaming never stores it and cannot recover it */
+            /** @description Locks the backup. At least 16 characters; TierPlan never stores it and cannot recover it */
             passphrase: string;
         };
         FailedEnvironmentBody: {
@@ -6855,12 +6855,12 @@ export interface components {
         GeneratedComposeBody: {
             /**
              * Format: int64
-             * @description Configs the file references as external. Coaming reads their names, never their contents
+             * @description Configs the file references as external. TierPlan reads their names, never their contents
              */
             externalConfigs: number;
             /**
              * Format: int64
-             * @description Secrets the file references as external. Coaming reads their names, never their values
+             * @description Secrets the file references as external. TierPlan reads their names, never their values
              */
             externalSecrets: number;
             /** @description What the rebuild could not say plainly, by service then code */
@@ -6928,7 +6928,7 @@ export interface components {
         GitCredentialRequest: {
             /** @description What the credential is called, unique among the credentials of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
             name?: string;
-            /** @description The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters. For an ssh key: an unencrypted OpenSSH, PKCS#1, PKCS#8 or SEC1 private key (ed25519, RSA or ECDSA) of at most 16 KiB; 422 key_passphrase when it is protected by a passphrase, key_invalid when it is not a private key Coaming can read, key_too_large over 16 KiB */
+            /** @description The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters. For an ssh key: an unencrypted OpenSSH, PKCS#1, PKCS#8 or SEC1 private key (ed25519, RSA or ECDSA) of at most 16 KiB; 422 key_passphrase when it is protected by a passphrase, key_invalid when it is not a private key TierPlan can read, key_too_large over 16 KiB */
             secret?: string;
             /** @description https for a token, ssh for a deploy key; 422 type_invalid for anything else */
             type?: string;
@@ -7016,7 +7016,7 @@ export interface components {
             caPem?: string;
             /** @description The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope */
             credentialId?: string;
-            /** @description For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Coaming. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh */
+            /** @description For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with TierPlan. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh */
             hostKey?: string;
             /** @description What the repository is called, unique among the repositories of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
             name?: string;
@@ -7112,9 +7112,9 @@ export interface components {
             composeFiles: string[] | null;
             /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
             folder?: string;
-            /** @description The stack's name, held to the rule of the environment's target, as for a stack made in Coaming (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash) */
+            /** @description The stack's name, held to the rule of the environment's target, as for a stack made in TierPlan (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash) */
             name: string;
-            /** @description Files Coaming holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB */
+            /** @description Files TierPlan holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB */
             overlays?: components["schemas"]["GitStackOverlayBody"][] | null;
             /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
             ref: string;
@@ -7176,7 +7176,7 @@ export interface components {
             /** @description When state is changed, the fingerprint of the trusted key the new one differs from */
             savedFingerprint: string;
             /**
-             * @description none for an https address, or an ssh host Coaming holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically
+             * @description none for an https address, or an ssh host TierPlan holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically
              * @enum {string}
              */
             state: "none" | "builtin" | "trusted" | "untrusted" | "changed";
@@ -7431,7 +7431,7 @@ export interface components {
             size: number;
             /**
              * Format: int64
-             * @description Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Coaming reads, never from the engine's own per-image count, which a list does not compute
+             * @description Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers TierPlan reads, never from the engine's own per-image count, which a list does not compute
              */
             usedByContainers: number;
             /**
@@ -7523,7 +7523,7 @@ export interface components {
         };
         ImageRemoveResult: {
             /**
-             * @description Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
             code?: "image_in_use" | "not_dangling" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
@@ -7649,7 +7649,7 @@ export interface components {
             username: string;
         };
         InstallBody: {
-            /** @description The address the agent dials, for example wss://coaming.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
+            /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
             agentUrl: string;
             /**
              * Format: int64
@@ -7662,9 +7662,9 @@ export interface components {
             joinToken: string;
             /** @description Commands that remove the agent by hand, for a host that is offline when its environment is removed */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
-            /** @description The SPKI pin of the self-signed certificate Coaming serves, which the agent trusts instead of system roots. Present only when Coaming serves its own self-signed certificate */
+            /** @description The SPKI pin of the self-signed certificate TierPlan serves, which the agent trusts instead of system roots. Present only when TierPlan serves its own self-signed certificate */
             pin?: string;
-            /** @description The Docker secret the swarm install creates for this token, coaming-agent-token-g followed by the generation */
+            /** @description The Docker secret the swarm install creates for this token, tierplan-agent-token-g followed by the generation */
             secretName: string;
             /** @description The install for a standalone host */
             standalone: components["schemas"]["InstallStandaloneBody"];
@@ -7752,7 +7752,7 @@ export interface components {
              */
             keptAt?: string;
             /**
-             * @description label: the network carries the coaming.keep=true label, which only its owner can remove. user: a person kept it
+             * @description label: the network carries the tierplan.keep=true label, which only its owner can remove. user: a person kept it
              * @enum {string}
              */
             keptBy: "label" | "user";
@@ -7782,11 +7782,11 @@ export interface components {
             detected: boolean;
             /** @description Whether this host is already an environment (D-19) */
             managed: boolean;
-            /** @description The ID of the container Coaming runs in, when it can tell (D-27) */
+            /** @description The ID of the container TierPlan runs in, when it can tell (D-27) */
             ownContainerId?: string;
             /** @description What the engine behind the socket reported; absent when no socket exists */
             probe?: components["schemas"]["ProbeResult"];
-            /** @description The Docker socket path Coaming was configured with */
+            /** @description The Docker socket path TierPlan was configured with */
             socketPath: string;
         };
         LogLine: {
@@ -7809,7 +7809,7 @@ export interface components {
             username: string;
         };
         LookupInviteBody: {
-            /** @description The name of this Coaming instance */
+            /** @description The name of this TierPlan instance */
             instanceName: string;
             /**
              * @description invite for a new user choosing a first password, reset for an existing user choosing a new one
@@ -7882,7 +7882,7 @@ export interface components {
         NetworkConnectRequest: {
             /** @description Another name other containers on the network can use to reach this one */
             alias?: string;
-            /** @description The container's name, typed. Needed to connect Coaming's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
+            /** @description The container's name, typed. Needed to connect TierPlan's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
             confirm?: string;
             /** @description The container ID */
             containerId: string;
@@ -7987,7 +7987,7 @@ export interface components {
             scope: string;
         };
         NetworkDisconnectRequest: {
-            /** @description The container's name, typed. Needed to disconnect Coaming's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
+            /** @description The container's name, typed. Needed to disconnect TierPlan's own server or an agent container (else 422 confirmation_required, and nothing is sent) */
             confirm?: string;
             /** @description The container ID */
             containerId: string;
@@ -8093,7 +8093,7 @@ export interface components {
              * @description The agent's last sign of life this server run; empty when none
              */
             lastSeen: string;
-            /** @description True when Coaming reaches the node now: a connected agent runs on it, or it is the local socket's own node */
+            /** @description True when TierPlan reaches the node now: a connected agent runs on it, or it is the local socket's own node */
             reporting: boolean;
             /** @description The agent's version; empty when no agent is connected there and for the local socket's node */
             version: string;
@@ -8133,7 +8133,7 @@ export interface components {
         NodeDetailBody: {
             /** @description The address the swarm reaches the node at; empty when unknown */
             address: string;
-            /** @description The Coaming agent on the node */
+            /** @description The TierPlan agent on the node */
             agent: components["schemas"]["NodeAgentBody"];
             /** @description The node's architecture as the engine reports it (x86_64, aarch64) */
             arch: string;
@@ -8184,8 +8184,8 @@ export interface components {
              * @enum {string}
              */
             role: "manager" | "worker";
-            /** @description True for the node whose engine hosts Coaming's own container (or, on the local socket, the node the socket is) */
-            runsCoaming: boolean;
+            /** @description True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is) */
+            runsTierPlan: boolean;
             /** @description The swarm's word for the node: ready, down, disconnected or unknown */
             state: string;
             /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now */
@@ -8211,7 +8211,7 @@ export interface components {
             hostname: string;
             /** @description The manager counts */
             managers: components["schemas"]["NodeImpactManagers"];
-            /** @description True when the node's name must be typed to make the change: a drain or demote of Coaming's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it */
+            /** @description True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it */
             needsConfirm: boolean;
             /** @description For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise */
             tasks: components["schemas"]["NodeImpactTask"][] | null;
@@ -8220,7 +8220,7 @@ export interface components {
              * @description The node's object version as read for this judgement: the version a change made on the strength of it must send back
              */
             version: number;
-            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_coaming (the node hosts Coaming), only_manager_agent (it has the only manager agent connected to Coaming), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null */
+            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null */
             warnings: string[] | null;
         };
         NodeImpactManagers: {
@@ -8267,7 +8267,7 @@ export interface components {
         NodeItem: {
             /** @description The address the swarm reaches the node at; empty when unknown */
             address: string;
-            /** @description True when Coaming reaches the node now: a connected agent runs on it, or it is the local socket's own node */
+            /** @description True when TierPlan reaches the node now: a connected agent runs on it, or it is the local socket's own node */
             agentReporting: boolean;
             /** @description The node's architecture as the engine reports it (x86_64, aarch64) */
             arch: string;
@@ -8303,8 +8303,8 @@ export interface components {
              * @enum {string}
              */
             role: "manager" | "worker";
-            /** @description True for the node whose engine hosts Coaming's own container (or, on the local socket, the node the socket is) */
-            runsCoaming: boolean;
+            /** @description True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is) */
+            runsTierPlan: boolean;
             /** @description The swarm's word for the node: ready, down, disconnected or unknown */
             state: string;
             /** @description The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now */
@@ -8520,19 +8520,19 @@ export interface components {
             /** @description The network's name */
             name: string;
             /**
-             * @description deleted: the network was removed. kept: Coaming checked again just before and left it alone, which is a safe answer and not an error
+             * @description deleted: the network was removed. kept: TierPlan checked again just before and left it alone, which is a safe answer and not an error
              * @enum {string}
              */
             outcome: "deleted" | "kept";
             /**
-             * @description Why a network was kept, empty when it was deleted. in_use_again: something uses it now, or the engine refused the remove as in use. not_orphaned: its stack exists again, it was kept, or it is inside the grace period. node_missing: a node or the manager stopped answering, so Coaming could not be sure
+             * @description Why a network was kept, empty when it was deleted. in_use_again: something uses it now, or the engine refused the remove as in use. not_orphaned: its stack exists again, it was kept, or it is inside the grace period. node_missing: a node or the manager stopped answering, so TierPlan could not be sure
              * @enum {string}
              */
             reason: "in_use_again" | "not_orphaned" | "node_missing" | "";
         };
         OrphanRowBody: {
             /**
-             * @description orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: Coaming cannot be sure, because a node did not report, no manager answered or a stack did not load
+             * @description orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: TierPlan cannot be sure, because a node did not report, no manager answered or a stack did not load
              * @enum {string}
              */
             class: "orphaned" | "unused" | "cant_tell";
@@ -8545,11 +8545,11 @@ export interface components {
             formerOwnerKind: "stack" | "project" | "";
             /**
              * Format: date-time
-             * @description When the network's idle time started: the later of its creation and the last time Coaming saw it in use
+             * @description When the network's idle time started: the later of its creation and the last time TierPlan saw it in use
              */
             idleSince: string;
             /**
-             * @description seen when idleSince is the last time Coaming saw the network in use, created when it is the network's creation
+             * @description seen when idleSince is the last time TierPlan saw the network in use, created when it is the network's creation
              * @enum {string}
              */
             idleSinceSource: "seen" | "created";
@@ -8570,7 +8570,7 @@ export interface components {
             managerMissing: boolean;
             /** @description The nodes that did not report, because of which a network was not judged */
             nodes: string[] | null;
-            /** @description The Coaming stacks that did not load, whose external networks are therefore not known */
+            /** @description The TierPlan stacks that did not load, whose external networks are therefore not known */
             stacks: string[] | null;
         };
         OverlayUsageBody: {
@@ -8793,7 +8793,7 @@ export interface components {
         ProfileBody: {
             /** @description The name shown for the user; empty when none was set */
             displayName: string;
-            /** @description The user's email address; empty when none was set. Coaming never sends mail to it */
+            /** @description The user's email address; empty when none was set. TierPlan never sends mail to it */
             email: string;
             /**
              * Format: date-time
@@ -8963,7 +8963,7 @@ export interface components {
             name: string;
             /** @description The node's ID: what nodeIds in a pull names, and the nodeId of its rows in the lists */
             nodeId: string;
-            /** @description False when the node's agent is not connected to Coaming now */
+            /** @description False when the node's agent is not connected to TierPlan now */
             reachable: boolean;
             /** @description True when the host's owner made it read-only: a pull there fails with host_read_only */
             readOnly: boolean;
@@ -9185,7 +9185,7 @@ export interface components {
             windowMinutes: number;
         };
         RestoreApplyBody: {
-            /** @description Always true: Coaming is swapping the database and restarting, and everyone is signed out */
+            /** @description Always true: TierPlan is swapping the database and restarting, and everyone is signed out */
             restarting: boolean;
         };
         RestoreApplyInputBody: {
@@ -9225,7 +9225,7 @@ export interface components {
             users: number;
         };
         RestoreSummaryBody: {
-            /** @description The Coaming release that made it */
+            /** @description The TierPlan release that made it */
             appVersion: string;
             /** @description False when the audit log did not verify when the backup was made */
             chainVerified: boolean;
@@ -9238,7 +9238,7 @@ export interface components {
             created: string;
             /** @description The instance the backup was made on */
             instanceName: string;
-            /** @description True when the backup is from an older Coaming and is upgraded while restoring */
+            /** @description True when the backup is from an older TierPlan and is upgraded while restoring */
             older: boolean;
             /** @description The public URL stored in the backup, empty when it had none */
             publicUrl: string;
@@ -9404,14 +9404,14 @@ export interface components {
         RouteCheckBody: {
             /** @description With unmounted on a swarm agent, the command that adds the route mount to the agent service. Absent otherwise: the wording of the standalone and local fixes is the interface's */
             fix?: string;
-            /** @description True for the host Coaming itself runs on, read from the route file mounted into Coaming's own container */
+            /** @description True for the host TierPlan itself runs on, read from the route file mounted into TierPlan's own container */
             local: boolean;
             /** @description The node's name */
             node: string;
             /** @description The node's ID; absent for a standalone host */
             nodeId?: string;
             /**
-             * @description ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or Coaming itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes
+             * @description ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or TierPlan itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes
              * @enum {string}
              */
             state: "ok" | "old_agent" | "unmounted" | "offline" | "failed";
@@ -9486,8 +9486,6 @@ export interface components {
             source?: "typed" | "file" | "rotate" | "apply";
         };
         SecretDetailBody: {
-            /** @description The ID of the Coaming stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -9508,6 +9506,8 @@ export interface components {
              * @enum {string}
              */
             ownerKind: "stack" | "";
+            /** @description The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was last updated
@@ -9528,8 +9528,6 @@ export interface components {
             };
         };
         SecretItem: {
-            /** @description The ID of the Coaming stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -9550,6 +9548,8 @@ export interface components {
              * @enum {string}
              */
             ownerKind: "stack" | "";
+            /** @description The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was last updated
@@ -9608,7 +9608,7 @@ export interface components {
             digest: string;
             /** @description The image the service now names: tag@sha256:digest when the tag was resolved */
             image: string;
-            /** @description True when Coaming resolved the tag and wrote the digest into the spec */
+            /** @description True when TierPlan resolved the tag and wrote the digest into the spec */
             pinned: boolean;
             /** @description The steps of the apply in order: the image, each object created, the service */
             steps: components["schemas"]["ServiceApplyStepBody"][] | null;
@@ -9663,7 +9663,7 @@ export interface components {
             image: string;
             /** @description The service's name */
             name: string;
-            /** @description True when Coaming resolved the tag and wrote the digest into the spec */
+            /** @description True when TierPlan resolved the tag and wrote the digest into the spec */
             pinned: boolean;
             /** @description The steps of the create in order: the image, each object created, the service */
             steps: components["schemas"]["ServiceApplyStepBody"][] | null;
@@ -9685,10 +9685,8 @@ export interface components {
             };
         };
         ServiceDetailBody: {
-            /** @description True for a Coaming agent service */
+            /** @description True for a TierPlan agent service */
             agent: boolean;
-            /** @description The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /** @description The swarm configs the service uses, by reference */
             configs: components["schemas"]["ServiceFileRefBody"][] | null;
             /**
@@ -9747,6 +9745,8 @@ export interface components {
             secrets: components["schemas"]["ServiceFileRefBody"][] | null;
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The update policy; absent when the spec sets none (the engine's defaults) */
@@ -9802,7 +9802,7 @@ export interface components {
             digest: string;
             /** @description The image the service now names: tag@sha256:digest when the tag was resolved, else what it named */
             image: string;
-            /** @description True when Coaming resolved the tag and wrote the digest into the spec */
+            /** @description True when TierPlan resolved the tag and wrote the digest into the spec */
             pinned: boolean;
             /** @description The image the service named before */
             previousImage: string;
@@ -9822,9 +9822,9 @@ export interface components {
             version?: number;
         };
         ServiceHostPolicyBody: {
-            /** @description False when the manager's agent refuses services with host access because its owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way */
+            /** @description False when the manager's agent refuses services with host access because its owner did not set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way */
             managerAllowsPrivileged: boolean;
-            /** @description True when the manager's host is read-only (COAMING_AGENT_READ_ONLY): nothing can be applied */
+            /** @description True when the manager's host is read-only (TIERPLAN_AGENT_READ_ONLY): nothing can be applied */
             readOnly: boolean;
         };
         ServiceImageBody: {
@@ -9846,10 +9846,8 @@ export interface components {
             masked: boolean;
         };
         ServiceItem: {
-            /** @description True for a Coaming agent service */
+            /** @description True for a TierPlan agent service */
             agent: boolean;
-            /** @description The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /**
              * Format: date-time
              * @description When the service was created
@@ -9884,6 +9882,8 @@ export interface components {
             running: number;
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
@@ -10114,7 +10114,7 @@ export interface components {
             /** @description False when the service already had that count: it was answered done and no update was sent */
             changed: boolean;
             /**
-             * @description Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message
+             * @description Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message
              * @enum {string}
              */
             code?: "not_scalable" | "service_changed" | "service_not_found" | "host_read_only" | "agent_policy_denied" | "agent_host_policy" | "no_manager_connected" | "no_quorum" | "registry_unresolved" | "scale_failed";
@@ -10150,10 +10150,8 @@ export interface components {
             serviceId: string;
         };
         ServiceSpecBody: {
-            /** @description True for a Coaming agent service */
+            /** @description True for a TierPlan agent service */
             agent: boolean;
-            /** @description The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage */
-            coamingStackId: string;
             /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
             masked: boolean;
             /**
@@ -10173,6 +10171,8 @@ export interface components {
             };
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: int64
              * @description The service's version: what an update or a rollback must send back to be accepted
@@ -10292,11 +10292,11 @@ export interface components {
         SettingsBody: {
             /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
             agentEndpoint: string;
-            /** @description True when agentEndpoint is plain ws:// for a host that is not this machine and COAMING_AGENT_ALLOW_INSECURE is off. Agents refuse such an address and Coaming refuses their plain connections, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https */
+            /** @description True when agentEndpoint is plain ws:// for a host that is not this machine and TIERPLAN_AGENT_ALLOW_INSECURE is off. Agents refuse such an address and TierPlan refuses their plain connections, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https */
             agentEndpointRefused: boolean;
             /** @description The address agents dial when it differs from the public URL; empty means they dial the public URL */
             agentUrl: string;
-            /** @description True when the COAMING_AGENT_URL environment variable fixes the agent URL */
+            /** @description True when the TIERPLAN_AGENT_URL environment variable fixes the agent URL */
             agentUrlLocked: boolean;
             /**
              * Format: int64
@@ -10310,9 +10310,9 @@ export interface components {
              * @description How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted
              */
             offlineAgents: number;
-            /** @description The URL users reach Coaming at; drives the Origin check and the cookie Secure flag */
+            /** @description The URL users reach TierPlan at; drives the Origin check and the cookie Secure flag */
             publicUrl: string;
-            /** @description True when the COAMING_PUBLIC_URL environment variable fixes the public URL */
+            /** @description True when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL */
             publicUrlLocked: boolean;
         };
         SetupDefaultsBody: {
@@ -10320,7 +10320,7 @@ export interface components {
             defaultInstanceName: string;
             /** @description The configured public URL, empty when none is set */
             publicUrl: string;
-            /** @description True when COAMING_PUBLIC_URL fixes the public URL */
+            /** @description True when TIERPLAN_PUBLIC_URL fixes the public URL */
             publicUrlLocked: boolean;
         };
         SetupRestoreApplyInputBody: {
@@ -10475,7 +10475,7 @@ export interface components {
         StackAdoptionBody: {
             /** @description The name of the stack on the engine that was adopted */
             adoptedFrom: string;
-            /** @description True until the stack's first good deploy: its services do not carry Coaming's ownership labels yet, and that deploy adds them and recreates each service (a brief restart) */
+            /** @description True until the stack's first good deploy: its services do not carry TierPlan's ownership labels yet, and that deploy adds them and recreates each service (a brief restart) */
             pending: boolean;
         };
         StackCancelBody: {
@@ -10626,7 +10626,7 @@ export interface components {
             lastOperation?: components["schemas"]["StackOperationBody"];
             /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
             lock?: components["schemas"]["StackLockBody"];
-            /** @description True for a stack Coaming manages; false for one found on the engine by its labels that Coaming did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
+            /** @description True for a stack TierPlan manages; false for one found on the engine by its labels that TierPlan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
             managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
@@ -10643,7 +10643,7 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives: inline (made in Coaming), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Coaming did not make (see unmanaged)
+             * @description Where the stack's definition lives: inline (made in TierPlan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that TierPlan did not make (see unmanaged)
              * @enum {string}
              */
             source: "inline" | "adopted" | "git" | "unmanaged";
@@ -10790,11 +10790,11 @@ export interface components {
             draftVersion: number;
         };
         StackDriftBody: {
-            /** @description The cause to name for the stack: the newest action of Coaming's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known */
+            /** @description The cause to name for the stack: the newest action of TierPlan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known */
             cause?: components["schemas"]["StackDriftCauseBody"];
             /**
              * Format: int64
-             * @description How many drifted services an action of Coaming's own explains
+             * @description How many drifted services an action of TierPlan's own explains
              */
             causes: number;
             /** @description When the stack was read, RFC 3339 UTC */
@@ -10839,7 +10839,7 @@ export interface components {
             to: string;
         };
         StackDriftServiceBody: {
-            /** @description Why the service differs, when the audit log (a scale, roll back or edit from Coaming since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside Coaming */
+            /** @description Why the service differs, when the audit log (a scale, roll back or edit from TierPlan since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside TierPlan */
             cause?: components["schemas"]["StackDriftCauseBody"];
             /**
              * @description changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have
@@ -10948,7 +10948,7 @@ export interface components {
             when: string;
         };
         StackGitCommitsBody: {
-            /** @description False when Coaming can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty */
+            /** @description False when TierPlan can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty */
             available: boolean;
             /** @description True when the walk stopped at its limit of 2000 commits: there may be more than total */
             capped: boolean;
@@ -11098,7 +11098,7 @@ export interface components {
             folder: string;
             /** @description The full ID of the commit the ref pointed at when the stack was last checked; empty when it never was */
             headSha: string;
-            /** @description True when Coaming checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says */
+            /** @description True when TierPlan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says */
             pollEnabled: boolean;
             /**
              * Format: int64
@@ -11223,7 +11223,7 @@ export interface components {
         StackHistorySettingsBody: {
             /**
              * Format: int64
-             * @description How many revisions of each stack Coaming keeps. The deployed revision and any revision still deploying are kept besides
+             * @description How many revisions of each stack TierPlan keeps. The deployed revision and any revision still deploying are kept besides
              */
             kept: number;
             /**
@@ -11260,7 +11260,7 @@ export interface components {
              * @enum {string}
              */
             lastDeployedTrigger?: "poll" | "webhook";
-            /** @description True for a stack Coaming manages; false for one found on the engine by its labels that Coaming did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
+            /** @description True for a stack TierPlan manages; false for one found on the engine by its labels that TierPlan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
             managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
@@ -11275,7 +11275,7 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives: inline (made in Coaming), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Coaming did not make (see unmanaged)
+             * @description Where the stack's definition lives: inline (made in TierPlan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that TierPlan did not make (see unmanaged)
              * @enum {string}
              */
             source: "inline" | "adopted" | "git" | "unmanaged";
@@ -11430,12 +11430,12 @@ export interface components {
             all: number;
             /**
              * Format: int64
-             * @description Stacks Coaming manages
+             * @description Stacks TierPlan manages
              */
             managed: number;
             /**
              * Format: int64
-             * @description Stacks found on the engine that Coaming did not make
+             * @description Stacks found on the engine that TierPlan did not make
              */
             unmanaged: number;
         };
@@ -11488,7 +11488,7 @@ export interface components {
             /** @description The sentence to show for a name that cannot be used, naming the environment where it matters; empty when it is available */
             message: string;
             /**
-             * @description available: the name can be used. taken: one of Coaming's stacks on this environment has it. clash: something Coaming does not manage has it on this environment (D-12). invalid: the name breaks the rule
+             * @description available: the name can be used. taken: one of TierPlan's stacks on this environment has it. clash: something TierPlan does not manage has it on this environment (D-12). invalid: the name breaks the rule
              * @enum {string}
              */
             status: "available" | "taken" | "clash" | "invalid";
@@ -11501,7 +11501,7 @@ export interface components {
             /** @description The network name */
             name: string;
             /**
-             * @description stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which Coaming never changes or removes
+             * @description stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which TierPlan never changes or removes
              * @enum {string}
              */
             ownership: "stack" | "external";
@@ -11517,14 +11517,14 @@ export interface components {
         StackObjectResourceBody: {
             /** @description The name of the object on the swarm: the stack, the name and the content hash joined. The name itself on a standalone host and for an external object */
             fullName: string;
-            /** @description The short content hash Coaming put in the name of an object it made from a file; empty for any other */
+            /** @description The short content hash TierPlan put in the name of an object it made from a file; empty for any other */
             hash: string;
             /** @description The swarm object ID; empty on a standalone host, where a secret or a config is a file in the containers */
             id: string;
             /** @description The name as the compose file writes it */
             name: string;
             /**
-             * @description stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which Coaming never changes or removes
+             * @description stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which TierPlan never changes or removes
              * @enum {string}
              */
             ownership: "stack" | "external";
@@ -11640,7 +11640,7 @@ export interface components {
             volumes: components["schemas"]["StackVolumesCardBody"];
         };
         StackRevertsDriftBody: {
-            /** @description Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from Coaming since the revision deployed) knows; left out when it does not, which a reader says is a change made outside Coaming */
+            /** @description Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from TierPlan since the revision deployed) knows; left out when it does not, which a reader says is a change made outside TierPlan */
             cause?: components["schemas"]["StackDriftCauseBody"];
             /**
              * @description changed: a setting that runs other than the deployed revision has it and that the deploy sets back. created: the deployed revision has the service, it no longer runs and the deploy creates it again. removed: the service runs under the stack and neither the deployed revision nor the deploy declares it, so the deploy removes it
@@ -11662,7 +11662,7 @@ export interface components {
              * @description How many services the deploy recreates for the ownership labels alone (they restart briefly)
              */
             ownershipOnly: number;
-            /** @description True: the deploy is the stack's first since it was adopted, and adds Coaming's ownership labels to every service */
+            /** @description True: the deploy is the stack's first since it was adopted, and adds TierPlan's ownership labels to every service */
             pending: boolean;
         };
         StackReviewBody: {
@@ -11793,7 +11793,7 @@ export interface components {
         };
         StackReviewObjectBody: {
             /**
-             * @description What a deploy would do; external is an object the stack only names and Coaming never touches
+             * @description What a deploy would do; external is an object the stack only names and TierPlan never touches
              * @enum {string}
              */
             change: "added" | "changed" | "removed" | "external";
@@ -11845,7 +11845,7 @@ export interface components {
             next: {
                 [key: string]: unknown;
             } | null;
-            /** @description Left out unless true: true when the service differs from what runs in nothing but Coaming's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false */
+            /** @description Left out unless true: true when the service differs from what runs in nothing but TierPlan's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false */
             ownershipOnly?: boolean;
             /**
              * Format: int64
@@ -11856,7 +11856,7 @@ export interface components {
             short: string;
         };
         StackReviewSummaryBody: {
-            /** @description Configs Coaming makes from the stack's files; a changed file counts as changed */
+            /** @description Configs TierPlan makes from the stack's files; a changed file counts as changed */
             configs: components["schemas"]["StackReviewCountsBody"];
             /**
              * Format: int64
@@ -11872,7 +11872,7 @@ export interface components {
             networks: components["schemas"]["StackReviewCountsBody"];
             /**
              * Format: int64
-             * @description Services of an adopted stack's first deploy that differ from what runs in nothing but Coaming's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review
+             * @description Services of an adopted stack's first deploy that differ from what runs in nothing but TierPlan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review
              */
             ownershipOnly: number;
             /**
@@ -11880,7 +11880,7 @@ export interface components {
              * @description How many changes made outside the stack this deploy, update or roll back would put back (revertsDrift in the answer). Zero for a restore, which is the drift itself
              */
             revertsDrift: number;
-            /** @description Secrets Coaming makes from the stack's files; a changed file counts as changed */
+            /** @description Secrets TierPlan makes from the stack's files; a changed file counts as changed */
             secrets: components["schemas"]["StackReviewCountsBody"];
             /** @description Services */
             services: components["schemas"]["StackReviewCountsBody"];
@@ -11976,7 +11976,7 @@ export interface components {
              * @description How many images the revision pinned, when it has no older good revision to compare with (the first or an adopted one); 0 otherwise
              */
             pinned: number;
-            /** @description The sentence of the failure code; empty when there is no code or Coaming has no sentence for it */
+            /** @description The sentence of the failure code; empty when there is no code or TierPlan has no sentence for it */
             reason: string;
             /**
              * Format: int64
@@ -12005,7 +12005,7 @@ export interface components {
             items: components["schemas"]["StackRevisionItem"][] | null;
             /**
              * Format: int64
-             * @description How many revisions of each stack Coaming keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides
+             * @description How many revisions of each stack TierPlan keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides
              */
             kept: number;
         };
@@ -12171,15 +12171,15 @@ export interface components {
             lines: string[] | null;
         };
         StackUnmanagedBody: {
-            /** @description False for Coaming's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
+            /** @description False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
             adoptable: boolean;
-            /** @description True when an object of the stack carries a coaming.stack.id: Coaming made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
+            /** @description True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
             orphan: boolean;
             /**
-             * @description coaming for the stack the Coaming server itself runs in, agent for a stack that holds a Coaming agent, empty for any other
+             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other
              * @enum {string}
              */
-            owner: "" | "coaming" | "agent";
+            owner: "" | "tierplan" | "agent";
             /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */
@@ -12224,7 +12224,7 @@ export interface components {
             /** @description The ID of that node, which the volume's page takes as its node */
             nodeId: string;
             /**
-             * @description stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which Coaming never changes or removes
+             * @description stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which TierPlan never changes or removes
              * @enum {string}
              */
             ownership: "stack" | "external";
@@ -12729,7 +12729,7 @@ export interface components {
             value: string;
         };
         UnmanagedStackBody: {
-            /** @description False for Coaming's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
+            /** @description False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
             adoptable: boolean;
             /** @description A digest of what runs: each service's ID and version on a swarm, each container's ID, config hash and image ID on a standalone host. The adopt request sends it back, and when what runs has changed since, the adoption is refused 409 adopt_stale and stores nothing. Empty when the stack cannot be adopted */
             fingerprint: string;
@@ -12737,13 +12737,13 @@ export interface components {
             foundBy: components["schemas"]["UnmanagedFoundByBody"];
             /** @description The swarm namespace or the Compose project */
             name: string;
-            /** @description True when an object of the stack carries a coaming.stack.id: Coaming made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked */
+            /** @description True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked */
             orphan: boolean;
             /**
-             * @description coaming for the stack the Coaming server itself runs in, agent for a stack that holds a Coaming agent, empty for any other
+             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other
              * @enum {string}
              */
-            owner: "" | "coaming" | "agent";
+            owner: "" | "tierplan" | "agent";
             /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */
@@ -12787,7 +12787,7 @@ export interface components {
         UpdateMyProfileInputBody: {
             /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
             displayName?: string;
-            /** @description A bare address, or empty to clear it; leave it out to keep it. Coaming never sends mail */
+            /** @description A bare address, or empty to clear it; leave it out to keep it. TierPlan never sends mail */
             email?: string;
             /**
              * Format: date-time
@@ -12796,11 +12796,11 @@ export interface components {
             updatedAt: string;
         };
         UpdateSettingsInputBody: {
-            /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while COAMING_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless COAMING_AGENT_ALLOW_INSECURE is on */
+            /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless TIERPLAN_AGENT_ALLOW_INSECURE is on */
             agentUrl?: string;
             /** @description New instance name, 1 to 64 characters */
             instanceName?: string;
-            /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while COAMING_PUBLIC_URL is set */
+            /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while TIERPLAN_PUBLIC_URL is set */
             publicUrl?: string;
         };
         UpdateShellSettingsInputBody: {
@@ -12834,7 +12834,7 @@ export interface components {
         UpdateUserInputBody: {
             /** @description The name shown for the user; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
             displayName?: string;
-            /** @description A bare address, or empty to clear it; leave it out to keep it. Coaming never sends mail */
+            /** @description A bare address, or empty to clear it; leave it out to keep it. TierPlan never sends mail */
             email?: string;
             /**
              * Format: date-time
@@ -12868,7 +12868,7 @@ export interface components {
             createdAt: string;
             /** @description The name shown for the user; empty when none was set */
             displayName: string;
-            /** @description The user's email address; empty when none was set. Coaming never sends mail to it */
+            /** @description The user's email address; empty when none was set. TierPlan never sends mail to it */
             email: string;
             /** @description The user's ID */
             id: string;
@@ -12917,7 +12917,7 @@ export interface components {
         UserSummaryBody: {
             /** @description The name shown for the user; empty when none was set */
             displayName: string;
-            /** @description The user's email address; empty when none was set. Coaming never sends mail to it */
+            /** @description The user's email address; empty when none was set. TierPlan never sends mail to it */
             email: string;
             /** @description The user's ID */
             id: string;
@@ -13007,7 +13007,7 @@ export interface components {
         };
         VolumeDeleteResult: {
             /**
-             * @description Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
             code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
@@ -13169,7 +13169,7 @@ export interface components {
         WarningBody: {
             /**
              * Format: int64
-             * @description For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Coaming does not know
+             * @description For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents TierPlan does not know
              */
             count?: number;
             /** @description For proxy_url_mismatch: the host the newest request was for */
@@ -13462,7 +13462,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description A file name from the list; only names of the form coaming-backup-YYYYMMDD-HHMM.coaming are served */
+                /** @description A file name from the list; only names of the form tierplan-backup-YYYYMMDD-HHMM.tierplan are served */
                 name: string;
             };
             cookie?: never;
@@ -14693,7 +14693,7 @@ export interface operations {
                     "application/json": components["schemas"]["ContainerListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Coaming does not manage it. Carries the state, the engine and the reason. */
+            /** @description environment_unsupported: the engine answers but TierPlan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -15716,7 +15716,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImageListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Coaming does not manage it. Carries the state, the engine and the reason. */
+            /** @description environment_unsupported: the engine answers but TierPlan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16147,7 +16147,7 @@ export interface operations {
                     "application/json": components["schemas"]["NetworkListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Coaming does not manage it. Carries the state, the engine and the reason. */
+            /** @description environment_unsupported: the engine answers but TierPlan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -17560,7 +17560,7 @@ export interface operations {
     removeService: {
         parameters: {
             query?: {
-                /** @description The service's name, typed. Needed only to remove Coaming's own agent service; ignored for any other service */
+                /** @description The service's name, typed. Needed only to remove TierPlan's own agent service; ignored for any other service */
                 confirm?: string;
             };
             header?: never;
@@ -18083,7 +18083,7 @@ export interface operations {
                 q?: string;
                 /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
-                /** @description Only stacks Coaming manages (managed) or only stacks found on the engine that Coaming did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
+                /** @description Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
@@ -19542,7 +19542,7 @@ export interface operations {
                     "application/json": components["schemas"]["EnvironmentSummaryBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Coaming does not manage it. Carries the state, the engine and the reason. */
+            /** @description environment_unsupported: the engine answers but TierPlan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -19816,7 +19816,7 @@ export interface operations {
                     "application/json": components["schemas"]["VolumeListBody"];
                 };
             };
-            /** @description environment_unsupported: the engine answers but Coaming does not manage it. Carries the state, the engine and the reason. */
+            /** @description environment_unsupported: the engine answers but TierPlan does not manage it. Carries the state, the engine and the reason. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -22093,7 +22093,7 @@ export interface operations {
                 q?: string;
                 /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
-                /** @description Only stacks Coaming manages (managed) or only stacks found on the engine that Coaming did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
+                /** @description Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";

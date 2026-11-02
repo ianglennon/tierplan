@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -13,10 +13,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // Stable problem types of the audit routes.
@@ -320,7 +320,7 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		Path:        "/api/audit/export",
 		Summary:     "Export the audit log as CSV or JSON",
 		Description: "Streams every entry matching the filters, newest first, as a download named " +
-			"coaming-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab " +
+			"tierplan-audit-<UTC timestamp>.csv or .json. CSV follows RFC 4180, and any cell that starts with =, +, -, @, a tab " +
 			"or a carriage return is prefixed with a single quote so a spreadsheet cannot run it as a formula. Exports are " +
 			"reads and are not audited. Under the same scope as the list: an Admin of environments exports only the entries on " +
 			"those environments. 403 as for the list.",
@@ -345,7 +345,7 @@ func RegisterAudit(r *httpx.Router, d AuditDeps) {
 		if in.Format == "json" {
 			contentType, ext, write = "application/json", "json", audit.ExportJSON
 		}
-		name := "coaming-audit-" + d.Now().UTC().Format("20060102T150405Z") + "." + ext
+		name := "tierplan-audit-" + d.Now().UTC().Format("20060102T150405Z") + "." + ext
 		return &huma.StreamResponse{Body: func(hctx huma.Context) {
 			hctx.SetHeader("Content-Type", contentType)
 			hctx.SetHeader("Content-Disposition", "attachment; filename="+strconv.Quote(name))

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The terminal's WebSocket (RESEARCH Pattern 5). Binary frames are the raw terminal
 // bytes both ways; text frames are JSON control: resize from the browser, and exit

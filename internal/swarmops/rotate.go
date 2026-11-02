@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package swarmops
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/redact"
 )
 
 // A swarm secret or config can't be changed: a new value is a new object. A rotate (D-26) makes that
@@ -94,7 +94,7 @@ type RotatePreviewResult struct {
 }
 
 // RotateInput is a rotate to make: the object to replace, the name and value of the new one and whether to
-// remove the old one when nothing uses it. Data is the value, which crosses Coaming once, on its way to the
+// remove the old one when nothing uses it. Data is the value, which crosses TierPlan once, on its way to the
 // manager. Templating is a config's driver (golang, or empty). NewName empty means the next version of the
 // old name.
 type RotateInput struct {

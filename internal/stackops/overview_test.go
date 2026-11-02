@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -10,12 +10,12 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The Overview of a deployed stack (plan 07-23, STK-10, D-22): the services the stack owns on the engine, with
@@ -32,9 +32,9 @@ func standaloneStack(name string) stackops.Stack {
 }
 
 func overviewLabels(written string) map[string]string {
-	l := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
+	l := map[string]string{"com.docker.stack.namespace": "web", "tierplan.stack.id": "stack-web"}
 	if written != "" {
-		l["coaming.stack.image"] = written
+		l["tierplan.stack.image"] = written
 	}
 	return l
 }
@@ -47,7 +47,7 @@ func TestOverviewOfASwarmStackListsEachServiceItOwnsWithItsCountsImageAndPorts(t
 			Labels: overviewLabels("nginx:1.27"), Ports: []swarm.PortConfig{{PublishedPort: 8080, TargetPort: 80, Protocol: "tcp", PublishMode: "ingress"}},
 		},
 		dockertest.FakeService{ID: "svc-db", Name: "web_db", Mode: "replicated", Running: 1, Desired: 1, Image: "postgres:16@" + overviewDigest, Labels: overviewLabels("postgres:16")},
-		dockertest.FakeService{ID: "svc-other", Name: "blog_app", Mode: "replicated", Running: 1, Desired: 1, Image: "x", Labels: map[string]string{"com.docker.stack.namespace": "blog", "coaming.stack.id": "stack-blog"}},
+		dockertest.FakeService{ID: "svc-other", Name: "blog_app", Mode: "replicated", Running: 1, Desired: 1, Image: "x", Labels: map[string]string{"com.docker.stack.namespace": "blog", "tierplan.stack.id": "stack-blog"}},
 		dockertest.FakeService{ID: "svc-foreign", Name: "web_foreign", Mode: "replicated", Running: 1, Desired: 1, Image: "y", Labels: map[string]string{"com.docker.stack.namespace": "web"}},
 	)
 
@@ -82,7 +82,7 @@ func TestSwarmRowsRollUpTheStateOfEachService(t *testing.T) {
 	row := func(mode string, running, desired uint64, update string) dockerx.ServiceRow {
 		return dockerx.ServiceRow{
 			ID: "s", Name: "web_a", Mode: mode, Running: running, Desired: desired, UpdateState: update, Stack: "web",
-			Labels: map[string]string{"coaming.stack.id": "stack-web"}, Image: "a",
+			Labels: map[string]string{"tierplan.stack.id": "stack-web"}, Image: "a",
 		}
 	}
 	for name, tc := range map[string]struct {
@@ -257,7 +257,7 @@ func TestStandaloneRowsShowPublishedPortsOnceWithoutTheHostAddress(t *testing.T)
 }
 
 // TestStandaloneRowsCountAContainerTheHostCLIAdded: docker compose up --scale web=2 adds web-2 to the project with none of
-// Coaming's labels. Beside web-1, which carries the stack's ID, it is a container of the service on the stack's page and
+// TierPlan's labels. Beside web-1, which carries the stack's ID, it is a container of the service on the stack's page and
 // in the lists' counts. Another stack's container, a project the stack owns no container of, and a one-off stay out
 // (G-08-6, user decision 2026-10-27, D-09).
 func TestStandaloneRowsCountAContainerTheHostCLIAdded(t *testing.T) {

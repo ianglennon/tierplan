@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -16,14 +16,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/rbac/compose"
-	"github.com/ianglennon/coaming/internal/rbac/swarmspec"
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/swarmops"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/rbac/compose"
+	"github.com/ianglennon/tierplan/internal/rbac/swarmspec"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/swarmops"
 )
 
 // SpecJSON is a service spec carried as the JSON object the caller sent, byte for byte, so a
@@ -134,8 +134,8 @@ type ServiceMissingBody struct {
 
 // ServiceHostPolicyBody is what the manager's agent will forward.
 type ServiceHostPolicyBody struct {
-	ManagerAllowsPrivileged bool `json:"managerAllowsPrivileged" doc:"False when the manager's agent refuses services with host access because its owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way"`
-	ReadOnly                bool `json:"readOnly" doc:"True when the manager's host is read-only (COAMING_AGENT_READ_ONLY): nothing can be applied"`
+	ManagerAllowsPrivileged bool `json:"managerAllowsPrivileged" doc:"False when the manager's agent refuses services with host access because its owner did not set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way"`
+	ReadOnly                bool `json:"readOnly" doc:"True when the manager's host is read-only (TIERPLAN_AGENT_READ_ONLY): nothing can be applied"`
 }
 
 // ServiceReviewBody is the review of a spec.
@@ -185,7 +185,7 @@ type ServiceCleanupBody struct {
 type ServiceApplyBody struct {
 	Image    string                 `json:"image" doc:"The image the service now names: tag@sha256:digest when the tag was resolved"`
 	Digest   string                 `json:"digest" doc:"The digest the image is pinned to; empty when it names none"`
-	Pinned   bool                   `json:"pinned" doc:"True when Coaming resolved the tag and wrote the digest into the spec"`
+	Pinned   bool                   `json:"pinned" doc:"True when TierPlan resolved the tag and wrote the digest into the spec"`
 	Warnings []string               `json:"warnings" doc:"The manager's warnings about the update, scrubbed of masked values; empty when there are none"`
 	Steps    []ServiceApplyStepBody `json:"steps" doc:"The steps of the apply in order: the image, each object created, the service"`
 	Cleanup  ServiceCleanupBody     `json:"cleanup" doc:"Empty after a successful apply. A failed apply answers a problem whose errors carry the same lists"`
@@ -454,7 +454,7 @@ func stagedOverlapGate(ctx context.Context, d ServicesDeps, envID string, object
 }
 
 // lockStagedSubnets holds the environment's allocation lock while the staged networks that have a
-// subnet are checked and made, so two creates through Coaming cannot both pass the check with one
+// subnet are checked and made, so two creates through TierPlan cannot both pass the check with one
 // subnet (NET-05). The returned function releases it; it does nothing when no lock applies.
 func lockStagedSubnets(d ServicesDeps, envID string, objects []swarmops.StagedObject) func() {
 	if d.AddressSpaces != nil && slices.ContainsFunc(objects, func(o swarmops.StagedObject) bool {
@@ -569,7 +569,7 @@ func withCleanup(problem error, verb, service string, rep swarmops.CleanupReport
 		for i, o := range rep.NotRemoved {
 			left[i] = o.Kind + " " + o.Name
 		}
-		tail = "Coaming couldn't remove " + strings.Join(left, ", ") + ". Remove them under Networks, Secrets or Configs."
+		tail = "TierPlan couldn't remove " + strings.Join(left, ", ") + ". Remove them under Networks, Secrets or Configs."
 	}
 	reason := m.Detail
 	m.Detail = "Couldn't " + verb + " " + service + ". " + reason + " " + tail
@@ -629,7 +629,7 @@ func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed stri
 		return problemStackOwned, stackOwnedProblem(owned.Stack, loadStackIDs(ctx, d.Store, envID, d.Log).confirm(owned.Stack, owned.StackID))
 	case errors.As(err, &ph) && errors.Is(err, redact.ErrPlaceholderReserved):
 		return problem(http.StatusUnprocessableEntity, problemPlaceholderReserved,
-			redact.Placeholder+" is what Coaming shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
+			redact.Placeholder+" is what TierPlan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
 			&huma.ErrorDetail{Location: ph.Path, Message: "reserved"})
 	case errors.As(err, &ph):
 		return problem(http.StatusUnprocessableEntity, problemPlaceholderNoMatch,
@@ -708,12 +708,12 @@ func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed stri
 		if errors.As(err, &na) && na.Name != "" {
 			name = na.Name
 		}
-		detail := "The swarm didn't give network " + name + " an address range, so Coaming removed it again. " +
+		detail := "The swarm didn't give network " + name + " an address range, so TierPlan removed it again. " +
 			"Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet."
 		if na != nil && !na.Removed {
 			detail = "The swarm didn't give network " + name + " an address range. " +
 				"Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet. " +
-				"Coaming couldn't remove it, so delete " + name + " on the Networks page."
+				"TierPlan couldn't remove it, so delete " + name + " on the Networks page."
 		}
 		return problem(http.StatusUnprocessableEntity, problemNetworkNotAllocated, detail,
 			&huma.ErrorDetail{Location: "object", Message: "network:" + name})

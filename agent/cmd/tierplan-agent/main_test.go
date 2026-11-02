@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package main
 
@@ -23,14 +23,14 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/ianglennon/coaming/agent/internal/connect"
-	"github.com/ianglennon/coaming/agent/internal/privdrop"
-	"github.com/ianglennon/coaming/agent/internal/selfmaint"
-	"github.com/ianglennon/coaming/agent/internal/version"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/agent/internal/connect"
+	"github.com/ianglennon/tierplan/agent/internal/privdrop"
+	"github.com/ianglennon/tierplan/agent/internal/selfmaint"
+	"github.com/ianglennon/tierplan/agent/internal/version"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
-const secret = "cmjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
+const secret = "tpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
 
 // harness records the order of the effects run causes.
 type harness struct {
@@ -56,9 +56,9 @@ type harness struct {
 
 // inState says whether a path is under the state directory the environment names.
 func inState(env map[string]string, name string) bool {
-	dir := env["COAMING_AGENT_STATE_DIR"]
+	dir := env["TIERPLAN_AGENT_STATE_DIR"]
 	if dir == "" {
-		dir = "/var/lib/coaming-agent"
+		dir = "/var/lib/tierplan-agent"
 	}
 	return strings.HasPrefix(name, dir+"/")
 }
@@ -131,16 +131,16 @@ func TestTheTokenFileIsReadBeforeThePrivilegesAreDropped(t *testing.T) {
 	h := &harness{}
 	d := h.deps(
 		map[string]string{ //nolint:gosec // a test fixture, not a credential
-			"COAMING_AGENT_URL":             "wss://coaming.example/agent/connect",
-			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
-			"COAMING_AGENT_DOCKER_GID":      "42",
+			"TIERPLAN_AGENT_URL":             "wss://tierplan.example/agent/connect",
+			"TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/tierplan-agent-token",
+			"TIERPLAN_AGENT_DOCKER_GID":      "42",
 		},
-		map[string]string{"/run/secrets/coaming-agent-token": secret + "\n"},
+		map[string]string{"/run/secrets/tierplan-agent-token": secret + "\n"},
 	)
 	if code := run(d); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
 	}
-	want := []string{"read /run/secrets/coaming-agent-token", "drop", "connect"}
+	want := []string{"read /run/secrets/tierplan-agent-token", "drop", "connect"}
 	if !reflect.DeepEqual(h.events, want) {
 		t.Fatalf("events = %v, want %v: the secret can only be read before the drop", h.events, want)
 	}
@@ -153,7 +153,7 @@ func TestTheTokenFileIsReadBeforeThePrivilegesAreDropped(t *testing.T) {
 	if strings.Contains(h.stderr.String(), secret) || strings.Contains(h.stdout.String(), secret) {
 		t.Fatalf("the token reached the output: %s", h.stderr.String())
 	}
-	for _, want := range []string{"coaming.example", "token_present=true", "uid=1000"} {
+	for _, want := range []string{"tierplan.example", "token_present=true", "uid=1000"} {
 		if !strings.Contains(h.stderr.String(), want) {
 			t.Errorf("the start line does not contain %q: %s", want, h.stderr.String())
 		}
@@ -168,15 +168,15 @@ func TestNothingInTheStateDirectoryIsReadBeforeTheDrop(t *testing.T) {
 	h := &harness{stateLocked: true}
 	d := h.deps(
 		map[string]string{ //nolint:gosec // a test fixture, not a credential
-			"COAMING_AGENT_URL":             "wss://coaming.example/agent/connect",
-			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
+			"TIERPLAN_AGENT_URL":             "wss://tierplan.example/agent/connect",
+			"TIERPLAN_AGENT_JOIN_TOKEN_FILE": "/run/secrets/tierplan-agent-token",
 		},
-		map[string]string{"/run/secrets/coaming-agent-token": secret + "\n"},
+		map[string]string{"/run/secrets/tierplan-agent-token": secret + "\n"},
 	)
 	if code := run(d); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
 	}
-	if want := []string{"read /run/secrets/coaming-agent-token", "drop", "connect"}; !reflect.DeepEqual(h.events, want) {
+	if want := []string{"read /run/secrets/tierplan-agent-token", "drop", "connect"}; !reflect.DeepEqual(h.events, want) {
 		t.Fatalf("events = %v, want %v", h.events, want)
 	}
 	if strings.Contains(h.stderr.String(), secret) || strings.Contains(h.stdout.String(), secret) {
@@ -190,12 +190,12 @@ func TestNothingInTheStateDirectoryIsReadBeforeTheDrop(t *testing.T) {
 // find its identity as UID 1000 and connect with no token, in the default state
 // directory and in a custom one.
 func TestAnEnrolledAgentWithoutATokenStartsWhenRootCannotReadItsStateDirectory(t *testing.T) {
-	for name, dir := range map[string]string{"default": "/var/lib/coaming-agent", "custom": "/state"} {
+	for name, dir := range map[string]string{"default": "/var/lib/tierplan-agent", "custom": "/state"} {
 		t.Run(name, func(t *testing.T) {
 			h := &harness{stateLocked: true}
-			env := map[string]string{"COAMING_AGENT_URL": "wss://coaming.example/agent/connect"}
+			env := map[string]string{"TIERPLAN_AGENT_URL": "wss://tierplan.example/agent/connect"}
 			if name == "custom" {
-				env["COAMING_AGENT_STATE_DIR"] = dir
+				env["TIERPLAN_AGENT_STATE_DIR"] = dir
 			}
 			d := h.deps(env, map[string]string{dir + "/identity.json": "{}"})
 			if code := run(d); code != 0 {
@@ -221,14 +221,14 @@ func TestAnEnrolledAgentWithoutATokenStartsWhenRootCannotReadItsStateDirectory(t
 // that the agent never connects.
 func TestAnAgentWithNoTokenAndNoIdentityStopsAfterTheDrop(t *testing.T) {
 	h := &harness{stateLocked: true}
-	d := h.deps(map[string]string{"COAMING_AGENT_URL": "wss://coaming.example/agent/connect"}, nil)
+	d := h.deps(map[string]string{"TIERPLAN_AGENT_URL": "wss://tierplan.example/agent/connect"}, nil)
 	if code := run(d); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
 	if want := []string{"drop"}; !reflect.DeepEqual(h.events, want) {
 		t.Fatalf("events = %v, want %v", h.events, want)
 	}
-	for _, name := range []string{"COAMING_AGENT_JOIN_TOKEN_FILE", "COAMING_AGENT_JOIN_TOKEN"} {
+	for _, name := range []string{"TIERPLAN_AGENT_JOIN_TOKEN_FILE", "TIERPLAN_AGENT_JOIN_TOKEN"} {
 		if !strings.Contains(h.stderr.String(), name) {
 			t.Errorf("stderr %q does not name %s", h.stderr.String(), name)
 		}
@@ -240,14 +240,14 @@ func TestAnAgentWithNoTokenAndNoIdentityStopsAfterTheDrop(t *testing.T) {
 // never connects.
 func TestAnIdentityUnreadableAfterTheDropStopsTheAgent(t *testing.T) {
 	h := &harness{stateUnreadable: true}
-	d := h.deps(map[string]string{"COAMING_AGENT_URL": "wss://coaming.example/agent/connect"}, map[string]string{"/var/lib/coaming-agent/identity.json": "{}"})
+	d := h.deps(map[string]string{"TIERPLAN_AGENT_URL": "wss://tierplan.example/agent/connect"}, map[string]string{"/var/lib/tierplan-agent/identity.json": "{}"})
 	if code := run(d); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
 	if slices.Contains(h.events, "connect") {
 		t.Fatalf("events = %v: the agent connected without being able to read its identity", h.events)
 	}
-	for _, want := range []string{"read the enrolled state in", "/var/lib/coaming-agent"} {
+	for _, want := range []string{"read the enrolled state in", "/var/lib/tierplan-agent"} {
 		if !strings.Contains(h.stderr.String(), want) {
 			t.Errorf("stderr %q does not contain %q", h.stderr.String(), want)
 		}
@@ -257,8 +257,8 @@ func TestAnIdentityUnreadableAfterTheDropStopsTheAgent(t *testing.T) {
 func TestAConfigurationErrorExitsBeforeTheDropAndNeverShowsTheToken(t *testing.T) {
 	h := &harness{}
 	d := h.deps(map[string]string{
-		"COAMING_AGENT_URL":        "https://not-a-websocket",
-		"COAMING_AGENT_JOIN_TOKEN": secret,
+		"TIERPLAN_AGENT_URL":        "https://not-a-websocket",
+		"TIERPLAN_AGENT_JOIN_TOKEN": secret,
 	}, nil)
 	if code := run(d); code != 2 {
 		t.Fatalf("exit %d, want 2", code)
@@ -274,8 +274,8 @@ func TestAConfigurationErrorExitsBeforeTheDropAndNeverShowsTheToken(t *testing.T
 func TestAFailedDropExitsNonZeroAndNeverConnects(t *testing.T) {
 	h := &harness{dropErr: errors.New("drop privileges: set uid 1000: operation not permitted")}
 	d := h.deps(map[string]string{
-		"COAMING_AGENT_URL":        "wss://coaming.example/agent/connect",
-		"COAMING_AGENT_JOIN_TOKEN": secret,
+		"TIERPLAN_AGENT_URL":        "wss://tierplan.example/agent/connect",
+		"TIERPLAN_AGENT_JOIN_TOKEN": secret,
 	}, nil)
 	if code := run(d); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
@@ -328,11 +328,11 @@ func TestTheStateDirectoryIsMadePrivateAtStart(t *testing.T) {
 func TestTheStateDirectoryAndBackoffReachTheConnection(t *testing.T) {
 	h := &harness{}
 	d := h.deps(map[string]string{
-		"COAMING_AGENT_URL":         "wss://coaming.example/agent/connect",
-		"COAMING_AGENT_JOIN_TOKEN":  secret,
-		"COAMING_AGENT_STATE_DIR":   "/state",
-		"COAMING_AGENT_BACKOFF_MIN": "2s",
-		"COAMING_AGENT_BACKOFF_MAX": "20s",
+		"TIERPLAN_AGENT_URL":         "wss://tierplan.example/agent/connect",
+		"TIERPLAN_AGENT_JOIN_TOKEN":  secret,
+		"TIERPLAN_AGENT_STATE_DIR":   "/state",
+		"TIERPLAN_AGENT_BACKOFF_MIN": "2s",
+		"TIERPLAN_AGENT_BACKOFF_MAX": "20s",
 	}, nil)
 	if code := run(d); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
@@ -345,10 +345,10 @@ func TestTheStateDirectoryAndBackoffReachTheConnection(t *testing.T) {
 func TestThePolicyFlagsReachTheConnection(t *testing.T) {
 	h := &harness{}
 	d := h.deps(map[string]string{
-		"COAMING_AGENT_URL":         "wss://coaming.example/agent/connect",
-		"COAMING_AGENT_JOIN_TOKEN":  secret,
-		"COAMING_AGENT_READ_ONLY":   "true",
-		"COAMING_AGENT_SELF_UPDATE": "false",
+		"TIERPLAN_AGENT_URL":         "wss://tierplan.example/agent/connect",
+		"TIERPLAN_AGENT_JOIN_TOKEN":  secret,
+		"TIERPLAN_AGENT_READ_ONLY":   "true",
+		"TIERPLAN_AGENT_SELF_UPDATE": "false",
 	}, nil)
 	if code := run(d); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
@@ -365,9 +365,9 @@ func TestTheAllowInsecureSwitchReachesTheConnection(t *testing.T) {
 	}{{"true", true}, {"", false}, {"false", false}} {
 		h := &harness{}
 		d := h.deps(map[string]string{
-			"COAMING_AGENT_URL":            "ws://coaming.example/agent/connect",
-			"COAMING_AGENT_JOIN_TOKEN":     secret,
-			"COAMING_AGENT_ALLOW_INSECURE": tc.value,
+			"TIERPLAN_AGENT_URL":            "ws://tierplan.example/agent/connect",
+			"TIERPLAN_AGENT_JOIN_TOKEN":     secret,
+			"TIERPLAN_AGENT_ALLOW_INSECURE": tc.value,
 		}, nil)
 		code := run(d)
 		if tc.want {
@@ -389,7 +389,7 @@ func TestTheAllowInsecureSwitchReachesTheConnection(t *testing.T) {
 	}
 	// With an allowed (wss) URL and no switch, AllowInsecure is false and the line says so.
 	h := &harness{}
-	d := h.deps(map[string]string{"COAMING_AGENT_URL": "wss://coaming.example/agent/connect", "COAMING_AGENT_JOIN_TOKEN": secret}, nil)
+	d := h.deps(map[string]string{"TIERPLAN_AGENT_URL": "wss://tierplan.example/agent/connect", "TIERPLAN_AGENT_JOIN_TOKEN": secret}, nil)
 	if code := run(d); code != 0 || h.gotConn.AllowInsecure || !strings.Contains(h.stderr.String(), "allow_insecure=false") {
 		t.Errorf("wss without the switch: exit %d, AllowInsecure %v, stderr %s", code, h.gotConn.AllowInsecure, h.stderr.String())
 	}
@@ -406,10 +406,10 @@ func TestSelfMaintenanceReachesTheConnectionAndHonoursTheHostSwitch(t *testing.T
 		t.Run("self update "+tc.flag, func(t *testing.T) {
 			h := &harness{}
 			d := h.deps(map[string]string{
-				"COAMING_AGENT_URL":         "wss://coaming.example/agent/connect",
-				"COAMING_AGENT_JOIN_TOKEN":  secret,
-				"COAMING_AGENT_SELF_UPDATE": tc.flag,
-				"COAMING_AGENT_SOCKET":      "/nonexistent/docker.sock",
+				"TIERPLAN_AGENT_URL":         "wss://tierplan.example/agent/connect",
+				"TIERPLAN_AGENT_JOIN_TOKEN":  secret,
+				"TIERPLAN_AGENT_SELF_UPDATE": tc.flag,
+				"TIERPLAN_AGENT_SOCKET":      "/nonexistent/docker.sock",
 			}, nil)
 			if code := run(d); code != 0 {
 				t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
@@ -419,7 +419,7 @@ func TestSelfMaintenanceReachesTheConnectionAndHonoursTheHostSwitch(t *testing.T
 			}
 			// Off: the switch answers. On, with no Docker to read its own container
 			// from, the agent cannot know its own repository and updates nothing.
-			res := h.gotConn.Maint.Update(context.Background(), wire.Update{T: wire.TypeUpdate, Image: "ghcr.io/ianglennon/coaming-agent:1"})
+			res := h.gotConn.Maint.Update(context.Background(), wire.Update{T: wire.TypeUpdate, Image: "ghcr.io/ianglennon/tierplan-agent:1"})
 			if res.OK || res.Error != tc.wantCode {
 				t.Fatalf("update answered %+v, want error %s", res, tc.wantCode)
 			}
@@ -430,7 +430,7 @@ func TestSelfMaintenanceReachesTheConnectionAndHonoursTheHostSwitch(t *testing.T
 func TestTheHelperSubcommandRecreatesTheTargetWithoutAURLOrAToken(t *testing.T) {
 	dir := t.TempDir()
 	h := &harness{}
-	d := h.deps(map[string]string{"COAMING_AGENT_STATE_DIR": dir, "COAMING_AGENT_SOCKET": "/s/docker.sock", "COAMING_AGENT_DOCKER_GID": "42"}, nil)
+	d := h.deps(map[string]string{"TIERPLAN_AGENT_STATE_DIR": dir, "TIERPLAN_AGENT_SOCKET": "/s/docker.sock", "TIERPLAN_AGENT_DOCKER_GID": "42"}, nil)
 	d.args = []string{"helper", "recreate", "--target", "abc123"}
 	if code := run(d); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
@@ -484,7 +484,7 @@ func TestTheHelperSubcommandExitCodes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &harness{recreateErr: tc.err, dropErr: tc.dropErr}
-			d := h.deps(map[string]string{"COAMING_AGENT_STATE_DIR": t.TempDir()}, nil)
+			d := h.deps(map[string]string{"TIERPLAN_AGENT_STATE_DIR": t.TempDir()}, nil)
 			d.args = tc.args
 			if code := run(d); code != tc.want {
 				t.Fatalf("exit %d, want %d; stderr: %s", code, tc.want, h.stderr.String())
@@ -501,7 +501,7 @@ func TestTheHelperSubcommandExitCodes(t *testing.T) {
 
 func TestTheHelperSubcommandRejectsABadDockerGID(t *testing.T) {
 	h := &harness{}
-	d := h.deps(map[string]string{"COAMING_AGENT_DOCKER_GID": "x"}, nil)
+	d := h.deps(map[string]string{"TIERPLAN_AGENT_DOCKER_GID": "x"}, nil)
 	d.args = []string{"helper", "recreate", "--target", "x"}
 	if code := run(d); code != 2 || len(h.events) != 0 {
 		t.Fatalf("exit %d, events %v", code, h.events)
@@ -510,8 +510,8 @@ func TestTheHelperSubcommandRejectsABadDockerGID(t *testing.T) {
 
 func TestTheRemoveVolumeHelperPassesItsFlagsAndDropsPrivilegesFirst(t *testing.T) {
 	h := &harness{}
-	d := h.deps(map[string]string{"COAMING_AGENT_SOCKET": "/s/docker.sock", "COAMING_AGENT_DOCKER_GID": "42"}, nil)
-	d.args = []string{"helper", "remove-volume", "--wait", "abc123", "--volume", "coaming-agent", "--remove-container", "--keep-volume"}
+	d := h.deps(map[string]string{"TIERPLAN_AGENT_SOCKET": "/s/docker.sock", "TIERPLAN_AGENT_DOCKER_GID": "42"}, nil)
+	d.args = []string{"helper", "remove-volume", "--wait", "abc123", "--volume", "tierplan-agent", "--remove-container", "--keep-volume"}
 	if code := run(d); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, h.stderr.String())
 	}
@@ -519,7 +519,7 @@ func TestTheRemoveVolumeHelperPassesItsFlagsAndDropsPrivilegesFirst(t *testing.T
 		t.Fatalf("events = %v, want %v: no connect loop, and the privileges are dropped first", h.events, want)
 	}
 	o := h.gotRemove
-	if o.ContainerID != "abc123" || o.Volume != "coaming-agent" || o.SocketPath != "/s/docker.sock" || !o.RemoveContainer || !o.KeepVolume {
+	if o.ContainerID != "abc123" || o.Volume != "tierplan-agent" || o.SocketPath != "/s/docker.sock" || !o.RemoveContainer || !o.KeepVolume {
 		t.Fatalf("options = %+v", o)
 	}
 	if o.Grace <= 0 || o.Timeout != selfmaint.RemoveTimeout {
@@ -630,19 +630,19 @@ func (s *refusingServer) url() string {
 
 // TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch starts the agent through
 // run with the real configuration and the real connection code. A plain ws://
-// COAMING_AGENT_URL for a host that is not loopback sends the join token and the
+// TIERPLAN_AGENT_URL for a host that is not loopback sends the join token and the
 // proof to a peer the agent never authenticated, so the agent refuses it, before
-// dropping privileges and without a dial, unless COAMING_AGENT_ALLOW_INSECURE=true
+// dropping privileges and without a dial, unless TIERPLAN_AGENT_ALLOW_INSECURE=true
 // is set on the agent itself; loopback needs no switch (T-02-31, WR-A05).
 func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
 	start := func(t *testing.T, raw string, extra map[string]string) (*harness, int) {
 		t.Helper()
 		sockDir := t.TempDir()
 		env := map[string]string{
-			"COAMING_AGENT_URL":        raw,
-			"COAMING_AGENT_JOIN_TOKEN": secret,
-			"COAMING_AGENT_STATE_DIR":  t.TempDir(),
-			"COAMING_AGENT_SOCKET":     filepath.Join(sockDir, "missing.sock"),
+			"TIERPLAN_AGENT_URL":        raw,
+			"TIERPLAN_AGENT_JOIN_TOKEN": secret,
+			"TIERPLAN_AGENT_STATE_DIR":  t.TempDir(),
+			"TIERPLAN_AGENT_SOCKET":     filepath.Join(sockDir, "missing.sock"),
 		}
 		for k, v := range extra {
 			env[k] = v
@@ -663,7 +663,7 @@ func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
 		if code != 2 {
 			t.Fatalf("exit %d, want 2; stderr: %s", code, h.stderr.String())
 		}
-		for _, want := range []string{"COAMING_AGENT_ALLOW_INSECURE", "wss://"} {
+		for _, want := range []string{"TIERPLAN_AGENT_ALLOW_INSECURE", "wss://"} {
 			if !strings.Contains(h.stderr.String(), want) {
 				t.Errorf("stderr does not mention %s: %s", want, h.stderr.String())
 			}
@@ -685,7 +685,7 @@ func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
 			t.Skip("this machine has no non-loopback IPv4 address")
 		}
 		srv := newRefusingServer(t, ip)
-		h, code := start(t, srv.url(), map[string]string{"COAMING_AGENT_ALLOW_INSECURE": "true"})
+		h, code := start(t, srv.url(), map[string]string{"TIERPLAN_AGENT_ALLOW_INSECURE": "true"})
 		if code != 1 {
 			t.Fatalf("exit %d, want 1 (the server refused the first enrolment); stderr: %s", code, h.stderr.String())
 		}

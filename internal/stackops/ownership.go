@@ -1,31 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
 import (
 	"slices"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/rebuild"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
 )
 
 // Ownership decides which objects of an engine belong to a stack. It is the one place that does, so the
 // overview, the resources and the logs serve every kind of stack with the same rule (D-09, D-13).
 //
-// A managed stack owns what carries its namespace or project and its own coaming.stack.id: a name alone
+// A managed stack owns what carries its namespace or project and its own tierplan.stack.id: a name alone
 // is never ownership, since another stack, or a person, can make an object under the same name. A
 // discovered stack (Stack.Discovered) is a name found on the engine and has no ID, so it owns everything
 // under its namespace or project label, whoever made it.
 //
-// An adopted stack (plan 08-13) is a stack Coaming took over without touching the engine, so its objects do not
+// An adopted stack (plan 08-13) is a stack TierPlan took over without touching the engine, so its objects do not
 // carry its ID yet. Until its first deploy (Pending) its services and containers are owned when they carry its
-// namespace or project and either no coaming.stack.id or the stale one recorded at adoption (D-11); its networks
+// namespace or project and either no tierplan.stack.id or the stale one recorded at adoption (D-11); its networks
 // and volumes are owned by the names recorded at adoption, for as long as the stack lives (D-18). A
-// coaming.stack.id alone never links an object to a stack: another ID is another stack's (T-08-47).
+// tierplan.stack.id alone never links an object to a stack: another ID is another stack's (T-08-47).
 //
-// A container on a host is in one more class for the drift check: an unlabelled one, with no coaming.stack.id, in a
+// A container on a host is in one more class for the drift check: an unlabelled one, with no tierplan.stack.id, in a
 // project the stack owns a container of. The person added it from the host CLI, so it is not owned (OwnsWorkload
 // stays false), and it is not another stack's either (SplitProject).
 type Ownership struct {
@@ -35,10 +35,10 @@ type Ownership struct {
 	Name string
 	// Target says which label the name is on: the namespace on a swarm, the project on a host.
 	Target stacks.Target
-	// Discovered is true for a stack found by its labels that Coaming does not hold.
+	// Discovered is true for a stack found by its labels that TierPlan does not hold.
 	Discovered bool
-	// Adopted is true for a stack Coaming took over (source kind adopted), Pending until its first deploy has put
-	// Coaming's labels on what it runs, and PriorID the coaming.stack.id its objects carried when it was adopted.
+	// Adopted is true for a stack TierPlan took over (source kind adopted), Pending until its first deploy has put
+	// TierPlan's labels on what it runs, and PriorID the tierplan.stack.id its objects carried when it was adopted.
 	Adopted, Pending bool
 	PriorID          string
 	// Networks and Volumes are the engine names of the networks and volumes an adopted stack owns, and
@@ -69,7 +69,7 @@ func (o Ownership) labelKey() string {
 func (o Ownership) inName(name string) bool { return name == o.Name && o.Name != "" }
 
 // ownsExactly is the managed rule: the object states the stack's name and carries the stack's own ID. A stored
-// stack with no ID owns nothing this way: an object with no coaming.stack.id must never match it.
+// stack with no ID owns nothing this way: an object with no tierplan.stack.id must never match it.
 func (o Ownership) ownsExactly(name string, labels map[string]string) bool {
 	if !o.inName(name) {
 		return false
@@ -99,7 +99,7 @@ func (o Ownership) OwnsWorkload(labels map[string]string) bool {
 	return o.owns(labels[o.labelKey()], labels)
 }
 
-// Claims says whether an object that states the stack's namespace or project as name, and the coaming.stack.id id (empty
+// Claims says whether an object that states the stack's namespace or project as name, and the tierplan.stack.id id (empty
 // for none), is linked to the stack: it carries the stack's own ID, or the stack is adopted and pending and the object
 // carries no ID or the one recorded at adoption. It is OwnsWorkload for a caller that holds the two values a page
 // shows and not the labels. An ID is a claim, never a fact: another stack's ID under this name links to nothing.
@@ -172,12 +172,12 @@ func (o Ownership) foreignVolume(name string, labels map[string]string) bool {
 //
 //   - A container whose project or namespace (labelKey) is not the stack's name is in no list.
 //   - owned: OwnsWorkload says it is the stack's.
-//   - unlabelled: on a host, a stack Coaming holds (not Discovered, with an ID) meets a container of its project that
-//     carries no coaming.stack.id, and owns another container of the same Compose service. It is what the person adds
+//   - unlabelled: on a host, a stack TierPlan holds (not Discovered, with an ID) meets a container of its project that
+//     carries no tierplan.stack.id, and owns another container of the same Compose service. It is what the person adds
 //     to the project from the host CLI (docker compose up --scale), and counts as the stack's wherever the stack
 //     compares scale.
 //   - foreign: every other container under the name. Another non-empty ID is always another stack's (T-08-103). A
-//     container with no ID in a project the stack owns nothing of is a project Coaming did not deploy or adopt, so it
+//     container with no ID in a project the stack owns nothing of is a project TierPlan did not deploy or adopt, so it
 //     is not taken over silently (T-08-104, P7 D-12). Nor is a container with no ID of a service no container of the
 //     stack runs: an unrelated project that resolves to the same name looks just like it, and Deploy, Restore and
 //     Remove would delete it as an orphan (WR-03, T-08-113).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # The stability bars of phase 6.1, applied to one share of the suite (D-01, D-02,
 # D-03, D-12, D-16). A shard is a set of Go packages, and the agent-web shard also
@@ -29,7 +29,7 @@
 # test binary, so a hang in a package that starts late can run past the budget by up
 # to that package's own run; the job's margin covers it. A -timeout flag is refused,
 # because the budget governs.
-# Tests quarantined under D-12 are included (COAMING_RUN_QUARANTINED=1): the point
+# Tests quarantined under D-12 are included (TIERPLAN_RUN_QUARANTINED=1): the point
 # of the stress run is to find out whether they are stable yet. Every pass runs even
 # when an earlier one failed, so one red run reports everything; the exit status is
 # non-zero at the end if any pass failed. scripts/test-summary.sh turns the JSON into
@@ -95,7 +95,7 @@ rm -f "${results}/stress-${shard}-"*
 gotestsum_cmd=(${GOTESTSUM:-gotestsum})
 
 # D-12: run the quarantined tests too.
-export COAMING_RUN_QUARANTINED=1
+export TIERPLAN_RUN_QUARANTINED=1
 
 failed=0
 

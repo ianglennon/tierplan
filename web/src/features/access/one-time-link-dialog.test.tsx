@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -119,21 +119,21 @@ describe("OneTimeLinkDialog", () => {
     expect(block.contains(screen.getByRole("button", { name: "Copy link" }))).toBe(false);
   });
 
-  it("turns an address relative to Coaming into a full one and leaves a public URL alone", async () => {
+  it("turns an address relative to TierPlan into a full one and leaves a public URL alone", async () => {
     const writeText = vi.fn(async () => {});
     stubClipboard(writeText);
-    renderDialog({ link: link(`/coaming/invite#token=${TOKEN}`) });
+    renderDialog({ link: link(`/tierplan/invite#token=${TOKEN}`) });
     fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenLastCalledWith(
-      `${window.location.origin}/coaming/invite#token=${TOKEN}`,
+      `${window.location.origin}/tierplan/invite#token=${TOKEN}`,
     );
     cleanup();
 
-    renderDialog({ link: link(`https://coaming.example/invite#token=${TOKEN}`) });
+    renderDialog({ link: link(`https://tierplan.example/invite#token=${TOKEN}`) });
     fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
-    expect(writeText).toHaveBeenLastCalledWith(`https://coaming.example/invite#token=${TOKEN}`);
+    expect(writeText).toHaveBeenLastCalledWith(`https://tierplan.example/invite#token=${TOKEN}`);
   });
 
   it("copies the real link by the fallback chain when there is no clipboard API", async () => {

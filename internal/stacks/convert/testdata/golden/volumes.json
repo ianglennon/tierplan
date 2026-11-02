@@ -8,8 +8,8 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-volumes",
-        "com.docker.stack.namespace": "volumes"
+        "com.docker.stack.namespace": "volumes",
+        "tierplan.stack.id": "id-volumes"
       },
       "DriverOpts": null,
       "IPAMDriver": "",
@@ -24,16 +24,16 @@
       "Spec": {
         "Name": "volumes_db",
         "Labels": {
-          "coaming.stack.id": "id-volumes",
           "com.docker.stack.image": "postgres:16",
-          "com.docker.stack.namespace": "volumes"
+          "com.docker.stack.namespace": "volumes",
+          "tierplan.stack.id": "id-volumes"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "postgres:16",
             "Labels": {
-              "coaming.stack.id": "id-volumes",
-              "com.docker.stack.namespace": "volumes"
+              "com.docker.stack.namespace": "volumes",
+              "tierplan.stack.id": "id-volumes"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -47,8 +47,8 @@
                 "Target": "/var/lib/postgresql/data",
                 "VolumeOptions": {
                   "Labels": {
-                    "coaming.stack.id": "id-volumes",
-                    "com.docker.stack.namespace": "volumes"
+                    "com.docker.stack.namespace": "volumes",
+                    "tierplan.stack.id": "id-volumes"
                   }
                 }
               },
@@ -59,9 +59,9 @@
                 "VolumeOptions": {
                   "NoCopy": true,
                   "Labels": {
-                    "coaming.stack.id": "id-volumes",
                     "com.docker.stack.namespace": "volumes",
-                    "purpose": "cache"
+                    "purpose": "cache",
+                    "tierplan.stack.id": "id-volumes"
                   },
                   "DriverConfig": {
                     "Name": "local",
@@ -79,8 +79,8 @@
                 "VolumeOptions": {
                   "NoCopy": true,
                   "Labels": {
-                    "coaming.stack.id": "id-volumes",
-                    "com.docker.stack.namespace": "volumes"
+                    "com.docker.stack.namespace": "volumes",
+                    "tierplan.stack.id": "id-volumes"
                   },
                   "Subpath": "sub",
                   "DriverConfig": {

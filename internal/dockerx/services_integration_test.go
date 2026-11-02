@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -18,8 +18,8 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // facadeFix is one dind engine that is a one-node swarm, with a registry on it and a dockerx client
@@ -34,7 +34,7 @@ type facadeFix struct {
 }
 
 // startFacadeFix starts the engine the tests of the swarm facades run against: a one-node swarm, the
-// busybox image the services run and a registry holding nothing yet. The engine is COAMING_TEST_ENGINE.
+// busybox image the services run and a registry holding nothing yet. The engine is TIERPLAN_TEST_ENGINE.
 func startFacadeFix(t *testing.T) *facadeFix {
 	t.Helper()
 	node := dockertest.StartHost(t, "")
@@ -190,7 +190,7 @@ func TestServiceFacadeOnARealEngine(t *testing.T) {
 	}
 	bad := spec
 	bad.Name = "facade-bad-network"
-	bad.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "cm-no-such-network"}}
+	bad.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "tp-no-such-network"}}
 	var rejected *dockerx.SpecRejectedError
 	if _, _, err := f.cli.ServiceCreate(ctx, specOf(t, bad), ""); !errors.As(err, &rejected) {
 		t.Errorf("ServiceCreate naming a network that does not exist = %v, want a *SpecRejectedError", err)
@@ -275,7 +275,7 @@ func TestServiceFacadeOnARealEngine(t *testing.T) {
 	}
 	var unknown *dockerx.SpecRejectedError
 	broken := decodeSpec(t, edit.Spec)
-	broken.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "cm-no-such-network"}}
+	broken.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "tp-no-such-network"}}
 	if _, err := f.cli.ServiceUpdate(ctx, id, edit.Version, specOf(t, broken), ""); !errors.As(err, &unknown) {
 		t.Errorf("ServiceUpdate naming a network that does not exist = %v, want a *SpecRejectedError", err)
 	}

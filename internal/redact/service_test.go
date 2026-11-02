@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package redact_test
 
@@ -16,7 +16,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/tierplan/internal/redact"
 )
 
 // A service's spec carries the same secrets a container's does (D-39, AUTH-07): the values of

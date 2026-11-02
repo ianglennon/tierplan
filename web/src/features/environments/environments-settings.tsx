@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -232,7 +232,7 @@ export function RenameDialog({ environment, onClose, returnFocusRef }: RenameDia
 }
 
 // EnvironmentRow is one environment as an `item`: name, type, health, engine
-// version and, for the host Coaming itself runs on, the own-instance badge.
+// version and, for the host TierPlan itself runs on, the own-instance badge.
 function EnvironmentRow({
   environment,
   canRemove,

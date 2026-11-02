@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -31,7 +31,7 @@ import { withBase } from "@/lib/base-path";
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
 interface RestorePanelProps {
-  // Called once Coaming is back on the backup's state and the session is gone.
+  // Called once TierPlan is back on the backup's state and the session is gone.
   // It is given the function that lets the app react to refusals again, to call
   // when the page showing the result is left.
   onRestored: (release: () => void) => void;
@@ -39,7 +39,7 @@ interface RestorePanelProps {
 
 // RestorePanel is the Restore card of Settings > Backup (D-30, path 3): choose a
 // file and its passphrase, check it, read what is in it, confirm with the
-// instance name, and wait for Coaming to restart into it. The file and the
+// instance name, and wait for TierPlan to restart into it. The file and the
 // passphrase stay in this component's state, are dropped once the restore has
 // worked or another file is chosen, and go with the component.
 export function RestorePanel({ onRestored }: RestorePanelProps) {

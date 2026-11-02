@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // Timing of the cluster reader (RESEARCH A12). They are tuning, kept in one place.
@@ -35,7 +35,7 @@ const (
 	failureWindow = 5 * time.Minute
 	// refreshParallel bounds the environments read at once.
 	refreshParallel = 8
-	// minEngineMajor is the oldest Docker Engine Coaming manages (D-47).
+	// minEngineMajor is the oldest Docker Engine TierPlan manages (D-47).
 	minEngineMajor = 24
 	// auditTimeout bounds the write of a failover's audit row.
 	auditTimeout = 5 * time.Second
@@ -44,8 +44,8 @@ const (
 	// (D-13); the cluster reader is part of how the hub keeps an environment going.
 	agentHubActor = "system:agent-hub"
 
-	// eventTypeCoaming is the type of a feed row that is Coaming's own.
-	eventTypeCoaming = "coaming"
+	// eventTypeTierPlan is the type of a feed row that is TierPlan's own.
+	eventTypeTierPlan = "tierplan"
 )
 
 // ErrNoManager is the error of a cluster read of an environment that has no
@@ -631,9 +631,9 @@ func (c *Clusters) failover(ctx context.Context, in RollupInput, e *clusterEntry
 	}
 	if c.events != nil {
 		c.events.Inject(to.TargetKey(), dockerx.EventRow{
-			ID:   fmt.Sprintf("coaming-%d-%s-%s", now.UnixNano(), from.ID, to.ID),
+			ID:   fmt.Sprintf("tierplan-%d-%s-%s", now.UnixNano(), from.ID, to.ID),
 			Time: now.UTC(), TimeNano: now.UnixNano(),
-			Type: eventTypeCoaming, Action: "failover", ActorID: in.EnvID, Name: msg,
+			Type: eventTypeTierPlan, Action: "failover", ActorID: in.EnvID, Name: msg,
 			Attributes: map[string]string{"from": fromNode, "to": toNode},
 		})
 	}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // secretRefs are the names of the secrets a service's spec references, as "name>file" (the file the container sees).
@@ -29,7 +29,7 @@ func secretNames(t *testing.T, f *swarmFix) []string {
 	t.Helper()
 	var names []string
 	for _, n := range strings.Fields(sh(t, f.sw.Managers[0], "docker secret ls --format '{{.Name}}'")) {
-		if !strings.HasPrefix(n, "coaming-agent-token") {
+		if !strings.HasPrefix(n, "tierplan-agent-token") {
 			names = append(names, n)
 		}
 	}

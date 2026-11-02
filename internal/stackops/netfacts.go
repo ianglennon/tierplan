@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // netFactsCheckDeadline bounds the parse of one stack when its declared networks are read.
 const netFactsCheckDeadline = 2 * time.Second
 
-// NetFacts is what Coaming's own stacks say about the networks of an environment, for the check
+// NetFacts is what TierPlan's own stacks say about the networks of an environment, for the check
 // that lists the networks nothing uses (NET-04): which stacks exist, which networks they declare
 // external (and so use without owning) and which stack holds an operation. It implements
 // envs.StackFacts.

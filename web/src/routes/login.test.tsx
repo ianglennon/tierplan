@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -94,11 +94,11 @@ function renderAt(path: string, basepath?: string) {
 // announceBase does what the server does when it renders index.html (plan
 // 02-03): it puts the base path in a meta tag the SPA reads once.
 function announceBase(base: string | null): void {
-  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="tierplan-base"]')) el.remove();
   resetBasePathForTests();
   if (base === null) return;
   const meta = document.createElement("meta");
-  meta.name = "coaming-base";
+  meta.name = "tierplan-base";
   meta.content = base;
   document.head.append(meta);
 }
@@ -174,7 +174,7 @@ describe("/login", () => {
     await fill("admin", "x");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(
-      await screen.findByText("Can't reach Coaming. Check your connection and try again."),
+      await screen.findByText("Can't reach TierPlan. Check your connection and try again."),
     ).toBeTruthy();
   });
 
@@ -308,21 +308,23 @@ describe("/login", () => {
   it("keeps the version and source link on the sign-in page", async () => {
     stubApi({});
     renderAt("/login");
-    expect(await screen.findByText("Coaming v0.0.0")).toBeTruthy();
+    expect(await screen.findByText("TierPlan v0.0.0")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Source code (opens in a new tab)" })).toBeTruthy();
   });
 });
 
 describe("/login under a base path", () => {
-  beforeEach(() => announceBase("/coaming"));
+  beforeEach(() => announceBase("/tierplan"));
   afterEach(() => announceBase(null));
 
   it("sends the browser to the base plus next after sign-in", async () => {
     stubApi({ signedInAfterLogin: true });
-    const router = renderAt("/coaming/login?next=%2Fenv%2Fa%2Fcontainers", "/coaming");
+    const router = renderAt("/tierplan/login?next=%2Fenv%2Fa%2Fcontainers", "/tierplan");
     await fill("admin", "pw");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await waitFor(() => expect(router.history.location.pathname).toBe("/coaming/env/a/containers"));
+    await waitFor(() =>
+      expect(router.history.location.pathname).toBe("/tierplan/env/a/containers"),
+    );
     await waitFor(() => expect(router.state.location.pathname).toBe("/env/a/containers"));
   });
 
@@ -330,10 +332,10 @@ describe("/login under a base path", () => {
     "ignores an unsafe next (%s) and lands on the base root",
     async (next) => {
       stubApi({ signedInAfterLogin: true });
-      const router = renderAt(`/coaming/login?next=${next}`, "/coaming");
+      const router = renderAt(`/tierplan/login?next=${next}`, "/tierplan");
       await fill("admin", "pw");
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-      await waitFor(() => expect(router.history.location.pathname).toMatch(/^\/coaming\/?$/));
+      await waitFor(() => expect(router.history.location.pathname).toMatch(/^\/tierplan\/?$/));
       await waitFor(() => expect(["/", "/environments"]).toContain(router.state.location.pathname));
       expect(router.history.location.href).not.toContain("evil");
     },
@@ -341,8 +343,8 @@ describe("/login under a base path", () => {
 
   it("skips the form for a signed-in visitor and lands under the base", async () => {
     stubApi({ signedIn: true });
-    const router = renderAt("/coaming/login?next=%2Fenv%2Fa", "/coaming");
-    await waitFor(() => expect(router.history.location.pathname).toBe("/coaming/env/a"));
+    const router = renderAt("/tierplan/login?next=%2Fenv%2Fa", "/tierplan");
+    await waitFor(() => expect(router.history.location.pathname).toBe("/tierplan/env/a"));
     expect(router.state.location.pathname).toBe("/env/a");
   });
 });

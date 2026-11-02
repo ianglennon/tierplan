@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package webui serves the single-page app out of an fs.FS (the embedded
 // web/dist in production).
@@ -23,8 +23,8 @@ const maxRenderedBases = 4
 // Handler serves files from site, falls back to index.html for any other path
 // (client-side routes), and never invents a file under /assets/.
 //
-// base returns the base path Coaming is served under, "" for the root (D-50).
-// index.html is rendered once per distinct base: a <meta name="coaming-base">
+// base returns the base path TierPlan is served under, "" for the root (D-50).
+// index.html is rendered once per distinct base: a <meta name="tierplan-base">
 // is added after <head>, and the relative ./ asset references the SPA build
 // emits are rewritten to {base}/. No <base> element is added, because the CSP's
 // base-uri 'none' makes browsers ignore it, and no inline script is added, so
@@ -105,7 +105,7 @@ func (c *indexCache) render(site fs.FS, base string) ([]byte, error) {
 	return data, nil
 }
 
-// renderIndex inserts the coaming-base meta right after <head> and points every
+// renderIndex inserts the tierplan-base meta right after <head> and points every
 // relative ./ src and href at the base. The base is HTML-escaped first, so a
 // public URL cannot break out of the attribute (T-02-13).
 func renderIndex(raw []byte, base string) []byte {
@@ -114,7 +114,7 @@ func renderIndex(raw []byte, base string) []byte {
 	for _, attr := range []string{`src="./`, `href="./`} {
 		out = bytes.ReplaceAll(out, []byte(attr), []byte(strings.TrimSuffix(attr, "./")+esc+"/"))
 	}
-	meta := []byte(`<meta name="coaming-base" content="` + esc + `">`)
+	meta := []byte(`<meta name="tierplan-base" content="` + esc + `">`)
 	if at := headEnd(out); at >= 0 {
 		withMeta := make([]byte, 0, len(out)+len(meta))
 		withMeta = append(withMeta, out[:at]...)

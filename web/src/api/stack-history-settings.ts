@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -10,7 +10,7 @@ import type { components } from "@/api/schema";
 export type StackHistorySettings = components["schemas"]["StackHistorySettingsBody"];
 export type StackHistoryPrunePreview = components["schemas"]["StackHistoryPreviewBody"];
 
-// How many revisions of each stack Coaming keeps (D-01). Read with settings.read, changed with
+// How many revisions of each stack TierPlan keeps (D-01). Read with settings.read, changed with
 // settings.write.
 export const stackHistorySettingsQuery = queryOptions({
   queryKey: ["settings", "stack-history"],

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package state
 
@@ -379,9 +379,9 @@ func TestAnInterruptedDiscardLeavesADirectoryThatReadsAsNotEnrolled(t *testing.T
 // --- the addresses the server pushed (D-19) ---
 
 const (
-	urlA = "wss://coaming.example.com/agent/connect"
-	urlB = "wss://coaming.internal:7480/agent/connect"
-	urlC = "wss://c.example.org/coaming/agent/connect"
+	urlA = "wss://tierplan.example.com/agent/connect"
+	urlB = "wss://tierplan.internal:7480/agent/connect"
+	urlC = "wss://c.example.org/tierplan/agent/connect"
 )
 
 func urlsOf(es []URLEntry) []string {
@@ -468,10 +468,10 @@ func TestMergeURLsBringsBackAURLTheServerListsAgain(t *testing.T) {
 func TestMergeURLsIgnoresWhatIsNotAnAddressTheAgentWouldDialAndCapsTheList(t *testing.T) {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	bad := []string{
-		"", "not a url", "https://coaming.example.com/agent/connect", "ftp://x.example/agent/connect", "wss://",
-		"wss://user:pw@coaming.example.com/agent/connect", "wss://coaming.example.com/agent/connect#frag",
-		"wss://coaming.example.com/agent/connect?token=x", "wss://coaming.example.com\n/agent/connect",
-		"wss://coaming.example.com/" + strings.Repeat("a", MaxURLLen),
+		"", "not a url", "https://tierplan.example.com/agent/connect", "ftp://x.example/agent/connect", "wss://",
+		"wss://user:pw@tierplan.example.com/agent/connect", "wss://tierplan.example.com/agent/connect#frag",
+		"wss://tierplan.example.com/agent/connect?token=x", "wss://tierplan.example.com\n/agent/connect",
+		"wss://tierplan.example.com/" + strings.Repeat("a", MaxURLLen),
 	}
 	got := MergeURLs(nil, append(bad, urlA, urlA), now)
 	if !slices.Equal(urlsOf(got), []string{urlA}) {
@@ -539,7 +539,7 @@ func TestLoadURLsDropsEntriesThatAreNotAddresses(t *testing.T) {
 	}
 }
 
-// --- the COAMING_AGENT_URL the agent last started with (G-02-4b) ---
+// --- the TIERPLAN_AGENT_URL the agent last started with (G-02-4b) ---
 
 func TestEnvURLRoundTripsIsPrivateAndLeavesNoTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
@@ -632,8 +632,8 @@ func TestDialableURLAllowsPlainWSOnlyToLoopbackOrWithTheSwitch(t *testing.T) {
 		url              string
 		without, withSwi bool
 	}{
-		{"wss://coaming.example/agent/connect", true, true},
-		{"ws://coaming.example/agent/connect", false, true},
+		{"wss://tierplan.example/agent/connect", true, true},
+		{"ws://tierplan.example/agent/connect", false, true},
 		{"ws://127.0.0.1:7480/agent/connect", true, true},
 		{"ws://127.1.2.3/agent/connect", true, true},
 		{"ws://[::1]:7480/agent/connect", true, true},
@@ -646,11 +646,11 @@ func TestDialableURLAllowsPlainWSOnlyToLoopbackOrWithTheSwitch(t *testing.T) {
 		{"ws://localhost.example/agent/connect", false, true},
 		{"ws://127.0.0.1.example/agent/connect", false, true},
 		// ValidURL refuses these, with or without the switch.
-		{"wss://user:pw@coaming.example/agent/connect", false, false},
+		{"wss://user:pw@tierplan.example/agent/connect", false, false},
 		{"ws://user@127.0.0.1/agent/connect", false, false},
-		{"wss://coaming.example/agent/connect?x=1", false, false},
-		{"wss://coaming.example/agent/connect#f", false, false},
-		{"https://coaming.example/agent/connect", false, false},
+		{"wss://tierplan.example/agent/connect?x=1", false, false},
+		{"wss://tierplan.example/agent/connect#f", false, false},
+		{"https://tierplan.example/agent/connect", false, false},
 		{"", false, false},
 	} {
 		if got := DialableURL(tc.url, false); got != tc.without {

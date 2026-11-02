@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -334,7 +334,7 @@ describe("PullDialog (the form)", () => {
     for (const [status, type, text] of [
       [403, "forbidden", "You no longer have permission to do that."],
       [409, "host_read_only", "This host is read-only (set on the host)."],
-      [503, "node_unavailable", "The node isn't connected to Coaming right now."],
+      [503, "node_unavailable", "The node isn't connected to TierPlan right now."],
       [500, "oops", "Couldn't start the pull. Try again."],
     ] as const) {
       answer = () => problem(status, type);
@@ -346,7 +346,7 @@ describe("PullDialog (the form)", () => {
     answer = () => problem(502, "agent_policy_denied");
     mount();
     const dialog = await submit("nginx");
-    expect(await within(dialog).findByText(/older than this Coaming|agent/i)).toBeTruthy();
+    expect(await within(dialog).findByText(/older than this TierPlan|agent/i)).toBeTruthy();
   });
 
   it("ignores Escape and Cancel while the request is out, and still tracks the pull when it answers (WR-C01)", async () => {

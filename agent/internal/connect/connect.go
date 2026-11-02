@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package connect is the agent's one connection to Coaming: dial out over
+// Package connect is the agent's one connection to TierPlan: dial out over
 // WebSocket, authenticate inside it, then serve the server's Docker calls over
 // one multiplexed session. No port on the host is opened (D-18).
 //
@@ -43,18 +43,18 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/coaming/agent/internal/facts"
-	"github.com/ianglennon/coaming/agent/internal/hostnet"
-	"github.com/ianglennon/coaming/agent/internal/proxy"
-	"github.com/ianglennon/coaming/agent/internal/selfmaint"
-	"github.com/ianglennon/coaming/agent/internal/state"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/agent/internal/facts"
+	"github.com/ianglennon/tierplan/agent/internal/hostnet"
+	"github.com/ianglennon/tierplan/agent/internal/proxy"
+	"github.com/ianglennon/tierplan/agent/internal/selfmaint"
+	"github.com/ianglennon/tierplan/agent/internal/state"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Config is what Run needs.
 type Config struct {
-	// URL is the server's agent endpoint, for example wss://coaming.example/agent/connect.
+	// URL is the server's agent endpoint, for example wss://tierplan.example/agent/connect.
 	URL string
 	// JoinToken is presented once, in the handshake. It is never logged.
 	JoinToken string
@@ -69,8 +69,8 @@ type Config struct {
 	// earlier welcomes, and the proxy from the environment (tls.go). A caller
 	// that supplies one takes over verification; the agent binary never does.
 	HTTPClient *http.Client
-	// InstallPins are the server certificate pins of COAMING_AGENT_PIN: the
-	// pin of Coaming's own certificate, or of a certificate authority in the
+	// InstallPins are the server certificate pins of TIERPLAN_AGENT_PIN: the
+	// pin of TierPlan's own certificate, or of a certificate authority in the
 	// chain of a private-CA proxy.
 	InstallPins []string
 	// StateDir holds the agent's identity (key, certificate, IDs). Empty keeps
@@ -82,9 +82,9 @@ type Config struct {
 	// SelfUpdate says whether the host lets the agent update itself. Both are
 	// reported in the handshake so the UI can show them (D-28).
 	ReadOnly, SelfUpdate bool
-	// AllowPrivilegedServices is COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES.
+	// AllowPrivilegedServices is TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES.
 	AllowPrivilegedServices bool
-	// AllowInsecure is COAMING_AGENT_ALLOW_INSECURE: it lets the agent dial a plain
+	// AllowInsecure is TIERPLAN_AGENT_ALLOW_INSECURE: it lets the agent dial a plain
 	// ws:// address for a host that is not loopback. For development only; without
 	// it such an address is never dialed, whether it came from URL, from the stored
 	// list or from the server (T-02-31). It changes nothing for wss://.
@@ -157,7 +157,7 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 // errNoCredentials means the agent has neither an identity nor a join token.
-var errNoCredentials = errors.New("the agent has no identity yet and no join token: set COAMING_AGENT_JOIN_TOKEN_FILE or COAMING_AGENT_JOIN_TOKEN")
+var errNoCredentials = errors.New("the agent has no identity yet and no join token: set TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN")
 
 // runner is the agent's state across connection attempts.
 type runner struct {
@@ -205,7 +205,7 @@ func newTarget(raw string, allowPlain bool) (target, error) {
 		return target{}, fmt.Errorf("%q is not a wss:// (or ws://) address", raw)
 	}
 	if !state.DialableURL(raw, allowPlain) {
-		return target{}, fmt.Errorf("%s is not an address the agent may dial: plain ws:// to another host needs COAMING_AGENT_ALLOW_INSECURE=true", u.Host)
+		return target{}, fmt.Errorf("%s is not an address the agent may dial: plain ws:// to another host needs TIERPLAN_AGENT_ALLOW_INSECURE=true", u.Host)
 	}
 	aud, err := authn.Audience(raw)
 	if err != nil {
@@ -236,17 +236,17 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 	}
 	u, err := url.Parse(cfg.URL)
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
-		return fmt.Errorf("COAMING_AGENT_URL must be a wss:// (or ws://) address: %q", cfg.URL)
+		return fmt.Errorf("TIERPLAN_AGENT_URL must be a wss:// (or ws://) address: %q", cfg.URL)
 	}
 	if !state.DialableURL(cfg.URL, cfg.AllowInsecure) {
-		return fmt.Errorf("COAMING_AGENT_URL %s is plain ws:// for a host that is not loopback, so the agent will not dial it: use wss://, or set COAMING_AGENT_ALLOW_INSECURE=true for development only", u.Host)
+		return fmt.Errorf("TIERPLAN_AGENT_URL %s is plain ws:// for a host that is not loopback, so the agent will not dial it: use wss://, or set TIERPLAN_AGENT_ALLOW_INSECURE=true for development only", u.Host)
 	}
 	if _, err := authn.Audience(cfg.URL); err != nil {
-		return fmt.Errorf("COAMING_AGENT_URL: %w", err)
+		return fmt.Errorf("TIERPLAN_AGENT_URL: %w", err)
 	}
 	if u.Scheme == "ws" {
 		if cfg.AllowInsecure {
-			log.Warn("the agent endpoint is plain ws:// and COAMING_AGENT_ALLOW_INSECURE is set (development only): the join token and every Docker answer travel unencrypted")
+			log.Warn("the agent endpoint is plain ws:// and TIERPLAN_AGENT_ALLOW_INSECURE is set (development only): the join token and every Docker answer travel unencrypted")
 		} else {
 			log.Warn("the agent endpoint is plain ws:// (loopback): the join token and every Docker answer travel unencrypted")
 		}
@@ -256,8 +256,8 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 	// one. Once it has pushed one, the stored list rules and the environment's
 	// address is just one more entry in it, kept for 30 days as an undo window in
 	// case the change is reverted. The exception is an operator who starts the agent
-	// with a COAMING_AGENT_URL that differs from the one it last started with: they
-	// mean it, most often to bring home an agent that was offline while Coaming's
+	// with a TIERPLAN_AGENT_URL that differs from the one it last started with: they
+	// mean it, most often to bring home an agent that was offline while TierPlan's
 	// agent address changed, so it is dialed first (G-02-4b).
 	r := &runner{cfg: cfg, env: env, log: log, urls: []state.URLEntry{{URL: cfg.URL}}}
 	if cfg.StateDir != "" {
@@ -272,31 +272,31 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			log.Warn("the agent could not read its stored server pins; it will trust only the install pin and the system roots", "error", err)
 			r.pins = nil
 		}
-		// env-url.json is only compared with COAMING_AGENT_URL, to see whether the
+		// env-url.json is only compared with TIERPLAN_AGENT_URL, to see whether the
 		// operator changed it. It is never dialed, so a plain address recorded there
 		// under other settings cannot make the agent dial anything.
 		last, known, err := state.LoadEnvURL(cfg.StateDir)
 		if err != nil {
-			log.Warn("the agent could not read the COAMING_AGENT_URL it last started with; it treats COAMING_AGENT_URL as unchanged", "error", err)
+			log.Warn("the agent could not read the TIERPLAN_AGENT_URL it last started with; it treats TIERPLAN_AGENT_URL as unchanged", "error", err)
 			known = false
 		}
 		stored, err := state.LoadURLs(cfg.StateDir)
 		if err != nil {
-			log.Warn("the agent could not read the addresses the server gave it; it will dial COAMING_AGENT_URL", "error", err)
+			log.Warn("the agent could not read the addresses the server gave it; it will dial TIERPLAN_AGENT_URL", "error", err)
 		} else {
 			// A stored plain ws:// address for another host was learned or written
 			// under other settings. Without the switch it is not dialed (T-02-31, D-18).
 			if kept := slices.DeleteFunc(slices.Clone(stored), func(e state.URLEntry) bool {
 				return !state.DialableURL(e.URL, cfg.AllowInsecure)
 			}); len(kept) != len(stored) {
-				log.Warn("the agent ignored stored addresses for plain ws:// on another host; COAMING_AGENT_ALLOW_INSECURE=true is needed to dial them",
+				log.Warn("the agent ignored stored addresses for plain ws:// on another host; TIERPLAN_AGENT_ALLOW_INSECURE=true is needed to dial them",
 					"count", len(stored)-len(kept))
 				stored = kept
 			}
 			urls, changed := state.StartURLs(stored, cfg.URL, last, known, env.now())
 			r.urls = urls
 			if changed {
-				log.Info("COAMING_AGENT_URL changed since the agent last started; it dials the new address first", "address", cfg.URL)
+				log.Info("TIERPLAN_AGENT_URL changed since the agent last started; it dials the new address first", "address", cfg.URL)
 				if err := state.SaveURLs(cfg.StateDir, urls); err != nil {
 					log.Warn("the agent could not save its new address list", "error", err)
 				}
@@ -304,7 +304,7 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		}
 		if !known || last != cfg.URL {
 			if err := state.SaveEnvURL(cfg.StateDir, cfg.URL); err != nil {
-				log.Warn("the agent could not record the COAMING_AGENT_URL it started with; a later change of it may not be noticed", "error", err)
+				log.Warn("the agent could not record the TIERPLAN_AGENT_URL it started with; a later change of it may not be noticed", "error", err)
 			}
 		}
 	}
@@ -355,7 +355,7 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		} else {
 			failures++
 			wait = backoff(failures, cfg.BackoffMin, cfg.BackoffMax, env.rnd)
-			log.Warn("the connection to Coaming ended; will reconnect", "error", err, "retry_in", wait.Round(time.Millisecond).String())
+			log.Warn("the connection to TierPlan ended; will reconnect", "error", err, "retry_in", wait.Round(time.Millisecond).String())
 		}
 		if err := env.sleep(ctx, wait); err != nil {
 			return nil
@@ -431,7 +431,7 @@ func (r *runner) rejoin(code string) time.Duration {
 	r.mu.Unlock()
 	r.rejoinedAt = now
 	if code == wire.ReasonUnknownAgent {
-		r.log.Info("the agent's identity is not known to this Coaming; it dropped it and will enrol again with its join token")
+		r.log.Info("the agent's identity is not known to this TierPlan; it dropped it and will enrol again with its join token")
 	} else {
 		r.log.Info("the agent's identity was revoked; it dropped it and will enrol again with its join token")
 	}
@@ -457,23 +457,23 @@ func (r *runner) hint(code string) string {
 	switch code {
 	case wire.ReasonRevoked:
 		if r.cfg.JoinToken == "" {
-			return "this agent was revoked in Coaming, or its node left the swarm, and it has no join token to enrol again with: start it with COAMING_AGENT_JOIN_TOKEN_FILE or COAMING_AGENT_JOIN_TOKEN set"
+			return "this agent was revoked in TierPlan, or its node left the swarm, and it has no join token to enrol again with: start it with TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN set"
 		}
-		return "this agent was revoked in Coaming, or its node left the swarm; it drops the revoked identity and enrols again as a new agent, unless an administrator blocked this host"
+		return "this agent was revoked in TierPlan, or its node left the swarm; it drops the revoked identity and enrols again as a new agent, unless an administrator blocked this host"
 	case wire.ReasonUnknownAgent:
-		return "this agent was enrolled after the backup this Coaming was restored from; reinstall it with the environment's install command"
+		return "this agent was enrolled after the backup this TierPlan was restored from; reinstall it with the environment's install command"
 	case wire.ReasonBlocked:
-		return "this host is on Coaming's block list; an administrator can unblock it in the environment's settings"
+		return "this host is on TierPlan's block list; an administrator can unblock it in the environment's settings"
 	case wire.ReasonCertExpired:
-		return "the agent's certificate expired; start the agent with a join token (COAMING_AGENT_JOIN_TOKEN_FILE or COAMING_AGENT_JOIN_TOKEN) to enrol again"
+		return "the agent's certificate expired; start the agent with a join token (TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN) to enrol again"
 	case wire.ReasonAuthRejected:
-		return "Coaming did not accept the agent's credentials; check the join token and COAMING_AGENT_URL. If Coaming's agent address changed while this agent was offline, start it again with the new address in COAMING_AGENT_URL on the same volume, and it keeps its identity"
+		return "TierPlan did not accept the agent's credentials; check the join token and TIERPLAN_AGENT_URL. If TierPlan's agent address changed while this agent was offline, start it again with the new address in TIERPLAN_AGENT_URL on the same volume, and it keeps its identity"
 	case wire.ReasonVersionIncompatible:
-		return "upgrade the agent to the version Coaming runs"
+		return "upgrade the agent to the version TierPlan runs"
 	case wire.ReasonClockSkew:
 		return "set this host's clock, for example with NTP"
 	case wire.ReasonClusterChanged:
-		return "the swarm behind this environment was re-initialised; an administrator adopts the new cluster in the environment's settings in Coaming, and the agent connects on its next try"
+		return "the swarm behind this environment was re-initialised; an administrator adopts the new cluster in the environment's settings in TierPlan, and the agent connects on its next try"
 	case wire.ReasonEngineUnreachable:
 		return "the agent could not read Docker's description of this host; check that /var/run/docker.sock is mounted into the agent and that Docker is running"
 	}
@@ -639,7 +639,7 @@ func (r *runner) hooks(verified bool) controlHooks {
 
 // pushable reports whether the agent will take an address from the server: one it
 // could dial, over wss. A verified session is TLS, so a plain ws:// address could
-// only be a downgrade. COAMING_AGENT_ALLOW_INSECURE does not change this: it lets
+// only be a downgrade. TIERPLAN_AGENT_ALLOW_INSECURE does not change this: it lets
 // the operator point the agent at a plain address, never the server.
 func pushable(raw string) bool {
 	if !state.ValidURL(raw) {
@@ -749,7 +749,7 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target
 		r.mu.Lock()
 		r.cur, r.have = cur, true
 		r.mu.Unlock()
-		r.log.Info("enrolled with Coaming", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
+		r.log.Info("enrolled with TierPlan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
 		if r.cfg.StateDir != "" {
 			if err := state.Save(r.cfg.StateDir, cur); err != nil {
 				// Staying connected beats stopping: the identity is in memory, and
@@ -764,7 +764,7 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target
 		if w.AgentID != mine {
 			return fmt.Errorf("the server welcomed agent %q but this agent is %q", w.AgentID, mine)
 		}
-		r.log.Info("connected to Coaming", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
+		r.log.Info("connected to TierPlan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
 	}
 	if verified {
 		r.mergePins(w.Pins)
@@ -957,11 +957,11 @@ func serve(ctx context.Context, c *websocket.Conn, socketPath, routeFile string,
 			select {
 			case cerr := <-controlErr:
 				if cerr != nil {
-					return fmt.Errorf("the control stream to Coaming ended: %w", cerr)
+					return fmt.Errorf("the control stream to TierPlan ended: %w", cerr)
 				}
 			default:
 			}
-			return fmt.Errorf("the connection to Coaming ended: %w", err)
+			return fmt.Errorf("the connection to TierPlan ended: %w", err)
 		}
 		go serveStream(st, handler, routeFile, log)
 	}

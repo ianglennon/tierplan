@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup
 
@@ -18,9 +18,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 const (
@@ -36,15 +36,15 @@ const (
 	sqliteMagic = "SQLite format 3\x00"
 )
 
-// ErrNewerBackup is returned for a backup made by a Coaming whose database
+// ErrNewerBackup is returned for a backup made by a TierPlan whose database
 // schema is newer than this binary's. There are no down-migrations, so it is
 // refused like a downgrade, naming the version that made it (D-30).
-var ErrNewerBackup = errors.New("backup was made by a newer Coaming")
+var ErrNewerBackup = errors.New("backup was made by a newer TierPlan")
 
 // NewerBackupError is the error behind ErrNewerBackup. It carries the version
 // that made the backup so a caller can name it without parsing the message.
 type NewerBackupError struct {
-	// AppVersion is the Coaming release that made the backup.
+	// AppVersion is the TierPlan release that made the backup.
 	AppVersion string
 	// Schema is the backup's database schema version and BinarySchema this
 	// binary's.
@@ -52,8 +52,8 @@ type NewerBackupError struct {
 }
 
 func (e *NewerBackupError) Error() string {
-	return fmt.Sprintf("%s: it was made by Coaming %s (schema version %d) and this Coaming knows schema version %d; "+
-		"restore it with Coaming %s or newer", ErrNewerBackup, e.AppVersion, e.Schema, e.BinarySchema, e.AppVersion)
+	return fmt.Sprintf("%s: it was made by TierPlan %s (schema version %d) and this TierPlan knows schema version %d; "+
+		"restore it with TierPlan %s or newer", ErrNewerBackup, e.AppVersion, e.Schema, e.BinarySchema, e.AppVersion)
 }
 
 // Is makes errors.Is(err, ErrNewerBackup) true.
@@ -131,7 +131,7 @@ func Inspect(src io.Reader, passphrase []byte, binarySchema int64) (Inspection, 
 // and swapped in. Its directory is removed by Swap, by Discard and by any
 // failure of Stage or Prepare.
 type Staged struct {
-	// Dir holds the staged coaming.db.
+	// Dir holds the staged tierplan.db.
 	Dir        string
 	Inspection Inspection
 
@@ -358,7 +358,7 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 	return nil
 }
 
-// Swap replaces <dataDir>/coaming.db with the prepared staged database and
+// Swap replaces <dataDir>/tierplan.db with the prepared staged database and
 // removes the staging directory. The replacement is one rename of a file that
 // is complete and verified, so an interrupted restore leaves either the old
 // database or the new one, never a mix. It returns the path of the pre-restore

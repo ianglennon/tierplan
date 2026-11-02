@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
@@ -125,14 +125,14 @@ describe("RefPicker", () => {
 
   it("says a branch is followed", async () => {
     mount({ value: "main" });
-    expect(await screen.findByText("Coaming follows this branch.")).toBeTruthy();
+    expect(await screen.findByText("TierPlan follows this branch.")).toBeTruthy();
   });
 
   it("says a moved tag counts as a change", async () => {
     mount({ kind: "tag" });
     expect(
       await screen.findByText(
-        "Coaming follows this tag. If the tag is moved to another commit, that counts as a change.",
+        "TierPlan follows this tag. If the tag is moved to another commit, that counts as a change.",
       ),
     ).toBeTruthy();
   });

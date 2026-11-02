@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // The D-33 rollup (plan 02-11, ENV-06, ENV-08, D-33, D-40, D-41, D-45). Rollup is

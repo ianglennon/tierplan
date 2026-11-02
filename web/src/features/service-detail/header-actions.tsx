@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useIsMutating } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -42,7 +42,7 @@ export function itemOf(d: ServiceDetail): ServiceItem {
     updateState: d.updateStatus,
     image: d.image.ref,
     stack: d.stack,
-    coamingStackId: d.coamingStackId,
+    tierplanStackId: d.tierplanStackId,
     agent: d.agent,
     updatedAt: d.updatedAt,
     ports: [],

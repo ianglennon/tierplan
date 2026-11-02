@@ -206,7 +206,7 @@ func (q *Queries) GetGitRepo(ctx context.Context, id string) (GetGitRepoRow, err
 
 const insertGitCredential = `-- name: InsertGitCredential :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 INSERT INTO git_credentials (
     id, env_id, name, type, username, secret_sealed, secret_last4, public_key, fingerprint,

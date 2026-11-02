@@ -1,4 +1,4 @@
-# Hostile: include pulls a file of the Coaming server's own disk into the project.
+# Hostile: include pulls a file of the TierPlan server's own disk into the project.
 include:
   - /etc/hostname
 services:

@@ -1,7 +1,7 @@
 //go:build !devspa
 
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package web embeds the built single-page app. dist/ is produced by
 // `make web`; dist/.gitkeep is committed so a fresh clone still compiles

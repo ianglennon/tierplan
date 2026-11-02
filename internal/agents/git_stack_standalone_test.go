@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // The git stack tracer of plan 09-33 (GIT-04, GIT-06, GIT-07): a stack made from a folder of a git repository lives its
@@ -34,7 +34,7 @@ func (f *saFix) modeOf(t *testing.T, name string) string {
 // pulls and redeploys it, and then lets auto-deploy deploy the commit after that by itself (GIT-04, GIT-06, GIT-07).
 func TestGitStackStandaloneThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 	h := newGitHarness(t, f.srv.Do, f.env.ID)
 

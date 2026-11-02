@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -17,12 +17,12 @@ import (
 
 	"github.com/moby/moby/api/types/mount"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
-// Adopting a stack Coaming did not make (plan 08-13, STK-13, D-14): the route takes the fingerprint the page read,
+// Adopting a stack TierPlan did not make (plan 08-13, STK-13, D-14): the route takes the fingerprint the page read,
 // rebuilds the definition itself and stores the stack with revision 1, and sends nothing to an engine.
 
 // adoptPath is the path of the adopt route of a name, after /api/env/{envId}/.
@@ -138,15 +138,15 @@ func TestAdoptRefusesAStackThatChangedSinceTheCheck(t *testing.T) {
 	}
 }
 
-// TestAdoptRefusesCoamingsOwnStack: the stack Coaming runs in is refused with the reason the list shows (D-49).
-func TestAdoptRefusesCoamingsOwnStack(t *testing.T) {
+// TestAdoptRefusesTierPlansOwnStack: the stack TierPlan runs in is refused with the reason the list shows (D-49).
+func TestAdoptRefusesTierPlansOwnStack(t *testing.T) {
 	t.Parallel()
 	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
-	agent := foreignSwarmService("fleet", "agent", 1, 1, map[string]string{"coaming.agent": "true"})
+	agent := foreignSwarmService("fleet", "agent", 1, 1, map[string]string{"tierplan.agent": "true"})
 	reconfigureSwarm(t, f, e, agent, foreignSwarmService("my.stack", "web", 1, 1, nil))
 
-	for name, reason := range map[string]string{"fleet": "This stack runs Coaming's agent.", "my.stack": "can't adopt my.stack"} {
+	for name, reason := range map[string]string{"fleet": "This stack runs TierPlan's agent.", "my.stack": "can't adopt my.stack"} {
 		rec := admin.do(http.MethodPost, adoptPath(name), adoptBody("anything"))
 		if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_not_adoptable" || !strings.Contains(rec.Body.String(), reason) {
 			t.Errorf("adopt %s: %d %s, want 409 stack_not_adoptable saying %q", name, rec.Code, rec.Body, reason)
@@ -521,7 +521,7 @@ func TestAdoptCheckBodyCarriesObjectsAndFlags(t *testing.T) {
 	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	svc := foreignSecretService("legacy", "app", 2, 2, map[string]string{
-		"io.portainer.accesscontrol.teams": "ops", "coaming.stack.id": "made-before",
+		"io.portainer.accesscontrol.teams": "ops", "tierplan.stack.id": "made-before",
 	})
 	cs := svc.Spec.TaskTemplate.ContainerSpec
 	cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"})

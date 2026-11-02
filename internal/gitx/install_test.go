@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx_test
 
@@ -12,7 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 
-	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/gitx"
 )
 
 // noInstallEnv makes TestMain leave the transport alone, in the child process of the test below.

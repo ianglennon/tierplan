@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -85,7 +85,7 @@ import { z } from "@/lib/zod-config";
 
 // Build-time source URL (Vite define). The docs ship with the source, so a link to one is built
 // from the same URL the footer uses.
-declare const __COAMING_SOURCE_URL__: string;
+declare const __TIERPLAN_SOURCE_URL__: string;
 const SELF_HOSTED_DOCS_PATH = "/blob/main/docs/registries.md#self-hosted-registries";
 
 // The server's limit on a custom CA, and the line every certificate in a PEM bundle starts with.
@@ -1156,7 +1156,7 @@ function FormSheet({ credential, onClose }: { credential?: Credential; onClose: 
                     <AlertDescription className="flex flex-col gap-1">
                       <span>{t("registries.sheet.advanced.nodeNote")}</span>
                       <a
-                        href={`${__COAMING_SOURCE_URL__}${SELF_HOSTED_DOCS_PATH}`}
+                        href={`${__TIERPLAN_SOURCE_URL__}${SELF_HOSTED_DOCS_PATH}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="w-fit rounded-sm text-accent-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"

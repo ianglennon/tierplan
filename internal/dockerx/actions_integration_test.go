@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -13,9 +13,9 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // state reads what the engine says a container is doing, bypassing dockerx, so the
@@ -33,7 +33,7 @@ func state(t *testing.T, ctx context.Context, raw *client.Client, name string) c
 // it when the test ends.
 func idleContainer(t *testing.T, ctx context.Context, raw *client.Client, cfg *container.Config, hc *container.HostConfig) string {
 	t.Helper()
-	name := "cm-act-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "tp-act-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	cfg.Image = "busybox:1"
 	cfg.Cmd = []string{"sleep", "300"}
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: hc}); err != nil {
@@ -130,7 +130,7 @@ func TestActions(t *testing.T) {
 	})
 
 	t.Run("remove with volumes deletes the anonymous volume and keeps the named one", func(t *testing.T) {
-		named := "cm-act-named-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		named := "tp-act-named-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		if _, err := raw.VolumeCreate(ctx, client.VolumeCreateOptions{Name: named}); err != nil {
 			t.Fatalf("create the named volume: %v", err)
 		}

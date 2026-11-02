@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -197,7 +197,7 @@ describe("app shell", () => {
     renderAt("/");
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(
-      screen.getByText(/Coaming gives you one command that installs a small agent on it/),
+      screen.getByText(/TierPlan gives you one command that installs a small agent on it/),
     ).toBeTruthy();
     expect(document.title).toBe("Environments · Lab");
   });
@@ -260,11 +260,11 @@ describe("version footer (PLAT-05)", () => {
     expect(document.querySelector("main")?.parentElement?.contains(sourceLinks()[0] ?? null)).toBe(
       true,
     );
-    expect(window.localStorage.getItem("coaming-sidebar")).toBe("collapsed");
+    expect(window.localStorage.getItem("tierplan-sidebar")).toBe("collapsed");
   });
 
   it("starts collapsed when the browser remembers that", async () => {
-    window.localStorage.setItem("coaming-sidebar", "collapsed");
+    window.localStorage.setItem("tierplan-sidebar", "collapsed");
     renderAt("/");
     await screen.findByText("No environments yet");
     await waitFor(() => expect(sourceLinks()).toHaveLength(1));
@@ -306,11 +306,11 @@ describe("user menu", () => {
     expect(screen.getByRole("menuitem", { name: "Log out" })).toBeTruthy();
   });
 
-  it("remembers the theme in coaming-theme and applies it", async () => {
+  it("remembers the theme in tierplan-theme and applies it", async () => {
     renderAt("/");
     await openUserMenu();
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Dark" }));
-    expect(window.localStorage.getItem("coaming-theme")).toBe("dark");
+    expect(window.localStorage.getItem("tierplan-theme")).toBe("dark");
     expect(document.documentElement.classList.contains("dark")).toBe(true);
   });
 

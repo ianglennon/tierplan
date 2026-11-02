@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Keeps D-15 true: CI never retries a test, a check or a job. A run that went red
 # is a defect to fix, not noise to try again. The gate fails on every form of

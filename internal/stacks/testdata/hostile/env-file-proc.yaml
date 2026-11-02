@@ -1,4 +1,4 @@
-# Hostile: env_file reads the environment of the Coaming server process.
+# Hostile: env_file reads the environment of the TierPlan server process.
 services:
   web:
     image: nginx:1.27-alpine

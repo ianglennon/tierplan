@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package agents_test
 
@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // fakeUpdateHub is the part of the tunnel hub the updater uses: which agents of an
@@ -134,7 +134,7 @@ func newUpdRig(t *testing.T, version string) *updRig {
 // for the updater to find, and returns its ID.
 func (r *updRig) enrol(t *testing.T, host string) string {
 	t.Helper()
-	req := newProof(t, "coaming.example").request(r.token)
+	req := newProof(t, "tierplan.example").request(r.token)
 	req.Facts.Hostname = host
 	req.Facts.EngineID = "ENG:" + host
 	res, err := r.svc.Enrol(r.ctx, req)
@@ -213,7 +213,7 @@ func (r *updRig) awaitFailed(t *testing.T, id, want string, n int) {
 	}
 }
 
-const ownRepo = "ghcr.io/ianglennon/coaming-agent"
+const ownRepo = "ghcr.io/ianglennon/tierplan-agent"
 
 func TestUpdaterAReleaseServerUpdatesAnOlderConnectedStandaloneAgentOnceAndAuditsItAsTheUpdater(t *testing.T) {
 	r := newUpdRig(t, "v0.2.1")
@@ -298,7 +298,7 @@ func TestUpdaterNoUpdateWhenTheEnvironmentSwitchedAutoUpdateOffOrTheHostRefuses(
 	r2 := newUpdRig(t, "v0.2.1")
 	r2.connect(r2.standalone("a1", "0.2.0", false))
 	if got := r2.hub.sentTo(); len(got) != 0 {
-		t.Fatalf("the host set COAMING_AGENT_SELF_UPDATE=false: updates sent to %v", got)
+		t.Fatalf("the host set TIERPLAN_AGENT_SELF_UPDATE=false: updates sent to %v", got)
 	}
 }
 
@@ -636,7 +636,7 @@ func TestUpdaterStateOfAnAgentTheUpdaterNeverHeardOfIsIdle(t *testing.T) {
 	}
 }
 
-func TestUpdaterManualUpdateIsNeededOnlyWhenCoamingCannotDoItForTheAdmin(t *testing.T) {
+func TestUpdaterManualUpdateIsNeededOnlyWhenTierPlanCannotDoItForTheAdmin(t *testing.T) {
 	cases := []struct {
 		name                 string
 		server, agent        string

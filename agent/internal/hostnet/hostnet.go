@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package hostnet reads the routes of the agent's host from one file the host
 // owner bind-mounts read-only (/proc/1/net/route on the host, /host/route in
@@ -16,8 +16,8 @@ import (
 	"net/netip"
 	"os"
 
-	"github.com/ianglennon/coaming/proto/hostroute"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/hostroute"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // DefaultRouteFile is where the install command mounts the host's route file.
@@ -26,7 +26,7 @@ const DefaultRouteFile = "/host/route"
 // Probe says whether the route file at path can be read: wire.HostNetOK when its
 // first line is readable, wire.HostNetUnmounted otherwise.
 func Probe(path string) string {
-	f, err := os.Open(path) //nolint:gosec // the path is the host owner's setting (COAMING_AGENT_HOST_ROUTE_FILE), never the server's
+	f, err := os.Open(path) //nolint:gosec // the path is the host owner's setting (TIERPLAN_AGENT_HOST_ROUTE_FILE), never the server's
 	if err != nil {
 		return wire.HostNetUnmounted
 	}
@@ -47,7 +47,7 @@ func Probe(path string) string {
 // that exceeds the parser's limits "too_large"; both carry no routes.
 func Read(path string) wire.HostNetDoc {
 	doc := wire.HostNetDoc{V: 1, Routes: []wire.HostRoute{}}
-	f, err := os.Open(path) //nolint:gosec // the path is the host owner's setting (COAMING_AGENT_HOST_ROUTE_FILE), never the server's
+	f, err := os.Open(path) //nolint:gosec // the path is the host owner's setting (TIERPLAN_AGENT_HOST_ROUTE_FILE), never the server's
 	if err != nil {
 		doc.Error = wire.HostNetUnreadable
 		return doc

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -15,12 +15,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 const (
@@ -114,16 +114,16 @@ type ServiceUpdatePolicyBody struct {
 // secret has gone through the redact package before it is put here: without secrets.reveal
 // the environment values are withheld (D-39).
 type ServiceDetailBody struct {
-	ID             string `json:"id" doc:"The service ID"`
-	Name           string `json:"name" doc:"The service name"`
-	Mode           string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
-	Running        uint64 `json:"running" doc:"Tasks that are running now, from the last cluster read"`
-	Desired        uint64 `json:"desired" doc:"Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count"`
-	Stack          string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
-	CoamingStackID string `json:"coamingStackId" doc:"The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
-	Agent          bool   `json:"agent" doc:"True for a Coaming agent service"`
-	CreatedAt      string `json:"createdAt" format:"date-time" doc:"When the service was created"`
-	UpdatedAt      string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
+	ID              string `json:"id" doc:"The service ID"`
+	Name            string `json:"name" doc:"The service name"`
+	Mode            string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
+	Running         uint64 `json:"running" doc:"Tasks that are running now, from the last cluster read"`
+	Desired         uint64 `json:"desired" doc:"Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count"`
+	Stack           string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
+	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
+	Agent           bool   `json:"agent" doc:"True for a TierPlan agent service"`
+	CreatedAt       string `json:"createdAt" format:"date-time" doc:"When the service was created"`
+	UpdatedAt       string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
 	Image    ServiceImageBody     `json:"image" doc:"The image the spec names"`
 	Ports    []ServicePortBody    `json:"ports" doc:"The ports the service publishes, sorted by published port; empty when it publishes none"`
@@ -260,7 +260,7 @@ func getServiceSpec(ctx context.Context, d ServicesDeps, p *rbac.Principal, envI
 	previous, _ := doc["PreviousSpec"].(map[string]any)
 	return ServiceSpecBody{
 		Version: detail.Version, Name: detail.Name, Mode: detail.Mode, Stack: detail.Stack,
-		CoamingStackID: loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels), Agent: detail.Agent,
+		TierPlanStackID: loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels), Agent: detail.Agent,
 		Masked: masked, Spec: spec, PreviousSpec: previous,
 	}, nil
 }
@@ -306,7 +306,7 @@ func getService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, s
 
 	row, loop, muted, haveRow := serviceRow(ctx, d, envID, detail.ID)
 	body := serviceDetailBody(detail, shown, nets, row, haveRow, reveal)
-	body.CoamingStackID = loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels)
+	body.TierPlanStackID = loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels)
 	if loop != nil {
 		body.RestartLoop = restartLoopBody(*loop)
 	}

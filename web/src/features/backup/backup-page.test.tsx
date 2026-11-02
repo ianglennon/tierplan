@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -42,7 +42,7 @@ beforeEach(() => {
     new Response("backup-bytes", {
       headers: {
         "Content-Type": "application/octet-stream",
-        "Content-Disposition": 'attachment; filename="coaming-backup-20261007-1030.coaming"',
+        "Content-Disposition": 'attachment; filename="tierplan-backup-20261007-1030.tierplan"',
       },
     });
   vi.stubGlobal(
@@ -53,7 +53,7 @@ beforeEach(() => {
       if (req.method === "POST") entry.body = await req.clone().json();
       sent.push(entry);
       if (path === "/api/backup/info") {
-        return Response.json({ minPassphraseLength: minLength, fileExtension: ".coaming" });
+        return Response.json({ minPassphraseLength: minLength, fileExtension: ".tierplan" });
       }
       if (path === "/api/backup/export") return answer();
       return Response.json({}, { status: 404 });
@@ -104,7 +104,7 @@ describe("Download card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download backup" }));
 
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]?.name).toBe("coaming-backup-20261007-1030.coaming");
+    expect(saved[0]?.name).toBe("tierplan-backup-20261007-1030.tierplan");
     expect(exports()).toHaveLength(1);
     expect(exports()[0]?.body).toEqual({ passphrase: PASS });
     expect(exports()[0]?.csrf).toBe("csrf-1");
@@ -125,7 +125,7 @@ describe("Download card", () => {
 describe("Backup page", () => {
   it("is titled and shows the Download card", async () => {
     renderPage();
-    expect(screen.getByRole("heading", { name: "Back up and restore Coaming" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Back up and restore TierPlan" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Download a backup" })).toBeTruthy();
   });
 });
@@ -140,7 +140,7 @@ describe("Backup page layout", () => {
     renderPage();
     const intro = screen.getByText(/^A backup holds users, teams, access, settings/);
     expect(intro.textContent).toBe(
-      "A backup holds users, teams, access, settings, environments and the audit log, and the same for anything added in later releases. It doesn't hold the master key, sessions or pending links. Keep the backup passphrase safe: Coaming can't recover it.",
+      "A backup holds users, teams, access, settings, environments and the audit log, and the same for anything added in later releases. It doesn't hold the master key, sessions or pending links. Keep the backup passphrase safe: TierPlan can't recover it.",
     );
     const card = screen.getByRole("heading", { name: "Download a backup" });
     const note = screen.getByRole("button", { name: "Master key" });
@@ -157,14 +157,14 @@ describe("Backup page layout", () => {
     fireEvent.click(trigger);
     expect(
       await screen.findByText(
-        "Rotate the master key from the command line while Coaming is stopped:",
+        "Rotate the master key from the command line while TierPlan is stopped:",
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText("docker run --rm -v <volume>:/data ghcr.io/ianglennon/coaming key rotate"),
+      screen.getByText("docker run --rm -v <volume>:/data ghcr.io/ianglennon/tierplan key rotate"),
     ).toBeTruthy();
     expect(
-      screen.getByText("The old key is kept as coaming.key.old until you delete it."),
+      screen.getByText("The old key is kept as tierplan.key.old until you delete it."),
     ).toBeTruthy();
     expect(screen.queryByText(/docker exec/)).toBeNull();
   });
@@ -244,7 +244,7 @@ describe("Download card while the backup is made", () => {
 
     release(
       new Response("bytes", {
-        headers: { "Content-Disposition": 'attachment; filename="b.coaming"' },
+        headers: { "Content-Disposition": 'attachment; filename="b.tierplan"' },
       }),
     );
     await waitFor(() => expect(saved).toHaveLength(1));
@@ -305,7 +305,7 @@ describe("Download card while the backup is made", () => {
 
     answer = () =>
       new Response("bytes", {
-        headers: { "Content-Disposition": 'attachment; filename="b.coaming"' },
+        headers: { "Content-Disposition": 'attachment; filename="b.tierplan"' },
       });
     fireEvent.click(download());
     await waitFor(() => expect(saved).toHaveLength(1));

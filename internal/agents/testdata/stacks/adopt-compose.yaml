@@ -1,5 +1,5 @@
 # The Compose project of plan 08-28: what a person has running on a standalone host before they adopt it into
-# Coaming. The test starts it with the real `docker compose up -d`, never with Coaming, so the containers, the
+# TierPlan. The test starts it with the real `docker compose up -d`, never with TierPlan, so the containers, the
 # network and the volume carry exactly the labels and hashes Compose gives them. {{IMAGE}} is where the test
 # puts the image it pushed to the host's registry.
 #   db   keeps its data in the named volume `data` (the test writes a marker file there)

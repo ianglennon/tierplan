@@ -6,8 +6,8 @@
       "guide": "Pool guidance"
     },
     "title": "Pool guidance",
-    "caption": "Plan address pools without touching your hosts. Coaming explains the steps and gives you commands to copy. It never runs them.",
-    "note": "Coaming never runs swarm init or swarm leave, and never edits daemon.json. Run the commands yourself on the right host.",
+    "caption": "Plan address pools without touching your hosts. TierPlan explains the steps and gives you commands to copy. It never runs them.",
+    "note": "TierPlan never runs swarm init or swarm leave, and never edits daemon.json. Run the commands yourself on the right host.",
     "tabs": {
       "label": "Parts of the pool guidance",
       "freeSpace": "Free up space",
@@ -75,14 +75,14 @@
       "steps": {
         "backup": {
           "title": "Back up",
-          "body": "Back up Coaming's data and anything the stacks keep in volumes."
+          "body": "Back up TierPlan's data and anything the stacks keep in volumes."
         },
         "remove": {
           "title": "Remove the stacks",
-          "body": "Remove each stack from Coaming's Stacks page, or run the command below on a manager.",
-          "bodyPlain": "Remove each stack from Coaming's Stacks page.",
-          "skipped_one": "{{count}} stack has a name that can't go in a command. Remove it from Coaming's Stacks page.",
-          "skipped_other": "{{count}} stacks have names that can't go in a command. Remove them from Coaming's Stacks page."
+          "body": "Remove each stack from TierPlan's Stacks page, or run the command below on a manager.",
+          "bodyPlain": "Remove each stack from TierPlan's Stacks page.",
+          "skipped_one": "{{count}} stack has a name that can't go in a command. Remove it from TierPlan's Stacks page.",
+          "skipped_other": "{{count}} stacks have names that can't go in a command. Remove them from TierPlan's Stacks page."
         },
         "leave": {
           "title": "Leave the swarm",
@@ -98,13 +98,13 @@
           "body": "Get the join token on the manager, then run the join command on each node."
         },
         "adopt": {
-          "title": "Adopt the new swarm in Coaming",
-          "body": "Coaming sees a new cluster. Open this environment's settings and choose Adopt new cluster.",
+          "title": "Adopt the new swarm in TierPlan",
+          "body": "TierPlan sees a new cluster. Open this environment's settings and choose Adopt new cluster.",
           "link": "Open settings"
         },
         "redeploy": {
           "title": "Redeploy",
-          "body": "Deploy the stacks again from Coaming. Turn on small stack subnets first if you want them."
+          "body": "Deploy the stacks again from TierPlan. Turn on small stack subnets first if you want them."
         }
       }
     },
@@ -114,7 +114,7 @@
       "incomplete": "Fill in the base and size of every pool to see the snippet.",
       "snippetCaption": "Merge this into /etc/docker/daemon.json",
       "restart": "Restart the Docker daemon to apply it: sudo systemctl restart docker. Existing networks keep their subnets. Containers stop during the restart unless live-restore is on.",
-      "followUp": "Enter the same pools in this environment's settings so Coaming measures against them.",
+      "followUp": "Enter the same pools in this environment's settings so TierPlan measures against them.",
       "openSettings": "Open address pool settings"
     },
     "header": {

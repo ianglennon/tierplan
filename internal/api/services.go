@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -17,14 +17,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 const (
@@ -96,17 +96,17 @@ type ServicesDeps struct {
 
 // ServiceItem is one swarm service as the list shows it.
 type ServiceItem struct {
-	ID             string `json:"id" doc:"The service ID"`
-	Name           string `json:"name" doc:"The service name"`
-	Mode           string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
-	Running        uint64 `json:"running" doc:"Tasks that are running now"`
-	Desired        uint64 `json:"desired" doc:"Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0"`
-	UpdateState    string `json:"updateState" doc:"The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none"`
-	Image          string `json:"image" doc:"The image the service's spec names, as written; empty when it has none"`
-	Stack          string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
-	CoamingStackID string `json:"coamingStackId" doc:"The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
-	Agent          bool   `json:"agent" doc:"True for a Coaming agent service"`
-	UpdatedAt      string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
+	ID              string `json:"id" doc:"The service ID"`
+	Name            string `json:"name" doc:"The service name"`
+	Mode            string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
+	Running         uint64 `json:"running" doc:"Tasks that are running now"`
+	Desired         uint64 `json:"desired" doc:"Tasks the swarm wants running. For a global service this is the count of nodes it runs on; for a job, 0"`
+	UpdateState     string `json:"updateState" doc:"The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none"`
+	Image           string `json:"image" doc:"The image the service's spec names, as written; empty when it has none"`
+	Stack           string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
+	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
+	Agent           bool   `json:"agent" doc:"True for a TierPlan agent service"`
+	UpdatedAt       string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
 	Ports           []string `json:"ports" doc:"The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none"`
 	UpdateMessage   string   `json:"updateMessage" doc:"The swarm's message about the last update; empty when it has none"`
@@ -204,7 +204,7 @@ type ServiceScaleResult struct {
 	ServiceID string `json:"serviceId" doc:"The service ID or name the request named"`
 	Name      string `json:"name" doc:"The service name when the manager could be asked; otherwise what the request named"`
 	Result    string `json:"result" enum:"done,failed,skipped" doc:"done: the service has the replica count asked for (changed says whether an update was sent). failed: it could not be scaled; code says why. skipped: it has no replica count to set (not_scalable)"`
-	Code      string `json:"code,omitempty" enum:"not_scalable,service_changed,service_not_found,host_read_only,agent_policy_denied,agent_host_policy,no_manager_connected,no_quorum,registry_unresolved,scale_failed" doc:"Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message"`
+	Code      string `json:"code,omitempty" enum:"not_scalable,service_changed,service_not_found,host_read_only,agent_policy_denied,agent_host_policy,no_manager_connected,no_quorum,registry_unresolved,scale_failed" doc:"Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message"`
 	Detail    string `json:"detail,omitempty" doc:"The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence"`
 	Previous  *int64 `json:"previous,omitempty" doc:"The replica count the service had; absent when it was not read"`
 	Replicas  int64  `json:"replicas" doc:"The replica count that was asked for"`
@@ -453,7 +453,7 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 	for _, row := range shown {
 		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
-			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, CoamingStackID: known.confirmedFor(row.Stack, row.Labels),
+			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, TierPlanStackID: known.confirmedFor(row.Stack, row.Labels),
 			Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
 			Ports: servicePortStrings(row.Ports), UpdateMessage: row.UpdateMessage, HasPreviousSpec: row.HasPreviousSpec,
 			CreatedAt: rfc3339(row.CreatedAt),
@@ -627,9 +627,9 @@ func registryAuthFor(ctx context.Context, d ServicesDeps, envID, image string) (
 // refusal the same way. It returns "" for an error that is none of these: the caller then
 // has a code of its own, or a generic failure.
 //
-//   - host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the manager's agent.
+//   - host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent.
 //   - agent_host_policy: the agent refused a spec that gives tasks host access, because its
-//     owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36).
+//     owner did not set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36).
 //   - agent_policy_denied: the agent refused the call by its own policy.
 //   - no_manager_connected: no manager is connected, or the one reached is not a manager.
 //   - service_changed, service_not_found: the service moved or went away under the write.
@@ -655,8 +655,8 @@ func swarmWriteCode(err error) string {
 
 // swarmWriteDetail is the sentence of a code swarmWriteCode returned.
 var swarmWriteDetail = map[string]string{
-	codeHostReadOnly:       "This host is read-only: its owner set COAMING_AGENT_READ_ONLY on the agent, so Coaming cannot change anything on it.",
-	codeAgentHostPolicy:    "This swarm's manager agents don't let Coaming change services with host access. Set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
+	codeHostReadOnly:       "This host is read-only: its owner set TIERPLAN_AGENT_READ_ONLY on the agent, so TierPlan cannot change anything on it.",
+	codeAgentHostPolicy:    "This swarm's manager agents don't let TierPlan change services with host access. Set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
 	codeAgentPolicyDeny:    "The manager's agent refused the request.",
 	codeNoManagerConnected: "No manager of the swarm is connected.",
 	codeServiceChanged:     "This service was changed by someone else after it was read. Nothing was changed; try again.",

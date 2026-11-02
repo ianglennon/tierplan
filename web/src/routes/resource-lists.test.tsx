@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -67,10 +67,10 @@ const CONTAINERS = {
   items: [
     {
       id: "abc123def456aaaa",
-      name: "coaming",
+      name: "tierplan",
       state: "running",
       status: "Up 3 hours",
-      image: "ghcr.io/ianglennon/coaming:latest",
+      image: "ghcr.io/ianglennon/tierplan:latest",
       created: ago(3 * 3600_000),
       ports: ["0.0.0.0:7480->7480/tcp"],
       isSelf: true,
@@ -290,37 +290,39 @@ describe("containers list", () => {
     expect(headers).toEqual(["", "Name", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
-    const first = cellsOf(rows[0] as HTMLElement).slice(1);
-    expect(first[0]).toContain("coaming");
+    // The rows sort by name: db, old-job, then tierplan (TierPlan's own container).
+    const first = cellsOf(rows[2] as HTMLElement).slice(1);
+    expect(first[0]).toContain("tierplan");
     expect(first[1]).toBe("Running");
-    expect(first[2]).toBe("ghcr.io/ianglennon/coaming:latest");
+    expect(first[2]).toBe("ghcr.io/ianglennon/tierplan:latest");
     expect(first[3]).toBe("0.0.0.0:7480->7480/tcp");
     expect(first[4]).toBe("3 h ago");
     const names = rows.map((r) => cellsOf(r as HTMLElement)[1]);
-    expect(names[0]).toContain("coaming");
-    expect(names[1]).toContain("db");
-    expect(names[2]).toContain("old-job");
+    expect(names[0]).toContain("db");
+    expect(names[1]).toContain("old-job");
+    expect(names[2]).toContain("tierplan");
     expect(screen.getByText("3 containers")).toBeTruthy();
   });
 
-  it("badges Coaming's own container row and no other (D-27)", async () => {
+  it("badges TierPlan's own container row and no other (D-27)", async () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement).slice(1)[0]).toContain("Coaming (this instance)");
-    expect(cellsOf(rows[1] as HTMLElement).slice(1)[0]).not.toContain("Coaming (this instance)");
+    expect(cellsOf(rows[2] as HTMLElement).slice(1)[0]).toContain("TierPlan (this instance)");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[0]).not.toContain("TierPlan (this instance)");
+    expect(cellsOf(rows[1] as HTMLElement).slice(1)[0]).not.toContain("TierPlan (this instance)");
   });
 
   it("pairs every state dot with its text and renders a dash for a missing created time and no ports", async () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[1] as HTMLElement).slice(1)[1]).toBe("Restarting");
-    const last = cellsOf(rows[2] as HTMLElement).slice(1);
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[1]).toBe("Restarting");
+    const last = cellsOf(rows[1] as HTMLElement).slice(1);
     expect(last[1]).toBe("Exited");
     expect(last[4]).toBe("—");
     expect(last[3]).toBe("—");
-    expect(cellsOf(rows[1] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
   });
 
   it("has a checkbox for each row and one for all, a link for each name, and its only other buttons are the closed row action menus (D-56, plan 04-08, 04-10)", async () => {
@@ -406,7 +408,7 @@ describe("containers list", () => {
     await waitFor(() => expect(router.state.location.search).toEqual({ group: "none", q: "old" }));
     await waitFor(() => expect(sentUrls).toContain("/api/env/e1/containers?q=old"));
     expect(window.history.length).toBe(length);
-    await waitFor(() => expect(screen.queryByText("coaming")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("tierplan")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
     await waitFor(() => expect(router.state.location.search).toEqual({ group: "none" }));
   });
@@ -905,7 +907,7 @@ describe("swarm lists", () => {
       shortId: "a9e1c0de",
       node,
       nodeId: node,
-      repoTags: ["ghcr.io/ianglennon/coaming-agent:0.1.0"],
+      repoTags: ["ghcr.io/ianglennon/tierplan-agent:0.1.0"],
       size: 1024,
       created: ago(60_000),
       usedByContainers: 0,
@@ -925,7 +927,7 @@ describe("swarm lists", () => {
     const spy = sameKeyWarnings();
     try {
       renderAt("/env/e1/images?view=node");
-      await screen.findAllByText("ghcr.io/ianglennon/coaming-agent:0.1.0");
+      await screen.findAllByText("ghcr.io/ianglennon/tierplan-agent:0.1.0");
       let rows = screen.getAllByRole("row").slice(1);
       expect(rows.map((r) => cellsOf(r as HTMLElement)[3])).toEqual(["n1", "n2"]);
 

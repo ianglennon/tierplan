@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration || swarm
 
 package agents_test
@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // Versions of the two agent images the self-update tests build with
-// `make agent-image AGENT_VERSION=<v> AGENT_TAG=coaming-agent:<v>`.
+// `make agent-image AGENT_VERSION=<v> AGENT_TAG=tierplan-agent:<v>`.
 const (
 	oldRelease = "v0.2.0"
 	newRelease = "v0.2.1"
@@ -25,7 +25,7 @@ const (
 func loadReleases(t *testing.T, nodes ...*dockertest.Node) {
 	t.Helper()
 	for _, v := range []string{oldRelease, newRelease} {
-		dockertest.LoadAgentImageAs(t, "coaming-agent:"+v, agents.AgentImage(v), nodes...)
+		dockertest.LoadAgentImageAs(t, "tierplan-agent:"+v, agents.AgentImage(v), nodes...)
 	}
 }
 

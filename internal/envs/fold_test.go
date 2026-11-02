@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Folding the local host into the swarm environment it manages (ENV-02, D-48, T-02-96,
@@ -23,7 +23,7 @@ import (
 
 const foldCluster = "cluster-1"
 
-// foldRig is a Coaming whose own host (local-1, node-local) manages the same swarm as
+// foldRig is a TierPlan whose own host (local-1, node-local) manages the same swarm as
 // the agent environment it is enrolled in (manager mgr-1 on another node).
 type foldRig struct {
 	*tunRig

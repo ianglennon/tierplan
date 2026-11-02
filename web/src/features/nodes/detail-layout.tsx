@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
@@ -122,10 +122,10 @@ function Header({ data }: { data: NodeDetail }) {
             {t("nodes.badge.leader")}
           </Badge>
         ) : null}
-        {data.runsCoaming ? (
+        {data.runsTierPlan ? (
           <Badge variant="outline" className="shrink-0">
             <Lock aria-hidden="true" />
-            {t("nodes.badge.runsCoaming")}
+            {t("nodes.badge.runsTierPlan")}
           </Badge>
         ) : null}
       </div>

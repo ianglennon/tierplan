@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -12,10 +12,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // StackDeployer starts the deploy of a stack's draft for a principal that is not on a request: the git sync
@@ -89,7 +89,7 @@ func (s *StackDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envI
 }
 
 // RevertedDrift says, as the lines an automatic deploy records, what deploying the draft of a stack on behalf of p would
-// put back that was changed outside Coaming (D-23): the "Reverts drift" part of the review that the Review page shows, read
+// put back that was changed outside TierPlan (D-23): the "Reverts drift" part of the review that the Review page shows, read
 // the same way (the engine as it runs now against the revision that is deployed and the draft), with the values of
 // settings that hold secrets withheld as for a caller who may not reveal them, since what is recorded is read by others
 // than the owner. A stack with no good revision has nothing to put back. It saves and starts nothing; an error is a
@@ -170,10 +170,10 @@ func (s *StackDeployer) environment(ctx context.Context, envID, stackID string) 
 	return &e, nil
 }
 
-// internal is a failure of Coaming itself: it is logged with the stack only and may pass on its own.
+// internal is a failure of TierPlan itself: it is logged with the stack only and may pass on its own.
 func (s *StackDeployer) internal(what, stackID string, err error) error {
 	s.d.Log.Error("an automated stack deploy failed", "step", what, "stack", stackID, "error", err)
-	return &DeployRefusal{Code: refusalInternal, Detail: "Coaming could not start the deploy.", Retry: true}
+	return &DeployRefusal{Code: refusalInternal, Detail: "TierPlan could not start the deploy.", Retry: true}
 }
 
 // refusal turns the error of deployDraft into the refusal an automated caller reads. The code comes from what
@@ -210,9 +210,9 @@ func (s *StackDeployer) refusal(stackID string, err error) error {
 			return &DeployRefusal{Code: em.Type, Detail: em.Detail}
 		}
 	}
-	// Anything else is a failure of Coaming or of the environment, which may pass: only the stack is logged.
+	// Anything else is a failure of TierPlan or of the environment, which may pass: only the stack is logged.
 	s.d.Log.Error("an automated stack deploy failed", "stack", stackID, "error", err)
-	return &DeployRefusal{Code: refusalInternal, Detail: "Coaming could not start the deploy.", Retry: true}
+	return &DeployRefusal{Code: refusalInternal, Detail: "TierPlan could not start the deploy.", Retry: true}
 }
 
 // concurrentAutomationDetail is what an automatic deploy says when the concurrent gate stops it: the gate is a backstop

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -152,7 +152,7 @@ describe("AddressPoolsCard", () => {
     expect(screen.getByRole("heading", { name: "Address pools" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Optional. Coaming reads the address pools the daemon reports, or Docker's defaults when daemon.json sets none. Enter pools here only if Coaming should measure against different ones.",
+        "Optional. TierPlan reads the address pools the daemon reports, or Docker's defaults when daemon.json sets none. Enter pools here only if TierPlan should measure against different ones.",
       ),
     ).toBeTruthy();
     // The description leads to the standalone part of the pool guidance.
@@ -162,7 +162,7 @@ describe("AddressPoolsCard", () => {
     expect(screen.getByText("Using the daemon's pools")).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming reads the address pools the daemon reports, or Docker's defaults when it sets none. Add pools here only to measure against different ones.",
+        "TierPlan reads the address pools the daemon reports, or Docker's defaults when it sets none. Add pools here only to measure against different ones.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("Using Docker's default pools")).toBeNull();

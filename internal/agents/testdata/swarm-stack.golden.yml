@@ -1,8 +1,8 @@
-# Create the secret first:  printf %s 'cmjt_E_S' | docker secret create coaming-agent-token-g1 -
-# Then deploy this file:  docker stack deploy -c coaming-agent.yml coaming
+# Create the secret first:  printf %s 'tpjt_E_S' | docker secret create tierplan-agent-token-g1 -
+# Then deploy this file:  docker stack deploy -c tierplan-agent.yml tierplan
 services:
-  coaming-agent:
-    image: ghcr.io/ianglennon/coaming-agent:0.2.0
+  tierplan-agent:
+    image: ghcr.io/ianglennon/tierplan-agent:0.2.0
     read_only: true
     cap_drop:
       - ALL
@@ -10,21 +10,21 @@ services:
       - SETUID
       - SETGID
     labels:
-      coaming.agent: "true"
+      tierplan.agent: "true"
     environment:
-      COAMING_AGENT_URL: "wss://example.com/coaming/agent/connect"
-      COAMING_AGENT_PIN: "sha256/P"
-      COAMING_AGENT_JOIN_TOKEN_FILE: /run/secrets/coaming-agent-token
+      TIERPLAN_AGENT_URL: "wss://example.com/tierplan/agent/connect"
+      TIERPLAN_AGENT_PIN: "sha256/P"
+      TIERPLAN_AGENT_JOIN_TOKEN_FILE: /run/secrets/tierplan-agent-token
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - coaming-agent:/var/lib/coaming-agent
+      - tierplan-agent:/var/lib/tierplan-agent
       - type: bind
         source: /proc/1/net/route
         target: /host/route
         read_only: true
     secrets:
-      - source: coaming-agent-token-g1
-        target: coaming-agent-token
+      - source: tierplan-agent-token-g1
+        target: tierplan-agent-token
         mode: 0400
     deploy:
       mode: global
@@ -35,10 +35,10 @@ services:
         parallelism: 1
         delay: 10s
       labels:
-        coaming.agent: "true"
+        tierplan.agent: "true"
 volumes:
-  coaming-agent:
-    name: coaming-agent
+  tierplan-agent:
+    name: tierplan-agent
 secrets:
-  coaming-agent-token-g1:
+  tierplan-agent-token-g1:
     external: true

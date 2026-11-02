@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { type QueryClient, queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -127,7 +127,7 @@ export interface DisconnectTarget {
   networkId: string;
   containerId: string;
   nodeId: string;
-  // The container's name, typed, which the server asks for on Coaming's own server
+  // The container's name, typed, which the server asks for on TierPlan's own server
   // container and on an agent's (422 confirmation_required).
   confirm?: string;
 }

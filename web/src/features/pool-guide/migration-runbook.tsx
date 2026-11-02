@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -54,13 +54,13 @@ interface MigrationRunbookProps {
   envId: string;
   inputs: SwarmInputs;
   onChange: (patch: Partial<SwarmInputs>) => void;
-  // True when the environment is a swarm, whose Coaming stacks can be named in the remove step.
+  // True when the environment is a swarm, whose TierPlan stacks can be named in the remove step.
   swarm: boolean;
 }
 
 // MigrationRunbook is the Rebuild a swarm tab (D-23 part 2): the downtime said plainly and from the
 // first moment, the seven steps in order, and the pool fields it shares with New swarm. The stack
-// names come from the stacks Coaming already lists; a name that is not one plain word gets no
+// names come from the stacks TierPlan already lists; a name that is not one plain word gets no
 // command, only the sentence that sends the person to the Stacks page.
 export function MigrationRunbook({ envId, inputs, onChange, swarm }: MigrationRunbookProps) {
   const t = useT();

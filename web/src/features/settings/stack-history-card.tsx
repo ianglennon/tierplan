@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
@@ -223,7 +223,7 @@ function StackHistoryForm({ settings }: { settings: StackHistorySettings }) {
 }
 
 // StackHistoryCard is the "Stack history" card of Settings > General: how many revisions of each stack
-// Coaming keeps (D-01). Reading needs settings.read and changing settings.write; the server checks both
+// TierPlan keeps (D-01). Reading needs settings.read and changing settings.write; the server checks both
 // again. Raising the limit saves at once; lowering it asks the server how many revisions would be
 // deleted and, when any would, asks first, because they cannot be recovered.
 export function StackHistoryCard() {

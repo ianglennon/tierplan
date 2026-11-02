@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -26,10 +26,10 @@ const ENV = "e1";
 const DEPLOYED = "0123456789abcdef0123456789abcdef01234567";
 // Values that must be found only inside the show-once panel.
 const SECRET = "s3cr3t-value-9f8e7d6c5b4a";
-const TOKEN_URL = "https://coaming.example/hooks/git/tok-0123456789abcdefghij";
+const TOKEN_URL = "https://tierplan.example/hooks/git/tok-0123456789abcdefghij";
 const ROTATED_SECRET = "n3w-secret-value-1a2b3c4d5e6f";
-const ROTATED_URL = "https://coaming.example/hooks/git/tok-zyxwvutsrqponmlkjihg";
-const MASKED = "https://coaming.example/hooks/git/••••";
+const ROTATED_URL = "https://tierplan.example/hooks/git/tok-zyxwvutsrqponmlkjihg";
+const MASKED = "https://tierplan.example/hooks/git/••••";
 
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock("@/lib/toast", () => ({
@@ -229,11 +229,11 @@ describe("WebhookCard set up", () => {
     mount();
     const c = await card();
     expect(
-      within(c).getByText("Lets your git host tell Coaming the moment something is pushed."),
+      within(c).getByText("Lets your git host tell TierPlan the moment something is pushed."),
     ).toBeTruthy();
     expect(within(c).getByText("No webhook yet.")).toBeTruthy();
     expect(within(c).getByRole("button", { name: "Set up webhook" })).toBeTruthy();
-    expect(within(c).queryByText(/A webhook only tells Coaming/)).toBeNull();
+    expect(within(c).queryByText(/A webhook only tells TierPlan/)).toBeNull();
   });
 
   it("offers the four git hosts, and the generic one a place for the secret", async () => {
@@ -241,7 +241,7 @@ describe("WebhookCard set up", () => {
     const dialog = await openSetUp(await card());
     expect(
       within(dialog).getByText(
-        "Pick your git host. Coaming creates a secret address for this stack.",
+        "Pick your git host. TierPlan creates a secret address for this stack.",
       ),
     ).toBeTruthy();
     const hosts = within(dialog).getByRole("radiogroup", { name: "Git host" });
@@ -276,7 +276,7 @@ describe("WebhookCard set up", () => {
     const panel = await within(c).findByRole("status", { name: "Copy the secret now" });
     expect(creates).toEqual([{ flavour: "github" }]);
     expect(
-      within(c).getByText("Coaming can't show it again. If you lose it, rotate the secret."),
+      within(c).getByText("TierPlan can't show it again. If you lose it, rotate the secret."),
     ).toBeTruthy();
 
     const address = within(panel).getByLabelText("Webhook address") as HTMLInputElement;
@@ -430,7 +430,7 @@ describe("WebhookCard configured", () => {
     expect(within(c).queryByText("No webhook yet.")).toBeNull();
     expect(
       within(c).getByText(
-        "A webhook only tells Coaming to check the repository. Coaming ignores what the request says and fetches main itself.",
+        "A webhook only tells TierPlan to check the repository. TierPlan ignores what the request says and fetches main itself.",
       ),
     ).toBeTruthy();
   });
@@ -457,7 +457,7 @@ describe("WebhookCard configured", () => {
   });
 
   it("lets a long address wrap and scroll inside its input group", async () => {
-    const long = `https://coaming.example/${"a-very-long-path-".repeat(12)}hooks/git/\u2022\u2022\u2022\u2022`;
+    const long = `https://tierplan.example/${"a-very-long-path-".repeat(12)}hooks/git/\u2022\u2022\u2022\u2022`;
     const c = await configured({ address: long });
     const address = within(c).getByLabelText("Address") as HTMLInputElement;
     expect(address.value).toBe(long);

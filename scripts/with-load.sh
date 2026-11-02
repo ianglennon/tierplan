@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Runs a command beside N CPU busy loops, so the stability bar of phase 6.1 can
 # be applied under load on a runner or this host without installing stress-ng.

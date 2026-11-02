@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package selfmaint
 
@@ -28,7 +28,7 @@ const (
 	// it puts the old one back (D-24).
 	ConnectTimeout = 90 * time.Second
 	// oldName is what the running agent is renamed to while its replacement is tried.
-	oldName = "coaming-agent-old"
+	oldName = "tierplan-agent-old"
 	// rollbackTimeout bounds the rollback, which must finish even when the helper's
 	// own context was cancelled.
 	rollbackTimeout = time.Minute
@@ -64,7 +64,7 @@ type RecreateOptions struct {
 // RecreateAgent replaces the target agent container with one from the helper's own
 // image, configured identically and on the same state volume, and puts the old one
 // back if the new one does not connect in time (D-24). It only touches a target
-// labelled coaming.agent=true that is not itself a helper and whose image is in the
+// labelled tierplan.agent=true that is not itself a helper and whose image is in the
 // helper's repository. The order is rename, stop, create, start, wait: the old
 // agent is stopped before the new one starts because both would hold one identity
 // and one state volume.
@@ -113,7 +113,7 @@ func (r *recreator) run(ctx context.Context) error {
 		return fmt.Errorf("recreate: inspect the helper's own container: %w", err)
 	}
 	if self.Container.Config == nil || self.Container.Config.Labels[AgentLabel] != "true" || self.Container.Config.Labels[HelperLabel] != "true" {
-		return errors.New("recreate: this container is not a Coaming agent helper")
+		return errors.New("recreate: this container is not a TierPlan agent helper")
 	}
 	newImageRef := self.Container.Config.Image
 	helperRepo, err := reference.ParseNormalizedNamed(newImageRef)
@@ -127,7 +127,7 @@ func (r *recreator) run(ctx context.Context) error {
 	}
 	target := tr.Container
 	if target.Config == nil || target.Config.Labels[AgentLabel] != "true" {
-		return errors.New("recreate: the target is not labelled coaming.agent=true; refusing to touch it")
+		return errors.New("recreate: the target is not labelled tierplan.agent=true; refusing to touch it")
 	}
 	if target.Config.Labels[HelperLabel] == "true" {
 		return errors.New("recreate: the target is a helper, not an agent; refusing to touch it")
@@ -454,7 +454,7 @@ type RemoveVolumeOptions struct {
 // agent's container no longer exists, because a stopped container still holds its
 // volumes, and then removes the one named state volume.
 //
-// It touches only what the agent named: a target that is not labelled coaming.agent=true,
+// It touches only what the agent named: a target that is not labelled tierplan.agent=true,
 // or is a helper, is refused; the volume must be one the target mounts (checked while the
 // target still exists); nothing else is ever removed.
 func RemoveVolumeAfter(ctx context.Context, opts RemoveVolumeOptions) error {
@@ -562,7 +562,7 @@ func checkRemoveTarget(ctx context.Context, cli *client.Client, opts RemoveVolum
 	}
 	c := r.Container
 	if c.Config == nil || c.Config.Labels[AgentLabel] != "true" {
-		return false, errors.New("remove: the container is not labelled coaming.agent=true; refusing to touch it")
+		return false, errors.New("remove: the container is not labelled tierplan.agent=true; refusing to touch it")
 	}
 	if c.Config.Labels[HelperLabel] == "true" {
 		return false, errors.New("remove: the container is a helper, not an agent; refusing to touch it")

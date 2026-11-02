@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
@@ -27,7 +27,7 @@ function reasonOf(t: Translate, code: string): string {
 }
 
 // DeployFailedAlert is the warning on a stack's page after its last deploy stopped (UI-SPEC "Stack
-// page", D-14): it says where Coaming stopped and why, and offers the console and the one-click way back
+// page", D-14): it says where TierPlan stopped and why, and offers the console and the one-click way back
 // to the version that ran well. It stays until a later deploy succeeds, because it is drawn from the
 // stack's newest operation. A deploy that was cancelled or that a restart interrupted is told as that.
 // A service name and a code are text. Nothing here rolls back by itself.

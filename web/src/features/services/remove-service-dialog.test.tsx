@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -31,7 +31,7 @@ const web: ServiceItem = {
   updateState: "",
   image: "localhost:5000/private/web:1",
   stack: "",
-  coamingStackId: "",
+  tierplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
@@ -43,7 +43,7 @@ const web: ServiceItem = {
 const agent: ServiceItem = {
   ...web,
   id: "id-agent",
-  name: "coaming-agent",
+  name: "tierplan-agent",
   mode: "global",
   agent: true,
 };
@@ -157,13 +157,13 @@ describe("RemoveServiceDialog", () => {
 
   it("for the agent service warns, asks for its name and keeps the confirm aria-disabled until it matches", async () => {
     const { onRemoved } = mount(agent);
-    const dialog = screen.getByRole("alertdialog", { name: "Remove coaming-agent?" });
+    const dialog = screen.getByRole("alertdialog", { name: "Remove tierplan-agent?" });
     expect(
       within(dialog).getByText(
-        "This is Coaming's agent service. Removing it cuts Coaming off from every node it runs on.",
+        "This is TierPlan's agent service. Removing it cuts TierPlan off from every node it runs on.",
       ),
     ).toBeTruthy();
-    const field = within(dialog).getByLabelText("Type coaming-agent to confirm");
+    const field = within(dialog).getByLabelText("Type tierplan-agent to confirm");
     const confirm = within(dialog).getByRole("button", { name: "Remove agent service" });
     expect(within(dialog).queryByRole("button", { name: "Remove service" })).toBeNull();
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
@@ -171,14 +171,14 @@ describe("RemoveServiceDialog", () => {
     fireEvent.click(confirm);
     expect(sent).toHaveLength(0);
 
-    fireEvent.change(field, { target: { value: "coaming-agen" } });
+    fireEvent.change(field, { target: { value: "tierplan-agen" } });
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.change(field, { target: { value: "coaming-agent" } });
+    fireEvent.change(field, { target: { value: "tierplan-agent" } });
     expect(confirm.getAttribute("aria-disabled")).not.toBe("true");
 
     fireEvent.click(confirm);
     await waitFor(() =>
-      expect(sent).toEqual(["DELETE /api/env/e1/services/id-agent?confirm=coaming-agent"]),
+      expect(sent).toEqual(["DELETE /api/env/e1/services/id-agent?confirm=tierplan-agent"]),
     );
     await waitFor(() => expect(onRemoved).toHaveBeenCalled());
   });
@@ -208,7 +208,7 @@ describe("RemoveServiceDialog", () => {
     mount();
     fireEvent.click(screen.getByRole("button", { name: "Remove service" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "The connection dropped before Coaming answered",
+      "The connection dropped before TierPlan answered",
     );
   });
 

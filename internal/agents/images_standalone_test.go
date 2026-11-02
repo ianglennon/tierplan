@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // TestStandaloneAgentImagePull pulls an image on a standalone host through a real
@@ -74,7 +74,7 @@ func TestStandaloneAgentImagePull(t *testing.T) {
 // credential is sent with the pull, the host is never logged in and holds no Docker client
 // configuration afterwards, and a wrong password ends the item pull_unauthorized with the
 // credential's failure recorded, then a corrected one pulls again and clears it. It runs on the
-// engine COAMING_TEST_ENGINE names, so the same test covers Engine 24 where a refusal can
+// engine TIERPLAN_TEST_ENGINE names, so the same test covers Engine 24 where a refusal can
 // arrive inside the progress stream instead of as an HTTP status.
 func TestStandaloneAgentPrivatePull(t *testing.T) {
 	const user, password = "bot", "registry-pass-0123456789"
@@ -141,7 +141,7 @@ func TestStandaloneAgentPrivatePull(t *testing.T) {
 		t.Errorf("the host does not have %s after the pull: %q", ref, got)
 	}
 	if dockertest.HasClientConfig(t, host) {
-		t.Errorf("the host has a Docker client configuration after the pull: Coaming must not log in")
+		t.Errorf("the host has a Docker client configuration after the pull: TierPlan must not log in")
 	}
 	rows = srv.AuditRows("image.pulled")
 	if len(rows) != 2 || rows[1].Result != "success" || rows[1].Details["credential"] != "private-bot" {
@@ -229,6 +229,6 @@ func TestStandaloneAgentTestFromEnvironment(t *testing.T) {
 		t.Fatalf("audit rows = %+v, want three rows via env on the node: success, pull_unauthorized, image_not_found", rows)
 	}
 	if dockertest.HasClientConfig(t, host) {
-		t.Errorf("the host has a Docker client configuration after the checks: Coaming must not log in")
+		t.Errorf("the host has a Docker client configuration after the checks: TierPlan must not log in")
 	}
 }

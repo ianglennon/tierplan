@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronDown, ChevronRight, PinOff } from "lucide-react";
 import { useRef, useState } from "react";
@@ -31,9 +31,9 @@ interface KeptListProps {
   swarm: boolean;
 }
 
-// KeptList is the "Kept networks (n)" collapsible: the networks Coaming never lists as orphaned or
+// KeptList is the "Kept networks (n)" collapsible: the networks TierPlan never lists as orphaned or
 // unused (D-11). It is closed until opened and left out when nothing is kept. A keep a person made
-// can be taken back; one made by the coaming.keep label can only be removed from the network.
+// can be taken back; one made by the tierplan.keep label can only be removed from the network.
 export function KeptList({ envId, envName, kept, swarm }: KeptListProps) {
   const t = useT();
   const needs = useNeeds("networks.keep", envId);

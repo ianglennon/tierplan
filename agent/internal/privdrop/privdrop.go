@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package privdrop takes the agent from root to UID and GID 1000 (D-21, D-22).
 //
@@ -34,7 +34,7 @@ const (
 type Options struct {
 	// SocketPath is the Docker socket whose group is joined. It may not exist.
 	SocketPath string
-	// DockerGID is COAMING_AGENT_DOCKER_GID and wins over the socket's group.
+	// DockerGID is TIERPLAN_AGENT_DOCKER_GID and wins over the socket's group.
 	DockerGID *int
 
 	Geteuid func() int

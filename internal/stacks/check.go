@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks
 
@@ -19,7 +19,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/ianglennon/coaming/internal/stacks/lint"
+	"github.com/ianglennon/tierplan/internal/stacks/lint"
 )
 
 // CheckInput is what Check needs: the stack's name and target, and the working copy to check. It
@@ -165,7 +165,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	binds := relativeBinds(loaded.Project, idx, in.Copy.Vars)
 	if err := assertSandboxed(loaded.Project, NewFileSet(in.Copy.Files)); err != nil && (!errors.Is(err, errRelativeBind) || len(binds) == 0) {
 		// Nothing the prescan lets through should fail here. If something does, the project is
-		// withheld and the person is told it is a Coaming bug, not their file.
+		// withheld and the person is told it is a TierPlan bug, not their file.
 		res.Problems = Problems{internalCheckFailed(file)}
 		return res
 	}
@@ -185,7 +185,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	// What the target will ignore or refuse is judged on the project as loaded, with build still
 	// in it: that is how a build key is seen.
 	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx, Env: in.Env})
-	// Coaming deploys images and never builds one (A5): build leaves the project here, before any
+	// TierPlan deploys images and never builds one (A5): build leaves the project here, before any
 	// engine or any later step can see it. A service with a build and no image is a blocking error
 	// above, so what is left to deploy always names an image.
 	stripBuild(loaded.Project)
@@ -305,12 +305,12 @@ func secretFilePaths(c WorkingCopy) []string {
 	return out
 }
 
-// dotenvFile is the name of the file a Compose project directory reads on its own, and Coaming
+// dotenvFile is the name of the file a Compose project directory reads on its own, and TierPlan
 // does not.
 const dotenvFile = DotEnvFile
 
 // dotenvNotRead is the warning for a stack file called .env that nothing uses. Compose reads a .env
-// beside the compose file by itself; Coaming reads variables from the table only (D-01), so a
+// beside the compose file by itself; TierPlan reads variables from the table only (D-01), so a
 // person who brought one over should know it does nothing as it stands.
 func dotenvNotRead() Problem {
 	return Problem{
@@ -377,7 +377,7 @@ func repoEnvProblem(err error) Problem {
 	var ef *EnvFileError
 	if errors.As(err, &ef) && ef.Line > 0 {
 		p.Line, p.EndLine = ef.Line, ef.Line
-		p.Message = fmt.Sprintf(".env has a line Coaming can't read (line %d). Write each line as NAME=value.", ef.Line)
+		p.Message = fmt.Sprintf(".env has a line TierPlan can't read (line %d). Write each line as NAME=value.", ef.Line)
 	}
 	if errors.Is(err, ErrFileTooLarge) {
 		p.Code = CodeComposeTooLarge
@@ -408,9 +408,9 @@ func envFileProblem(err error, ix *PositionIndex) Problem {
 		p.Code = CodeFileMissing
 		p.Message = fmt.Sprintf("env_file “%s” isn't one of this stack's files. Add it under Files.", ef.Path)
 	case ef.Format != "":
-		p.Message = fmt.Sprintf("env_file “%s” asks for the “%s” format, which Coaming can't read. Remove format to use the .env format.", ef.Path, ef.Format)
+		p.Message = fmt.Sprintf("env_file “%s” asks for the “%s” format, which TierPlan can't read. Remove format to use the .env format.", ef.Path, ef.Format)
 	case ef.Line > 0:
-		p.Message = fmt.Sprintf("env_file “%s” has a line Coaming can't read (line %d). Write each line as NAME=value.", ef.Path, ef.Line)
+		p.Message = fmt.Sprintf("env_file “%s” has a line TierPlan can't read (line %d). Write each line as NAME=value.", ef.Path, ef.Line)
 	default:
 		p.Message = fmt.Sprintf("env_file “%s” can't be read. Write each line as NAME=value.", ef.Path)
 	}
@@ -1178,7 +1178,7 @@ func thousands(n int) string {
 func internalCheckFailed(file string) Problem {
 	return Problem{
 		Severity: SeverityError, Code: CodeInternalCheckFailed, File: file, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		Message: "The check found something it should have refused. This is a bug in Coaming: please report it.",
+		Message: "The check found something it should have refused. This is a bug in TierPlan: please report it.",
 	}
 }
 

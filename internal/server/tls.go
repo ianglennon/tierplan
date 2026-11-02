@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/proto/authn"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 const (
@@ -55,8 +55,8 @@ func TLSEnabled(cfg config.Config) bool {
 
 // TLSConfig returns the TLS configuration to serve with, or nil for plain HTTP (D-12).
 //
-// With COAMING_TLS_CERT_FILE and COAMING_TLS_KEY_FILE it serves that pair. With
-// COAMING_TLS_SELF_SIGNED it serves an ECDSA P-256 certificate kept under
+// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair. With
+// TIERPLAN_TLS_SELF_SIGNED it serves an ECDSA P-256 certificate kept under
 // <data>/tls, covering localhost, the loopback addresses, the machine host name
 // (unless it is a container ID), the host of publicURL and the host of agentURL
 // (the address agents dial when it is not the public one, D-18). That certificate is
@@ -73,7 +73,7 @@ func TLSEnabled(cfg config.Config) bool {
 func TLSConfig(cfg config.Config, publicURL, agentURL string, now func() time.Time) (*tls.Config, error) {
 	files := cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
 	if files && cfg.TLSSelfSigned {
-		return nil, errors.New("COAMING_TLS_SELF_SIGNED conflicts with COAMING_TLS_CERT_FILE and COAMING_TLS_KEY_FILE; use one or the other")
+		return nil, errors.New("TIERPLAN_TLS_SELF_SIGNED conflicts with TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE; use one or the other")
 	}
 	if now == nil {
 		now = time.Now
@@ -83,13 +83,13 @@ func TLSConfig(cfg config.Config, publicURL, agentURL string, now func() time.Ti
 	case files:
 		src, err := newSuppliedSource(cfg.TLSCertFile, cfg.TLSKeyFile, now)
 		if err != nil {
-			return nil, fmt.Errorf("load the TLS certificate from COAMING_TLS_CERT_FILE and COAMING_TLS_KEY_FILE: %w", err)
+			return nil, fmt.Errorf("load the TLS certificate from TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE: %w", err)
 		}
 		return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
 	case cfg.TLSSelfSigned:
 		src, err := newSelfSignedSource(filepath.Join(cfg.DataDir, selfSignedDir), wantedNames(publicURL, agentURL), now)
 		if err != nil {
-			return nil, fmt.Errorf("prepare the self-signed certificate (COAMING_TLS_SELF_SIGNED): %w", err)
+			return nil, fmt.Errorf("prepare the self-signed certificate (TIERPLAN_TLS_SELF_SIGNED): %w", err)
 		}
 		return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
 	}
@@ -391,7 +391,7 @@ func logNewKey(hadCert bool, certDER []byte) {
 
 // loadKey reads the stored ECDSA key, or reports why it cannot.
 func loadKey(path string) (*ecdsa.PrivateKey, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // Coaming's own key under its data directory
+	data, err := os.ReadFile(path) //nolint:gosec // TierPlan's own key under its data directory
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +436,7 @@ func signCertificate(key *ecdsa.PrivateKey, want names, now time.Time) ([]byte, 
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Coaming self-signed", Organization: []string{"Coaming"}},
+		Subject:               pkix.Name{CommonName: "TierPlan self-signed", Organization: []string{"TierPlan"}},
 		NotBefore:             now.Add(-backdate),
 		NotAfter:              now.Add(selfSignedValidity),
 		KeyUsage:              x509.KeyUsageDigitalSignature,

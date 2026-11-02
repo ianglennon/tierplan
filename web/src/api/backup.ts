@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { queryOptions } from "@tanstack/react-query";
 
@@ -11,7 +11,7 @@ import { apiUrl } from "@/lib/base-path";
 // The passphrase rule the server states, used until (or unless) it is read.
 export const DEFAULT_MIN_PASSPHRASE = 16;
 
-const FALLBACK_NAME = "coaming-backup.coaming";
+const FALLBACK_NAME = "tierplan-backup.tierplan";
 
 // The ["backup", "info"] query: the shortest passphrase a backup accepts and the
 // file extension a backup file has. The server checks the rule again.
@@ -191,7 +191,7 @@ export async function checkRestore(uploadId: string, passphrase: string): Promis
   return data;
 }
 
-// applyRestore replaces this instance with the backup. The 202 means Coaming is
+// applyRestore replaces this instance with the backup. The 202 means TierPlan is
 // about to restart; confirm is the instance name the person typed.
 export async function applyRestore(
   uploadId: string,
@@ -256,9 +256,9 @@ export interface RestoreMessage {
   values?: Record<string, string>;
 }
 
-// The version a "newer Coaming" answer names, as in "made by a newer Coaming (v1.2.3)".
+// The version a "newer TierPlan" answer names, as in "made by a newer TierPlan (v1.2.3)".
 function newerVersion(detail: string | undefined): string | undefined {
-  return detail?.match(/newer Coaming \(([^)]+)\)/)?.[1];
+  return detail?.match(/newer TierPlan \(([^)]+)\)/)?.[1];
 }
 
 // restoreProblem turns whatever a restore step threw into the message to show.

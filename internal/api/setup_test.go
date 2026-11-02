@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -16,17 +16,17 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/internal/webui"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/internal/webui"
 )
 
 const testClientAddr = "203.0.113.9:40000"
@@ -219,7 +219,7 @@ func TestSetupTokenRightTokenReturnsTheStepThreeDefaults(t *testing.T) {
 		locked bool
 	}{
 		"unlocked": {url: "", locked: false},
-		"locked":   {url: "https://coaming.example.com", locked: true},
+		"locked":   {url: "https://tierplan.example.com", locked: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newSetupFixture(t, config.Config{PublicURL: tc.url, SessionRememberLifetime: 720 * time.Hour})
@@ -325,13 +325,13 @@ func TestSetupTokenSixthAttemptInAMinuteIsRateLimitedAndAudited(t *testing.T) {
 // Behind a subpath the browser follows the redirect literally, so it must carry
 // the base: a Location of "/login" leaves the application and lands on whatever
 // the proxy serves at the root (found by the plan 02-32 end-to-end run behind
-// Caddy at /coaming, where it showed a blank page).
+// Caddy at /tierplan, where it showed a blank page).
 func TestSetupPageRedirectsToTheLoginPageUnderTheBasePath(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ url, want string }{
 		"no public url":   {url: "", want: "/login"},
-		"root":            {url: "https://coaming.example.com", want: "/login"},
-		"under a subpath": {url: "https://example.com/coaming", want: "/coaming/login"},
+		"root":            {url: "https://tierplan.example.com", want: "/login"},
+		"under a subpath": {url: "https://example.com/tierplan", want: "/tierplan/login"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newSetupFixture(t, config.Config{PublicURL: tc.url})

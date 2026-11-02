@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
@@ -209,8 +209,8 @@ export function AddressesUsedCell({
   );
 }
 
-// OwnerCell words who made the network. A stack Coaming manages is a link to it; a stack or compose
-// project Coaming does not manage is its name in mono; a service-made network says which service.
+// OwnerCell words who made the network. A stack TierPlan manages is a link to it; a stack or compose
+// project TierPlan does not manage is its name in mono; a service-made network says which service.
 // Every value is text, and the link is built from the stack's ID, never from the name.
 function OwnerCell({ envId, row }: { envId: string; row: AddressMapRow }) {
   const t = useT();

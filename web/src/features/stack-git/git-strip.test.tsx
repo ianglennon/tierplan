@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -258,7 +258,7 @@ describe("GitStrip", () => {
     );
     expect(
       within(status(strip)).getByText(
-        "Coaming couldn't fetch the repository: the server refused the credential.",
+        "TierPlan couldn't fetch the repository: the server refused the credential.",
       ),
     ).toBeTruthy();
   });
@@ -430,7 +430,7 @@ describe("SyncErrorAlert", () => {
     [
       "fetch_failed",
       { reasonDetail: "The server refused the credential." },
-      "Coaming couldn't fetch the repository: the server refused the credential.",
+      "TierPlan couldn't fetch the repository: the server refused the credential.",
     ],
     ["host_key_changed", {}, "The host key for github.com has changed."],
     ["host_key_untrusted", {}, "Host key not trusted yet. Confirm the key for github.com."],

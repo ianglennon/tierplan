@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { ReactNode } from "react";
 import type { OneTimeLink } from "@/api/users";
@@ -20,7 +20,7 @@ import { formatAbsolute } from "@/lib/format";
 const HOUR_MS = 3_600_000;
 
 // fullUrl makes the link something an admin can hand over. Without a public URL
-// the server answers an address relative to this Coaming, base path included;
+// the server answers an address relative to this TierPlan, base path included;
 // copied as it is, it would be useless to anyone else.
 function fullUrl(url: string): string {
   try {

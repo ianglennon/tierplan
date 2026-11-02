@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package swarmops
 
@@ -9,9 +9,9 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/rbac/compose"
-	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/rbac/compose"
+	"github.com/ianglennon/tierplan/internal/redact"
 )
 
 // ApplyInput is a spec to apply, as ReviewInput.

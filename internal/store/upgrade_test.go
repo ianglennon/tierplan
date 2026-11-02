@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package store_test
 
@@ -13,12 +13,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // phase2Fixture names what seedPhase2Database wrote, so the assertions after the
@@ -449,7 +449,7 @@ func seedPhase2Database(t *testing.T, s *store.Store, v *vault.Vault) phase2Fixt
 	exec(`INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, remember, ip, user_agent) VALUES (x'aa01',?,40,41,0,'10.0.0.1','ua-1')`, fx.adminID)
 	exec(`INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, remember, ip, user_agent) VALUES (x'aa02',?,42,43,1,'10.0.0.2','ua-2')`, fx.adminID)
 
-	exec(`INSERT INTO settings (key, value, updated_at) VALUES ('public_url','https://coaming.example.org',50)`)
+	exec(`INSERT INTO settings (key, value, updated_at) VALUES ('public_url','https://tierplan.example.org',50)`)
 
 	// An audit chain written by the real writer, one entry scoped to the environment.
 	w := audit.NewWriter(s, v, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
@@ -480,8 +480,8 @@ func assertSnapshotTaken(t *testing.T, dir, path string) {
 	if path == "" {
 		t.Fatal("no pre-migration snapshot path reported")
 	}
-	if filepath.Dir(path) != filepath.Join(dir, "backups") || !strings.HasPrefix(filepath.Base(path), "coaming-") {
-		t.Errorf("snapshot %q is not a coaming-* file under %s/backups", path, dir)
+	if filepath.Dir(path) != filepath.Join(dir, "backups") || !strings.HasPrefix(filepath.Base(path), "tierplan-") {
+		t.Errorf("snapshot %q is not a tierplan-* file under %s/backups", path, dir)
 	}
 	if fi, err := os.Stat(path); err != nil || fi.Size() == 0 {
 		t.Errorf("snapshot %q missing or empty: %v", path, err)
@@ -578,7 +578,7 @@ func assertEnvironmentDataUnchanged(t *testing.T, s *store.Store, fx phase2Fixtu
 	if err := s.Read.QueryRowContext(ctx, `SELECT status, agent_version FROM agents WHERE id = ? AND env_id = ?`, fx.agentID, fx.envID).Scan(&status, &version); err != nil || status != "active" || version != "0.1.0" {
 		t.Errorf("agent row = status %q version %q (%v), want active 0.1.0", status, version, err)
 	}
-	if err := s.Read.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'public_url'`).Scan(&url); err != nil || url != "https://coaming.example.org" {
+	if err := s.Read.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'public_url'`).Scan(&url); err != nil || url != "https://tierplan.example.org" {
 		t.Errorf("settings public_url = %q (%v)", url, err)
 	}
 }

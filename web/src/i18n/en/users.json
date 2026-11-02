@@ -49,7 +49,7 @@
     },
     "create": {
       "title": "Create user",
-      "body": "They get a one-time link to choose their own password. Coaming doesn't send email.",
+      "body": "They get a one-time link to choose their own password. TierPlan doesn't send email.",
       "username": {
         "label": "Username",
         "helper": "3 to 32 characters: letters, numbers, dot, dash or underscore. Not case-sensitive. It can't be changed later."
@@ -59,7 +59,7 @@
       },
       "email": {
         "label": "Email (optional)",
-        "helper": "Nothing uses it yet. Coaming sends no email."
+        "helper": "Nothing uses it yet. TierPlan sends no email."
       },
       "submit": "Create user",
       "pending": "Creating…",
@@ -70,7 +70,7 @@
         "username": "Use 3 to 32 characters: letters, numbers, dot, dash or underscore.",
         "email": "Enter a valid email address.",
         "displayName": "Use 64 characters or fewer.",
-        "server": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening."
+        "server": "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening."
       }
     },
     "link": {
@@ -84,7 +84,7 @@
       "expires_other": "Works once. Expires {{when}} ({{count}} hours from now).",
       "notice": "Send this link to {{username}} yourself. Anyone who has it can set the password, so share it privately. You can't see it again after you close this dialog. If you lose it, generate a new one.",
       "close": "Close",
-      "failed": "Couldn't create the link. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't create the link. Try again, and check the TierPlan logs if it keeps happening."
     },
     "regenerate": {
       "title": "Generate a new invite link?",

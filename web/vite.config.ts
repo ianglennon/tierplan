@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -10,7 +10,7 @@ import { defineConfig } from "vite";
 // browser uses gets past Vite's host check, which otherwise answers only
 // localhost and IP addresses (G-02-1b). Unset or unparsable leaves Vite's default.
 function devAllowedHosts(): string[] | undefined {
-  const raw = process.env.COAMING_DEV_PUBLIC_URL;
+  const raw = process.env.TIERPLAN_DEV_PUBLIC_URL;
   if (!raw) return undefined;
   try {
     return [new URL(raw).hostname];
@@ -38,8 +38,8 @@ export default defineConfig({
   ],
   define: {
     // Source link shown by VersionFooter when /api/version is unreachable (PLAT-05).
-    __COAMING_SOURCE_URL__: JSON.stringify(
-      process.env.COAMING_SOURCE_URL ?? "https://github.com/ianglennon/coaming",
+    __TIERPLAN_SOURCE_URL__: JSON.stringify(
+      process.env.TIERPLAN_SOURCE_URL ?? "https://github.com/ianglennon/tierplan",
     ),
   },
   resolve: {
@@ -59,7 +59,7 @@ export default defineConfig({
     // (http://localhost:5173) reaches the Go Origin check unchanged (Pitfall 20).
     // ws forwards the browser shell's WebSocket upgrade; without it the shell's
     // pending session is never claimed and expires after 30 seconds.
-    // /hooks: under make dev the webhook address Coaming shows is built on the Vite public
+    // /hooks: under make dev the webhook address TierPlan shows is built on the Vite public
     // URL, so a git host's delivery to /hooks/git/{token} must reach the Go server. It is a
     // plain POST, so no ws.
     proxy: {

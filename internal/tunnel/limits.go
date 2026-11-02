@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package tunnel
 
@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // /agent/connect is the one endpoint that answers anyone, so everything that
@@ -96,19 +96,19 @@ const (
 // WithAllowInsecure lets agents connect over plain ws:// to an agent address that
 // is not this machine: an https address, or an http one for another host. A plain
 // address on this machine needs no switch. It is for development only
-// (COAMING_AGENT_ALLOW_INSECURE): the join token and every Docker answer then
+// (TIERPLAN_AGENT_ALLOW_INSECURE): the join token and every Docker answer then
 // cross the network in the clear. Call it before the hub serves.
 func (h *Hub) WithAllowInsecure(allow bool) *Hub {
 	h.allowInsecure = allow
 	if allow {
-		h.log.Warn("COAMING_AGENT_ALLOW_INSECURE is set: agents may connect over plain ws://, so join tokens and Docker answers can be read on the network. Use it for development only")
+		h.log.Warn("TIERPLAN_AGENT_ALLOW_INSECURE is set: agents may connect over plain ws://, so join tokens and Docker answers can be read on the network. Use it for development only")
 	}
 	return h
 }
 
 // WithConnectLimit sets how many connection attempts one client address may make
 // at once; it earns one more every 100 ms. A burst below one keeps the default
-// (COAMING_AGENT_CONNECT_BURST). Call it before the hub serves.
+// (TIERPLAN_AGENT_CONNECT_BURST). Call it before the hub serves.
 func (h *Hub) WithConnectLimit(burst int) *Hub {
 	if burst > 0 {
 		h.connect = auth.NewIPLimiter(connectRefill, burst, connectLimiterTTL, h.now)
@@ -207,13 +207,13 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 	}
 	aud, plainOK, err := h.audience()
 	if err != nil {
-		h.logBeforeAdmission(slog.LevelError, ip, "agent connection refused: Coaming has no usable public URL", "error", err)
+		h.logBeforeAdmission(slog.LevelError, ip, "agent connection refused: TierPlan has no usable public URL", "error", err)
 		return "", &preflightRefusal{status: http.StatusServiceUnavailable, msg: "this server has no public URL, so it cannot accept agents"}
 	}
 	if !secureTransport(r) {
 		if !plainOK && !h.allowInsecure {
 			if base := h.publicURL(); PlainAddressRefused(base, false) {
-				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: the agent address is plain http for a host that is not this machine; it needs an https public URL or agent URL (COAMING_AGENT_ALLOW_INSECURE=true allows it, for development only)")
+				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: the agent address is plain http for a host that is not this machine; it needs an https public URL or agent URL (TIERPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only)")
 			} else {
 				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: it did not arrive over TLS")
 			}

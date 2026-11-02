@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Keeps docs/testing.md "Waiting in tests" true: a test does not wait a fixed, short length
 # of real time. A wait, a bound or a clock that follows real time is either a testsupport

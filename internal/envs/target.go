@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -8,16 +8,16 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // ErrNodeUnavailable means the node a write was aimed at is not a node of the
-// environment that Coaming can reach now: unknown, revoked or without a live
+// environment that TierPlan can reach now: unknown, revoked or without a live
 // session. Nothing was sent to any engine.
 var ErrNodeUnavailable = errors.New("envs: the node is not available")
 
 // ErrHostReadOnly means the agent of the node reported that its host owner set
-// COAMING_AGENT_READ_ONLY, so every write to it would be refused. It is named from
+// TIERPLAN_AGENT_READ_ONLY, so every write to it would be refused. It is named from
 // the agent's facts before any call, so a read-only host is never mistaken for an
 // agent too old to know a route (D-35).
 var ErrHostReadOnly = errors.New("envs: the host is read-only")
@@ -148,7 +148,7 @@ func nodeTarget(in RollupInput, nodeID string) (key string, readOnly, ok bool) {
 	return "", false, false
 }
 
-// SwarmNodeTargets maps each swarm node of the environment that Coaming can reach now to
+// SwarmNodeTargets maps each swarm node of the environment that TierPlan can reach now to
 // the node ID that the container routes take (the ID OnNode and WriteOnNode are given).
 // The key is the swarm node ID, as a task or a node row carries it, so a task can be
 // followed to its node's engine.

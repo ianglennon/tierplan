@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // What is wrong with a repository address, as a key under git.errors: "required" for none,
 // "userinfo" for a user name or password in the address, "unsupported" for any other scheme or a
-// form Coaming does not take.
+// form TierPlan does not take.
 export type AddressProblem = "required" | "userinfo" | "unsupported";
 
 // The server's longest address, in bytes.
@@ -80,7 +80,7 @@ export function addressKind(raw: string): "ssh" | "https" | undefined {
   return /^[^@\s/]+@[^:\s]+:/.test(s) ? "ssh" : undefined;
 }
 
-// The hosts whose SSH host keys ship with Coaming (the pinned set of gitx.BuiltinHostKeys).
+// The hosts whose SSH host keys ship with TierPlan (the pinned set of gitx.BuiltinHostKeys).
 const BUILTIN_HOSTS = new Set([
   "github.com",
   "ssh.github.com",
@@ -110,7 +110,7 @@ export function hostOf(raw: string): string {
   return host.toLowerCase();
 }
 
-// hasBuiltinHostKey says whether Coaming ships the host keys of the address's host, so an ssh
+// hasBuiltinHostKey says whether TierPlan ships the host keys of the address's host, so an ssh
 // repository on it needs no key to be confirmed.
 export function hasBuiltinHostKey(raw: string): boolean {
   return BUILTIN_HOSTS.has(hostOf(raw));

@@ -27,7 +27,7 @@
       "checkedAnnounce": "Checked {{time}}",
       "checkAgain": "Check again",
       "checkingButton": "Checking…",
-      "intro": "Coaming never fixes drift on its own. Restore puts the deployed revision back; Accept live keeps what's running as your next draft.",
+      "intro": "TierPlan never fixes drift on its own. Restore puts the deployed revision back; Accept live keeps what's running as your next draft.",
       "loading": "Checking for drift…",
       "stopped": {
         "title": "Stopped stacks don't drift.",

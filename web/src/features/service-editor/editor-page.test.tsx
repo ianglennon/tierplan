@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -407,7 +407,7 @@ describe("the Spec tab", () => {
     [
       "placeholder_reserved",
       422,
-      "<hidden> is what Coaming shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
+      "<hidden> is what TierPlan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
     ],
     [
       "stack_owned",
@@ -1080,7 +1080,9 @@ describe("creating a service", () => {
   it("reviews as Review {name} with the table of what will be created and Create service to confirm", async () => {
     renderAt(NEW);
     await reviewIt();
-    expect(screen.getByText("Check the service Coaming will create, then create it.")).toBeTruthy();
+    expect(
+      screen.getByText("Check the service TierPlan will create, then create it."),
+    ).toBeTruthy();
     const table = await screen.findByRole("table", { name: "Changes to chat" });
     const heads = within(table).getAllByRole("columnheader");
     expect(heads.map((h) => h.textContent)).toEqual(["Setting", "Value"]);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks
 
@@ -437,7 +437,7 @@ var shortContainerName = regexp.MustCompile(`^[0-9a-f]{12}$`)
 // they mean the same thing. It is applied to both sides, as NormalizeSpec is for a swarm service
 // (Pitfall 5): it removes what the image or the engine fills in rather than the compose file (the image's
 // own environment, command, entrypoint, user, working directory, labels, exposed ports and healthcheck, the
-// SDK's com.docker.compose.* labels, Coaming's own coaming.* labels, the aliases the SDK adds, the engine's
+// SDK's com.docker.compose.* labels, TierPlan's own tierplan.* labels, the aliases the SDK adds, the engine's
 // default restart policy and hostname), orders every list stably, writes a deploy: resources limit and
 // restart policy as the SDK sends them, and reads a container:<ID> of a container of the project back as
 // the service it is. Anything it does not name is left out of the result, so a setting the engine cannot be
@@ -478,9 +478,9 @@ func NormalizeComposeService(svc types.ServiceConfig, img ImageDefaults, rc Runn
 		out.Environment[k] = v
 	}
 
-	// Labels: the SDK's and Coaming's own labels, and the image's, are not the file's.
+	// Labels: the SDK's and TierPlan's own labels, and the image's, are not the file's.
 	for k, v := range svc.Labels {
-		if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "coaming.") {
+		if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "tierplan.") {
 			continue
 		}
 		if iv, ok := img.Labels[k]; ok && iv == v {

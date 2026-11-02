@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ExternalLink } from "lucide-react";
 
@@ -7,8 +7,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useT } from "@/i18n/use-t";
 
 // The hosts a commit link is built for, each with the fixed pattern of its commit page (D-16, UI-SPEC default 2). They
-// are the three hosts Coaming ships pinned SSH keys for. Any other host, a self-hosted Gitea or a GitLab of a company
-// among them, gets no link: its address says nothing Coaming can build a commit page from.
+// are the three hosts TierPlan ships pinned SSH keys for. Any other host, a self-hosted Gitea or a GitLab of a company
+// among them, gets no link: its address says nothing TierPlan can build a commit page from.
 const COMMIT_PATH: Record<string, (path: string, sha: string) => string> = {
   "github.com": (path, sha) => `/${path}/commit/${sha}`,
   "gitlab.com": (path, sha) => `/${path}/-/commit/${sha}`,

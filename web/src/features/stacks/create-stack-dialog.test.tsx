@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -391,7 +391,8 @@ describe("CreateStackDialog: the name check", () => {
     checkAnswer = () =>
       Response.json({
         status: "clash",
-        message: "A stack named legacy already exists on this environment, not managed by Coaming.",
+        message:
+          "A stack named legacy already exists on this environment, not managed by TierPlan.",
       });
     mount();
     const dialog = await open();
@@ -399,7 +400,7 @@ describe("CreateStackDialog: the name check", () => {
     fireEvent.blur(within(dialog).getByLabelText("Name"));
     const alert = await within(dialog).findByRole("alert");
     expect(alert.textContent).toContain(
-      "A stack named legacy already exists on this environment, not managed by Coaming.",
+      "A stack named legacy already exists on this environment, not managed by TierPlan.",
     );
     expect(alert.textContent).toContain("Pick another name, or adopt the existing stack.");
     expect(alert.textContent).not.toContain("later version");
@@ -415,7 +416,8 @@ describe("CreateStackDialog: the name check", () => {
     checkAnswer = () =>
       Response.json({
         status: "clash",
-        message: "A stack named legacy already exists on this environment, not managed by Coaming.",
+        message:
+          "A stack named legacy already exists on this environment, not managed by TierPlan.",
       });
     mount();
     const dialog = await open();
@@ -497,7 +499,7 @@ describe("CreateStackDialog: the name check", () => {
     submit(dialog);
     const alert = await within(dialog).findByRole("alert");
     expect(alert.textContent).toContain(
-      "A stack named legacy already exists on this environment, not managed by Coaming.",
+      "A stack named legacy already exists on this environment, not managed by TierPlan.",
     );
     expect(alert.textContent).toContain("Pick another name, or adopt the existing stack.");
     expect(within(alert).getByRole("link", { name: "Open legacy" })).toBeTruthy();

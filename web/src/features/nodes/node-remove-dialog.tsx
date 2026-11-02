@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useEffect, useRef, useState } from "react";
 
@@ -53,7 +53,7 @@ function removeWording(t: Translate, err: unknown, name: string, environment: st
 }
 
 // NodeRemoveDialog is "Remove {node}?" for a node that is down (D-22, UI-SPEC "Nodes"): an alert
-// dialog that says Swarm forgets the node and Coaming marks its agent as gone, and asks for the
+// dialog that says Swarm forgets the node and TierPlan marks its agent as gone, and asks for the
 // node's name before its destructive confirm turns on. Focus starts on Cancel and the dialog
 // cannot be dismissed while the request is out. A refusal stays inside it in words; a node that is
 // already gone is said so in a toast and the dialog closes, since the list no longer shows it.

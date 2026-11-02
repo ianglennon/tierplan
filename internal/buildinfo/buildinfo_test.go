@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package buildinfo
 
 import "testing"
 
-const repo = "https://github.com/ianglennon/coaming"
+const repo = "https://github.com/ianglennon/tierplan"
 
 func TestResolve(t *testing.T) {
 	full := "abc1234def5678abc1234def5678abc1234def56"
@@ -38,8 +38,8 @@ func TestResolve(t *testing.T) {
 			wantDisplay: "dev (unknown)", wantTree: repo,
 		},
 		{
-			name: "fork source url with trailing slash", version: "v0.1.0", commit: full, source: "https://example.org/fork/coaming/",
-			wantDisplay: "v0.1.0 (abc1234)", wantTree: "https://example.org/fork/coaming/tree/" + full,
+			name: "fork source url with trailing slash", version: "v0.1.0", commit: full, source: "https://example.org/fork/tierplan/",
+			wantDisplay: "v0.1.0 (abc1234)", wantTree: "https://example.org/fork/tierplan/tree/" + full,
 		},
 		{
 			name: "empty source url falls back to default", source: "",

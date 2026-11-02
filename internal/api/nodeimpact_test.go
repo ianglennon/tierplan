@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // What a change to a node will do (plan 06-15, RES-05, D-20). The arithmetic is quorum: a
@@ -162,7 +162,7 @@ func TestNodeImpactDrainOfANodeWithNoTasksHasAnEmptyListAndNoWarnings(t *testing
 	}
 }
 
-func TestNodeImpactDrainNeedsTheNameForCoamingsNodeAndTheOnlyManagerAgent(t *testing.T) {
+func TestNodeImpactDrainNeedsTheNameForTierPlansNodeAndTheOnlyManagerAgent(t *testing.T) {
 	t.Parallel()
 	m := niNode("m1", "manager")
 	for _, tc := range []struct {
@@ -172,12 +172,12 @@ func TestNodeImpactDrainNeedsTheNameForCoamingsNodeAndTheOnlyManagerAgent(t *tes
 		confirm       bool
 	}{
 		{"neither", false, false, nil, false},
-		{"Coaming's node", true, false, []string{warnRunsCoaming}, true},
+		{"TierPlan's node", true, false, []string{warnRunsTierPlan}, true},
 		{"the only manager agent", false, true, []string{warnOnlyManagerAgent}, true},
-		{"both", true, true, []string{warnRunsCoaming, warnOnlyManagerAgent}, true},
+		{"both", true, true, []string{warnRunsTierPlan, warnOnlyManagerAgent}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := nodeImpact(nodeImpactInput{Action: "drain", Node: m, Nodes: []dockerx.NodeRow{m}, RunsCoaming: tc.runs, OnlyManagerAgent: tc.onlyAgt})
+			b := nodeImpact(nodeImpactInput{Action: "drain", Node: m, Nodes: []dockerx.NodeRow{m}, RunsTierPlan: tc.runs, OnlyManagerAgent: tc.onlyAgt})
 			if !sameWarnings(b.Warnings, tc.warnings) {
 				t.Errorf("warnings = %v, want %v", b.Warnings, tc.warnings)
 			}
@@ -195,8 +195,8 @@ func TestNodeImpactPauseKeepsTheTasksAndNeverNeedsTheName(t *testing.T) {
 		Action: "pause", Node: w, Nodes: []dockerx.NodeRow{w},
 		Tasks:    []dockerx.TaskRow{niTask("t1", "web", 1), niTask("t2", "agent", 0)},
 		Services: niServices(dockerx.ServiceRow{ID: "web", Name: "web", Mode: "replicated"}, dockerx.ServiceRow{ID: "agent", Name: "agent", Mode: "global"}),
-		// Pausing sends nothing away, so even Coaming's own node needs no warning.
-		RunsCoaming: true, OnlyManagerAgent: true,
+		// Pausing sends nothing away, so even TierPlan's own node needs no warning.
+		RunsTierPlan: true, OnlyManagerAgent: true,
 	})
 	for _, tk := range b.Tasks {
 		if tk.Outcome != taskStays {
@@ -247,11 +247,11 @@ func TestNodeImpactDemoteCountsManagersAndWarns(t *testing.T) {
 	}
 }
 
-func TestNodeImpactDemoteOfCoamingsNodeOrTheOnlyManagerAgentNeedsTheName(t *testing.T) {
+func TestNodeImpactDemoteOfTierPlansNodeOrTheOnlyManagerAgentNeedsTheName(t *testing.T) {
 	t.Parallel()
 	nodes := niManagers("reachable", "reachable", "reachable", "reachable")
 	for name, in := range map[string]nodeImpactInput{
-		"Coaming's node":         {RunsCoaming: true},
+		"TierPlan's node":        {RunsTierPlan: true},
 		"the only manager agent": {OnlyManagerAgent: true},
 	} {
 		in.Action, in.Node, in.Nodes = "demote", nodes[0], nodes

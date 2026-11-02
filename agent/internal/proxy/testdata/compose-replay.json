@@ -137,10 +137,10 @@
         "VolumesFrom": null
       },
       "Hostname": "",
-      "Image": "localhost:5000/cm/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "Image": "localhost:5000/tp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "Labels": {
-        "coaming.stack.id": "stack-replay",
-        "coaming.stack.image": "localhost:5000/cm/web:1",
+        "tierplan.stack.id": "stack-replay",
+        "tierplan.stack.image": "localhost:5000/tp/web:1",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.container-number": "1",
         "com.docker.compose.depends_on": "db:service_healthy:false",
@@ -148,7 +148,7 @@
         "com.docker.compose.oneoff": "False",
         "com.docker.compose.project": "replay",
         "com.docker.compose.project.config_files": "compose.yaml",
-        "com.docker.compose.project.working_dir": "/coaming-stack",
+        "com.docker.compose.project.working_dir": "/tierplan-stack",
         "com.docker.compose.service": "web"
       },
       "NetworkingConfig": {
@@ -307,12 +307,12 @@
         "VolumesFrom": null
       },
       "Hostname": "",
-      "Image": "localhost:5000/cm/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "Image": "localhost:5000/tp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "Labels": {
-        "coaming.stack.config.nginxconf": "a705e199",
-        "coaming.stack.id": "stack-replay",
-        "coaming.stack.image": "localhost:5000/cm/web:1",
-        "coaming.stack.secret.tok": "f119db9b",
+        "tierplan.stack.config.nginxconf": "a705e199",
+        "tierplan.stack.id": "stack-replay",
+        "tierplan.stack.image": "localhost:5000/tp/web:1",
+        "tierplan.stack.secret.tok": "f119db9b",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.container-number": "1",
         "com.docker.compose.depends_on": "",
@@ -320,7 +320,7 @@
         "com.docker.compose.oneoff": "False",
         "com.docker.compose.project": "replay",
         "com.docker.compose.project.config_files": "compose.yaml",
-        "com.docker.compose.project.working_dir": "/coaming-stack",
+        "com.docker.compose.project.working_dir": "/tierplan-stack",
         "com.docker.compose.service": "db"
       },
       "NetworkingConfig": {
@@ -448,10 +448,10 @@
         "VolumesFrom": null
       },
       "Hostname": "",
-      "Image": "localhost:5000/cm/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "Image": "localhost:5000/tp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "Labels": {
-        "coaming.stack.id": "stack-replay",
-        "coaming.stack.image": "localhost:5000/cm/web:1",
+        "tierplan.stack.id": "stack-replay",
+        "tierplan.stack.image": "localhost:5000/tp/web:1",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.container-number": "1",
         "com.docker.compose.depends_on": "db:service_healthy:false",
@@ -459,7 +459,7 @@
         "com.docker.compose.oneoff": "False",
         "com.docker.compose.project": "replay",
         "com.docker.compose.project.config_files": "compose.yaml",
-        "com.docker.compose.project.working_dir": "/coaming-stack",
+        "com.docker.compose.project.working_dir": "/tierplan-stack",
         "com.docker.compose.service": "web"
       },
       "NetworkingConfig": {
@@ -541,7 +541,7 @@
   },
   {
     "method": "GET",
-    "path": "/images/localhost:5000/cm/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json",
+    "path": "/images/localhost:5000/tp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/json",
     "query": "manifests=1",
     "hasBody": false
   },
@@ -592,7 +592,7 @@
       "Ingress": false,
       "Internal": false,
       "Labels": {
-        "coaming.stack.id": "stack-replay",
+        "tierplan.stack.id": "stack-replay",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.network": "back",
         "com.docker.compose.project": "replay",
@@ -616,7 +616,7 @@
       "Ingress": false,
       "Internal": false,
       "Labels": {
-        "coaming.stack.id": "stack-replay",
+        "tierplan.stack.id": "stack-replay",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.network": "front",
         "com.docker.compose.project": "replay",
@@ -677,7 +677,7 @@
     "hasBody": true,
     "json": {
       "Labels": {
-        "coaming.stack.id": "stack-replay",
+        "tierplan.stack.id": "stack-replay",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.project": "replay",
         "com.docker.compose.version": "",

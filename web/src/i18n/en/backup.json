@@ -1,8 +1,8 @@
 {
   "backup": {
     "tabTitle": "Backup",
-    "title": "Back up and restore Coaming",
-    "intro": "A backup holds users, teams, access, settings, environments and the audit log, and the same for anything added in later releases. It doesn't hold the master key, sessions or pending links. Keep the backup passphrase safe: Coaming can't recover it.",
+    "title": "Back up and restore TierPlan",
+    "intro": "A backup holds users, teams, access, settings, environments and the audit log, and the same for anything added in later releases. It doesn't hold the master key, sessions or pending links. Keep the backup passphrase safe: TierPlan can't recover it.",
     "download": {
       "title": "Download a backup",
       "passphrase": "Passphrase",
@@ -19,9 +19,9 @@
     },
     "masterKey": {
       "trigger": "Master key",
-      "body": "Rotate the master key from the command line while Coaming is stopped:",
+      "body": "Rotate the master key from the command line while TierPlan is stopped:",
       "codeLabel": "the key rotate command",
-      "note": "The old key is kept as coaming.key.old until you delete it."
+      "note": "The old key is kept as tierplan.key.old until you delete it."
     }
   }
 }

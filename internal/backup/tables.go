@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup
 
@@ -91,7 +91,7 @@ var Tables = map[string]Class{
 	"stack_git":       Included, // webhook_secret_sealed is re-wrapped by RewrapAll
 	"stack_git_state": Excluded, // derived state, re-checked after a restore
 
-	// Networks and address pools (Phase 10): when Coaming first saw each network and last saw it in use
+	// Networks and address pools (Phase 10): when TierPlan first saw each network and last saw it in use
 	// (the orphan check's 24-hour grace clock, which the Phase 11 janitor reads too) and the networks a
 	// person asked never to be listed. Both belong to their environment and hold no secret.
 	"network_seen":  Included,

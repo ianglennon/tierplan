@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { describe, expect, it } from "vitest";
 
@@ -72,7 +72,7 @@ describe("eligibleFor", () => {
     }
   });
 
-  it("lets one of Coaming's own containers take an action on its own, never in a bulk", () => {
+  it("lets one of TierPlan's own containers take an action on its own, never in a bulk", () => {
     const server = subject("running", { selfKind: "server" });
     const agent = subject("running", { selfKind: "agent" });
     const legacy = subject("running", { isSelf: true });

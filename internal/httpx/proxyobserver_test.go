@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package httpx
 
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const observedPublicURL = "https://coaming.example.com"
+const observedPublicURL = "https://tierplan.example.com"
 
 var observedTrusted = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 
@@ -97,13 +97,13 @@ func kinds(sigs []Signal) []string {
 	return out
 }
 
-// goodViaProxy is a request that a correct proxy in front of Coaming would send.
+// goodViaProxy is a request that a correct proxy in front of TierPlan would send.
 func goodViaProxy(extra map[string]string) probe {
 	h := map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-For": "203.0.113.9"}
 	for k, v := range extra {
 		h[k] = v
 	}
-	return probe{peer: "10.1.2.3:4000", host: "coaming.example.com", headers: h}
+	return probe{peer: "10.1.2.3:4000", host: "tierplan.example.com", headers: h}
 }
 
 func TestEffectiveSchemeFollowsTLSAndOnlyATrustedProxy(t *testing.T) {
@@ -144,7 +144,7 @@ func TestEffectiveSchemeOutsideTheMiddlewareIsHTTP(t *testing.T) {
 func TestForwardedHeadersFromAnUntrustedPeerRecordTheTCPPeer(t *testing.T) {
 	rig := newObserverRig(observedTrusted, observedPublicURL)
 	rig.send(probe{
-		peer: "198.51.100.7:5555", host: "coaming.example.com", tls: true,
+		peer: "198.51.100.7:5555", host: "tierplan.example.com", tls: true,
 		headers: map[string]string{"X-Forwarded-For": "203.0.113.9"},
 	})
 	sigs := rig.obs.Signals()
@@ -176,7 +176,7 @@ func TestHostAndPrefixHeadersNeverWidenTheOriginCheck(t *testing.T) {
 	f := newFixture(t, func(o *Options) { o.TrustedProxies = observedTrusted })
 	h := f.r.Handler()
 	forged := func(r *http.Request) {
-		r.Host = "coaming.example"
+		r.Host = "tierplan.example"
 		r.RemoteAddr = "10.1.2.3:4000"
 		r.Header.Set("X-Forwarded-Proto", "https")
 		r.Header.Set("X-Forwarded-Host", "evil.example")
@@ -204,9 +204,9 @@ func TestAHostThatIsNotThePublicURLRecordsAMismatchWithThatHost(t *testing.T) {
 
 func TestPlainHTTPThroughATrustedProxyThatSendsNoProtoRecordsAMismatchWithThatScheme(t *testing.T) {
 	rig := newObserverRig(observedTrusted, observedPublicURL)
-	rig.send(probe{peer: "10.1.2.3:4000", host: "coaming.example.com", headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}})
+	rig.send(probe{peer: "10.1.2.3:4000", host: "tierplan.example.com", headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}})
 	sigs := rig.obs.Signals()
-	if len(sigs) != 1 || sigs[0].Kind != SignalURLMismatch || sigs[0].Scheme != "http" || sigs[0].Host != "coaming.example.com" {
+	if len(sigs) != 1 || sigs[0].Kind != SignalURLMismatch || sigs[0].Scheme != "http" || sigs[0].Host != "tierplan.example.com" {
 		t.Fatalf("signals = %+v, want one url_mismatch over http", sigs)
 	}
 }
@@ -214,7 +214,7 @@ func TestPlainHTTPThroughATrustedProxyThatSendsNoProtoRecordsAMismatchWithThatSc
 func TestADefaultPortInTheHostIsNotAMismatch(t *testing.T) {
 	rig := newObserverRig(observedTrusted, observedPublicURL)
 	p := goodViaProxy(nil)
-	p.host = "Coaming.Example.com:443"
+	p.host = "TierPlan.Example.com:443"
 	rig.send(p)
 	if sigs := rig.obs.Signals(); len(sigs) != 0 {
 		t.Fatalf("signals = %+v, want none for the same host with its default port", sigs)
@@ -225,8 +225,8 @@ func TestProbesAndLoopbackAreNotCheckedAgainstThePublicURL(t *testing.T) {
 	rig := newObserverRig(observedTrusted, observedPublicURL)
 	rig.send(probe{peer: "127.0.0.1:5000", host: "localhost:7480", path: "/healthz"})
 	rig.send(probe{peer: "127.0.0.1:5000", host: "localhost:7480", path: "/readyz"})
-	rig.send(probe{peer: "172.18.0.9:5000", host: "coaming:7480", path: "/healthz"})
-	rig.send(probe{peer: "172.18.0.9:5000", host: "coaming:7480", path: "/readyz"})
+	rig.send(probe{peer: "172.18.0.9:5000", host: "tierplan:7480", path: "/healthz"})
+	rig.send(probe{peer: "172.18.0.9:5000", host: "tierplan:7480", path: "/readyz"})
 	rig.send(probe{peer: "127.0.0.1:5000", host: "localhost:7480", path: "/api/version"})
 	rig.send(probe{peer: "[::1]:5000", host: "localhost:7480", path: "/"})
 	if sigs := rig.obs.Signals(); len(sigs) != 0 {
@@ -276,7 +276,7 @@ func TestTheObserverHoldsAtMost256SignalsAndKeepsTheNewest(t *testing.T) {
 	rig := newObserverRig(observedTrusted, observedPublicURL)
 	for i := range 300 {
 		rig.send(probe{
-			peer: fmt.Sprintf("198.51.%d.%d:5000", i/250, i%250+1), host: "coaming.example.com", tls: true,
+			peer: fmt.Sprintf("198.51.%d.%d:5000", i/250, i%250+1), host: "tierplan.example.com", tls: true,
 			headers: map[string]string{"X-Forwarded-For": "203.0.113.9"},
 		})
 		rig.advance(time.Second)

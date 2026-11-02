@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // The Resources tab of a stack (plan 07-25, STK-10, D-22): everything the stack owns on its environment, one card
@@ -256,9 +256,9 @@ func TestStackResourcesListTheVolumesOfAStackOnTheNodeThatHoldsThem(t *testing.T
 	cfg := swarmManagerEngine()
 	cfg.TasksFollowWrites = true
 	cfg.Volumes = []dockertest.FakeVolume{
-		{Name: "tracer_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "tracer", "coaming.stack.id": st.ID}},
+		{Name: "tracer_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "tracer", "tierplan.stack.id": st.ID}},
 		{Name: "tracer_hand", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "tracer"}},
-		{Name: "other_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "other", "coaming.stack.id": "someone-else"}},
+		{Name: "other_data", Driver: "local", Labels: map[string]string{"com.docker.stack.namespace": "other", "tierplan.stack.id": "someone-else"}},
 	}
 	f.fake.Reconfigure(cfg)
 

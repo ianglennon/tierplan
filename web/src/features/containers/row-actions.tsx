@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
@@ -100,7 +100,7 @@ interface ContainerRowActionsProps {
 // ContainerRowActions is the row menu of the containers list: the actions that
 // fit the container's state (D-06, D-07). Start, Restart, Pause and Unpause run
 // at once; Stop, Kill and Remove ask first, and so does any action on one of
-// Coaming's own containers (D-11). A caller without the permission sees the item
+// TierPlan's own containers (D-11). A caller without the permission sees the item
 // disabled, with the reason (D-19); the server decides either way.
 export function ContainerRowActions({
   envId,
@@ -145,7 +145,7 @@ export function ContainerRowActions({
   const canRemove = eligibleFor("remove", row);
   if (!canStart && !canStop && !canRestart && !canPause && !canUnpause && !canKill && !canRemove)
     return null;
-  // One of Coaming's own containers asks for its name before it is stopped,
+  // One of TierPlan's own containers asks for its name before it is stopped,
   // killed, restarted, paused or removed; start and unpause need no more care.
   const own = ownKind(row) !== "";
 

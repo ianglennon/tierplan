@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup_test
 
@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 const exportPass = "correct horse battery"
@@ -97,7 +97,7 @@ func (f *exportFixture) export(t *testing.T, pass string, o backup.ExportOptions
 	return res, buf.Bytes(), err
 }
 
-var testOptions = backup.ExportOptions{AppVersion: "v9.9.9", InstanceName: "Home lab", PublicURL: "https://coaming.example"}
+var testOptions = backup.ExportOptions{AppVersion: "v9.9.9", InstanceName: "Home lab", PublicURL: "https://tierplan.example"}
 
 // opened is a backup taken apart: its manifest, the raw database bytes and the
 // database copied out to a file and opened.
@@ -174,7 +174,7 @@ func TestExportWritesAFileThatOpensWithThePassphrase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m.Format != 1 || m.AppVersion != "v9.9.9" || m.Schema != schema ||
-		m.InstanceName != "Home lab" || m.PublicURL != "https://coaming.example" || !m.ChainVerified || m.ExportKey == "" {
+		m.InstanceName != "Home lab" || m.PublicURL != "https://tierplan.example" || !m.ChainVerified || m.ExportKey == "" {
 		t.Fatalf("manifest = %+v", m)
 	}
 	want := backup.Counts{Users: 1, Teams: 1, Environments: 1, AuditEntries: 3}

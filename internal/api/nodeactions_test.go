@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -14,11 +14,11 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Drain, pause, activate, promote and demote (plan 06-15, RES-05, D-20 to D-23). Docker is a fake
@@ -178,12 +178,12 @@ func TestNodeImpactOfADrainClassifiesTheNodesTasks(t *testing.T) {
 	}
 }
 
-func TestNodeImpactOfADemoteOfCoamingsNodeNeedsTheNameAndWarnsOfAnEvenCount(t *testing.T) {
+func TestNodeImpactOfADemoteOfTierPlansNodeNeedsTheNameAndWarnsOfAnEvenCount(t *testing.T) {
 	t.Parallel()
 	f, e := naEnv(t, nil)
 	b := niOf(t, f.nodeImpact(t, e, "node-1", "demote"))
-	if !b.NeedsConfirm || !slices.Contains(b.Warnings, "runs_coaming") || !slices.Contains(b.Warnings, "even_count") || slices.Contains(b.Warnings, "quorum_at_risk") {
-		t.Errorf("body = %+v, want runs_coaming and even_count and the typed confirm", b)
+	if !b.NeedsConfirm || !slices.Contains(b.Warnings, "runs_tierplan") || !slices.Contains(b.Warnings, "even_count") || slices.Contains(b.Warnings, "quorum_at_risk") {
+		t.Errorf("body = %+v, want runs_tierplan and even_count and the typed confirm", b)
 	}
 	if b.Managers.After != 2 {
 		t.Errorf("managers = %+v, want 2 after", b.Managers)
@@ -269,7 +269,7 @@ func TestSetNodeAvailabilityDrainsWithTheFullSpecAndTheVersionJustRead(t *testin
 func TestSetNodeAvailabilityPauseAndActivateNeedNoName(t *testing.T) {
 	t.Parallel()
 	f, e := naEnv(t, nil)
-	// Pausing the node Coaming runs on sends nothing away, so it needs no name.
+	// Pausing the node TierPlan runs on sends nothing away, so it needs no name.
 	if rec := f.setAvailability(t, e, "node-1", `{"availability":"pause","version":7}`); rec.code != http.StatusNoContent {
 		t.Fatalf("pause = %d: %s", rec.code, rec.body)
 	}
@@ -286,7 +286,7 @@ func TestSetNodeAvailabilityPauseAndActivateNeedNoName(t *testing.T) {
 	}
 }
 
-func TestSetNodeAvailabilityOfCoamingsNodeNeedsItsNameAndThenIsNotBlocked(t *testing.T) {
+func TestSetNodeAvailabilityOfTierPlansNodeNeedsItsNameAndThenIsNotBlocked(t *testing.T) {
 	t.Parallel()
 	f, e := naEnv(t, nil)
 	for _, confirm := range []string{"", "mgr-2", "MGR-1", "mgr-1 "} {
@@ -308,12 +308,12 @@ func TestSetNodeAvailabilityOfCoamingsNodeNeedsItsNameAndThenIsNotBlocked(t *tes
 	}
 	for _, r := range rows {
 		if r.Result != string(audit.ResultFailure) || r.Reason != "confirmation_required" || r.Details["confirmed"] != "false" ||
-			r.Details["code"] != "confirmation_required" || !strings.Contains(r.Details["warnings"], "runs_coaming") {
-			t.Errorf("row = %+v, want a failure confirmation_required carrying runs_coaming", r)
+			r.Details["code"] != "confirmation_required" || !strings.Contains(r.Details["warnings"], "runs_tierplan") {
+			t.Errorf("row = %+v, want a failure confirmation_required carrying runs_tierplan", r)
 		}
 	}
 
-	// Coaming never hard-blocks a change an Admin confirmed.
+	// TierPlan never hard-blocks a change an Admin confirmed.
 	rec := f.setAvailability(t, e, "node-1", `{"availability":"drain","version":7,"confirm":"mgr-1"}`)
 	if rec.code != http.StatusNoContent {
 		t.Fatalf("with its name: %d %s, want 204", rec.code, rec.body)
@@ -322,7 +322,7 @@ func TestSetNodeAvailabilityOfCoamingsNodeNeedsItsNameAndThenIsNotBlocked(t *tes
 		t.Errorf("updates = %+v, want the drain sent", ups)
 	}
 	last := f.nodeAudits(t)[4]
-	if last.Result != string(audit.ResultSuccess) || last.Details["confirmed"] != "true" || last.Details["code"] != "done" || !strings.Contains(last.Details["warnings"], "runs_coaming") {
+	if last.Result != string(audit.ResultSuccess) || last.Details["confirmed"] != "true" || last.Details["code"] != "done" || !strings.Contains(last.Details["warnings"], "runs_tierplan") {
 		t.Errorf("last row = %+v, want a success with confirmed true and the warning", last)
 	}
 }
@@ -394,7 +394,7 @@ func TestSetNodeRoleDemoteThatPutsQuorumAtRiskNeedsTheName(t *testing.T) {
 	}
 	rec = f.setRole(t, e, "node-2", `{"role":"worker","version":5,"confirm":"mgr-2"}`)
 	if rec.code != http.StatusNoContent {
-		t.Fatalf("with the name = %d %s, want 204: Coaming warns, Docker alone refuses", rec.code, rec.body)
+		t.Fatalf("with the name = %d %s, want 204: TierPlan warns, Docker alone refuses", rec.code, rec.body)
 	}
 	rows := f.nodeAudits(t)
 	last := rows[len(rows)-1]
@@ -651,7 +651,7 @@ func TestRemoveNodeRefusals(t *testing.T) {
 		{"a worker that is ready", "node-4", http.StatusConflict, "node_not_down"},
 		{"a worker that is paused", "node-6", http.StatusConflict, "node_not_down"},
 		{"a manager that is ready", "node-2", http.StatusConflict, "node_is_manager"},
-		{"Coaming's own manager", "node-1", http.StatusConflict, "node_is_manager"},
+		{"TierPlan's own manager", "node-1", http.StatusConflict, "node_is_manager"},
 		{"a manager that is down", "node-8", http.StatusConflict, "node_is_manager"},
 		{"a node the swarm does not have", "node-99", http.StatusNotFound, "node_not_found"},
 	} {

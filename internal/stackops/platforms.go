@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -13,15 +13,15 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The platforms of a service (TaskTemplate.Placement.Platforms) belong to its image: they are the os and
 // architecture pairs the image was published for, and a swarm schedules a task only on a node that runs one of them
 // (user decision 2026-10-27). docker stack deploy has the daemon resolve each image and stores them, so a stack made
 // by it holds them and no compose file can say them. The converter never sees an image's platforms, so they are set
-// where the image is pinned, as the docker client sets them after it converts; plan 08-31 adds the ones Coaming
+// where the image is pinned, as the docker client sets them after it converts; plan 08-31 adds the ones TierPlan
 // looks up itself.
 
 // withPin returns spec with the image of the pin and the platforms of that image. The spec given is not changed: the
@@ -59,7 +59,7 @@ func recordedPlatforms(p Pin, name string, stored map[string]stacks.LivePin) []s
 // pinPlatforms gives each pin its platforms by one precedence, which the deploy review and every deploy that looks images
 // up apply alike, so the review shows the placement the deploy sends (WR-02): what the stack's last good revision recorded
 // for the pin's sha256 digest comes first, even over what a registry lookup just said for it, so a redeploy puts back
-// platforms someone took off outside Coaming and the review shows it; a pin that has none yet then takes those of the
+// platforms someone took off outside TierPlan and the review shows it; a pin that has none yet then takes those of the
 // running service of the same image (carryPlatforms). Nothing is asked of a registry here (P7 D-18). The pins map is
 // changed in place.
 func pinPlatforms(pins map[string]Pin, stored map[string]stacks.LivePin, live map[string]dockerx.ServiceDetail) {
@@ -133,7 +133,7 @@ func specPlatforms(spec json.RawMessage) []swarm.Platform {
 // platformMemoLimit is how many digests a PlatformMemo holds before it starts again.
 const platformMemoLimit = 4096
 
-// PlatformMemo remembers the platforms of the images Coaming looked up, by the repository the image was looked up in and
+// PlatformMemo remembers the platforms of the images TierPlan looked up, by the repository the image was looked up in and
 // the sha256 digest of its manifest, within the environment that looked it up. A digest names one manifest, but only a
 // registry that tells the truth keeps it so, and the memo is one for the whole server, so an answer is held only for the
 // repository it came from: a lookup of one repository never answers for another that names the same digest (CR-01). Each

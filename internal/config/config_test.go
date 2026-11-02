@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package config_test
 
@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // envMap is a fake environment.
@@ -68,7 +68,7 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestFlagBeatsEnv(t *testing.T) {
-	c, err := load(t, []string{"--listen", "127.0.0.1:1"}, envMap{"COAMING_LISTEN": ":9000"}, files{})
+	c, err := load(t, []string{"--listen", "127.0.0.1:1"}, envMap{"TIERPLAN_LISTEN": ":9000"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestFlagBeatsEnv(t *testing.T) {
 }
 
 func TestEnvBeatsDefault(t *testing.T) {
-	c, err := load(t, nil, envMap{"COAMING_LISTEN": ":9000"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_LISTEN": ":9000"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestEnvBeatsDefault(t *testing.T) {
 func TestFlagDefaultDoesNotOverrideEnv(t *testing.T) {
 	// A flag that was not set on the command line must not beat the env var,
 	// even though BindFlags registered it with a default.
-	c, err := load(t, []string{"--data-dir", "/x"}, envMap{"COAMING_LISTEN": ":9000"}, files{})
+	c, err := load(t, []string{"--data-dir", "/x"}, envMap{"TIERPLAN_LISTEN": ":9000"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestFlagDefaultDoesNotOverrideEnv(t *testing.T) {
 
 func TestFileVariantTrimsTrailingNewline(t *testing.T) {
 	c, err := load(t, nil,
-		envMap{"COAMING_ENCRYPTION_KEY_FILE": "/run/secrets/key"},
+		envMap{"TIERPLAN_ENCRYPTION_KEY_FILE": "/run/secrets/key"},
 		files{"/run/secrets/key": "abc\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestFileVariantTrimsTrailingNewline(t *testing.T) {
 }
 
 func TestEnvBeatsFileWhenOnlyOneIsSet(t *testing.T) {
-	c, err := load(t, nil, envMap{"COAMING_ENCRYPTION_KEY": "fromenv"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_ENCRYPTION_KEY": "fromenv"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,13 +123,13 @@ func TestEnvBeatsFileWhenOnlyOneIsSet(t *testing.T) {
 
 func TestBothSecretAndFileIsAnError(t *testing.T) {
 	_, err := load(t, nil, envMap{
-		"COAMING_ENCRYPTION_KEY":      "x",
-		"COAMING_ENCRYPTION_KEY_FILE": "/run/secrets/key",
+		"TIERPLAN_ENCRYPTION_KEY":      "x",
+		"TIERPLAN_ENCRYPTION_KEY_FILE": "/run/secrets/key",
 	}, files{"/run/secrets/key": "abc"})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	for _, name := range []string{"COAMING_ENCRYPTION_KEY", "COAMING_ENCRYPTION_KEY_FILE"} {
+	for _, name := range []string{"TIERPLAN_ENCRYPTION_KEY", "TIERPLAN_ENCRYPTION_KEY_FILE"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
@@ -137,31 +137,31 @@ func TestBothSecretAndFileIsAnError(t *testing.T) {
 }
 
 func TestUnreadableOrEmptyFileIsAnError(t *testing.T) {
-	_, err := load(t, nil, envMap{"COAMING_ENCRYPTION_KEY_FILE": "/missing"}, files{})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_ENCRYPTION_KEY_FILE") {
+	_, err := load(t, nil, envMap{"TIERPLAN_ENCRYPTION_KEY_FILE": "/missing"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_ENCRYPTION_KEY_FILE") {
 		t.Errorf("missing file error = %v", err)
 	}
-	_, err = load(t, nil, envMap{"COAMING_ENCRYPTION_KEY_FILE": "/empty"}, files{"/empty": "\n"})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_ENCRYPTION_KEY_FILE") {
+	_, err = load(t, nil, envMap{"TIERPLAN_ENCRYPTION_KEY_FILE": "/empty"}, files{"/empty": "\n"})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_ENCRYPTION_KEY_FILE") {
 		t.Errorf("empty file error = %v", err)
 	}
 }
 
 func TestPublicURL(t *testing.T) {
-	_, err := load(t, nil, envMap{"COAMING_PUBLIC_URL": "example.com"}, files{})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_PUBLIC_URL") {
+	_, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": "example.com"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_PUBLIC_URL") {
 		t.Fatalf("relative URL error = %v", err)
 	}
 	for in, want := range map[string]string{
-		"https://coaming.example.com/":       "https://coaming.example.com",
-		"HTTPS://Coaming.Example.com":        "https://coaming.example.com",
-		"http://localhost:5173":              "http://localhost:5173",
-		"https://example.com/coaming/":       "https://example.com/coaming",
-		"https://example.com/sub/path":       "https://example.com/sub/path",
-		"http://192.168.1.10:7480":           "http://192.168.1.10:7480",
-		"https://coaming.example.com:443///": "https://coaming.example.com:443",
+		"https://tierplan.example.com/":       "https://tierplan.example.com",
+		"HTTPS://TierPlan.Example.com":        "https://tierplan.example.com",
+		"http://localhost:5173":               "http://localhost:5173",
+		"https://example.com/tierplan/":       "https://example.com/tierplan",
+		"https://example.com/sub/path":        "https://example.com/sub/path",
+		"http://192.168.1.10:7480":            "http://192.168.1.10:7480",
+		"https://tierplan.example.com:443///": "https://tierplan.example.com:443",
 	} {
-		c, err := load(t, nil, envMap{"COAMING_PUBLIC_URL": in}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
 			continue
@@ -171,21 +171,21 @@ func TestPublicURL(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"ftp://example.com", "https://", "https://u:p@example.com", "https://example.com/?a=b", "https://example.com/#f"} {
-		if _, err := load(t, nil, envMap{"COAMING_PUBLIC_URL": bad}, files{}); err == nil {
+		if _, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": bad}, files{}); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}
 	}
 }
 
-func TestPublicURLRejectsAFirstSegmentCoamingServesItself(t *testing.T) {
+func TestPublicURLRejectsAFirstSegmentTierPlanServesItself(t *testing.T) {
 	for _, seg := range []string{"api", "assets", "agent", "healthz", "readyz", "setup", "openapi", "docs", "schemas", "env", "environments", "settings", "audit", "login", "welcome"} {
 		for _, in := range []string{"https://example.com/" + seg, "https://example.com/" + seg + "/x", "https://example.com/" + seg + "/"} {
-			_, err := load(t, nil, envMap{"COAMING_PUBLIC_URL": in}, files{})
+			_, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
 			if err == nil {
 				t.Errorf("%q should be rejected", in)
 				continue
 			}
-			if !strings.Contains(err.Error(), "COAMING_PUBLIC_URL") || !strings.Contains(err.Error(), "must not start with /"+seg+", which Coaming serves itself") {
+			if !strings.Contains(err.Error(), "TIERPLAN_PUBLIC_URL") || !strings.Contains(err.Error(), "must not start with /"+seg+", which TierPlan serves itself") {
 				t.Errorf("%q: error %q does not name the reserved segment", in, err)
 			}
 		}
@@ -198,14 +198,14 @@ func TestPublicURLRejectsAFirstSegmentCoamingServesItself(t *testing.T) {
 
 func TestPublicURLAcceptsAPathThatDoesNotCollide(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://example.com/coaming":       "https://example.com/coaming",
-		"https://example.com/tools/coaming": "https://example.com/tools/coaming",
-		// Only the FIRST segment is Coaming's to claim.
+		"https://example.com/tierplan":       "https://example.com/tierplan",
+		"https://example.com/tools/tierplan": "https://example.com/tools/tierplan",
+		// Only the FIRST segment is TierPlan's to claim.
 		"https://example.com/tools/api": "https://example.com/tools/api",
 		"https://example.com/apis":      "https://example.com/apis",
 		"https://example.com/API":       "https://example.com/API",
 	} {
-		c, err := load(t, nil, envMap{"COAMING_PUBLIC_URL": in}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
 			continue
@@ -217,7 +217,7 @@ func TestPublicURLAcceptsAPathThatDoesNotCollide(t *testing.T) {
 }
 
 func TestTrustedProxies(t *testing.T) {
-	c, err := load(t, nil, envMap{"COAMING_TRUSTED_PROXIES": "10.0.0.0/8, 192.168.1.5"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_TRUSTED_PROXIES": "10.0.0.0/8, 192.168.1.5"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,24 +227,24 @@ func TestTrustedProxies(t *testing.T) {
 	if got := c.TrustedProxies[1].String(); got != "192.168.1.5/32" {
 		t.Errorf("single IP prefix = %s, want 192.168.1.5/32", got)
 	}
-	_, err = load(t, nil, envMap{"COAMING_TRUSTED_PROXIES": "10.0.0.0/8,nonsense"}, files{})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_TRUSTED_PROXIES") {
+	_, err = load(t, nil, envMap{"TIERPLAN_TRUSTED_PROXIES": "10.0.0.0/8,nonsense"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TRUSTED_PROXIES") {
 		t.Errorf("invalid entry error = %v", err)
 	}
 }
 
 func TestInvalidValuesNameTheEnvVar(t *testing.T) {
 	for env, val := range map[string]string{
-		"COAMING_LISTEN":                    "no-port",
-		"COAMING_LOGIN_MAX_FAILURES":        "0",
-		"COAMING_LOGIN_LOCKOUT":             "soon",
-		"COAMING_SESSION_IDLE_TIMEOUT":      "-1h",
-		"COAMING_SESSION_REMEMBER_LIFETIME": "0s",
-		"COAMING_AUDIT_RETENTION_DAYS":      "-3",
-		"COAMING_SKIP_PRE_MIGRATE_BACKUP":   "maybe",
-		"COAMING_TLS_SELF_SIGNED":           "perhaps",
-		"COAMING_DOCKER_GID":                "abc",
-		"COAMING_LOG_LEVEL":                 "loud",
+		"TIERPLAN_LISTEN":                    "no-port",
+		"TIERPLAN_LOGIN_MAX_FAILURES":        "0",
+		"TIERPLAN_LOGIN_LOCKOUT":             "soon",
+		"TIERPLAN_SESSION_IDLE_TIMEOUT":      "-1h",
+		"TIERPLAN_SESSION_REMEMBER_LIFETIME": "0s",
+		"TIERPLAN_AUDIT_RETENTION_DAYS":      "-3",
+		"TIERPLAN_SKIP_PRE_MIGRATE_BACKUP":   "maybe",
+		"TIERPLAN_TLS_SELF_SIGNED":           "perhaps",
+		"TIERPLAN_DOCKER_GID":                "abc",
+		"TIERPLAN_LOG_LEVEL":                 "loud",
 	} {
 		_, err := load(t, nil, envMap{env: val}, files{})
 		if err == nil {
@@ -259,13 +259,13 @@ func TestInvalidValuesNameTheEnvVar(t *testing.T) {
 
 func TestTypedValues(t *testing.T) {
 	c, err := load(t, nil, envMap{
-		"COAMING_LOGIN_MAX_FAILURES":      "9",
-		"COAMING_LOGIN_LOCKOUT":           "45m",
-		"COAMING_AUDIT_RETENTION_DAYS":    "0",
-		"COAMING_SKIP_PRE_MIGRATE_BACKUP": "true",
-		"COAMING_DOCKER_GID":              "999",
-		"COAMING_LOG_LEVEL":               "debug",
-		"DOCKER_HOST":                     "unix:///custom.sock",
+		"TIERPLAN_LOGIN_MAX_FAILURES":      "9",
+		"TIERPLAN_LOGIN_LOCKOUT":           "45m",
+		"TIERPLAN_AUDIT_RETENTION_DAYS":    "0",
+		"TIERPLAN_SKIP_PRE_MIGRATE_BACKUP": "true",
+		"TIERPLAN_DOCKER_GID":              "999",
+		"TIERPLAN_LOG_LEVEL":               "debug",
+		"DOCKER_HOST":                      "unix:///custom.sock",
 	}, files{})
 	if err != nil {
 		t.Fatal(err)
@@ -280,23 +280,23 @@ func TestTypedValues(t *testing.T) {
 }
 
 func TestTLSSettingsMustBeConsistent(t *testing.T) {
-	_, err := load(t, nil, envMap{"COAMING_TLS_CERT_FILE": "/c.pem"}, files{})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_TLS_KEY_FILE") {
+	_, err := load(t, nil, envMap{"TIERPLAN_TLS_CERT_FILE": "/c.pem"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_KEY_FILE") {
 		t.Errorf("cert without key error = %v", err)
 	}
 	_, err = load(t, nil, envMap{
-		"COAMING_TLS_CERT_FILE":   "/c.pem",
-		"COAMING_TLS_KEY_FILE":    "/k.pem",
-		"COAMING_TLS_SELF_SIGNED": "true",
+		"TIERPLAN_TLS_CERT_FILE":   "/c.pem",
+		"TIERPLAN_TLS_KEY_FILE":    "/k.pem",
+		"TIERPLAN_TLS_SELF_SIGNED": "true",
 	}, files{})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_TLS_SELF_SIGNED") {
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_SELF_SIGNED") {
 		t.Errorf("cert plus self-signed error = %v", err)
 	}
 }
 
 func TestRedactedNeverContainsSecrets(t *testing.T) {
 	const secret = "super-secret-key-value"
-	c, err := load(t, nil, envMap{"COAMING_ENCRYPTION_KEY": secret, "COAMING_LISTEN": ":9000"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_ENCRYPTION_KEY": secret, "TIERPLAN_LISTEN": ":9000"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,15 +306,15 @@ func TestRedactedNeverContainsSecrets(t *testing.T) {
 			t.Errorf("Redacted leaks the secret in %s=%s", k, v)
 		}
 	}
-	if red["COAMING_ENCRYPTION_KEY"] != "[redacted]" {
-		t.Errorf("secret shown as %q, want [redacted]", red["COAMING_ENCRYPTION_KEY"])
+	if red["TIERPLAN_ENCRYPTION_KEY"] != "[redacted]" {
+		t.Errorf("secret shown as %q, want [redacted]", red["TIERPLAN_ENCRYPTION_KEY"])
 	}
-	if red["COAMING_LISTEN"] != ":9000" {
-		t.Errorf("non-secret shown as %q", red["COAMING_LISTEN"])
+	if red["TIERPLAN_LISTEN"] != ":9000" {
+		t.Errorf("non-secret shown as %q", red["TIERPLAN_LISTEN"])
 	}
 	// An unset secret is reported as unset, not as redacted.
 	c2, _ := load(t, nil, envMap{}, files{})
-	if got := c2.Redacted()["COAMING_ENCRYPTION_KEY"]; got != "" {
+	if got := c2.Redacted()["TIERPLAN_ENCRYPTION_KEY"]; got != "" {
 		t.Errorf("unset secret shown as %q, want empty", got)
 	}
 }
@@ -339,7 +339,7 @@ func TestLoadWithNilFlagsAndReadFileError(t *testing.T) {
 
 func TestNamesListsTheAgentTimingSettings(t *testing.T) {
 	names := strings.Join(config.Names(), " ")
-	for _, want := range []string{"COAMING_AGENT_HEARTBEAT_INTERVAL", "COAMING_AGENT_OFFLINE_AFTER", "COAMING_AGENT_RECONNECT_GRACE"} {
+	for _, want := range []string{"TIERPLAN_AGENT_HEARTBEAT_INTERVAL", "TIERPLAN_AGENT_OFFLINE_AFTER", "TIERPLAN_AGENT_RECONNECT_GRACE"} {
 		if !strings.Contains(names, want) {
 			t.Errorf("Names() does not list %s", want)
 		}
@@ -358,7 +358,7 @@ func TestTheAgentTimingDefaultsAreTenThirtyAndSixtySeconds(t *testing.T) {
 
 func TestTheAgentTimingSettingsCanBeOverridden(t *testing.T) {
 	c, err := load(t, nil, envMap{
-		"COAMING_AGENT_HEARTBEAT_INTERVAL": "5s", "COAMING_AGENT_OFFLINE_AFTER": "20s", "COAMING_AGENT_RECONNECT_GRACE": "2m",
+		"TIERPLAN_AGENT_HEARTBEAT_INTERVAL": "5s", "TIERPLAN_AGENT_OFFLINE_AFTER": "20s", "TIERPLAN_AGENT_RECONNECT_GRACE": "2m",
 	}, files{})
 	if err != nil {
 		t.Fatal(err)
@@ -370,27 +370,27 @@ func TestTheAgentTimingSettingsCanBeOverridden(t *testing.T) {
 
 func TestTheOfflineWindowMustBeAtLeastTwiceTheHeartbeatInterval(t *testing.T) {
 	for name, vars := range map[string]envMap{
-		"offline window equal to the interval":             {"COAMING_AGENT_HEARTBEAT_INTERVAL": "10s", "COAMING_AGENT_OFFLINE_AFTER": "10s"},
-		"offline window under twice the interval":          {"COAMING_AGENT_HEARTBEAT_INTERVAL": "10s", "COAMING_AGENT_OFFLINE_AFTER": "19s"},
-		"an interval that leaves the default window short": {"COAMING_AGENT_HEARTBEAT_INTERVAL": "20s"},
-		"not a duration":   {"COAMING_AGENT_HEARTBEAT_INTERVAL": "often"},
-		"a zero window":    {"COAMING_AGENT_OFFLINE_AFTER": "0s"},
-		"a negative grace": {"COAMING_AGENT_RECONNECT_GRACE": "-1m"},
+		"offline window equal to the interval":             {"TIERPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "TIERPLAN_AGENT_OFFLINE_AFTER": "10s"},
+		"offline window under twice the interval":          {"TIERPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "TIERPLAN_AGENT_OFFLINE_AFTER": "19s"},
+		"an interval that leaves the default window short": {"TIERPLAN_AGENT_HEARTBEAT_INTERVAL": "20s"},
+		"not a duration":   {"TIERPLAN_AGENT_HEARTBEAT_INTERVAL": "often"},
+		"a zero window":    {"TIERPLAN_AGENT_OFFLINE_AFTER": "0s"},
+		"a negative grace": {"TIERPLAN_AGENT_RECONNECT_GRACE": "-1m"},
 	} {
 		_, err := load(t, nil, vars, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_") {
-			t.Errorf("%s: error = %v, want one naming a COAMING_AGENT_ variable", name, err)
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_") {
+			t.Errorf("%s: error = %v, want one naming a TIERPLAN_AGENT_ variable", name, err)
 		}
 	}
 	// Exactly twice is allowed.
-	if _, err := load(t, nil, envMap{"COAMING_AGENT_HEARTBEAT_INTERVAL": "10s", "COAMING_AGENT_OFFLINE_AFTER": "20s"}, files{}); err != nil {
+	if _, err := load(t, nil, envMap{"TIERPLAN_AGENT_HEARTBEAT_INTERVAL": "10s", "TIERPLAN_AGENT_OFFLINE_AFTER": "20s"}, files{}); err != nil {
 		t.Errorf("a window of exactly twice the interval was refused: %v", err)
 	}
 }
 
 func TestNamesListsTheAgentEndpointSettings(t *testing.T) {
 	names := strings.Join(config.Names(), " ")
-	for _, want := range []string{"COAMING_AGENT_ALLOW_INSECURE", "COAMING_AGENT_CONNECT_BURST"} {
+	for _, want := range []string{"TIERPLAN_AGENT_ALLOW_INSECURE", "TIERPLAN_AGENT_CONNECT_BURST"} {
 		if !strings.Contains(names, want) {
 			t.Errorf("Names() does not list %s", want)
 		}
@@ -408,7 +408,7 @@ func TestTheAgentEndpointDefaultsAreSecureAndTwoHundred(t *testing.T) {
 }
 
 func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testing.T) {
-	c, err := load(t, nil, envMap{"COAMING_AGENT_ALLOW_INSECURE": "true", "COAMING_AGENT_CONNECT_BURST": "500"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_AGENT_ALLOW_INSECURE": "true", "TIERPLAN_AGENT_CONNECT_BURST": "500"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,13 +416,13 @@ func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testin
 		t.Fatalf("allow insecure %v, burst %d; want true and 500", c.AgentAllowInsecure, c.AgentConnectBurst)
 	}
 	for name, vars := range map[string]envMap{
-		"a zero burst":      {"COAMING_AGENT_CONNECT_BURST": "0"},
-		"a negative burst":  {"COAMING_AGENT_CONNECT_BURST": "-5"},
-		"a burst of text":   {"COAMING_AGENT_CONNECT_BURST": "many"},
-		"insecure not bool": {"COAMING_AGENT_ALLOW_INSECURE": "sometimes"},
+		"a zero burst":      {"TIERPLAN_AGENT_CONNECT_BURST": "0"},
+		"a negative burst":  {"TIERPLAN_AGENT_CONNECT_BURST": "-5"},
+		"a burst of text":   {"TIERPLAN_AGENT_CONNECT_BURST": "many"},
+		"insecure not bool": {"TIERPLAN_AGENT_ALLOW_INSECURE": "sometimes"},
 	} {
-		if _, err := load(t, nil, vars, files{}); err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_") {
-			t.Errorf("%s: error = %v, want one naming a COAMING_AGENT_ variable", name, err)
+		if _, err := load(t, nil, vars, files{}); err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_") {
+			t.Errorf("%s: error = %v, want one naming a TIERPLAN_AGENT_ variable", name, err)
 		}
 	}
 }
@@ -433,12 +433,12 @@ func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
 		t.Fatalf("unset: %q, %v; want empty", c.AgentURL, err)
 	}
 	for in, want := range map[string]string{
-		"https://coaming.internal:7480":  "https://coaming.internal:7480",
-		"HTTPS://Coaming.Internal:7480/": "https://coaming.internal:7480",
-		"http://192.168.1.10:7480":       "http://192.168.1.10:7480",
-		"https://example.com/coaming/":   "https://example.com/coaming",
+		"https://tierplan.internal:7480":  "https://tierplan.internal:7480",
+		"HTTPS://TierPlan.Internal:7480/": "https://tierplan.internal:7480",
+		"http://192.168.1.10:7480":        "http://192.168.1.10:7480",
+		"https://example.com/tierplan/":   "https://example.com/tierplan",
 	} {
-		c, err := load(t, nil, envMap{"COAMING_AGENT_URL": in}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_AGENT_URL": in}, files{})
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
 			continue
@@ -448,9 +448,9 @@ func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"example.com", "ftp://example.com", "https://", "https://u:p@example.com", "https://example.com/?a=b", "https://example.com/api"} {
-		_, err := load(t, nil, envMap{"COAMING_AGENT_URL": bad}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_URL") {
-			t.Errorf("%q: error = %v, want one naming COAMING_AGENT_URL", bad, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_AGENT_URL": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
+			t.Errorf("%q: error = %v, want one naming TIERPLAN_AGENT_URL", bad, err)
 		}
 	}
 }
@@ -461,7 +461,7 @@ func TestAgentURLHasAFlagAndTheEnvironmentWinsOverNothingElse(t *testing.T) {
 		t.Fatalf("flag: %q, %v", c.AgentURL, err)
 	}
 	// The public URL is a separate setting.
-	c, err = load(t, nil, envMap{"COAMING_PUBLIC_URL": "https://pub.example", "COAMING_AGENT_URL": "https://agent.example"}, files{})
+	c, err = load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": "https://pub.example", "TIERPLAN_AGENT_URL": "https://agent.example"}, files{})
 	if err != nil || c.PublicURL != "https://pub.example" || c.AgentURL != "https://agent.example" {
 		t.Fatalf("both: %q %q, %v", c.PublicURL, c.AgentURL, err)
 	}
@@ -469,12 +469,12 @@ func TestAgentURLHasAFlagAndTheEnvironmentWinsOverNothingElse(t *testing.T) {
 
 func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://example.com":               "wss://example.com/agent/connect",
-		"https://example.com/coaming":       "wss://example.com/coaming/agent/connect",
-		"https://example.com/coaming/":      "wss://example.com/coaming/agent/connect",
-		"https://coaming.lan:7480":          "wss://coaming.lan:7480/agent/connect",
-		"http://192.168.1.10:7480":          "ws://192.168.1.10:7480/agent/connect",
-		"https://u:p@coaming.example/x?q=1": "wss://coaming.example/x/agent/connect",
+		"https://example.com":                "wss://example.com/agent/connect",
+		"https://example.com/tierplan":       "wss://example.com/tierplan/agent/connect",
+		"https://example.com/tierplan/":      "wss://example.com/tierplan/agent/connect",
+		"https://tierplan.lan:7480":          "wss://tierplan.lan:7480/agent/connect",
+		"http://192.168.1.10:7480":           "ws://192.168.1.10:7480/agent/connect",
+		"https://u:p@tierplan.example/x?q=1": "wss://tierplan.example/x/agent/connect",
 	} {
 		got, err := config.AgentEndpoint(in)
 		if err != nil || got != want {
@@ -489,8 +489,8 @@ func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 }
 
 func TestTheFailingServiceGraceDefaultsToTwoMinutesAndIsListed(t *testing.T) {
-	if !strings.Contains(strings.Join(config.Names(), " "), "COAMING_FAILING_SERVICE_GRACE") {
-		t.Error("Names() does not list COAMING_FAILING_SERVICE_GRACE")
+	if !strings.Contains(strings.Join(config.Names(), " "), "TIERPLAN_FAILING_SERVICE_GRACE") {
+		t.Error("Names() does not list TIERPLAN_FAILING_SERVICE_GRACE")
 	}
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil {
@@ -502,7 +502,7 @@ func TestTheFailingServiceGraceDefaultsToTwoMinutesAndIsListed(t *testing.T) {
 }
 
 func TestTheFailingServiceGraceCanBeOverriddenAndMustBeAPositiveDuration(t *testing.T) {
-	c, err := load(t, nil, envMap{"COAMING_FAILING_SERVICE_GRACE": "5m"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_FAILING_SERVICE_GRACE": "5m"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,18 +510,18 @@ func TestTheFailingServiceGraceCanBeOverriddenAndMustBeAPositiveDuration(t *test
 		t.Fatalf("FailingServiceGrace = %v, want 5m", c.FailingServiceGrace)
 	}
 	for name, v := range map[string]string{"not a duration": "soon", "zero": "0s", "negative": "-1m"} {
-		_, err := load(t, nil, envMap{"COAMING_FAILING_SERVICE_GRACE": v}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_FAILING_SERVICE_GRACE") {
-			t.Errorf("%s: error = %v, want one naming COAMING_FAILING_SERVICE_GRACE", name, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_FAILING_SERVICE_GRACE": v}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_FAILING_SERVICE_GRACE") {
+			t.Errorf("%s: error = %v, want one naming TIERPLAN_FAILING_SERVICE_GRACE", name, err)
 		}
 	}
 }
 
-// COAMING_STACK_CONVERGE_TIMEOUT (plan 07-18, D-13): how long a swarm stack deploy waits for a
+// TIERPLAN_STACK_CONVERGE_TIMEOUT (plan 07-18, D-13): how long a swarm stack deploy waits for a
 // service to settle.
 func TestTheStackConvergeTimeoutDefaultsToTenMinutesAndIsListed(t *testing.T) {
-	if !strings.Contains(strings.Join(config.Names(), " "), "COAMING_STACK_CONVERGE_TIMEOUT") {
-		t.Error("Names() does not list COAMING_STACK_CONVERGE_TIMEOUT")
+	if !strings.Contains(strings.Join(config.Names(), " "), "TIERPLAN_STACK_CONVERGE_TIMEOUT") {
+		t.Error("Names() does not list TIERPLAN_STACK_CONVERGE_TIMEOUT")
 	}
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil {
@@ -534,20 +534,20 @@ func TestTheStackConvergeTimeoutDefaultsToTenMinutesAndIsListed(t *testing.T) {
 
 func TestTheStackConvergeTimeoutAcceptsOneMinuteToTwoHoursAndRefusesTheRest(t *testing.T) {
 	for raw, want := range map[string]time.Duration{"1m": time.Minute, "45m": 45 * time.Minute, "2h": 2 * time.Hour} {
-		c, err := load(t, nil, envMap{"COAMING_STACK_CONVERGE_TIMEOUT": raw}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_STACK_CONVERGE_TIMEOUT": raw}, files{})
 		if err != nil || c.StackConvergeTimeout != want {
 			t.Errorf("%s: %v, %v, want %v", raw, c.StackConvergeTimeout, err, want)
 		}
 	}
 	for name, v := range map[string]string{"under a minute": "30s", "over two hours": "121m", "zero": "0s", "negative": "-5m", "not a duration": "soon"} {
-		_, err := load(t, nil, envMap{"COAMING_STACK_CONVERGE_TIMEOUT": v}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_STACK_CONVERGE_TIMEOUT") {
-			t.Errorf("%s: error = %v, want one naming COAMING_STACK_CONVERGE_TIMEOUT", name, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_STACK_CONVERGE_TIMEOUT": v}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_STACK_CONVERGE_TIMEOUT") {
+			t.Errorf("%s: error = %v, want one naming TIERPLAN_STACK_CONVERGE_TIMEOUT", name, err)
 		}
 	}
 }
 
-// COAMING_INVITE_TTL (plan 03-11, D-24): how long an invite or reset link works.
+// TIERPLAN_INVITE_TTL (plan 03-11, D-24): how long an invite or reset link works.
 func TestInviteTTLDefaultsToSeventyTwoHours(t *testing.T) {
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil {
@@ -562,7 +562,7 @@ func TestInviteTTLAcceptsFromOneHourToThirtyDays(t *testing.T) {
 	for raw, want := range map[string]time.Duration{
 		"1h": time.Hour, "24h": 24 * time.Hour, "168h": 168 * time.Hour, "720h": 720 * time.Hour, "90m": 90 * time.Minute,
 	} {
-		c, err := load(t, nil, envMap{"COAMING_INVITE_TTL": raw}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_INVITE_TTL": raw}, files{})
 		if err != nil || c.InviteTTL != want {
 			t.Errorf("%s: %v, %v, want %v", raw, c.InviteTTL, err, want)
 		}
@@ -571,9 +571,9 @@ func TestInviteTTLAcceptsFromOneHourToThirtyDays(t *testing.T) {
 
 func TestInviteTTLRefusesAnythingOutsideItsRangeAtStartup(t *testing.T) {
 	for _, raw := range []string{"59m", "30s", "0s", "-72h", "721h", "8760h", "soon", "72"} {
-		_, err := load(t, nil, envMap{"COAMING_INVITE_TTL": raw}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_INVITE_TTL") {
-			t.Errorf("%q: error %v, want one naming COAMING_INVITE_TTL", raw, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_INVITE_TTL": raw}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_INVITE_TTL") {
+			t.Errorf("%q: error %v, want one naming TIERPLAN_INVITE_TTL", raw, err)
 		}
 	}
 	// The flag is checked the same way.
@@ -582,11 +582,11 @@ func TestInviteTTLRefusesAnythingOutsideItsRangeAtStartup(t *testing.T) {
 	}
 }
 
-// COAMING_RESTORE_RESTART and COAMING_BACKUP_MAX_UPLOAD (plan 03-25, D-30): how
-// Coaming restarts after a restore from the web UI, and how big a backup it takes.
+// TIERPLAN_RESTORE_RESTART and TIERPLAN_BACKUP_MAX_UPLOAD (plan 03-25, D-30): how
+// TierPlan restarts after a restore from the web UI, and how big a backup it takes.
 func TestTheRestoreRestartModeDefaultsToExecAcceptsExitAndRefusesAnythingElse(t *testing.T) {
 	names := strings.Join(config.Names(), " ")
-	for _, want := range []string{"COAMING_RESTORE_RESTART", "COAMING_BACKUP_MAX_UPLOAD"} {
+	for _, want := range []string{"TIERPLAN_RESTORE_RESTART", "TIERPLAN_BACKUP_MAX_UPLOAD"} {
 		if !strings.Contains(names, want) {
 			t.Errorf("Names() does not list %s", want)
 		}
@@ -599,19 +599,19 @@ func TestTheRestoreRestartModeDefaultsToExecAcceptsExitAndRefusesAnythingElse(t 
 		t.Fatalf("RestoreRestart default = %q, want exec", c.RestoreRestart)
 	}
 	for _, mode := range []string{"exec", "exit"} {
-		c, err := load(t, nil, envMap{"COAMING_RESTORE_RESTART": mode}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_RESTORE_RESTART": mode}, files{})
 		if err != nil || c.RestoreRestart != mode {
-			t.Errorf("COAMING_RESTORE_RESTART=%s: %q, %v", mode, c.RestoreRestart, err)
+			t.Errorf("TIERPLAN_RESTORE_RESTART=%s: %q, %v", mode, c.RestoreRestart, err)
 		}
 	}
-	c, err = load(t, []string{"--restore-restart", "exit"}, envMap{"COAMING_RESTORE_RESTART": "exec"}, files{})
+	c, err = load(t, []string{"--restore-restart", "exit"}, envMap{"TIERPLAN_RESTORE_RESTART": "exec"}, files{})
 	if err != nil || c.RestoreRestart != "exit" {
 		t.Errorf("the flag does not win: %q, %v", c.RestoreRestart, err)
 	}
 	for _, bad := range []string{"restart", "EXEC", "kill", "true"} {
-		_, err := load(t, nil, envMap{"COAMING_RESTORE_RESTART": bad}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_RESTORE_RESTART") || !strings.Contains(err.Error(), "exec") || !strings.Contains(err.Error(), "exit") {
-			t.Errorf("COAMING_RESTORE_RESTART=%q: error = %v, want one naming the variable and the two values", bad, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_RESTORE_RESTART": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_RESTORE_RESTART") || !strings.Contains(err.Error(), "exec") || !strings.Contains(err.Error(), "exit") {
+			t.Errorf("TIERPLAN_RESTORE_RESTART=%q: error = %v, want one naming the variable and the two values", bad, err)
 		}
 	}
 }
@@ -629,42 +629,42 @@ func TestTheBackupUploadCapDefaultsToOneGiBAndTakesByteSizesFromOneMiBToSixtyFou
 		"1048576": 1 << 20, "5368709120": 5 << 30, " 1 GiB ": 1 << 30, "1gib": 1 << 30,
 		"1024KiB": 1 << 20, "1M": 1 << 20, "3G": 3 << 30,
 	} {
-		c, err := load(t, nil, envMap{"COAMING_BACKUP_MAX_UPLOAD": in}, files{})
+		c, err := load(t, nil, envMap{"TIERPLAN_BACKUP_MAX_UPLOAD": in}, files{})
 		if err != nil || c.BackupMaxUpload != want {
-			t.Errorf("COAMING_BACKUP_MAX_UPLOAD=%q: %d, %v; want %d", in, c.BackupMaxUpload, err, want)
+			t.Errorf("TIERPLAN_BACKUP_MAX_UPLOAD=%q: %d, %v; want %d", in, c.BackupMaxUpload, err, want)
 		}
 	}
 	for _, bad := range []string{"1048575", "1023KiB", "0", "-1GiB", "65GiB", "70000000000", "lots", "1TiB", "1.5GiB"} {
-		_, err := load(t, nil, envMap{"COAMING_BACKUP_MAX_UPLOAD": bad}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_BACKUP_MAX_UPLOAD") {
-			t.Errorf("COAMING_BACKUP_MAX_UPLOAD=%q: error = %v, want one naming the variable", bad, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_BACKUP_MAX_UPLOAD": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_BACKUP_MAX_UPLOAD") {
+			t.Errorf("TIERPLAN_BACKUP_MAX_UPLOAD=%q: error = %v, want one naming the variable", bad, err)
 		}
 	}
 }
 
-// COAMING_BACKUP_DIR (plan 03-27, D-32): where scheduled backups are written.
+// TIERPLAN_BACKUP_DIR (plan 03-27, D-32): where scheduled backups are written.
 func TestTheBackupFolderIsUnsetByDefaultSoItFollowsTheDataDirectoryAndCanBeSet(t *testing.T) {
-	if !strings.Contains(strings.Join(config.Names(), " "), "COAMING_BACKUP_DIR") {
-		t.Error("Names() does not list COAMING_BACKUP_DIR")
+	if !strings.Contains(strings.Join(config.Names(), " "), "TIERPLAN_BACKUP_DIR") {
+		t.Error("Names() does not list TIERPLAN_BACKUP_DIR")
 	}
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil || c.BackupDir != "" {
 		t.Fatalf("default BackupDir = %q, %v; want empty", c.BackupDir, err)
 	}
-	c, err = load(t, nil, envMap{"COAMING_BACKUP_DIR": "/mnt/backups"}, files{})
+	c, err = load(t, nil, envMap{"TIERPLAN_BACKUP_DIR": "/mnt/backups"}, files{})
 	if err != nil || c.BackupDir != "/mnt/backups" {
-		t.Errorf("COAMING_BACKUP_DIR: %q, %v", c.BackupDir, err)
+		t.Errorf("TIERPLAN_BACKUP_DIR: %q, %v", c.BackupDir, err)
 	}
-	c, err = load(t, []string{"--backup-dir", "/srv/b"}, envMap{"COAMING_BACKUP_DIR": "/mnt/backups"}, files{})
+	c, err = load(t, []string{"--backup-dir", "/srv/b"}, envMap{"TIERPLAN_BACKUP_DIR": "/mnt/backups"}, files{})
 	if err != nil || c.BackupDir != "/srv/b" {
 		t.Errorf("the flag does not win: %q, %v", c.BackupDir, err)
 	}
 }
 
-// COAMING_REGISTRY_BLOCK_CIDRS (plan 05-12, D-14): ranges registry calls refuse on top of the
+// TIERPLAN_REGISTRY_BLOCK_CIDRS (plan 05-12, D-14): ranges registry calls refuse on top of the
 // built-in ones.
 func TestRegistryBlockCIDRsParsesCommaSeparatedPrefixes(t *testing.T) {
-	c, err := load(t, nil, envMap{"COAMING_REGISTRY_BLOCK_CIDRS": "10.9.0.0/16, fd00::/8"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_REGISTRY_BLOCK_CIDRS": "10.9.0.0/16, fd00::/8"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,34 +681,34 @@ func TestRegistryBlockCIDRsIsEmptyByDefault(t *testing.T) {
 }
 
 func TestRegistryBlockCIDRsRefusesAnInvalidEntryAtStartupAndNamesIt(t *testing.T) {
-	_, err := load(t, nil, envMap{"COAMING_REGISTRY_BLOCK_CIDRS": "10.9.0.0/16,not-a-range"}, files{})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_REGISTRY_BLOCK_CIDRS") || !strings.Contains(err.Error(), "not-a-range") {
-		t.Fatalf("error = %v, want one naming COAMING_REGISTRY_BLOCK_CIDRS and not-a-range", err)
+	_, err := load(t, nil, envMap{"TIERPLAN_REGISTRY_BLOCK_CIDRS": "10.9.0.0/16,not-a-range"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_REGISTRY_BLOCK_CIDRS") || !strings.Contains(err.Error(), "not-a-range") {
+		t.Fatalf("error = %v, want one naming TIERPLAN_REGISTRY_BLOCK_CIDRS and not-a-range", err)
 	}
 }
 
-// COAMING_HOST_ROUTE_FILE (plan 10-05, NET-05): the host's route table as mounted into
-// Coaming's own container, for the subnet picker's route check on Coaming's own host.
+// TIERPLAN_HOST_ROUTE_FILE (plan 10-05, NET-05): the host's route table as mounted into
+// TierPlan's own container, for the subnet picker's route check on TierPlan's own host.
 func TestConfigHostRouteFile(t *testing.T) {
-	if !strings.Contains(strings.Join(config.Names(), " "), "COAMING_HOST_ROUTE_FILE") {
-		t.Error("Names() does not list COAMING_HOST_ROUTE_FILE")
+	if !strings.Contains(strings.Join(config.Names(), " "), "TIERPLAN_HOST_ROUTE_FILE") {
+		t.Error("Names() does not list TIERPLAN_HOST_ROUTE_FILE")
 	}
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil || c.HostRouteFile != "/host/route" {
 		t.Fatalf("default HostRouteFile = %q, %v; want /host/route", c.HostRouteFile, err)
 	}
-	c, err = load(t, nil, envMap{"COAMING_HOST_ROUTE_FILE": "/proc/host/net/route"}, files{})
+	c, err = load(t, nil, envMap{"TIERPLAN_HOST_ROUTE_FILE": "/proc/host/net/route"}, files{})
 	if err != nil || c.HostRouteFile != "/proc/host/net/route" {
-		t.Errorf("COAMING_HOST_ROUTE_FILE: %q, %v", c.HostRouteFile, err)
+		t.Errorf("TIERPLAN_HOST_ROUTE_FILE: %q, %v", c.HostRouteFile, err)
 	}
-	c, err = load(t, []string{"--host-route-file", "/srv/route"}, envMap{"COAMING_HOST_ROUTE_FILE": "/proc/host/net/route"}, files{})
+	c, err = load(t, []string{"--host-route-file", "/srv/route"}, envMap{"TIERPLAN_HOST_ROUTE_FILE": "/proc/host/net/route"}, files{})
 	if err != nil || c.HostRouteFile != "/srv/route" {
 		t.Errorf("the flag does not win: %q, %v", c.HostRouteFile, err)
 	}
 	for _, bad := range []string{"host/route", "route", "/host/../route", "/host//route", "/host/route/"} {
-		_, err := load(t, nil, envMap{"COAMING_HOST_ROUTE_FILE": bad}, files{})
-		if err == nil || !strings.Contains(err.Error(), "COAMING_HOST_ROUTE_FILE") {
-			t.Errorf("COAMING_HOST_ROUTE_FILE=%q: error = %v, want one naming the variable", bad, err)
+		_, err := load(t, nil, envMap{"TIERPLAN_HOST_ROUTE_FILE": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "TIERPLAN_HOST_ROUTE_FILE") {
+			t.Errorf("TIERPLAN_HOST_ROUTE_FILE=%q: error = %v, want one naming the variable", bad, err)
 		}
 	}
 }

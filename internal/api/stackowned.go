@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -10,9 +10,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // problemStackOwned is the type of the 409 a change to a service a stack owns gets from the
@@ -22,10 +22,10 @@ const problemStackOwned = "stack_owned"
 // stackOwner says which stack an object belongs to, from its labels. It is the one place that decides
 // who owns an object: the label docker stack deploy writes (com.docker.stack.namespace), or the one
 // Docker Compose writes on a container (com.docker.compose.project), whichever is set, the namespace
-// first. A label that is set but empty names no stack. coamingID is Coaming's own label
-// (coaming.stack.id) as the object states it: a claim, not a fact, until stackIDs.confirm has seen a
+// first. A label that is set but empty names no stack. tierplanID is TierPlan's own label
+// (tierplan.stack.id) as the object states it: a claim, not a fact, until stackIDs.confirm has seen a
 // stack of the environment with that ID and name.
-func stackOwner(labels map[string]string) (stack, coamingID string, owned bool) {
+func stackOwner(labels map[string]string) (stack, tierplanID string, owned bool) {
 	stack = labels[labelStack]
 	if stack == "" {
 		stack = labels[labelProject]
@@ -48,7 +48,7 @@ func namespaceOwner(labels map[string]string) (string, bool) {
 	return stack, owned
 }
 
-// stackIDs are the stacks Coaming holds on one environment, by name, each with the rule that says which objects are
+// stackIDs are the stacks TierPlan holds on one environment, by name, each with the rule that says which objects are
 // its own (stackops.Ownership). A name is unique in an environment, so the name an object states picks the stack.
 type stackIDs map[string]stackops.Ownership
 
@@ -98,19 +98,19 @@ func (k stackIDs) confirmObject(stack, id string) string {
 	return ""
 }
 
-// confirmedFor is the Coaming stack ID of an object that shows stack as its stack, from its labels.
+// confirmedFor is the TierPlan stack ID of an object that shows stack as its stack, from its labels.
 func (k stackIDs) confirmedFor(stack string, labels map[string]string) string {
 	_, id, _ := stackOwner(labels)
 	return k.confirm(stack, id)
 }
 
 // stackOwnedProblem is the 409 a refused change to a stack's service is answered with. The stack is
-// named in the detail and in errors, as stack; a stack Coaming manages is named there too, as
-// coamingStackId, so the SPA can link to it. coamingID is empty for a stack Coaming does not manage.
-func stackOwnedProblem(stack, coamingID string) error {
+// named in the detail and in errors, as stack; a stack TierPlan manages is named there too, as
+// tierplanStackId, so the SPA can link to it. tierplanID is empty for a stack TierPlan does not manage.
+func stackOwnedProblem(stack, tierplanID string) error {
 	errs := []*huma.ErrorDetail{{Location: "stack", Message: stack}}
-	if coamingID != "" {
-		errs = append(errs, &huma.ErrorDetail{Location: "coamingStackId", Message: coamingID})
+	if tierplanID != "" {
+		errs = append(errs, &huma.ErrorDetail{Location: "tierplanStackId", Message: tierplanID})
 	}
 	return &huma.ErrorModel{
 		Type: problemStackOwned, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,

@@ -20,7 +20,7 @@ func (q *Queries) DeleteSetting(ctx context.Context, key string) error {
 
 const getMeta = `-- name: GetMeta :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 SELECT value FROM app_meta WHERE key = ?
 `

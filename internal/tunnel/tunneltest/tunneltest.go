@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package tunneltest is the server end of the agent tunnel, in process, for
 // tests: a real tunnel.Hub behind a TLS test server, a real migrated store, the
@@ -34,15 +34,15 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Clock is a clock a test can move. It is the server's clock: certificates are
@@ -106,7 +106,7 @@ type Options struct {
 	Log *slog.Logger
 }
 
-// Server is a running in-process Coaming tunnel endpoint.
+// Server is a running in-process TierPlan tunnel endpoint.
 type Server struct {
 	// Hub is the real hub. HTTP is the TLS test server in front of it.
 	Hub  *tunnel.Hub
@@ -778,7 +778,7 @@ func pipeDocker(st net.Conn, kind byte, socketPath string) {
 	<-done // whichever side ends first ends the exchange; the deferred closes release the other copy
 }
 
-// ForeignCert issues a client certificate shaped like Coaming's (CN the agent ID,
+// ForeignCert issues a client certificate shaped like TierPlan's (CN the agent ID,
 // OU the environment ID, client authentication) from a CA the server has never
 // heard of. With envID of a real environment it is a certificate "signed by
 // another environment's CA"; with an unknown one it names an environment that

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -13,14 +13,14 @@ import (
 
 	"github.com/distribution/reference"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 // The pre-pull of a standalone deploy (plan 07-21, D-27, IMG-02, STK-09). The Compose SDK pulls an image it
 // does not find with the credentials of its own configuration directory, which is empty on purpose (nothing of
-// the server's disk reaches a host), so a private image would fail at its pull. Coaming pulls the images
+// the server's disk reaches a host), so a private image would fail at its pull. TierPlan pulls the images
 // itself, before the SDK runs, with the credential it stores for the image's registry; the SDK then finds
 // every image on the host and never needs a credential.
 

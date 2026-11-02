@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package compose is the D-13 privileged-compose checker. Given the text of a
 // compose file it returns every host-escalation feature in it (privileged

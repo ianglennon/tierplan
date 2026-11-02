@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // An agent tunnel is a hijacked connection that sits idle between Docker calls.
@@ -21,7 +21,7 @@ func TestTunnelIdleLongerThanTheReadTimeoutStaysConnected(t *testing.T) {
 	const readTimeout = time.Second
 
 	srv := tunneltest.Start(t, tunneltest.Options{
-		// The hub is served by the http.Server Coaming itself builds.
+		// The hub is served by the http.Server TierPlan itself builds.
 		Server: func(h http.Handler) *http.Server { return newHTTPServer(h, nil, readTimeout) },
 	})
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))

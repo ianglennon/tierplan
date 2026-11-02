@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -14,7 +14,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/volume"
 
-	"github.com/ianglennon/coaming/proto/hostpath"
+	"github.com/ianglennon/tierplan/proto/hostpath"
 )
 
 // containerEscalations returns the path of each feature in a container create that gives the

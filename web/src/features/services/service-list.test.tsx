@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -31,7 +31,7 @@ const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
   updateState: "",
   image: `registry.example.com/acme/web:1.4@sha256:${"a".repeat(64)}`,
   stack: "",
-  coamingStackId: "",
+  tierplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
@@ -101,11 +101,11 @@ beforeEach(() => {
     svc(),
     svc({
       id: "id-agent",
-      name: "coaming-agent",
+      name: "tierplan-agent",
       mode: "global",
       running: 3,
       desired: 3,
-      image: "coaming/agent:1",
+      image: "tierplan/agent:1",
       agent: true,
     }),
     svc({
@@ -211,7 +211,7 @@ describe("ServiceList", () => {
     // The tag is shown, the digest only in the tooltip.
     expect(web.textContent).toContain("registry.example.com/acme/web:1.4");
     expect(web.textContent).not.toContain("sha256");
-    const agent = screen.getByRole("row", { name: /^Select coaming-agent/ });
+    const agent = screen.getByRole("row", { name: /^Select tierplan-agent/ });
     expect(within(agent).getByText("Global")).toBeTruthy();
     expect(within(agent).getByText("3/3")).toBeTruthy();
     const job = screen.getByRole("row", { name: /^Select backup/ });
@@ -229,7 +229,7 @@ describe("ServiceList", () => {
 
   it("hides Scale… for a global service and a job", async () => {
     mount();
-    await openMenu("coaming-agent");
+    await openMenu("tierplan-agent");
     expect(await screen.findByRole("menuitem", { name: "Open" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Scale…" })).toBeNull();
     cleanup();
@@ -243,7 +243,7 @@ describe("ServiceList", () => {
     mount();
     const link = await screen.findByRole("link", { name: "web" });
     expect(link.getAttribute("href")).toBe("/env/e1/services/id-web");
-    expect(screen.getByRole("link", { name: "coaming-agent" }).getAttribute("href")).toBe(
+    expect(screen.getByRole("link", { name: "tierplan-agent" }).getAttribute("href")).toBe(
       "/env/e1/services/id-agent",
     );
   });
@@ -252,7 +252,7 @@ describe("ServiceList", () => {
     mount();
     for (const [name, id] of [
       ["web", "id-web"],
-      ["coaming-agent", "id-agent"],
+      ["tierplan-agent", "id-agent"],
       ["backup", "id-backup"],
     ] as const) {
       await openMenu(name);
@@ -292,7 +292,7 @@ describe("the row menu's Force update… and Roll back…", () => {
     ]);
     cleanup();
     mount();
-    await openMenu("coaming-agent");
+    await openMenu("tierplan-agent");
     expect(await screen.findByRole("menuitem", { name: "Force update…" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: /^Roll back…/ })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Scale…" })).toBeNull();
@@ -595,9 +595,9 @@ const names = () =>
     .filter((t) => t !== "");
 
 describe("the services list: stack links", () => {
-  it("links a stack Coaming manages in its group header and a foreign stack to its read-only page", async () => {
+  it("links a stack TierPlan manages in its group header and a foreign stack to its read-only page", async () => {
     items = [
-      svc({ id: "id-web", name: "shop_web", stack: "shop", coamingStackId: "stk-shop" }),
+      svc({ id: "id-web", name: "shop_web", stack: "shop", tierplanStackId: "stk-shop" }),
       svc({ id: "id-old", name: "old_app", stack: "legacy" }),
     ];
     mount();
@@ -821,8 +821,8 @@ describe("the services list: sorting", () => {
     await screen.findByText("web");
     const rows = names();
     const at = (name: string) => rows.findIndex((r) => r.startsWith(name));
-    expect(at("web")).toBeLessThan(at("coaming-agent"));
-    expect(at("coaming-agent")).toBeLessThan(at("backup"));
+    expect(at("web")).toBeLessThan(at("tierplan-agent"));
+    expect(at("tierplan-agent")).toBeLessThan(at("backup"));
   });
 });
 
@@ -851,14 +851,16 @@ describe("the services list: columns", () => {
     expect(within(none).getAllByText("—").length).toBeGreaterThan(0);
   });
 
-  it("marks Coaming's agent service with the Coaming agent badge", async () => {
+  it("marks TierPlan's agent service with the TierPlan agent badge", async () => {
     mount();
     await screen.findByText("web");
     expect(
-      within(screen.getByRole("row", { name: /^Select coaming-agent/ })).getByText("Coaming agent"),
+      within(screen.getByRole("row", { name: /^Select tierplan-agent/ })).getByText(
+        "TierPlan agent",
+      ),
     ).toBeTruthy();
     expect(
-      within(screen.getByRole("row", { name: /^Select web/ })).queryByText("Coaming agent"),
+      within(screen.getByRole("row", { name: /^Select web/ })).queryByText("TierPlan agent"),
     ).toBeNull();
   });
 
@@ -1081,7 +1083,7 @@ describe("the services list: selection and bulk scale", () => {
     svc({ id: "id-web", name: "shop_web", stack: "shop", desired: 2 }),
     svc({ id: "id-db", name: "shop_db", stack: "shop", desired: 1, running: 1 }),
     svc({ id: "id-blog", name: "blog_app", stack: "Blog", desired: 3, running: 3 }),
-    svc({ id: "id-agent", name: "coaming-agent", mode: "global", running: 3, desired: 3 }),
+    svc({ id: "id-agent", name: "tierplan-agent", mode: "global", running: 3, desired: 3 }),
     svc({ id: "id-backup", name: "backup", mode: "replicated-job", running: 0, desired: 0 }),
   ];
 
@@ -1100,7 +1102,7 @@ describe("the services list: selection and bulk scale", () => {
 
   it("gives every row a named checkbox, the header one to select all services and each group one of its own", async () => {
     await mountReady();
-    for (const name of ["shop_web", "shop_db", "blog_app", "coaming-agent", "backup"]) {
+    for (const name of ["shop_web", "shop_db", "blog_app", "tierplan-agent", "backup"]) {
       expect(box(name)).toBeTruthy();
     }
     expect(screen.getByRole("checkbox", { name: "Select all services" })).toBeTruthy();
@@ -1149,7 +1151,7 @@ describe("the services list: selection and bulk scale", () => {
 
   it("disables Scale… with 'None of the selected services can be scaled.' when nothing selected is replicated", async () => {
     await mountReady();
-    fireEvent.click(box("coaming-agent"));
+    fireEvent.click(box("tierplan-agent"));
     fireEvent.click(box("backup"));
     const scale = within(bar()).getByRole("button", { name: "Scale…" });
     expect(scale.getAttribute("aria-disabled")).toBe("true");
@@ -1433,7 +1435,7 @@ describe("the services list: Live stats (06-33)", () => {
     expect(within(row()).getByText("1.2 GiB")).toBeTruthy();
     expect(within(row()).getByText("↓ 1.2 MiB/s ↑ 340 KiB/s")).toBeTruthy();
     // The other rows were not in the round and still wait.
-    const agent = screen.getByRole("row", { name: /^Select coaming-agent/ });
+    const agent = screen.getByRole("row", { name: /^Select tierplan-agent/ });
     expect(within(agent).queryByText("142%")).toBeNull();
   });
 

@@ -5,31 +5,31 @@
       "title_other": "Taking ownership restarts {{count}} services",
       "title_standalone_one": "Taking ownership restarts {{count}} container",
       "title_standalone_other": "Taking ownership restarts {{count}} containers",
-      "body": "Adopted stacks get Coaming's ownership labels on their first deploy. A label change recreates the container, which restarts it briefly. They're listed under Ownership labels only.",
-      "body_standalone": "Adopted stacks get Coaming's ownership labels on their first deploy. A label change recreates the containers, which restarts them briefly. They're listed under Ownership labels only."
+      "body": "Adopted stacks get TierPlan's ownership labels on their first deploy. A label change recreates the container, which restarts it briefly. They're listed under Ownership labels only.",
+      "body_standalone": "Adopted stacks get TierPlan's ownership labels on their first deploy. A label change recreates the containers, which restarts them briefly. They're listed under Ownership labels only."
     },
     "group": {
       "title": "Ownership labels only",
-      "sub_one": "{{count}} service will be recreated to take Coaming ownership labels (brief restart). Nothing else about it changes.",
-      "sub_other": "{{count}} services will be recreated to take Coaming ownership labels (brief restart). Nothing else about them changes.",
-      "sub_standalone_one": "{{count}} container will be recreated to take Coaming ownership labels (brief restart). Nothing else about it changes.",
-      "sub_standalone_other": "{{count}} containers will be recreated to take Coaming ownership labels (brief restart). Nothing else about them changes.",
+      "sub_one": "{{count}} service will be recreated to take TierPlan ownership labels (brief restart). Nothing else about it changes.",
+      "sub_other": "{{count}} services will be recreated to take TierPlan ownership labels (brief restart). Nothing else about them changes.",
+      "sub_standalone_one": "{{count}} container will be recreated to take TierPlan ownership labels (brief restart). Nothing else about it changes.",
+      "sub_standalone_other": "{{count}} containers will be recreated to take TierPlan ownership labels (brief restart). Nothing else about them changes.",
       "labels": "labels",
       "tasks_one": "{{count}} task",
       "tasks_other": "{{count}} tasks",
       "caption": "Labels on {{service}}",
-      "standaloneNote": "Compose recreates the container because Coaming's labels change its configuration hash. No setting you wrote changes."
+      "standaloneNote": "Compose recreates the container because TierPlan's labels change its configuration hash. No setting you wrote changes."
     },
     "summary": {
       "line": "Ownership labels only: {{count}}"
     },
     "banner": {
-      "title": "{{name}} is adopted but not yet deployed by Coaming",
-      "body_one": "The first deploy adds Coaming's ownership labels and recreates {{count}} service (brief restart). Review shows exactly what changes.",
-      "body_other": "The first deploy adds Coaming's ownership labels and recreates {{count}} services (brief restart). Review shows exactly what changes.",
-      "body_standalone_one": "The first deploy adds Coaming's ownership labels and recreates {{count}} container (brief restart). Review shows exactly what changes.",
-      "body_standalone_other": "The first deploy adds Coaming's ownership labels and recreates {{count}} containers (brief restart). Review shows exactly what changes.",
-      "bodyUnknown": "The first deploy adds Coaming's ownership labels and recreates its services (brief restart). Review shows exactly what changes.",
+      "title": "{{name}} is adopted but not yet deployed by TierPlan",
+      "body_one": "The first deploy adds TierPlan's ownership labels and recreates {{count}} service (brief restart). Review shows exactly what changes.",
+      "body_other": "The first deploy adds TierPlan's ownership labels and recreates {{count}} services (brief restart). Review shows exactly what changes.",
+      "body_standalone_one": "The first deploy adds TierPlan's ownership labels and recreates {{count}} container (brief restart). Review shows exactly what changes.",
+      "body_standalone_other": "The first deploy adds TierPlan's ownership labels and recreates {{count}} containers (brief restart). Review shows exactly what changes.",
+      "bodyUnknown": "The first deploy adds TierPlan's ownership labels and recreates its services (brief restart). Review shows exactly what changes.",
       "review": "Review and deploy",
       "history": "Open history"
     }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 
@@ -17,7 +17,7 @@ import {
 } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
-// Wizard step 4 (D-02): the admin decides whether Coaming manages the Docker
+// Wizard step 4 (D-02): the admin decides whether TierPlan manages the Docker
 // host it runs on. It is a signed-in route, shown once straight after setup,
 // and it is the same panel Settings shows later (UI-SPEC interpretation 1).
 function WelcomePage() {

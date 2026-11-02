@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // StandaloneNode is the ID of the one node of a standalone environment: the environment's own ID for the
@@ -89,7 +89,7 @@ func standaloneItems(p *types.Project) []pinItem {
 var imageIDRe = regexp.MustCompile(`^(sha256:)?[a-f0-9]{12,64}$`)
 
 // standaloneLivePins are the images the host's containers run and the text each was deployed from, by
-// service: the coaming.stack.image label and the reference the container was created with. A container that
+// service: the tierplan.stack.image label and the reference the container was created with. A container that
 // records no text, or whose reference the engine has replaced with an image ID, says nothing about what was
 // deployed, and the stack's last good revision answers for the service instead.
 func standaloneLivePins(cs []dockerx.ComposeContainer) map[string]stacks.LivePin {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx
 
@@ -12,7 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// builtinTable is the fingerprint of every key that ships with Coaming, as the vendors publish them
+// builtinTable is the fingerprint of every key that ships with TierPlan, as the vendors publish them
 // (09-RESEARCH "Built-in pinned SSH host keys": GitHub's api.github.com/meta, GitLab's documentation
 // checked against ssh-keyscan, Bitbucket's bitbucket.org/site/ssh). The table is typed out here, apart
 // from the keys it checks: a typo in a key fails this test instead of locking everyone out.

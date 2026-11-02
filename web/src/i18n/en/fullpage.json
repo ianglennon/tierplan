@@ -2,28 +2,28 @@
   "fullpage": {
     "pending": {
       "heading": "No agent has connected yet",
-      "body": "Install the Coaming agent on a host to start managing {{name}}.",
-      "bodyNoToken": "Install the Coaming agent on a host to start managing {{name}}. Ask an admin to finish setting it up.",
+      "body": "Install the TierPlan agent on a host to start managing {{name}}.",
+      "bodyNoToken": "Install the TierPlan agent on a host to start managing {{name}}. Ask an admin to finish setting it up.",
       "action": "Show install command"
     },
     "reconnecting": {
       "heading": "Reconnecting to {{name}}…",
-      "body": "Coaming just started and is waiting for the agent to reconnect. This usually takes under a minute."
+      "body": "TierPlan just started and is waiting for the agent to reconnect. This usually takes under a minute."
     },
     "offline": {
       "heading": "{{name}} isn't reachable",
-      "body": "Coaming lost contact with the agent on {{name}} at {{time}}.",
-      "bodyNoTime": "Coaming lost contact with the agent on {{name}}."
+      "body": "TierPlan lost contact with the agent on {{name}} at {{time}}.",
+      "bodyNoTime": "TierPlan lost contact with the agent on {{name}}."
     },
     "revoked": {
       "heading": "This environment was revoked",
-      "body": "An admin revoked every agent on {{name}}, so Coaming can't reach it.",
+      "body": "An admin revoked every agent on {{name}}, so TierPlan can't reach it.",
       "openSettings": "Open node settings",
       "remove": "Remove environment"
     },
     "clusterChanged": {
       "heading": "This swarm was re-initialised",
-      "body": "The agents on {{name}} now report a different cluster, so Coaming refused them. Nothing was changed on the old environment.",
+      "body": "The agents on {{name}} now report a different cluster, so TierPlan refused them. Nothing was changed on the old environment.",
       "adopt": "Adopt new cluster",
       "remove": "Remove environment"
     },

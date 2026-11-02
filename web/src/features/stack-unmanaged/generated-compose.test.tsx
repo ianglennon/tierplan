@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -10,7 +10,7 @@ import { GeneratedCompose } from "@/features/stack-unmanaged/generated-compose";
 import "@/i18n";
 import { editorText } from "@/test-editor";
 
-// The Generated compose tab of an unmanaged stack (plan 08-11, STK-12, D-09, D-12, D-47): what Coaming would use
+// The Generated compose tab of an unmanaged stack (plan 08-11, STK-12, D-09, D-12, D-47): what TierPlan would use
 // if the stack were adopted, rebuilt from the running services, read only.
 
 const ENV = "e1";
@@ -83,7 +83,7 @@ describe("the Generated compose tab", () => {
     expect(screen.getByRole("heading", { name: "Generated compose" })).toBeTruthy();
     expect(
       screen.getByText(
-        "What Coaming would use if you adopt this stack, rebuilt from the running services. It is a preview: nothing is saved. Hidden values show as <hidden>.",
+        "What TierPlan would use if you adopt this stack, rebuilt from the running services. It is a preview: nothing is saved. Hidden values show as <hidden>.",
       ),
     ).toBeTruthy();
   });
@@ -111,7 +111,7 @@ describe("the Generated compose tab", () => {
       );
     mount("shop");
     expect(
-      await screen.findByText("Coaming couldn't rebuild shop: no container of shop is running"),
+      await screen.findByText("TierPlan couldn't rebuild shop: no container of shop is running"),
     ).toBeTruthy();
   });
 
@@ -120,7 +120,7 @@ describe("the Generated compose tab", () => {
     mount();
     expect(
       await screen.findByText(
-        "2 secrets and 1 config are referenced as external. Coaming never reads their values.",
+        "2 secrets and 1 config are referenced as external. TierPlan never reads their values.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -147,7 +147,7 @@ describe("the Generated compose tab", () => {
             service: "",
             code: "network_not_overlay",
             message:
-              "The network legacy_lan uses the macvlan driver, not overlay, so the file uses it as an external network. Coaming doesn't create it.",
+              "The network legacy_lan uses the macvlan driver, not overlay, so the file uses it as an external network. TierPlan doesn't create it.",
           },
         ],
       });
@@ -157,7 +157,7 @@ describe("the Generated compose tab", () => {
     const items = within(notes).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual([
       "app runs nginx:1.27, which has no digest, so it is pinned to the reference as it is.",
-      "The network legacy_lan uses the macvlan driver, not overlay, so the file uses it as an external network. Coaming doesn't create it.",
+      "The network legacy_lan uses the macvlan driver, not overlay, so the file uses it as an external network. TierPlan doesn't create it.",
     ]);
     // The notes come after the file.
     expect(box.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -191,8 +191,8 @@ describe("the Generated compose tab", () => {
         .getAllByRole("listitem")
         .map((li) => li.textContent),
     ).toEqual([
-      "api runs an image built on this host. It is pinned to its image ID; Coaming can't look it up in a registry.",
-      "shop_data is kept external: Coaming couldn't match its settings, so a deploy leaves it as it is.",
+      "api runs an image built on this host. It is pinned to its image ID; TierPlan can't look it up in a registry.",
+      "shop_data is kept external: TierPlan couldn't match its settings, so a deploy leaves it as it is.",
       "A sentence from a newer server.",
     ]);
   });
@@ -253,7 +253,7 @@ describe("a stack that cannot be rebuilt", () => {
     expect(await screen.findByText("Can't generate the compose file")).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming couldn't rebuild legacy: services.app.image: the rebuilt file is not valid",
+        "TierPlan couldn't rebuild legacy: services.app.image: the rebuilt file is not valid",
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // The modes of a stop and a start: the Mode of the job and the kind of the row in stack_deploys.
@@ -167,7 +167,7 @@ func (l *lifecycle) failStep(ctx context.Context, item string, err error) {
 }
 
 // Stop parks a stack without losing anything it holds (STK-11, D-19): on a swarm every replicated service is
-// scaled to 0 with its count remembered on the service itself, in the label coaming.stack.stopped-replicas, and
+// scaled to 0 with its count remembered on the service itself, in the label tierplan.stack.stopped-replicas, and
 // the global and job services are removed (Start makes them again from the last good revision); on a standalone
 // host the Compose SDK stops the containers. Networks, volumes, secrets and configs are never touched. The stack
 // is marked stopped once everything has stopped. A stack whose services were stopped before, or only in part, is

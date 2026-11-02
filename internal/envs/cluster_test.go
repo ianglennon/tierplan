@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -17,14 +17,14 @@ import (
 
 	swarmapi "github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Manager choice, failover and the cluster view (plan 02-20, ENV-09, ENV-06,
@@ -274,10 +274,10 @@ func TestWhenTheLeaderDiesMidReadTheReadSucceedsOnAnotherManagerAndTheFailoverIs
 	msg := "Manager mgr-2 unreachable, using " + attempts[1]
 	var found bool
 	for _, row := range s.evs.Recent(AgentTarget(fo[0].ToAgentID), 10) {
-		found = found || row.Type == "coaming" && row.Name == msg
+		found = found || row.Type == "tierplan" && row.Name == msg
 	}
 	if !found {
-		t.Errorf("the feed of the manager now in use has no coaming row saying %q: %+v", msg, s.evs.Recent(AgentTarget(fo[0].ToAgentID), 10))
+		t.Errorf("the feed of the manager now in use has no tierplan row saying %q: %+v", msg, s.evs.Recent(AgentTarget(fo[0].ToAgentID), 10))
 	}
 	if n := s.failoverAudits(t, s.env.ID); n != 1 {
 		t.Errorf("environment.failover audit rows under system:agent-hub = %d, want 1", n)

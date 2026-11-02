@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 // SPDX-FileCopyrightText: 2023 shadcn. Derived from shadcn/ui (https://github.com/shadcn-ui/ui), used under the MIT licence; see the third-party notices.
 
 import { Command as CommandPrimitive } from "cmdk";
@@ -42,7 +42,7 @@ function CommandDialog({
   description?: string;
   className?: string;
   showCloseButton?: boolean;
-  // Coaming's change: a palette opened by a keystroke has no trigger to return
+  // TierPlan's change: a palette opened by a keystroke has no trigger to return
   // focus to, so the caller says where focus goes on close.
   onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
 }) {
@@ -71,7 +71,7 @@ function CommandInput({
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
       <InputGroup className="h-8! rounded-lg! border-input/30 bg-input/30 shadow-none! max-md:h-11! *:data-[slot=input-group-addon]:pl-2!">
-        {/* Coaming's change: the input is the group's control, so the group shows
+        {/* TierPlan's change: the input is the group's control, so the group shows
             the focus ring (it is the only focusable thing in the list header). */}
         <CommandPrimitive.Input
           data-slot="input-group-control"
@@ -144,7 +144,7 @@ function CommandSeparator({
   );
 }
 
-// Coaming's change: no built-in check mark. The environment lists render their
+// TierPlan's change: no built-in check mark. The environment lists render their
 // own inside a link (asChild takes exactly one child), and highlight uses muted
 // (UI-SPEC: never the accent colour).
 function CommandItem({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Item>) {

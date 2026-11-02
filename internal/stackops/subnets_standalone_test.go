@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Small stack subnets (Phase 10, D-20, D-22, NET-06) on a standalone host: the subnet a network is first created
@@ -181,7 +181,7 @@ func TestSmallSubnetStandaloneNoFreeBlock(t *testing.T) {
 	}
 }
 
-// ownedNetwork is a network the stack's earlier deploy left on the host, with the labels the SDK and Coaming put on it.
+// ownedNetwork is a network the stack's earlier deploy left on the host, with the labels the SDK and TierPlan put on it.
 func ownedNetwork(st stackops.Stack, name, subnet string, extra map[string]string) dockerx.NetworkCreateSpec {
 	labels := map[string]string{stacks.LabelComposeProject: st.Name, stacks.LabelStackID: st.ID}
 	for k, v := range extra {

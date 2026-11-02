@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # A local Docker Swarm for the development loop (D-60): three managers and one
 # worker, each a privileged docker:<engine>-dind container, with the agent built
-# from this source tree loaded on every node. `make dev` is the Coaming they
+# from this source tree loaded on every node. `make dev` is the TierPlan they
 # report to.
 #
 #   scripts/dev-swarm.sh up      create the swarm and load the agent image
 #   scripts/dev-swarm.sh down    remove what `up` created
 #   scripts/dev-swarm.sh dns     print the DNS servers `up` would give the nodes
 #
-# `down` removes only the four containers named coaming-dev-m1..m3 and
-# coaming-dev-w1 (and only when they carry the label this script put on them),
-# their anonymous volumes, and the network coaming-dev-swarm. It never prunes:
+# `down` removes only the four containers named tierplan-dev-m1..m3 and
+# tierplan-dev-w1 (and only when they carry the label this script put on them),
+# their anonymous volumes, and the network tierplan-dev-swarm. It never prunes:
 # nothing on the machine that this script did not create is touched.
 #
 # Environment (all optional):
@@ -47,12 +47,12 @@ cd "$(dirname "$0")/.."
 
 ENGINE="${DEV_SWARM_ENGINE:-29}"
 SUBNET="${DEV_SWARM_SUBNET:-172.31.250.0/24}"
-NETWORK=coaming-dev-swarm
-LABEL=coaming.dev-swarm=true
-AGENT_LOCAL=coaming-agent:dev
-AGENT_EDGE=ghcr.io/ianglennon/coaming-agent:edge
-MANAGERS=(coaming-dev-m1 coaming-dev-m2 coaming-dev-m3)
-WORKERS=(coaming-dev-w1)
+NETWORK=tierplan-dev-swarm
+LABEL=tierplan.dev-swarm=true
+AGENT_LOCAL=tierplan-agent:dev
+AGENT_EDGE=ghcr.io/ianglennon/tierplan-agent:edge
+MANAGERS=(tierplan-dev-m1 tierplan-dev-m2 tierplan-dev-m3)
+WORKERS=(tierplan-dev-w1)
 NODES=("${MANAGERS[@]}" "${WORKERS[@]}")
 
 # The addresses come from the subnet: only a /24 is supported, so the first three
@@ -152,7 +152,7 @@ exists() { docker container inspect "$1" >/dev/null 2>&1; }
 
 all_nodes_ready() {
   local out
-  out="$(docker exec coaming-dev-m1 docker node ls --format '{{.Status}}|{{.ManagerStatus}}')" || return 1
+  out="$(docker exec tierplan-dev-m1 docker node ls --format '{{.Status}}|{{.ManagerStatus}}')" || return 1
   [[ "$(grep -c '^Ready|' <<<"${out}")" == "${#NODES[@]}" ]] && grep -q '|Leader$' <<<"${out}"
 }
 
@@ -230,7 +230,7 @@ The agent built from this tree is loaded on every node as ${AGENT_EDGE}.
 $(if ((${#dns_servers[@]} > 0)); then echo "The nodes' Docker daemons use DNS server(s): ${dns_servers[*]}"; else echo "No DNS server was found for the nodes: agents there use Docker's fallback 8.8.8.8, which cannot resolve LAN names (set DEV_SWARM_DNS)."; fi)
 
 Next:
-  1. Start Coaming so the nodes can reach it. The nodes see this machine as ${GATEWAY}:
+  1. Start TierPlan so the nodes can reach it. The nodes see this machine as ${GATEWAY}:
        make dev DEV_LISTEN=0.0.0.0:7480
      (dev-go tells agents to dial http://${GATEWAY}:7480 over plain ws://, which is for
      development only. DEV_LISTEN=0.0.0.0:7480 is what lets the nodes reach the
@@ -253,7 +253,7 @@ down() {
     if ! exists "${n}"; then
       continue
     fi
-    if [[ "$(docker container inspect -f '{{index .Config.Labels "coaming.dev-swarm"}}' "${n}")" != "true" ]]; then
+    if [[ "$(docker container inspect -f '{{index .Config.Labels "tierplan.dev-swarm"}}' "${n}")" != "true" ]]; then
       echo "dev-swarm: container ${n} does not carry the ${LABEL} label, so it is not ours; leaving it" >&2
       continue
     fi
@@ -261,7 +261,7 @@ down() {
     docker rm -f -v "${n}" >/dev/null
   done
   if docker network inspect "${NETWORK}" >/dev/null 2>&1; then
-    if [[ "$(docker network inspect -f '{{index .Labels "coaming.dev-swarm"}}' "${NETWORK}")" == "true" ]]; then
+    if [[ "$(docker network inspect -f '{{index .Labels "tierplan.dev-swarm"}}' "${NETWORK}")" == "true" ]]; then
       docker network rm "${NETWORK}" >/dev/null
     else
       echo "dev-swarm: network ${NETWORK} does not carry the ${LABEL} label, so it is not ours; leaving it" >&2

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package agents_test
 
@@ -14,15 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 const restorePass = "a long enough passphrase"
@@ -86,7 +86,7 @@ func TestRestoredHelloAcceptsAnAgentFromBeforeTheBackupAndRefusesOneEnrolledAfte
 	if re.Code != wire.ReasonUnknownAgent || re.AuditReason != "unknown_agent" {
 		t.Fatalf("the agent enrolled after the backup: code %q, audit reason %q; want unknown_agent for both", re.Code, re.AuditReason)
 	}
-	if !strings.Contains(re.Detail, "enrolled after the backup this Coaming was restored from") {
+	if !strings.Contains(re.Detail, "enrolled after the backup this TierPlan was restored from") {
 		t.Errorf("detail = %q", re.Detail)
 	}
 	listed := restored.Unknown().List(fixedNow)

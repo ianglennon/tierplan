@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { TierPlanLogo } from "@/components/tierplan-logo";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -69,20 +70,34 @@ export function AuthLayout({
 }: AuthLayoutProps) {
   const { t } = useTranslation();
   const plainHttp = isPlainHttpRemote();
+  // When the title is just the product name, the wordmark already says it: the logo is the
+  // heading and the name is not written out again under it.
+  const logoIsTitle = title === t("common.brand.wordmark");
+  const logo = <TierPlanLogo variant="wordmark" className="h-10 self-start" />;
 
   return (
     <main className="flex min-h-svh flex-col items-center gap-4 bg-background px-4 pt-16 pb-6 text-foreground">
       <div className={cn("flex w-full flex-col gap-4", wide ? "max-w-120" : "max-w-100")}>
         {showSignOut ? <SignedInBar /> : null}
-        <div className="flex flex-col gap-1">
-          <h1
-            className="line-clamp-2 text-2xl leading-tight font-medium wrap-anywhere"
-            title={title}
-          >
-            {title}
-          </h1>
-          {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
-        </div>
+        {logoIsTitle ? (
+          <div className="flex flex-col gap-1">
+            <h1 className="flex">{logo}</h1>
+            {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
+          </div>
+        ) : (
+          <>
+            {logo}
+            <div className="flex flex-col gap-1">
+              <h1
+                className="line-clamp-2 text-2xl leading-tight font-medium wrap-anywhere"
+                title={title}
+              >
+                {title}
+              </h1>
+              {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
+            </div>
+          </>
+        )}
         {plainHttp || children ? (
           <Card className="py-6">
             <CardContent className="flex flex-col gap-4 px-6">

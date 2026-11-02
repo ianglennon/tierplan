@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { KeyValueRow } from "@/components/key-value-editor";
 
@@ -10,7 +10,7 @@ export const MAX_LABEL_KEY_BYTES = 256;
 export const MAX_LABEL_VALUE_BYTES = 4096;
 
 // The prefixes Docker keeps for itself. Docker accepts a node label that starts with one
-// (RESEARCH E15, Pitfall 16), so Coaming is the one that refuses it.
+// (RESEARCH E15, Pitfall 16), so TierPlan is the one that refuses it.
 const RESERVED_PREFIXES = ["com.docker.", "io.docker.", "org.dockerproject."] as const;
 
 export type LabelProblem =

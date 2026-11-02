@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -15,15 +15,15 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Accept live into the draft (plan 08-24, STK-14, D-23, D-54): a stack deployed from a revision, changed outside
-// Coaming, becomes the stack's next draft on top of that revision.
+// TierPlan, becomes the stack's next draft on top of that revision.
 
 const acceptCompose = `services:
   web:
@@ -93,7 +93,7 @@ func newAcceptRig(t *testing.T) *acceptRig {
 	return &acceptRig{swarmRig: rig, repo: repo, st: st, rev: rev, copy: copy}
 }
 
-// scaleLive scales the deployed service outside Coaming, as docker service scale does.
+// scaleLive scales the deployed service outside TierPlan, as docker service scale does.
 func (r *acceptRig) scaleLive(t *testing.T, replicas uint64) {
 	t.Helper()
 	svc, ok := r.ownedNow(t, r.st)["shop_web"]
