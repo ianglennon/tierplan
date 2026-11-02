@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The rules for a swarm task container, in the order ClassifyContainer tries them (plan 11-01,
@@ -328,4 +330,379 @@ func TestSizeAndAgeOfARemovableContainer(t *testing.T) {
 	if _, _, _, est, known := got.Summary(); est != 4096 || !known {
 		t.Fatalf("estimate = %d known %v, want 4096", est, known)
 	}
+}
+
+// The rules for a container that is not the container of a swarm task (plan 11-12, D-05, D-11, D-18,
+// RESEARCH F16, JAN-06). Every case judges at t0 with every container finished two days ago unless
+// it says otherwise.
+
+// box makes an exited container of node n1 with the labels given. idx orders containers: a larger
+// idx is newer.
+func box(id string, idx int, labels map[string]string) Container {
+	return Container{
+		ID: id, Name: "/" + id, NodeID: "n1-id", Node: "n1", State: "exited",
+		Created: t0.Add(-72 * time.Hour).Add(time.Duration(idx) * time.Hour), Labels: labels,
+	}
+}
+
+// inState is c in another state of the engine.
+func inState(c Container, state string) Container {
+	c.State = state
+	return c
+}
+
+// composed is the labels docker compose puts on a container of project's service.
+func composed(project, service string, oneoff bool) map[string]string {
+	l := map[string]string{stacks.LabelComposeProject: project, stacks.LabelComposeService: service, stacks.LabelComposeOneoff: "False"}
+	if oneoff {
+		l[stacks.LabelComposeOneoff] = "True"
+	}
+	return l
+}
+
+// withStack adds the label that says a TierPlan stack made the container.
+func withStack(l map[string]string, id string) map[string]string {
+	l[stacks.LabelStackID] = id
+	return l
+}
+
+// hostOf is a standalone host of one node holding cs, whose TierPlan stacks were read and are the
+// stacks named. A stack is its name and, with the same text, its ID: stk-{name}.
+func hostOf(stackNames []string, cs ...Container) Snapshot {
+	names, ids := map[string]bool{}, map[string]bool{}
+	for _, n := range stackNames {
+		names[n], ids["stk-"+n] = true, true
+	}
+	return Snapshot{
+		Nodes: []Node{{ID: "n1-id", Name: "n1"}}, Containers: cs, ReadAt: t0, ServicesRead: true,
+		StackNames: names, StackIDs: ids, StacksRead: true,
+	}
+}
+
+// optIn is the default policy with the stopped-containers opt-in as given and no container kept
+// by keep-N.
+func optIn(on bool) Policy {
+	p := DefaultPolicy()
+	p.KeepN, p.RemoveStoppedContainers = 0, on
+	return p
+}
+
+func TestStandaloneExistingProjectNeverTouched(t *testing.T) {
+	t.Parallel()
+	web, db := box("web", 0, composed("shop", "web", false)), box("db", 1, composed("shop", "db", false))
+	for name, cs := range map[string][]Container{
+		"a running sibling":         {web, inState(db, "running")},
+		"a paused sibling":          {web, inState(db, "paused")},
+		"a restarting sibling":      {web, inState(db, "restarting")},
+		"a created sibling":         {web, inState(db, "created")},
+		"an exited sibling":         {web, db},
+		"an exited one-off":         {web, box("run1", 2, composed("shop", "web", true))},
+		"a sibling on another node": {web, func() Container { c := inState(db, "running"); c.NodeID, c.Node = "n2-id", "n2"; return c }()},
+	} {
+		for _, on := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, opt-in %v", name, on), func(t *testing.T) {
+				t.Parallel()
+				p := optIn(on)
+				p.KeepN = 5 // a one-off sibling stays by keep-N; nothing else may be listed either
+				s := hostOf(nil, cs...)
+				got := planOf(s, p)
+				if len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+					t.Fatalf("plan = %+v, want nothing: the project still exists", got)
+				}
+				if c := Candidates(s, p); len(c) != 0 {
+					t.Fatalf("candidates = %v, want none: nothing of it is inspected", c)
+				}
+			})
+		}
+	}
+}
+
+func TestStandaloneOwnedProjectOneOffs(t *testing.T) {
+	t.Parallel()
+	svc := func(id string, idx int) Container { return box(id, idx, composed("shop", "web", false)) }
+	oneoff := func(id string, idx int) Container { return box(id, idx, composed("shop", "migrate", true)) }
+	t.Run("a stack named as the project: its service containers are left, its old one-offs beyond keep-N go", func(t *testing.T) {
+		t.Parallel()
+		p := DefaultPolicy()
+		got := planOf(hostOf([]string{"shop"}, svc("web1", 0), svc("web2", 1), svc("web3", 2), oneoff("r1", 0), oneoff("r2", 1), oneoff("r3", 2)), p)
+		if !reflect.DeepEqual(refs(got.Items), []string{"r1"}) || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want only the oldest one-off", got)
+		}
+		it := got.Items[0]
+		if it.Class != ClassRemovable || it.Reason.Code != ReasonComposeOneoff || it.Reason.Project != "shop" || it.Reason.Service != "migrate" || it.Reason.Rank != 1 {
+			t.Errorf("item = %+v, want removable compose_oneoff of (shop, migrate), rank 1", it)
+		}
+	})
+	t.Run("a stack whose ID the container carries owns it, whatever the project is called", func(t *testing.T) {
+		t.Parallel()
+		c := box("web1", 0, withStack(composed("renamed", "web", false), "stk-shop"))
+		if got := planOf(hostOf([]string{"shop"}, c), optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want nothing: a TierPlan stack owns it", got)
+		}
+	})
+	t.Run("a removed stack's ID on a project another stack is named after: the project is owned, so left", func(t *testing.T) {
+		t.Parallel()
+		c := box("web1", 0, withStack(composed("shop", "web", false), "stk-removed"))
+		if got := planOf(hostOf([]string{"shop"}, c), optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want nothing", got)
+		}
+	})
+}
+
+func TestStandaloneLoneComposeReportOnly(t *testing.T) {
+	t.Parallel()
+	lone := box("tmp1", 0, composed("scratch", "app", false))
+	t.Run("opt-in off: reported, never removable", func(t *testing.T) {
+		t.Parallel()
+		got := planOf(hostOf(nil, lone), optIn(false))
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 {
+			t.Fatalf("plan = %+v, want the container reported and not removable", got)
+		}
+		it := got.NotRemoved[0]
+		if it.Class != ClassReported || it.Reason.Code != ReasonLoneComposeContainer || it.Reason.Project != "scratch" || it.Reason.Service != "app" || it.Age != 48*time.Hour {
+			t.Errorf("item = %+v, want reported lone_compose_container of scratch/app, 48h old", it)
+		}
+	})
+	t.Run("opt-in on: removable as compose_project_gone", func(t *testing.T) {
+		t.Parallel()
+		got := planOf(hostOf(nil, lone), optIn(true))
+		if len(got.Items) != 1 || len(got.NotRemoved) != 0 || got.Items[0].Class != ClassRemovable || got.Items[0].Reason.Code != ReasonComposeProjectGone {
+			t.Fatalf("plan = %+v, want removable compose_project_gone", got)
+		}
+	})
+	t.Run("kept by label whatever the opt-in", func(t *testing.T) {
+		t.Parallel()
+		kept := box("tmp1", 0, composed("scratch", "app", false))
+		kept.Labels[keepLabel] = "true"
+		got := planOf(hostOf(nil, kept), optIn(true))
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 || got.NotRemoved[0].Class != ClassProtected || got.NotRemoved[0].Reason.Code != ReasonKeptLabel {
+			t.Fatalf("plan = %+v, want protected kept_label", got)
+		}
+	})
+	t.Run("not inspected: cant_tell, never removable", func(t *testing.T) {
+		t.Parallel()
+		got := Build(Input{Snapshot: hostOf(nil, lone)}, optIn(true), t0)
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 || got.NotRemoved[0].Class != ClassCantTell || got.NotRemoved[0].Reason.Code != ReasonInspectCapped {
+			t.Fatalf("plan = %+v, want cant_tell inspect_capped", got)
+		}
+	})
+}
+
+func TestStandalonePlainNeedsOptIn(t *testing.T) {
+	t.Parallel()
+	plain := box("p1", 0, map[string]string{})
+	t.Run("opt-in off: reported opt_in_off_containers", func(t *testing.T) {
+		t.Parallel()
+		got := planOf(hostOf(nil, plain), optIn(false))
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 {
+			t.Fatalf("plan = %+v, want reported and not removable", got)
+		}
+		if it := got.NotRemoved[0]; it.Class != ClassReported || it.Reason.Code != ReasonOptInOffContainers || it.Name != "p1" || it.Node != "n1" {
+			t.Errorf("item = %+v, want reported opt_in_off_containers", it)
+		}
+	})
+	t.Run("opt-in on: removable stopped_standalone", func(t *testing.T) {
+		t.Parallel()
+		got := planOf(hostOf(nil, plain), optIn(true))
+		if len(got.Items) != 1 || len(got.NotRemoved) != 0 || got.Items[0].Class != ClassRemovable || got.Items[0].Reason.Code != ReasonStoppedStandalone {
+			t.Fatalf("plan = %+v, want removable stopped_standalone", got)
+		}
+	})
+	t.Run("a nil label map is a plain container too", func(t *testing.T) {
+		t.Parallel()
+		c := plain
+		c.Labels = nil
+		if got := planOf(hostOf(nil, c), optIn(false)); len(got.NotRemoved) != 1 || got.NotRemoved[0].Reason.Code != ReasonOptInOffContainers {
+			t.Fatalf("plan = %+v", got)
+		}
+	})
+	t.Run("a container that is not exited is not the janitor's business", func(t *testing.T) {
+		t.Parallel()
+		for _, state := range []string{"running", "paused", "restarting", "created", "removing", "dead"} {
+			if got := planOf(hostOf(nil, inState(plain, state)), optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+				t.Errorf("a %s container: plan = %+v, want nothing", state, got)
+			}
+		}
+	})
+}
+
+func TestStandaloneGrace(t *testing.T) {
+	t.Parallel()
+	gone := func() Container { return box("g1", 0, withStack(composed("oldshop", "web", false), "stk-oldshop")) }
+	cases := []struct {
+		name   string
+		cs     []Container
+		stacks []string
+		p      Policy
+		after  Class // the class once the grace period has passed
+		code   ReasonCode
+	}{
+		{"stack_gone", []Container{gone()}, nil, optIn(false), ClassRemovable, ReasonStackGone},
+		{"compose_oneoff", []Container{box("r1", 0, composed("shop", "migrate", true))}, []string{"shop"}, optIn(false), ClassRemovable, ReasonComposeOneoff},
+		{"lone compose container, opt-in off", []Container{box("l1", 0, composed("tmp", "app", false))}, nil, optIn(false), ClassReported, ReasonLoneComposeContainer},
+		{"lone compose container, opt-in on", []Container{box("l1", 0, composed("tmp", "app", false))}, nil, optIn(true), ClassRemovable, ReasonComposeProjectGone},
+		{"plain container, opt-in off", []Container{box("p1", 0, nil)}, nil, optIn(false), ClassReported, ReasonOptInOffContainers},
+		{"plain container, opt-in on", []Container{box("p1", 0, nil)}, nil, optIn(true), ClassRemovable, ReasonStoppedStandalone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			at := func(ago time.Duration) Plan {
+				ends := map[string]ContainerEnd{}
+				for _, c := range tc.cs {
+					ends[c.ID] = ContainerEnd{FinishedAt: t0.Add(-ago), SizeRw: -1}
+				}
+				return Build(Input{Snapshot: hostOf(tc.stacks, tc.cs...), Ends: ends}, tc.p, t0)
+			}
+			young := at(24*time.Hour - time.Minute)
+			if len(young.Items) != 0 || len(young.NotRemoved) != 1 {
+				t.Fatalf("23h59m: plan = %+v, want one container under grace", young)
+			}
+			if it := young.NotRemoved[0]; it.Class != ClassGrace || it.Reason.Code != ReasonYoungerThanGrace || it.Reason.Remaining != time.Minute {
+				t.Errorf("23h59m: item = %+v, want grace with 1m remaining", it)
+			}
+			old := at(24 * time.Hour)
+			var it Item
+			switch {
+			case tc.after == ClassRemovable && len(old.Items) == 1 && len(old.NotRemoved) == 0:
+				it = old.Items[0]
+			case tc.after == ClassReported && len(old.Items) == 0 && len(old.NotRemoved) == 1:
+				it = old.NotRemoved[0]
+			default:
+				t.Fatalf("24h: plan = %+v, want one %s item", old, tc.after)
+			}
+			if it.Class != tc.after || it.Reason.Code != tc.code || it.Age != 24*time.Hour {
+				t.Errorf("24h: item = %+v, want %s %s at exactly the grace period", it, tc.after, tc.code)
+			}
+		})
+	}
+	t.Run("a container beside swarm tasks on a swarm node is judged the same way", func(t *testing.T) {
+		t.Parallel()
+		s := swarmOf(task("t1", "1", 0), box("p1", 0, nil))
+		s.StacksRead, s.StackNames, s.StackIDs = true, map[string]bool{}, map[string]bool{}
+		p := optIn(true)
+		got := planOf(s, p)
+		if !reflect.DeepEqual(refs(got.Items), []string{"p1", "t1"}) {
+			t.Fatalf("items = %v, want the plain container and the task container", refs(got.Items))
+		}
+	})
+}
+
+func TestStandaloneStackGoneRunningSibling(t *testing.T) {
+	t.Parallel()
+	leftover := func(id, service string) Container {
+		return box(id, 0, withStack(composed("oldshop", service, false), "stk-oldshop"))
+	}
+	t.Run("every one exited: all of them are leftovers", func(t *testing.T) {
+		t.Parallel()
+		got := planOf(hostOf(nil, leftover("a", "web"), leftover("b", "db")), optIn(false))
+		if !reflect.DeepEqual(refs(got.Items), []string{"a", "b"}) || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want both removable", got)
+		}
+		for _, it := range got.Items {
+			if it.Reason.Code != ReasonStackGone || it.Reason.Project != "oldshop" {
+				t.Errorf("item = %+v, want stack_gone of oldshop", it)
+			}
+		}
+	})
+	for _, state := range []string{"running", "paused", "restarting", "created", "removing", "dead"} {
+		t.Run("a "+state+" container in the project: none is listed", func(t *testing.T) {
+			t.Parallel()
+			sibling := inState(leftover("c", "db"), state)
+			s := hostOf(nil, leftover("a", "web"), sibling)
+			if got := planOf(s, optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+				t.Fatalf("plan = %+v, want nothing: the project still has a %s container", got, state)
+			}
+		})
+	}
+	t.Run("a running container of the same stack under another project name: none is listed", func(t *testing.T) {
+		t.Parallel()
+		other := inState(box("c", 0, withStack(composed("elsewhere", "db", false), "stk-oldshop")), "running")
+		if got := planOf(hostOf(nil, leftover("a", "web"), other), optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want nothing", got)
+		}
+	})
+	t.Run("a running container of another project does not hold it", func(t *testing.T) {
+		t.Parallel()
+		other := inState(box("c", 0, composed("shop", "db", false)), "running")
+		got := planOf(hostOf(nil, leftover("a", "web"), other), optIn(false))
+		if !reflect.DeepEqual(refs(got.Items), []string{"a"}) {
+			t.Fatalf("plan = %+v, want the leftover", got)
+		}
+	})
+}
+
+func TestStandaloneStacksUnread(t *testing.T) {
+	t.Parallel()
+	cs := []Container{
+		box("gone", 0, withStack(composed("oldshop", "web", false), "stk-oldshop")),
+		box("lone", 0, composed("tmp", "app", false)),
+		box("oneoff", 0, composed("shop", "migrate", true)),
+		box("kept", 0, composed("shop", "web", false)),
+	}
+	cs[3].Labels[keepLabel] = "true"
+	plain := box("plain", 0, nil)
+	s := hostOf(nil, append(cs, plain)...)
+	s.StacksRead, s.StackNames, s.StackIDs = false, nil, nil
+	p := optIn(true)
+	if c := Candidates(s, p); !reflect.DeepEqual(c, []ContainerRef{{ID: "plain", NodeID: "n1-id"}}) {
+		t.Fatalf("candidates = %v, want only the plain container: who owns the compose ones is not known", c)
+	}
+	got := planOf(s, p)
+	for _, it := range append(append([]Item{}, got.Items...), got.NotRemoved...) {
+		switch it.Ref {
+		case "gone", "lone", "oneoff":
+			if it.Class != ClassCantTell || it.Reason.Code != ReasonStackUnknown {
+				t.Errorf("%s = %+v, want cant_tell stack_unknown", it.Ref, it)
+			}
+		case "kept":
+			if it.Class != ClassProtected {
+				t.Errorf("kept = %+v, want protected: the label is checked first", it)
+			}
+		case "plain":
+			if it.Class != ClassRemovable || it.Reason.Code != ReasonStoppedStandalone {
+				t.Errorf("plain = %+v, want a plain container judged as before", it)
+			}
+		default:
+			t.Errorf("unexpected item %+v", it)
+		}
+	}
+	if !reflect.DeepEqual(refs(got.Items), []string{"plain"}) || len(got.NotRemoved) != 4 {
+		t.Fatalf("plan = %+v, want only the plain container removable and four others left", got)
+	}
+}
+
+func TestStandaloneScaledServiceUntouched(t *testing.T) {
+	t.Parallel()
+	replicas := func(n int, labelOf func(i int) map[string]string) []Container {
+		var cs []Container
+		for i := range n {
+			cs = append(cs, box(fmt.Sprintf("web%d", i+1), i, labelOf(i)))
+		}
+		return cs
+	}
+	t.Run("three exited replicas of a project nobody manages", func(t *testing.T) {
+		t.Parallel()
+		for _, on := range []bool{false, true} {
+			cs := replicas(3, func(int) map[string]string { return composed("shop", "web", false) })
+			if got := planOf(hostOf(nil, cs...), optIn(on)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+				t.Fatalf("opt-in %v: plan = %+v, want none listed", on, got)
+			}
+		}
+	})
+	t.Run("three exited replicas of a project a stack owns", func(t *testing.T) {
+		t.Parallel()
+		cs := replicas(3, func(int) map[string]string { return withStack(composed("shop", "web", false), "stk-shop") })
+		if got := planOf(hostOf([]string{"shop"}, cs...), optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want none listed", got)
+		}
+	})
+	t.Run("one of three running", func(t *testing.T) {
+		t.Parallel()
+		cs := replicas(3, func(int) map[string]string { return composed("shop", "web", false) })
+		cs[2] = inState(cs[2], "running")
+		if got := planOf(hostOf(nil, cs...), optIn(true)); len(got.Items) != 0 || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want none listed", got)
+		}
+	})
 }

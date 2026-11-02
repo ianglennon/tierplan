@@ -6,6 +6,7 @@ package janitor
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -175,4 +176,77 @@ func TestCandidatesAreOnlyThoseBeyondKeep(t *testing.T) {
 	if !reflect.DeepEqual(ids, []string{"c1", "c2", "c3"}) {
 		t.Fatalf("candidates = %v, want c1 c2 c3 only", ids)
 	}
+}
+
+func TestKeepNOneOffs(t *testing.T) {
+	t.Parallel()
+	oneoff := func(id string, idx int, project, service string) Container {
+		return box(id, idx, composed(project, service, true))
+	}
+	var cs []Container
+	for i := range 4 {
+		cs = append(cs, oneoff(fmt.Sprintf("m%d", i+1), i, "shop", "migrate"))
+	}
+	// The same project's other service, another project's service of the same name and the same
+	// service on another node are groups of their own.
+	other := []Container{oneoff("s1", 0, "shop", "seed"), oneoff("o1", 0, "blog", "migrate")}
+	elsewhere := oneoff("e1", 0, "shop", "migrate")
+	elsewhere.NodeID, elsewhere.Node = "n2-id", "n2"
+	for _, tc := range []struct {
+		keep int
+		want []string
+	}{
+		{keep: 2, want: []string{"m1", "m2"}},
+		{keep: 0, want: []string{"e1", "m1", "m2", "m3", "m4", "o1", "s1"}},
+		{keep: 1, want: []string{"m1", "m2", "m3"}},
+		{keep: 4, want: []string{}},
+		{keep: -1, want: []string{"e1", "m1", "m2", "m3", "m4", "o1", "s1"}},
+	} {
+		t.Run(fmt.Sprintf("keep=%d", tc.keep), func(t *testing.T) {
+			t.Parallel()
+			p := DefaultPolicy()
+			p.KeepN = tc.keep
+			s := hostOf([]string{"shop"}, append(append([]Container{}, cs...), append(other, elsewhere)...)...)
+			s.Nodes = append(s.Nodes, Node{ID: "n2-id", Name: "n2"})
+			got := planOf(s, p)
+			ids := refs(got.Items)
+			slices.Sort(ids)
+			if !reflect.DeepEqual(ids, tc.want) || len(got.NotRemoved) != 0 {
+				t.Fatalf("items = %v notRemoved = %+v, want %v", ids, got.NotRemoved, tc.want)
+			}
+			for _, it := range got.Items {
+				if it.Reason.Code != ReasonComposeOneoff || it.Class != ClassRemovable {
+					t.Errorf("item = %+v, want removable compose_oneoff", it)
+				}
+			}
+		})
+	}
+	t.Run("the oldest are the ones removed, with their rank", func(t *testing.T) {
+		t.Parallel()
+		got := planOf(hostOf([]string{"shop"}, cs...), DefaultPolicy())
+		if !reflect.DeepEqual(refs(got.Items), []string{"m1", "m2"}) {
+			t.Fatalf("items = %v, want the two oldest", refs(got.Items))
+		}
+		for i, it := range got.Items {
+			if it.Reason.Rank != i+1 || it.Reason.Project != "shop" || it.Reason.Service != "migrate" {
+				t.Errorf("item = %+v, want rank %d of (shop, migrate)", it, i+1)
+			}
+		}
+	})
+	t.Run("a one-off still running does not count towards keep-N", func(t *testing.T) {
+		t.Parallel()
+		live := append([]Container{}, cs...)
+		live = append(live, inState(oneoff("m5", 9, "shop", "migrate"), "running"))
+		if got := planOf(hostOf([]string{"shop"}, live...), DefaultPolicy()); !reflect.DeepEqual(refs(got.Items), []string{"m1", "m2"}) {
+			t.Fatalf("items = %v, want the two oldest exited ones", refs(got.Items))
+		}
+	})
+	t.Run("a one-off in a project nobody manages goes the same way, even beside a service container", func(t *testing.T) {
+		t.Parallel()
+		svc := box("web1", 0, composed("shop", "web", false))
+		got := planOf(hostOf(nil, append([]Container{svc}, cs...)...), DefaultPolicy())
+		if !reflect.DeepEqual(refs(got.Items), []string{"m1", "m2"}) || len(got.NotRemoved) != 0 {
+			t.Fatalf("plan = %+v, want the two oldest one-offs and nothing said of the service container", got)
+		}
+	})
 }
