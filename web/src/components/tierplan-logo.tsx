@@ -17,9 +17,6 @@ const SIZES = {
 
 interface TierPlanLogoProps {
   variant: "wordmark" | "icon";
-  // True where the page already says TierPlan in text: the logo is then hidden from assistive
-  // technology so it is not read twice.
-  decorative?: boolean;
   // Sizes the logo by its height (h-7, size-6, ...); the artwork fills it.
   className?: string;
 }
@@ -28,16 +25,17 @@ interface TierPlanLogoProps {
 // and light ink for dark mode, and the dark: variant shows one of them by the dark class on
 // <html> (theme-init.js sets it before first paint, lib/theme.ts keeps it), so no script runs
 // and nothing flashes. The wrapper is the one thing with a name; the images are decorative.
-export function TierPlanLogo({ variant, decorative = false, className }: TierPlanLogoProps) {
+export function TierPlanLogo({ variant, className }: TierPlanLogoProps) {
   const t = useT();
   const { width, height } = SIZES[variant];
   const light = variant === "wordmark" ? wordmarkLight : iconLight;
   const dark = variant === "wordmark" ? wordmarkDark : iconDark;
-  const a11y = decorative
-    ? ({ "aria-hidden": true } as const)
-    : ({ role: "img", "aria-label": t("common.brand.wordmark") } as const);
   return (
-    <span className={cn("inline-block shrink-0", className)} {...a11y}>
+    <span
+      className={cn("inline-block shrink-0", className)}
+      role="img"
+      aria-label={t("common.brand.wordmark")}
+    >
       <img
         src={light}
         alt=""

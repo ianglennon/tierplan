@@ -45,14 +45,14 @@ describe("the TierPlan logo on the auth screens", () => {
     }
   });
 
-  it("is decorative when the title already says TierPlan, so it is not read twice", () => {
-    const { container } = render(<AuthLayout title="TierPlan" />);
-    expect(screen.queryByRole("img", { name: "TierPlan" })).toBeNull();
-    expect(screen.getByRole("heading", { level: 1, name: "TierPlan" })).toBeTruthy();
-    // Still drawn: the images are in the page, under a wrapper that is aria-hidden.
-    const wrapper = container.querySelector('span[aria-hidden="true"]') as HTMLElement;
-    expect(wrapper).toBeTruthy();
-    expect(wrapper.getAttribute("role")).toBeNull();
-    expect(artwork(wrapper).images).toHaveLength(2);
+  it("is the heading when the title is just TierPlan, with the name not written out again", () => {
+    render(<AuthLayout title="TierPlan" subtitle="Create the first account" />);
+    const heading = screen.getByRole("heading", { level: 1, name: "TierPlan" });
+    const logo = within(heading).getByRole("img", { name: "TierPlan" });
+    expect(artwork(logo).images).toHaveLength(2);
+    // No text spells the name out: the heading's only content is the logo.
+    expect(heading.textContent).toBe("");
+    expect(screen.queryByText("TierPlan")).toBeNull();
+    expect(screen.getByText("Create the first account")).toBeTruthy();
   });
 });
