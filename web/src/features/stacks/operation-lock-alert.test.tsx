@@ -62,4 +62,20 @@ describe("the operation lock alert", () => {
     expect(alert.querySelector("b")).toBeNull();
     expect(alert.textContent).toContain("<b>x</b>");
   });
+
+  it("says the janitor is cleaning the environment, and links to its run", async () => {
+    mount(lock({ kind: "janitor", runId: "r9", stackId: "", stackName: "", jobId: "j1" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/^The janitor is cleaning Prod, started 5 min ago\./);
+    expect(alert.textContent).not.toMatch(/Another stack operation/);
+    const link = screen.getByRole("link", { name: "Open it" });
+    expect(link.getAttribute("href")).toBe("/env/e1/janitor/runs/r9");
+  });
+
+  it("has no link for a janitor hold whose run is not known yet", async () => {
+    mount(lock({ kind: "janitor", runId: undefined, stackId: "", stackName: "", jobId: "" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/^The janitor is cleaning Prod/);
+    expect(screen.queryByRole("link", { name: "Open it" })).toBeNull();
+  });
 });

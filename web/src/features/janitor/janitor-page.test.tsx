@@ -22,12 +22,20 @@ import { makeMe } from "@/test-me";
 
 const ENV = "e1";
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
+vi.mock("@/lib/toast", () => ({
+  toastSuccess: toasts.success,
+  toastError: toasts.error,
+  toastInfo: toasts.info,
+}));
+
 let me: ReturnType<typeof makeMe>;
 let envBody: Record<string, unknown>;
 let previewBody: ReturnType<typeof preview>;
 let started: { body: unknown; calls: number };
 let runBody: ReturnType<typeof run>;
 let client: QueryClient;
+let lockAnswer: (() => Response) | undefined;
 
 beforeEach(() => {
   setCsrfToken(null);
@@ -41,6 +49,9 @@ beforeEach(() => {
     ],
   });
   started = { body: undefined, calls: 0 };
+  lockAnswer = undefined;
+  toasts.error.mockReset();
+  toasts.info.mockReset();
   runBody = run({
     state: "completed",
     counts: {
@@ -67,6 +78,7 @@ beforeEach(() => {
       if (url.pathname === `/api/env/${ENV}/janitor/runs` && req.method === "POST") {
         started.calls++;
         started.body = await req.json();
+        if (lockAnswer) return lockAnswer();
         return Response.json({ runId: "r1", jobId: "j1" }, { status: 202 });
       }
       if (url.pathname === `/api/env/${ENV}/janitor/runs/r1`) return Response.json(runBody);
@@ -144,5 +156,70 @@ describe("JanitorPageCleanNow", () => {
     const removedRows = rows.filter((r) => within(r).queryByText("Removed") !== null);
     expect(removedRows).toHaveLength(2);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("who may clean, and when", () => {
+  const reasonOf = (button: HTMLElement) =>
+    document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent;
+
+  it("disables Clean now with the role it needs for a user below Env Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    const button = await screen.findByRole("button", { name: "Clean now" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    expect(reasonOf(button)).toBe("Needs Admin on Prod");
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("disables Clean now, with the reason, when no node is reporting", async () => {
+    envBody = { id: ENV, name: "Prod", envType: "swarm", nodes: { ready: 0, total: 2 } };
+    mount();
+    const button = await screen.findByRole("button", { name: "Clean now" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    expect(reasonOf(button)).toBe("No node is reporting, so there is nothing TierPlan can check.");
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("describes Clean now as showing what would be removed first", async () => {
+    mount();
+    const button = await screen.findByRole("button", { name: "Clean now" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBeNull());
+    expect(reasonOf(button)).toBe("Shows what would be removed first.");
+  });
+
+  it("keeps the lock on the page once the sheet is closed on a refused Remove", async () => {
+    lockAnswer = () =>
+      new Response(
+        JSON.stringify({
+          type: "operation_locked",
+          title: "Conflict",
+          status: 409,
+          errors: [
+            { location: "kind", message: "janitor" },
+            { location: "runId", message: "r9" },
+            { location: "job", message: "j9" },
+            { location: "started", message: new Date().toISOString() },
+          ],
+        }),
+        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+      );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Clean now" }));
+    const sheet = await screen.findByRole("dialog", { name: "Clean up Prod" });
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Remove 3 items" }));
+    await waitFor(() => expect(toasts.error).toHaveBeenCalled());
+    fireEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText(/The janitor is cleaning Prod, started/)).toBeTruthy();
+  });
+
+  it("shows nothing but the no-access page to a user who can't read the environment", async () => {
+    me = makeMe({ envs: {} });
+    mount();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clean now" })).toBeNull());
+    expect(screen.queryByRole("heading", { level: 1, name: "Janitor" })).toBeNull();
   });
 });

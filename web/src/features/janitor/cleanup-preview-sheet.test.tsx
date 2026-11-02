@@ -15,10 +15,26 @@ import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
+vi.mock("@/lib/toast", () => ({
+  toastSuccess: toasts.success,
+  toastError: toasts.error,
+  toastInfo: toasts.info,
+}));
+
+const problem = (type: string, status: number, errors: { location: string; message: string }[]) =>
+  new Response(JSON.stringify({ type, title: "Error", status, errors }), {
+    status,
+    headers: { "Content-Type": "application/problem+json" },
+  });
+
 let me: ReturnType<typeof makeMe>;
 let previews: ReturnType<typeof preview>[];
 let asked: number;
 let started: { items: { type: string; nodeId: string; ref: string }[] } | undefined;
+// What the stubbed server answers instead of the usual, when a test needs it to.
+let previewAnswer: (() => Response | Promise<Response>) | undefined;
+let runsAnswer: (() => Response) | undefined;
 let client: QueryClient;
 
 // jsdom lays nothing out, so the scrolling area is given a height and the virtualiser can tell how
@@ -36,6 +52,11 @@ beforeEach(() => {
   previews = [];
   asked = 0;
   started = undefined;
+  previewAnswer = undefined;
+  runsAnswer = undefined;
+  toasts.success.mockReset();
+  toasts.error.mockReset();
+  toasts.info.mockReset();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     "fetch",
@@ -45,10 +66,12 @@ beforeEach(() => {
       if (url.pathname === `/api/env/${ENV}/janitor/preview`) {
         const body = previews[Math.min(asked, previews.length - 1)];
         asked++;
+        if (previewAnswer) return previewAnswer();
         return Response.json(body);
       }
       if (url.pathname === `/api/env/${ENV}/janitor/runs` && req.method === "POST") {
         started = await req.json();
+        if (runsAnswer) return runsAnswer();
         return Response.json({ runId: "r1", jobId: "j1" }, { status: 202 });
       }
       return Response.json({}, { status: 404 });
@@ -67,7 +90,7 @@ afterEach(() => {
   }
 });
 
-function mount(swarm = true) {
+function mount(swarm = true, onOpenChange: (open: boolean) => void = () => {}) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
@@ -77,7 +100,7 @@ function mount(swarm = true) {
             envName="Prod"
             swarm={swarm}
             nodeCount={2}
-            onOpenChange={() => {}}
+            onOpenChange={onOpenChange}
           />
         </TooltipProvider>
       </TestRouter>
@@ -259,6 +282,203 @@ describe("Refresh preview", () => {
     const sheet = screen.getByRole("dialog");
     for (const b of within(sheet).getAllByRole("checkbox", { name: /^Select web\./ })) {
       expect(b.getAttribute("aria-checked")).toBe("true");
+    }
+  });
+});
+
+describe("a deploy holds the environment", () => {
+  const holder = () =>
+    problem("operation_locked", 409, [
+      { location: "stack", message: "tracer" },
+      { location: "job", message: "j9" },
+      { location: "started", message: new Date(Date.now() - 5 * 60_000).toISOString() },
+      { location: "stackId", message: "s9" },
+    ]);
+
+  it("keeps the sheet open, shows the lock and says so in a toast", async () => {
+    previews = [preview({ items: [previewItem({ name: "web.1.aaa", ref: "c1" })] })];
+    runsAnswer = holder;
+    const closed = vi.fn();
+    mount(true, closed);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove 1 item" }));
+
+    const sheet = screen.getByRole("dialog");
+    expect(await within(sheet).findByText(/Another stack operation is running on Prod: tracer/)).toBeTruthy();
+    expect(toasts.error).toHaveBeenCalledWith("A deploy is running in Prod. Try again when it finishes.");
+    expect(closed).not.toHaveBeenCalled();
+    // The commit can't be pressed again, and says why.
+    const remove = within(sheet).getByRole("button", { name: "Remove 1 item" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Waiting for a deploy to finish. tracer is deploying.",
+    );
+  });
+
+  it("names the janitor when it is the janitor that holds it", async () => {
+    previews = [preview({ items: [previewItem({ name: "web.1.aaa", ref: "c1" })] })];
+    runsAnswer = () =>
+      problem("operation_locked", 409, [
+        { location: "kind", message: "janitor" },
+        { location: "runId", message: "r9" },
+        { location: "job", message: "j9" },
+        { location: "started", message: new Date(Date.now() - 60_000).toISOString() },
+      ]);
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Remove 1 item" }));
+    const sheet = screen.getByRole("dialog");
+    expect(await within(sheet).findByText(/The janitor is cleaning Prod, started/)).toBeTruthy();
+    expect(within(sheet).getByRole("link", { name: "Open it" }).getAttribute("href")).toBe(
+      "/env/e1/janitor/runs/r9",
+    );
+    expect(toasts.error).toHaveBeenCalledWith(
+      "The janitor is already cleaning Prod. Try again when it finishes.",
+    );
+  });
+});
+
+describe("a user below Env Admin", () => {
+  it("sees the preview but can't remove, and is told what it takes", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    previews = [preview({ items: [previewItem({ name: "web.1.aaa", ref: "c1" })] })];
+    mount();
+    const remove = await screen.findByRole("button", { name: "Remove 1 item" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Needs Admin on Prod",
+    );
+    fireEvent.click(remove);
+    expect(started).toBeUndefined();
+  });
+});
+
+describe("nothing to clean up", () => {
+  it("says so, hides the commit and still lists what was left", async () => {
+    previews = [
+      preview({
+        items: [],
+        notRemoved: [
+          previewItem({
+            type: "network",
+            name: "scratch_net",
+            ref: "n9",
+            node: "",
+            nodeId: "",
+            class: "reported",
+            reason: { code: "opt_in_off_networks" },
+          }),
+        ],
+      }),
+    ];
+    mount();
+    expect(await screen.findByText("Nothing to clean up")).toBeTruthy();
+    expect(
+      screen.getByText(/Anything the policy only reports is listed under Not removed\./),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull();
+
+    // Not removed is closed to start with; its reason is in the row, in words.
+    fireEvent.click(screen.getByRole("button", { name: /^Not removed \(1\)/ }));
+    expect(
+      await screen.findByText(
+        "Opt-in off: unused networks aren't removed until you turn that on.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("scratch_net")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open policy" }).getAttribute("href")).toBe(
+      "/env/e1/janitor#policy",
+    );
+  });
+});
+
+describe("while it works out what to clean", () => {
+  it("says it is checking the nodes and holds the place of the sections", async () => {
+    let release: (r: Response) => void = () => {};
+    previewAnswer = () => new Promise<Response>((resolve) => (release = resolve));
+    previews = [preview()];
+    mount();
+    expect(await screen.findByText("Checking 2 nodes…")).toBeTruthy();
+    expect(document.querySelector('[data-slot="skeleton"]')).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull();
+    release(Response.json(previews[0]));
+    expect(await screen.findByRole("button", { name: "Remove 1 item" })).toBeTruthy();
+    expect(screen.queryByText("Checking 2 nodes…")).toBeNull();
+  });
+});
+
+describe("a preview that fails", () => {
+  it("says nothing was removed, sends nothing and offers to try again", async () => {
+    previews = [preview({ items: [previewItem({ name: "web.1.aaa", ref: "c1" })] })];
+    previewAnswer = () => problem("internal", 500, []);
+    mount();
+    expect(await screen.findByText("Couldn't work out what to clean up.")).toBeTruthy();
+    expect(screen.getByText(/Nothing was removed\./)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Remove/ })).toBeNull();
+    expect(started).toBeUndefined();
+
+    previewAnswer = undefined;
+    fireEvent.click(screen.getByRole("button", { name: "Retry preview" }));
+    expect(await screen.findByRole("button", { name: "Remove 1 item" })).toBeTruthy();
+    expect(asked).toBe(2);
+    expect(started).toBeUndefined();
+  });
+});
+
+describe("a node that is not reporting", () => {
+  it("is named in the banner, with the note that its networks are not judged", async () => {
+    previews = [
+      preview({
+        items: [previewItem({ name: "web.1.aaa", ref: "c1" })],
+        withheldNodes: ["node-3"],
+        networksWithheld: true,
+      }),
+    ];
+    mount();
+    await screen.findByRole("button", { name: "Remove 1 item" });
+    const sheet = screen.getByRole("dialog");
+    expect(within(sheet).getByText(/node-3/, { selector: "[data-slot=alert-description]" })).toBeTruthy();
+    expect(
+      within(sheet).getByText("TierPlan won't judge networks while node-3 isn't reporting."),
+    ).toBeTruthy();
+  });
+});
+
+describe("names and reasons that hold markup", () => {
+  it("are drawn as text and never as elements", async () => {
+    previews = [
+      preview({
+        items: [
+          previewItem({ name: "<script>alert(1)</script>", ref: "c1" }),
+          previewItem({
+            type: "network",
+            name: "<img src=x onerror=alert(1)>",
+            ref: "n1",
+            node: "",
+            nodeId: "",
+            reason: { code: "network_orphaned", stack: "<b>old</b>" },
+          }),
+        ],
+        notRemoved: [
+          previewItem({
+            name: "<i>kept</i>",
+            ref: "c8",
+            class: "protected",
+            reason: { code: "stack_excluded", stack: "<u>x</u>" },
+          }),
+        ],
+      }),
+    ];
+    mount();
+    const sheet = await screen.findByRole("dialog");
+    await within(sheet).findByRole("button", { name: "Remove 2 items" });
+    fireEvent.click(within(sheet).getByRole("button", { name: /^Not removed \(1\)/ }));
+    await within(sheet).findByText("<i>kept</i>");
+    expect(within(sheet).getByText("<script>alert(1)</script>")).toBeTruthy();
+    expect(within(sheet).getByText("<img src=x onerror=alert(1)>")).toBeTruthy();
+    expect(
+      within(sheet).getByText("Orphaned: the stack <b>old</b> that created it no longer exists."),
+    ).toBeTruthy();
+    for (const tag of ["script", "img", "b", "i", "u"]) {
+      expect(sheet.querySelector(tag)).toBeNull();
     }
   });
 });
