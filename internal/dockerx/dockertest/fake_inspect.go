@@ -39,6 +39,9 @@ type FakeInspect struct {
 	OOMKilled    bool
 	Error        string
 	RestartCount int
+	// SizeRw is the size of the container's writable layer. The inspect carries it only when the
+	// request asks for the size (size=1), and zero sends none, as an engine that did not measure.
+	SizeRw int64
 	// MemoryBytes and NanoCPUs are the container's own limits, HostConfig.Memory and
 	// HostConfig.NanoCPUs; zero is no limit.
 	MemoryBytes, NanoCPUs int64
@@ -165,6 +168,10 @@ func (f *Fake) serveInspect(w http.ResponseWriter, r *http.Request, p string, cf
 			}
 			resp.NetworkSettings.Networks[netName] = es
 		}
+	}
+	if known && r.URL.Query().Get("size") == "1" && found.Inspect.SizeRw != 0 {
+		size := found.Inspect.SizeRw
+		resp.SizeRw = &size
 	}
 	if known && found.Inspect.Document != nil {
 		resp = found.Inspect.documentFor(resp)

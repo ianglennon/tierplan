@@ -401,6 +401,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
 			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
 		})
+		if f.stackLocks == nil {
+			f.stackLocks = stackops.NewLocks()
+		}
+		api.RegisterJanitor(r, api.JanitorDeps{Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Now: f.clk.now, Log: log})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),

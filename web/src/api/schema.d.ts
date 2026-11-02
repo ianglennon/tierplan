@@ -1428,6 +1428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what the janitor would remove
+         * @description Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. Today it lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. Needs environments.read on the environment.
+         */
+        post: operations["previewJanitor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -7727,6 +7747,108 @@ export interface components {
             type?: string;
             /** @description The registry user name; 422 username_required */
             username?: string;
+        };
+        JanitorItemBody: {
+            /**
+             * Format: int64
+             * @description How long the object has been stopped or idle, 0 when not known
+             */
+            ageSeconds: number;
+            /**
+             * @description removable: the janitor would remove it now. reported: worth a look, not removed by the policy. protected: kept by a label or a person. grace: stopped or idle for less than the grace period. cant_tell: TierPlan cannot be sure, so it leaves it
+             * @enum {string}
+             */
+            class: "removable" | "reported" | "protected" | "grace" | "cant_tell";
+            name: string;
+            /** @description The node's name */
+            node: string;
+            /** @description The ID of the node the object is on */
+            nodeId: string;
+            reason: components["schemas"]["JanitorReasonBody"];
+            /** @description The engine's ID of the object */
+            ref: string;
+            /**
+             * Format: int64
+             * @description The bytes removing the object frees, null when not known
+             */
+            sizeBytes: number | null;
+            /** @enum {string} */
+            type: "container" | "image" | "network";
+        };
+        JanitorPreviewBody: {
+            /** @description What the janitor would remove now, ordered by type (container, network, image), then node, name and ID */
+            items: components["schemas"]["JanitorItemBody"][] | null;
+            /** @description True when no network was judged because a node that could hold an attachment did not report */
+            networksWithheld: boolean;
+            /**
+             * Format: int64
+             * @description How many nodes reported and were checked
+             */
+            nodesChecked: number;
+            /** @description What the janitor looked at and left, with the class and reason, in the same order */
+            notRemoved: components["schemas"]["JanitorItemBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the preview was made
+             */
+            previewedAt: string;
+            summary: components["schemas"]["JanitorSummaryBody"];
+            /** @description The nodes that did not report. None of their objects is listed, and nothing is judged that depends on them */
+            withheldNodes: string[] | null;
+        };
+        JanitorReasonBody: {
+            /**
+             * Format: int64
+             * @description How long the object has been stopped or idle
+             */
+            ageSeconds?: number;
+            /**
+             * @description A stable word the SPA maps to its own copy
+             * @enum {string}
+             */
+            code: "task_beyond_keep" | "task_service_gone" | "stack_gone" | "compose_project_gone" | "compose_oneoff" | "stopped_standalone" | "dangling_image" | "network_orphaned" | "network_unused" | "opt_in_off_containers" | "opt_in_off_networks" | "lone_compose_container" | "kept_label" | "kept_row" | "stack_excluded" | "stack_declared_keep" | "younger_than_grace" | "node_not_reporting" | "networks_withheld" | "stack_unknown" | "inspect_capped" | "clock_skew" | "task_labels_missing" | "services_unread";
+            /** @description The node a global service's group is on */
+            node?: string;
+            /** @description The compose project the object is labelled with */
+            project?: string;
+            /**
+             * Format: int64
+             * @description The container's place among the exited containers of its group, 1 for the oldest
+             */
+            rank?: number;
+            /**
+             * Format: int64
+             * @description How much of the grace period is left, for an item held back by grace
+             */
+            remainingSeconds?: number;
+            /** @description The swarm service of a task container */
+            service?: string;
+            /** @description The replica slot of a replicated service's task container. Empty for a global service */
+            slot?: string;
+            /** @description The swarm stack the object is labelled with */
+            stack?: string;
+        };
+        JanitorSummaryBody: {
+            /**
+             * Format: int64
+             * @description How many containers the janitor would remove
+             */
+            containers: number;
+            /**
+             * Format: int64
+             * @description The space the removable items hold, the sum of the sizes that are known. Null when no size is known, which is not zero: the estimate is unavailable
+             */
+            estBytes: number | null;
+            /**
+             * Format: int64
+             * @description How many images the janitor would remove
+             */
+            images: number;
+            /**
+             * Format: int64
+             * @description How many networks the janitor would remove
+             */
+            networks: number;
         };
         KeepBody: {
             /**
@@ -16107,6 +16229,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageUsedByBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewJanitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorPreviewBody"];
                 };
             };
             /** @description Error */

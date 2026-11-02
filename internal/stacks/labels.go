@@ -28,6 +28,12 @@ const (
 	LabelConfigPrefix = "tierplan.stack.config."
 	// LabelStoppedReplicas remembers a replicated service's count while its stack is stopped.
 	LabelStoppedReplicas = "tierplan.stack.stopped-replicas"
+	// LabelKeep is the one opt-out label for every resource type the janitor and the orphan check
+	// judge (containers, images, networks, JAN-07, D-09). An object that carries it with the exact
+	// value "true" is never listed for removal; the label protects only the object that carries it.
+	// It is an on-host contract users write into their compose files, so a rename needs a dual read
+	// for as long as labelled objects live.
+	LabelKeep = "tierplan.keep"
 
 	// LabelSwarmNamespace is the label docker stack deploy puts on every object of a stack.
 	LabelSwarmNamespace = "com.docker.stack.namespace"

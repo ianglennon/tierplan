@@ -7401,6 +7401,254 @@
         ],
         "type": "object"
       },
+      "JanitorItemBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ageSeconds": {
+            "description": "How long the object has been stopped or idle, 0 when not known",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "description": "removable: the janitor would remove it now. reported: worth a look, not removed by the policy. protected: kept by a label or a person. grace: stopped or idle for less than the grace period. cant_tell: TierPlan cannot be sure, so it leaves it",
+            "enum": [
+              "removable",
+              "reported",
+              "protected",
+              "grace",
+              "cant_tell"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node": {
+            "description": "The node's name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of the node the object is on",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/JanitorReasonBody"
+          },
+          "ref": {
+            "description": "The engine's ID of the object",
+            "type": "string"
+          },
+          "sizeBytes": {
+            "description": "The bytes removing the object frees, null when not known",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "enum": [
+              "container",
+              "image",
+              "network"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "nodeId",
+          "node",
+          "ref",
+          "name",
+          "class",
+          "reason",
+          "ageSeconds",
+          "sizeBytes"
+        ],
+        "type": "object"
+      },
+      "JanitorPreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "What the janitor would remove now, ordered by type (container, network, image), then node, name and ID",
+            "items": {
+              "$ref": "#/components/schemas/JanitorItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "networksWithheld": {
+            "description": "True when no network was judged because a node that could hold an attachment did not report",
+            "type": "boolean"
+          },
+          "nodesChecked": {
+            "description": "How many nodes reported and were checked",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notRemoved": {
+            "description": "What the janitor looked at and left, with the class and reason, in the same order",
+            "items": {
+              "$ref": "#/components/schemas/JanitorItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "previewedAt": {
+            "description": "When the preview was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/JanitorSummaryBody"
+          },
+          "withheldNodes": {
+            "description": "The nodes that did not report. None of their objects is listed, and nothing is judged that depends on them",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "previewedAt",
+          "nodesChecked",
+          "summary",
+          "items",
+          "notRemoved",
+          "withheldNodes",
+          "networksWithheld"
+        ],
+        "type": "object"
+      },
+      "JanitorReasonBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ageSeconds": {
+            "description": "How long the object has been stopped or idle",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "code": {
+            "description": "A stable word the SPA maps to its own copy",
+            "enum": [
+              "task_beyond_keep",
+              "task_service_gone",
+              "stack_gone",
+              "compose_project_gone",
+              "compose_oneoff",
+              "stopped_standalone",
+              "dangling_image",
+              "network_orphaned",
+              "network_unused",
+              "opt_in_off_containers",
+              "opt_in_off_networks",
+              "lone_compose_container",
+              "kept_label",
+              "kept_row",
+              "stack_excluded",
+              "stack_declared_keep",
+              "younger_than_grace",
+              "node_not_reporting",
+              "networks_withheld",
+              "stack_unknown",
+              "inspect_capped",
+              "clock_skew",
+              "task_labels_missing",
+              "services_unread"
+            ],
+            "type": "string"
+          },
+          "node": {
+            "description": "The node a global service's group is on",
+            "type": "string"
+          },
+          "project": {
+            "description": "The compose project the object is labelled with",
+            "type": "string"
+          },
+          "rank": {
+            "description": "The container's place among the exited containers of its group, 1 for the oldest",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "remainingSeconds": {
+            "description": "How much of the grace period is left, for an item held back by grace",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "service": {
+            "description": "The swarm service of a task container",
+            "type": "string"
+          },
+          "slot": {
+            "description": "The replica slot of a replicated service's task container. Empty for a global service",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The swarm stack the object is labelled with",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "JanitorSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "description": "How many containers the janitor would remove",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "estBytes": {
+            "description": "The space the removable items hold, the sum of the sizes that are known. Null when no size is known, which is not zero: the estimate is unavailable",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "images": {
+            "description": "How many images the janitor would remove",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "networks": {
+            "description": "How many networks the janitor would remove",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "containers",
+          "networks",
+          "images",
+          "estBytes"
+        ],
+        "type": "object"
+      },
       "KeepBody": {
         "additionalProperties": false,
         "properties": {
@@ -25721,6 +25969,57 @@
           }
         },
         "summary": "What uses one image",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/preview": {
+      "post": {
+        "description": "Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. Today it lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. Needs environments.read on the environment.",
+        "operationId": "previewJanitor",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorPreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview what the janitor would remove",
         "tags": [
           "environments"
         ]

@@ -177,6 +177,7 @@ type RouterDeps struct {
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
 	AddressSpace  api.AddressSpaceDeps
+	Janitor       api.JanitorDeps
 	Services      api.ServicesDeps
 	RestartLoop   api.RestartLoopDeps
 	Secrets       api.SecretsDeps
@@ -233,6 +234,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
 	api.RegisterAddressSpace(r, d.AddressSpace)
+	api.RegisterJanitor(r, d.Janitor)
 	api.RegisterServices(r, d.Services)
 	api.RegisterRestartLoop(r, d.RestartLoop)
 	api.RegisterSecrets(r, d.Secrets)
@@ -870,6 +872,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
 		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log},
+		Janitor:       api.JanitorDeps{Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Now: time.Now, Log: log},
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
