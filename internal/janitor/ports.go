@@ -135,6 +135,9 @@ type EvidenceSource struct {
 	// Secrets are values to hide wherever they appear in a line: the container's own secret-looking
 	// environment values and, for a container of a TierPlan stack, that stack's secret values.
 	Secrets []string
+	// Mask, when set, hides the secret values of the container's TierPlan stack in a line; it runs
+	// before the pattern masks. Nil means the container is not a stack's.
+	Mask func(string) string
 	// ImageDigest is the repo@sha256 name of the image the container ran on its node, empty when the
 	// node has none. Node is the node's name; the runner fills it in when the engine does not.
 	ImageDigest, Node string

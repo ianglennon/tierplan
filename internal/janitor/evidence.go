@@ -60,6 +60,9 @@ type Evidence struct {
 func BuildEvidence(src EvidenceSource) Evidence {
 	ev := evidenceOf(src.End, src.Node)
 	// The engine's start error is text a remote system wrote, so it is masked like a log line.
+	if src.Mask != nil {
+		ev.Error = src.Mask(ev.Error)
+	}
 	ev.Error, _ = redact.MaskLogLine(ev.Error, src.Secrets)
 	if src.ImageDigest != "" {
 		ev.ImageDigest = src.ImageDigest
@@ -74,6 +77,9 @@ func BuildEvidence(src EvidenceSource) Evidence {
 	}
 	masked := make([]string, 0, len(lines))
 	for _, l := range lines {
+		if src.Mask != nil {
+			l = src.Mask(l)
+		}
 		m, _ := redact.MaskLogLine(l, src.Secrets)
 		masked = append(masked, m)
 	}

@@ -287,13 +287,44 @@ func (e *janitorEngine) Evidence(ctx context.Context, envID, nodeID, id string) 
 		}
 		src.Labels = d.Labels
 		src.Secrets = redact.SecretEnvValues(d.Env)
+		maskable := e.stackMask(ctx, &src, d.Labels)
 		if img, _, err := c.ImageDetail(ctx, d.ImageID); err == nil && len(img.RepoDigests) > 0 {
 			src.ImageDigest = img.RepoDigests[0]
+		}
+		if !maskable {
+			// The stack's secret values could not be read, so no line of this log is kept: a tail that
+			// has not been masked is never stored (T-11-35).
+			src.LogsUnavailable = true
+			return nil
 		}
 		src.Lines, src.LogsUnavailable = e.crashLog(ctx, c, id)
 		return nil
 	})
 	return src, err
+}
+
+// stackMasker is what the stack records offer the janitor: the masker of a stack's deployed
+// revision. The facts the engine is built with implement it (stackops.NetFacts).
+type stackMasker interface {
+	DeployedMasker(ctx context.Context, stackID string) (stacks.Masker, error)
+}
+
+// stackMask gives src the masker of the TierPlan stack a container belongs to, if it belongs to one.
+// It answers false when the container is a stack's and the stack's values could not be read. A stack
+// that does not exist, or has not deployed, hides nothing and is not a failure.
+func (e *janitorEngine) stackMask(ctx context.Context, src *janitor.EvidenceSource, labels map[string]string) bool {
+	stackID := labels[stacks.LabelStackID]
+	sm, ok := e.facts.(stackMasker)
+	if stackID == "" || !ok {
+		return true
+	}
+	m, err := sm.DeployedMasker(ctx, stackID)
+	if err != nil {
+		e.log.Warn("the janitor could not read the secret values of a stack, so a crashed container's log was not kept", "stack", stackID, "error", err)
+		return false
+	}
+	src.Mask = m.Mask
+	return true
 }
 
 // crashLog reads the last janitor.EvidenceLines lines of a container's log, each with the engine's

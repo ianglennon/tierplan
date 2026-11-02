@@ -4,7 +4,10 @@
 package redact_test
 
 import (
+	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ianglennon/tierplan/internal/redact"
 )
@@ -24,6 +27,24 @@ func TestMaskLogLine(t *testing.T) {
 		{name: "a pair among words", line: "boot DB_PASSWORD=hunter2 started", want: "boot DB_PASSWORD=<hidden> started", masked: true},
 		{name: "a plain pair is left alone", line: "listening PORT=8080", want: "listening PORT=8080"},
 		{name: "a line with nothing to hide", line: "2026-01-01T00:00:00Z started", want: "2026-01-01T00:00:00Z started"},
+		{name: "url user-info", line: "connecting to postgres://app:s3cret@db/x", want: "connecting to postgres://<hidden>@db/x", masked: true},
+		{name: "an authorization header", line: "Authorization: Bearer abc.def", want: "Authorization: Bearer <hidden>", masked: true},
+		{name: "a lower case authorization pair", line: "authorization=xyz", want: "authorization=<hidden>", masked: true},
+		{name: "a basic credential", line: "sent authorization: Basic dXNlcjpwdw== now", want: "sent authorization: Basic <hidden> now", masked: true},
+		{name: "a bearer token alone", line: "retry with Bearer eyJhbGciOi.payload.sig", want: "retry with Bearer <hidden>", masked: true},
+		{name: "prose about a bearer is left alone", line: "the bearer of bad news", want: "the bearer of bad news"},
+		{name: "a secret name with a colon", line: "api_key: 12345abc went wrong", want: "api_key: <hidden> went wrong", masked: true},
+		{name: "a json secret", line: `{"password": "hunter2", "user": "bob"}`, want: `{"password": "<hidden>", "user": "bob"}`, masked: true},
+		{name: "a plain name with a colon", line: "user: bob", want: "user: bob"},
+		{name: "a clock time is not a pair", line: "at 12:30:45 the token expired", want: "at 12:30:45 the token expired"},
+		{name: "a quoted pair", line: `starting secret="two words" now`, want: "starting secret=<hidden> now", masked: true},
+		{name: "a literal secret anywhere", line: "dial tcp: hunter2xyz refused for x-hunter2xyz-y", secrets: []string{"hunter2xyz"}, want: "dial tcp: <hidden> refused for x-<hidden>-y", masked: true},
+		{name: "the longest secret goes first", line: "token abcdefgh1234 and abcdefgh", secrets: []string{"abcdefgh", "abcdefgh1234"}, want: "token <hidden> and <hidden>", masked: true},
+		{name: "a short secret is not worth hiding", line: "ab ab abc", secrets: []string{"ab", ""}, want: "ab ab abc"},
+		{name: "colour codes are stripped", line: "\x1b[31mred\x1b[0m text\x1b]0;title\x07 end", want: "red text end"},
+		{name: "other control characters are stripped", line: "a\x00b\x07c\x7fd\rt\tx", want: "abcdt\tx"},
+		{name: "a control character cannot split a secret", line: "pass hun\x1b[1mter2xyz", secrets: []string{"hunter2xyz"}, want: "pass <hidden>", masked: true},
+		{name: "bytes that are not text are dropped", line: "a\xffb", want: "ab"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -32,5 +53,29 @@ func TestMaskLogLine(t *testing.T) {
 				t.Fatalf("MaskLogLine(%q) = %q, %v; want %q, %v", tc.line, got, masked, tc.want, tc.masked)
 			}
 		})
+	}
+}
+
+func TestMaskLogLineCutsLongLines(t *testing.T) {
+	t.Parallel()
+	got, masked := redact.MaskLogLine(strings.Repeat("a", 10000), nil)
+	if n := utf8.RuneCountInString(got); n != 2048 || masked {
+		t.Fatalf("a 10,000 character line came out as %d characters, masked %v; want 2048 and not masked", n, masked)
+	}
+	// A secret across the cut is hidden whole, never cut in two with a half left behind.
+	secret := "SECRET-" + strings.Repeat("z", 30)
+	line := strings.Repeat("a", 2040) + secret + "tail"
+	got, masked = redact.MaskLogLine(line, []string{secret})
+	if strings.Contains(got, "SECRET") || strings.Contains(got, "zzz") || !masked {
+		t.Fatalf("the cut left part of a secret: %q (masked %v)", got[len(got)-30:], masked)
+	}
+}
+
+func TestSecretEnvValues(t *testing.T) {
+	t.Parallel()
+	got := redact.SecretEnvValues([]string{"DB_PASSWORD=hunter2", "PORT=8080", "API_TOKEN=a=b", "EMPTY_SECRET=", "SHORT_KEY=abc", "NOEQUALS", "SESSION_KEY=abcd"})
+	want := []string{"hunter2", "abcd"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("SecretEnvValues = %q, want %q: secret-looking names only, values of 4 characters or more", got, want)
 	}
 }
