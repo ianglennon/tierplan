@@ -391,3 +391,38 @@ func TestJanitorPreviewStandaloneStackGone(t *testing.T) {
 		t.Errorf("preview after = %+v %+v, want nothing left", after.Items, after.NotRemoved)
 	}
 }
+
+// A node whose engine reports a time more than five minutes from the server's is not judged: its
+// containers are cant_tell clock_skew in the preview (plan 11-12, RESEARCH Pitfall 11). An engine
+// that reports no time is judged as before (A9). The server's time is the one the snapshot was read
+// at, which is real time and not the fixture's janitor clock, so the engine's is told against that.
+func TestJanitorPreviewNodeClockSkew(t *testing.T) {
+	t.Parallel()
+	at := func(d time.Duration) string { return time.Now().Add(d).Format(time.RFC3339Nano) }
+	for name, tc := range map[string]struct {
+		engineTime string
+		wantClass  string
+		wantCode   string
+		wantItems  int
+	}{
+		"ten minutes ahead":   {at(10 * time.Minute), "cant_tell", "clock_skew", 0},
+		"ten minutes behind":  {at(-10 * time.Minute), "cant_tell", "clock_skew", 0},
+		"a minute ahead":      {at(time.Minute), "removable", "stack_gone", 1},
+		"a minute behind":     {at(-time.Minute), "removable", "stack_gone", 1},
+		"no time is reported": {"", "removable", "stack_gone", 1},
+		"a time not a time":   {"yesterday", "removable", "stack_gone", 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := orphanEngine()
+			cfg.SystemTime = tc.engineTime
+			cfg.Containers = []dockertest.FakeContainer{standaloneBox("old-web", 72*time.Hour, map[string]string{"tierplan.stack.id": "stk-removed", "com.docker.compose.project": "oldshop", "com.docker.compose.service": "web"})}
+			f, e := dashEnv(t, cfg)
+			got := f.previewJanitor(t, e)
+			all := append(append([]janitorItem{}, got.Items...), got.NotRemoved...)
+			if len(got.Items) != tc.wantItems || len(all) != 1 || all[0].Class != tc.wantClass || all[0].Reason.Code != tc.wantCode {
+				t.Fatalf("items = %+v notRemoved = %+v, want one container %s %s", got.Items, got.NotRemoved, tc.wantClass, tc.wantCode)
+			}
+		})
+	}
+}

@@ -160,3 +160,123 @@ func TestReasonCodesAreDistinct(t *testing.T) {
 		t.Fatalf("%d reason codes, want the 24 the API enum promises", len(seen))
 	}
 }
+
+// The clock skew rail (plan 11-12, RESEARCH Pitfall 11, A9): a node whose engine clock differs from
+// the server's by more than five minutes has its container and image candidates left alone.
+func TestClockSkewRail(t *testing.T) {
+	t.Parallel()
+	// Each of two nodes holds a plain stopped container and a dangling image, all two days old.
+	build := func(n1 time.Time, mutate func(*Snapshot)) Plan {
+		c1, c2 := box("c1", 0, nil), box("c2", 0, nil)
+		c2.NodeID, c2.Node = "n2-id", "n2"
+		i1, i2 := bareImage("a1", 48*time.Hour), bareImage("a2", 48*time.Hour)
+		i2.NodeID, i2.Node = "n2-id", "n2"
+		s := hostOf(nil, c1, c2)
+		s.Nodes = append(s.Nodes, Node{ID: "n2-id", Name: "n2"})
+		s.Images = []Image{i1, i2}
+		s.NodeTimes = map[string]time.Time{"n2-id": t0}
+		if !n1.IsZero() {
+			s.NodeTimes["n1-id"] = n1
+		}
+		if mutate != nil {
+			mutate(&s)
+		}
+		return planOf(s, optIn(true))
+	}
+	byNode := func(items []Item) map[string][]string {
+		out := map[string][]string{}
+		for _, it := range items {
+			out[it.Node] = append(out[it.Node], string(it.Type)+":"+it.Name)
+		}
+		return out
+	}
+	t.Run("six minutes ahead: its container and image are cant_tell clock_skew, the other node is judged normally", func(t *testing.T) {
+		t.Parallel()
+		got := build(t0.Add(6*time.Minute), nil)
+		if !reflect.DeepEqual(byNode(got.Items), map[string][]string{"n2": {"container:c2", "image:a2"}}) {
+			t.Fatalf("items = %+v, want only the other node's container and image", got.Items)
+		}
+		if len(got.NotRemoved) != 2 {
+			t.Fatalf("notRemoved = %+v, want the skewed node's container and image", got.NotRemoved)
+		}
+		for _, it := range got.NotRemoved {
+			if it.Node != "n1" || it.Class != ClassCantTell || it.Reason.Code != ReasonClockSkew || it.Age != 0 || it.Reason.Age != 0 || it.Reason.Remaining != 0 {
+				t.Errorf("item = %+v, want cant_tell clock_skew with no age on n1", it)
+			}
+		}
+	})
+	t.Run("six minutes behind is as wrong as six minutes ahead", func(t *testing.T) {
+		t.Parallel()
+		got := build(t0.Add(-6*time.Minute), nil)
+		if len(got.Items) != 2 || len(got.NotRemoved) != 2 || got.NotRemoved[0].Reason.Code != ReasonClockSkew {
+			t.Fatalf("plan = %+v, want n1's two items held back", got)
+		}
+	})
+	t.Run("four minutes out, exactly five and an unknown clock are judged normally", func(t *testing.T) {
+		t.Parallel()
+		for name, n1 := range map[string]time.Time{"4m ahead": t0.Add(4 * time.Minute), "4m behind": t0.Add(-4 * time.Minute), "exactly 5m": t0.Add(ClockSkewTolerance), "unknown": {}} {
+			got := build(n1, nil)
+			if len(got.Items) != 4 || len(got.NotRemoved) != 0 {
+				t.Errorf("%s: plan = %+v, want all four removable", name, got)
+			}
+		}
+	})
+	t.Run("a snapshot with no read time cannot tell", func(t *testing.T) {
+		t.Parallel()
+		got := build(t0.Add(time.Hour), func(s *Snapshot) { s.ReadAt = time.Time{} })
+		if len(got.Items) != 4 {
+			t.Fatalf("plan = %+v, want all four judged normally", got)
+		}
+	})
+	t.Run("a kept container stays protected while the rest of the node is cant_tell", func(t *testing.T) {
+		t.Parallel()
+		got := build(t0.Add(time.Hour), func(s *Snapshot) {
+			s.Containers = append(s.Containers, box("c4", 0, map[string]string{keepLabel: "true"}))
+		})
+		classes := map[string]Class{}
+		for _, it := range got.NotRemoved {
+			if it.Node == "n1" {
+				classes[it.Name] = it.Class
+			}
+		}
+		if want := map[string]Class{"c1": ClassCantTell, "a1": ClassCantTell, "c4": ClassProtected}; !reflect.DeepEqual(classes, want) {
+			t.Fatalf("classes of n1 = %v, want %v", classes, want)
+		}
+	})
+	t.Run("a container held back by grace is cant_tell too: its age is the wrong clock's", func(t *testing.T) {
+		t.Parallel()
+		c := box("c1", 0, nil)
+		s := hostOf(nil, c)
+		s.NodeTimes = map[string]time.Time{"n1-id": t0.Add(time.Hour)}
+		got := Build(Input{Snapshot: s, Ends: map[string]ContainerEnd{"c1": {FinishedAt: t0.Add(-time.Hour), SizeRw: -1}}}, optIn(true), t0)
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 || got.NotRemoved[0].Class != ClassCantTell || got.NotRemoved[0].Reason.Code != ReasonClockSkew || got.NotRemoved[0].Reason.Remaining != 0 {
+			t.Fatalf("plan = %+v, want cant_tell clock_skew in place of grace", got)
+		}
+	})
+	t.Run("opt-in off: the reported container is held back as well", func(t *testing.T) {
+		t.Parallel()
+		c := box("c1", 0, nil)
+		s := hostOf(nil, c)
+		s.NodeTimes = map[string]time.Time{"n1-id": t0.Add(time.Hour)}
+		got := planOf(s, optIn(false))
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 || got.NotRemoved[0].Class != ClassCantTell || got.NotRemoved[0].Reason.Code != ReasonClockSkew {
+			t.Fatalf("plan = %+v, want cant_tell clock_skew in place of reported", got)
+		}
+	})
+	t.Run("a swarm task container on a skewed node is held back too", func(t *testing.T) {
+		t.Parallel()
+		s := swarmOf(task("c1", "1", 0), task("c2", "1", 1), task("c3", "1", 2))
+		s.NodeTimes = map[string]time.Time{"n1-id": t0.Add(10 * time.Minute)}
+		p := DefaultPolicy()
+		p.KeepN = 0
+		got := planOf(s, p)
+		if len(got.Items) != 0 || len(got.NotRemoved) != 3 {
+			t.Fatalf("plan = %+v, want all three cant_tell", got)
+		}
+		for _, it := range got.NotRemoved {
+			if it.Reason.Code != ReasonClockSkew || it.Reason.Service != "web" || it.Reason.Slot != "1" {
+				t.Errorf("item = %+v, want clock_skew keeping its service and slot", it)
+			}
+		}
+	})
+}
