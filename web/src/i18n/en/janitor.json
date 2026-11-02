@@ -46,14 +46,14 @@
       "unknown": "—"
     },
     "counts": {
-      "containers_one": "{{count}} container",
-      "containers_other": "{{count}} containers",
-      "networks_one": "{{count}} network",
-      "networks_other": "{{count}} networks",
-      "images_one": "{{count}} image",
-      "images_other": "{{count}} images",
-      "items_one": "{{count}} item",
-      "items_other": "{{count}} items",
+      "containers_one": "{{count, number}} container",
+      "containers_other": "{{count, number}} containers",
+      "networks_one": "{{count, number}} network",
+      "networks_other": "{{count, number}} networks",
+      "images_one": "{{count, number}} image",
+      "images_other": "{{count, number}} images",
+      "items_one": "{{count, number}} item",
+      "items_other": "{{count, number}} items",
       "size": "~{{size}}"
     },
     "type": {
@@ -108,8 +108,8 @@
         "image": "Images ({{count}})"
       },
       "nodeGroup": {
-        "items_one": "{{count}} item",
-        "items_other": "{{count}} items"
+        "items_one": "{{count, number}} item",
+        "items_other": "{{count, number}} items"
       },
       "columns": {
         "select": "Select",
@@ -140,8 +140,8 @@
       "footer": {
         "note": "TierPlan checks each item again just before it removes it, and keeps any that something started using. The details of each network and container are saved first. Volumes are never touched.",
         "cancel": "Cancel",
-        "remove_one": "Remove {{count}} item",
-        "remove_other": "Remove {{count}} items",
+        "remove_one": "Remove {{count, number}} item",
+        "remove_other": "Remove {{count, number}} items",
         "removing": "Removing…",
         "tickOne": "Tick at least one item to remove.",
         "needsOn": "{{need}} on {{name}}"
@@ -205,8 +205,8 @@
       },
       "caption": "Items in this run",
       "empty": "This run found nothing to remove.",
-      "items_one": "{{count}} item",
-      "items_other": "{{count}} items",
+      "items_one": "{{count, number}} item",
+      "items_other": "{{count, number}} items",
       "outcome": {
         "removed": "Removed",
         "refused_in_use": "In use, kept",
