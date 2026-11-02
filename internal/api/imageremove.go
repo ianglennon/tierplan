@@ -17,8 +17,10 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 const (
@@ -120,6 +122,9 @@ type ImageUntagOutput struct {
 var (
 	errImageGone = errors.New("api: the node has no such image")
 	errNameGone  = errors.New("api: the image has no such name on the node")
+	// errNotDangling is what a strict-dangling closure answers when the image has gained a name or
+	// a keep label since the janitor looked.
+	errNotDangling = errors.New("api: the image is no longer dangling")
 )
 
 // imageBusyError is what a closure answers when something uses the image: the containers and
@@ -188,6 +193,9 @@ type imageCheck struct {
 	// svcErr is set when the specs of a swarm's services could not be read: nothing on it can
 	// be told to be unused.
 	svcErr error
+	// specs are the service specs the check read, for the janitor's strict rule, which also asks
+	// whether a spec names an image by its ID.
+	specs []dockerx.ServiceRef
 }
 
 // readImageCheck reads the check of a request.
@@ -202,6 +210,7 @@ func readImageCheck(ctx context.Context, d ImagesDeps, envID string) (imageCheck
 		refs, chk.svcErr = liveServiceRefs(ctx, d, envID)
 	}
 	chk.usage = imageUsageFrom(agg, refs, nil)
+	chk.specs = refs
 	return chk, nil
 }
 
@@ -233,6 +242,11 @@ type imageOp struct {
 	// danglingOnly refuses an image that has a name: set on every target of a bulk delete,
 	// which removes untagged images only (D-17).
 	danglingOnly bool
+	// strictDangling is the janitor's rule (D-07): inside the write call, once the image's names
+	// are read again, an image that has a real tag or any digest reference, or is labelled
+	// tierplan.keep=true, is refused with not_dangling and nothing is removed. It is checked on the
+	// image as the node has it at that moment, not on the list the caller saw.
+	strictDangling bool
 }
 
 // imageOutcome is what happened to one op, and what its audit row needs.
@@ -324,12 +338,25 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 		out.attempted = false
 		return fail(codeNotDangling, out.ref+" has a name, so it was not deleted with the others. Open the image to remove it.")
 	}
+	if op.strictDangling && op.untag == "" && (slices.ContainsFunc(row.RepoTags, func(tag string) bool { return !isNoneTag(tag) }) ||
+		len(row.RepoDigests) > 0 || row.Labels[stacks.LabelKeep] == "true") {
+		out.attempted = false
+		return fail(codeNotDangling, out.ref+" has a name or is kept, so it is not dangling and was left alone.")
+	}
 	if chk.svcErr != nil {
 		return fail(codeNodeUnreachable, "Can't tell whether "+out.ref+" is in use: no manager answered. Try again when one is back.")
 	}
 	var services []string
 	for _, use := range chk.usage.servicesOf(row.ImageRow) {
 		services = append(services, "service "+use.ref.Name)
+	}
+	if op.strictDangling {
+		// An image with no name can only be named by a spec through its ID.
+		for _, ref := range chk.specs {
+			if janitor.ImageNamedBySpec([]string{ref.Image}, op.imageID) {
+				services = append(services, "service "+ref.Name)
+			}
+		}
 	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
@@ -503,6 +530,8 @@ func imageRemoveError(ref string, err error) (code, detail string) {
 		return codeLastNameInUse, "This is the last name of an image that is in use. Remove what uses it first."
 	case errors.As(err, &busy):
 		return codeImageInUse, ref + " is still in use by " + joinMore(busy.users, maxNamedUsers) + ". Remove what uses it, then try again."
+	case errors.Is(err, errNotDangling):
+		return codeNotDangling, ref + " has a name or is kept, so it is not dangling and was left alone."
 	case dockerx.IsNotFound(err), errors.Is(err, errImageGone), errors.Is(err, errNameGone):
 		return codeNotFound, ref + " is already gone."
 	case dockerx.IsConflict(err):

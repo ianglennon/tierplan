@@ -805,8 +805,9 @@ func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T)
 	// list sends only the owner. A VolumeRow keeps its labels (plan 04-17) for the stack and
 	// project columns and the search; the list sends only those two and a flag, and
 	// the option values of a volume (which can hold a share password) are never on a row.
+	// An ImageRow keeps its labels (plan 11-10) for the janitor's tierplan.keep check; no list sends them.
 	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
-	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true, "VolumeRow.Labels": true}
+	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true, "VolumeRow.Labels": true, "ImageRow.Labels": true}
 	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
 		typ := reflect.TypeOf(v)
 		for i := range typ.NumField() {

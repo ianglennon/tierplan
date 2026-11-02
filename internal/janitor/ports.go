@@ -55,6 +55,17 @@ type Task struct {
 	Slot            int
 }
 
+// Image is one image on one node as a list reports it.
+type Image struct {
+	ID, NodeID, Node string
+	// RepoTags and RepoDigests are the image's names on this node. The engine's none placeholders
+	// are ignored by the planner, so an untagged image may carry either them or nothing.
+	RepoTags, RepoDigests []string
+	Size                  int64
+	Created               time.Time
+	Labels                map[string]string
+}
+
 // Snapshot is what the janitor reads of an environment at one moment.
 type Snapshot struct {
 	// Swarm is true for a swarm environment; ManagerRead is true when a manager answered the
@@ -69,6 +80,14 @@ type Snapshot struct {
 	// run skips the items it finds on one of them without sending anything.
 	Unreachable []Node
 	Containers  []Container
+	// Images are the images of every node that reported.
+	Images []Image
+	// ServiceImages are the image references and digests the swarm's service specs name, whatever
+	// the services' tasks are doing: a service scaled to zero still names its image. ServicesRead
+	// is true when they were read (always, for an environment that is not a swarm); on a swarm where
+	// it is false no image is judged.
+	ServiceImages []string
+	ServicesRead  bool
 	// Services are the swarm's services by ID, nil when no manager answered.
 	Services map[string]Service
 	// Tasks are the tasks the swarm wants running. Without a manager there are none.
@@ -105,6 +124,11 @@ type Engine interface {
 	// refuses one that is no longer exited or is labelled tierplan.keep, so what the planner
 	// judged a moment ago is judged again at the engine that will do the removing.
 	RemoveContainer(ctx context.Context, envID, nodeID, id string) error
+	// RemoveImage removes one image through the agent of its node, once and never retried, by the
+	// Images page's own removal: the node's containers and the swarm's service specs are read again
+	// first, the image's names are read again and an image that has gained a name is refused, and
+	// force is never sent. It answers the same errors as RemoveContainer.
+	RemoveImage(ctx context.Context, envID, nodeID, imageID string) error
 }
 
 // What RemoveContainer answers when it does not remove the container. The runner reads them with

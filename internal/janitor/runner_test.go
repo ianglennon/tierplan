@@ -97,6 +97,18 @@ func (e *fakeEngine) RemoveContainer(_ context.Context, _, _, id string) error {
 	return nil
 }
 
+// RemoveImage records the removal in the same order as RemoveContainer, as "image:"+id.
+func (e *fakeEngine) RemoveImage(_ context.Context, _, _, id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls = append(e.calls, "image:"+id)
+	if err := e.removeErr["image:"+id]; err != nil {
+		return err
+	}
+	e.removed = append(e.removed, "image:"+id)
+	return nil
+}
+
 func (e *fakeEngine) removeCalls() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()

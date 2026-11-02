@@ -82,6 +82,8 @@ type ImageRow struct {
 	RepoDigests []string
 	Size        int64
 	Created     time.Time
+	// Labels are the image's labels as the engine's list reports them, never nil.
+	Labels map[string]string
 }
 
 // VolumeRow is one volume. Created is the zero time when the engine did not say.
@@ -420,7 +422,9 @@ func imageRows(res client.ImageListResult) []ImageRow {
 		if digests == nil {
 			digests = []string{}
 		}
-		rows = append(rows, ImageRow{ID: it.ID, RepoTags: tags, RepoDigests: digests, Size: it.Size, Created: time.Unix(it.Created, 0).UTC()})
+		labels := make(map[string]string, len(it.Labels))
+		maps.Copy(labels, it.Labels)
+		rows = append(rows, ImageRow{ID: it.ID, RepoTags: tags, RepoDigests: digests, Size: it.Size, Created: time.Unix(it.Created, 0).UTC(), Labels: labels})
 	}
 	slices.SortFunc(rows, func(a, b ImageRow) int {
 		return cmp.Or(cmp.Compare(b.Created.Unix(), a.Created.Unix()), cmp.Compare(a.ID, b.ID))

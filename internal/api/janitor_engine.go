@@ -48,7 +48,8 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 		return janitor.Snapshot{}, err
 	}
 	snap := janitor.Snapshot{
-		ReadAt: agg.FetchedAt, NotReporting: append([]string{}, agg.NotReporting...),
+		// An environment that is not a swarm has no service specs to read.
+		ServicesRead: true, ReadAt: agg.FetchedAt, NotReporting: append([]string{}, agg.NotReporting...),
 		Nodes: make([]janitor.Node, 0, len(agg.Nodes)), Containers: make([]janitor.Container, 0, len(agg.Containers)),
 	}
 	for _, n := range agg.Nodes {
@@ -63,6 +64,12 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 			ImageID: c.ImageID, Created: c.Created, Labels: c.Labels,
 		})
 	}
+	for _, img := range agg.Images {
+		snap.Images = append(snap.Images, janitor.Image{
+			ID: img.ID, NodeID: img.NodeID, Node: img.Node, RepoTags: img.RepoTags, RepoDigests: img.RepoDigests,
+			Size: img.Size, Created: img.Created, Labels: img.Labels,
+		})
+	}
 	if e.clusters == nil {
 		return snap, nil
 	}
@@ -72,6 +79,7 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 	}
 	snap.Swarm = swarm
 	if swarm {
+		snap.ServicesRead = false
 		e.readManager(ctx, envID, &snap)
 	}
 	return snap, nil
@@ -84,6 +92,7 @@ func (e *janitorEngine) readManager(ctx context.Context, envID string, snap *jan
 	var (
 		services map[string]janitor.Service
 		tasks    []janitor.Task
+		images   []string
 	)
 	err := e.clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
 		read, err := c.Cluster(ctx)
@@ -93,6 +102,11 @@ func (e *janitorEngine) readManager(ctx context.Context, envID string, snap *jan
 		wanted, err := c.Tasks(ctx, dockerx.TaskFilter{DesiredState: "running"})
 		if err != nil {
 			return err
+		}
+		for _, ref := range read.ServiceRefs {
+			if ref.Image != "" {
+				images = append(images, ref.Image)
+			}
 		}
 		services = make(map[string]janitor.Service, len(read.Services))
 		for _, s := range read.Services {
@@ -109,6 +123,7 @@ func (e *janitorEngine) readManager(ctx context.Context, envID string, snap *jan
 		return
 	}
 	snap.ManagerRead, snap.Services, snap.Tasks = true, services, tasks
+	snap.ServiceImages, snap.ServicesRead = images, true
 }
 
 // Inspect implements janitor.Engine: the end of each container on one node, with the size asked

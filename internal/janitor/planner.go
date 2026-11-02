@@ -211,7 +211,8 @@ type Input struct {
 //  9. its service is gone, and a manager said so: removable (task_service_gone)
 //  10. otherwise: removable (task_beyond_keep)
 //
-// A network is judged by ClassifyNetwork from the orphan check's report.
+// A network is judged by ClassifyNetwork from the orphan check's report, an image by ClassifyImage
+// from the snapshot's images, containers and service specs.
 //
 // The nodes that did not report are named in the plan and none of their objects is judged.
 func Build(in Input, p Policy, now time.Time) Plan {
@@ -237,6 +238,7 @@ func Build(in Input, p Policy, now time.Time) Plan {
 			plan.NotRemoved = append(plan.NotRemoved, item)
 		}
 	}
+	addImages(&plan, s, p, now)
 	if in.Networks != nil {
 		addNetworks(&plan, *in.Networks, p, now)
 	}
@@ -269,12 +271,18 @@ func addNetworks(plan *Plan, rep NetworkReport, p Policy, now time.Time) {
 }
 
 // sortItems puts items in the order a plan promises: kind (containers, networks, images), then
-// node name, name and ID.
+// node name, name and ID. Images are ordered by node name, then oldest first, then ID: an image's
+// name is a short ID, which says nothing about its age.
 func sortItems(items []Item) {
 	slices.SortStableFunc(items, func(a, b Item) int {
+		byName := strings.Compare(a.Name, b.Name)
+		if a.Type == KindImage && b.Type == KindImage {
+			byName = cmp.Compare(b.Age, a.Age)
+		}
 		return cmp.Or(
 			cmp.Compare(kindRank(a.Type), kindRank(b.Type)),
 			strings.Compare(a.Node, b.Node),
+			byName,
 			strings.Compare(a.Name, b.Name),
 			strings.Compare(a.Ref, b.Ref),
 		)

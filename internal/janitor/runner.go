@@ -461,7 +461,9 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 	if req.All {
 		return plan.Items, nil, nil
 	}
-	// This stage is the containers'; the networks are the next stage's.
+	// This stage is the containers' and then the images' (a plan lists them in that order); the
+	// networks are the next stage's, judged afresh once these are gone. An image a container of this
+	// run was using was used when the run judged it, so it is judged again by the next run.
 	ticked := make(map[string]bool, len(req.Ticked))
 	for _, t := range req.Ticked {
 		if t.Type != KindNetwork {
@@ -502,10 +504,18 @@ func absentItem(snap Snapshot, plan Plan, ref ItemRef) Item {
 		}
 	}
 	it := Item{Type: ref.Type, NodeID: ref.NodeID, Ref: ref.Ref, Name: ref.Ref, Size: -1}
-	if ref.Type == KindContainer {
+	switch ref.Type {
+	case KindContainer:
 		for _, c := range snap.Containers {
 			if c.ID == ref.Ref && c.NodeID == ref.NodeID {
 				it.Name, it.Node = strings.TrimPrefix(c.Name, "/"), c.Node
+				return it
+			}
+		}
+	case KindImage:
+		for _, img := range snap.Images {
+			if img.ID == ref.Ref && img.NodeID == ref.NodeID {
+				it.Name, it.Node = shortImageID(img.ID), img.Node
 				return it
 			}
 		}
@@ -531,8 +541,11 @@ func offlineOutcome() outcome {
 // noLongerStaleOutcome is an item that is not what the janitor removes any more: nothing was sent.
 func noLongerStaleOutcome(k Kind) outcome {
 	msg := "It is no longer a stale container, so it was left alone."
-	if k == KindNetwork {
+	switch k {
+	case KindNetwork:
 		msg = "It is no longer an orphaned or unused network, so it was left alone."
+	case KindImage:
+		msg = "It is no longer a dangling image, so it was left alone."
 	}
 	return outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: msg, recorded: OutcomeSkippedProtected}
 }
@@ -547,6 +560,8 @@ func (r *Runner) remove(ctx context.Context, req RunRequest, it Item, run *runSt
 	switch it.Type {
 	case KindContainer:
 		err = r.Engine.RemoveContainer(ctx, req.EnvID, it.NodeID, it.Ref)
+	case KindImage:
+		err = r.Engine.RemoveImage(ctx, req.EnvID, it.NodeID, it.Ref)
 	case KindNetwork:
 		err = r.Networks.Remove(ctx, req.EnvID, run.principal(req), run.netRows[planItemID(it)])
 	default:
@@ -723,5 +738,5 @@ func (s *runState) countRemoved(it Item) {
 	}
 }
 
-// errUnsupported is the removal of a kind of object the janitor does not remove yet.
+// errUnsupported is the removal of a kind of object the janitor does not remove.
 var errUnsupported = errors.New("janitor: removing this kind of object is not supported")
