@@ -110,6 +110,9 @@ func TestTaskHistoryPutAndGet(t *testing.T) {
 	if rec.code != http.StatusOK || got.Limit != 10 || !got.Changed {
 		t.Fatalf("put: %d %s, want 200, limit 10, changed true", rec.code, rec.body)
 	}
+	if reqs := s.swarmUpdateRequests(); !slices.Equal(reqs, []string{"POST /swarm/update?version=1"}) {
+		t.Fatalf("update requests = %v, want one with the version as its only key", reqs)
+	}
 	ups := s.swarmUpdates()
 	if len(ups) != 1 || ups[0].Version != "1" {
 		t.Fatalf("updates = %+v, want one against the version the manager reported (1)", ups)
@@ -123,6 +126,27 @@ func TestTaskHistoryPutAndGet(t *testing.T) {
 	rows := s.auditRows(t, taskHistoryAudit)
 	if len(rows) != 1 || rows[0].Result != "success" || rows[0].EnvID != s.env.ID || rows[0].Details["from"] != "5" || rows[0].Details["to"] != "10" || len(rows[0].Details) != 2 {
 		t.Fatalf("audit rows = %+v, want one success with exactly from 5 and to 10", rows)
+	}
+}
+
+// The server's own socket is a swarm manager: the same routes work on it with no agent.
+func TestTaskHistoryLocalSwarmManager(t *testing.T) {
+	t.Parallel()
+	cfg := dockertest.FakeConfig{SwarmState: "active", SwarmControl: true, SwarmClusterID: "cluster-1", HistoryLimit: 5, SwarmSpec: engineSpec()}
+	f, e := dashEnv(t, cfg)
+	f.awaitFirstProbe(t, e.ID)
+	path := "/api/env/" + e.ID + "/janitor/task-history"
+	if rec := f.req(t, http.MethodGet, path, ""); rec.code != http.StatusOK || decode[taskHistoryAnswer](t, rec).Limit != 5 {
+		t.Fatalf("get: %d %s, want 200 with the limit 5", rec.code, rec.body)
+	}
+	if rec := f.req(t, http.MethodPut, path, `{"limit":10}`); rec.code != http.StatusOK || !decode[taskHistoryAnswer](t, rec).Changed {
+		t.Fatalf("put: %d %s, want 200 changed", rec.code, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /swarm/update?version=1"}) {
+		t.Fatalf("writes = %v, want the one update", w)
+	}
+	if rec := f.req(t, http.MethodGet, path, ""); rec.code != http.StatusOK || decode[taskHistoryAnswer](t, rec).Limit != 10 {
+		t.Fatalf("after: %d %s, want the limit 10", rec.code, rec.body)
 	}
 }
 
