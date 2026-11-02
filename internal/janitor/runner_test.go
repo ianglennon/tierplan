@@ -368,3 +368,207 @@ func TestRunnerRecordsTheRunAndItsItems(t *testing.T) {
 		}
 	}
 }
+
+// runsNow copies the runs on record at this moment.
+func (m *memStore) runsNow() []Run {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Run, 0, len(m.runs))
+	for _, r := range m.runs {
+		out = append(out, r)
+	}
+	return out
+}
+
+// JAN-10, empty: a run with nothing to remove is still a run on record.
+func TestRunnerAllEmptyPlan(t *testing.T) {
+	t.Parallel()
+	run, _, hub := newRunner(t, newFakeEngine(0))
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Wait(ctx, started.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, items, err := recordOf(run).GetRun(ctx, "env-1", started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateCompleted || got.Reason != "" || got.Counts != (Counts{}) || got.EstBytes != -1 || got.FinishedAt.IsZero() ||
+		got.Trigger != TriggerSchedule || got.Actor != "TierPlan" || len(items) != 0 {
+		t.Fatalf("run = %+v items %+v, want a completed scheduled run by TierPlan with zero counts and no items", got, items)
+	}
+}
+
+// T-11-12: the run is on record, running, when the first removal is asked of the engine.
+func TestRunnerRunRowBeforeRemove(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	run, _, hub := newRunner(t, eng)
+	rs := recordOf(run)
+	var (
+		mu     sync.Mutex
+		before []Run
+		asked  int
+	)
+	eng.onRemove = func(string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if asked == 0 {
+			before = rs.runsNow()
+		}
+		asked++
+	}
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Ticked: ticked("c1", "c2")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := hub.Wait(ctx, started.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if asked != 2 {
+		t.Fatalf("the engine was asked to remove %d containers, want 2", asked)
+	}
+	if len(before) != 1 {
+		t.Fatalf("%d runs on record when the first removal was asked, want 1", len(before))
+	}
+	r := before[0]
+	if r.ID != started.RunID || r.State != StateRunning || r.Trigger != TriggerManual || r.Actor != "u1" || r.EnvID != "env-1" ||
+		r.JobID != job.ID || !r.FinishedAt.IsZero() || r.StartedAt != t0 {
+		t.Fatalf("run before the first removal = %+v, want it running with its trigger, actor, environment, job and start", r)
+	}
+}
+
+// A store that cannot record the run means nothing is started, and nothing is removed.
+func TestRunnerNotRecordedNotStarted(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	run, locks, _ := newRunner(t, eng)
+	run.Store = failingStore{run.Store}
+	_, err := run.Start(testsupport.Context(t), RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: ticked("c1")})
+	if !errors.Is(err, errNoStore) {
+		t.Fatalf("Start = %v, want the store's error", err)
+	}
+	if _, held := locks.Held("env-1"); held {
+		t.Error("a run that could not be recorded kept the lock")
+	}
+	if got := eng.removedIDs(); len(got) != 0 {
+		t.Errorf("removed = %v, a run that is not on record removed something", got)
+	}
+}
+
+var errNoStore = errors.New("the database is gone")
+
+// failingStore cannot create a run.
+type failingStore struct{ RunStore }
+
+func (failingStore) CreateRun(context.Context, Run) error { return errNoStore }
+
+func TestRunnerPartialWhenItemErrors(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	eng.removeErr["c1"] = errors.New("the engine said no")
+	run, _, hub := newRunner(t, eng)
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Ticked: ticked("c1", "c2")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Wait(ctx, started.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, items, err := recordOf(run).GetRun(ctx, "env-1", started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StatePartial || got.Reason != "" || got.Counts != (Counts{RemovedContainers: 1, Failed: 1}) {
+		t.Fatalf("run = %+v, want partial with one removed and one failed", got)
+	}
+	if len(items) != 2 || items[0].Ref != "c1" || items[0].Outcome != OutcomeError || items[0].Code != codeFailed ||
+		items[1].Ref != "c2" || items[1].Outcome != OutcomeRemoved {
+		t.Fatalf("items = %+v, want c1 recorded as an error and c2 as removed", items)
+	}
+}
+
+// Every way an item can end is recorded, and counted where the record says it is.
+func TestRunnerRecordsEachOutcome(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(7) // the two newest are kept, so c1 to c5 are removable
+	eng.removeErr["c1"] = ErrNoLongerStale
+	eng.removeErr["c2"] = ErrInUse
+	eng.removeErr["c3"] = ErrGone
+	eng.removeErr["c4"] = fmt.Errorf("%w: down", ErrNodeOffline)
+	run, _, hub := newRunner(t, eng)
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: ticked("c1", "c2", "c3", "c4", "c5")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Wait(ctx, started.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, items, err := recordOf(run).GetRun(ctx, "env-1", started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		outcome Outcome
+		code    string
+	}{
+		{OutcomeSkippedProtected, codeNoLongerStale}, {OutcomeRefusedInUse, codeInUse}, {OutcomeRemoved, codeGone},
+		{OutcomeSkippedNodeOffline, codeNodeOffline}, {OutcomeRemoved, ""},
+	}
+	if len(items) != len(want) {
+		t.Fatalf("items = %+v, want %d", items, len(want))
+	}
+	for i, w := range want {
+		if items[i].Outcome != w.outcome || items[i].Code != w.code {
+			t.Errorf("item %d (%s) = %s/%q, want %s/%q", i, items[i].Ref, items[i].Outcome, items[i].Code, w.outcome, w.code)
+		}
+	}
+	// The one already gone is not a removal of this run's, and an offline node is not an error.
+	if got.State != StateCompleted || got.Counts != (Counts{RemovedContainers: 1, Kept: 2, SkippedOffline: 1}) {
+		t.Fatalf("run = %+v, want completed with 1 removed, 2 kept and 1 skipped offline", got)
+	}
+}
+
+func TestRunnerItemsBatched(t *testing.T) {
+	t.Parallel()
+	run, _, hub := newRunner(t, newFakeEngine(122)) // the two newest are kept
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Wait(ctx, started.JobID); err != nil {
+		t.Fatal(err)
+	}
+	rs := recordOf(run)
+	got, items, err := rs.GetRun(ctx, "env-1", started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateCompleted || got.Counts.RemovedContainers != 120 || len(items) != 120 {
+		t.Fatalf("run = %+v with %d items, want 120 containers removed and recorded", got, len(items))
+	}
+	for i, it := range items {
+		if it.Seq != i+1 {
+			t.Fatalf("item %d has seq %d, want %d", i, it.Seq, i+1)
+		}
+	}
+	var sizes []int
+	rs.mu.Lock()
+	for _, b := range rs.batches {
+		sizes = append(sizes, len(b))
+	}
+	rs.mu.Unlock()
+	if !slices.Equal(sizes, []int{50, 50, 20}) {
+		t.Fatalf("items were written in batches of %v, want 50, 50 and 20", sizes)
+	}
+}

@@ -376,3 +376,102 @@ func TestJanitorRunRecorded(t *testing.T) {
 		t.Fatalf("item = %+v, want web-x1 removed on wrk-1 as task_beyond_keep rank 1 of web slot 1", it)
 	}
 }
+
+// runsOnRecord counts the janitor runs on record, in every environment.
+func (s *swarmFix) runsOnRecord(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := s.st.Read.QueryRowContext(testsupport.Context(t), `SELECT COUNT(*) FROM janitor_runs`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// D-08: a Clean now refused because a deploy holds the lock is not a run, so it leaves no row.
+func TestJanitorRunLockedWritesNoRun(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	release, _, ok := s.stackLocks.TryAcquire(s.env.ID, stackops.Holder{StackID: "stk-1", StackName: "shop", JobID: "job-1", Kind: "deploy", By: "ada", Started: janitorNow})
+	if !ok {
+		t.Fatal("the lock was not free")
+	}
+	rec, _ := s.runJanitor(t, tick(preview.Items[0]))
+	if rec.code != http.StatusConflict || rec.ptyp != "operation_locked" {
+		t.Fatalf("Clean now under a deploy: %d %s (%s), want 409 operation_locked", rec.code, rec.body, rec.ptyp)
+	}
+	if n := s.runsOnRecord(t); n != 0 {
+		t.Fatalf("%d janitor runs on record after a refused Clean now, want none", n)
+	}
+	release()
+	rec, started := s.runJanitor(t, tick(preview.Items[0]))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now after the deploy: %d %s, want 202", rec.code, rec.body)
+	}
+	s.awaitRun(t, started.JobID)
+	if n := s.runsOnRecord(t); n != 1 {
+		t.Fatalf("%d janitor runs on record after one Clean now, want 1", n)
+	}
+}
+
+// D-15: whoever can read the environment can read its runs.
+func TestJanitorRunReadableByViewer(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	_, started := s.runJanitor(t, tick(preview.Items[0]))
+	s.awaitRun(t, started.JobID)
+
+	s.addUser(t, "vera", false)
+	s.addEnvRole(t, "vera", s.env.ID, "viewer")
+	cookie, csrf := s.signIn(t, "vera", false)
+	path := "/api/env/" + s.env.ID + "/janitor/runs/" + started.RunID
+	rec := s.call(t, authReq{method: http.MethodGet, path: path, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a Viewer reads the run: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var run janitorRunRead
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.ID != started.RunID || run.State != "completed" || len(run.Items) != 1 {
+		t.Fatalf("run = %+v, want the completed run with its one item", run)
+	}
+	// Signed out, and a user with no role on the environment, read nothing.
+	if rec := s.call(t, authReq{method: http.MethodGet, path: path}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("signed out: %d, want 401", rec.Code)
+	}
+	s.addUser(t, "nell", false)
+	cookie, csrf = s.signIn(t, "nell", false)
+	if rec := s.call(t, authReq{method: http.MethodGet, path: path, cookie: cookie, csrf: csrf}); rec.Code == http.StatusOK {
+		t.Fatalf("a user with no role on the environment read the run: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// D-15, T-11-80: a run is looked up by its environment and its ID, so another environment's run
+// answers the same 404 as one that does not exist.
+func TestJanitorRunOtherEnvNotFound(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	_, started := s.runJanitor(t, tick(preview.Items[0]))
+	s.awaitRun(t, started.JobID)
+	other := s.srv.NewEnvironment(t, "Other")
+
+	for name, path := range map[string]string{
+		"another environment's run": "/api/env/" + other.ID + "/janitor/runs/" + started.RunID,
+		"an unknown run":            "/api/env/" + s.env.ID + "/janitor/runs/no-such-run",
+		"an unknown run elsewhere":  "/api/env/" + other.ID + "/janitor/runs/no-such-run",
+	} {
+		rec := s.req(t, http.MethodGet, path, "")
+		if rec.code != http.StatusNotFound || rec.ptyp != "janitor_run_not_found" {
+			t.Errorf("%s: %d %s (%s), want 404 janitor_run_not_found", name, rec.code, rec.body, rec.ptyp)
+		}
+		if strings.Contains(string(rec.body), started.RunID) && !strings.HasSuffix(path, started.RunID) {
+			t.Errorf("%s: the body %s names a run of another environment", name, rec.body)
+		}
+	}
+	if rec, run := s.getRun(t, started.RunID); rec.code != http.StatusOK || run.ID != started.RunID {
+		t.Fatalf("the run in its own environment: %d %s, want 200", rec.code, rec.body)
+	}
+}
