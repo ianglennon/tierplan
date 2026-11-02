@@ -173,6 +173,23 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type JanitorEvidence struct {
+	RunID       string
+	Seq         int64
+	ExitCode    int64
+	Error       string
+	OomKilled   int64
+	StartedAt   int64
+	FinishedAt  int64
+	Image       string
+	ImageID     string
+	ImageDigest string
+	Node        string
+	LogText     string
+	LogLines    int64
+	LogState    string
+}
+
 type JanitorRun struct {
 	ID                string
 	EnvID             string

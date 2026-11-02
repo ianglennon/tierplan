@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/redact"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -256,4 +259,78 @@ func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id s
 	// the agent's policy refused, the host is read-only, the node did not answer, or it failed.
 	code, _ := actionError(err)
 	return &janitor.CodedError{Code: code, Err: err}
+}
+
+// evidenceReadLimit is the most bytes read from a crashed container's log. The engine is asked for
+// the last lines only; the limit keeps a daemon that ignores that from sending a whole log.
+const evidenceReadLimit = 1 << 20
+
+// evidenceTimeout is how long reading a crashed container's end, image and log may take.
+const evidenceTimeout = time.Minute
+
+// Evidence implements janitor.Engine. On the container's node it reads why the container stopped,
+// the image it ran and the last janitor.EvidenceLines lines of its log, and the secret values to
+// hide in them: the container's own secret-looking environment values. Nothing is masked here.
+// A log the engine cannot read back is reported as such and is not an error.
+func (e *janitorEngine) Evidence(ctx context.Context, envID, nodeID, id string) (janitor.EvidenceSource, error) {
+	ctx, cancel := context.WithTimeout(ctx, evidenceTimeout)
+	defer cancel()
+	var src janitor.EvidenceSource
+	err := e.agg.OnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
+		d, _, err := c.ContainerDetail(ctx, id)
+		if err != nil {
+			return err
+		}
+		src.End = janitor.ContainerEnd{
+			StartedAt: engineInstant(d.StartedAt), FinishedAt: engineInstant(d.FinishedAt), ExitCode: d.ExitCode, Error: d.Error,
+			OOMKilled: d.OOMKilled, Image: d.Image, ImageID: d.ImageID, SizeRw: -1,
+		}
+		src.Labels = d.Labels
+		src.Secrets = redact.SecretEnvValues(d.Env)
+		if img, _, err := c.ImageDetail(ctx, d.ImageID); err == nil && len(img.RepoDigests) > 0 {
+			src.ImageDigest = img.RepoDigests[0]
+		}
+		src.Lines, src.LogsUnavailable = e.crashLog(ctx, c, id)
+		return nil
+	})
+	return src, err
+}
+
+// crashLog reads the last janitor.EvidenceLines lines of a container's log, each with the engine's
+// timestamp in front. A log that cannot be read at all is unavailable; one that fails part way keeps
+// the lines read so far.
+func (e *janitorEngine) crashLog(ctx context.Context, c *dockerx.Client, id string) (lines []string, unavailable bool) {
+	rc, tty, err := c.ContainerLogs(ctx, id, dockerx.LogOptions{Tail: strconv.Itoa(janitor.EvidenceLines)})
+	if err != nil {
+		if !errors.Is(err, dockerx.ErrLogsUnreadable) {
+			e.log.Warn("the janitor could not read the log of a crashed container", "container", id, "error", err)
+		}
+		return nil, true
+	}
+	defer func() { _ = rc.Close() }()
+	// A log is read to its end, but never further than the tail asked for plus the line that
+	// straddles it, so a daemon that ignores the tail cannot make this read a whole log.
+	err = pumpLogs(ctx, io.LimitReader(rc, evidenceReadLimit), tty, func(l LogLine) {
+		lines = append(lines, l.T+" "+l.M)
+		if len(lines) > 2*janitor.EvidenceLines {
+			lines = lines[len(lines)-janitor.EvidenceLines:]
+		}
+	})
+	if err != nil {
+		e.log.Warn("the janitor could not read the whole log of a crashed container", "container", id, "error", err)
+		if len(lines) == 0 {
+			return nil, true
+		}
+	}
+	return lines, false
+}
+
+// engineInstant parses a time the engine sends in RFC 3339; the zero time (year 1), an empty text and
+// anything that does not parse are the zero time.
+func engineInstant(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil || t.Year() <= 1 {
+		return time.Time{}
+	}
+	return t.UTC()
 }

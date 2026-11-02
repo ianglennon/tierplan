@@ -52,6 +52,42 @@ func (q *Queries) FinishJanitorRun(ctx context.Context, arg FinishJanitorRunPara
 	return result.RowsAffected()
 }
 
+const getJanitorEvidence = `-- name: GetJanitorEvidence :one
+SELECT e.run_id, e.seq, e.exit_code, e.error, e.oom_killed, e.started_at, e.finished_at, e.image, e.image_id, e.image_digest, e.node, e.log_text, e.log_lines, e.log_state
+FROM janitor_evidence e
+JOIN janitor_runs r ON r.id = e.run_id
+WHERE r.env_id = ? AND e.run_id = ? AND e.seq = ?
+`
+
+type GetJanitorEvidenceParams struct {
+	EnvID string
+	RunID string
+	Seq   int64
+}
+
+// The evidence of one item of one run of one environment: another environment's run has none.
+func (q *Queries) GetJanitorEvidence(ctx context.Context, arg GetJanitorEvidenceParams) (JanitorEvidence, error) {
+	row := q.db.QueryRowContext(ctx, getJanitorEvidence, arg.EnvID, arg.RunID, arg.Seq)
+	var i JanitorEvidence
+	err := row.Scan(
+		&i.RunID,
+		&i.Seq,
+		&i.ExitCode,
+		&i.Error,
+		&i.OomKilled,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Image,
+		&i.ImageID,
+		&i.ImageDigest,
+		&i.Node,
+		&i.LogText,
+		&i.LogLines,
+		&i.LogState,
+	)
+	return i, err
+}
+
 const getJanitorRun = `-- name: GetJanitorRun :one
 SELECT id, env_id, trigger, actor, state, reason, job_id, started_at, finished_at,
        removed_containers, removed_images, removed_networks, kept, failed, skipped_offline, est_bytes
@@ -87,6 +123,49 @@ func (q *Queries) GetJanitorRun(ctx context.Context, arg GetJanitorRunParams) (J
 		&i.EstBytes,
 	)
 	return i, err
+}
+
+const insertJanitorEvidence = `-- name: InsertJanitorEvidence :exec
+INSERT INTO janitor_evidence (run_id, seq, exit_code, error, oom_killed, started_at, finished_at, image, image_id, image_digest, node, log_text, log_lines, log_state)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertJanitorEvidenceParams struct {
+	RunID       string
+	Seq         int64
+	ExitCode    int64
+	Error       string
+	OomKilled   int64
+	StartedAt   int64
+	FinishedAt  int64
+	Image       string
+	ImageID     string
+	ImageDigest string
+	Node        string
+	LogText     string
+	LogLines    int64
+	LogState    string
+}
+
+// The crash evidence of a container, saved before the janitor removes it.
+func (q *Queries) InsertJanitorEvidence(ctx context.Context, arg InsertJanitorEvidenceParams) error {
+	_, err := q.db.ExecContext(ctx, insertJanitorEvidence,
+		arg.RunID,
+		arg.Seq,
+		arg.ExitCode,
+		arg.Error,
+		arg.OomKilled,
+		arg.StartedAt,
+		arg.FinishedAt,
+		arg.Image,
+		arg.ImageID,
+		arg.ImageDigest,
+		arg.Node,
+		arg.LogText,
+		arg.LogLines,
+		arg.LogState,
+	)
+	return err
 }
 
 const insertJanitorRun = `-- name: InsertJanitorRun :exec
@@ -159,6 +238,34 @@ func (q *Queries) InsertJanitorRunItem(ctx context.Context, arg InsertJanitorRun
 		arg.EstBytes,
 	)
 	return err
+}
+
+const listJanitorEvidenceSeqs = `-- name: ListJanitorEvidenceSeqs :many
+SELECT seq FROM janitor_evidence WHERE run_id = ? ORDER BY seq
+`
+
+// The items of a run that have evidence, without reading any log text.
+func (q *Queries) ListJanitorEvidenceSeqs(ctx context.Context, runID string) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listJanitorEvidenceSeqs, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			return nil, err
+		}
+		items = append(items, seq)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listJanitorRunItems = `-- name: ListJanitorRunItems :many

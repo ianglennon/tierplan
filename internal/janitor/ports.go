@@ -119,6 +119,27 @@ type ContainerRef struct {
 	ID, NodeID string
 }
 
+// EvidenceSource is what the engine of a node says of a crashed container, before it is built into
+// the evidence a run stores: the container's end, its labels, the last lines of its log as the
+// engine wrote them and the secret values to hide in them. Nothing in it has been masked.
+type EvidenceSource struct {
+	// End is how the container ended, read fresh from its node.
+	End ContainerEnd
+	// Labels are the container's labels.
+	Labels map[string]string
+	// Lines are the last lines of its log, oldest first, with the engine's timestamp in front.
+	Lines []string
+	// LogsUnavailable is true when the container's log driver cannot be read back, so Lines is empty
+	// for that reason and not because the container wrote nothing.
+	LogsUnavailable bool
+	// Secrets are values to hide wherever they appear in a line: the container's own secret-looking
+	// environment values and, for a container of a TierPlan stack, that stack's secret values.
+	Secrets []string
+	// ImageDigest is the repo@sha256 name of the image the container ran on its node, empty when the
+	// node has none. Node is the node's name; the runner fills it in when the engine does not.
+	ImageDigest, Node string
+}
+
 // Engine is how the planner's input is read. The server implements it over its aggregator, so a
 // snapshot is read fresh from the engines and never from a cache.
 type Engine interface {
@@ -137,6 +158,10 @@ type Engine interface {
 	// first, the image's names are read again and an image that has gained a name is refused, and
 	// force is never sent. It answers the same errors as RemoveContainer.
 	RemoveImage(ctx context.Context, envID, nodeID, imageID string) error
+	// Evidence reads what a crashed container leaves behind, on its node, before it is removed: its
+	// end, labels and the last EvidenceLines lines of its log. A log the engine cannot read back is
+	// not an error: it is LogsUnavailable. An error means nothing could be read at all.
+	Evidence(ctx context.Context, envID, nodeID, id string) (EvidenceSource, error)
 }
 
 // What RemoveContainer answers when it does not remove the container. The runner reads them with

@@ -52,6 +52,14 @@ type fakeEngine struct {
 	onRemove func(id string)
 	// onRemoveImage is the same for images.
 	onRemoveImage func(id string)
+	// exitCodes are the exit codes Inspect reports, by container ID; a container not in it exited 0.
+	exitCodes map[string]int
+	// sources are what Evidence answers, by container ID; a container not in it answers an empty source.
+	sources map[string]EvidenceSource
+	// evidenceErr is what Evidence answers when set.
+	evidenceErr error
+	// evidenceCalls are the IDs Evidence was asked for.
+	evidenceCalls []string
 }
 
 func newFakeEngine(n int) *fakeEngine {
@@ -80,9 +88,23 @@ func (e *fakeEngine) Snapshot(ctx context.Context, _ string) (Snapshot, error) {
 func (e *fakeEngine) Inspect(_ context.Context, _, _ string, ids []string) (map[string]ContainerEnd, error) {
 	out := map[string]ContainerEnd{}
 	for _, id := range ids {
-		out[id] = ContainerEnd{FinishedAt: t0.Add(-48 * time.Hour), SizeRw: -1}
+		out[id] = ContainerEnd{FinishedAt: t0.Add(-48 * time.Hour), SizeRw: -1, ExitCode: e.exitCodes[id]}
 	}
 	return out, nil
+}
+
+func (e *fakeEngine) Evidence(_ context.Context, _, _, id string) (EvidenceSource, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.evidenceCalls = append(e.evidenceCalls, id)
+	if e.evidenceErr != nil {
+		return EvidenceSource{}, e.evidenceErr
+	}
+	src, ok := e.sources[id]
+	if !ok {
+		src = EvidenceSource{End: ContainerEnd{ExitCode: e.exitCodes[id]}}
+	}
+	return src, nil
 }
 
 func (e *fakeEngine) RemoveContainer(_ context.Context, _, _, id string) error {
@@ -141,10 +163,46 @@ type memStore struct {
 	runs    map[string]Run
 	items   map[string][]RunItem
 	batches [][]RunItem
+	// evidence is the evidence saved, by run and sequence number; evidenceErr is what SaveEvidence
+	// answers when set, and saves records the order the sequence numbers were saved in.
+	evidence    map[string]Evidence
+	evidenceErr error
+	saves       []string
 }
 
 func newMemStore() *memStore {
-	return &memStore{runs: map[string]Run{}, items: map[string][]RunItem{}}
+	return &memStore{runs: map[string]Run{}, items: map[string][]RunItem{}, evidence: map[string]Evidence{}}
+}
+
+func evidenceKey(runID string, seq int) string { return fmt.Sprintf("%s/%d", runID, seq) }
+
+func (m *memStore) SaveEvidence(_ context.Context, runID string, seq int, ev Evidence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.evidenceErr != nil {
+		return m.evidenceErr
+	}
+	m.evidence[evidenceKey(runID, seq)] = ev
+	m.saves = append(m.saves, evidenceKey(runID, seq))
+	return nil
+}
+
+func (m *memStore) GetEvidence(_ context.Context, envID, runID string, seq int) (Evidence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	ev, has := m.evidence[evidenceKey(runID, seq)]
+	if !ok || run.EnvID != envID || !has {
+		return Evidence{}, ErrEvidenceNotFound
+	}
+	return ev, nil
+}
+
+// evidenceCount is how many pieces of evidence were saved.
+func (m *memStore) evidenceCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.evidence)
 }
 
 func (m *memStore) CreateRun(_ context.Context, run Run) error {

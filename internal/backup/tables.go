@@ -102,6 +102,9 @@ var Tables = map[string]Class{
 	// no secret.
 	"janitor_runs":      Included,
 	"janitor_run_items": Included,
+	// The crash evidence saved before a crashed container was removed: why it stopped and the masked, capped tail
+	// of its log. It belongs to its run and goes with it.
+	"janitor_evidence": Included,
 
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and

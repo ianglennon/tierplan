@@ -7401,6 +7401,90 @@
         ],
         "type": "object"
       },
+      "JanitorEvidenceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "The engine's last start error, empty for none",
+            "type": "string"
+          },
+          "exitCode": {
+            "description": "The container's exit code, which is not 0",
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "description": "When the container last stopped; null when the engine reported none",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "description": "The image reference the container was created with",
+            "type": "string"
+          },
+          "imageDigest": {
+            "description": "The repo@sha256 name of that image on the node, empty when it has none",
+            "type": "string"
+          },
+          "imageId": {
+            "description": "The ID of the image the container ran",
+            "type": "string"
+          },
+          "logLines": {
+            "description": "The last lines of the container's log, oldest first, with the engine's timestamp in front, masked and cut at 2048 characters a line; at most 200 lines and 32 KiB. Draw them as text",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "logState": {
+            "description": "saved: the lines are here. empty: the container wrote no log. unavailable: its log driver cannot be read back. cap_reached: the run already holds the most evidence it may, so no log was kept",
+            "enum": [
+              "saved",
+              "empty",
+              "unavailable",
+              "cap_reached"
+            ],
+            "type": "string"
+          },
+          "node": {
+            "description": "The name of the node the container ran on",
+            "type": "string"
+          },
+          "oomKilled": {
+            "description": "True when the container was killed for running out of memory",
+            "type": "boolean"
+          },
+          "startedAt": {
+            "description": "When the container last started; null when the engine reported none",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "exitCode",
+          "error",
+          "oomKilled",
+          "startedAt",
+          "finishedAt",
+          "image",
+          "imageId",
+          "imageDigest",
+          "node",
+          "logLines",
+          "logState"
+        ],
+        "type": "object"
+      },
       "JanitorItemBody": {
         "additionalProperties": false,
         "properties": {
@@ -7796,8 +7880,12 @@
         "additionalProperties": false,
         "properties": {
           "code": {
-            "description": "A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, agent_policy_denied, host_read_only, node_unreachable or action_failed",
+            "description": "A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, evidence_unsaved, agent_policy_denied, host_read_only, node_unreachable or action_failed",
             "type": "string"
+          },
+          "hasEvidence": {
+            "description": "True when the run saved the crash evidence of this container before removing it; read it from the item's evidence route",
+            "type": "boolean"
           },
           "name": {
             "type": "string"
@@ -7811,7 +7899,7 @@
             "type": "string"
           },
           "outcome": {
-            "description": "How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed",
+            "description": "How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed, or evidence_unsaved when a crashed container's evidence could not be saved and so the container was kept",
             "enum": [
               "removed",
               "refused_in_use",
@@ -7863,7 +7951,8 @@
           "reason",
           "outcome",
           "code",
-          "sizeBytes"
+          "sizeBytes",
+          "hasEvidence"
         ],
         "type": "object"
       },
@@ -26519,6 +26608,80 @@
           }
         },
         "summary": "Read one janitor run",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/runs/{runId}/items/{seq}/evidence": {
+      "get": {
+        "description": "Before the janitor removes a container that exited with a code other than 0, it saves why the container stopped (its exit code, error, whether it was killed for memory, when it started and stopped, its image and the node) and the last 200 lines of its log. This answers that evidence for one item of a run. The log lines are masked on a best effort and capped at 32 KiB, and the answer says when the log could not be read or was not kept. An item that has no evidence, a run that does not exist or one of another environment is 404 janitor_evidence_not_found. The evidence is the container's log, so it needs containers.read on the environment, as reading the container's logs does.",
+        "operationId": "getJanitorEvidence",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ID of the run, as Clean now or the schedule gave it",
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "description": "The ID of the run, as Clean now or the schedule gave it",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The item's sequence number in the run, as the run lists it",
+            "in": "path",
+            "name": "seq",
+            "required": true,
+            "schema": {
+              "description": "The item's sequence number in the run, as the run lists it",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorEvidenceBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the crash evidence of a container a janitor run removed",
         "tags": [
           "environments"
         ]

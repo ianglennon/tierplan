@@ -84,4 +84,5 @@ func (d JanitorDeps) log() *slog.Logger {
 func RegisterJanitor(r *httpx.Router, d JanitorDeps) {
 	registerJanitorPreview(r, d)
 	registerJanitorRuns(r, d)
+	registerJanitorEvidence(r, d)
 }

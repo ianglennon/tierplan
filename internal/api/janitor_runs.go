@@ -75,16 +75,17 @@ type JanitorRunCountsBody struct {
 
 // JanitorRunItemBody is one item a run attempted.
 type JanitorRunItemBody struct {
-	Seq       int               `json:"seq" minimum:"1" doc:"1 for the first item the run attempted, counting up"`
-	Type      string            `json:"type" enum:"container,image,network"`
-	NodeID    string            `json:"nodeId" doc:"The ID of the node the object was on"`
-	Node      string            `json:"node" doc:"The node's name"`
-	Ref       string            `json:"ref" doc:"The engine's ID of the object"`
-	Name      string            `json:"name"`
-	Reason    JanitorReasonBody `json:"reason" doc:"Why the run selected it. For a ticked item the fresh plan did not list, the reason the planner gave for leaving it, and an empty code when the planner did not look at it"`
-	Outcome   string            `json:"outcome" enum:"removed,refused_in_use,skipped_protected,skipped_node_offline,error" doc:"How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed"`
-	Code      string            `json:"code" doc:"A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, agent_policy_denied, host_read_only, node_unreachable or action_failed"`
-	SizeBytes *int64            `json:"sizeBytes" nullable:"true" minimum:"0" doc:"The bytes removing the object frees, null when not known"`
+	Seq         int               `json:"seq" minimum:"1" doc:"1 for the first item the run attempted, counting up"`
+	Type        string            `json:"type" enum:"container,image,network"`
+	NodeID      string            `json:"nodeId" doc:"The ID of the node the object was on"`
+	Node        string            `json:"node" doc:"The node's name"`
+	Ref         string            `json:"ref" doc:"The engine's ID of the object"`
+	Name        string            `json:"name"`
+	Reason      JanitorReasonBody `json:"reason" doc:"Why the run selected it. For a ticked item the fresh plan did not list, the reason the planner gave for leaving it, and an empty code when the planner did not look at it"`
+	Outcome     string            `json:"outcome" enum:"removed,refused_in_use,skipped_protected,skipped_node_offline,error" doc:"How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed, or evidence_unsaved when a crashed container's evidence could not be saved and so the container was kept"`
+	Code        string            `json:"code" doc:"A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, evidence_unsaved, agent_policy_denied, host_read_only, node_unreachable or action_failed"`
+	SizeBytes   *int64            `json:"sizeBytes" nullable:"true" minimum:"0" doc:"The bytes removing the object frees, null when not known"`
+	HasEvidence bool              `json:"hasEvidence" doc:"True when the run saved the crash evidence of this container before removing it; read it from the item's evidence route"`
 }
 
 // JanitorRunBody is one run of the janitor and every item it attempted.
@@ -211,7 +212,7 @@ func janitorRunBody(ctx context.Context, d JanitorDeps, run janitor.Run, items [
 				Stack: it.Reason.Stack, Node: it.Reason.Node, Rank: it.Reason.Rank,
 				AgeSeconds: int64(it.Reason.Age.Seconds()), RemainingSeconds: int64(it.Reason.Remaining.Seconds()),
 			},
-			Outcome: string(it.Outcome), Code: it.Code,
+			Outcome: string(it.Outcome), Code: it.Code, HasEvidence: it.HasEvidence,
 		}
 		if it.Size >= 0 {
 			size := it.Size

@@ -253,6 +253,11 @@ type runState struct {
 	netRows   map[string]NetworkRow
 	// netsUnread is true when the networks could not be judged, which leaves the run partial.
 	netsUnread bool
+	// ends are the ends of the containers the fresh read inspected, by container ID: a container
+	// that exited with a code other than 0 has its evidence saved before it is removed.
+	ends map[string]ContainerEnd
+	// evidence is how many containers of this run have had evidence saved, which MaxEvidencePerRun caps.
+	evidence int
 }
 
 // begin is the one place a run starts. It gives the run on record its job.
@@ -457,6 +462,7 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 		return nil, nil, nil
 	}
 	ends := InspectCandidates(ctx, r.Engine, req.EnvID, Candidates(snap, pol))
+	run.ends = ends
 	plan := Build(Input{Snapshot: snap, Ends: ends}, pol, r.clock().Now().UTC())
 	if req.All {
 		return plan.Items, nil, nil
@@ -559,6 +565,11 @@ func (r *Runner) remove(ctx context.Context, req RunRequest, it Item, run *runSt
 	var err error
 	switch it.Type {
 	case KindContainer:
+		// A crashed container's evidence is committed before it is removed: if it cannot be saved the
+		// container stays (D-06).
+		if out, ok := r.saveEvidence(ctx, req, it, run); !ok {
+			return out
+		}
 		err = r.Engine.RemoveContainer(ctx, req.EnvID, it.NodeID, it.Ref)
 	case KindImage:
 		err = r.Engine.RemoveImage(ctx, req.EnvID, it.NodeID, it.Ref)
@@ -592,6 +603,46 @@ func (r *Runner) remove(ctx context.Context, req RunRequest, it Item, run *runSt
 		msg = "Its details are over 64 KB, too large to save in the audit log first, so it was not removed."
 	}
 	return outcome{state: jobs.ItemFailed, code: code, message: msg, recorded: OutcomeError}
+}
+
+// saveEvidence saves the crash evidence of a container that exited with a code other than 0, in a
+// transaction of its own, before the container is removed (D-06, T-11-38). It answers ok when the
+// removal may go on: the container did not crash, or its evidence is on record. When the evidence
+// cannot be written it answers the outcome of the item, which is not removed. A log that cannot be
+// read never stops a removal: the evidence then says so. Past MaxEvidencePerRun a container's facts
+// are kept and its log is not read.
+func (r *Runner) saveEvidence(ctx context.Context, req RunRequest, it Item, run *runState) (outcome, bool) {
+	end, inspected := run.ends[it.Ref]
+	if !inspected || end.ExitCode == 0 {
+		return outcome{}, true
+	}
+	var ev Evidence
+	if run.evidence >= MaxEvidencePerRun {
+		ev = evidenceOf(end, it.Node)
+		ev.State = EvidenceCapReached
+	} else {
+		src, err := r.Engine.Evidence(ctx, req.EnvID, it.NodeID, it.Ref)
+		if err != nil {
+			// Nothing could be read of the container's log. What the fresh inspect said is kept, and
+			// the removal that follows meets the same node and says why it cannot go on.
+			r.log().Warn("a janitor run could not read the log of a crashed container", "environment", req.EnvID, "run", run.runID, "node", it.NodeID, "ref", it.Ref, "error", err)
+			src = EvidenceSource{End: end, LogsUnavailable: true}
+		}
+		if src.Node == "" {
+			src.Node = it.Node
+		}
+		ev = BuildEvidence(src)
+		run.evidence++
+	}
+	// The item is recorded right after its removal ends, and takes the next sequence number.
+	if err := r.Store.SaveEvidence(run.ctx, run.runID, run.seq+1, ev); err != nil {
+		r.log().Error("a janitor run could not save the evidence of a crashed container, so it was not removed", "environment", req.EnvID, "run", run.runID, "ref", it.Ref, "error", err)
+		return outcome{
+			state: jobs.ItemFailed, code: CodeEvidenceUnsaved, recorded: OutcomeError,
+			message: "Its crash evidence could not be saved, so it was not removed.",
+		}, false
+	}
+	return outcome{}, true
 }
 
 // principal is who the run's network removals are recorded as.

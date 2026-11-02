@@ -325,7 +325,9 @@ type janitorRunRead struct {
 		Name    string `json:"name"`
 		Outcome string `json:"outcome"`
 		Code    string `json:"code"`
-		Reason  struct {
+		// HasEvidence is true when the run saved the crash evidence of the container.
+		HasEvidence bool `json:"hasEvidence"`
+		Reason      struct {
 			Code    string `json:"code"`
 			Service string `json:"service"`
 			Slot    string `json:"slot"`

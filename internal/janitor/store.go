@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/store"
@@ -97,10 +98,17 @@ type RunItem struct {
 	Code string
 	// Size is the bytes removing the object frees, -1 when not known.
 	Size int64
+	// HasEvidence is true when the run saved the crash evidence of the container before removing it.
+	// It is only read from the record, never written with the item.
+	HasEvidence bool
 }
 
 // ErrRunNotFound means there is no such run in the environment.
 var ErrRunNotFound = errors.New("janitor: no such run")
+
+// ErrEvidenceNotFound means the item has no crash evidence: it is not a container that exited with
+// a code other than 0, or there is no such item or run in the environment.
+var ErrEvidenceNotFound = errors.New("janitor: no evidence for this item")
 
 // RunStore keeps the record of the runs.
 type RunStore interface {
@@ -116,6 +124,11 @@ type RunStore interface {
 	// GetRun answers a run of an environment and its items in the order they were attempted.
 	// A run of another environment is ErrRunNotFound.
 	GetRun(ctx context.Context, envID, runID string) (Run, []RunItem, error)
+	// SaveEvidence records the crash evidence of the item seq of a run, in a transaction of its own.
+	// It is called before the container is removed, which is not removed if it fails.
+	SaveEvidence(ctx context.Context, runID string, seq int, ev Evidence) error
+	// GetEvidence answers the evidence of an item of a run of an environment, or ErrEvidenceNotFound.
+	GetEvidence(ctx context.Context, envID, runID string, seq int) (Evidence, error)
 }
 
 // SQLStore is the RunStore in SQLite.
@@ -222,6 +235,14 @@ func (s *SQLStore) GetRun(ctx context.Context, envID, runID string) (Run, []RunI
 	if err != nil {
 		return Run{}, nil, fmt.Errorf("read the janitor run's items: %w", err)
 	}
+	withEvidence, err := s.St.RQ.ListJanitorEvidenceSeqs(ctx, runID)
+	if err != nil {
+		return Run{}, nil, fmt.Errorf("read the janitor run's evidence: %w", err)
+	}
+	has := make(map[int64]bool, len(withEvidence))
+	for _, seq := range withEvidence {
+		has[seq] = true
+	}
 	run := Run{
 		ID: row.ID, EnvID: row.EnvID, Trigger: row.Trigger, Actor: row.Actor, State: row.State, Reason: row.Reason,
 		JobID: row.JobID, StartedAt: time.Unix(0, row.StartedAt).UTC(), EstBytes: row.EstBytes,
@@ -248,8 +269,66 @@ func (s *SQLStore) GetRun(ctx context.Context, envID, runID string) (Run, []RunI
 				Age:       time.Duration(d.AgeSeconds) * time.Second,
 				Remaining: time.Duration(d.RemainingSeconds) * time.Second,
 			},
-			Outcome: Outcome(r.Outcome), Code: r.Code, Size: r.EstBytes,
+			Outcome: Outcome(r.Outcome), Code: r.Code, Size: r.EstBytes, HasEvidence: has[r.Seq],
 		})
 	}
 	return run, items, nil
+}
+
+// SaveEvidence implements RunStore.
+func (s *SQLStore) SaveEvidence(ctx context.Context, runID string, seq int, ev Evidence) error {
+	err := s.St.Q.InsertJanitorEvidence(ctx, sqlc.InsertJanitorEvidenceParams{
+		RunID: runID, Seq: int64(seq), ExitCode: int64(ev.ExitCode), Error: ev.Error, OomKilled: boolInt(ev.OOMKilled),
+		StartedAt: nanos(ev.StartedAt), FinishedAt: nanos(ev.FinishedAt), Image: ev.Image, ImageID: ev.ImageID,
+		ImageDigest: ev.ImageDigest, Node: ev.Node, LogText: strings.Join(ev.Lines, "\n"), LogLines: int64(len(ev.Lines)),
+		LogState: ev.State,
+	})
+	if err != nil {
+		return fmt.Errorf("save the crash evidence of a janitor run item: %w", err)
+	}
+	return nil
+}
+
+// GetEvidence implements RunStore.
+func (s *SQLStore) GetEvidence(ctx context.Context, envID, runID string, seq int) (Evidence, error) {
+	row, err := s.St.RQ.GetJanitorEvidence(ctx, sqlc.GetJanitorEvidenceParams{EnvID: envID, RunID: runID, Seq: int64(seq)})
+	if errors.Is(err, sql.ErrNoRows) {
+		return Evidence{}, ErrEvidenceNotFound
+	}
+	if err != nil {
+		return Evidence{}, fmt.Errorf("read the crash evidence of a janitor run item: %w", err)
+	}
+	ev := Evidence{
+		ExitCode: int(row.ExitCode), Error: row.Error, OOMKilled: row.OomKilled != 0,
+		StartedAt: timeOf(row.StartedAt), FinishedAt: timeOf(row.FinishedAt),
+		Image: row.Image, ImageID: row.ImageID, ImageDigest: row.ImageDigest, Node: row.Node, State: row.LogState,
+	}
+	if row.LogText != "" {
+		ev.Lines = strings.Split(row.LogText, "\n")
+	}
+	return ev, nil
+}
+
+// boolInt is the 0 or 1 SQLite keeps a bool as.
+func boolInt(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// nanos is a time as UTC unix nanoseconds, 0 for the zero time.
+func nanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UTC().UnixNano()
+}
+
+// timeOf is the time of UTC unix nanoseconds, the zero time for 0.
+func timeOf(n int64) time.Time {
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n).UTC()
 }

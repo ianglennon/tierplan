@@ -1488,6 +1488,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/runs/{runId}/items/{seq}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the crash evidence of a container a janitor run removed
+         * @description Before the janitor removes a container that exited with a code other than 0, it saves why the container stopped (its exit code, error, whether it was killed for memory, when it started and stopped, its image and the node) and the last 200 lines of its log. This answers that evidence for one item of a run. The log lines are masked on a best effort and capped at 32 KiB, and the answer says when the log could not be read or was not kept. An item that has no evidence, a run that does not exist or one of another environment is 404 janitor_evidence_not_found. The evidence is the container's log, so it needs containers.read on the environment, as reading the container's logs does.
+         */
+        get: operations["getJanitorEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor/task-history": {
         parameters: {
             query?: never;
@@ -7812,6 +7832,42 @@ export interface components {
             /** @description The registry user name; 422 username_required */
             username?: string;
         };
+        JanitorEvidenceBody: {
+            /** @description The engine's last start error, empty for none */
+            error: string;
+            /**
+             * Format: int64
+             * @description The container's exit code, which is not 0
+             */
+            exitCode: number;
+            /**
+             * Format: date-time
+             * @description When the container last stopped; null when the engine reported none
+             */
+            finishedAt: string | null;
+            /** @description The image reference the container was created with */
+            image: string;
+            /** @description The repo@sha256 name of that image on the node, empty when it has none */
+            imageDigest: string;
+            /** @description The ID of the image the container ran */
+            imageId: string;
+            /** @description The last lines of the container's log, oldest first, with the engine's timestamp in front, masked and cut at 2048 characters a line; at most 200 lines and 32 KiB. Draw them as text */
+            logLines: string[] | null;
+            /**
+             * @description saved: the lines are here. empty: the container wrote no log. unavailable: its log driver cannot be read back. cap_reached: the run already holds the most evidence it may, so no log was kept
+             * @enum {string}
+             */
+            logState: "saved" | "empty" | "unavailable" | "cap_reached";
+            /** @description The name of the node the container ran on */
+            node: string;
+            /** @description True when the container was killed for running out of memory */
+            oomKilled: boolean;
+            /**
+             * Format: date-time
+             * @description When the container last started; null when the engine reported none
+             */
+            startedAt: string | null;
+        };
         JanitorItemBody: {
             /**
              * Format: int64
@@ -7976,15 +8032,17 @@ export interface components {
             skippedOffline: number;
         };
         JanitorRunItemBody: {
-            /** @description A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, agent_policy_denied, host_read_only, node_unreachable or action_failed */
+            /** @description A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, evidence_unsaved, agent_policy_denied, host_read_only, node_unreachable or action_failed */
             code: string;
+            /** @description True when the run saved the crash evidence of this container before removing it; read it from the item's evidence route */
+            hasEvidence: boolean;
             name: string;
             /** @description The node's name */
             node: string;
             /** @description The ID of the node the object was on */
             nodeId: string;
             /**
-             * @description How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed
+             * @description How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed, or evidence_unsaved when a crashed container's evidence could not be saved and so the container was kept
              * @enum {string}
              */
             outcome: "removed" | "refused_in_use" | "skipped_protected" | "skipped_node_offline" | "error";
@@ -16560,6 +16618,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JanitorRunBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The ID of the run, as Clean now or the schedule gave it */
+                runId: string;
+                /** @description The item's sequence number in the run, as the run lists it */
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorEvidenceBody"];
                 };
             };
             /** @description Error */
