@@ -820,10 +820,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The policy is the default until the policy store arrives behind the same function.
 	// Networks are judged by the orphan check the Address space page lists with and removed by the code its delete route
 	// calls, so the janitor has one way to judge a network and one way to remove it.
+	// A preview judges ages by the same clock a run does, so a test that moves the janitor's clock
+	// sees the preview and the run agree. Production builds have none and read the real time.
+	janitorNow := time.Now
+	if bo.janitorClock != nil {
+		janitorNow = bo.janitorClock.Now
+	}
 	addressSpaceDeps := api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log}
 	janitorDeps := api.JanitorDeps{
 		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
-		AddressSpaces: addressSpaces, Clock: bo.janitorClock, Now: time.Now, Log: log,
+		AddressSpaces: addressSpaces, Clock: bo.janitorClock, Now: janitorNow, Log: log,
 	}
 	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
 	janitorRuns := &janitor.SQLStore{St: st}
