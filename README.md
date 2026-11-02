@@ -1,4 +1,9 @@
-# TierPlan
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/src/assets/brand/tierplan-wordmark-dark.svg">
+    <img alt="TierPlan" src="web/src/assets/brand/tierplan-wordmark-light.svg" width="360">
+  </picture>
+</h1>
 
 TierPlan is an open-source, web-based manager for Docker: many Docker Swarm clusters and standalone Docker hosts, from one place. It aims to be easier to use than Portainer, with nothing held back behind a paid tier.
 
