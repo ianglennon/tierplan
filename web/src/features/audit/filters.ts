@@ -172,6 +172,14 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.pulled",
   "git.source_changed",
   "janitor.cleaned",
+  "janitor.policy_changed",
+  "janitor.node_policy_changed",
+  "janitor.defaults_changed",
+  "janitor.kept",
+  "janitor.unkept",
+  "stack.janitor_excluded",
+  "stack.janitor_included",
+  "swarm.task_history_limit_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -201,9 +209,15 @@ const ENV_SCOPED_PREFIXES = [
   "config.",
   "stack.",
   "git.",
+  "janitor.",
+  "swarm.",
 ];
+// The janitor's defaults are the one janitor change that belongs to the instance, not to an environment.
+const INSTANCE_LEVEL_ACTIONS = ["janitor.defaults_changed"];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
-  (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),
+  (key) =>
+    key === "permission.denied" ||
+    (!INSTANCE_LEVEL_ACTIONS.includes(key) && ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p))),
 );
 
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -259,6 +273,11 @@ export interface AuditSearch {
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+// The kinds of item a person keeps out of cleanup, and what a run reports removing. Both come from the details of an
+// entry, so only these words ever become part of a copy key.
+const KEPT_KINDS: readonly string[] = ["container", "image", "network"];
+const REMOVED_KINDS = ["containers", "images", "networks"] as const;
 
 const HOUR_MS = 3_600_000;
 const PRESET_MS = {
@@ -379,6 +398,38 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     details?.stack
   ) {
     return t(`audit.actions.${key}_named`, { name: details.stack });
+  }
+  // The janitor's changes name what they were about: a stack, a node, the item kept or the limit set.
+  if ((key === "stack.janitor_excluded" || key === "stack.janitor_included") && details?.name) {
+    return t(`audit.actions.${key}_named`, { name: details.name });
+  }
+  if (key === "janitor.node_policy_changed" && details?.node) {
+    return t("audit.actions.janitor.node_policy_changed_named", { node: details.node });
+  }
+  if (
+    (key === "janitor.kept" || key === "janitor.unkept") &&
+    details?.name &&
+    details.kind &&
+    KEPT_KINDS.includes(details.kind)
+  ) {
+    return t(`audit.actions.${key}_${details.kind}`, {
+      name: details.name,
+    });
+  }
+  if (key === "swarm.task_history_limit_changed" && details?.to) {
+    return t("audit.actions.swarm.task_history_limit_changed_named", { limit: details.to });
+  }
+  // A run says what it removed: the non-zero counts, with plurals, in a fixed order.
+  if (key === "janitor.cleaned" && details) {
+    const parts = REMOVED_KINDS.flatMap((kind) => {
+      const n = Number(details[`removed_${kind}`]);
+      return Number.isInteger(n) && n > 0
+        ? [t(`audit.actions.janitor.removed_${kind}`, { count: n })]
+        : [];
+    });
+    if (parts.length > 0) {
+      return t("audit.actions.janitor.cleaned_removed", { summary: parts.join(", ") });
+    }
   }
   // Small stack subnets read as turned on, with their size, or turned off.
   if (key === "environment.small_subnets_changed" && details?.enabled === "true" && details.mask) {

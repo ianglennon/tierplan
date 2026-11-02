@@ -382,9 +382,22 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // reason as phase3DetailKeys. A finished janitor run records one summary row naming the run, what started it
 // (schedule or a person), how it ended, the reason when it did not end well, how many containers, images and networks
 // it removed, how many items it kept and how many failed, how many nodes it skipped because they were offline, and
-// the estimated bytes freed (plan 11-03, D-16).
+// the estimated bytes freed (plan 11-03, D-16). A change of an environment's janitor policy names the fields that
+// changed and the policy's new version; a change of one node's setting also names the node; a change of the instance
+// defaults also names how many run records the change removed (D-15). Keeping an item out of cleanup, and taking it
+// back, name its kind (container, image or network), its name, the node when it is local to one, and the bulk
+// operation when there was one. Excluding a stack from the janitor, and including it again, name the stack. A change of
+// the swarm task history limit names the value it replaced and the one it set (D-21).
 var phase11DetailKeys = map[string][]string{
-	audit.ActionJanitorCleaned: {"run", "trigger", "outcome", "reason", "removed_containers", "removed_images", "removed_networks", "kept", "failed", "skipped_offline", "est_bytes"},
+	audit.ActionJanitorCleaned:           {"run", "trigger", "outcome", "reason", "removed_containers", "removed_images", "removed_networks", "kept", "failed", "skipped_offline", "est_bytes"},
+	audit.ActionJanitorPolicyChanged:     {"fields", "version"},
+	audit.ActionJanitorNodePolicyChanged: {"node", "fields"},
+	audit.ActionJanitorDefaultsChanged:   {"fields", "removed_runs", "version"},
+	audit.ActionJanitorKept:              {"kind", "name", "node", "bulk"},
+	audit.ActionJanitorUnkept:            {"kind", "name", "node", "bulk"},
+	audit.ActionStackJanitorExcluded:     {"name"},
+	audit.ActionStackJanitorIncluded:     {"name"},
+	audit.ActionSwarmTaskHistoryChanged:  {"from", "to"},
 }
 
 func TestEveryPhase11ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -404,11 +417,22 @@ func TestEveryPhase11ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 			}
 		}
 	}
+	if len(phase11DetailKeys) != 9 {
+		t.Fatalf("phase11DetailKeys pins %d actions, want the 9 Phase 11 records", len(phase11DetailKeys))
+	}
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase11DetailKeys) {
 		t.Fatalf("verify = %+v", got)
 	}
 	for key, constant := range map[string]string{
-		"janitor.cleaned": audit.ActionJanitorCleaned,
+		"janitor.cleaned":                  audit.ActionJanitorCleaned,
+		"janitor.policy_changed":           audit.ActionJanitorPolicyChanged,
+		"janitor.node_policy_changed":      audit.ActionJanitorNodePolicyChanged,
+		"janitor.defaults_changed":         audit.ActionJanitorDefaultsChanged,
+		"janitor.kept":                     audit.ActionJanitorKept,
+		"janitor.unkept":                   audit.ActionJanitorUnkept,
+		"stack.janitor_excluded":           audit.ActionStackJanitorExcluded,
+		"stack.janitor_included":           audit.ActionStackJanitorIncluded,
+		"swarm.task_history_limit_changed": audit.ActionSwarmTaskHistoryChanged,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

@@ -293,7 +293,26 @@
         "rotated": "Config rotated"
       },
       "janitor": {
-        "cleaned": "Cleaned up the environment"
+        "cleaned": "Cleaned up the environment",
+        "policy_changed": "Changed the janitor policy",
+        "node_policy_changed": "Changed a node's janitor setting",
+        "defaults_changed": "Changed the janitor defaults",
+        "kept": "Kept an item out of cleanup",
+        "unkept": "Stopped keeping an item out of cleanup",
+        "cleaned_removed": "Cleaned up the environment (removed {{summary}})",
+        "removed_containers_one": "{{count}} container",
+        "removed_containers_other": "{{count}} containers",
+        "removed_images_one": "{{count}} image",
+        "removed_images_other": "{{count}} images",
+        "removed_networks_one": "{{count}} network",
+        "removed_networks_other": "{{count}} networks",
+        "node_policy_changed_named": "Changed a node's janitor setting ({{node}})",
+        "kept_container": "Kept container {{name}}",
+        "kept_image": "Kept image {{name}}",
+        "kept_network": "Kept network {{name}}",
+        "unkept_container": "Stopped keeping container {{name}}",
+        "unkept_image": "Stopped keeping image {{name}}",
+        "unkept_network": "Stopped keeping network {{name}}"
       },
       "stack": {
         "created": "Stack created",
@@ -311,7 +330,15 @@
         "value_revealed": "Stack secret value revealed",
         "adopted": "Stack adopted",
         "drift_accepted": "Accepted live state into the draft",
-        "drift_accepted_named": "Accepted live state into the draft of {{name}}"
+        "drift_accepted_named": "Accepted live state into the draft of {{name}}",
+        "janitor_excluded": "Excluded a stack from the janitor",
+        "janitor_included": "Included a stack in the janitor again",
+        "janitor_excluded_named": "Excluded stack {{name}} from the janitor",
+        "janitor_included_named": "Included stack {{name}} in the janitor again"
+      },
+      "swarm": {
+        "task_history_limit_changed": "Changed the swarm task history limit",
+        "task_history_limit_changed_named": "Set the task history limit to {{limit}}"
       }
     },
     "coalesced": {
