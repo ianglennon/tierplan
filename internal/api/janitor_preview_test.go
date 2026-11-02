@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -30,6 +31,7 @@ import (
 type janitorReason struct {
 	Code             string `json:"code"`
 	Service          string `json:"service"`
+	Project          string `json:"project"`
 	Slot             string `json:"slot"`
 	Node             string `json:"node"`
 	Rank             int    `json:"rank"`
@@ -344,5 +346,48 @@ func TestJanitorPreviewOrder(t *testing.T) {
 	again, _ := s.previewJanitor(t)
 	if !reflect.DeepEqual(decode[janitorPreview](t, again).Items, got.Items) {
 		t.Fatalf("the order changed between two previews")
+	}
+}
+
+// standaloneBox makes an exited container of a standalone host that finished ago before the
+// fixture's clock, with the labels given.
+func standaloneBox(id string, ago time.Duration, labels map[string]string) dockertest.FakeContainer {
+	created := janitorNow.Add(-ago - time.Hour)
+	return dockertest.FakeContainer{
+		ID: id, Names: []string{"/" + id}, Image: "busybox:1", State: "exited", Created: created.Unix(), Labels: labels,
+		Inspect: dockertest.FakeInspect{StartedAt: created.Format(time.RFC3339Nano), FinishedAt: janitorNow.Add(-ago).Format(time.RFC3339Nano)},
+	}
+}
+
+// The tracer for standalone hosts (plan 11-12, D-05): the leftovers of a TierPlan stack that has
+// been removed are in the preview as stack_gone, and Clean now removes them.
+func TestJanitorPreviewStandaloneStackGone(t *testing.T) {
+	t.Parallel()
+	gone := map[string]string{"tierplan.stack.id": "stk-removed", "com.docker.compose.project": "oldshop", "com.docker.compose.service": "web", "com.docker.compose.oneoff": "False"}
+	cfg := orphanEngine()
+	cfg.Containers = []dockertest.FakeContainer{
+		standaloneBox("old-web", 72*time.Hour, gone),
+		standaloneBox("old-db", 72*time.Hour, map[string]string{"tierplan.stack.id": "stk-removed", "com.docker.compose.project": "oldshop", "com.docker.compose.service": "db", "com.docker.compose.oneoff": "False"}),
+	}
+	f, e := dashEnv(t, cfg)
+	preview := f.previewJanitor(t, e)
+	if len(preview.Items) != 2 || preview.Summary.Containers != 2 || len(preview.NotRemoved) != 0 {
+		t.Fatalf("preview items = %+v notRemoved = %+v, want the two leftovers of the removed stack", preview.Items, preview.NotRemoved)
+	}
+	for _, it := range preview.Items {
+		if it.Type != "container" || it.Class != "removable" || it.Reason.Code != "stack_gone" || it.Reason.Project != "oldshop" {
+			t.Errorf("item = %+v, want a removable container with the reason stack_gone for project oldshop", it)
+		}
+	}
+
+	job, _ := f.cleanNow(t, e, preview.Items...)
+	if job.State != jobs.JobDone || len(job.Items) != 2 {
+		t.Fatalf("job = %s items %+v, want a done job with two items", job.State, job.Items)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"DELETE /containers/old-db", "DELETE /containers/old-web"}) {
+		t.Fatalf("writes = %v, want one delete of each container", w)
+	}
+	if after := f.previewJanitor(t, e); len(after.Items) != 0 || len(after.NotRemoved) != 0 {
+		t.Errorf("preview after = %+v %+v, want nothing left", after.Items, after.NotRemoved)
 	}
 }
