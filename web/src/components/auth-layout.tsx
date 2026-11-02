@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { TierPlanLogo } from "@/components/tierplan-logo";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -74,6 +75,11 @@ export function AuthLayout({
     <main className="flex min-h-svh flex-col items-center gap-4 bg-background px-4 pt-16 pb-6 text-foreground">
       <div className={cn("flex w-full flex-col gap-4", wide ? "max-w-120" : "max-w-100")}>
         {showSignOut ? <SignedInBar /> : null}
+        <TierPlanLogo
+          variant="wordmark"
+          decorative={title === t("common.brand.wordmark")}
+          className="h-10 self-start"
+        />
         <div className="flex flex-col gap-1">
           <h1
             className="line-clamp-2 text-2xl leading-tight font-medium wrap-anywhere"

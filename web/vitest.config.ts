@@ -9,6 +9,11 @@ export default defineConfig({
       "@": decodeURIComponent(new URL("./src", import.meta.url).pathname),
     },
   },
+  build: {
+    // As in vite.config.ts: an imported image is a URL, never a data: URI, so a test can tell the
+    // brand images apart by file name.
+    assetsInlineLimit: 0,
+  },
   define: {
     // Same build-time constant vite.config.ts defines, fixed for tests.
     __TIERPLAN_SOURCE_URL__: JSON.stringify("https://github.com/ianglennon/tierplan"),

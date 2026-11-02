@@ -342,3 +342,42 @@ describe("the Address space item", () => {
     expect(screen.queryByRole("link", { name: "Address space" })).toBeNull();
   });
 });
+
+describe("the TierPlan logo at the top of the sidebar", () => {
+  // The logo is the one image named TierPlan; its two inner images are the light and dark artwork.
+  const logoImages = (name: string) =>
+    Array.from(screen.getByRole("img", { name }).querySelectorAll("img")).map(
+      (i) => i.getAttribute("src") ?? "",
+    );
+
+  it("shows the wordmark, light and dark artwork, while the sidebar is expanded", async () => {
+    mount(DESKTOP_WIDTH);
+    await screen.findByRole("link", { name: "Registries" });
+    const srcs = logoImages("TierPlan");
+    expect(srcs).toHaveLength(2);
+    expect(srcs.some((s) => /tierplan-wordmark-light/.test(s))).toBe(true);
+    expect(srcs.some((s) => /tierplan-wordmark-dark/.test(s))).toBe(true);
+    expect(srcs.some((s) => /tierplan-icon/.test(s))).toBe(false);
+  });
+
+  it("shows the icon alone once it is collapsed to the rail", async () => {
+    mount(DESKTOP_WIDTH);
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle sidebar" }));
+    await waitFor(() => {
+      const srcs = logoImages("TierPlan");
+      expect(srcs.some((s) => /tierplan-icon-light/.test(s))).toBe(true);
+    });
+    const srcs = logoImages("TierPlan");
+    expect(srcs).toHaveLength(2);
+    expect(srcs.some((s) => /tierplan-icon-dark/.test(s))).toBe(true);
+    expect(srcs.some((s) => /tierplan-wordmark/.test(s))).toBe(false);
+  });
+
+  it("shows the wordmark in the phone drawer", async () => {
+    mount(375);
+    await openMenu();
+    const srcs = logoImages("TierPlan");
+    expect(srcs.some((s) => /tierplan-wordmark-light/.test(s))).toBe(true);
+    expect(srcs.some((s) => /tierplan-wordmark-dark/.test(s))).toBe(true);
+  });
+});

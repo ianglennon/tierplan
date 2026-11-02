@@ -270,7 +270,7 @@ describe("the page frame", () => {
     expect(
       await screen.findByRole("heading", { name: "<img src=x onerror=alert(1)>" }),
     ).toBeTruthy();
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
   });
 
   it("shows no permission to a user who cannot read nodes", async () => {
@@ -406,7 +406,7 @@ describe("the Overview tab", () => {
     state.detail = () => node(nodeDetail({ engineLabels: { "<b>k</b>": "<img src=x>" } }));
     renderAt();
     await screen.findByRole("region", { name: "Engine labels" });
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
     expect(document.querySelector("b")).toBeNull();
   });
 });
@@ -499,7 +499,7 @@ describe("the Tasks tab", () => {
       );
     renderAt(`${PAGE}/tasks`);
     expect(await screen.findByText("<b>boom</b>")).toBeTruthy();
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
     expect(document.querySelector("b")).toBeNull();
   });
 });
