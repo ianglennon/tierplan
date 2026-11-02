@@ -59,6 +59,7 @@ const (
 	PermSecretsReveal         Perm = "secrets.reveal"
 	PermVolumesDelete         Perm = "volumes.delete"
 	PermJanitorPolicy         Perm = "janitor.policy"
+	PermJanitorRun            Perm = "janitor.run"
 	PermShellsManage          Perm = "shells.manage"
 	PermRegistriesInstance    Perm = "registries.instance"
 	PermRegistriesManage      Perm = "registries.manage"
@@ -124,6 +125,7 @@ var defaultRegistry = Registry{
 	{Name: PermSecretsReveal, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Reveal secret values"},
 	{Name: PermVolumesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Delete volumes"},
 	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Change cleanup policy"},
+	{Name: PermJanitorRun, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Clean an environment now, keep items out of cleanup and set the swarm task history limit"},
 	{Name: PermShellsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and end other people's shells"},
 	{Name: PermRegistriesInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage registry credentials that apply to every environment"},
 	{Name: PermRegistriesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's registry credentials"},

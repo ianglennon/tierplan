@@ -292,6 +292,9 @@
         "removed": "Config deleted",
         "rotated": "Config rotated"
       },
+      "janitor": {
+        "cleaned": "Cleaned up the environment"
+      },
       "stack": {
         "created": "Stack created",
         "created_from_git": "Stack created from git",

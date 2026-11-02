@@ -171,6 +171,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.stack_detached",
   "git.pulled",
   "git.source_changed",
+  "janitor.cleaned",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

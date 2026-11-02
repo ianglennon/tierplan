@@ -378,6 +378,44 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 }
 
+// phase11DetailKeys maps every Phase 11 action to the detail keys the plans that record it must use, for the same
+// reason as phase3DetailKeys. A finished janitor run records one summary row naming the run, what started it
+// (schedule or a person), how it ended, the reason when it did not end well, how many containers, images and networks
+// it removed, how many items it kept and how many failed, how many nodes it skipped because they were offline, and
+// the estimated bytes freed (plan 11-03, D-16).
+var phase11DetailKeys = map[string][]string{
+	audit.ActionJanitorCleaned: {"run", "trigger", "outcome", "reason", "removed_containers", "removed_images", "removed_networks", "kept", "failed", "skipped_offline", "est_bytes"},
+}
+
+func TestEveryPhase11ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase11DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase11DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"janitor.cleaned": audit.ActionJanitorCleaned,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 // phase9DetailKeys maps every Phase 9 action to the detail keys the plans that record it must use, for the same
 // reason as phase3DetailKeys. A credential row names what was stored and never the token or the private key, nor
 // any part of it: the name, the layer (instance or environment), the type (https or ssh) and the username; an

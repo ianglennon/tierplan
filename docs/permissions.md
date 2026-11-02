@@ -45,6 +45,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
+| `janitor.run` | environment | no | no | yes | yes | no | Clean an environment now, keep items out of cleanup and set the swarm task history limit |
 | `networks.addressing` | environment | no | no | yes | yes | no | Change the address space settings: small stack subnets and entered address pools |
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
 | `networks.keep` | environment | no | no | yes | yes | no | Keep or stop keeping networks out of the orphan list |

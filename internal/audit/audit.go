@@ -245,6 +245,9 @@ const (
 	// source for review. The entry names the stack, the new repository, ref kind, ref, folder and commit and the ones it
 	// replaces; the next good deploy of the draft makes it the stack's source.
 	ActionGitSourceChanged = "git.source_changed"
+	// One summary row per finished janitor run, scheduled or started by a person, with what it removed, kept, failed and
+	// skipped (D-16). The environment is the target; the actor is the person, or the system principal for a scheduled run.
+	ActionJanitorCleaned = "janitor.cleaned"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
