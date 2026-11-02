@@ -1488,6 +1488,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/task-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The swarm's task history limit
+         * @description How many finished tasks per slot the swarm keeps (its TaskHistoryRetentionLimit), read live from a manager, with -1 as the manager reports it: the swarm keeps every task. dockerDefault is 5. 409 not_swarm for a standalone host; 503 no_manager when no manager of the swarm answers. Needs environments.read (Viewer) on the environment.
+         */
+        get: operations["getTaskHistoryLimit"];
+        /**
+         * Set the swarm's task history limit
+         * @description Sets how many finished tasks per slot the swarm keeps, a whole number from 0 to 1000; anything else is 422 and nothing is sent. TierPlan reads the swarm's settings and version from a manager, changes only that one setting and sends one update with that version through a manager. It never rotates a join token or the unlock key. Setting the limit the swarm already has answers 200 with changed false and sends and records nothing. A real change is audited as swarm.task_history_limit_changed with the limit it replaced (from) and the one it set (to). The update is never retried: if the swarm changed between the read and the update the answer is 409 swarm_changed and the person tries again. 409 not_swarm for a standalone host; 409 host_read_only when the host's agent is read-only; 503 no_manager when no manager answers; 502 agent_policy_denied when the manager's agent refuses the change by its own policy, which is what an agent older than this server does. Needs janitor.run (Env Admin) on the environment.
+         */
+        put: operations["setTaskHistoryLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -12819,6 +12843,43 @@ export interface components {
             /** @description The platforms of the tag, with the same limit as the digest */
             platforms?: components["schemas"]["PlatformBody"][] | null;
         };
+        TaskHistoryBody: {
+            /**
+             * Format: int64
+             * @description The limit Docker uses when none was set
+             */
+            dockerDefault: number;
+            /** @description True when the limit is negative, so the swarm never removes a finished task */
+            keepsAll: boolean;
+            /**
+             * Format: int64
+             * @description How many finished tasks per slot (per node for a global service) the swarm keeps, as the manager reports it. -1 means it keeps every task and removes none; Docker's default when none was set is 5
+             */
+            limit: number;
+        };
+        TaskHistoryChangeBody: {
+            /** @description True when this request changed the limit. False when the swarm already had the limit asked for: nothing was sent to it and nothing was audited */
+            changed: boolean;
+            /**
+             * Format: int64
+             * @description The limit Docker uses when none was set
+             */
+            dockerDefault: number;
+            /** @description True when the limit is negative, so the swarm never removes a finished task */
+            keepsAll: boolean;
+            /**
+             * Format: int64
+             * @description How many finished tasks per slot (per node for a global service) the swarm keeps, as the manager reports it. -1 means it keeps every task and removes none; Docker's default when none was set is 5
+             */
+            limit: number;
+        };
+        TaskHistoryRequest: {
+            /**
+             * Format: int64
+             * @description How many finished tasks per slot the swarm keeps, a whole number from 0 to 1000. Anything else is 422
+             */
+            limit: number;
+        };
         TaskItem: {
             /** @description The task's container ID on its node; empty until it has one */
             containerId: string;
@@ -16499,6 +16560,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JanitorRunBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getTaskHistoryLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskHistoryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setTaskHistoryLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskHistoryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskHistoryChangeBody"];
                 };
             };
             /** @description Error */

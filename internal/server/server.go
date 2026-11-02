@@ -236,6 +236,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterNetworks(r, d.Networks)
 	api.RegisterAddressSpace(r, d.AddressSpace)
 	api.RegisterJanitor(r, d.Janitor)
+	api.RegisterJanitorTaskHistory(r, d.Janitor)
 	api.RegisterServices(r, d.Services)
 	api.RegisterRestartLoop(r, d.RestartLoop)
 	api.RegisterSecrets(r, d.Secrets)

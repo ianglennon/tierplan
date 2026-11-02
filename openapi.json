@@ -19612,6 +19612,81 @@
         ],
         "type": "object"
       },
+      "TaskHistoryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "dockerDefault": {
+            "description": "The limit Docker uses when none was set",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keepsAll": {
+            "description": "True when the limit is negative, so the swarm never removes a finished task",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "How many finished tasks per slot (per node for a global service) the swarm keeps, as the manager reports it. -1 means it keeps every task and removes none; Docker's default when none was set is 5",
+            "format": "int64",
+            "minimum": -1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "dockerDefault",
+          "keepsAll"
+        ],
+        "type": "object"
+      },
+      "TaskHistoryChangeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "description": "True when this request changed the limit. False when the swarm already had the limit asked for: nothing was sent to it and nothing was audited",
+            "type": "boolean"
+          },
+          "dockerDefault": {
+            "description": "The limit Docker uses when none was set",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keepsAll": {
+            "description": "True when the limit is negative, so the swarm never removes a finished task",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "How many finished tasks per slot (per node for a global service) the swarm keeps, as the manager reports it. -1 means it keeps every task and removes none; Docker's default when none was set is 5",
+            "format": "int64",
+            "minimum": -1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changed",
+          "limit",
+          "dockerDefault",
+          "keepsAll"
+        ],
+        "type": "object"
+      },
+      "TaskHistoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many finished tasks per slot the swarm keeps, a whole number from 0 to 1000. Anything else is 422",
+            "format": "int64",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "type": "object"
+      },
       "TaskItem": {
         "additionalProperties": false,
         "properties": {
@@ -26444,6 +26519,116 @@
           }
         },
         "summary": "Read one janitor run",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/task-history": {
+      "get": {
+        "description": "How many finished tasks per slot the swarm keeps (its TaskHistoryRetentionLimit), read live from a manager, with -1 as the manager reports it: the swarm keeps every task. dockerDefault is 5. 409 not_swarm for a standalone host; 503 no_manager when no manager of the swarm answers. Needs environments.read (Viewer) on the environment.",
+        "operationId": "getTaskHistoryLimit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskHistoryBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The swarm's task history limit",
+        "tags": [
+          "environments"
+        ]
+      },
+      "put": {
+        "description": "Sets how many finished tasks per slot the swarm keeps, a whole number from 0 to 1000; anything else is 422 and nothing is sent. TierPlan reads the swarm's settings and version from a manager, changes only that one setting and sends one update with that version through a manager. It never rotates a join token or the unlock key. Setting the limit the swarm already has answers 200 with changed false and sends and records nothing. A real change is audited as swarm.task_history_limit_changed with the limit it replaced (from) and the one it set (to). The update is never retried: if the swarm changed between the read and the update the answer is 409 swarm_changed and the person tries again. 409 not_swarm for a standalone host; 409 host_read_only when the host's agent is read-only; 503 no_manager when no manager answers; 502 agent_policy_denied when the manager's agent refuses the change by its own policy, which is what an agent older than this server does. Needs janitor.run (Env Admin) on the environment.",
+        "operationId": "setTaskHistoryLimit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskHistoryChangeBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Set the swarm's task history limit",
         "tags": [
           "environments"
         ]
