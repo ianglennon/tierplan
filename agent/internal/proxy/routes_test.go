@@ -116,6 +116,7 @@ func TestRouteReadOnlyRefusesEveryWriteAndStillAllowsTheReads(t *testing.T) {
 		{"POST", "/containers/abc/unpause"},
 		{"DELETE", "/containers/abc?force=1&v=1"},
 		{"DELETE", "/containers/abc?link=1"},
+		{"POST", "/swarm/update?version=1"},
 	}
 	for _, tc := range writes {
 		resp := do(t, h, request(tc.method, tc.target))
@@ -668,6 +669,99 @@ func TestRouteConfigsTakeNoQueryAndTheListNeverShadowsTheInspect(t *testing.T) {
 	for _, w := range []struct{ method, path string }{{"POST", "/configs/create"}, {"DELETE", "/configs/abc123"}} {
 		if ok, reason, _ := Allowed(w.method, w.path, "", w.method == "POST", false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
 			t.Errorf("%s %s on a read-only host = %v %q, want refused read_only_flag", w.method, w.path, ok, reason)
+		}
+	}
+}
+
+func TestRouteSwarmUpdateTakesOnlyAVersionAndASpecBody(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path, query string
+		body                      bool
+		wantRoute                 string // "" means refused
+	}{
+		{"an update", "POST", "/swarm/update", "version=12", true, "swarm update"},
+		{"an update with the version prefix", "POST", "/v1.56/swarm/update", "version=12", true, "swarm update"},
+		{"an update with a 20 digit version", "POST", "/swarm/update", "version=" + strings.Repeat("1", 20), true, "swarm update"},
+		{"an update with a 21 digit version", "POST", "/swarm/update", "version=" + strings.Repeat("1", 21), true, ""},
+		{"an update with no version", "POST", "/swarm/update", "", true, ""},
+		{"an update with an empty version", "POST", "/swarm/update", "version=", true, ""},
+		{"an update with a non-numeric version", "POST", "/swarm/update", "version=abc", true, ""},
+		{"an update with a negative version", "POST", "/swarm/update", "version=-1", true, ""},
+		{"an update with a second bad version", "POST", "/swarm/update", "version=1&version=x", true, ""},
+		{"an update that rotates the worker token", "POST", "/swarm/update", "version=12&rotateWorkerToken=true", true, ""},
+		{"an update that rotates the manager token", "POST", "/swarm/update", "version=12&rotateManagerToken=true", true, ""},
+		{"an update that rotates the unlock key", "POST", "/swarm/update", "version=12&rotateManagerUnlockKey=true", true, ""},
+		{"an update with another key", "POST", "/swarm/update", "version=12&force=1", true, ""},
+		{"an update with no body", "POST", "/swarm/update", "version=12", false, ""},
+		{"an update with a trailing slash", "POST", "/swarm/update/", "version=12", true, ""},
+		{"a GET of update", "GET", "/swarm/update", "", false, ""},
+		{"a PUT of update", "PUT", "/swarm/update", "version=12", true, ""},
+		{"a DELETE of update", "DELETE", "/swarm/update", "version=12", false, ""},
+		{"a POST to the swarm itself", "POST", "/swarm", "version=12", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, kind := Allowed(tc.method, tc.path, tc.query, tc.body, false, Policy{})
+			if ok != (tc.wantRoute != "") {
+				t.Fatalf("Allowed(%s %s?%s) = %v, want %v", tc.method, tc.path, tc.query, ok, tc.wantRoute != "")
+			}
+			if !ok {
+				return
+			}
+			if rt, found := Match(tc.method, tc.path); !found || rt.name != tc.wantRoute || rt.registryAuth {
+				t.Fatalf("Match(%s %s) = %q (registryAuth %v), want %q without a registry credential", tc.method, tc.path, rt.name, rt.registryAuth, tc.wantRoute)
+			}
+			if kind != BodySwarmUpdate {
+				t.Errorf("body kind = %d, want %d", kind, BodySwarmUpdate)
+			}
+		})
+	}
+	if ok, reason, _ := Allowed("POST", "/swarm/update", "version=1", true, false, Policy{ReadOnly: true}); ok || reason != "read_only_flag" {
+		t.Errorf("a swarm update on a read-only host = %v %q, want refused read_only_flag", ok, reason)
+	}
+	if ok, _, _ := Allowed("POST", "/swarm/update", "version=1", true, true, Policy{}); ok {
+		t.Error("an upgrade on a swarm update was allowed")
+	}
+}
+
+// TestRouteSwarmGetStaysAbsent: a swarm's join tokens are credentials to add nodes, and GET /swarm
+// answers with them, so nothing under /swarm is forwarded but the update, whose key set is closed.
+func TestRouteSwarmGetStaysAbsent(t *testing.T) {
+	for _, tc := range []struct{ method, path, query string }{
+		{"GET", "/swarm", ""},
+		{"HEAD", "/swarm", ""},
+		{"GET", "/v1.56/swarm", ""},
+		{"GET", "/swarm", "x=1"},
+		{"GET", "/swarm/unlockkey", ""},
+		{"GET", "/swarm/update", ""},
+		{"POST", "/swarm/init", ""},
+		{"POST", "/swarm/join", ""},
+		{"POST", "/swarm/leave", "force=1"},
+		{"POST", "/swarm/unlock", ""},
+		{"POST", "/swarm/update", "version=1&rotateWorkerToken=true"},
+		{"GET", "/swarm/", ""},
+		{"GET", "/swarm/anything", ""},
+	} {
+		t.Run(tc.method+" "+tc.path+"?"+tc.query, func(t *testing.T) {
+			if ok, _, _ := Allowed(tc.method, tc.path, tc.query, false, false, Policy{}); ok {
+				t.Fatalf("%s %s?%s was allowed", tc.method, tc.path, tc.query)
+			}
+			if tc.query == "" {
+				if rt, found := Match(tc.method, tc.path); found {
+					t.Fatalf("%s %s matches the route %q", tc.method, tc.path, rt.name)
+				}
+			}
+		})
+	}
+	// Whatever the table holds, no route takes a key that rotates a join token or the unlock key,
+	// and the only route under /swarm is the update.
+	for _, rt := range routes {
+		for _, key := range []string{"rotateWorkerToken", "rotateManagerToken", "rotateManagerUnlockKey"} {
+			if _, has := rt.query[key]; has {
+				t.Errorf("route %q takes the key %s", rt.name, key)
+			}
+		}
+		if rt.path.MatchString("/swarm") || (rt.name != "swarm update" && rt.path.MatchString("/swarm/update")) {
+			t.Errorf("route %q reaches /swarm", rt.name)
 		}
 	}
 }
