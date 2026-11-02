@@ -16,10 +16,8 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
-// maxJanitorRunItems is how many items one Clean now may tick.
-const maxJanitorRunItems = 5000
-
-// maxJanitorRunBody bounds the body of a run: 5000 items of at most a few hundred bytes each.
+// maxJanitorRunBody bounds the body of a run: the 5000 items its schema allows, of at most a few
+// hundred bytes each.
 const maxJanitorRunBody = 4 << 20
 
 // problemTooManyJanitorRuns is the 429 for an Env Admin who already has the most jobs running.

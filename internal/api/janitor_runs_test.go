@@ -5,13 +5,18 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -106,5 +111,183 @@ func TestJanitorRunRemovesTickedTaskContainer(t *testing.T) {
 	_, after := s.previewJanitor(t)
 	if len(after.Items) != 2 || after.Items[0].Ref != "web-x2" {
 		t.Fatalf("preview after = %+v, want web-x2 and web-x3 left", after.Items)
+	}
+}
+
+func TestJanitorRunNeedsEnvAdmin(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	path := "/api/env/" + s.env.ID + "/janitor/runs"
+	body := tick(preview.Items[0])
+	as := func(user, role string) *httptest.ResponseRecorder {
+		s.addUser(t, user, false)
+		s.addEnvRole(t, user, s.env.ID, role)
+		cookie, csrf := s.signIn(t, user, false)
+		return s.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	}
+	if rec := as("olga", "operator"); rec.Code != http.StatusForbidden {
+		t.Fatalf("an Operator: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := as("vera", "viewer"); rec.Code != http.StatusForbidden {
+		t.Fatalf("a Viewer: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got := s.containerDeletes(); len(got) != 0 {
+		t.Fatalf("a refused request reached the daemons: %v", got)
+	}
+	rec := as("ada", "admin")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("an Env Admin: %d %s, want 202", rec.Code, rec.Body)
+	}
+	var started janitorStarted
+	if err := json.Unmarshal(rec.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if job := s.awaitRun(t, started.JobID); job.State != jobs.JobDone {
+		t.Fatalf("the Env Admin's job = %s, want done", job.State)
+	}
+	if rec := s.call(t, authReq{method: http.MethodPost, path: path, body: body}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("signed out: %d, want 401", rec.Code)
+	}
+}
+
+func TestJanitorRunLocked(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	holder := stackops.Holder{StackID: "stk-1", StackName: "shop", JobID: "job-1", Kind: "deploy", By: "ada", Started: janitorNow}
+	release, _, ok := s.stackLocks.TryAcquire(s.env.ID, holder)
+	if !ok {
+		t.Fatal("the lock was not free")
+	}
+	rec, _ := s.runJanitor(t, tick(preview.Items[0]))
+	if rec.code != http.StatusConflict || rec.ptyp != "operation_locked" {
+		t.Fatalf("Clean now under a deploy: %d %s (%s), want 409 operation_locked", rec.code, rec.body, rec.ptyp)
+	}
+	if !strings.Contains(string(rec.body), "shop") {
+		t.Errorf("body = %s, want the stack that holds the lock named", rec.body)
+	}
+	if got := s.containerDeletes(); len(got) != 0 {
+		t.Fatalf("a refused run removed %v", got)
+	}
+	if held, ok := s.stackLocks.Held(s.env.ID); !ok || held != holder {
+		t.Fatalf("held = %+v %v, want the deploy still holding the lock", held, ok)
+	}
+	// Once the deploy is done the same request is accepted.
+	release()
+	rec, started := s.runJanitor(t, tick(preview.Items[0]))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now after the deploy: %d %s, want 202", rec.code, rec.body)
+	}
+	s.awaitRun(t, started.JobID)
+	if _, held := s.stackLocks.Held(s.env.ID); held {
+		t.Fatal("the lock is still held after the run's job finished")
+	}
+}
+
+func TestJanitorRunRemovesOnlyTickedAndRemovable(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	if len(preview.Items) != 3 {
+		t.Fatalf("preview items = %+v, want web-x1 x2 x3 removable", preview.Items)
+	}
+	// Tick the first and the last, a container of the two newest (which the janitor keeps), one nobody has,
+	// and the first again on a node it is not on.
+	newest := janitorItem{Type: "container", NodeID: preview.Items[0].NodeID, Ref: "web-x5"}
+	missing := janitorItem{Type: "container", NodeID: preview.Items[0].NodeID, Ref: "web-nobody"}
+	elsewhere := janitorItem{Type: "container", NodeID: "not-a-node", Ref: "web-x2"}
+	rec, started := s.runJanitor(t, tick(preview.Items[2], newest, preview.Items[0], missing, elsewhere, preview.Items[0]))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	job := s.awaitRun(t, started.JobID)
+	got := s.containerDeletes()
+	slices.Sort(got)
+	if want := []string{"DELETE /containers/web-x1", "DELETE /containers/web-x3"}; !slices.Equal(got, want) {
+		t.Fatalf("the daemons saw %v, want %v: the ticked items that are removable, each once", got, want)
+	}
+	if job.State != jobs.JobDone || len(job.Items) != 2 {
+		t.Fatalf("job = %s items %+v, want done with the two removals", job.State, job.Items)
+	}
+	// web-x2 was never ticked and is still there.
+	if _, after := s.previewJanitor(t); len(after.Items) != 1 || after.Items[0].Ref != "web-x2" {
+		t.Fatalf("preview after = %+v, want only web-x2 left", after.Items)
+	}
+}
+
+func TestJanitorRunRejectsMalformedBodies(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	big := make([]string, 0, 5001)
+	for range 5001 {
+		big = append(big, `{"type":"container","nodeId":"n","ref":"a"}`)
+	}
+	for name, body := range map[string]string{
+		"no items":     `{"items":[]}`,
+		"too many":     `{"items":[` + strings.Join(big, ",") + `]}`,
+		"bad type":     `{"items":[{"type":"volume","nodeId":"n","ref":"a"}]}`,
+		"bad ref":      `{"items":[{"type":"container","nodeId":"n","ref":"../etc"}]}`,
+		"empty ref":    `{"items":[{"type":"container","nodeId":"n","ref":""}]}`,
+		"long node ID": `{"items":[{"type":"container","nodeId":"` + strings.Repeat("n", 129) + `","ref":"a"}]}`,
+	} {
+		if rec, _ := s.runJanitor(t, body); rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s, want 422", name, rec.code, rec.body)
+		}
+	}
+	if got := s.containerDeletes(); len(got) != 0 {
+		t.Fatalf("a refused body removed %v", got)
+	}
+}
+
+func TestJanitorRunNeverForceNorVolumes(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	rec, started := s.runJanitor(t, tick(preview.Items...))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	s.awaitRun(t, started.JobID)
+	got := s.containerDeletes()
+	if len(got) != 3 {
+		t.Fatalf("the daemons saw %v, want three deletes", got)
+	}
+	for _, w := range got {
+		// The daemon records the path and the query as it was sent: a delete with force or v asked for
+		// would carry them.
+		if strings.Contains(w, "?") || strings.Contains(w, "force") || strings.Contains(w, "v=") {
+			t.Errorf("%q asked for force or for the volumes", w)
+		}
+	}
+}
+
+// RemoveContainer looks at the container again on its node, whatever the plan said a moment ago.
+func TestJanitorEngineRemoveContainerChecksAgain(t *testing.T) {
+	t.Parallel()
+	boxes := append(exitedSlot(5),
+		taskBox{id: "web-live", service: "web", serviceID: "svc-web", slot: "1", state: "running", ageIdx: 9},
+		taskBox{id: "web-kept", service: "web", serviceID: "svc-web", slot: "1", state: "exited", ageIdx: 0, finishedAgo: 48 * time.Hour, keep: "true"},
+	)
+	s := janitorSwarm(t, onWorker(boxes), nil, wantedTask("task-web-live", "web-live"))
+	_, preview := s.previewJanitor(t)
+	node := preview.Items[0].NodeID
+	eng := api.NewJanitorEngine(s.agg, s.clusters, nil)
+	ctx := testsupport.Context(t)
+	for id, want := range map[string]error{"web-live": janitor.ErrNoLongerStale, "web-kept": janitor.ErrNoLongerStale, "web-nobody": janitor.ErrGone} {
+		if err := eng.RemoveContainer(ctx, s.env.ID, node, id); !errors.Is(err, want) {
+			t.Errorf("RemoveContainer(%s) = %v, want %v", id, err, want)
+		}
+	}
+	if err := eng.RemoveContainer(ctx, s.env.ID, "not-a-node", "web-x1"); !errors.Is(err, janitor.ErrNodeOffline) {
+		t.Errorf("RemoveContainer on an unknown node = %v, want ErrNodeOffline", err)
+	}
+	for _, w := range s.containerDeletes() {
+		if w != "DELETE /containers/web-nobody" {
+			t.Errorf("a refused removal reached a daemon: %q", w)
+		}
+	}
+	if err := eng.RemoveContainer(ctx, s.env.ID, node, "web-x1"); err != nil {
+		t.Fatalf("RemoveContainer(web-x1) = %v, want it removed", err)
 	}
 }
