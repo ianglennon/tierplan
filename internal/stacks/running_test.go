@@ -463,3 +463,30 @@ func TestExpandPortsKeepsARangeOverTheBudgetAsText(t *testing.T) {
 		t.Errorf("expose 10-12/udp = %v, want %v", got.Expose, want)
 	}
 }
+
+// TestRunningKeepsKeepLabel: a service whose file carries tierplan.keep=true reads back from its container with the
+// label, so a stack adopted or compared as running keeps the user's opt-out (JAN-07), and removing it from the
+// container shows as a difference. tierplan.stack.id is still not the file's.
+func TestRunningKeepsKeepLabel(t *testing.T) {
+	t.Parallel()
+	p := preparedProject(t, "services:\n  web:\n    image: nginx:1.27-alpine\n    labels:\n      team: a\n      tierplan.keep: \"true\"\n")
+	c := replica(t, p, "web", strings.Repeat("e", 64))
+	if c.Config.Labels["tierplan.stack.id"] == "" {
+		t.Fatalf("the container lacks the labels of TierPlan: %v", c.Config.Labels)
+	}
+
+	desired, running := compareService(t, p, "web", c, nil)
+
+	if want := []string{"team", stacks.LabelKeep}; !slices.Equal(labelKeys(running), slices.Sorted(slices.Values(want))) {
+		t.Errorf("running labels = %v, want %v", labelKeys(running), want)
+	}
+	if !slices.Equal(labelKeys(desired), labelKeys(running)) {
+		t.Errorf("desired labels = %v, running = %v, want them to agree", labelKeys(desired), labelKeys(running))
+	}
+
+	delete(c.Config.Labels, stacks.LabelKeep)
+	_, lost := compareService(t, p, "web", c, nil)
+	if slices.Contains(labelKeys(lost), stacks.LabelKeep) {
+		t.Errorf("labels after removal = %v, want tierplan.keep gone from the running service", labelKeys(lost))
+	}
+}

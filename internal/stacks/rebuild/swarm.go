@@ -224,9 +224,10 @@ func (b *builder) sortedNotes() []Note { return sortNotes(b.notes) }
 
 func (b *builder) sortedObjects() []Object { return sortObjects(b.objects) }
 
-// ownLabel is a label of the stack's own bookkeeping: the namespace, the image text and anything of TierPlan's.
+// ownLabel is a label of the stack's own bookkeeping: the namespace, the image text and anything of TierPlan's (not the
+// user's tierplan.keep, which a rebuild keeps, JAN-07).
 func ownLabel(key string) bool {
-	return key == stacks.LabelSwarmNamespace || key == stacks.LabelSwarmImage || strings.HasPrefix(key, "tierplan.")
+	return key == stacks.LabelSwarmNamespace || key == stacks.LabelSwarmImage || stacks.IsOwnershipLabel(key)
 }
 
 // userLabels are the labels a person put on an object, without the stack's own.

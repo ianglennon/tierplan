@@ -3,6 +3,8 @@
 
 package stacks
 
+import "strings"
+
 // Ownership labels. Everything a stack creates carries them, and later phases read them without
 // asking the stack store: Phase 8 adopts a foreign stack by its swarm namespace or compose
 // project, Phase 10 judges a network or volume an orphan by whether a stack still owns it, and
@@ -55,6 +57,14 @@ const (
 	// (dockerx.ServiceHash); a container whose hash differs from its service's is recreated.
 	LabelComposeConfigHash = "com.docker.compose.config-hash"
 )
+
+// IsOwnershipLabel reports whether key is one of TierPlan's own bookkeeping labels (the tierplan.* ones that say
+// who made an object and how, such as LabelStackID). Every place that removes TierPlan's labels before it compares or
+// rebuilds a definition (drift, adoption, rebuild) asks it. LabelKeep is not one of them: tierplan.keep is the user's
+// label (JAN-07, D-09), put there to protect an object from the janitor, so no site may drop it or hide its removal.
+func IsOwnershipLabel(key string) bool {
+	return key != LabelKeep && strings.HasPrefix(key, "tierplan.")
+}
 
 // The neutral values of the two labels that record where a project was loaded from (RESEARCH Q2,
 // Pitfall 5): the TierPlan server's own paths never reach a host, and the value never changes, so it

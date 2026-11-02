@@ -85,3 +85,37 @@ func TestStripOwnershipStripsTheLabelsOfVolumeMounts(t *testing.T) {
 		t.Error("the result shares its mounts with the spec it was given")
 	}
 }
+
+// TestStripOwnershipKeepsKeepLabel: tierplan.keep is the user's label (JAN-07), so drift keeps it on both sides of the
+// comparison: removing it from a running service while the stored definition has it shows as a difference, and the
+// labels of TierPlan's own are still dropped.
+func TestStripOwnershipKeepsKeepLabel(t *testing.T) {
+	t.Parallel()
+	spec := swarm.ServiceSpec{
+		Annotations: swarm.Annotations{Name: "web_app", Labels: map[string]string{
+			stacks.LabelStackID: "stack-1", stacks.LabelKeep: "true",
+		}},
+		TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
+			Image:  "nginx",
+			Labels: map[string]string{stacks.LabelStackID: "stack-1", stacks.LabelKeep: "true"},
+			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: "data", Target: "/data", VolumeOptions: &mount.VolumeOptions{
+				Labels: map[string]string{stacks.LabelStackID: "stack-1", stacks.LabelKeep: "true"},
+			}}},
+		}},
+	}
+	removed := stacks.StripOwnership(spec)
+	delete(removed.Labels, stacks.LabelKeep)
+
+	got := stacks.StripOwnership(spec)
+
+	want := map[string]string{stacks.LabelKeep: "true"}
+	if !maps.Equal(got.Labels, want) {
+		t.Errorf("service labels = %v, want %v", got.Labels, want)
+	}
+	if cs := got.TaskTemplate.ContainerSpec; !maps.Equal(cs.Labels, want) || !maps.Equal(cs.Mounts[0].VolumeOptions.Labels, want) {
+		t.Errorf("container labels = %v, mount labels = %v, want %v on both", cs.Labels, cs.Mounts[0].VolumeOptions.Labels, want)
+	}
+	if maps.Equal(got.Labels, removed.Labels) {
+		t.Errorf("a service that lost tierplan.keep reads the same as one that has it: drift would never show the removal")
+	}
+}

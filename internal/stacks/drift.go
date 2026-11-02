@@ -5,16 +5,13 @@ package stacks
 
 import (
 	"maps"
-	"strings"
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 )
 
-// ownershipLabelPrefix starts the key of each label that is TierPlan's own bookkeeping (LabelStackID and the rest).
-const ownershipLabelPrefix = "tierplan."
-
-// StripOwnership returns a copy of spec without any tierplan.* label, on the service, on its containers and on each of
+// StripOwnership returns a copy of spec without any of TierPlan's own tierplan.* labels (IsOwnershipLabel; the user's
+// tierplan.keep stays, so removing it shows as drift), on the service, on its containers and on each of
 // its volume mounts. Drift is judged on both sides through it: an adopted stack's services carry none of TierPlan's
 // labels until its first deploy, and the labels say who owns a service, not how it is set up (D-21, D-24). The ID the
 // converter puts on a named volume's mount is one of them: a stale one is replaced by the first deploy, and drift
@@ -40,14 +37,14 @@ func StripOwnership(spec swarm.ServiceSpec) swarm.ServiceSpec {
 	return spec
 }
 
-// withoutOwnership is labels less the keys that start with tierplan., as a new map; nil stays nil.
+// withoutOwnership is labels less TierPlan's own bookkeeping keys (IsOwnershipLabel), as a new map; nil stays nil.
 func withoutOwnership(labels map[string]string) map[string]string {
 	if labels == nil {
 		return nil
 	}
 	out := maps.Clone(labels)
 	for k := range out {
-		if strings.HasPrefix(k, ownershipLabelPrefix) {
+		if IsOwnershipLabel(k) {
 			delete(out, k)
 		}
 	}
