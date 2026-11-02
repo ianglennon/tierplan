@@ -14,8 +14,6 @@ The exact list of what each role may do is in [permissions.md](permissions.md), 
 
 Put the label `tierplan.keep=true` on anything you want the janitor to leave alone. It is the one opt-out label for every kind of object the janitor judges: containers, images and networks. There is no second label for another kind of object.
 
-This is the opt-out label that the requirement for the janitor calls `coaming.cleanup=false`. That name predates the rename; the label is `tierplan.keep=true` and nothing else is read.
-
 ```yaml
 services:
   web:
