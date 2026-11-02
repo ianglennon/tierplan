@@ -118,6 +118,11 @@
         "age": "Age",
         "size": "Size"
       },
+      "groups": {
+        "container": "Containers",
+        "network": "Networks",
+        "image": "Images"
+      },
       "selectItem": "Select {{name}}",
       "selectAll": "Select all in {{group}}",
       "withheldNetworks": "TierPlan won't judge networks while {{nodes}} isn't reporting.",

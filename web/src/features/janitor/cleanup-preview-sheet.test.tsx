@@ -174,9 +174,11 @@ describe("group and type ticks", () => {
     previews = [mixed()];
     mount();
     await screen.findByRole("button", { name: "Remove 5 items" });
-    const type = screen.getByRole("checkbox", { name: "Select all in Containers" });
-    const node1 = screen.getByRole("checkbox", { name: "Select all in node-1" });
-    const node2 = screen.getByRole("checkbox", { name: "Select all in node-2" });
+    // The image is on node-1 too, so the node's checkbox is looked for in the Containers section.
+    const containers = within(screen.getByRole("region", { name: /^Containers/ }));
+    const type = containers.getByRole("checkbox", { name: "Select all in Containers" });
+    const node1 = containers.getByRole("checkbox", { name: "Select all in node-1" });
+    const node2 = containers.getByRole("checkbox", { name: "Select all in node-2" });
     expect(type.getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Select web.1.aaa" }));
@@ -210,7 +212,7 @@ describe("a long list", () => {
     expect(await screen.findByRole("button", { name: "Remove 2,000 items" })).toBeTruthy();
     expect(visibleLine()).toBe("Would remove 2,000 containers, ~2 MB");
 
-    const rendered = screen.getAllByRole("checkbox", { name: /^Select task-/ }).length;
+    const rendered = (await screen.findAllByRole("checkbox", { name: /^Select task-/ })).length;
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(200);
 

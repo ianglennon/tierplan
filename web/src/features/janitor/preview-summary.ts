@@ -80,3 +80,20 @@ export function countParts(counts: Counts, t: Translate): string[] {
   }
   return out;
 }
+
+export interface SummaryCounts extends Counts {
+  // The estimated bytes the ticked items hold, null when no size was known.
+  estBytes?: number | null;
+}
+
+// summaryLine is "Would remove 14 containers, 3 networks, 2 images, ~1.2 GB": the parts that are
+// above zero, with the words in the right number, and the estimated size last when one is known.
+// With nothing to remove it is "Nothing selected", whatever the size.
+export function summaryLine(counts: SummaryCounts, t: Translate): string {
+  const parts = countParts(counts, t);
+  if (parts.length === 0) return t("janitor.preview.summary.none");
+  if (counts.estBytes !== null && counts.estBytes !== undefined) {
+    parts.push(t("janitor.counts.size", { size: formatSize(counts.estBytes, t) }));
+  }
+  return t("janitor.preview.summary.line", { parts: parts.join(", ") });
+}
