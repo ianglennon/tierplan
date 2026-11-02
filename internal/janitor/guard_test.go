@@ -54,3 +54,36 @@ func TestJanitorNeverTouchesVolumesOrPrune(t *testing.T) {
 		t.Fatalf("scanned %d source files, want the whole package: the guard is not looking at it", scanned)
 	}
 }
+
+// TestJanitorNeverSetsTaskHistory is the safety rail of JAN-03 and D-17: TierPlan never changes a
+// swarm's task history limit on its own and does not tie it to how many exited containers it keeps.
+// Only a person with janitor.run changes it, through the task-history route. So no file of this
+// package, tests aside, may call the write, send a swarm update, or name the route.
+func TestJanitorNeverSetsTaskHistory(t *testing.T) {
+	t.Parallel()
+	forbidden := []string{"SetTaskHistoryLimit", "SwarmUpdate", "task-history"}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		scanned++
+		raw, err := os.ReadFile(filepath.Clean(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range forbidden {
+			if strings.Contains(string(raw), bad) {
+				t.Errorf("%s contains %q: only a person changes the swarm's task history limit, never the janitor", name, bad)
+			}
+		}
+	}
+	if scanned < 5 {
+		t.Fatalf("scanned %d source files, want the whole package: the guard is not looking at it", scanned)
+	}
+}
