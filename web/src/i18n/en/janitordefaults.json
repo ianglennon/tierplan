@@ -1,0 +1,59 @@
+{
+  "janitorDefaults": {
+    "title": "Janitor defaults",
+    "caption": "Every environment follows these unless it overrides a field on its own Janitor page. Changing a default changes every environment that follows it.",
+    "loading": "Loading the janitor defaults",
+    "loadFailed": {
+      "title": "Couldn't load the janitor defaults.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading defaults"
+    },
+    "enabledSwitch": "Run the janitor on environments that follow this default",
+    "retention": {
+      "helper": "A run stays while it is newer than the days or among the last runs, whichever keeps more.",
+      "days": {
+        "label": "Keep run history for",
+        "suffix": "days",
+        "error": "Use a whole number from 7 to 3650."
+      },
+      "runs": {
+        "label": "Keep at least the last",
+        "suffix": "runs per environment",
+        "error": "Use a whole number from 10 to 1000."
+      }
+    },
+    "footer": {
+      "save": "Save janitor defaults",
+      "saving": "Saving…",
+      "checking": "Checking…",
+      "unsaved": "Unsaved changes"
+    },
+    "saved": "Saved the janitor defaults.",
+    "saveFailed": "Couldn't save the janitor defaults.",
+    "retry": "Try again.",
+    "previewFailed": "Couldn't check how much run history this would remove, so nothing was saved.",
+    "conflict": {
+      "message": "{{user}} changed the janitor defaults while you were editing. Reload to see them.",
+      "messageAnon": "The janitor defaults were changed while you were editing. Reload to see them.",
+      "reload": "Reload"
+    },
+    "retentionConfirm": {
+      "title": "Remove older run history?",
+      "body": "This removes {{runs}} across {{environments}}, along with their crash evidence. This can't be undone.",
+      "runs_one": "{{count}} recorded run",
+      "runs_other": "{{count}} recorded runs",
+      "environments_one": "{{count}} environment",
+      "environments_other": "{{count}} environments",
+      "cancel": "Cancel",
+      "remove_one": "Remove {{count}} run",
+      "remove_other": "Remove {{count}} runs"
+    },
+    "defaultsConfirm": {
+      "title": "Change the janitor defaults?",
+      "body_one": "These defaults apply to {{count}} environment that follows them.",
+      "body_other": "These defaults apply to {{count}} environments that follow them.",
+      "cancel": "Cancel",
+      "save": "Save janitor defaults"
+    }
+  }
+}

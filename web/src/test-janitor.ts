@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type {
+  JanitorDefaults,
   JanitorEvidence,
   JanitorItem,
   JanitorJobSummary,
@@ -188,6 +189,28 @@ export function janitorJob(over: Partial<JanitorJobSummary> = {}): JanitorJobSum
     state: "running",
     total: 8,
     trigger: "manual",
+    ...over,
+  };
+}
+
+// The instance-wide janitor defaults as the server answers them: on, daily at 03:00 in Europe/London,
+// keep 2, 24 hours, both opt-ins off, history kept 90 days or the last 100 runs, and three
+// environments following them.
+export function janitorDefaults(over: Partial<JanitorDefaults> = {}): JanitorDefaults {
+  return {
+    version: 4,
+    timezone: "Europe/London",
+    enabled: true,
+    schedule: "0 3 * * *",
+    schedulePreset: "daily",
+    keepN: 2,
+    graceHours: 24,
+    removeUnusedNetworks: false,
+    removeStoppedContainers: false,
+    retentionDays: 90,
+    retentionRuns: 100,
+    followingEnvironments: 3,
+    removedRuns: 0,
     ...over,
   };
 }

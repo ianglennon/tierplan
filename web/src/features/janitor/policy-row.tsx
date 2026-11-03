@@ -27,10 +27,12 @@ interface PolicyRowProps {
   // Absent when the control says it itself (the schedule's helper depends on its preset).
   helper?: ReactNode;
   // True when the environment sets the field itself; false when it follows the instance default.
-  overridden: boolean;
+  // Absent on a row that has no default to follow (the instance defaults on Settings, General), and
+  // then the row says neither Default nor Overridden and offers no Reset.
+  overridden?: boolean;
   // The name of the field in "Reset {field} to default".
-  field: string;
-  onReset: () => void;
+  field?: string;
+  onReset?: () => void;
   // Why the person may not change the row (NeedsTooltip); absent when they may.
   locked?: string;
   // What is wrong with the value, drawn under the control.
@@ -86,37 +88,39 @@ export function PolicyRow({
             {error}
           </p>
         ) : null}
-        <div className="flex min-h-6 flex-wrap items-center gap-2">
-          {overridden ? (
-            <>
-              <Badge variant="outline">{t("janitorPolicy.state.overridden")}</Badge>
-              <NeedsTooltip reason={locked}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="max-md:h-11"
-                  aria-label={t("janitorPolicy.state.resetField", { field })}
-                  onClick={onReset}
-                >
-                  {t("janitorPolicy.state.reset")}
-                </Button>
-              </NeedsTooltip>
-            </>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {/* Focusable, so the tooltip opens from the keyboard too. */}
-                <Badge variant="outline" tabIndex={0}>
-                  {t("janitorPolicy.state.default")}
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-80">
-                {t("janitorPolicy.state.defaultTooltip")}
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
+        {overridden === undefined ? null : (
+          <div className="flex min-h-6 flex-wrap items-center gap-2">
+            {overridden ? (
+              <>
+                <Badge variant="outline">{t("janitorPolicy.state.overridden")}</Badge>
+                <NeedsTooltip reason={locked}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="max-md:h-11"
+                    aria-label={t("janitorPolicy.state.resetField", { field: field ?? label })}
+                    onClick={onReset}
+                  >
+                    {t("janitorPolicy.state.reset")}
+                  </Button>
+                </NeedsTooltip>
+              </>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* Focusable, so the tooltip opens from the keyboard too. */}
+                  <Badge variant="outline" tabIndex={0}>
+                    {t("janitorPolicy.state.default")}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-80">
+                  {t("janitorPolicy.state.defaultTooltip")}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
     </fieldset>
   );

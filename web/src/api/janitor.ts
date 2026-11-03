@@ -33,6 +33,9 @@ export type JanitorPolicy = components["schemas"]["JanitorPolicyBody"];
 export type JanitorPolicyFields = components["schemas"]["JanitorPolicyFields"];
 export type JanitorPolicyRequest = components["schemas"]["JanitorPolicyRequest"];
 export type SchedulePreview = components["schemas"]["SchedulePreviewBody"];
+export type JanitorDefaults = components["schemas"]["JanitorDefaultsBody"];
+export type JanitorDefaultsRequest = components["schemas"]["JanitorDefaultsRequest"];
+export type JanitorRetentionPreview = components["schemas"]["JanitorRetentionPreviewBody"];
 export type SchedulePreset = NonNullable<JanitorPolicyFields["schedulePreset"]>;
 
 // The frames of a run's stream (GET .../janitor/runs/{runId}/stream). The server sends them but
@@ -476,4 +479,92 @@ export function useSchedulePreview(
     data: asking && current ? query.data : undefined,
     waiting: enabled && typed !== "" && (!current || query.isFetching),
   };
+}
+
+// The key of the instance-wide janitor defaults (Settings, General). It sits outside the "env" keys
+// because it belongs to no environment.
+export const janitorDefaultsKey = ["settings", "janitor"] as const;
+
+// janitorDefaultsQuery is what every environment's janitor follows until the environment sets the
+// field itself, the run-history retention, the version a save must send back and how many
+// environments follow at least one default. Reading needs settings.read. It is read when the page
+// opens and when the window regains focus, not on a timer: a person's unsaved edits are kept against
+// the snapshot they began from.
+export function janitorDefaultsQuery() {
+  return queryOptions({
+    queryKey: janitorDefaultsKey,
+    queryFn: async (): Promise<JanitorDefaults> => {
+      try {
+        const res = await api.GET("/api/settings/janitor");
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+  });
+}
+
+// useJanitorDefaults reads the instance-wide janitor defaults.
+export function useJanitorDefaults() {
+  return useQuery(janitorDefaultsQuery());
+}
+
+// useSaveJanitorDefaults saves every default and the retention (a PUT is a full replace). It is never
+// retried (P2 D-42): a lowered retention deletes run records. The answer replaces what the page
+// holds. A save changes what every environment that follows a field does, and what a lowered
+// retention keeps, so each environment's janitor reads (policy, status, run history) are made
+// stale. A save made against another version is 409 settings_changed, an unusable schedule 422
+// invalid_schedule or schedule_too_frequent, and a retention out of range 422 retention_out_of_range.
+export function useSaveJanitorDefaults() {
+  const queryClient = useQueryClient();
+  return useMutation<JanitorDefaults, JanitorRequestError, JanitorDefaultsRequest>({
+    retry: false,
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/settings/janitor", { body });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("PUT", 0);
+      }
+    },
+    onSuccess: (saved) => queryClient.setQueryData(janitorDefaultsKey, saved),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        predicate: (q) => q.queryKey[0] === "env" && q.queryKey[2] === "janitor",
+      }),
+  });
+}
+
+// janitorRetentionPreviewQuery is how many run records, in how many environments, saving a retention
+// of days and runs would delete now. It is a count taken at the moment of asking, so it is never
+// cached: the confirm that shows it must not show an older answer. It needs settings.write.
+export function janitorRetentionPreviewQuery(days: number, runs: number) {
+  return queryOptions({
+    queryKey: [...janitorDefaultsKey, "retention-preview", days, runs] as const,
+    queryFn: async (): Promise<JanitorRetentionPreview> => {
+      try {
+        const res = await api.GET("/api/settings/janitor/retention-preview", {
+          params: { query: { days, runs } },
+        });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
+// useRetentionPreview gives the function the defaults card asks the count with when a lowered
+// retention is about to be saved: (days, runs) -> what that retention would delete now. The server
+// answers 0 for a retention that does not lower the stored one.
+export function useRetentionPreview() {
+  const queryClient = useQueryClient();
+  return (days: number, runs: number) =>
+    queryClient.fetchQuery(janitorRetentionPreviewQuery(days, runs));
 }

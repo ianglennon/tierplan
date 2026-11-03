@@ -5,13 +5,14 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { NoPermission } from "@/components/full-page-state";
 import { GeneralForm } from "@/features/settings/general-form";
+import { JanitorDefaultsCard } from "@/features/settings/janitor-defaults-card";
 import { ShellSettingsCard } from "@/features/settings/shell-settings-card";
 import { StackHistoryCard } from "@/features/settings/stack-history-card";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
-// Settings > General (D-03, D-04, D-60), the Container shells card (D-29, D-31) and the Stack history
-// card (D-01).
+// Settings > General (D-03, D-04, D-60), the Container shells card (D-29, D-31), the Stack history
+// card (D-01) and the Janitor defaults card (anchor #janitor-defaults, Phase 11 D-04, D-16).
 // Reading needs settings.read; the form and the card are read-only without
 // settings.write, and the server checks both again.
 function GeneralTab() {
@@ -24,6 +25,7 @@ function GeneralTab() {
       <GeneralForm />
       <ShellSettingsCard />
       <StackHistoryCard />
+      <JanitorDefaultsCard />
     </div>
   );
 }

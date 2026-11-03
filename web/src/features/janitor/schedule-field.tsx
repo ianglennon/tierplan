@@ -37,7 +37,9 @@ export type ScheduleProblem = "invalid" | "too_frequent" | "time_missing";
 const TOUCH = "max-md:h-11";
 
 interface ScheduleFieldProps {
-  envId: string;
+  // The environment whose schedule-preview route is asked for the next runs of a custom expression.
+  // Absent when the person may read no environment: a custom expression is then checked on save.
+  envId?: string;
   // The id the controls are named from; the preset select is `${id}-preset`.
   id: string;
   value: ScheduleDraft;
@@ -66,7 +68,7 @@ export function ScheduleField({
 }: ScheduleFieldProps) {
   const t = useT();
   const custom = value.preset === "custom";
-  const preview = useSchedulePreview(envId, value.cron, custom);
+  const preview = useSchedulePreview(envId ?? "", value.cron, custom && envId !== undefined);
   // A select that may not be changed is held shut rather than disabled, so it keeps its place in the
   // tab order and its reason opens on focus (NeedsTooltip). Radix opens it on pointer down, which
   // the tooltip's click guard does not stop.
