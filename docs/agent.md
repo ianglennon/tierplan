@@ -490,6 +490,8 @@ Two things to know about a swarm update:
 - A swarm rolls with Docker's own rolling update, and Docker's default when a task fails is to **pause**, not to roll back. If an agent image is broken, the first node's agent stops, the update pauses, and the other nodes keep the old agent. Put the service back with `docker service rollback tierplan-agent` (or `<stack>_tierplan-agent`). TierPlan shows the node as disconnected until you do, and after fifteen minutes lists "the agent never came back on the new version".
 - A standalone update that cannot start the new agent leaves the old one running. The node list says "Docker refused the update" and the agent's log says why.
 
+**Changing the swarm's task history limit needs an up-to-date agent on a manager.** The janitor's Janitor page can read and change how many finished tasks per slot the swarm keeps (its task history limit, [janitor.md](janitor.md#the-swarm-task-history-limit)). Reading it works through any agent. Changing it is a `POST /swarm/update`, a call an agent forwards only from the version that introduced it, so an agent from before that answers that its policy does not allow it, and the page says "Update the agent on a manager to change this limit." Update the agents (above) and try again. The agent still never lets the server rotate a join token or the unlock key, or change anything about the swarm except that one number.
+
 Update and uninstall work only over a verified `wss://` session.
 
 ## Uninstall and manual cleanup

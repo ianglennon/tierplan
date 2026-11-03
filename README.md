@@ -212,6 +212,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [docs/containers.md](docs/containers.md): containers and bulk actions, logs, browser shells, networks, volumes and events, and what each one records.
 - [docs/stacks.md](docs/stacks.md): compose stacks: the editor, stack files and variables, the review, image pinning, deploying to a swarm or a standalone host, stopping, starting and removing, the labels TierPlan writes, and what is still open.
 - [docs/networks.md](docs/networks.md): the Address space page, pool and overlay warnings, orphaned and unused networks, the subnet picker, small stack subnets, and the pool guidance.
+- [docs/janitor.md](docs/janitor.md): the janitor: what it removes on its own and what it never touches, the schedule and policy levels, keeping things with `tierplan.keep=true`, previews and Clean now, run history, crash evidence, and the swarm task history limit.
 - [docs/services.md](docs/services.md): swarm services, nodes, secrets and configs, service logs and stats, restart loops, and why TierPlan cannot change a service with host access unless the host allows it.
 - [docs/access.md](docs/access.md): instance admins, roles, teams, invite and reset links, sessions.
 - [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.
