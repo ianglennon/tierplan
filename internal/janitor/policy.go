@@ -5,6 +5,7 @@ package janitor
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/netspace"
@@ -141,6 +142,31 @@ func EffectiveForNode(env Policy, n NodeOverrides) Policy {
 	return p
 }
 
-// Validate checks the values an environment would save. It is filled in by the next step of this
-// plan; until then everything passes.
-func Validate(Overrides) error { return nil }
+// Validate checks the values an environment would save: keep-N in MinKeepN..MaxKeepN and grace in
+// MinGraceHours..MaxGraceHours (ErrOutOfRange), the schedule through ParseSchedule, which includes
+// the 15-minute floor (ErrInvalidSchedule, ErrScheduleTooFrequent), and a preset that names a
+// schedule. A nil field is not checked: it follows the default.
+func Validate(o Overrides) error {
+	if o.KeepN != nil && (*o.KeepN < MinKeepN || *o.KeepN > MaxKeepN) {
+		return fmt.Errorf("%w: keep-N is %d, it must be %d to %d", ErrOutOfRange, *o.KeepN, MinKeepN, MaxKeepN)
+	}
+	if o.GraceHours != nil && (*o.GraceHours < MinGraceHours || *o.GraceHours > MaxGraceHours) {
+		return fmt.Errorf("%w: grace is %d hours, it must be %d to %d", ErrOutOfRange, *o.GraceHours, MinGraceHours, MaxGraceHours)
+	}
+	if o.Schedule != nil {
+		if _, err := ParseSchedule(*o.Schedule); err != nil {
+			return err
+		}
+	}
+	if o.SchedulePreset != nil {
+		switch *o.SchedulePreset {
+		case PresetHourly, PresetEvery6h, PresetDaily, PresetWeekly, PresetCustom:
+		default:
+			return fmt.Errorf("%w: %q is not a schedule preset", ErrInvalidSchedule, *o.SchedulePreset)
+		}
+		if o.Schedule == nil {
+			return fmt.Errorf("%w: a preset needs the schedule it names", ErrInvalidSchedule)
+		}
+	}
+	return nil
+}

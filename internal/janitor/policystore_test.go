@@ -59,9 +59,11 @@ func (f policyFix) effective(t *testing.T, env string) Policy {
 	return p
 }
 
-func (f policyFix) setDefaults(t *testing.T, set string) {
+// setDefaults changes three of the instance defaults, as the settings page will.
+func (f policyFix) setDefaults(t *testing.T, keepN, graceHours int, unusedNetworks bool) {
 	t.Helper()
-	if _, err := f.st.Write.ExecContext(testsupport.Context(t), `UPDATE janitor_defaults SET `+set+` WHERE id = 1`); err != nil {
+	if _, err := f.st.Write.ExecContext(testsupport.Context(t),
+		`UPDATE janitor_defaults SET keep_n = ?, grace_hours = ?, remove_unused_networks = ? WHERE id = 1`, keepN, graceHours, unusedNetworks); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -127,7 +129,7 @@ func TestDefaultChangeFollows(t *testing.T) {
 	if _, err := f.save(t, "env-2", Overrides{KeepN: ptr(7)}, 0); err != nil {
 		t.Fatal(err)
 	}
-	f.setDefaults(t, `keep_n = 4, grace_hours = 48, remove_unused_networks = 1`)
+	f.setDefaults(t, 4, 48, true)
 
 	one := f.effective(t, "env-1") // has no row: follows everything
 	if one.KeepN != 4 || one.Grace != 48*time.Hour || !one.RemoveUnusedNetworks {
