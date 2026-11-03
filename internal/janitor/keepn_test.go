@@ -319,13 +319,18 @@ func TestKeepNNodeOverride(t *testing.T) {
 			t.Fatalf("items = %v, want %v: the newest two of six stay", sortedRefs(got.Items), want)
 		}
 	})
-	t.Run("a node the snapshot cannot map is looked up by its own ID", func(t *testing.T) {
+	t.Run("a node the snapshot cannot map is looked up by its own ID, and one with no setting of its own is held", func(t *testing.T) {
 		t.Parallel()
 		s := twoNodes(cs...)
 		s.SwarmNodeOf = nil
 		got := planWithNodes(s, DefaultPolicy(), map[string]NodeOverrides{"A-id": {KeepN: intp(5)}})
-		if want := []string{"c0", "c1", "c2"}; !reflect.DeepEqual(refs(got.Items), want) {
-			t.Fatalf("items = %v, want %v", refs(got.Items), want)
+		if len(got.Items) != 0 {
+			t.Fatalf("items = %v, want none: node A keeps its newest 5, and node B is not mapped while the environment has node settings", refs(got.Items))
+		}
+		for _, it := range got.NotRemoved {
+			if it.NodeID == "B-id" && it.Reason.Code != ReasonNodeUnmapped {
+				t.Errorf("%s = %+v, want node_unmapped", it.Ref, it.Reason)
+			}
 		}
 	})
 	t.Run("a node's keep-N is not inspected beyond what it lets go", func(t *testing.T) {
@@ -450,6 +455,53 @@ func TestBuildNodeDisabledProtects(t *testing.T) {
 			if n := slices.Index(refs(got.Items), "b0"); n < 0 {
 				t.Errorf("override %+v: items = %v, want b0 removable", o, refs(got.Items))
 			}
+		}
+	})
+}
+
+// A swarm node that no agent has mapped to its swarm node ID yet is held back (node_unmapped) while the
+// environment has node settings: it might be the node a person switched off. With no node settings it
+// follows its environment as before.
+func TestBuildNodeUnmappedHeld(t *testing.T) {
+	t.Parallel()
+	var cs []Container
+	for i := range 4 {
+		cs = append(cs, onNode(task(fmt.Sprintf("a%d", i), "1", i), "A"), onNode(task(fmt.Sprintf("b%d", i), "2", i), "B"))
+	}
+	s := twoNodes(cs...)
+	s.Images = []Image{func() Image { i := bareImage("ib", 3*24*time.Hour); i.NodeID, i.Node = "B-id", "B"; return i }()}
+	s.ServicesRead = true
+	delete(s.SwarmNodeOf, "B-id")
+
+	t.Run("held while the environment has node settings", func(t *testing.T) {
+		t.Parallel()
+		nodes := map[string]NodeOverrides{"swarm-b": {Enabled: boolp(false)}}
+		for _, r := range CandidatesFor(s, DefaultPolicy(), nodes) {
+			if r.NodeID == "B-id" {
+				t.Errorf("candidate %+v is on a node not mapped yet: nothing of it is inspected", r)
+			}
+		}
+		got := planWithNodes(s, DefaultPolicy(), nodes)
+		if want := []string{"a0", "a1"}; !reflect.DeepEqual(refs(got.Items), want) {
+			t.Fatalf("items = %v, want %v: only node A's", refs(got.Items), want)
+		}
+		held := map[string]Item{}
+		for _, it := range got.NotRemoved {
+			if it.NodeID == "B-id" {
+				held[it.Ref] = it
+			}
+		}
+		for _, id := range []string{"b0", "b1", "sha256:ib"} {
+			if it, ok := held[id]; !ok || it.Class != ClassProtected || it.Reason.Code != ReasonNodeUnmapped {
+				t.Errorf("%s = %+v (listed %v), want protected node_unmapped", id, it, ok)
+			}
+		}
+	})
+	t.Run("follows its environment with no node settings", func(t *testing.T) {
+		t.Parallel()
+		got := planWithNodes(s, DefaultPolicy(), nil)
+		if want := []string{"a0", "a1", "b0", "b1", "sha256:ib"}; !reflect.DeepEqual(sortedRefs(got.Items), want) {
+			t.Fatalf("items = %v, want %v", sortedRefs(got.Items), want)
 		}
 	})
 }

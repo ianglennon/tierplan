@@ -112,6 +112,9 @@ const (
 	ReasonServicesUnread ReasonCode = "services_unread"
 	// ReasonNodeDisabled: the janitor is switched off for the swarm node that holds the object.
 	ReasonNodeDisabled ReasonCode = "node_disabled"
+	// ReasonNodeUnmapped: the environment has settings for some of its swarm nodes, and TierPlan does not
+	// know yet which swarm node holds the object, so it cannot tell whether that node is switched off.
+	ReasonNodeUnmapped ReasonCode = "node_unmapped"
 )
 
 // Reasons lists every reason code, for the API's enum.
@@ -122,7 +125,7 @@ func Reasons() []ReasonCode {
 		ReasonOptInOffContainers, ReasonOptInOffNetworks, ReasonLoneComposeContainer, ReasonKeptLabel, ReasonKeptRow,
 		ReasonStackExcluded, ReasonStackDeclaredKeep, ReasonYoungerThanGrace, ReasonNodeNotReporting,
 		ReasonNetworksWithheld, ReasonStackUnknown, ReasonInspectCapped, ReasonClockSkew, ReasonTaskLabelsMissing,
-		ReasonServicesUnread, ReasonNodeDisabled,
+		ReasonServicesUnread, ReasonNodeDisabled, ReasonNodeUnmapped,
 	}
 }
 
@@ -386,20 +389,22 @@ func nodePolicy(s Snapshot, env Policy, nodes map[string]NodeOverrides, nodeID s
 	return EffectiveForNode(env, nodeOverrides(s, nodes, nodeID))
 }
 
-// disabledNodes names, by snapshot node ID, the nodes the janitor is switched off for.
-func disabledNodes(s Snapshot, nodes map[string]NodeOverrides) map[string]bool {
+// disabledNodes names, by snapshot node ID, the nodes the janitor leaves alone because of the node
+// settings, with the reason heldNode gives.
+func disabledNodes(s Snapshot, nodes map[string]NodeOverrides) map[string]ReasonCode {
 	if len(nodes) == 0 {
 		return nil
 	}
-	var off map[string]bool
+	var off map[string]ReasonCode
 	mark := func(id string) {
-		if id == "" || !nodeOverrides(s, nodes, id).Disabled() {
+		code := heldNode(s, nodes, id)
+		if code == "" {
 			return
 		}
 		if off == nil {
-			off = map[string]bool{}
+			off = map[string]ReasonCode{}
 		}
-		off[id] = true
+		off[id] = code
 	}
 	for _, n := range s.Nodes {
 		mark(n.ID)
@@ -413,21 +418,23 @@ func disabledNodes(s Snapshot, nodes map[string]NodeOverrides) map[string]bool {
 	return off
 }
 
-// protectDisabled makes protected (node_disabled) every container and image the planner would have removed,
-// held back by grace, reported or could not tell about, on a node in off, and moves it to the list of what was
-// not removed. What a person or a label already protects keeps its own, more specific, reason.
-func protectDisabled(plan *Plan, off map[string]bool) {
+// protectDisabled makes protected (node_disabled or node_unmapped, as off says) every container and image the
+// planner would have removed, held back by grace, reported or could not tell about, on a node in off, and moves
+// it to the list of what was not removed. What a person or a label already protects keeps its own, more
+// specific, reason.
+func protectDisabled(plan *Plan, off map[string]ReasonCode) {
 	if len(off) == 0 {
 		return
 	}
 	judge := func(it Item) (Item, bool) {
-		if !off[it.NodeID] || (it.Type != KindContainer && it.Type != KindImage) {
+		code := off[it.NodeID]
+		if code == "" || (it.Type != KindContainer && it.Type != KindImage) {
 			return it, false
 		}
 		switch it.Class {
 		case ClassRemovable, ClassGrace, ClassReported, ClassCantTell:
 			it.Class = ClassProtected
-			it.Reason = Reason{Code: ReasonNodeDisabled, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Node}
+			it.Reason = Reason{Code: code, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Node}
 			it.Age = 0
 			return it, true
 		}

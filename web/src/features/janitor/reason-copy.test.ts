@@ -37,6 +37,7 @@ const PREVIEW_REASONS: Record<JanitorReason["code"], true> = {
   task_labels_missing: true,
   services_unread: true,
   node_disabled: true,
+  node_unmapped: true,
 };
 
 const RUN_REASONS: Record<NonNullable<Exclude<JanitorRun["reason"], "">>, true> = {

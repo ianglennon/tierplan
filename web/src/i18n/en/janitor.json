@@ -88,6 +88,7 @@
       "task_labels_missing": "Can't tell yet: it has no swarm task labels, so TierPlan can't place it.",
       "services_unread": "Can't tell yet: no manager answered, so TierPlan can't tell which services still exist.",
       "node_disabled": "Protected: the janitor is turned off for {{node}}.",
+      "node_unmapped": "Can't tell yet: {{node}} hasn't reported which swarm node it is, so its node setting can't be applied.",
       "unknown": "TierPlan left it alone."
     },
     "preview": {

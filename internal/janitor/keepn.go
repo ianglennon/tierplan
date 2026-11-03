@@ -103,8 +103,9 @@ type ContainerInput struct {
 	ProjectBusy, ProjectOthers bool
 	// OptIn is the policy's "also remove stopped standalone containers".
 	OptIn bool
-	// NodeOff: the janitor is switched off for the container's swarm node. Nothing on it is inspected
-	// or removed, and Build lists what it would have judged as protected (node_disabled).
+	// NodeOff: the janitor is switched off for the container's swarm node, or the environment has node
+	// settings and the node is not known yet as a swarm node. Nothing on it is inspected or removed, and
+	// Build lists what it would have judged as protected (node_disabled or node_unmapped).
 	NodeOff bool
 }
 
@@ -224,10 +225,28 @@ func allContainers(s Snapshot, p Policy, nodes map[string]NodeOverrides) []Conta
 	out := append(taskContainers(s, p, nodes), standaloneContainers(s, p)...)
 	if len(nodes) > 0 {
 		for i := range out {
-			out[i].NodeOff = nodeOverrides(s, nodes, out[i].Container.NodeID).Disabled()
+			out[i].NodeOff = heldNode(s, nodes, out[i].Container.NodeID) != ""
 		}
 	}
 	return out
+}
+
+// heldNode is why the node settings make the janitor leave the snapshot node nodeID alone: node_disabled
+// when the janitor is switched off for its swarm node, and node_unmapped when the environment is a swarm with
+// node settings and no agent has reported which swarm node nodeID is yet. Such a node would otherwise follow
+// its environment, and a node a person switched off could be cleaned in the moment before its agent reports.
+// "" when neither holds.
+func heldNode(s Snapshot, nodes map[string]NodeOverrides, nodeID string) ReasonCode {
+	if len(nodes) == 0 || nodeID == "" {
+		return ""
+	}
+	if _, own := nodes[nodeID]; s.Swarm && s.SwarmNodeOf[nodeID] == "" && !own {
+		return ReasonNodeUnmapped
+	}
+	if nodeOverrides(s, nodes, nodeID).Disabled() {
+		return ReasonNodeDisabled
+	}
+	return ""
 }
 
 // nodeOverrides are the overrides of the swarm node that a snapshot node is: the node IDs of a snapshot
