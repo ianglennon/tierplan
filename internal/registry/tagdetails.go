@@ -272,6 +272,10 @@ func (c *Client) repoRef(repo string) ref.Ref {
 	return ref.Ref{Scheme: "reg", Registry: c.host, Repository: repo}
 }
 
+// ErrNoDigest is the error of a manifest HEAD the registry answered without a digest. It is not an
+// answer about the tag, so a caller words it as a registry that cannot say, never as up to date.
+var ErrNoDigest = errors.New("no digest in the answer")
+
 // ManifestDigest asks the registry for the digest a tag points at with a manifest HEAD, which
 // the pull limits of Docker Hub do not count. For a multi-platform tag it is the index digest.
 func (c *Client) ManifestDigest(ctx context.Context, repo, tag string) (string, error) {
@@ -284,7 +288,7 @@ func (c *Client) ManifestDigest(ctx context.Context, repo, tag string) (string, 
 		}
 		d := m.GetDescriptor().Digest.String()
 		if d == "" {
-			return "", fmt.Errorf("registry: head %s/%s:%s: no digest in the answer", c.host, repo, tag)
+			return "", fmt.Errorf("registry: head %s/%s:%s: %w", c.host, repo, tag, ErrNoDigest)
 		}
 		return d, nil
 	})

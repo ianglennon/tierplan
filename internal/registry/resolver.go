@@ -140,3 +140,19 @@ func (r *Resolver) ForBrowse(ctx context.Context, envID string, visible func(Can
 		UpdatedAt: cred.UpdatedAt,
 	}, nil
 }
+
+// CredentialFor answers which stored credential ForBrowse would choose for ref in the environment, by
+// ID: "" when the call is anonymous. It looks at the same credentials and picks with the same Select,
+// with no visibility filter, and it never opens a secret, so it is safe where only the identity of a
+// credential matters, such as the key of a stored check (D-19). An error names no value.
+func (r *Resolver) CredentialFor(ctx context.Context, envID string, ref Ref) (string, error) {
+	cands, err := r.s.Candidates(ctx, envID)
+	if err != nil {
+		return "", err
+	}
+	m := Select(cands, ref)
+	if m.Cred == nil {
+		return "", nil
+	}
+	return m.Cred.ID, nil
+}

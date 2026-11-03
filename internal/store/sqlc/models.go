@@ -173,6 +173,19 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type ImageCheck struct {
+	Host      string
+	Repo      string
+	Tag       string
+	CredID    string
+	Digest    string
+	IsIndex   int64
+	Platforms string
+	CheckedAt int64
+	SuccessAt int64
+	ErrorCode string
+}
+
 type ImageDanglingSeen struct {
 	EnvID       string
 	NodeID      string

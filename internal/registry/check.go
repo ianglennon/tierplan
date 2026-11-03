@@ -185,6 +185,10 @@ func TestRepositoryPath(host, repo string) (path string, ok bool) {
 	return repo, true
 }
 
+// Classify is classify for callers outside the package: the code of an error from a registry call,
+// worked out from the error's type and never from registry text.
+func Classify(err error) string { return classify(err) }
+
 // classify maps an error from a registry call to the code the SPA words. It looks at the
 // error's type and never at registry text.
 func classify(err error) string {

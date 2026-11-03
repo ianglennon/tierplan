@@ -123,6 +123,13 @@ var Tables = map[string]Class{
 	"janitor_env_policy":  Included,
 	"janitor_node_policy": Included,
 
+	// What the registries last answered about the tag of each image (Phase 12, D-04): the digest, per
+	// platform, and when and how the last check ended, keyed by registry, repository, tag and the
+	// credential that asked. Badges survive a restore and the fleet view loads without calling a
+	// registry. It is matched to the running digests live, so it states no fact about Docker, and it
+	// holds no credential and no registry text.
+	"image_checks": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.
