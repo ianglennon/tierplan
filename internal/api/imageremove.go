@@ -375,7 +375,8 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 			// that name too and delete an image somebody wants.
 			return errNotDangling
 		}
-		names := append(slices.Clone(det.RepoTags), det.RepoDigests...)
+		// The engine's placeholders for no name are not names it can untag.
+		names := slices.DeleteFunc(append(slices.Clone(det.RepoTags), det.RepoDigests...), janitor.IsPlaceholder)
 		untag := op.untag
 		if untag != "" {
 			// The name as the node has it, which is what the engine is asked to untag.
@@ -415,10 +416,10 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 }
 
 // strictlyDangling is the janitor's rule for an image it may remove (D-07): no real tag, no digest
-// reference, and no tierplan.keep=true label.
+// reference, and no tierplan.keep=true label. The names are read by janitor.IsDangling, the planner's
+// own test, so an image the plan lists is never refused here for an engine's <none>@<none>.
 func strictlyDangling(tags, digests []string, labels map[string]string) bool {
-	return !slices.ContainsFunc(tags, func(tag string) bool { return !isNoneTag(tag) }) &&
-		len(digests) == 0 && labels[stacks.LabelKeep] != "true"
+	return janitor.IsDangling(tags, digests) && labels[stacks.LabelKeep] != "true"
 }
 
 // sameRef says whether two image names are the same reference once written out in full, so

@@ -26,6 +26,20 @@ func hasRealName(names []string, placeholders ...string) bool {
 	})
 }
 
+// IsDangling reports whether an image with these tags and digest references has no name, in the
+// strict sense the janitor removes (D-07): no real tag and no digest reference, the engine's
+// placeholders <none>, <none>:<none> and <none>@<none> being no name. The planner and the remover's
+// check just before a removal both ask it, so the two never disagree on an image.
+func IsDangling(tags, digests []string) bool {
+	return !hasRealName(tags, noneTag, noneTagTag) && !hasRealName(digests, noneDigest)
+}
+
+// IsPlaceholder reports whether name is one of the engine's words for no name, which is not a name an
+// engine can be asked to untag.
+func IsPlaceholder(name string) bool {
+	return name == "" || name == noneTag || name == noneTagTag || name == noneDigest
+}
+
 // shortImageID is how an image is named in the plan: its ID without sha256:, twelve characters.
 func shortImageID(id string) string {
 	id = strings.TrimPrefix(id, "sha256:")
@@ -55,7 +69,7 @@ func shortImageID(id string) string {
 // usedOnNode and serviceRef are the answers to rules 2 and 4 for this image; servicesRead is true
 // for an environment that is not a swarm.
 func ClassifyImage(img Image, usedOnNode, serviceRef, servicesRead bool, p Policy, now time.Time) (Item, bool) {
-	if hasRealName(img.RepoTags, noneTag, noneTagTag) || hasRealName(img.RepoDigests, noneDigest) {
+	if !IsDangling(img.RepoTags, img.RepoDigests) {
 		return Item{}, false
 	}
 	if usedOnNode {

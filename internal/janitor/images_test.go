@@ -278,3 +278,25 @@ func TestImageOrder(t *testing.T) {
 		t.Fatalf("order = %v, want %v whatever the order read", got, want)
 	}
 }
+
+// IsDangling is the one test of "no name" that the planner and the remover share (WR-02): the
+// engine's placeholders are no name, and anything else is one.
+func TestIsDangling(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		tags, digests []string
+		want          bool
+	}{
+		{nil, nil, true},
+		{[]string{"<none>:<none>"}, []string{"<none>@<none>"}, true},
+		{[]string{"<none>"}, []string{""}, true},
+		{[]string{"app:1"}, nil, false},
+		{nil, []string{"app@sha256:" + "b"}, false},
+		{[]string{"<none>:<none>"}, []string{"app@sha256:b"}, false},
+	}
+	for _, c := range cases {
+		if got := IsDangling(c.tags, c.digests); got != c.want {
+			t.Errorf("IsDangling(%q, %q) = %v, want %v", c.tags, c.digests, got, c.want)
+		}
+	}
+}

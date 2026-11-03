@@ -442,7 +442,10 @@ func (f *Fake) serveImageRemove(w http.ResponseWriter, r *http.Request, p string
 	}
 	force := r.URL.Query().Get("force") != ""
 	byID := fi.ID == name || strings.TrimPrefix(fi.ID, "sha256:") == name
-	names := append(slices.Clone(fi.RepoTags), fi.RepoDigests...)
+	// <none>:<none> and <none>@<none> are an engine's words for no name, not names.
+	names := slices.DeleteFunc(append(slices.Clone(fi.RepoTags), fi.RepoDigests...), func(n string) bool {
+		return n == "<none>:<none>" || n == "<none>@<none>" || n == "<none>"
+	})
 	users := f.imageUsers(cfg, fi.ID)
 	short := strings.TrimPrefix(fi.ID, "sha256:")[:min(12, len(strings.TrimPrefix(fi.ID, "sha256:")))]
 	if !force {

@@ -96,3 +96,26 @@ func TestJanitorImageRecheckedOnTheNode(t *testing.T) {
 		})
 	}
 }
+
+// An engine that lists a dangling image with the placeholders <none>:<none> and <none>@<none> lists
+// it as having no name, and the remover reads the placeholders the way the planner does (WR-02): the
+// image the preview lists as removable is removed, by its ID alone, and never refused as not
+// dangling run after run.
+func TestJanitorRemovesDanglingImageWithPlaceholders(t *testing.T) {
+	t.Parallel()
+	img := danglingImage("a")
+	img.RepoTags, img.RepoDigests = []string{"<none>:<none>"}, []string{"<none>@<none>"}
+	f, e := dashEnv(t, janitorImageEngine(img))
+	preview := f.previewJanitor(t, e)
+	if len(preview.Items) != 1 || preview.Items[0].Ref != img.ID || preview.Items[0].Class != "removable" {
+		t.Fatalf("preview items = %+v, want the image removable", preview.Items)
+	}
+	job, started := f.cleanNow(t, e, preview.Items[0])
+	if job.State != jobs.JobDone || len(job.Items) != 1 || job.Items[0].State != jobs.ItemDone {
+		run := f.runRecord(t, e, started.RunID)
+		t.Fatalf("job = %s items %+v run items %v, want the image removed", job.State, job.Items, runItems(run))
+	}
+	if w := f.fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "DELETE /images/"+img.ID) {
+		t.Fatalf("writes = %v, want one DELETE of the image by its ID and no untag of a placeholder", w)
+	}
+}
