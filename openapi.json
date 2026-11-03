@@ -12571,6 +12571,59 @@
         ],
         "type": "object"
       },
+      "SchedulePreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "nextRuns": {
+            "description": "The next three runs in the server's time zone, with this environment's start offset; empty when the expression is not valid",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "problem": {
+            "description": "Why it is not accepted: invalid when it is not a five-field cron expression the janitor can use, too_frequent when two of its next ten firings are less than 15 minutes apart. Empty when valid",
+            "enum": [
+              "",
+              "invalid",
+              "too_frequent"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "description": "The server's time zone the expression is read in",
+            "type": "string"
+          },
+          "valid": {
+            "description": "Whether the janitor accepts the expression",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "problem",
+          "nextRuns",
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "SchedulePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "schedule": {
+            "description": "A five-field cron expression, such as 0 3 * * *",
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule"
+        ],
+        "type": "object"
+      },
       "ScheduleRunBody": {
         "additionalProperties": false,
         "properties": {
@@ -27115,6 +27168,67 @@
           }
         },
         "summary": "Read the crash evidence of a container a janitor run removed",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/schedule-preview": {
+      "post": {
+        "description": "Checks a cron expression and answers the next three times it would run in the server's time zone, with this environment's start offset, so the page shows what a schedule does before it is saved. An expression is valid when the janitor can read it as five fields and no two of its next ten firings are less than 15 minutes apart. An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.",
+        "operationId": "previewJanitorSchedule",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview a janitor schedule",
         "tags": [
           "environments"
         ]

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -132,6 +133,50 @@ func nextRun(s cron.Schedule, envID string, now time.Time, loc *time.Location) t
 		probe = base
 	}
 	return time.Time{}
+}
+
+// NextRuns are the next n runs, in order. It stops short when the schedule has no more.
+func NextRuns(spec, envID string, now time.Time, loc *time.Location, n int) ([]time.Time, error) {
+	s, err := ParseSchedule(spec)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]time.Time, 0, n)
+	at := now
+	for range n {
+		at = nextRun(s, envID, at, loc)
+		if at.IsZero() {
+			break
+		}
+		out = append(out, at)
+	}
+	return out, nil
+}
+
+// PresetCron is the cron expression of a preset. hhmm is the time of day ("03:00") for daily and
+// weekly, and weekday the day for weekly, 0 for Sunday to 6 for Saturday. PresetCustom has no
+// expression of its own.
+func PresetCron(preset, hhmm string, weekday int) (string, error) {
+	switch preset {
+	case PresetHourly:
+		return "0 * * * *", nil
+	case PresetEvery6h:
+		return "0 */6 * * *", nil
+	case PresetDaily, PresetWeekly:
+		t, err := time.Parse("15:04", hhmm)
+		if err != nil {
+			return "", fmt.Errorf("%w: the time of day %q is not HH:MM", ErrInvalidSchedule, hhmm)
+		}
+		day := "*"
+		if preset == PresetWeekly {
+			if weekday < 0 || weekday > 6 {
+				return "", fmt.Errorf("%w: the day of the week %d is not 0 to 6", ErrInvalidSchedule, weekday)
+			}
+			day = strconv.Itoa(weekday)
+		}
+		return strconv.Itoa(t.Minute()) + " " + strconv.Itoa(t.Hour()) + " * * " + day, nil
+	}
+	return "", fmt.Errorf("%w: %q is not a preset with an expression", ErrInvalidSchedule, preset)
 }
 
 // ZoneName is the name of the time zone a schedule is read in, as a person would say it: the zone's

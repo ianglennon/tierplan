@@ -1532,6 +1532,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/schedule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview a janitor schedule
+         * @description Checks a cron expression and answers the next three times it would run in the server's time zone, with this environment's start offset, so the page shows what a schedule does before it is saved. An expression is valid when the janitor can read it as five fields and no two of its next ten firings are less than 15 minutes apart. An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.
+         */
+        post: operations["previewJanitorSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor/task-history": {
         parameters: {
             query?: never;
@@ -9994,6 +10014,23 @@ export interface components {
             /** @description The display names of the nodes that run its tasks of this image, in name order */
             nodes: string[] | null;
         };
+        SchedulePreviewBody: {
+            /** @description The next three runs in the server's time zone, with this environment's start offset; empty when the expression is not valid */
+            nextRuns: string[] | null;
+            /**
+             * @description Why it is not accepted: invalid when it is not a five-field cron expression the janitor can use, too_frequent when two of its next ten firings are less than 15 minutes apart. Empty when valid
+             * @enum {string}
+             */
+            problem: "" | "invalid" | "too_frequent";
+            /** @description The server's time zone the expression is read in */
+            timezone: string;
+            /** @description Whether the janitor accepts the expression */
+            valid: boolean;
+        };
+        SchedulePreviewRequest: {
+            /** @description A five-field cron expression, such as 0 3 * * * */
+            schedule: string;
+        };
         ScheduleRunBody: {
             /**
              * Format: date-time
@@ -16905,6 +16942,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JanitorEvidenceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewJanitorSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SchedulePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulePreviewBody"];
                 };
             };
             /** @description Error */

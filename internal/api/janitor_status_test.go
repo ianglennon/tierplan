@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -97,5 +98,112 @@ func TestJanitorStatusNextRun(t *testing.T) {
 	}
 	if got.Active == nil || got.Active.RunID != "run-waiting" || got.Active.JobID != "job-1" || got.Active.State != "waiting" {
 		t.Errorf("active = %+v, want the waiting run with its job", got.Active)
+	}
+}
+
+// A policy that is off has no next run, and the preset of one written by hand reads custom.
+func TestJanitorStatusDisabledAndCustom(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(3)), nil)
+	s.janitorPolicy = func() janitor.Policy {
+		p := janitor.DefaultPolicy()
+		p.Enabled, p.Schedule, p.SchedulePreset = false, "0 */4 * * *", "custom"
+		return p
+	}
+	rec, got := s.janitorStatus(t, s.env.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status: %d %s", rec.code, rec.body)
+	}
+	if got.Enabled || got.NextRunAt != nil || got.Schedule != "0 */4 * * *" || got.SchedulePreset != "custom" {
+		t.Errorf("status = %+v, want off with no next run, and the custom schedule it has", got)
+	}
+	// A preset the API does not know reads custom rather than a word the client cannot place.
+	s.janitorPolicy = func() janitor.Policy {
+		p := janitor.DefaultPolicy()
+		p.SchedulePreset = "nonsense"
+		return p
+	}
+	if _, got = s.janitorStatus(t, s.env.ID); got.SchedulePreset != "custom" || got.NextRunAt == nil {
+		t.Errorf("status = %+v, want the unknown preset read as custom", got)
+	}
+	// An environment that does not exist is not found.
+	if rec, _ := s.janitorStatus(t, "no-such-env"); rec.code != http.StatusNotFound {
+		t.Errorf("status of an unknown environment = %d, want 404", rec.code)
+	}
+}
+
+// schedulePreview is the answer of POST /api/env/{envId}/janitor/schedule-preview.
+type schedulePreview struct {
+	Valid    bool     `json:"valid"`
+	Problem  string   `json:"problem"`
+	NextRuns []string `json:"nextRuns"`
+	Timezone string   `json:"timezone"`
+}
+
+func (s *swarmFix) previewSchedule(t *testing.T, spec string) (*envRec, schedulePreview) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"schedule": spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/janitor/schedule-preview", string(body))
+	var got schedulePreview
+	if rec.code == http.StatusOK {
+		got = decode[schedulePreview](t, rec)
+	}
+	return rec, got
+}
+
+func TestJanitorSchedulePreview(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(3)), nil)
+	now := s.clk.now()
+
+	rec, got := s.previewSchedule(t, "0 3 * * *")
+	if rec.code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.code, rec.body)
+	}
+	want, err := janitor.NextRuns("0 3 * * *", s.env.ID, now, time.Local, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Valid || got.Problem != "" || got.Timezone != janitor.ZoneName(time.Local, now) || len(got.NextRuns) != 3 {
+		t.Fatalf("preview = %+v, want valid with three runs in the server's zone", got)
+	}
+	var prev time.Time
+	for i, raw := range got.NextRuns {
+		at, err := time.Parse(time.RFC3339, raw)
+		if err != nil || !at.Equal(want[i]) {
+			t.Errorf("run %d = %q (%v), want %v: the time the scheduler fires at, with this environment's offset", i, raw, err, want[i])
+		}
+		if i > 0 && (at.Sub(prev) < 23*time.Hour || at.Sub(prev) > 25*time.Hour) {
+			t.Errorf("run %d is %v after the one before, want a day", i, at.Sub(prev))
+		}
+		prev = at
+	}
+
+	for _, c := range []struct{ spec, problem string }{
+		{"* * * * *", "too_frequent"}, {"*/10 * * * *", "too_frequent"},
+		{"bad", "invalid"}, {"", "invalid"}, {"@every 1h", "invalid"}, {"0 3 * *", "invalid"},
+	} {
+		rec, got := s.previewSchedule(t, c.spec)
+		if rec.code != http.StatusOK {
+			t.Fatalf("preview of %q: %d %s", c.spec, rec.code, rec.body)
+		}
+		if got.Valid || got.Problem != c.problem || len(got.NextRuns) != 0 || got.Timezone == "" {
+			t.Errorf("preview of %q = %+v, want not valid, %s, no runs and the zone named", c.spec, got, c.problem)
+		}
+	}
+
+	// The schedule is capped at 100 characters, and the route writes nothing.
+	long := make([]byte, 101)
+	for i := range long {
+		long[i] = '*'
+	}
+	if rec, _ := s.previewSchedule(t, string(long)); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("preview of 101 characters = %d, want 422", rec.code)
+	}
+	if n := s.runsOnRecord(t); n != 0 {
+		t.Errorf("%d runs on record after previews, want none", n)
 	}
 }

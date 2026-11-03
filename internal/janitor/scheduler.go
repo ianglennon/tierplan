@@ -54,6 +54,9 @@ type Scheduler struct {
 	Tick time.Duration
 	// Log receives what the scheduler could not do. Nil means slog.Default().
 	Log *slog.Logger
+	// Ended, when set, is told that a run the scheduler started has ended and its environment may be
+	// started again. It is the seam a test waits on instead of sleeping.
+	Ended func(envID, runID string)
 
 	mu    sync.Mutex
 	slots map[string]slot
@@ -232,6 +235,9 @@ func (s *Scheduler) startDue(ctx context.Context, id string, sl slot, now time.T
 			s.mu.Lock()
 			delete(s.active, id)
 			s.mu.Unlock()
+			if s.Ended != nil {
+				s.Ended(id, started.RunID)
+			}
 		}()
 		// A stopping server ends the wait, not the run: the hub cancels its jobs when it closes.
 		if _, err := s.Runner.Jobs.Wait(ctx, started.JobID); err != nil && ctx.Err() == nil {

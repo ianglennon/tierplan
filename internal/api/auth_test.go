@@ -103,6 +103,8 @@ type authFixture struct {
 	// scheduler is told when a test saves the backup schedule.
 	scheduler interface{ Notify() }
 	acctVault *vault.Vault
+	// janitorPolicy, when set, is the policy of every environment's janitor (plan 11-15); nil means the default.
+	janitorPolicy func() janitor.Policy
 	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
 	proxy *httpx.ProxyObserver
 	// refusals feeds the refusal_burst items of GET /api/warnings (plan 03-10); nil means none.
@@ -419,6 +421,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, AddressSpaces: addressSpaces, StackFacts: janitorFacts,
 			Runner: &janitor.Runner{
 				Engine: api.NewJanitorEngine(f.agg, addrClusters, janitorFacts, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log,
+				Policy: func(context.Context, string) (janitor.Policy, error) {
+					if f.janitorPolicy != nil {
+						return f.janitorPolicy(), nil
+					}
+					return janitor.DefaultPolicy(), nil
+				},
 				Networks: api.NewJanitorNetworks(api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Now: f.clk.now, Log: log}),
 			},
 		}

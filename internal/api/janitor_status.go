@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -18,6 +19,12 @@ import (
 // janitorStatusRuns is how many of the newest runs the status looks through for the run that is
 // working and the last one that ended.
 const janitorStatusRuns = 25
+
+// schedulePreviewRuns is how many upcoming runs the schedule preview answers.
+const schedulePreviewRuns = 3
+
+// maxSchedulePreviewBody bounds the body of a schedule preview: one expression of at most 100 characters.
+const maxSchedulePreviewBody = 4 << 10
 
 // JanitorActiveBody is the run of the environment that has not ended.
 type JanitorActiveBody struct {
@@ -51,6 +58,31 @@ type JanitorStatusOutput struct {
 	Body         JanitorStatusBody
 }
 
+// SchedulePreviewRequest is the body of POST /api/env/{envId}/janitor/schedule-preview.
+type SchedulePreviewRequest struct {
+	Schedule string `json:"schedule" maxLength:"100" doc:"A five-field cron expression, such as 0 3 * * *"`
+}
+
+// SchedulePreviewInput is the request of the schedule preview.
+type SchedulePreviewInput struct {
+	EnvironmentPathInput
+	Body SchedulePreviewRequest
+}
+
+// SchedulePreviewBody is what a schedule would do.
+type SchedulePreviewBody struct {
+	Valid    bool     `json:"valid" doc:"Whether the janitor accepts the expression"`
+	Problem  string   `json:"problem" enum:",invalid,too_frequent" doc:"Why it is not accepted: invalid when it is not a five-field cron expression the janitor can use, too_frequent when two of its next ten firings are less than 15 minutes apart. Empty when valid"`
+	NextRuns []string `json:"nextRuns" doc:"The next three runs in the server's time zone, with this environment's start offset; empty when the expression is not valid"`
+	Timezone string   `json:"timezone" doc:"The server's time zone the expression is read in"`
+}
+
+// SchedulePreviewOutput wraps SchedulePreviewBody for huma.
+type SchedulePreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         SchedulePreviewBody
+}
+
 // location is the time zone schedules are read in: the scheduler's, else the server's local zone.
 func (d JanitorDeps) location() *time.Location {
 	if d.Scheduler != nil {
@@ -81,6 +113,36 @@ func registerJanitorStatus(r *httpx.Router, d JanitorDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			return &JanitorStatusOutput{CacheControl: "no-store", Body: body}, nil
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewJanitorSchedule", Method: http.MethodPost, Path: "/api/env/{envId}/janitor/schedule-preview",
+		Summary: "Preview a janitor schedule",
+		Description: "Checks a cron expression and answers the next three times it would run in the server's time zone, with this environment's start offset, " +
+			"so the page shows what a schedule does before it is saved. An expression is valid when the janitor can read it as five fields and no two of its next ten firings are less than 15 minutes apart. " +
+			"An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.",
+		Tags: []string{"environments"}, MaxBodyBytes: maxSchedulePreviewBody,
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *SchedulePreviewInput) (*SchedulePreviewOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			now := d.now()
+			loc := d.location()
+			body := SchedulePreviewBody{NextRuns: []string{}, Timezone: janitor.ZoneName(loc, now)}
+			runs, err := janitor.NextRuns(in.Body.Schedule, env.ID, now, loc, schedulePreviewRuns)
+			switch {
+			case errors.Is(err, janitor.ErrTooFrequent):
+				body.Problem = "too_frequent"
+			case err != nil:
+				body.Problem = "invalid"
+			default:
+				body.Valid = true
+				for _, at := range runs {
+					body.NextRuns = append(body.NextRuns, at.In(loc).Format(time.RFC3339))
+				}
+			}
+			return &SchedulePreviewOutput{CacheControl: "no-store", Body: body}, nil
 		})
 }
 
