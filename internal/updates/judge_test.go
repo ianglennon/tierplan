@@ -4,10 +4,12 @@
 package updates_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -118,5 +120,218 @@ func TestJudgePlatformMatrix(t *testing.T) {
 				t.Errorf("verdict = %s changed %v note %q, want %s changed %v note %q", v.State, v.ChangedPlatforms, v.Note, tc.state, tc.changed, tc.note)
 			}
 		})
+	}
+}
+
+// The rules that decide what a badge may say (plan 12-03, D-03, IMG-04, T-12-05).
+
+func TestJudgeTable(t *testing.T) {
+	t.Parallel()
+	const stale = 18 * time.Hour
+	run := dg('1')
+	w := func(digest string) updates.Workload {
+		return updates.Workload{ID: "web", Kind: "service", Ref: registry.Ref{Domain: "docker.io", Path: "library/nginx", Tag: "1.27"}, RunningDigest: digest}
+	}
+	// ok is a check that found digest d at t0.
+	ok := func(d string) *updates.Check { return &updates.Check{Digest: d, CheckedAt: t0, SuccessAt: t0} }
+	pinned := updates.Workload{ID: "web", Kind: "service", Ref: registry.Ref{Domain: "docker.io", Path: "library/nginx", Digest: run}, RunningDigest: run}
+
+	for _, tc := range []struct {
+		name    string
+		in      updates.JudgeInput
+		state   updates.State
+		reason  updates.Reason
+		success time.Time // the SuccessAt the verdict must carry
+		remote  string
+	}{
+		{name: "no stored check", in: updates.JudgeInput{Workload: w(run), Now: t0}, state: updates.StateNotChecked},
+		{
+			name: "failed with auth after an earlier success",
+			in: updates.JudgeInput{Workload: w(run), Now: t0.Add(2 * time.Hour),
+				Check: &updates.Check{Digest: run, CheckedAt: t0.Add(time.Hour), SuccessAt: t0, Error: updates.ReasonAuth}},
+			state: updates.StateCheckFailed, reason: updates.ReasonAuth, success: t0,
+		},
+		{
+			name: "failed with no success ever",
+			in: updates.JudgeInput{Workload: w(run), Now: t0.Add(2 * time.Hour),
+				Check: &updates.Check{CheckedAt: t0.Add(time.Hour), Error: updates.ReasonUnreachable}},
+			state: updates.StateCheckFailed, reason: updates.ReasonUnreachable,
+		},
+		{
+			name:  "the remote digest is the running one, an hour old",
+			in:    updates.JudgeInput{Workload: w(run), Check: ok(run), Now: t0.Add(time.Hour), StaleAfter: stale},
+			state: updates.StateUpToDate, success: t0, remote: run,
+		},
+		{
+			name:  "the same digest, found longer ago than the bound",
+			in:    updates.JudgeInput{Workload: w(run), Check: ok(run), Now: t0.Add(30 * time.Hour), StaleAfter: 24 * time.Hour},
+			state: updates.StateCheckStale, success: t0, remote: run,
+		},
+		{
+			name:  "the remote digest differs",
+			in:    updates.JudgeInput{Workload: w(run), Check: ok(dg('9')), Now: t0.Add(time.Hour), StaleAfter: stale},
+			state: updates.StateUpdateAvailable, success: t0, remote: dg('9'),
+		},
+		{
+			name: "a failure newer than a success that had found another digest",
+			in: updates.JudgeInput{Workload: w(run), Now: t0.Add(2 * time.Hour), StaleAfter: stale,
+				Check: &updates.Check{Digest: dg('9'), CheckedAt: t0.Add(time.Hour), SuccessAt: t0, Error: updates.ReasonRateLimited}},
+			state: updates.StateCheckFailed, reason: updates.ReasonRateLimited, success: t0,
+		},
+		{
+			name:  "written as a digest with no tag, whatever the check says",
+			in:    updates.JudgeInput{Workload: pinned, Check: ok(dg('9')), Now: t0.Add(time.Hour), StaleAfter: stale},
+			state: updates.StatePinned,
+		},
+		{
+			name: "written as a digest with no tag, with a failed check",
+			in: updates.JudgeInput{Workload: pinned, Now: t0.Add(2 * time.Hour), StaleAfter: stale,
+				Check: &updates.Check{CheckedAt: t0.Add(time.Hour), Error: updates.ReasonAuth}},
+			state: updates.StatePinned,
+		},
+		{
+			name:  "a success that named no digest is not an answer",
+			in:    updates.JudgeInput{Workload: w(run), Check: &updates.Check{CheckedAt: t0, SuccessAt: t0}, Now: t0, StaleAfter: stale},
+			state: updates.StateNotChecked, success: t0,
+		},
+		{
+			name:  "the service names no digest to compare with",
+			in:    updates.JudgeInput{Workload: w(""), Check: ok(dg('9')), Now: t0, StaleAfter: stale},
+			state: updates.StateNotFromRegistry, success: t0, remote: dg('9'),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := updates.Judge(tc.in)
+			if v.State != tc.state || v.Reason != tc.reason {
+				t.Fatalf("verdict = %s (reason %q), want %s (reason %q)", v.State, v.Reason, tc.state, tc.reason)
+			}
+			if !v.SuccessAt.Equal(tc.success) {
+				t.Errorf("SuccessAt = %v, want %v", v.SuccessAt, tc.success)
+			}
+			if v.RemoteDigest != tc.remote {
+				t.Errorf("RemoteDigest = %q, want %q", v.RemoteDigest, tc.remote)
+			}
+			if v.Note != "" && v.Note != updates.NoteRunningIndexGone {
+				t.Errorf("Note = %q, want empty or a code of the note enum", v.Note)
+			}
+		})
+	}
+}
+
+// TestJudgeWrittenReference is the rule of the written reference: a spec image that carries a digest is
+// checkable when the user wrote a tag, and pinned when the user wrote a digest.
+func TestJudgeWrittenReference(t *testing.T) {
+	t.Parallel()
+	image := "docker.io/library/nginx:1.27@" + dg('1')
+	tagged, digested := row("tagged", image), row("digested", image)
+	tagged.Labels = map[string]string{"tierplan.stack.image": "nginx:1.27"}
+	digested.Labels = map[string]string{"tierplan.stack.image": "nginx@" + dg('1')}
+	for _, tc := range []struct {
+		row       dockerx.ServiceRow
+		pinned    bool
+		wantState updates.State
+	}{
+		{tagged, false, updates.StateUpToDate},
+		{digested, true, updates.StatePinned},
+	} {
+		ws := updates.ServiceWorkloads([]dockerx.ServiceRow{tc.row})
+		if len(ws) != 1 {
+			t.Fatalf("%s: %d workloads", tc.row.ID, len(ws))
+		}
+		if ws[0].PinnedInFile() != tc.pinned || ws[0].Checkable() == tc.pinned {
+			t.Errorf("%s: pinned = %v, checkable = %v, want pinned %v", tc.row.ID, ws[0].PinnedInFile(), ws[0].Checkable(), tc.pinned)
+		}
+		chk := &updates.Check{Digest: dg('1'), CheckedAt: t0, SuccessAt: t0}
+		if v := updates.Judge(updates.JudgeInput{Workload: ws[0], Check: chk, Now: t0, StaleAfter: time.Hour}); v.State != tc.wantState {
+			t.Errorf("%s: state = %s, want %s", tc.row.ID, v.State, tc.wantState)
+		}
+	}
+}
+
+// TestJudgeNeverUpToDateWithoutFreshSuccess runs Judge over every combination of a check that is
+// missing, failed, stale or fresh, a digest that is equal or not, and platform data that is complete,
+// partial or absent, and asserts the one rule that matters: up_to_date is only ever said for a fresh
+// success whose running digest is the remote one, or whose every platform the workload runs on has the
+// same manifest in both.
+func TestJudgeNeverUpToDateWithoutFreshSuccess(t *testing.T) {
+	t.Parallel()
+	const stale = 24 * time.Hour
+	now := t0.Add(48 * time.Hour)
+	run := dg('1')
+	same := map[string]string{"linux/amd64": dg('a'), "linux/arm64": dg('b')}
+	moved := map[string]string{"linux/amd64": dg('a'), "linux/arm64": dg('f')}
+	movedAmd := map[string]string{"linux/amd64": dg('e'), "linux/arm64": dg('b')}
+
+	type chkCase struct {
+		name string
+		c    *updates.Check
+	}
+	fresh, old := now.Add(-time.Hour), now.Add(-30*time.Hour)
+	var checks []chkCase
+	checks = append(checks, chkCase{"missing", nil})
+	for _, digest := range []string{"", run, dg('9')} {
+		for _, index := range []bool{false, true} {
+			for _, p := range []map[string]string{nil, same, moved, movedAmd} {
+				for _, when := range []struct {
+					name      string
+					chk, succ time.Time
+					errCode   updates.Reason
+				}{
+					{"fresh", fresh, fresh, ""},
+					{"stale", old, old, ""},
+					{"never", fresh, time.Time{}, updates.ReasonOther},
+					{"failed-after-fresh", fresh, fresh.Add(-time.Minute), updates.ReasonAuth},
+					{"failed-after-stale", fresh, old, updates.ReasonUnreachable},
+					{"failed-before-success", old, fresh, updates.ReasonAuth},
+				} {
+					checks = append(checks, chkCase{
+						name: fmt.Sprintf("digest=%q index=%v platforms=%d %s", digest, index, len(p), when.name),
+						c:    &updates.Check{Digest: digest, Index: index, Platforms: p, CheckedAt: when.chk, SuccessAt: when.succ, Error: when.errCode},
+					})
+				}
+			}
+		}
+	}
+	workloads := []updates.Workload{
+		{RunningDigest: run, Ref: registry.Ref{Tag: "1"}},
+		{RunningDigest: run, Ref: registry.Ref{Tag: "1"}, Platforms: []string{"linux/amd64"}},
+		{RunningDigest: run, Ref: registry.Ref{Tag: "1"}, Platforms: []string{"linux/amd64", "linux/arm64"}},
+		{RunningDigest: "", Ref: registry.Ref{Tag: "1"}},
+		{RunningDigest: run, Ref: registry.Ref{Digest: run}},
+	}
+	runs := []map[string]string{nil, same, moved, {"linux/amd64": dg('a')}}
+
+	for _, w := range workloads {
+		for _, cc := range checks {
+			for _, rp := range runs {
+				for _, gone := range []bool{false, true} {
+					v := updates.Judge(updates.JudgeInput{Workload: w, Check: cc.c, Now: now, StaleAfter: stale, RunPlatforms: rp, RunIndexGone: gone})
+					if v.State != updates.StateUpToDate {
+						continue
+					}
+					c := cc.c
+					if c == nil {
+						t.Fatalf("up_to_date with no stored check: workload %+v", w)
+					}
+					failedNewer := c.Error != "" && c.CheckedAt.After(c.SuccessAt)
+					freshSuccess := !c.SuccessAt.IsZero() && now.Sub(c.SuccessAt) <= stale
+					if failedNewer || !freshSuccess || c.Digest == "" || w.RunningDigest == "" || w.PinnedInFile() {
+						t.Fatalf("up_to_date without a fresh success of a digest: check %s, workload %+v", cc.name, w)
+					}
+					if c.Digest != w.RunningDigest {
+						// Only a multi-platform tag, and only when everything the workload runs on is the same.
+						if gone || !c.Index || len(c.Platforms) == 0 || len(w.Platforms) == 0 {
+							t.Fatalf("up_to_date with another digest and no platform proof: check %s, workload %+v, gone %v", cc.name, w, gone)
+						}
+						for _, p := range w.Platforms {
+							if c.Platforms[p] == "" || c.Platforms[p] != rp[p] {
+								t.Fatalf("up_to_date though platform %s differs: check %s, run platforms %v", p, cc.name, rp)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }
