@@ -105,7 +105,16 @@ type Snapshot struct {
 	// NodeTimes is the time each node's engine reported when it was read, by node ID. A node whose
 	// engine did not say what time it is has no entry (or the zero time).
 	NodeTimes map[string]time.Time
-	ReadAt    time.Time
+	// Keeps are the objects a person kept out of cleanup from the Janitor page (D-12), read with the
+	// snapshot so a preview and every run judge by the same ones. A container or image with a keep is
+	// never removed. Nil means none.
+	Keeps  map[KeepKey]bool
+	ReadAt time.Time
+}
+
+// kept reports whether a person kept the container or image of kind k, on node nodeID, with ID ref.
+func (s Snapshot) kept(k Kind, nodeID, ref string) bool {
+	return s.Keeps[KeepKey{Kind: k, NodeID: nodeID, Ref: ref}]
 }
 
 // ContainerEnd is how a container ended: what a list does not carry and an inspect does.

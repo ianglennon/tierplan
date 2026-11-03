@@ -189,3 +189,22 @@ WHERE (CAST(sqlc.arg(env_id) AS TEXT) = '' OR janitor_runs.env_id = sqlc.arg(env
   AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
                               WHERE k.env_id = janitor_runs.env_id
                               ORDER BY k.started_at DESC, k.id DESC LIMIT sqlc.arg(keep));
+
+-- name: ListJanitorKeeps :many
+-- Every keep of one environment, of any kind (network, container or image): what a person chose to
+-- keep out of cleanup (D-12). ref is a network's name, a container's ID or an image's ID.
+SELECT kind, node_id, ref, name, kept_by, kept_at FROM janitor_keeps
+WHERE env_id = ?
+ORDER BY kind, name, node_id, ref;
+
+-- name: InsertJanitorKeep :execrows
+-- A second keep of the same object keeps the first (who kept it and when); zero rows means it was
+-- kept already.
+INSERT INTO janitor_keeps (env_id, kind, node_id, ref, name, kept_by, kept_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (env_id, kind, node_id, ref) DO NOTHING;
+
+-- name: DeleteJanitorKeep :execrows
+-- Takes one keep back; zero rows means there was none.
+DELETE FROM janitor_keeps
+WHERE env_id = ? AND kind = ? AND node_id = ? AND ref = ?;

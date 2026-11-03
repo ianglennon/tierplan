@@ -280,3 +280,55 @@ func TestClockSkewRail(t *testing.T) {
 		}
 	})
 }
+
+// D-12: a container or image with a keep row is never removable, whatever the rules say, and is listed
+// protected (kept_row) with its place in the group kept; a label's own, more specific, reason stays, and a
+// keep on another node, another kind or another ref changes nothing. Candidates does not inspect it.
+func TestBuildKeptRowProtects(t *testing.T) {
+	t.Parallel()
+	var cs []Container
+	for i := range 5 {
+		cs = append(cs, task(fmt.Sprintf("c%d", i+1), "1", i))
+	}
+	labelled := task("c0", "1", -1)
+	labelled.Labels[keepLabel] = "true"
+	cs = append(cs, labelled)
+	s := swarmOf(cs...)
+	img := bareImage("ia", 3*24*time.Hour)
+	img2 := bareImage("ib", 3*24*time.Hour)
+	s.Images = []Image{img, img2}
+	s.ServicesRead = true
+	s.Keeps = map[KeepKey]bool{
+		{Kind: KindContainer, NodeID: "n1-id", Ref: "c1"}:       true,
+		{Kind: KindContainer, NodeID: "n1-id", Ref: "c0"}:       true,
+		{Kind: KindContainer, NodeID: "other", Ref: "c2"}:       true, // another node's c2
+		{Kind: KindImage, NodeID: img.NodeID, Ref: "sha256:ia"}: true,
+		{Kind: KindNetwork, NodeID: "n1-id", Ref: "c3"}:         true, // a network, not the container
+	}
+
+	for _, r := range Candidates(s, DefaultPolicy()) {
+		if r.ID == "c1" {
+			t.Errorf("candidate %+v is kept: nothing of it is inspected", r)
+		}
+	}
+	got := planOf(s, DefaultPolicy())
+	if want := []string{"c2", "c3", "sha256:ib"}; !reflect.DeepEqual(refs(got.Items), want) {
+		t.Fatalf("items = %v, want %v: the kept c1 and the kept image are left", refs(got.Items), want)
+	}
+	byRef := map[string]Item{}
+	for _, it := range got.NotRemoved {
+		byRef[it.Ref] = it
+	}
+	for _, id := range []string{"c1", "sha256:ia"} {
+		it, ok := byRef[id]
+		if !ok || it.Class != ClassProtected || it.Reason.Code != ReasonKeptRow || it.Age != 0 {
+			t.Errorf("%s = %+v (listed %v), want protected kept_row", id, it, ok)
+		}
+	}
+	if it := byRef["c1"]; it.Reason.Service != "web" || it.Reason.Slot != "1" {
+		t.Errorf("c1 reason = %+v, want it to keep naming its service and slot", it.Reason)
+	}
+	if it := byRef["c0"]; it.Class != ClassProtected || it.Reason.Code != ReasonKeptLabel {
+		t.Errorf("c0 = %+v, want the keep label's own, more specific reason", it)
+	}
+}

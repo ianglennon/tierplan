@@ -1448,6 +1448,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/keeps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List what is kept out of cleanup
+         * @description Every keep of the environment, whether or not its object exists now, and every container, image and network that carries the tierplan.keep=true label (keptBy label). An object that has both is one item. Needs environments.read on the environment.
+         */
+        get: operations["listJanitorKeeps"];
+        /**
+         * Keep containers, images and networks out of cleanup
+         * @description Stores a keep for each target (1 to 100) in one transaction: the janitor never removes a kept container, image or network, by a schedule or by Clean now. Each target is checked against a fresh read of the environment; 404 not_found when one is not there. An object that is kept already changes and records nothing. Each new keep is audited as janitor.kept. 422 node_required when a container, an image or a local network is on more than one node and no nodeId is given. The keeps are the table the Address space page keeps networks in, so a network kept here is kept there. Needs janitor.run (Env Admin) on the environment.
+         */
+        put: operations["keepJanitorItems"];
+        post?: never;
+        /**
+         * Stop keeping a container, image or network out of cleanup
+         * @description Removes the keep of one object (kind, nodeId and ref in the query), audited as janitor.unkept. 404 keep_not_found when it is not kept by a person. 409 kept_by_label when it is kept by the tierplan.keep=true label on it, which only its owner can remove. 422 node_required when the same ref is kept on more than one node and no nodeId is given. Needs janitor.run (Env Admin) on the environment.
+         */
+        delete: operations["unkeepJanitorItem"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor/nodes/{nodeId}": {
         parameters: {
             query?: never;
@@ -8223,6 +8251,58 @@ export interface components {
              * @enum {string}
              */
             trigger: "schedule" | "manual";
+        };
+        JanitorKeepBody: {
+            /**
+             * Format: int64
+             * @description How many objects are newly kept. One that was kept already changes and records nothing and is not counted
+             */
+            kept: number;
+        };
+        JanitorKeepRequest: {
+            /** @description The containers, images and networks to keep, 1 to 100 */
+            targets: components["schemas"]["JanitorKeepTarget"][] | null;
+        };
+        JanitorKeepTarget: {
+            /**
+             * @description What is kept
+             * @enum {string}
+             */
+            kind: "network" | "container" | "image";
+            /** @description The node the container or image is on: the nodeId of its row. For a local network, the node it is on; left out for a swarm-wide network, and when only one node has it */
+            nodeId?: string;
+            /** @description The container's ID, the image's ID, or the network's name (a keep follows the name, so it holds for a network of that name made again) */
+            ref: string;
+        };
+        JanitorKeptBody: {
+            /** @description Every keep of the environment and every container, image and network that carries the keep label, by kind, name and node */
+            items: components["schemas"]["JanitorKeptItem"][] | null;
+        };
+        JanitorKeptItem: {
+            /**
+             * Format: date-time
+             * @description When it was kept; absent when kept by label alone
+             */
+            keptAt?: string;
+            /**
+             * @description label: it carries the tierplan.keep=true label, which only its owner can remove. user: a person kept it
+             * @enum {string}
+             */
+            keptBy: "label" | "user";
+            /** @description The display name of the person who kept it; empty when kept by label or when that person is not known */
+            keptByName: string;
+            /** @enum {string} */
+            kind: "network" | "container" | "image";
+            /** @description What to call it: the container's name, the image's first tag or short ID, the network's name */
+            name: string;
+            /** @description The node's name, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known */
+            node: string;
+            /** @description The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network */
+            nodeId: string;
+            /** @description True when the object exists now. A keep outlives its object, and a network of the same name made again is still kept */
+            present: boolean;
+            /** @description The container's ID, the image's ID, or the network's name */
+            ref: string;
         };
         JanitorNodeBody: {
             /** @description Whether the janitor cleans this node. Off leaves everything on the node alone, in scheduled runs and in Clean now. Not overridden means it follows the environment */
@@ -17117,6 +17197,113 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["JanitorStatusBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listJanitorKeeps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorKeptBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    keepJanitorItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorKeepRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorKeepBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unkeepJanitorItem: {
+        parameters: {
+            query: {
+                /** @description What is kept */
+                kind: "network" | "container" | "image";
+                /** @description The node the keep is for: the nodeId of its row. Left out for a swarm-wide network, and when only one node has the object */
+                nodeId?: string;
+                /** @description The container's ID, the image's ID, or the network's name */
+                ref: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

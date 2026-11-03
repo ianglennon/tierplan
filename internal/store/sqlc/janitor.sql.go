@@ -70,6 +70,32 @@ func (q *Queries) CountJanitorRunsToPrune(ctx context.Context, arg CountJanitorR
 	return i, err
 }
 
+const deleteJanitorKeep = `-- name: DeleteJanitorKeep :execrows
+DELETE FROM janitor_keeps
+WHERE env_id = ? AND kind = ? AND node_id = ? AND ref = ?
+`
+
+type DeleteJanitorKeepParams struct {
+	EnvID  string
+	Kind   string
+	NodeID string
+	Ref    string
+}
+
+// Takes one keep back; zero rows means there was none.
+func (q *Queries) DeleteJanitorKeep(ctx context.Context, arg DeleteJanitorKeepParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteJanitorKeep,
+		arg.EnvID,
+		arg.Kind,
+		arg.NodeID,
+		arg.Ref,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteJanitorNodePolicy = `-- name: DeleteJanitorNodePolicy :execrows
 DELETE FROM janitor_node_policy WHERE env_id = ? AND node_id = ?
 `
@@ -381,6 +407,40 @@ func (q *Queries) InsertJanitorEvidence(ctx context.Context, arg InsertJanitorEv
 	return err
 }
 
+const insertJanitorKeep = `-- name: InsertJanitorKeep :execrows
+INSERT INTO janitor_keeps (env_id, kind, node_id, ref, name, kept_by, kept_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (env_id, kind, node_id, ref) DO NOTHING
+`
+
+type InsertJanitorKeepParams struct {
+	EnvID  string
+	Kind   string
+	NodeID string
+	Ref    string
+	Name   string
+	KeptBy string
+	KeptAt int64
+}
+
+// A second keep of the same object keeps the first (who kept it and when); zero rows means it was
+// kept already.
+func (q *Queries) InsertJanitorKeep(ctx context.Context, arg InsertJanitorKeepParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertJanitorKeep,
+		arg.EnvID,
+		arg.Kind,
+		arg.NodeID,
+		arg.Ref,
+		arg.Name,
+		arg.KeptBy,
+		arg.KeptAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertJanitorRun = `-- name: InsertJanitorRun :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The TierPlan Authors */
@@ -471,6 +531,53 @@ func (q *Queries) ListJanitorEvidenceSeqs(ctx context.Context, runID string) ([]
 			return nil, err
 		}
 		items = append(items, seq)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJanitorKeeps = `-- name: ListJanitorKeeps :many
+SELECT kind, node_id, ref, name, kept_by, kept_at FROM janitor_keeps
+WHERE env_id = ?
+ORDER BY kind, name, node_id, ref
+`
+
+type ListJanitorKeepsRow struct {
+	Kind   string
+	NodeID string
+	Ref    string
+	Name   string
+	KeptBy string
+	KeptAt int64
+}
+
+// Every keep of one environment, of any kind (network, container or image): what a person chose to
+// keep out of cleanup (D-12). ref is a network's name, a container's ID or an image's ID.
+func (q *Queries) ListJanitorKeeps(ctx context.Context, envID string) ([]ListJanitorKeepsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listJanitorKeeps, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJanitorKeepsRow
+	for rows.Next() {
+		var i ListJanitorKeepsRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.NodeID,
+			&i.Ref,
+			&i.Name,
+			&i.KeptBy,
+			&i.KeptAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

@@ -23,6 +23,9 @@ import (
 // is not connected is ErrNodeOffline. Any other failure is a *janitor.CodedError with the Images
 // API's own code.
 func (e *janitorEngine) RemoveImage(ctx context.Context, envID, nodeID, imageID string) error {
+	if err := e.stillNotKept(ctx, envID, janitor.KindImage, nodeID, imageID); err != nil {
+		return err
+	}
 	d := ImagesDeps{Aggregator: e.agg, Clusters: e.clusters, Log: e.log}
 	chk, err := readImageCheck(ctx, d, envID)
 	if err != nil {

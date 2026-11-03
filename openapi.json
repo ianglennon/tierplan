@@ -7925,6 +7925,152 @@
         ],
         "type": "object"
       },
+      "JanitorKeepBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kept": {
+            "description": "How many objects are newly kept. One that was kept already changes and records nothing and is not counted",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kept"
+        ],
+        "type": "object"
+      },
+      "JanitorKeepRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "targets": {
+            "description": "The containers, images and networks to keep, 1 to 100",
+            "items": {
+              "$ref": "#/components/schemas/JanitorKeepTarget"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "type": "object"
+      },
+      "JanitorKeepTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "What is kept",
+            "enum": [
+              "network",
+              "container",
+              "image"
+            ],
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the container or image is on: the nodeId of its row. For a local network, the node it is on; left out for a swarm-wide network, and when only one node has it",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "ref": {
+            "description": "The container's ID, the image's ID, or the network's name (a keep follows the name, so it holds for a network of that name made again)",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "JanitorKeptBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Every keep of the environment and every container, image and network that carries the keep label, by kind, name and node",
+            "items": {
+              "$ref": "#/components/schemas/JanitorKeptItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "JanitorKeptItem": {
+        "additionalProperties": false,
+        "properties": {
+          "keptAt": {
+            "description": "When it was kept; absent when kept by label alone",
+            "format": "date-time",
+            "type": "string"
+          },
+          "keptBy": {
+            "description": "label: it carries the tierplan.keep=true label, which only its owner can remove. user: a person kept it",
+            "enum": [
+              "label",
+              "user"
+            ],
+            "type": "string"
+          },
+          "keptByName": {
+            "description": "The display name of the person who kept it; empty when kept by label or when that person is not known",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "network",
+              "container",
+              "image"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "What to call it: the container's name, the image's first tag or short ID, the network's name",
+            "type": "string"
+          },
+          "node": {
+            "description": "The node's name, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network",
+            "type": "string"
+          },
+          "present": {
+            "description": "True when the object exists now. A keep outlives its object, and a network of the same name made again is still kept",
+            "type": "boolean"
+          },
+          "ref": {
+            "description": "The container's ID, the image's ID, or the network's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "nodeId",
+          "node",
+          "ref",
+          "name",
+          "keptBy",
+          "keptByName",
+          "present"
+        ],
+        "type": "object"
+      },
       "JanitorNodeBody": {
         "additionalProperties": false,
         "properties": {
@@ -27469,6 +27615,191 @@
           }
         },
         "summary": "Read the state of an environment's janitor",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/keeps": {
+      "delete": {
+        "description": "Removes the keep of one object (kind, nodeId and ref in the query), audited as janitor.unkept. 404 keep_not_found when it is not kept by a person. 409 kept_by_label when it is kept by the tierplan.keep=true label on it, which only its owner can remove. 422 node_required when the same ref is kept on more than one node and no nodeId is given. Needs janitor.run (Env Admin) on the environment.",
+        "operationId": "unkeepJanitorItem",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "What is kept",
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "description": "What is kept",
+              "enum": [
+                "network",
+                "container",
+                "image"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The node the keep is for: the nodeId of its row. Left out for a swarm-wide network, and when only one node has the object",
+            "explode": false,
+            "in": "query",
+            "name": "nodeId",
+            "schema": {
+              "description": "The node the keep is for: the nodeId of its row. Left out for a swarm-wide network, and when only one node has the object",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The container's ID, the image's ID, or the network's name",
+            "explode": false,
+            "in": "query",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "The container's ID, the image's ID, or the network's name",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop keeping a container, image or network out of cleanup",
+        "tags": [
+          "environments"
+        ]
+      },
+      "get": {
+        "description": "Every keep of the environment, whether or not its object exists now, and every container, image and network that carries the tierplan.keep=true label (keptBy label). An object that has both is one item. Needs environments.read on the environment.",
+        "operationId": "listJanitorKeeps",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorKeptBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List what is kept out of cleanup",
+        "tags": [
+          "environments"
+        ]
+      },
+      "put": {
+        "description": "Stores a keep for each target (1 to 100) in one transaction: the janitor never removes a kept container, image or network, by a schedule or by Clean now. Each target is checked against a fresh read of the environment; 404 not_found when one is not there. An object that is kept already changes and records nothing. Each new keep is audited as janitor.kept. 422 node_required when a container, an image or a local network is on more than one node and no nodeId is given. The keeps are the table the Address space page keeps networks in, so a network kept here is kept there. Needs janitor.run (Env Admin) on the environment.",
+        "operationId": "keepJanitorItems",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JanitorKeepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorKeepBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Keep containers, images and networks out of cleanup",
         "tags": [
           "environments"
         ]

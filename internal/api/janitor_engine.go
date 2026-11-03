@@ -42,6 +42,8 @@ type janitorEngine struct {
 	// facts are TierPlan's own stacks, which say whether the stack or project a container is
 	// labelled with still exists. Nil means they are not read, and no compose container is removable.
 	facts envs.StackFacts
+	// keeps are the objects a person kept out of cleanup. The zero value has none.
+	keeps janitor.KeepStore
 	log   *slog.Logger
 }
 
@@ -50,12 +52,28 @@ var _ janitor.Engine = (*janitorEngine)(nil)
 // NewJanitorEngine is the janitor's engine over the server's aggregator and cluster reader, for
 // the Runner the server builds. clusters may be nil on a server with no swarm reader; facts are the
 // stacks of the environment (the same ones the Address space check reads), nil when there are none to
-// ask, in which case no compose container is ever removable; log nil means slog.Default().
-func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, facts envs.StackFacts, log *slog.Logger) janitor.Engine {
+// ask, in which case no compose container is ever removable; keeps are the objects a person kept out of
+// cleanup, read with every snapshot and again just before a removal (a KeepStore with no store has none);
+// log nil means slog.Default().
+func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, facts envs.StackFacts, keeps janitor.KeepStore, log *slog.Logger) janitor.Engine {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &janitorEngine{agg: agg, clusters: clusters, facts: facts, log: log}
+	return &janitorEngine{agg: agg, clusters: clusters, facts: facts, keeps: keeps, log: log}
+}
+
+// stillNotKept reads the keeps again and answers janitor.ErrNoLongerStale when a person has kept the
+// object since the run planned, so a keep made while a run is under way is still honoured (D-12). A
+// keep that cannot be read stops the removal: an object is never removed on a guess.
+func (e *janitorEngine) stillNotKept(ctx context.Context, envID string, kind janitor.Kind, nodeID, ref string) error {
+	keeps, err := e.keeps.List(ctx, envID)
+	if err != nil {
+		return &janitor.CodedError{Code: janitor.CodeActionFailed, Err: err}
+	}
+	if keeps[janitor.KeepKey{Kind: kind, NodeID: nodeID, Ref: ref}] {
+		return janitor.ErrNoLongerStale
+	}
+	return nil
 }
 
 // Snapshot implements janitor.Engine.
@@ -88,6 +106,10 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 		})
 	}
 	e.readStacks(ctx, envID, &snap)
+	// A keep that cannot be read fails the snapshot: judging without it could remove what a person kept.
+	if snap.Keeps, err = e.keeps.List(ctx, envID); err != nil {
+		return janitor.Snapshot{}, err
+	}
 	snap.NodeTimes = e.readNodeTimes(ctx, envID, agg.Nodes)
 	if e.clusters == nil {
 		return snap, nil
@@ -254,6 +276,9 @@ const removeContainerTimeout = time.Minute
 func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, removeContainerTimeout)
 	defer cancel()
+	if err := e.stillNotKept(ctx, envID, janitor.KindContainer, nodeID, id); err != nil {
+		return err
+	}
 	err := e.agg.WriteOnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
 		d, _, err := c.ContainerDetail(ctx, id)
 		if err != nil {

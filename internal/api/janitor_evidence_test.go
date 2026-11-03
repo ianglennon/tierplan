@@ -282,7 +282,7 @@ func TestJanitorEvidenceMasksTheStacksSecrets(t *testing.T) {
 	ctx := testsupport.Context(t)
 
 	facts := maskingFacts{masker: stacks.NewMasker([]stacks.Var{{Name: "DB_PASS", Value: "STACK-SECRET-VALUE", Secret: true}}, nil)}
-	src, err := api.NewJanitorEngine(s.agg, s.clusters, facts, nil).Evidence(ctx, s.env.ID, node, "web-x1")
+	src, err := api.NewJanitorEngine(s.agg, s.clusters, facts, janitor.KeepStore{}, nil).Evidence(ctx, s.env.ID, node, "web-x1")
 	if err != nil {
 		t.Fatalf("Evidence: %v", err)
 	}
@@ -297,12 +297,12 @@ func TestJanitorEvidenceMasksTheStacksSecrets(t *testing.T) {
 
 	// While the stack's values cannot be read, no line of the log is kept.
 	bad := maskingFacts{err: errors.New("the record is unreadable")}
-	src, err = api.NewJanitorEngine(s.agg, s.clusters, bad, nil).Evidence(ctx, s.env.ID, node, "web-x1")
+	src, err = api.NewJanitorEngine(s.agg, s.clusters, bad, janitor.KeepStore{}, nil).Evidence(ctx, s.env.ID, node, "web-x1")
 	if err != nil || !src.LogsUnavailable || len(src.Lines) != 0 {
 		t.Fatalf("source = %+v, %v; want the log withheld because the stack's secrets could not be read", src, err)
 	}
 	// A container that is not a stack's needs no masker.
-	src, err = api.NewJanitorEngine(s.agg, s.clusters, bad, nil).Evidence(ctx, s.env.ID, node, "web-x2")
+	src, err = api.NewJanitorEngine(s.agg, s.clusters, bad, janitor.KeepStore{}, nil).Evidence(ctx, s.env.ID, node, "web-x2")
 	if err != nil || src.LogsUnavailable {
 		t.Fatalf("source of a container with no stack = %+v, %v; want its log read", src, err)
 	}

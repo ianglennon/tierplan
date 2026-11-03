@@ -369,20 +369,7 @@ func keptBody(ctx context.Context, d AddressSpaceDeps, envID string) []KeptRowBo
 // keeperName is the display name of the user who kept a network: the display name, else the
 // username, else empty when the user is not known.
 func keeperName(ctx context.Context, d AddressSpaceDeps, cache map[string]string, userID string) string {
-	if name, ok := cache[userID]; ok {
-		return name
-	}
-	name := ""
-	if d.Store != nil {
-		if u, err := d.Store.RQ.GetUserByID(ctx, userID); err == nil {
-			name = u.DisplayName
-			if name == "" {
-				name = u.Username
-			}
-		}
-	}
-	cache[userID] = name
-	return name
+	return userDisplayName(ctx, d.Store, cache, userID)
 }
 
 // deleteOrphan removes one orphaned or unused network for the orphan list's route.

@@ -259,6 +259,7 @@ func Build(in Input, p Policy, now time.Time) Plan {
 		}
 	}
 	addImages(&plan, s, p, now)
+	protectKept(&plan, s)
 	protectDisabled(&plan, disabledNodes(s, in.Nodes))
 	withholdSkewed(&plan, skewedNodes(s))
 	if in.Networks != nil {
@@ -267,6 +268,41 @@ func Build(in Input, p Policy, now time.Time) Plan {
 	sortItems(plan.Items)
 	sortItems(plan.NotRemoved)
 	return plan
+}
+
+// protectKept makes protected (kept_row) every container and image the planner would have removed, held back
+// by grace, reported or could not tell about that a person kept from the Janitor page, and moves it to the list
+// of what was not removed (D-12). What a label already protects keeps its own reason, and it runs before the
+// node and clock checks so a kept object is never worded as anything else.
+func protectKept(plan *Plan, s Snapshot) {
+	if len(s.Keeps) == 0 {
+		return
+	}
+	judge := func(it Item) (Item, bool) {
+		if (it.Type != KindContainer && it.Type != KindImage) || !s.kept(it.Type, it.NodeID, it.Ref) {
+			return it, false
+		}
+		switch it.Class {
+		case ClassRemovable, ClassGrace, ClassReported, ClassCantTell:
+			it.Class = ClassProtected
+			it.Reason = Reason{Code: ReasonKeptRow, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Reason.Node}
+			it.Age = 0
+			return it, true
+		}
+		return it, false
+	}
+	items := plan.Items[:0:0]
+	for _, it := range plan.Items {
+		if out, changed := judge(it); changed {
+			plan.NotRemoved = append(plan.NotRemoved, out)
+			continue
+		}
+		items = append(items, it)
+	}
+	plan.Items = items
+	for i, it := range plan.NotRemoved {
+		plan.NotRemoved[i], _ = judge(it)
+	}
 }
 
 // nodePolicy is the policy of the swarm node that the snapshot node nodeID is: its environment's, with the
@@ -449,7 +485,7 @@ func Candidates(s Snapshot, p Policy) []ContainerRef { return CandidatesFor(s, p
 func CandidatesFor(s Snapshot, p Policy, nodes map[string]NodeOverrides) []ContainerRef {
 	var cands []ContainerInput
 	for _, ci := range allContainers(s, p, nodes) {
-		if needsInspect(ci) {
+		if needsInspect(ci) && !s.kept(KindContainer, ci.Container.NodeID, ci.Container.ID) {
 			cands = append(cands, ci)
 		}
 	}
