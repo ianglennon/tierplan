@@ -5,6 +5,7 @@ package envs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -573,6 +574,45 @@ func graceNets(now time.Time) []dockertest.FakeNetwork {
 	}
 }
 
+func TestOrphansDefaultGraceWhenUnset(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, graceNets)
+	rep := orphans(t, as, envID)
+	wantRows(t, rep, "idle30@edge-1=unused")
+	if rep.Grace != netspace.GracePeriod {
+		t.Errorf("grace = %v, want the default of 24h when no source is set", rep.Grace)
+	}
+
+	// A source that answers nothing usable is the default too.
+	for _, g := range []time.Duration{0, -time.Hour} {
+		as.WithGrace(graceSource(g, nil, nil))
+		forgetReport(as, envID)
+		rep = orphans(t, as, envID)
+		wantRows(t, rep, "idle30@edge-1=unused")
+		if rep.Grace != netspace.GracePeriod {
+			t.Errorf("grace = %v for a source answering %v, want 24h", rep.Grace, g)
+		}
+	}
+}
+
+func TestOrphansGraceSourceError(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, graceNets)
+	var calls int
+	as.WithGrace(graceSource(720*time.Hour, errors.New("the policy store is down"), &calls))
+	rep := orphans(t, as, envID)
+	wantRows(t, rep, "idle30@edge-1=unused")
+	if rep.Grace != netspace.GracePeriod || !rep.Complete {
+		t.Errorf("report = %+v, want the check to answer, complete, with the 24h default", rep)
+	}
+	if calls != 1 {
+		t.Errorf("source called %d times for one check, want once", calls)
+	}
+	// Judge answers too, and says which grace it used.
+	j, err := as.Judge(testsupport.Context(t), envID)
+	if err != nil || j.Grace != netspace.GracePeriod || len(j.Rows) == 0 {
+		t.Errorf("Judge = %+v, %v, want an answer judged by 24h", j, err)
+	}
+}
+
 func TestOrphansEnvironmentGraceMovesTheList(t *testing.T) {
 	_, envID, as := standaloneOrphans(t, graceNets)
 	grace := 48 * time.Hour
@@ -593,4 +633,41 @@ func TestOrphansEnvironmentGraceMovesTheList(t *testing.T) {
 	if rep.Grace != 12*time.Hour {
 		t.Errorf("grace = %v, want 12h after the change", rep.Grace)
 	}
+}
+
+func TestRecheckUsesGrace(t *testing.T) {
+	ctx := testsupport.Context(t)
+	_, envID, as := standaloneOrphans(t, graceNets)
+	grace := 48 * time.Hour
+	as.WithGrace(func(context.Context, string) (time.Duration, error) { return grace, nil })
+
+	// A network the list held back for its grace is held back by the re-check too.
+	wantRows(t, orphans(t, as, envID))
+	_, class, err := as.Recheck(ctx, envID, "n30", "")
+	if err != nil || class != netspace.ClassGrace {
+		t.Fatalf("Recheck with a 48h grace = %q, %v, want grace", class, err)
+	}
+	// The grace is read again by every re-check, so a change shows without waiting for the list.
+	grace = 24 * time.Hour
+	_, class, err = as.Recheck(ctx, envID, "n30", "")
+	if err != nil || class != netspace.ClassUnused {
+		t.Fatalf("Recheck with a 24h grace = %q, %v, want unused", class, err)
+	}
+	_, class, err = as.Recheck(ctx, envID, "n20", "")
+	if err != nil || class != netspace.ClassGrace {
+		t.Fatalf("Recheck of the 20h network with a 24h grace = %q, %v, want grace", class, err)
+	}
+}
+
+// At exactly the grace a network is listed, as in Phase 10; a nanosecond short of it, it is not.
+func TestGraceBoundaryListed(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, func(now time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Created: now.Add(-72 * time.Hour)},
+			{ID: "exact", Name: "exact", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}, Created: now.Add(-48 * time.Hour)},
+			{ID: "short", Name: "short", Driver: "bridge", Scope: "local", Subnets: []string{"172.31.0.0/24"}, Created: now.Add(-48*time.Hour + time.Nanosecond)},
+		}
+	})
+	as.WithGrace(graceSource(48*time.Hour, nil, nil))
+	wantRows(t, orphans(t, as, envID), "exact@edge-1=unused")
 }

@@ -105,3 +105,30 @@ func TestAddressSpaceAndJanitorShareGrace(t *testing.T) {
 		f.agree(t, e, "edgeshop_default", false, 48)
 	})
 }
+
+// An environment that follows the default follows a change of it in the Address space list too, once the
+// kept report is dropped, and an environment that sets its own grace does not move (D-20).
+func TestDefaultGraceFollowsInAddressSpace(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, orphanEngine(stackNet("old1", "oldshop_default", "oldshop", 30*time.Hour)))
+	f.agree(t, e, "oldshop_default", false, 24)
+
+	cur := f.readJanitorDefaults(t)
+	rec := f.putJanitorDefaults(t, defaultsJSON(cur, map[string]any{"graceHours": 72}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("change the default grace: %d %s", rec.code, rec.body)
+	}
+	// The report the page kept from before is gone: the list, not only the next TTL, follows the default.
+	f.agree(t, e, "oldshop_default", true, 72)
+
+	// An environment that set its own grace keeps it when the default changes back.
+	if rec := f.putJanitorPolicy(t, e, policyJSON(0, map[string]any{"graceHours": 12})); rec.code != http.StatusOK {
+		t.Fatalf("set the grace: %d %s", rec.code, rec.body)
+	}
+	f.agree(t, e, "oldshop_default", false, 12)
+	cur = f.readJanitorDefaults(t)
+	if rec := f.putJanitorDefaults(t, defaultsJSON(cur, map[string]any{"graceHours": 500})); rec.code != http.StatusOK {
+		t.Fatalf("change the default grace again: %d %s", rec.code, rec.body)
+	}
+	f.agree(t, e, "oldshop_default", false, 12)
+}
