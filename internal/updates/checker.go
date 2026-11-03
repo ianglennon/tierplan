@@ -21,8 +21,9 @@ type Heads interface {
 	// credential ID is returned with an error too whenever it is known, so a failure is stored under the
 	// credential that met it.
 	Digest(ctx context.Context, envID string, ref registry.Ref) (digest, credID string, err error)
-	// Index reads what the tag's digest names: whether it is a multi-platform index and the manifest
-	// digest of each platform it lists.
+	// Index reads what a digest names with a GET by digest, which a registry may count as a pull:
+	// whether it is a multi-platform index and the manifest digest of each platform it lists (platform
+	// key linux/amd64 to digest). The Checker asks only when a tag's digest changed.
 	Index(ctx context.Context, envID string, ref registry.Ref, digest string) (index bool, platforms map[string]string, err error)
 }
 
@@ -38,33 +39,50 @@ func NewHeads(resolver *registry.Resolver, clients *registry.ClientCache) Heads 
 	return registryHeads{Resolver: resolver, Clients: clients}
 }
 
+// client chooses the registry client for ref under the credential the environment resolves for it, and
+// that credential's ID ("" for an anonymous call). The ID is returned with an error whenever it is known.
+func (h registryHeads) client(ctx context.Context, envID string, ref registry.Ref) (*registry.Client, string, error) {
+	cred, err := h.Resolver.ForBrowse(ctx, envID, nil, ref)
+	if err != nil {
+		id, _ := h.Resolver.CredentialFor(ctx, envID, ref) // the identity alone; opens no secret
+		return nil, id, err
+	}
+	if cred == nil {
+		return h.Clients.Anonymous(ref.Domain), "", nil
+	}
+	return h.Clients.ForCredential(cred.ID, cred.UpdatedAt, cred.HostOptions), cred.ID, nil
+}
+
 // Digest implements Heads. A tag that is not a tag as the reference grammar writes one is refused as
 // not found before any request: a name that is not must never be put in a registry URL.
 func (h registryHeads) Digest(ctx context.Context, envID string, ref registry.Ref) (string, string, error) {
 	if !registry.ValidTag(ref.Tag) {
 		return "", "", errNoSuchTag
 	}
-	cred, err := h.Resolver.ForBrowse(ctx, envID, nil, ref)
+	c, credID, err := h.client(ctx, envID, ref)
 	if err != nil {
-		id, _ := h.Resolver.CredentialFor(ctx, envID, ref) // the identity alone; opens no secret
-		return "", id, err
-	}
-	var c *registry.Client
-	credID := ""
-	if cred == nil {
-		c = h.Clients.Anonymous(ref.Domain)
-	} else {
-		credID = cred.ID
-		c = h.Clients.ForCredential(cred.ID, cred.UpdatedAt, cred.HostOptions)
+		return "", credID, err
 	}
 	d, err := c.ManifestDigest(ctx, ref.Path, ref.Tag)
 	return d, credID, err
 }
 
-// Index implements Heads. It answers the single-manifest view for now: the per-platform judgement
-// replaces it.
-func (h registryHeads) Index(context.Context, string, registry.Ref, string) (bool, map[string]string, error) {
-	return false, nil, nil
+// Index implements Heads: one read of the manifest the digest names, by digest. It is the only request
+// of the check that is a pull, so the Checker makes it only when the tag's digest changed.
+func (h registryHeads) Index(ctx context.Context, envID string, ref registry.Ref, digest string) (bool, map[string]string, error) {
+	c, _, err := h.client(ctx, envID, ref)
+	if err != nil {
+		return false, nil, err
+	}
+	index, ps, err := c.IndexPlatforms(ctx, ref.Path, digest)
+	if err != nil || !index {
+		return false, nil, err
+	}
+	platforms := make(map[string]string, len(ps))
+	for _, p := range ps {
+		platforms[registry.PlatformKey(p)] = p.Digest
+	}
+	return true, platforms, nil
 }
 
 // errNoSuchTag is the error of a tag no request was made for. It is stored as not found.
@@ -86,8 +104,11 @@ func reasonFor(err error) Reason {
 type Checker struct {
 	Heads Heads
 	Store Store
-	Now   func() time.Time
-	Log   *slog.Logger
+	// Runs, when set, is given the platforms of an index the check is about to replace, which is the
+	// index the workloads that have not been updated yet still run.
+	Runs *RunIndex
+	Now  func() time.Time
+	Log  *slog.Logger
 }
 
 // CheckResult counts what one check of an environment found.
@@ -159,6 +180,15 @@ func (c *Checker) checkOne(ctx context.Context, envID string, ref registry.Ref) 
 	if err == nil && digest == "" {
 		err = registry.ErrNoDigest
 	}
+	var prev *Check
+	var index bool
+	var platforms map[string]string
+	if err == nil {
+		if prev, err = c.stored(ctx, key); err != nil {
+			return nil, err
+		}
+		index, platforms, err = c.platformsOf(ctx, envID, ref, digest, prev)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -170,9 +200,43 @@ func (c *Checker) checkOne(ctx context.Context, envID string, ref registry.Ref) 
 		}
 		return &Check{Key: key, CheckedAt: at, Error: reason}, nil
 	}
-	chk := Check{Key: key, Digest: digest, CheckedAt: at, SuccessAt: at}
+	chk := Check{Key: key, Digest: digest, Index: index, Platforms: platforms, CheckedAt: at, SuccessAt: at}
 	if serr := c.Store.SaveSuccess(ctx, chk); serr != nil {
 		return nil, fmt.Errorf("store the check: %w", serr)
 	}
+	if prev != nil && prev.Index && prev.Digest != digest {
+		// The index the tag leaves is the one workloads that are not updated yet still run.
+		c.Runs.Put(ref, prev.Digest, prev.Platforms)
+	}
 	return &chk, nil
+}
+
+// stored returns the check stored for key, nil when there is none.
+func (c *Checker) stored(ctx context.Context, key Key) (*Check, error) {
+	got, err := c.Store.Checks(ctx, []Key{key})
+	if err != nil {
+		return nil, fmt.Errorf("read the stored check: %w", err)
+	}
+	if p, ok := got[key]; ok {
+		return &p, nil
+	}
+	return nil, nil //nolint:nilnil // no stored check is an answer
+}
+
+// platformsOf says what digest names. The HEAD that found it costs no pull, so the read of the index
+// (one GET by digest) is made only when the digest is not the one already stored, or the stored index
+// has no platforms; otherwise the stored answer stands (D-02, RESEARCH Pitfall 2). An index that lists
+// no runnable platform is read as one image: there is nothing to compare platform by platform.
+func (c *Checker) platformsOf(ctx context.Context, envID string, ref registry.Ref, digest string, prev *Check) (bool, map[string]string, error) {
+	if prev != nil && prev.Digest == digest && !prev.SuccessAt.IsZero() && (!prev.Index || len(prev.Platforms) > 0) {
+		return prev.Index, prev.Platforms, nil
+	}
+	index, platforms, err := c.Heads.Index(ctx, envID, ref, digest)
+	if err != nil {
+		return false, nil, err
+	}
+	if !index || len(platforms) == 0 {
+		return false, nil, nil
+	}
+	return true, platforms, nil
 }

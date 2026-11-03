@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/regclient/regclient/types/errs"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
@@ -47,10 +49,46 @@ type fakeHeads struct {
 	answers map[string]answer
 	byEnv   map[string]answer
 	calls   map[string]int
+	// indexes are what a digest names: a multi-platform index with these platforms. A digest nobody
+	// scripted names one image. indexCalls counts the reads by digest, which a registry may count as pulls.
+	indexes    map[string]indexAnswer
+	indexCalls map[string]int
+}
+
+// indexAnswer is what the fake registry says a digest names.
+type indexAnswer struct {
+	platforms map[string]string
+	err       error
 }
 
 func newHeads() *fakeHeads {
-	return &fakeHeads{answers: map[string]answer{}, byEnv: map[string]answer{}, calls: map[string]int{}}
+	return &fakeHeads{answers: map[string]answer{}, byEnv: map[string]answer{}, calls: map[string]int{},
+		indexes: map[string]indexAnswer{}, indexCalls: map[string]int{}}
+}
+
+// setIndex scripts digest as a multi-platform index with the platforms given (linux/amd64 to digest).
+func (f *fakeHeads) setIndex(digest string, platforms map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.indexes[digest] = indexAnswer{platforms: platforms}
+}
+
+// goneIndex scripts digest as an index the registry no longer has.
+func (f *fakeHeads) goneIndex(digest string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.indexes[digest] = indexAnswer{err: fmt.Errorf("manifest unknown: %w", errs.ErrNotFound)}
+}
+
+// gets is how many reads by digest were made.
+func (f *fakeHeads) gets() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.indexCalls {
+		n += c
+	}
+	return n
 }
 
 // set scripts the answer for a tag: host/path:tag.
@@ -93,8 +131,18 @@ func (f *fakeHeads) Digest(_ context.Context, envID string, ref registry.Ref) (s
 	return a.digest, a.credID, a.err
 }
 
-func (f *fakeHeads) Index(context.Context, string, registry.Ref, string) (bool, map[string]string, error) {
-	return false, nil, nil
+func (f *fakeHeads) Index(_ context.Context, _ string, _ registry.Ref, digest string) (bool, map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.indexCalls[digest]++
+	a, ok := f.indexes[digest]
+	if !ok {
+		return false, nil, nil
+	}
+	if a.err != nil {
+		return false, nil, a.err
+	}
+	return true, a.platforms, nil
 }
 
 // clock is a settable clock.
@@ -139,8 +187,9 @@ func newRig(t *testing.T) *rig {
 	sql := updates.SQLStore{Q: st.Q, W: st.Write}
 	heads := newHeads()
 	logs := &bytes.Buffer{}
-	chk := &updates.Checker{Heads: heads, Store: sql, Now: clk.Now, Log: slog.New(slog.NewTextHandler(logs, nil))}
-	svc := &updates.Service{Store: sql, Resolver: registry.NewResolver(rs), Checker: chk, Now: clk.Now}
+	runs := updates.NewRunIndex()
+	chk := &updates.Checker{Heads: heads, Store: sql, Runs: runs, Now: clk.Now, Log: slog.New(slog.NewTextHandler(logs, nil))}
+	svc := &updates.Service{Store: sql, Resolver: registry.NewResolver(rs), Checker: chk, Runs: runs, Now: clk.Now}
 	return &rig{st: st, reg: rs, sql: sql, heads: heads, clk: clk, chk: chk, svc: svc, logs: logs}
 }
 
@@ -489,5 +538,85 @@ func TestPinnedServiceIsNeverAsked(t *testing.T) {
 	}
 	if v := got["pinned"]; v.State != updates.StatePinned {
 		t.Errorf("verdict = %+v, want pinned_in_file", v)
+	}
+}
+
+// fakeSnap is the aggregate of an environment: the nodes with their architectures, and the task
+// containers of each service on the node it runs on.
+type fakeSnap struct{ agg envs.Aggregate }
+
+func (f fakeSnap) Snapshot(context.Context, string) (envs.Aggregate, envs.Health, error) {
+	return f.agg, envs.Health{}, nil
+}
+
+// swarmOf builds an aggregate of nodes (id -> architecture) with the tasks given as service ID -> node IDs.
+func swarmOf(nodes map[string]string, tasks map[string][]string) fakeSnap {
+	agg := envs.Aggregate{NotReporting: []string{}, Unreachable: []envs.NodeRef{}}
+	for id, arch := range nodes {
+		agg.Nodes = append(agg.Nodes, envs.NodeRef{ID: id, Name: id, Arch: arch})
+	}
+	for svc, on := range tasks {
+		for _, n := range on {
+			agg.Containers = append(agg.Containers, envs.ContainerRow{
+				ContainerRow: dockerx.ContainerRow{State: "running", Labels: map[string]string{"com.docker.swarm.service.id": svc}},
+				NodeID:       n,
+			})
+		}
+	}
+	return fakeSnap{agg: agg}
+}
+
+// plats is the platform map of an index.
+func plats(amd64, arm64 string) map[string]string {
+	return map[string]string{"linux/amd64": amd64, "linux/arm64": arm64}
+}
+
+func TestPlatformRebuildNobodyRuns(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	r.svc.Aggregator = swarmOf(map[string]string{"n1": "amd64", "n2": "amd64"}, map[string][]string{"web": {"n1", "n2"}})
+	const tag = "ghcr.io/acme/app:2"
+	idx1, idx2, idx3 := dg('1'), dg('2'), dg('3')
+	rows := []dockerx.ServiceRow{row("web", "ghcr.io/acme/app:2@"+idx1)}
+	r.heads.setIndex(idx1, plats(dg('a'), dg('b')))
+	r.heads.set(tag, answer{digest: idx1})
+	verdict := func() updates.Verdict {
+		t.Helper()
+		got, err := r.svc.ServiceVerdicts(ctx, "env-1", rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got["web"]
+	}
+
+	// The service runs the index the tag points at.
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatal(err)
+	}
+	if v := verdict(); v.State != updates.StateUpToDate {
+		t.Fatalf("unchanged tag: %+v, want up_to_date", v)
+	}
+
+	// The tag is republished with a new arm64 image and the same amd64 one: nobody runs arm64.
+	r.heads.setIndex(idx2, plats(dg('a'), dg('c')))
+	r.heads.set(tag, answer{digest: idx2})
+	r.clk.advance(time.Hour)
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatal(err)
+	}
+	if v := verdict(); v.State != updates.StateUpToDate || len(v.ChangedPlatforms) != 0 || v.RemoteDigest != idx2 {
+		t.Fatalf("arm64 rebuilt, service on amd64: %+v, want up_to_date with the new index as the remote digest", v)
+	}
+
+	// The amd64 image is rebuilt: the service runs it.
+	r.heads.setIndex(idx3, plats(dg('d'), dg('c')))
+	r.heads.set(tag, answer{digest: idx3})
+	r.clk.advance(time.Hour)
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatal(err)
+	}
+	if v := verdict(); v.State != updates.StateUpdateAvailable || !slices.Equal(v.ChangedPlatforms, []string{"linux/amd64"}) {
+		t.Fatalf("amd64 rebuilt, service on amd64: %+v, want update_available naming linux/amd64", v)
 	}
 }

@@ -4,7 +4,10 @@
 package updates
 
 import (
+	"slices"
+
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
@@ -77,4 +80,66 @@ func ServiceWorkloads(rows []dockerx.ServiceRow) []Workload {
 		})
 	}
 	return out
+}
+
+// labelSwarmServiceID is the label Docker puts on every task container with the ID of its service.
+const labelSwarmServiceID = "com.docker.swarm.service.id"
+
+// WithPlatforms sets the NodeIDs and Platforms of each service of ws from the aggregate of its
+// environment (D-02): the nodes its task containers run on, and "linux/" plus the architecture of each
+// of those nodes, sorted and distinct. A task container counts while it runs or is about to; the
+// exited ones a node keeps for a while are history.
+//
+// Platforms are left empty, and the verdict compares index digests, whenever the platforms the service
+// runs on cannot be told for certain: no task container is seen yet, a node it runs on has not
+// reported its architecture, or a node did not report at all and may be running tasks that are not
+// seen. A service is never judged up to date on part of its platforms.
+func WithPlatforms(ws []Workload, agg envs.Aggregate) []Workload {
+	arch := make(map[string]string, len(agg.Nodes))
+	for _, n := range agg.Nodes {
+		arch[n.ID] = n.Arch
+	}
+	nodes := map[string][]string{} // service ID -> node IDs
+	for _, c := range agg.Containers {
+		id := c.Labels[labelSwarmServiceID]
+		if id == "" || !taskIsLive(c.State) {
+			continue
+		}
+		nodes[id] = append(nodes[id], c.NodeID)
+	}
+	complete := len(agg.Unreachable) == 0 && len(agg.NotReporting) == 0
+	out := make([]Workload, len(ws))
+	copy(out, ws)
+	for i, w := range out {
+		if w.Kind != "service" {
+			continue
+		}
+		ids := nodes[w.ID]
+		slices.Sort(ids)
+		out[i].NodeIDs = slices.Compact(ids)
+		out[i].Platforms = nil
+		if len(ids) == 0 || !complete {
+			continue
+		}
+		var ps []string
+		known := true
+		for _, id := range out[i].NodeIDs {
+			a := arch[id]
+			if a == "" {
+				known = false
+				break
+			}
+			ps = append(ps, "linux/"+a)
+		}
+		if known {
+			slices.Sort(ps)
+			out[i].Platforms = slices.Compact(ps)
+		}
+	}
+	return out
+}
+
+// taskIsLive reports whether a container in this state is a task that runs or is starting.
+func taskIsLive(state string) bool {
+	return state == "running" || state == "restarting" || state == "created"
 }

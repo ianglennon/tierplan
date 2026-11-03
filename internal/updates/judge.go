@@ -4,6 +4,7 @@
 package updates
 
 import (
+	"slices"
 	"time"
 )
 
@@ -58,6 +59,10 @@ func ReasonOf(registryCode string) Reason {
 	return ReasonOther
 }
 
+// NoteRunningIndexGone is the Note of a workload whose running image index the registry no longer
+// serves: what changed cannot be told, so it reads update_available.
+const NoteRunningIndexGone = "running_index_gone"
+
 // JudgeInput is everything a verdict depends on. Judge reads no clock, store or network: Now and
 // StaleAfter are given.
 type JudgeInput struct {
@@ -69,6 +74,12 @@ type JudgeInput struct {
 	// unchanged digest reads check_stale.
 	Now        time.Time
 	StaleAfter time.Duration
+	// RunPlatforms maps each platform (linux/amd64) of the index the workload runs to its manifest
+	// digest, read from that index (D-02). Nil when the workload runs one image, or when the index could
+	// not be read: the judgement then compares the index digests.
+	RunPlatforms map[string]string
+	// RunIndexGone is true when the registry no longer serves the index the workload runs.
+	RunIndexGone bool
 }
 
 // Verdict is what Judge decides about one workload.
@@ -95,8 +106,12 @@ type Verdict struct {
 //  3. The last check failed (it is newer than the last success): check_failed with its reason. It is
 //     never up to date, whatever an earlier check found.
 //  4. The workload runs no digest the registry could be compared with: not_from_registry.
-//  5. The tag points at another digest than the one the workload runs: update_available.
-//  6. The same digest, found within StaleAfter: up_to_date; found longer ago: check_stale.
+//  5. The tag points at another digest than the one the workload runs: update_available, unless both
+//     are multi-platform indexes and none of the platforms the workload runs on changed (D-02), which
+//     reads as the same digest does. A running index the registry no longer serves is
+//     update_available with the note running_index_gone.
+//  6. The same digest, or none of the workload's platforms changed, found within StaleAfter:
+//     up_to_date; found longer ago: check_stale.
 func Judge(in JudgeInput) Verdict {
 	w, c := in.Workload, in.Check
 	v := Verdict{State: StateNotChecked, RunningDigest: w.RunningDigest}
@@ -117,16 +132,43 @@ func Judge(in JudgeInput) Verdict {
 		return v
 	}
 	v.RemoteDigest = c.Digest
+	changed := false
 	switch {
 	case w.RunningDigest == "":
 		v.State = StateNotFromRegistry
-		v.Note = "The service names no digest, so there is nothing to compare the registry's answer with."
+		return v
+	case c.Digest != w.RunningDigest && in.RunIndexGone:
+		v.State, v.Note = StateUpdateAvailable, NoteRunningIndexGone
+		return v
 	case c.Digest != w.RunningDigest:
-		v.State = StateUpdateAvailable
-	case in.Now.Sub(c.SuccessAt) <= in.StaleAfter:
+		v.ChangedPlatforms, changed = changedPlatforms(w, c, in.RunPlatforms)
+		if changed {
+			v.State = StateUpdateAvailable
+			return v
+		}
+	}
+	if in.Now.Sub(c.SuccessAt) <= in.StaleAfter {
 		v.State = StateUpToDate
-	default:
+	} else {
 		v.State = StateCheckStale
 	}
 	return v
+}
+
+// changedPlatforms decides whether a tag that moved to another digest changed anything the workload
+// runs. It can say no only when everything it needs is known: the stored check is an index with its
+// platforms, the workload's platforms are known, and so are those of the index it runs. Then the
+// workload's platforms whose manifest differs, sorted, are the change; none means no change. Anything
+// less known than that is a change, with no platforms named.
+func changedPlatforms(w Workload, c *Check, run map[string]string) (names []string, changed bool) {
+	if !c.Index || len(c.Platforms) == 0 || len(w.Platforms) == 0 || len(run) == 0 {
+		return nil, true
+	}
+	for _, p := range w.Platforms {
+		if now := c.Platforms[p]; now == "" || now != run[p] {
+			names = append(names, p)
+		}
+	}
+	slices.Sort(names)
+	return names, len(names) > 0
 }
