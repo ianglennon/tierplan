@@ -106,15 +106,22 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 }
 
 // previewJanitor reads the environment, inspects the few containers that need it, judges the
-// networks and builds the plan. The policy is the default until the policy store arrives behind the
-// same call. nets may be nil, and then no network is listed. A network check that fails withholds
+// networks and builds the plan. The policy is the one the runs follow, read through Runner.Policy, so
+// the preview and a run judge alike. nets may be nil, and then no network is listed. A network check that fails withholds
 // every network, as a node that does not answer does.
 func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets janitor.Networks, envID string) (JanitorPreviewBody, error) {
 	snap, err := eng.Snapshot(ctx, envID)
 	if err != nil {
 		return JanitorPreviewBody{}, snapshotProblem(d.log(), envID, err)
 	}
-	pol := janitor.DefaultPolicy()
+	pol := fallbackPolicy()
+	if d.Runner != nil && d.Runner.Policy != nil {
+		p, err := d.Runner.Policy(ctx, envID)
+		if err != nil {
+			return JanitorPreviewBody{}, err
+		}
+		pol = p
+	}
 	ends := janitor.InspectCandidates(ctx, eng, envID, janitor.Candidates(snap, pol))
 	in := janitor.Input{Snapshot: snap, Ends: ends}
 	if nets != nil {

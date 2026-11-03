@@ -173,6 +173,36 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type JanitorDefault struct {
+	ID                      int64
+	Enabled                 int64
+	Schedule                string
+	SchedulePreset          string
+	KeepN                   int64
+	GraceHours              int64
+	RemoveUnusedNetworks    int64
+	RemoveStoppedContainers int64
+	RetentionDays           int64
+	RetentionRuns           int64
+	Version                 int64
+	UpdatedBy               string
+	UpdatedAt               int64
+}
+
+type JanitorEnvPolicy struct {
+	EnvID                   string
+	Enabled                 sql.NullInt64
+	Schedule                sql.NullString
+	SchedulePreset          sql.NullString
+	KeepN                   sql.NullInt64
+	GraceHours              sql.NullInt64
+	RemoveUnusedNetworks    sql.NullInt64
+	RemoveStoppedContainers sql.NullInt64
+	Version                 int64
+	UpdatedBy               string
+	UpdatedAt               int64
+}
+
 type JanitorEvidence struct {
 	RunID       string
 	Seq         int64
@@ -188,6 +218,15 @@ type JanitorEvidence struct {
 	LogText     string
 	LogLines    int64
 	LogState    string
+}
+
+type JanitorNodePolicy struct {
+	EnvID     string
+	NodeID    string
+	Enabled   sql.NullInt64
+	KeepN     sql.NullInt64
+	UpdatedBy string
+	UpdatedAt int64
 }
 
 type JanitorRun struct {

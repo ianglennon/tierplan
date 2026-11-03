@@ -103,7 +103,7 @@ type authFixture struct {
 	// scheduler is told when a test saves the backup schedule.
 	scheduler interface{ Notify() }
 	acctVault *vault.Vault
-	// janitorPolicy, when set, is the policy of every environment's janitor (plan 11-15); nil means the default.
+	// janitorPolicy, when set, is the policy of every environment's janitor (plan 11-15); nil means the stored policy.
 	janitorPolicy func() janitor.Policy
 	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
 	proxy *httpx.ProxyObserver
@@ -414,18 +414,19 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		// The clock of a janitor run is the fixture's, so containers dated against it are past grace.
 		janitorClock := nowClock(f.clk.now)
 		janitorRuns := &janitor.SQLStore{St: f.st}
+		janitorPolicies := janitor.PolicyStore{St: f.st}
 		// The janitor asks the stack records which stacks and projects still exist, as the server does.
 		janitorFacts := stackops.NetFacts{Repo: stackops.Repo{Store: f.st, Vault: f.v}, Locks: f.stackLocks}
 		janitorDeps := api.JanitorDeps{
 			Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Jobs: f.jobHub,
-			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, AddressSpaces: addressSpaces, StackFacts: janitorFacts,
+			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, Policies: janitorPolicies, AddressSpaces: addressSpaces, StackFacts: janitorFacts,
 			Runner: &janitor.Runner{
 				Engine: api.NewJanitorEngine(f.agg, addrClusters, janitorFacts, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log,
-				Policy: func(context.Context, string) (janitor.Policy, error) {
+				Policy: func(ctx context.Context, envID string) (janitor.Policy, error) {
 					if f.janitorPolicy != nil {
 						return f.janitorPolicy(), nil
 					}
-					return janitor.DefaultPolicy(), nil
+					return janitorPolicies.Effective(ctx, envID)
 				},
 				Networks: api.NewJanitorNetworks(api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Now: f.clk.now, Log: log}),
 			},

@@ -108,3 +108,37 @@ SET state = 'failed', reason = 'server_restarted', finished_at = MAX(janitor_run
 WHERE janitor_runs.state IN ('waiting', 'running')
 RETURNING id, env_id, trigger, actor, state, reason, job_id, started_at, finished_at,
           removed_containers, removed_images, removed_networks, kept, failed, skipped_offline, est_bytes;
+
+-- name: GetJanitorDefaults :one
+-- The instance defaults: the one row the migration seeds.
+SELECT enabled, schedule, schedule_preset, keep_n, grace_hours, remove_unused_networks,
+       remove_stopped_containers, retention_days, retention_runs, version, updated_by, updated_at
+FROM janitor_defaults WHERE id = 1;
+
+-- name: GetJanitorEnvPolicy :one
+-- One environment's overrides; no row means it follows every default.
+SELECT env_id, enabled, schedule, schedule_preset, keep_n, grace_hours, remove_unused_networks,
+       remove_stopped_containers, version, updated_by, updated_at
+FROM janitor_env_policy WHERE env_id = ?;
+
+-- name: InsertJanitorEnvPolicy :execrows
+-- The first save of an environment's overrides (NULL for every field it follows), at version 1.
+-- Zero rows means the environment already has a row, so the save was made from a stale read.
+INSERT INTO janitor_env_policy (env_id, enabled, schedule, schedule_preset, keep_n, grace_hours,
+                                remove_unused_networks, remove_stopped_containers, version, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT (env_id) DO NOTHING;
+
+-- name: UpdateJanitorEnvPolicy :execrows
+-- Saves an environment's overrides only when the version is the one the caller read; zero rows
+-- means it was not.
+UPDATE janitor_env_policy
+SET enabled = ?, schedule = ?, schedule_preset = ?, keep_n = ?, grace_hours = ?,
+    remove_unused_networks = ?, remove_stopped_containers = ?,
+    version = version + 1, updated_by = ?, updated_at = ?
+WHERE env_id = ? AND version = ?;
+
+-- name: ListJanitorNodePolicies :many
+-- The per-node overrides of one environment.
+SELECT env_id, node_id, enabled, keep_n, updated_by, updated_at
+FROM janitor_node_policy WHERE env_id = ? ORDER BY node_id;

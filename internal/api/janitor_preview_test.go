@@ -426,3 +426,42 @@ func TestJanitorPreviewNodeClockSkew(t *testing.T) {
 		})
 	}
 }
+
+// The tracer for the stored policy (plan 11-17, D-01, D-04, D-11): the preview reads the policy the
+// runs follow from the store, field by field. A stopped docker run container two days old is only
+// reported while the environment follows the default (the opt-in is off), and is removable once the
+// environment's own stored policy turns the opt-in on.
+func TestJanitorPreviewFollowsStoredPolicy(t *testing.T) {
+	t.Parallel()
+	cfg := orphanEngine()
+	cfg.Containers = []dockertest.FakeContainer{standaloneBox("scratch", 48*time.Hour, nil)}
+	f, e := dashEnv(t, cfg)
+
+	before := f.previewJanitor(t, e)
+	if len(before.Items) != 0 || len(before.NotRemoved) != 1 || before.NotRemoved[0].Class != "reported" || before.NotRemoved[0].Reason.Code != "opt_in_off_containers" {
+		t.Fatalf("preview before = %+v notRemoved = %+v, want the container reported as opt_in_off_containers", before.Items, before.NotRemoved)
+	}
+
+	ctx := testsupport.Context(t)
+	tx, err := f.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	changed, err := janitor.PolicyStore{St: f.st}.SetEnv(ctx, f.st.Q.WithTx(tx), e.ID, janitor.Overrides{RemoveStoppedContainers: &on}, 0, "admin", janitorNow)
+	if err != nil || !changed {
+		_ = tx.Rollback()
+		t.Fatalf("SetEnv = %v, %v, want a change", changed, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	after := f.previewJanitor(t, e)
+	if len(after.Items) != 1 || after.Summary.Containers != 1 || len(after.NotRemoved) != 0 {
+		t.Fatalf("preview after = %+v notRemoved = %+v, want the container removable", after.Items, after.NotRemoved)
+	}
+	if it := after.Items[0]; it.Class != "removable" || it.Reason.Code != "stopped_standalone" || it.Ref != "scratch" {
+		t.Errorf("item = %+v, want a removable stopped_standalone container", it)
+	}
+}

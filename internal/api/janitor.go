@@ -41,6 +41,9 @@ type JanitorDeps struct {
 	// Scheduler is the janitor's scheduler, which the status reads the next run from. Nil means the
 	// next run is worked out from the policy alone.
 	Scheduler *janitor.Scheduler
+	// Policies is the stored policy at its three levels. The server backs Runner.Policy with it, and the
+	// routes that change a policy (plan 11-19) save through it.
+	Policies janitor.PolicyStore
 	// Runs reads the record of the runs. The server gives the Runner and the routes the same store.
 	Runs janitor.RunStore
 	// AddressSpaces is the orphan check the preview judges networks by, the one the Address space
@@ -87,6 +90,9 @@ func (d JanitorDeps) log() *slog.Logger {
 	}
 	return slog.Default()
 }
+
+// fallbackPolicy is the policy of a fixture that gave the routes no Runner: the seeded defaults.
+func fallbackPolicy() janitor.Policy { return janitor.DefaultPolicy() }
 
 // RegisterJanitor registers the janitor routes.
 func RegisterJanitor(r *httpx.Router, d JanitorDeps) {

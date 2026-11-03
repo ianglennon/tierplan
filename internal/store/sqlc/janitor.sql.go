@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 const countJanitorRuns = `-- name: CountJanitorRuns :one
@@ -62,6 +63,74 @@ func (q *Queries) FinishJanitorRun(ctx context.Context, arg FinishJanitorRunPara
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const getJanitorDefaults = `-- name: GetJanitorDefaults :one
+SELECT enabled, schedule, schedule_preset, keep_n, grace_hours, remove_unused_networks,
+       remove_stopped_containers, retention_days, retention_runs, version, updated_by, updated_at
+FROM janitor_defaults WHERE id = 1
+`
+
+type GetJanitorDefaultsRow struct {
+	Enabled                 int64
+	Schedule                string
+	SchedulePreset          string
+	KeepN                   int64
+	GraceHours              int64
+	RemoveUnusedNetworks    int64
+	RemoveStoppedContainers int64
+	RetentionDays           int64
+	RetentionRuns           int64
+	Version                 int64
+	UpdatedBy               string
+	UpdatedAt               int64
+}
+
+// The instance defaults: the one row the migration seeds.
+func (q *Queries) GetJanitorDefaults(ctx context.Context) (GetJanitorDefaultsRow, error) {
+	row := q.db.QueryRowContext(ctx, getJanitorDefaults)
+	var i GetJanitorDefaultsRow
+	err := row.Scan(
+		&i.Enabled,
+		&i.Schedule,
+		&i.SchedulePreset,
+		&i.KeepN,
+		&i.GraceHours,
+		&i.RemoveUnusedNetworks,
+		&i.RemoveStoppedContainers,
+		&i.RetentionDays,
+		&i.RetentionRuns,
+		&i.Version,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getJanitorEnvPolicy = `-- name: GetJanitorEnvPolicy :one
+SELECT env_id, enabled, schedule, schedule_preset, keep_n, grace_hours, remove_unused_networks,
+       remove_stopped_containers, version, updated_by, updated_at
+FROM janitor_env_policy WHERE env_id = ?
+`
+
+// One environment's overrides; no row means it follows every default.
+func (q *Queries) GetJanitorEnvPolicy(ctx context.Context, envID string) (JanitorEnvPolicy, error) {
+	row := q.db.QueryRowContext(ctx, getJanitorEnvPolicy, envID)
+	var i JanitorEnvPolicy
+	err := row.Scan(
+		&i.EnvID,
+		&i.Enabled,
+		&i.Schedule,
+		&i.SchedulePreset,
+		&i.KeepN,
+		&i.GraceHours,
+		&i.RemoveUnusedNetworks,
+		&i.RemoveStoppedContainers,
+		&i.Version,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getJanitorEvidence = `-- name: GetJanitorEvidence :one
@@ -135,6 +204,47 @@ func (q *Queries) GetJanitorRun(ctx context.Context, arg GetJanitorRunParams) (J
 		&i.EstBytes,
 	)
 	return i, err
+}
+
+const insertJanitorEnvPolicy = `-- name: InsertJanitorEnvPolicy :execrows
+INSERT INTO janitor_env_policy (env_id, enabled, schedule, schedule_preset, keep_n, grace_hours,
+                                remove_unused_networks, remove_stopped_containers, version, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT (env_id) DO NOTHING
+`
+
+type InsertJanitorEnvPolicyParams struct {
+	EnvID                   string
+	Enabled                 sql.NullInt64
+	Schedule                sql.NullString
+	SchedulePreset          sql.NullString
+	KeepN                   sql.NullInt64
+	GraceHours              sql.NullInt64
+	RemoveUnusedNetworks    sql.NullInt64
+	RemoveStoppedContainers sql.NullInt64
+	UpdatedBy               string
+	UpdatedAt               int64
+}
+
+// The first save of an environment's overrides (NULL for every field it follows), at version 1.
+// Zero rows means the environment already has a row, so the save was made from a stale read.
+func (q *Queries) InsertJanitorEnvPolicy(ctx context.Context, arg InsertJanitorEnvPolicyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertJanitorEnvPolicy,
+		arg.EnvID,
+		arg.Enabled,
+		arg.Schedule,
+		arg.SchedulePreset,
+		arg.KeepN,
+		arg.GraceHours,
+		arg.RemoveUnusedNetworks,
+		arg.RemoveStoppedContainers,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertJanitorEvidence = `-- name: InsertJanitorEvidence :exec
@@ -270,6 +380,42 @@ func (q *Queries) ListJanitorEvidenceSeqs(ctx context.Context, runID string) ([]
 			return nil, err
 		}
 		items = append(items, seq)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJanitorNodePolicies = `-- name: ListJanitorNodePolicies :many
+SELECT env_id, node_id, enabled, keep_n, updated_by, updated_at
+FROM janitor_node_policy WHERE env_id = ? ORDER BY node_id
+`
+
+// The per-node overrides of one environment.
+func (q *Queries) ListJanitorNodePolicies(ctx context.Context, envID string) ([]JanitorNodePolicy, error) {
+	rows, err := q.db.QueryContext(ctx, listJanitorNodePolicies, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JanitorNodePolicy
+	for rows.Next() {
+		var i JanitorNodePolicy
+		if err := rows.Scan(
+			&i.EnvID,
+			&i.NodeID,
+			&i.Enabled,
+			&i.KeepN,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -506,6 +652,50 @@ type SetJanitorRunStateParams struct {
 // changed by this, so a late call cannot undo the final state.
 func (q *Queries) SetJanitorRunState(ctx context.Context, arg SetJanitorRunStateParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setJanitorRunState, arg.State, arg.JobID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateJanitorEnvPolicy = `-- name: UpdateJanitorEnvPolicy :execrows
+UPDATE janitor_env_policy
+SET enabled = ?, schedule = ?, schedule_preset = ?, keep_n = ?, grace_hours = ?,
+    remove_unused_networks = ?, remove_stopped_containers = ?,
+    version = version + 1, updated_by = ?, updated_at = ?
+WHERE env_id = ? AND version = ?
+`
+
+type UpdateJanitorEnvPolicyParams struct {
+	Enabled                 sql.NullInt64
+	Schedule                sql.NullString
+	SchedulePreset          sql.NullString
+	KeepN                   sql.NullInt64
+	GraceHours              sql.NullInt64
+	RemoveUnusedNetworks    sql.NullInt64
+	RemoveStoppedContainers sql.NullInt64
+	UpdatedBy               string
+	UpdatedAt               int64
+	EnvID                   string
+	Version                 int64
+}
+
+// Saves an environment's overrides only when the version is the one the caller read; zero rows
+// means it was not.
+func (q *Queries) UpdateJanitorEnvPolicy(ctx context.Context, arg UpdateJanitorEnvPolicyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateJanitorEnvPolicy,
+		arg.Enabled,
+		arg.Schedule,
+		arg.SchedulePreset,
+		arg.KeepN,
+		arg.GraceHours,
+		arg.RemoveUnusedNetworks,
+		arg.RemoveStoppedContainers,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.EnvID,
+		arg.Version,
+	)
 	if err != nil {
 		return 0, err
 	}

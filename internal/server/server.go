@@ -852,7 +852,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
 	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
 	// The janitor's Clean now: a run takes the lock the stack operations share and is a job in the same hub.
-	// The policy is the default until the policy store arrives behind the same function.
+	// The policy is the stored one: the instance defaults with each environment's overrides over them.
 	// Networks are judged by the orphan check the Address space page lists with and removed by the code its delete route
 	// calls, so the janitor has one way to judge a network and one way to remove it.
 	// A preview judges ages by the same clock a run does, so a test that moves the janitor's clock
@@ -868,9 +868,11 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
 	janitorDeps.Runs = janitorRuns
+	janitorPolicies := janitor.PolicyStore{St: st}
+	janitorDeps.Policies = janitorPolicies
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
-		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Store: janitorRuns, Audit: aud, Log: log,
+		Policy: janitorPolicies.Effective, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}
 	// The scheduler cleans each enabled environment at its slot, as the system, through the Runner Clean now uses. It

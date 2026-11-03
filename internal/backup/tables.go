@@ -106,6 +106,13 @@ var Tables = map[string]Class{
 	// of its log. It belongs to its run and goes with it.
 	"janitor_evidence": Included,
 
+	// The janitor's policy (Phase 11): the instance defaults (one seeded row), each environment's
+	// overrides and each swarm node's. A NULL field follows the level above, so nothing here is a
+	// copy of a default. No secret.
+	"janitor_defaults":    Included,
+	"janitor_env_policy":  Included,
+	"janitor_node_policy": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.
