@@ -3018,7 +3018,7 @@ export interface paths {
         get?: never;
         /**
          * Exclude a stack from the janitor, or include it again
-         * @description Sets whether the janitor leaves everything the stack owns alone (excluded true): its containers, matched by the stack's tierplan.stack.id, its swarm namespace or its compose project, are listed as protected (stack_excluded) in what a cleanup would not remove and are never removed, by a schedule or by Clean now, until the stack is included again. The change applies at once and is audited as stack.janitor_excluded or stack.janitor_included; the same value twice writes nothing and records nothing. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs janitor.policy (Operator with the extra permission).
+         * @description Sets whether the janitor leaves everything the stack owns alone (excluded true): its containers, matched by the stack's tierplan.stack.id, its swarm namespace or its compose project, are listed as protected (stack_excluded) in what a cleanup would not remove and are never removed, by a schedule or by Clean now, until the stack is included again. The answer also says whether the stack's compose file declares itself kept (declared): that is read from its current definition, stays true whatever this switch says, and keeps the stack's objects protected (stack_declared_keep). The change applies at once and is audited as stack.janitor_excluded or stack.janitor_included; the same value twice writes nothing and records nothing. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs janitor.policy (Operator with the extra permission).
          */
         put: operations["setStackJanitorExclusion"];
         post?: never;
@@ -11650,7 +11650,7 @@ export interface components {
             hasDraft: boolean;
             /** @description The stack ID */
             id: string;
-            /** @description Whether the stack is excluded from the janitor: set by PUT .../stacks/{stackId}/janitor */
+            /** @description Whether the stack is excluded from the janitor: excluded is set by PUT .../stacks/{stackId}/janitor, declared is read from the stack's compose file (x-tierplan: {keep: true}) */
             janitor: components["schemas"]["StackJanitorBody"];
             /** @description When the newest successful deploy ended, RFC 3339 UTC; empty when there is none */
             lastDeployedAt: string;
@@ -12332,7 +12332,9 @@ export interface components {
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackJanitorBody: {
-            /** @description True when the stack is excluded from the janitor: everything it owns is left alone by every cleanup until it is included again */
+            /** @description True when the stack's own compose file says x-tierplan: {keep: true} at the top level. That keeps everything the stack owns out of every cleanup too, and only the file can undo it: the switch does not */
+            declared: boolean;
+            /** @description True when the switch excludes the stack from the janitor: everything it owns is left alone by every cleanup until it is included again */
             excluded: boolean;
         };
         StackJanitorRequest: {

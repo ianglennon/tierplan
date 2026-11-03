@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -44,7 +45,29 @@ type janitorEngine struct {
 	facts envs.StackFacts
 	// keeps are the objects a person kept out of cleanup. The zero value has none.
 	keeps janitor.KeepStore
-	log   *slog.Logger
+	// declared reads what each stack's compose file says about the janitor (x-tierplan: {keep: true}). Nil means
+	// the files are not read, and only a person's exclusion holds a stack back.
+	declared stackDeclarations
+	log      *slog.Logger
+}
+
+// stackDeclarations is stackops.JanitorFacts as the engine uses it.
+type stackDeclarations interface {
+	Exclusions(ctx context.Context, envID string) ([]stackops.StackExclusion, error)
+}
+
+// JanitorEngineOption sets an optional part of the engine NewJanitorEngine builds.
+type JanitorEngineOption func(*janitorEngine)
+
+// WithStackDeclarations makes the engine read each stack's own word on the janitor from its current compose file
+// (x-tierplan: {keep: true}, D-10), beside the exclusion a person set. Facts with no store read nothing, as if the
+// option were not given.
+func WithStackDeclarations(f stackops.JanitorFacts) JanitorEngineOption {
+	return func(e *janitorEngine) {
+		if f.Configured() {
+			e.declared = f
+		}
+	}
 }
 
 var _ janitor.Engine = (*janitorEngine)(nil)
@@ -54,12 +77,46 @@ var _ janitor.Engine = (*janitorEngine)(nil)
 // stacks of the environment (the same ones the Address space check reads), nil when there are none to
 // ask, in which case no compose container is ever removable; keeps are the objects a person kept out of
 // cleanup, read with every snapshot and again just before a removal (a KeepStore with no store has none);
-// log nil means slog.Default().
-func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, facts envs.StackFacts, keeps janitor.KeepStore, log *slog.Logger) janitor.Engine {
+// log nil means slog.Default(); opts add what the stacks' own files say (WithStackDeclarations).
+func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, facts envs.StackFacts, keeps janitor.KeepStore, log *slog.Logger, opts ...JanitorEngineOption) janitor.Engine {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &janitorEngine{agg: agg, clusters: clusters, facts: facts, keeps: keeps, log: log}
+	e := &janitorEngine{agg: agg, clusters: clusters, facts: facts, keeps: keeps, log: log}
+	for _, o := range opts {
+		o(e)
+	}
+	return e
+}
+
+// stackFacts reads the stacks of the environment with everything that holds the janitor back: the exclusion a
+// person set, and what each stack's current compose file says. A stack whose file could not be read is Unknown. Either
+// read failing is an error and not a guess: a stack must never be judged without its word.
+func (e *janitorEngine) stackFacts(ctx context.Context, envID string) ([]janitor.StackFact, error) {
+	facts, err := (janitor.StackStore{St: e.keeps.St}).List(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	if e.declared == nil {
+		return facts, nil
+	}
+	ex, err := e.declared.Exclusions(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("read what the stacks say about the janitor: %w", err)
+	}
+	byID := make(map[string]int, len(facts))
+	for i, f := range facts {
+		byID[f.ID] = i
+	}
+	for _, x := range ex {
+		if i, ok := byID[x.ID]; ok {
+			facts[i].Declared, facts[i].Unknown = x.Declared, x.Unknown
+			continue
+		}
+		// A stack made since the list was read.
+		facts = append(facts, janitor.StackFact{ID: x.ID, Name: x.Name, Declared: x.Declared, Unknown: x.Unknown})
+	}
+	return facts, nil
 }
 
 // stillNotKept reads the keeps again and answers janitor.ErrNoLongerStale when a person has kept the
@@ -110,8 +167,8 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 	if snap.Keeps, err = e.keeps.List(ctx, envID); err != nil {
 		return janitor.Snapshot{}, err
 	}
-	// Likewise the stacks a person excluded: their objects must never be judged without it.
-	if snap.StackFacts, err = (janitor.StackStore{St: e.keeps.St}).List(ctx, envID); err != nil {
+	// Likewise the stacks a person excluded or whose file keeps them out: their objects must never be judged without it.
+	if snap.StackFacts, err = e.stackFacts(ctx, envID); err != nil {
 		return janitor.Snapshot{}, err
 	}
 	snap.NodeTimes = e.readNodeTimes(ctx, envID, agg.Nodes)
@@ -283,9 +340,9 @@ func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id s
 	if err := e.stillNotKept(ctx, envID, janitor.KindContainer, nodeID, id); err != nil {
 		return err
 	}
-	// A stack excluded since the run planned keeps what it owns, so the stacks are read again too; ones that
-	// cannot be read stop the removal.
-	facts, err := (janitor.StackStore{St: e.keeps.St}).List(ctx, envID)
+	// A stack excluded, or declared kept by its file, since the run planned keeps what it owns, so the stacks are
+	// read again too; ones that cannot be read stop the removal.
+	facts, err := e.stackFacts(ctx, envID)
 	if err != nil {
 		return &janitor.CodedError{Code: janitor.CodeActionFailed, Err: err}
 	}
@@ -295,7 +352,7 @@ func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id s
 			return err
 		}
 		// The engine's own word for the state: only a container that ran and stopped is stale.
-		if d.Status != "exited" || d.Labels[stacks.LabelKeep] == "true" || janitor.OwnedByExcludedStack(facts, d.Labels) {
+		if d.Status != "exited" || d.Labels[stacks.LabelKeep] == "true" || heldByStack(facts, d.Labels) {
 			return janitor.ErrNoLongerStale
 		}
 		return c.ContainerRemove(ctx, id, dockerx.RemoveOptions{})
@@ -314,6 +371,13 @@ func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id s
 	// the agent's policy refused, the host is read-only, the node did not answer, or it failed.
 	code, _ := actionError(err)
 	return &janitor.CodedError{Code: code, Err: err}
+}
+
+// heldByStack reports whether a stack in facts holds the object with these labels back: excluded by a person, kept by
+// its compose file, or unreadable.
+func heldByStack(facts []janitor.StackFact, labels map[string]string) bool {
+	_, held := janitor.HeldByStack(facts, labels)
+	return held
 }
 
 // evidenceReadLimit is the most bytes read from a crashed container's log. The engine is asked for

@@ -67,12 +67,18 @@ type Image struct {
 	Labels                map[string]string
 }
 
-// StackFact is one TierPlan stack of the environment and whether a person excluded it from the janitor
-// (D-10). Everything a stack owns is found by its ID (tierplan.stack.id), or by its name as the swarm
-// namespace or the compose project of the object.
+// StackFact is one TierPlan stack of the environment and how it holds the janitor back (D-10, D-19). A person can
+// exclude it (Excluded), its own compose file can say x-tierplan: {keep: true} (Declared), and a stack whose
+// definition could not be read (Unknown) is left alone because what it owns cannot be judged. Everything a stack
+// owns is found by its ID (tierplan.stack.id), or by its name as the swarm namespace or the compose project of
+// the object.
 type StackFact struct {
 	ID, Name string
 	Excluded bool
+	// Declared is true when the stack's compose file keeps the whole stack out of cleanup.
+	Declared bool
+	// Unknown is true when the stack's definition did not load.
+	Unknown bool
 }
 
 // Snapshot is what the janitor reads of an environment at one moment.
@@ -125,27 +131,54 @@ type Snapshot struct {
 	ReadAt     time.Time
 }
 
-// OwnedByExcludedStack reports whether an object with these labels belongs to a stack in facts that is excluded
-// from the janitor: it carries the stack's ID, or the stack's name as its swarm namespace or compose project.
-func OwnedByExcludedStack(facts []StackFact, labels map[string]string) bool {
+// HeldByStack says whether an object with these labels is held back by a stack in facts, and why: the reason code
+// is stack_excluded when a person excluded the stack, stack_declared_keep when its compose file keeps it out of
+// cleanup, and stack_unknown when its definition could not be read. An object belongs to a stack when it carries
+// the stack's ID, or the stack's name as its swarm namespace or compose project. When several stacks match, the
+// switch beats the compose file, which beats an unreadable definition. Held is false when no stack holds it.
+func HeldByStack(facts []StackFact, labels map[string]string) (code ReasonCode, held bool) {
 	if len(labels) == 0 {
-		return false
+		return "", false
+	}
+	rank := func(c ReasonCode) int {
+		switch c {
+		case ReasonStackExcluded:
+			return 3
+		case ReasonStackDeclaredKeep:
+			return 2
+		}
+		return 1
 	}
 	for _, f := range facts {
-		if !f.Excluded {
+		var c ReasonCode
+		switch {
+		case f.Excluded:
+			c = ReasonStackExcluded
+		case f.Declared:
+			c = ReasonStackDeclaredKeep
+		case f.Unknown:
+			c = ReasonStackUnknown
+		default:
 			continue
 		}
-		if (f.ID != "" && labels[stacks.LabelStackID] == f.ID) ||
-			(f.Name != "" && (labels[stacks.LabelSwarmNamespace] == f.Name || labels[stacks.LabelComposeProject] == f.Name)) {
-			return true
+		owned := (f.ID != "" && labels[stacks.LabelStackID] == f.ID) ||
+			(f.Name != "" && (labels[stacks.LabelSwarmNamespace] == f.Name || labels[stacks.LabelComposeProject] == f.Name))
+		if owned && (!held || rank(c) > rank(code)) {
+			code, held = c, true
 		}
 	}
-	return false
+	return code, held
 }
 
-// ownedByExcludedStack is OwnedByExcludedStack over the snapshot's stacks.
-func (s Snapshot) ownedByExcludedStack(labels map[string]string) bool {
-	return OwnedByExcludedStack(s.StackFacts, labels)
+// heldByStackLabels reports whether any stack holds an object with these labels back.
+func (s Snapshot) heldByStackLabels(labels map[string]string) bool {
+	_, held := s.heldByStack(labels)
+	return held
+}
+
+// heldByStack is HeldByStack over the snapshot's stacks.
+func (s Snapshot) heldByStack(labels map[string]string) (ReasonCode, bool) {
+	return HeldByStack(s.StackFacts, labels)
 }
 
 // kept reports whether a person kept the container or image of kind k, on node nodeID, with ID ref.

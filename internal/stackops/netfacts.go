@@ -88,18 +88,25 @@ func (n NetFacts) Busy(envID string) (string, bool) {
 // externalsOf is the external networks one snapshot of a stack declares, and false when the
 // stack did not load.
 func (n NetFacts) externalsOf(ctx context.Context, s Stack, snap Snapshot) ([]string, bool) {
+	res, ok := loadFacts(ctx, n.Check, s, snap)
+	return res.names, ok
+}
+
+// loadFacts reads what one snapshot of a stack declares: the networks it uses without owning, and whether its top
+// level says x-tierplan: {keep: true}. NetFacts and JanitorFacts both ask it, so a stack is parsed once for the two.
+// The second answer is false when the stack did not load. check nil means stacks.Check.
+func loadFacts(ctx context.Context, check func(context.Context, stacks.CheckInput) stacks.CheckResult, s Stack, snap Snapshot) (factsResult, bool) {
 	key := factsKey{stackID: s.ID, snapshotID: snap.ID, version: snap.Version, baseSeq: snap.BaseSeq, draft: snap.IsDraft}
 	if got, ok := factsMemo.get(key); ok {
-		return got.names, true
+		return got, true
 	}
-	check := n.Check
 	if check == nil {
 		check = stacks.Check
 	}
 	res := check(ctx, stacks.CheckInput{Name: s.Name, Target: s.Target, Copy: snap.Copy, Deadline: netFactsCheckDeadline})
 	if ctx.Err() != nil {
 		// A check cut short by the caller says nothing about the stack, and is not remembered.
-		return nil, false
+		return factsResult{}, false
 	}
 	out := factsResult{loaded: res.Loaded != nil && res.Loaded.Project != nil}
 	if out.loaded {
@@ -113,13 +120,14 @@ func (n NetFacts) externalsOf(ctx context.Context, s Stack, snap Snapshot) ([]st
 			}
 			out.names = append(out.names, name)
 		}
+		out.declared = declaresKeep(res.Loaded.Project.Extensions)
 	}
 	// A stack that did not load is not remembered: the check may only have run out of time, and
 	// a broken definition is quick to refuse again.
 	if out.loaded {
 		factsMemo.put(key, out)
 	}
-	return out.names, out.loaded
+	return out, out.loaded
 }
 
 // factsKey names one version of one stack's definition.
@@ -130,15 +138,18 @@ type factsKey struct {
 }
 
 type factsResult struct {
-	names  []string
-	loaded bool
+	names []string
+	// declared is true when the top level of the compose file says x-tierplan: {keep: true}.
+	declared bool
+	loaded   bool
 }
 
 // maxFactsMemo bounds the memo: a stack keeps one entry, and a server that has seen this many
 // stacks starts again rather than grow without bound.
 const maxFactsMemo = 4096
 
-// factsMemo remembers what each stack's latest definition declares external. Stack IDs are unique,
+// factsMemo remembers what each stack's latest definition declares: its external networks and whether it keeps itself
+// out of the janitor. Stack IDs are unique,
 // so one memo for the process cannot mix environments.
 var factsMemo = &memoTable{m: map[string]memoEntry{}}
 

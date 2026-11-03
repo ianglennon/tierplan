@@ -14,17 +14,19 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // Excluding a whole stack from the janitor (plan 11-28, JAN-07, D-10, D-21). A stack that is excluded keeps
 // everything it owns: no container of its services or its one-off runs, and no image it labels, is ever
 // removed by a schedule or by Clean now, until it is included again. The other way, x-tierplan: {keep: true}
-// in the compose file, is read from the file and never stored here.
+// in the compose file (plan 11-29, D-19), is read from the file and never stored here: the switch cannot undo it.
 
 // StackJanitorBody is where a stack stands with the janitor.
 type StackJanitorBody struct {
-	Excluded bool `json:"excluded" doc:"True when the stack is excluded from the janitor: everything it owns is left alone by every cleanup until it is included again"`
+	Excluded bool `json:"excluded" doc:"True when the switch excludes the stack from the janitor: everything it owns is left alone by every cleanup until it is included again"`
+	Declared bool `json:"declared" doc:"True when the stack's own compose file says x-tierplan: {keep: true} at the top level. That keeps everything the stack owns out of every cleanup too, and only the file can undo it: the switch does not"`
 }
 
 // StackJanitorRequest is the body of PUT /api/env/{envId}/stacks/{stackId}/janitor.
@@ -53,6 +55,7 @@ func registerJanitorStack(r *httpx.Router, d JanitorDeps) {
 		Summary: "Exclude a stack from the janitor, or include it again",
 		Description: "Sets whether the janitor leaves everything the stack owns alone (excluded true): its containers, matched by the stack's tierplan.stack.id, its swarm namespace or its compose project, " +
 			"are listed as protected (stack_excluded) in what a cleanup would not remove and are never removed, by a schedule or by Clean now, until the stack is included again. " +
+			"The answer also says whether the stack's compose file declares itself kept (declared): that is read from its current definition, stays true whatever this switch says, and keeps the stack's objects protected (stack_declared_keep). " +
 			"The change applies at once and is audited as stack.janitor_excluded or stack.janitor_included; the same value twice writes nothing and records nothing. " +
 			"A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs janitor.policy (Operator with the extra permission).",
 		Tags: []string{"stacks"},
@@ -65,6 +68,9 @@ func registerJanitorStack(r *httpx.Router, d JanitorDeps) {
 			body, err := setStackJanitorExclusion(ctx, d, p, env.ID, in)
 			if err != nil {
 				return nil, err
+			}
+			if body.Declared, err = declaredOf(ctx, d.JanitorFacts, env.ID, in.StackID); err != nil {
+				return nil, huma.Error500InternalServerError("internal error")
 			}
 			return &StackJanitorOutput{CacheControl: "no-store", Body: body}, nil
 		})
@@ -110,4 +116,19 @@ func setStackJanitorExclusion(ctx context.Context, d JanitorDeps, p *rbac.Princi
 		return StackJanitorBody{}, internal("commit", err)
 	}
 	return StackJanitorBody{Excluded: in.Body.Excluded}, nil
+}
+
+// declaredOf says whether the compose file of a stack declares it kept out of the janitor, read from the stack's
+// current definition. Facts that cannot read (no store) say false, as does a definition that does not load: only a
+// file that loads and says so declares a stack.
+func declaredOf(ctx context.Context, facts stackops.JanitorFacts, envID, stackID string) (bool, error) {
+	if !facts.Configured() {
+		return false, nil
+	}
+	s, err := facts.Repo.Stack(ctx, envID, stackID)
+	if err != nil {
+		return false, err
+	}
+	ex, err := facts.ExclusionOf(ctx, s)
+	return ex.Declared, err
 }

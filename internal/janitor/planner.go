@@ -264,7 +264,7 @@ func Build(in Input, p Policy, now time.Time) Plan {
 	}
 	addImages(&plan, s, p, now)
 	protectKept(&plan, s)
-	protectExcluded(&plan, s)
+	protectStacks(&plan, s)
 	protectDisabled(&plan, disabledNodes(s, in.Nodes))
 	withholdSkewed(&plan, skewedNodes(s))
 	if in.Networks != nil {
@@ -310,42 +310,52 @@ func protectKept(plan *Plan, s Snapshot) {
 	}
 }
 
-// protectExcluded makes protected (stack_excluded) every container and image the planner would have removed, held
-// back by grace, reported or could not tell about, that a stack excluded from the janitor owns, and moves it to the
-// list of what was not removed (D-10). A stack owns an object that carries its tierplan.stack.id, or its name as the
-// swarm namespace or the compose project. What a person or a label already protects keeps its own reason, and it runs
-// before the node and clock checks so an excluded stack's object is never worded as anything else. Its networks are
-// owned by the stack, so the orphan check never lists them and nothing here changes that.
-func protectExcluded(plan *Plan, s Snapshot) {
-	if !anyExcluded(s) {
+// protectStacks holds back every container and image the planner would have removed, held back by grace, reported or
+// could not tell about, that a stack's state says to leave alone, and moves it to the list of what was not removed
+// (D-10, D-19). A stack owns an object that carries its tierplan.stack.id, or its name as the swarm namespace or the
+// compose project. A stack a person excluded gives protected stack_excluded; one whose compose file says
+// x-tierplan: {keep: true} gives protected stack_declared_keep; one whose definition did not load gives cant_tell
+// stack_unknown, because what it owns cannot be judged. The switch is named before the compose file. What a person or
+// a label already protects keeps its own reason, and it runs before the node and clock checks so a stack's object is
+// never worded as anything else. A stack's networks are owned by it, so the orphan check never lists them and nothing
+// here changes that.
+func protectStacks(plan *Plan, s Snapshot) {
+	if !anyHeldStack(s) {
 		return
 	}
 	type ref struct {
 		kind       Kind
 		nodeID, id string
 	}
-	owned := map[ref]bool{}
+	held := map[ref]ReasonCode{}
 	for _, c := range s.Containers {
-		if s.ownedByExcludedStack(c.Labels) {
-			owned[ref{KindContainer, c.NodeID, c.ID}] = true
+		if code, ok := s.heldByStack(c.Labels); ok {
+			held[ref{KindContainer, c.NodeID, c.ID}] = code
 		}
 	}
 	for _, img := range s.Images {
-		if s.ownedByExcludedStack(img.Labels) {
-			owned[ref{KindImage, img.NodeID, img.ID}] = true
+		if code, ok := s.heldByStack(img.Labels); ok {
+			held[ref{KindImage, img.NodeID, img.ID}] = code
 		}
 	}
-	if len(owned) == 0 {
+	if len(held) == 0 {
 		return
 	}
 	judge := func(it Item) (Item, bool) {
-		if (it.Type != KindContainer && it.Type != KindImage) || !owned[ref{it.Type, it.NodeID, it.Ref}] {
+		if it.Type != KindContainer && it.Type != KindImage {
+			return it, false
+		}
+		code, ok := held[ref{it.Type, it.NodeID, it.Ref}]
+		if !ok {
 			return it, false
 		}
 		switch it.Class {
 		case ClassRemovable, ClassGrace, ClassReported, ClassCantTell:
 			it.Class = ClassProtected
-			it.Reason = Reason{Code: ReasonStackExcluded, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Reason.Node}
+			if code == ReasonStackUnknown {
+				it.Class = ClassCantTell
+			}
+			it.Reason = Reason{Code: code, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Reason.Node}
 			it.Age = 0
 			return it, true
 		}
@@ -365,9 +375,9 @@ func protectExcluded(plan *Plan, s Snapshot) {
 	}
 }
 
-// anyExcluded reports whether the snapshot has a stack excluded from the janitor.
-func anyExcluded(s Snapshot) bool {
-	return slices.ContainsFunc(s.StackFacts, func(f StackFact) bool { return f.Excluded })
+// anyHeldStack reports whether the snapshot has a stack that holds the janitor back: excluded, declared or unknown.
+func anyHeldStack(s Snapshot) bool {
+	return slices.ContainsFunc(s.StackFacts, func(f StackFact) bool { return f.Excluded || f.Declared || f.Unknown })
 }
 
 // nodePolicy is the policy of the swarm node that the snapshot node nodeID is: its environment's, with the
@@ -550,7 +560,7 @@ func Candidates(s Snapshot, p Policy) []ContainerRef { return CandidatesFor(s, p
 func CandidatesFor(s Snapshot, p Policy, nodes map[string]NodeOverrides) []ContainerRef {
 	var cands []ContainerInput
 	for _, ci := range allContainers(s, p, nodes) {
-		if needsInspect(ci) && !s.kept(KindContainer, ci.Container.NodeID, ci.Container.ID) && !s.ownedByExcludedStack(ci.Container.Labels) {
+		if needsInspect(ci) && !s.kept(KindContainer, ci.Container.NodeID, ci.Container.ID) && !s.heldByStackLabels(ci.Container.Labels) {
 			cands = append(cands, ci)
 		}
 	}

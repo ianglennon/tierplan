@@ -827,6 +827,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// other reader of a stack does.
 	netFacts := stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks}
 	addressSpaces.WithStackFacts(netFacts)
+	// The janitor reads what each stack's own file says (x-tierplan: {keep: true}) with the same loader and deadline.
+	janitorFacts := stackops.JanitorFacts{Repo: stackops.Repo{Store: st, Vault: vlt}}
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
 		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,
@@ -868,7 +870,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	addressSpaceDeps := api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log}
 	janitorDeps := api.JanitorDeps{
 		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
-		AddressSpaces: addressSpaces, StackFacts: netFacts, Clock: bo.janitorClock, Now: janitorNow, Log: log,
+		AddressSpaces: addressSpaces, StackFacts: netFacts, JanitorFacts: janitorFacts, Clock: bo.janitorClock, Now: janitorNow, Log: log,
 	}
 	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
 	janitorDeps.Runs = janitorRuns
@@ -882,7 +884,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		return p.Grace, err
 	})
 	janitorDeps.Runner = &janitor.Runner{
-		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, janitor.KeepStore{St: st}, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
+		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, janitor.KeepStore{St: st}, log, api.WithStackDeclarations(janitorFacts)), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
 		Policy: janitorPolicies.Effective, Nodes: janitorPolicies.Nodes, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}

@@ -86,6 +86,7 @@ type JanitorPreviewOutput struct {
 // registerJanitorPreview registers the dry run.
 func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 	eng := &janitorEngine{agg: d.Aggregator, clusters: d.Clusters, facts: d.StackFacts, keeps: janitor.KeepStore{St: d.Store}, log: d.log()}
+	WithStackDeclarations(d.JanitorFacts)(eng)
 	httpx.Register(r, huma.Operation{
 		OperationID: "previewJanitor", Method: http.MethodPost, Path: "/api/env/{envId}/janitor/preview",
 		Summary: "Preview what the janitor would remove",

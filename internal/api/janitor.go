@@ -53,6 +53,10 @@ type JanitorDeps struct {
 	// asks them which stacks and projects of an environment still exist before it removes a compose
 	// container. Nil means they are not read, and no compose container is removable.
 	StackFacts envs.StackFacts
+	// JanitorFacts reads what each stack's current compose file says about the janitor (x-tierplan: {keep: true}),
+	// with the loader and the memo StackFacts uses. The preview, the stack's janitor answer and the server's runs
+	// judge by it. With no store it reads nothing, and only a person's exclusion holds a stack back.
+	JanitorFacts stackops.JanitorFacts
 	// Heartbeat is how often an idle run stream gets a ping, MaxStreamsPerUser how many run streams
 	// one person may hold open and MaxLifetime how long one stream may live. Zero takes the defaults
 	// every other stream has.

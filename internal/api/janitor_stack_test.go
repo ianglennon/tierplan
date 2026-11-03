@@ -12,6 +12,8 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -36,6 +38,7 @@ func ownedSlot(n int) []taskBox {
 
 type stackJanitorJSON struct {
 	Excluded bool `json:"excluded"`
+	Declared bool `json:"declared"`
 }
 
 // The tracer: a stack someone excludes keeps its five old task containers, whether the janitor is previewed,
@@ -239,5 +242,97 @@ func TestStackJanitorNoOp(t *testing.T) {
 	}
 	if rows := janitorKeepAudits(t, f.st.Read, "stack.janitor_included"); len(rows) != 1 || rows[0].Details["name"] != "shop" {
 		t.Fatalf("stack.janitor_included = %+v, want one row naming shop", rows)
+	}
+}
+
+// declaredCompose is a compose file for the stack shop; with keep it says x-tierplan: {keep: true} at the top.
+func declaredCompose(top string) stacks.WorkingCopy {
+	return stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(top + "services:\n  web:\n    image: nginx\n")}}}
+}
+
+// namespacedSlot is exitedSlot where every container carries the swarm namespace of the stack shop, the label
+// docker stack deploy puts on a stack's tasks.
+func namespacedSlot(n int) []taskBox {
+	boxes := exitedSlot(n)
+	for i := range boxes {
+		boxes[i].labels = map[string]string{"com.docker.stack.namespace": "shop"}
+	}
+	return boxes
+}
+
+type stackDetailJSON struct {
+	Janitor stackJanitorJSON `json:"janitor"`
+}
+
+// The tracer (plan 11-29): a stack whose own compose file says x-tierplan: {keep: true} keeps its five old task
+// containers, in the preview and in a scheduled run (All), whatever the switch says; the stack's body says declared.
+// Taking the line out of the file makes them removable again, because the file is read each time.
+func TestDeclaredStackNeverCleaned(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(namespacedSlot(5)), nil)
+	repo := stackops.Repo{Store: s.st, Vault: s.v}
+	ctx := testsupport.Context(t)
+	st, _, err := repo.CreateStack(ctx, s.env.ID, "shop", stacks.TargetSwarm, "ada", declaredCompose("x-tierplan:\n  keep: true\n"))
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	removable := []string{"web-x1", "web-x2", "web-x3"}
+	refs := func(items []janitorItem) []string {
+		var out []string
+		for _, it := range items {
+			out = append(out, it.Ref)
+		}
+		return out
+	}
+
+	rec := s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/stacks/"+st.ID, "")
+	if got := decode[stackDetailJSON](t, rec); rec.code != http.StatusOK || !got.Janitor.Declared || got.Janitor.Excluded {
+		t.Fatalf("stack body: %d %s, want janitor declared true and excluded false", rec.code, rec.body)
+	}
+	rec, p := s.previewJanitor(t)
+	if rec.code != http.StatusOK || len(p.Items) != 0 || len(p.NotRemoved) != 3 {
+		t.Fatalf("preview: %d items %+v notRemoved %+v, want nothing removable and the three protected", rec.code, p.Items, p.NotRemoved)
+	}
+	for _, it := range p.NotRemoved {
+		if it.Class != "protected" || it.Reason.Code != "stack_declared_keep" || it.Type != "container" {
+			t.Errorf("%+v, want a protected container with reason stack_declared_keep", it)
+		}
+	}
+
+	runner := &janitor.Runner{
+		Engine: api.NewJanitorEngine(s.agg, s.clusters, nil, janitor.KeepStore{St: s.st}, nil, api.WithStackDeclarations(stackops.JanitorFacts{Repo: repo})),
+		Locks:  s.stackLocks, Jobs: s.jobHub,
+		Clock: nowClock(s.clk.now), Store: &janitor.SQLStore{St: s.st}, Audit: s.aud, Policy: janitor.PolicyStore{St: s.st}.Effective,
+		Nodes: janitor.PolicyStore{St: s.st}.Nodes,
+	}
+	run := func() {
+		t.Helper()
+		started, err := runner.Start(testsupport.Context(t), janitor.RunRequest{
+			EnvID: s.env.ID, EnvName: "swarm", Trigger: janitor.TriggerSchedule, Actor: "system:janitor", Owner: "system:janitor:" + s.env.ID, All: true,
+		})
+		if err != nil {
+			t.Fatalf("Runner.Start: %v", err)
+		}
+		s.awaitRun(t, started.JobID)
+	}
+	run()
+	if got := s.containerDeletes(); len(got) != 0 {
+		t.Fatalf("the daemons saw %v after a run on a declared stack, want no delete", got)
+	}
+
+	// Taking the declaration out of the file lets the janitor judge the containers again.
+	draft, err := repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.SaveDraft(ctx, st.ID, draft.Version, "ada", declaredCompose("")); err != nil {
+		t.Fatal(err)
+	}
+	if _, p := s.previewJanitor(t); !slices.Equal(refs(p.Items), removable) {
+		t.Fatalf("preview after the declaration was removed: items %v notRemoved %+v, want %v removable", refs(p.Items), p.NotRemoved, removable)
+	}
+	run()
+	if got := s.containerDeletes(); !slices.Equal(got, []string{"DELETE /containers/web-x1", "DELETE /containers/web-x2", "DELETE /containers/web-x3"}) {
+		t.Fatalf("the daemons saw %v, want the three old containers deleted once the file no longer keeps the stack", got)
 	}
 }
