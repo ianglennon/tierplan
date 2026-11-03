@@ -25,6 +25,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/updates"
 )
 
 const (
@@ -90,6 +91,9 @@ type ServicesDeps struct {
 	// AllocationWait is how a staged network waits for the swarm to allocate it. The zero value is
 	// the real defaults (about 6 s); tests pass a clock that fires at once.
 	AllocationWait dockerx.AllocationWait
+	// Updates judges the image of each service from the checks it stored. Nil means update checks are not
+	// wired and no service carries an update object.
+	Updates *updates.Service
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -114,6 +118,8 @@ type ServiceItem struct {
 	CreatedAt       string   `json:"createdAt" format:"date-time" doc:"When the service was created"`
 
 	RestartLoop *RestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the service is in a restart loop: its tasks keep failing. Absent otherwise"`
+
+	Update *UpdateInfoBody `json:"update,omitempty" doc:"The image update state of the service; absent for the TierPlan agent, job-mode services, or when update checks are not wired"`
 }
 
 // RestartLoopBody says a service is in a restart loop (RES-13, D-14, D-15).
@@ -450,6 +456,7 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 		StatusCounts: serviceStatusCounts(all, loops), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt),
 	}
 	known := loadStackIDs(ctx, d.Store, envID, d.Log)
+	verdicts, workloads := serviceUpdates(ctx, d, envID, shown)
 	for _, row := range shown {
 		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
@@ -461,9 +468,31 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 		if l, flagged := loops[row.ID]; flagged {
 			item.RestartLoop = restartLoopBody(l)
 		}
+		if v, ok := verdicts[row.ID]; ok {
+			item.Update = updateInfoOf(v, workloads[row.ID])
+		}
 		body.Items = append(body.Items, item)
 	}
 	return body, nil
+}
+
+// serviceUpdates judges the images of the rows shown, keyed by service ID, with the workload each verdict
+// is for. A failure to read the verdicts is logged and answers none: the list never fails for it.
+func serviceUpdates(ctx context.Context, d ServicesDeps, envID string, rows []dockerx.ServiceRow) (map[string]updates.Verdict, map[string]updates.Workload) {
+	if d.Updates == nil {
+		return nil, nil
+	}
+	verdicts, err := d.Updates.ServiceVerdicts(ctx, envID, rows)
+	if err != nil {
+		d.Log.Warn("could not judge the images of the services", "environment", envID, "error", err)
+		return nil, nil
+	}
+	ws := updates.ServiceWorkloads(rows)
+	workloads := make(map[string]updates.Workload, len(ws))
+	for _, w := range ws {
+		workloads[w.ID] = w
+	}
+	return verdicts, workloads
 }
 
 // scaleOutcome is what one target's write learned, beyond the ContainerActionResult the

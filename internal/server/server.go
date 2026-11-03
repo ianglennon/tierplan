@@ -43,6 +43,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/internal/vault"
 	"github.com/ianglennon/tierplan/internal/webui"
 	"github.com/ianglennon/tierplan/web"
@@ -180,6 +181,7 @@ type RouterDeps struct {
 	AddressSpace  api.AddressSpaceDeps
 	Janitor       api.JanitorDeps
 	Services      api.ServicesDeps
+	Updates       api.UpdatesDeps
 	RestartLoop   api.RestartLoopDeps
 	Secrets       api.SecretsDeps
 	Configs       api.ConfigsDeps
@@ -238,6 +240,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterJanitor(r, d.Janitor)
 	api.RegisterJanitorTaskHistory(r, d.Janitor)
 	api.RegisterServices(r, d.Services)
+	api.RegisterUpdates(r, d.Updates)
 	api.RegisterRestartLoop(r, d.RestartLoop)
 	api.RegisterSecrets(r, d.Secrets)
 	api.RegisterConfigs(r, d.Configs)
@@ -847,6 +850,14 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	gitConns := gitconn.NewStore(st, vlt, nil)
+	// Image update checks: the registries are asked through the same clients and egress policy as every other
+	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
+	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
+	runIndex := updates.NewRunIndex()
+	updateService := &updates.Service{
+		Store: updates.SQLStore{Q: st.Q, W: st.Write}, Resolver: resolver, Clusters: clusters, Aggregator: aggregator, Runs: runIndex,
+		Checker: &updates.Checker{Heads: updates.NewHeads(resolver, registryClients), Store: updates.SQLStore{Q: st.Q, W: st.Write}, Runs: runIndex, Log: log},
+	}
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,
 		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Audit: aud, Log: log, Access: accessSvc}),
@@ -974,7 +985,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
 		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,
-		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
+		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Updates: updateService, Log: log},
+		Updates:       api.UpdatesDeps{Updates: updateService, Checker: checker, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},

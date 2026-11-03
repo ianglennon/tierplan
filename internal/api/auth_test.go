@@ -43,6 +43,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/internal/vault"
 )
 
@@ -134,6 +135,10 @@ type authFixture struct {
 	// addressSpaces is the address reader build made for the routes; nil before build or
 	// without an aggregator.
 	addressSpaces *envs.AddressSpaces
+	// updateHeads, when set, is the registry the image update checks ask (plan 12-37); without it the routes
+	// are built with no update checks. updateStore replaces the SQLite store the checks are kept in.
+	updateHeads updates.Heads
+	updateStore updates.Store
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18); agg is the aggregator over it that the routes read
 	// through (plan 02-11).
@@ -451,10 +456,23 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterJanitor(r, janitorDeps)
 		api.RegisterJanitorTaskHistory(r, janitorDeps)
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
+		var updateSvc *updates.Service
+		if f.updateHeads != nil {
+			var store updates.Store = updates.SQLStore{Q: f.st.Q, W: f.st.Write}
+			if f.updateStore != nil {
+				store = f.updateStore
+			}
+			runs := updates.NewRunIndex()
+			updateSvc = &updates.Service{
+				Store: store, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Clusters: f.clusters, Aggregator: f.agg, Runs: runs,
+				Checker: &updates.Checker{Heads: f.updateHeads, Store: store, Runs: runs, Now: f.clk.now, Log: log}, Now: f.clk.now,
+			}
+		}
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
-			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Log: log,
+			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Updates: updateSvc, Log: log,
 		})
+		api.RegisterUpdates(r, api.UpdatesDeps{Updates: updateSvc, Checker: checker, Log: log})
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
 		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})

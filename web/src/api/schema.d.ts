@@ -3428,6 +3428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/updates/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the environment's images for updates now
+         * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services have an update available (judged for the platforms each service runs on) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. 409 not_a_swarm for a standalone host. The services list carries the outcome for each service. Needs updates.check (Operator) on the environment.
+         */
+        post: operations["checkEnvironmentUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/volumes": {
         parameters: {
             query?: never;
@@ -5776,6 +5796,23 @@ export interface components {
             currentPassword: string;
             /** @description The new password; at least 12 characters, not a common password and not containing the username */
             newPassword: string;
+        };
+        CheckUpdatesBody: {
+            /**
+             * Format: int64
+             * @description How many distinct images (registry, repository and tag) were asked about
+             */
+            checked: number;
+            /**
+             * Format: int64
+             * @description How many images could not be checked; each service's update object says why
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description How many of the environment's services have an update available now, judged platform by platform
+             */
+            updates: number;
         };
         CompleteSetupBody: {
             /** @description Sent as X-CSRF-Token on every mutating request */
@@ -10921,6 +10958,8 @@ export interface components {
             stack: string;
             /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
             tierplanStackId: string;
+            /** @description The image update state of the service; absent for the TierPlan agent, job-mode services, or when update checks are not wired */
+            update?: components["schemas"]["UpdateInfoBody"];
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
@@ -13871,6 +13910,45 @@ export interface components {
             autoUpdate?: boolean;
             /** @description The new name, 1 to 64 characters */
             name?: string;
+        };
+        UpdateInfoBody: {
+            /** @description For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named */
+            changedPlatforms: string[] | null;
+            /**
+             * Format: date-time
+             * @description When the tag was last checked, whatever came of it; empty when it never was
+             */
+            checkedAt: string;
+            /**
+             * @description A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states
+             * @enum {string}
+             */
+            note: "" | "running_index_gone" | "may_be_stale";
+            /**
+             * @description Why the last check failed, in TierPlan's words; empty unless state is check_failed
+             * @enum {string}
+             */
+            reason: "" | "auth" | "rate_limited" | "unreachable" | "not_found" | "unsupported" | "other";
+            /** @description The registry host the image is checked at; empty when the image cannot be checked */
+            registry: string;
+            /** @description The digest the tag pointed at when it was last checked successfully; empty before any check did */
+            remoteDigest: string;
+            /** @description The repository below the registry host; empty when the image cannot be checked */
+            repository: string;
+            /** @description The digest the service runs, from its spec; empty when its spec names none */
+            runningDigest: string;
+            /**
+             * @description What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored
+             * @enum {string}
+             */
+            state: "update_available" | "updating" | "busy" | "queued" | "up_to_date" | "check_stale" | "check_failed" | "rolled_back" | "rollback_failed" | "not_from_registry" | "pinned_in_file" | "not_checked" | "skipped" | "ignored";
+            /**
+             * Format: date-time
+             * @description When a check of the tag last succeeded; empty when none did
+             */
+            successAt: string;
+            /** @description The tag that is followed; empty for an image named by digest alone */
+            tag: string;
         };
         UpdateMyProfileInputBody: {
             /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
@@ -21474,6 +21552,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdateAgentsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkEnvironmentUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckUpdatesBody"];
                 };
             };
             /** @description Error */

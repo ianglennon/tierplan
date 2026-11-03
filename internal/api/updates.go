@@ -1,0 +1,164 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/updates"
+)
+
+const (
+	// checkNowTimeout is the longest a Check now request runs (D-01, D-10). What the check had stored by
+	// then stays stored.
+	checkNowTimeout = 60 * time.Second
+
+	problemCheckTimedOut = "check_timed_out"
+)
+
+// UpdatesDeps are the dependencies of the image update routes.
+type UpdatesDeps struct {
+	// Updates asks the registries and judges what they answered. Nil means update checks are not wired
+	// and Check now answers 503.
+	Updates *updates.Service
+	Checker *rbac.Checker
+	// Log receives server-side failures. Nil means slog.Default().
+	Log *slog.Logger
+}
+
+func (d UpdatesDeps) log() *slog.Logger {
+	if d.Log != nil {
+		return d.Log
+	}
+	return slog.Default()
+}
+
+// UpdateInfoBody is what the page says about the image of one workload (D-03). It carries TierPlan's
+// words only: a state, a reason code and the digests, never the registry's own text.
+type UpdateInfoBody struct {
+	State            string   `json:"state" enum:"update_available,updating,busy,queued,up_to_date,check_stale,check_failed,rolled_back,rollback_failed,not_from_registry,pinned_in_file,not_checked,skipped,ignored" doc:"What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored"`
+	Reason           string   `json:"reason" enum:",auth,rate_limited,unreachable,not_found,unsupported,other" doc:"Why the last check failed, in TierPlan's words; empty unless state is check_failed"`
+	Registry         string   `json:"registry" doc:"The registry host the image is checked at; empty when the image cannot be checked"`
+	Repository       string   `json:"repository" doc:"The repository below the registry host; empty when the image cannot be checked"`
+	Tag              string   `json:"tag" doc:"The tag that is followed; empty for an image named by digest alone"`
+	RunningDigest    string   `json:"runningDigest" doc:"The digest the service runs, from its spec; empty when its spec names none"`
+	RemoteDigest     string   `json:"remoteDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
+	ChangedPlatforms []string `json:"changedPlatforms" doc:"For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named"`
+	CheckedAt        string   `json:"checkedAt" format:"date-time" doc:"When the tag was last checked, whatever came of it; empty when it never was"`
+	SuccessAt        string   `json:"successAt" format:"date-time" doc:"When a check of the tag last succeeded; empty when none did"`
+	Note             string   `json:"note" enum:",running_index_gone,may_be_stale" doc:"A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states"`
+}
+
+// updateInfoOf turns a verdict into its answer. w is the workload the verdict is for, which names the
+// image that is followed.
+func updateInfoOf(v updates.Verdict, w updates.Workload) *UpdateInfoBody {
+	b := &UpdateInfoBody{
+		State: string(v.State), Reason: string(v.Reason),
+		RunningDigest: v.RunningDigest, RemoteDigest: v.RemoteDigest,
+		ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
+		CheckedAt:        rfc3339(v.CheckedAt), SuccessAt: rfc3339(v.SuccessAt),
+		Note: v.Note,
+	}
+	if w.Checkable() {
+		b.Registry, b.Repository, b.Tag = w.Ref.Domain, w.Ref.Path, w.Ref.Tag
+	}
+	return b
+}
+
+// CheckUpdatesBody is the answer of Check now.
+type CheckUpdatesBody struct {
+	Checked int `json:"checked" doc:"How many distinct images (registry, repository and tag) were asked about"`
+	Updates int `json:"updates" doc:"How many of the environment's services have an update available now, judged platform by platform"`
+	Failed  int `json:"failed" doc:"How many images could not be checked; each service's update object says why"`
+}
+
+// CheckUpdatesOutput wraps CheckUpdatesBody for huma.
+type CheckUpdatesOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         CheckUpdatesBody
+}
+
+// RegisterUpdates registers the image update routes.
+func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "checkEnvironmentUpdates", Method: http.MethodPost, Path: "/api/env/{envId}/updates/check",
+		Summary: "Check the environment's images for updates now",
+		Description: "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. " +
+			"Answers within 60 seconds with how many images were asked about, how many of the environment's services have an update available (judged for the platforms each service runs on) and how many images could not be checked; " +
+			"a check that takes longer is 504 check_timed_out, and what it had learned stays stored. 409 not_a_swarm for a standalone host. " +
+			"The services list carries the outcome for each service. Needs updates.check (Operator) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermUpdatesCheck, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *EnvironmentPathInput) (*CheckUpdatesOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := checkEnvironmentUpdates(ctx, d, env.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &CheckUpdatesOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// checkEnvironmentUpdates checks the images of an environment's services now and counts what it found.
+func checkEnvironmentUpdates(ctx context.Context, d UpdatesDeps, envID string) (CheckUpdatesBody, error) {
+	u := d.Updates
+	if u == nil || u.Clusters == nil || u.Checker == nil {
+		return CheckUpdatesBody{}, httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available on this server.")
+	}
+	swarm, err := u.Clusters.IsSwarm(ctx, envID)
+	if err != nil {
+		return CheckUpdatesBody{}, snapshotProblem(d.log(), envID, err)
+	}
+	if !swarm {
+		return CheckUpdatesBody{}, httpx.Problem(http.StatusConflict, problemNotASwarm, "This environment is a standalone Docker host, not a swarm.")
+	}
+	cctx, cancel := context.WithTimeout(ctx, checkNowTimeout)
+	defer cancel()
+	res, err := u.CheckNow(cctx, envID)
+	switch {
+	case err == nil:
+	case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		return CheckUpdatesBody{}, httpx.Problem(http.StatusGatewayTimeout, problemCheckTimedOut, "The check took longer than 60 seconds. What it learned is kept; check again.")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return CheckUpdatesBody{}, httpx.Problem(http.StatusServiceUnavailable, "", "The check was cut short.")
+	default:
+		return CheckUpdatesBody{}, snapshotProblem(d.log(), envID, err)
+	}
+	// CheckResult.Updates counts services whose running digest differs from the tag's, which a rebuild of a
+	// platform nobody runs also does. The count shown is the one the verdicts give.
+	return CheckUpdatesBody{Checked: res.Checked, Updates: countUpdates(cctx, d, envID), Failed: res.Failed}, nil
+}
+
+// countUpdates counts the services of an environment whose verdict is update_available. A verdict that
+// cannot be read is logged and counts none: the list says what each service is.
+func countUpdates(ctx context.Context, d UpdatesDeps, envID string) int {
+	st, err := d.Updates.Clusters.State(ctx, envID)
+	if err != nil && st.FetchedAt.IsZero() {
+		d.log().Warn("could not read the services to count their updates", "environment", envID, "error", err)
+		return 0
+	}
+	verdicts, err := d.Updates.ServiceVerdicts(ctx, envID, st.Read.Services)
+	if err != nil {
+		d.log().Warn("could not judge the images to count their updates", "environment", envID, "error", err)
+		return 0
+	}
+	n := 0
+	for _, v := range verdicts {
+		if v.State == updates.StateUpdateAvailable {
+			n++
+		}
+	}
+	return n
+}

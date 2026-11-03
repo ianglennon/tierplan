@@ -1571,6 +1571,32 @@
         ],
         "type": "object"
       },
+      "CheckUpdatesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "checked": {
+            "description": "How many distinct images (registry, repository and tag) were asked about",
+            "format": "int64",
+            "type": "integer"
+          },
+          "failed": {
+            "description": "How many images could not be checked; each service's update object says why",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updates": {
+            "description": "How many of the environment's services have an update available now, judged platform by platform",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checked",
+          "updates",
+          "failed"
+        ],
+        "type": "object"
+      },
       "CompleteSetupBody": {
         "additionalProperties": false,
         "properties": {
@@ -14451,6 +14477,10 @@
             "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
+          "update": {
+            "$ref": "#/components/schemas/UpdateInfoBody",
+            "description": "The image update state of the service; absent for the TierPlan agent, job-mode services, or when update checks are not wired"
+          },
           "updateMessage": {
             "description": "The swarm's message about the last update; empty when it has none",
             "type": "string"
@@ -21497,6 +21527,107 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "UpdateInfoBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changedPlatforms": {
+            "description": "For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "checkedAt": {
+            "description": "When the tag was last checked, whatever came of it; empty when it never was",
+            "format": "date-time",
+            "type": "string"
+          },
+          "note": {
+            "description": "A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states",
+            "enum": [
+              "",
+              "running_index_gone",
+              "may_be_stale"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the last check failed, in TierPlan's words; empty unless state is check_failed",
+            "enum": [
+              "",
+              "auth",
+              "rate_limited",
+              "unreachable",
+              "not_found",
+              "unsupported",
+              "other"
+            ],
+            "type": "string"
+          },
+          "registry": {
+            "description": "The registry host the image is checked at; empty when the image cannot be checked",
+            "type": "string"
+          },
+          "remoteDigest": {
+            "description": "The digest the tag pointed at when it was last checked successfully; empty before any check did",
+            "type": "string"
+          },
+          "repository": {
+            "description": "The repository below the registry host; empty when the image cannot be checked",
+            "type": "string"
+          },
+          "runningDigest": {
+            "description": "The digest the service runs, from its spec; empty when its spec names none",
+            "type": "string"
+          },
+          "state": {
+            "description": "What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored",
+            "enum": [
+              "update_available",
+              "updating",
+              "busy",
+              "queued",
+              "up_to_date",
+              "check_stale",
+              "check_failed",
+              "rolled_back",
+              "rollback_failed",
+              "not_from_registry",
+              "pinned_in_file",
+              "not_checked",
+              "skipped",
+              "ignored"
+            ],
+            "type": "string"
+          },
+          "successAt": {
+            "description": "When a check of the tag last succeeded; empty when none did",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tag": {
+            "description": "The tag that is followed; empty for an image named by digest alone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reason",
+          "registry",
+          "repository",
+          "tag",
+          "runningDigest",
+          "remoteDigest",
+          "changedPlatforms",
+          "checkedAt",
+          "successAt",
+          "note"
+        ],
         "type": "object"
       },
       "UpdateMyProfileInputBody": {
@@ -35160,6 +35291,57 @@
           }
         },
         "summary": "Update every agent of an environment that is behind",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/updates/check": {
+      "post": {
+        "description": "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services have an update available (judged for the platforms each service runs on) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. 409 not_a_swarm for a standalone host. The services list carries the outcome for each service. Needs updates.check (Operator) on the environment.",
+        "operationId": "checkEnvironmentUpdates",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckUpdatesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check the environment's images for updates now",
         "tags": [
           "environments"
         ]
