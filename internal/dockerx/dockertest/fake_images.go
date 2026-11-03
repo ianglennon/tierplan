@@ -70,6 +70,9 @@ func (f *Fake) serveImageInspect(w http.ResponseWriter, r *http.Request, p strin
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + m[1]})
 		return true
 	}
+	if changed, ok := cfg.InspectImages[fi.ID]; ok {
+		fi = changed
+	}
 	os, arch := fi.OS, fi.Architecture
 	if os == "" {
 		os = "linux"

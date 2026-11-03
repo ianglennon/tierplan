@@ -140,6 +140,10 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// InspectImages, keyed by image ID, is what GET /images/{id}/json answers for an image of Images
+	// instead of its list entry: an image that gained a name or a label after it was listed, so a test
+	// can show what a caller that trusts the list would miss.
+	InspectImages map[string]FakeImage
 	// Secrets are the swarm secrets /secrets lists, none with a value (fake_secrets.go).
 	Secrets []FakeSecret
 	// Configs are the swarm configs /configs lists, each with its content, as a real manager

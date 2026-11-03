@@ -338,8 +338,9 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 		out.attempted = false
 		return fail(codeNotDangling, out.ref+" has a name, so it was not deleted with the others. Open the image to remove it.")
 	}
-	if op.strictDangling && op.untag == "" && (slices.ContainsFunc(row.RepoTags, func(tag string) bool { return !isNoneTag(tag) }) ||
-		len(row.RepoDigests) > 0 || row.Labels[stacks.LabelKeep] == "true") {
+	// A cheap early exit on the list the check read; the test that decides is the one inside the
+	// write call below, on the image as the node has it then.
+	if op.strictDangling && op.untag == "" && !strictlyDangling(row.RepoTags, row.RepoDigests, row.Labels) {
 		out.attempted = false
 		return fail(codeNotDangling, out.ref+" has a name or is kept, so it is not dangling and was left alone.")
 	}
@@ -368,6 +369,11 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 				return errImageGone
 			}
 			return e
+		}
+		if op.strictDangling && op.untag == "" && !strictlyDangling(det.RepoTags, det.RepoDigests, det.Labels) {
+			// It gained a name or a keep label since the list was read: an ImageRemove now would untag
+			// that name too and delete an image somebody wants.
+			return errNotDangling
 		}
 		names := append(slices.Clone(det.RepoTags), det.RepoDigests...)
 		untag := op.untag
@@ -401,10 +407,18 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 	})
 	if err != nil {
 		code, detail := imageRemoveError(out.ref, err)
-		out.attempted = code != codeNotFound
+		// An image found no longer dangling was only read, never sent a removal, as the early exit above.
+		out.attempted = code != codeNotFound && code != codeNotDangling
 		return fail(code, detail)
 	}
 	return out
+}
+
+// strictlyDangling is the janitor's rule for an image it may remove (D-07): no real tag, no digest
+// reference, and no tierplan.keep=true label.
+func strictlyDangling(tags, digests []string, labels map[string]string) bool {
+	return !slices.ContainsFunc(tags, func(tag string) bool { return !isNoneTag(tag) }) &&
+		len(digests) == 0 && labels[stacks.LabelKeep] != "true"
 }
 
 // sameRef says whether two image names are the same reference once written out in full, so
