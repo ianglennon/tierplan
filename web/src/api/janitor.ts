@@ -37,6 +37,8 @@ export type JanitorDefaults = components["schemas"]["JanitorDefaultsBody"];
 export type JanitorDefaultsRequest = components["schemas"]["JanitorDefaultsRequest"];
 export type JanitorRetentionPreview = components["schemas"]["JanitorRetentionPreviewBody"];
 export type SchedulePreset = NonNullable<JanitorPolicyFields["schedulePreset"]>;
+export type TaskHistory = components["schemas"]["TaskHistoryBody"];
+export type TaskHistoryChange = components["schemas"]["TaskHistoryChangeBody"];
 
 // The frames of a run's stream (GET .../janitor/runs/{runId}/stream). The server sends them but
 // does not describe them in the OpenAPI document, so they are written here by hand from
@@ -567,4 +569,67 @@ export function useRetentionPreview() {
   const queryClient = useQueryClient();
   return (days: number, runs: number) =>
     queryClient.fetchQuery(janitorRetentionPreviewQuery(days, runs));
+}
+
+// The key of a swarm's task history limit. It sits under the environment's janitor keys but outside
+// the overview, which the events feed makes stale: the limit changes only when someone changes it.
+export function taskHistoryKey(envId: string) {
+  return ["env", envId, "janitor", "task-history"] as const;
+}
+
+// taskHistoryQuery is how many finished tasks per slot the swarm keeps, read live from a manager. A
+// swarm with no manager connected answers 503 no_manager, an older agent 502 agent_policy_denied, and
+// a standalone host 409 not_swarm; none of them is asked for again. It is read when the page opens and
+// when the window regains focus, not on a timer: a person's unsaved number is kept against it.
+export function taskHistoryQuery(envId: string) {
+  return queryOptions({
+    queryKey: taskHistoryKey(envId),
+    queryFn: async (): Promise<TaskHistory> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/janitor/task-history", {
+          params: { path: { envId } },
+        });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+    retry: false,
+  });
+}
+
+// useTaskHistory reads the swarm's task history limit; enabled is false for a standalone host and for
+// a person who may not read the environment.
+export function useTaskHistory(envId: string, enabled = true) {
+  return useQuery({ ...taskHistoryQuery(envId), enabled });
+}
+
+// useSaveTaskHistory sets the swarm's task history limit (0 to 1000). It is never retried (P2 D-42):
+// it is a swarm update. The answer says whether anything was changed and what the swarm now keeps, and
+// replaces what the page holds. A swarm that changed under the save is 409 swarm_changed, no manager
+// 503 no_manager, an older agent 502 agent_policy_denied and a read-only host 409 host_read_only.
+export function useSaveTaskHistory(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<TaskHistoryChange, JanitorRequestError, number>({
+    retry: false,
+    mutationFn: async (limit) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/janitor/task-history", {
+          params: { path: { envId } },
+          body: { limit },
+        });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("PUT", 0);
+      }
+    },
+    onSuccess: ({ limit, dockerDefault, keepsAll }) =>
+      queryClient.setQueryData<TaskHistory>(taskHistoryKey(envId), {
+        limit,
+        dockerDefault,
+        keepsAll,
+      }),
+  });
 }

@@ -17,6 +17,7 @@ import { CleanupPreviewSheet } from "@/features/janitor/cleanup-preview-sheet";
 import { PolicyCard } from "@/features/janitor/policy-card";
 import { RunHistoryCard } from "@/features/janitor/run-history-card";
 import { StatusCard } from "@/features/janitor/status-card";
+import { TaskHistoryLimitCard } from "@/features/janitor/task-history-limit-card";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { usePermission } from "@/hooks/use-me";
@@ -33,8 +34,8 @@ interface JanitorPageProps {
 
 // JanitorPage is where an operator cleans an environment (D-13): the title, what the janitor does and
 // never does, and Clean now, which opens the dry run, then whether the janitor is on, what it last
-// did and when it runs next, its policy (with the note on what it removes and never touches), and
-// every run it has made. Clean now is the page's one accent control.
+// did and when it runs next, its policy (with the note on what it removes and never touches), on a swarm
+// the task history limit, and every run it has made. Clean now is the page's one accent control.
 export function JanitorPage({ envId, limit, onLimitChange }: JanitorPageProps) {
   const t = useT();
   const hintId = useId();
@@ -119,6 +120,8 @@ export function JanitorPage({ envId, limit, onLimitChange }: JanitorPageProps) {
         nodeCount={env?.nodes?.total ?? 1}
         firstRunDone={status.data ? status.data.lastRun !== undefined : undefined}
       />
+
+      {swarm ? <TaskHistoryLimitCard envId={envId} envName={envName} /> : null}
 
       <RunHistoryCard
         envId={envId}
