@@ -474,6 +474,8 @@ function RunBody({ envId, envName, run, stream, search, onSearchChange }: RunBod
             items={items}
             show={search.show ?? "all"}
             q={search.q}
+            item={search.item}
+            onItemChange={(seq) => onSearchChange({ item: seq })}
             onClearFilters={() => onSearchChange({ show: undefined, q: undefined })}
           />
         </>

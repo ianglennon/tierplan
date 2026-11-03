@@ -105,6 +105,8 @@ describe("the crash evidence sheet", () => {
     expect(read("Started")).toContain("2026");
     expect(read("Finished")).toContain("2026");
     cleanup();
+    // The evidence of an item never changes, so the second look needs a cache that has none.
+    client.clear();
 
     answer = () =>
       Response.json(

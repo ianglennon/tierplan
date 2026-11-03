@@ -9,20 +9,23 @@ import {
   CircleCheck,
   CircleX,
   Container,
+  FileText,
   Info,
   Layers,
   Network,
   ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 
 import type { JanitorRunItem } from "@/api/janitor";
 import { Button } from "@/components/ui/button";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MAX_QUERY } from "@/features/containers/list-search";
+import { CrashEvidenceSheet } from "@/features/janitor/crash-evidence-sheet";
 import { reasonText, type Translate } from "@/features/janitor/preview-summary";
 import { TruncatedText } from "@/features/resources/resource-table";
+import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 import { z } from "@/lib/zod-config";
@@ -89,6 +92,10 @@ export function itemReason(item: JanitorRunItem, t: Translate): string {
   return reasonText(item.reason, t);
 }
 
+// hasEvidence is true for a container the run removed and saved the crash evidence of first.
+const hasEvidence = (item: JanitorRunItem): boolean =>
+  item.type === "container" && item.outcome === "removed" && item.hasEvidence;
+
 function TypeIcon({ type }: { type: JanitorRunItem["type"] }) {
   const Icon = type === "container" ? Container : type === "image" ? Layers : Network;
   return <Icon aria-hidden="true" className="size-4 text-muted-foreground" />;
@@ -135,13 +142,30 @@ export interface RunItemsTableProps {
   q?: string;
   // Clears the filters, for the line that says nothing matches.
   onClearFilters?: () => void;
+  // The item whose crash evidence is open (its sequence number in the run), and the way to open or
+  // close one. The page keeps it in the address.
+  item?: number;
+  onItemChange?: (seq: number | undefined) => void;
 }
 
 // RunItemsTable lists the items a run attempted, narrowed by the Show filter and the search by name
 // and sortable by its headers. It is a native table; over 100 rows only the rows in view are drawn
 // between two spacer rows, and the count under it is of every row that matches.
-export function RunItemsTable({ items, show, q, onClearFilters }: RunItemsTableProps) {
+export function RunItemsTable({
+  envId,
+  runId,
+  items,
+  show,
+  q,
+  onClearFilters,
+  item: openSeq,
+  onItemChange,
+}: RunItemsTableProps) {
   const t = useT();
+  // The evidence is the container's log, so it takes the same permission as reading it.
+  const mayRead = usePermission("containers.read", envId);
+  // The buttons that open the sheet, so the one that did can have the focus back when it closes.
+  const buttons = useRef(new Map<number, HTMLButtonElement>());
   const [sort, setSort] = useState<Sort | undefined>();
   // The scrolling element is state and not a ref: the rows ask for it before React has set a ref on
   // their parent, and a ref would still be empty then.
@@ -195,7 +219,7 @@ export function RunItemsTable({ items, show, q, onClearFilters }: RunItemsTableP
   }
 
   const virtual = rows.length > VIRTUALISE_OVER;
-  const columns = showNode ? 5 : 4;
+  const columns = showNode ? 6 : 5;
   const header = (key: SortKey, className: string) => (
     <SortHeader
       sort={sort}
@@ -230,8 +254,30 @@ export function RunItemsTable({ items, show, q, onClearFilters }: RunItemsTableP
       <TableCell className={cn(CELL, "w-48")}>
         <OutcomeCell outcome={item.outcome} />
       </TableCell>
+      <TableCell className={cn(CELL, "w-32")}>
+        {mayRead && hasEvidence(item) && onItemChange ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="max-md:h-11"
+            aria-label={t("janitorRun.evidence.viewFor", { name: item.name })}
+            ref={(el) => {
+              if (el) buttons.current.set(item.seq, el);
+              else buttons.current.delete(item.seq);
+            }}
+            onClick={() => onItemChange(item.seq)}
+          >
+            <FileText aria-hidden="true" />
+            {t("janitorRun.evidence.view")}
+          </Button>
+        ) : (
+          t("janitorRun.evidence.none")
+        )}
+      </TableCell>
     </TableRow>
   );
+  const sheetItem = openSeq === undefined ? undefined : items.find((i) => i.seq === openSeq);
 
   return (
     <>
@@ -251,6 +297,9 @@ export function RunItemsTable({ items, show, q, onClearFilters }: RunItemsTableP
               {showNode ? header("node", "w-36") : null}
               {header("reason", "min-w-64")}
               {header("outcome", "w-48")}
+              <TableHead scope="col" className="w-32">
+                {t("janitorRun.columns.evidence")}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -272,6 +321,20 @@ export function RunItemsTable({ items, show, q, onClearFilters }: RunItemsTableP
           ? t("janitorRun.items", { count: items.length })
           : t("janitorRun.itemsFiltered", { shown: rows.length, count: items.length })}
       </p>
+      {sheetItem && onItemChange ? (
+        <CrashEvidenceSheet
+          envId={envId}
+          runId={runId}
+          item={sheetItem}
+          onClose={() => onItemChange(undefined)}
+          onCloseAutoFocus={(event) => {
+            const button = buttons.current.get(sheetItem.seq);
+            if (!button) return;
+            event.preventDefault();
+            button.focus();
+          }}
+        />
+      ) : null}
     </>
   );
 }
