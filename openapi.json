@@ -7446,6 +7446,187 @@
         ],
         "type": "object"
       },
+      "JanitorDefaultsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether the schedule runs the janitor on an environment that does not set this itself",
+            "type": "boolean"
+          },
+          "followingEnvironments": {
+            "description": "How many environments follow at least one of these defaults, because they set nothing themselves or leave a field to the default",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "graceHours": {
+            "description": "How many hours an object must have been stopped or idle before it can be removed, 1 to 720",
+            "format": "int64",
+            "maximum": 720,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "keepN": {
+            "description": "How many of the newest exited task containers of each service slot are kept, 0 to 20",
+            "format": "int64",
+            "maximum": 20,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removeStoppedContainers": {
+            "description": "Whether stopped containers no stack or project ever owned are removed too",
+            "type": "boolean"
+          },
+          "removeUnusedNetworks": {
+            "description": "Whether networks no stack ever owned are removed too",
+            "type": "boolean"
+          },
+          "removedRuns": {
+            "description": "How many run records the save removed because it lowered the retention; 0 for a read and for a save that kept every run",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retentionDays": {
+            "description": "How many days a run stays in the history, 7 to 3650. A run is kept while it is that recent or among the newest retentionRuns runs of its environment, whichever keeps more",
+            "format": "int64",
+            "maximum": 3650,
+            "minimum": 7,
+            "type": "integer"
+          },
+          "retentionRuns": {
+            "description": "How many of the newest runs of each environment stay in the history, 10 to 1000",
+            "format": "int64",
+            "maximum": 1000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "schedule": {
+            "description": "A five-field cron expression that fires no more often than every 15 minutes, read in the server's time zone",
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schedulePreset": {
+            "description": "The preset the schedule came from, shown on the page; custom for one written by hand",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "description": "The server's time zone, which the schedule is read in",
+            "type": "string"
+          },
+          "version": {
+            "description": "How many times the defaults were saved, starting at 1. Send it back with a save: a save made against any other version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "timezone",
+          "followingEnvironments",
+          "removedRuns",
+          "enabled",
+          "schedule",
+          "schedulePreset",
+          "keepN",
+          "graceHours",
+          "removeUnusedNetworks",
+          "removeStoppedContainers",
+          "retentionDays",
+          "retentionRuns"
+        ],
+        "type": "object"
+      },
+      "JanitorDefaultsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether the schedule runs the janitor on an environment that does not set this itself",
+            "type": "boolean"
+          },
+          "graceHours": {
+            "description": "How many hours an object must have been stopped or idle before it can be removed, 1 to 720",
+            "format": "int64",
+            "maximum": 720,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "keepN": {
+            "description": "How many of the newest exited task containers of each service slot are kept, 0 to 20",
+            "format": "int64",
+            "maximum": 20,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removeStoppedContainers": {
+            "description": "Whether stopped containers no stack or project ever owned are removed too",
+            "type": "boolean"
+          },
+          "removeUnusedNetworks": {
+            "description": "Whether networks no stack ever owned are removed too",
+            "type": "boolean"
+          },
+          "retentionDays": {
+            "description": "How many days a run stays in the history, 7 to 3650. A run is kept while it is that recent or among the newest retentionRuns runs of its environment, whichever keeps more",
+            "format": "int64",
+            "maximum": 3650,
+            "minimum": 7,
+            "type": "integer"
+          },
+          "retentionRuns": {
+            "description": "How many of the newest runs of each environment stay in the history, 10 to 1000",
+            "format": "int64",
+            "maximum": 1000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "schedule": {
+            "description": "A five-field cron expression that fires no more often than every 15 minutes, read in the server's time zone",
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schedulePreset": {
+            "description": "The preset the schedule came from, shown on the page; custom for one written by hand",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "description": "The version read with the defaults; a save against another version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "enabled",
+          "schedule",
+          "schedulePreset",
+          "keepN",
+          "graceHours",
+          "removeUnusedNetworks",
+          "removeStoppedContainers",
+          "retentionDays",
+          "retentionRuns"
+        ],
+        "type": "object"
+      },
       "JanitorEvidenceBody": {
         "additionalProperties": false,
         "properties": {
@@ -8157,6 +8338,26 @@
         "required": [
           "days",
           "runs"
+        ],
+        "type": "object"
+      },
+      "JanitorRetentionPreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "environments": {
+            "description": "How many environments those runs belong to",
+            "format": "int64",
+            "type": "integer"
+          },
+          "runs": {
+            "description": "How many run records saving this retention would delete now, across all environments",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "environments"
         ],
         "type": "object"
       },
@@ -37290,6 +37491,161 @@
           }
         },
         "summary": "Change the instance name, the public URL or the agent URL",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/janitor": {
+      "get": {
+        "description": "The settings every environment's janitor follows until the environment sets the field itself (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), how long the run history is kept (retentionDays and retentionRuns), the version a save must send back, the server's time zone and how many environments follow at least one default. Needs settings.read.",
+        "operationId": "getJanitorDefaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorDefaultsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the instance-wide janitor defaults",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Replaces every default and the run-history retention. A change reaches every environment that follows the field and none that sets it itself; nothing is written to an environment. keepN is 0 to 20, graceHours 1 to 720, retentionDays 7 to 3650, retentionRuns 10 to 1000, and the schedule a five-field cron expression that fires no more often than every 15 minutes (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the defaults: a save made against any other version is 409 settings_changed and names who saved last. Lowering the retention deletes the run records it no longer keeps, in every environment, in the same transaction as the new value; the answer's removedRuns says how many, and a run that is waiting or running is never deleted. Use the retention preview to count them first. A save that changes nothing answers 200 and writes nothing. Needs settings.write: an instance admin, not an environment admin or an operator with janitor.policy. A change is audited as janitor.defaults_changed, naming the fields and how many runs were removed.",
+        "operationId": "setJanitorDefaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JanitorDefaultsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorDefaultsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the instance-wide janitor defaults",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/janitor/retention-preview": {
+      "get": {
+        "description": "Answers how many run records across how many environments saving a retention of days and runs would delete now, by the rule saving applies: a run stays while it is recent enough or among the newest runs of its environment, and a run that is waiting or running is never counted. A retention that does not lower the stored one deletes nothing and answers 0. It only reads. Needs settings.write, as the change it previews does.",
+        "operationId": "previewJanitorRetention",
+        "parameters": [
+          {
+            "description": "The days to count for, 7 to 3650",
+            "explode": false,
+            "in": "query",
+            "name": "days",
+            "required": true,
+            "schema": {
+              "description": "The days to count for, 7 to 3650",
+              "format": "int64",
+              "maximum": 3650,
+              "minimum": 7,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The runs per environment to count for, 10 to 1000",
+            "explode": false,
+            "in": "query",
+            "name": "runs",
+            "required": true,
+            "schema": {
+              "description": "The runs per environment to count for, 10 to 1000",
+              "format": "int64",
+              "maximum": 1000,
+              "minimum": 10,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorRetentionPreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Count the runs a lower retention would delete",
         "tags": [
           "settings"
         ]

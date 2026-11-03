@@ -142,3 +142,33 @@ WHERE env_id = ? AND version = ?;
 -- The per-node overrides of one environment.
 SELECT env_id, node_id, enabled, keep_n, updated_by, updated_at
 FROM janitor_node_policy WHERE env_id = ? ORDER BY node_id;
+
+-- name: UpdateJanitorDefaults :execrows
+-- Saves the instance defaults and the run-history retention only when the version is the one the caller
+-- read; zero rows means it was not. The row is seeded by the migration, so there is always one.
+UPDATE janitor_defaults
+SET enabled = ?, schedule = ?, schedule_preset = ?, keep_n = ?, grace_hours = ?,
+    remove_unused_networks = ?, remove_stopped_containers = ?, retention_days = ?, retention_runs = ?,
+    version = version + 1, updated_by = ?, updated_at = ?
+WHERE id = 1 AND version = ?;
+
+-- name: CountJanitorFollowers :one
+-- How many environments follow at least one instance default: those with no policy row and those whose
+-- row leaves any field NULL (the schedule and its preset are set together, so the schedule stands for both).
+SELECT COUNT(*) FROM environments e
+LEFT JOIN janitor_env_policy p ON p.env_id = e.id
+WHERE p.env_id IS NULL
+   OR p.enabled IS NULL OR p.schedule IS NULL OR p.keep_n IS NULL OR p.grace_hours IS NULL
+   OR p.remove_unused_networks IS NULL OR p.remove_stopped_containers IS NULL;
+
+-- name: CountJanitorRunsToPrune :one
+-- How many runs PruneAllJanitorRuns (or PruneJanitorRuns, when env_id is not empty) would delete now, and
+-- from how many environments, by the same rule: the answer a retention preview gives.
+SELECT COUNT(*) AS runs, COUNT(DISTINCT janitor_runs.env_id) AS environments
+FROM janitor_runs
+WHERE (CAST(sqlc.arg(env_id) AS TEXT) = '' OR janitor_runs.env_id = sqlc.arg(env_id))
+  AND janitor_runs.state NOT IN ('waiting', 'running')
+  AND janitor_runs.started_at < sqlc.arg(cutoff)
+  AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
+                              WHERE k.env_id = janitor_runs.env_id
+                              ORDER BY k.started_at DESC, k.id DESC LIMIT sqlc.arg(keep));

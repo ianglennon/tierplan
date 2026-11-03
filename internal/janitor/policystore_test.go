@@ -257,3 +257,161 @@ func TestPolicyStoreSetEnvInvalid(t *testing.T) {
 		t.Error("the database accepted grace_hours 0")
 	}
 }
+
+// saveDefaults runs SetDefaults in a transaction of its own and commits it unless it failed.
+func (f policyFix) saveDefaults(t *testing.T, p Policy, r Retention, version int64) (removed int64, changed bool, err error) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	tx, err := f.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, changed, err = f.ps.SetDefaults(ctx, f.st.Q.WithTx(tx), p, r, version, "ada", time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return removed, changed, nil
+}
+
+// An instance admin's change of the defaults reaches the environment that follows the field and not the one
+// that sets it (plan 11-21, D-04), and is stored with its version, author and time.
+func TestPolicyStoreSetDefaults(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFix(t)
+	ctx := testsupport.Context(t)
+	if _, err := f.save(t, "env-2", Overrides{KeepN: ptr(7)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	pol, _, version, err := f.ps.Defaults(ctx)
+	if err != nil || version != 1 {
+		t.Fatalf("Defaults = %v, v%d", err, version)
+	}
+	pol.KeepN, pol.Grace, pol.RemoveUnusedNetworks, pol.Schedule, pol.SchedulePreset = 0, 48*time.Hour, true, "0 4 * * 1", PresetCustom
+	ret := Retention{Days: 30, Runs: 20}
+	removed, changed, err := f.saveDefaults(t, pol, ret, 1)
+	if err != nil || !changed || removed != 0 {
+		t.Fatalf("SetDefaults = %d, %v, %v, want changed with nothing removed", removed, changed, err)
+	}
+	got, gotRet, version, err := f.ps.Defaults(ctx)
+	if err != nil || got != pol || gotRet != ret || version != 2 {
+		t.Fatalf("stored = %+v %+v v%d %v, want what was saved at version 2", got, gotRet, version, err)
+	}
+	var by string
+	var at int64
+	if err := f.st.Read.QueryRowContext(ctx, `SELECT updated_by, updated_at FROM janitor_defaults WHERE id = 1`).Scan(&by, &at); err != nil || by != "ada" || at == 0 {
+		t.Errorf("updated_by %q updated_at %d (%v), want the author and the time", by, at, err)
+	}
+	if e := f.effective(t, "env-1"); e.KeepN != 0 || e.Grace != 48*time.Hour || !e.RemoveUnusedNetworks || e.Schedule != "0 4 * * 1" {
+		t.Errorf("env-1 (follows) = %+v, want the new defaults", e)
+	}
+	if e := f.effective(t, "env-2"); e.KeepN != 7 || e.Grace != 48*time.Hour {
+		t.Errorf("env-2 (keeps its own keep-N) = %+v, want keep 7 and the new grace", e)
+	}
+	if rt, err := f.ps.Retention(ctx); err != nil || rt != ret {
+		t.Errorf("Retention = %+v, %v, want %+v", rt, err, ret)
+	}
+}
+
+func TestPolicyStoreFollowers(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFix(t)
+	ctx := testsupport.Context(t)
+	count := func() int {
+		t.Helper()
+		n, err := f.ps.Followers(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("followers with no policy row = %d, want both environments", n)
+	}
+	// A row that sets one field still follows the others.
+	if _, err := f.save(t, "env-1", Overrides{KeepN: ptr(1)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 2 {
+		t.Errorf("followers with one override = %d, want 2", n)
+	}
+	// An environment that sets every field follows nothing.
+	all := Overrides{
+		Enabled: ptr(true), Schedule: ptr("0 5 * * *"), SchedulePreset: ptr(PresetCustom), KeepN: ptr(1), GraceHours: ptr(5),
+		RemoveUnusedNetworks: ptr(false), RemoveStoppedContainers: ptr(false),
+	}
+	if _, err := f.save(t, "env-1", all, 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("followers with env-1 setting everything = %d, want 1", n)
+	}
+	// Taking one field back makes it follow again.
+	all.GraceHours = nil
+	if _, err := f.save(t, "env-1", all, 2); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 2 {
+		t.Errorf("followers after env-1 follows the grace again = %d, want 2", n)
+	}
+}
+
+func TestPolicyStoreSetDefaultsStaleNoOpInvalid(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFix(t)
+	ctx := testsupport.Context(t)
+	pol, ret, _, err := f.ps.Defaults(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Saving what is stored writes nothing: the version and the time stay.
+	if removed, changed, err := f.saveDefaults(t, pol, ret, 1); err != nil || changed || removed != 0 {
+		t.Fatalf("identical save = %d, %v, %v, want changed false", removed, changed, err)
+	}
+	if _, _, v, _ := f.ps.Defaults(ctx); v != 1 {
+		t.Errorf("version = %d after a no-op, want 1", v)
+	}
+	// A save from another version is refused, even one that would change nothing.
+	changedPol := pol
+	changedPol.KeepN = 9
+	for _, version := range []int64{0, 2} {
+		if _, changed, err := f.saveDefaults(t, changedPol, ret, version); !errors.Is(err, ErrPolicyVersion) || changed {
+			t.Errorf("version %d: SetDefaults = %v, %v, want ErrPolicyVersion", version, changed, err)
+		}
+	}
+	if _, _, err := f.saveDefaults(t, pol, ret, 5); !errors.Is(err, ErrPolicyVersion) {
+		t.Errorf("a no-op from the wrong version = %v, want ErrPolicyVersion", err)
+	}
+	bad := func(mut func(*Policy, *Retention)) (Policy, Retention) {
+		p, r := pol, ret
+		mut(&p, &r)
+		return p, r
+	}
+	for name, tc := range map[string]struct {
+		mut  func(*Policy, *Retention)
+		want error
+	}{
+		"keep 21":       {func(p *Policy, _ *Retention) { p.KeepN = 21 }, ErrOutOfRange},
+		"keep -1":       {func(p *Policy, _ *Retention) { p.KeepN = -1 }, ErrOutOfRange},
+		"grace 0":       {func(p *Policy, _ *Retention) { p.Grace = 0 }, ErrOutOfRange},
+		"grace 90 mins": {func(p *Policy, _ *Retention) { p.Grace = 90 * time.Minute }, ErrOutOfRange},
+		"every minute":  {func(p *Policy, _ *Retention) { p.Schedule = "* * * * *" }, ErrScheduleTooFrequent},
+		"no schedule":   {func(p *Policy, _ *Retention) { p.Schedule = "" }, ErrInvalidSchedule},
+		"no preset":     {func(p *Policy, _ *Retention) { p.SchedulePreset = "" }, ErrInvalidSchedule},
+		"days 6":        {func(_ *Policy, r *Retention) { r.Days = 6 }, ErrOutOfRange},
+		"days 3651":     {func(_ *Policy, r *Retention) { r.Days = 3651 }, ErrOutOfRange},
+		"runs 9":        {func(_ *Policy, r *Retention) { r.Runs = 9 }, ErrOutOfRange},
+		"runs 1001":     {func(_ *Policy, r *Retention) { r.Runs = 1001 }, ErrOutOfRange},
+	} {
+		p, r := bad(tc.mut)
+		if _, changed, err := f.saveDefaults(t, p, r, 1); !errors.Is(err, tc.want) || changed {
+			t.Errorf("%s: SetDefaults = %v, %v, want %v", name, changed, err, tc.want)
+		}
+	}
+	if got, gotRet, v, _ := f.ps.Defaults(ctx); got != pol || gotRet != ret || v != 1 {
+		t.Errorf("stored = %+v %+v v%d, want the seeded defaults untouched", got, gotRet, v)
+	}
+}

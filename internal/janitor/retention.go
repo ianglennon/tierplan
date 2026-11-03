@@ -42,6 +42,10 @@ func (r Retention) cutoff(now time.Time) int64 {
 	return now.UTC().Add(-time.Duration(r.Days) * 24 * time.Hour).UnixNano()
 }
 
+// lowers reports whether r keeps less history than cur: fewer days or fewer runs. Only then does saving r
+// delete anything; raising either never reaches for a run it was not asked about.
+func (r Retention) lowers(cur Retention) bool { return r.Days < cur.Days || r.Runs < cur.Runs }
+
 func (r Retention) valid() error {
 	if r.Days < 1 || r.Runs < 1 {
 		return ErrRetentionTooLow

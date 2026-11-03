@@ -10,6 +10,23 @@ import (
 	"database/sql"
 )
 
+const countJanitorFollowers = `-- name: CountJanitorFollowers :one
+SELECT COUNT(*) FROM environments e
+LEFT JOIN janitor_env_policy p ON p.env_id = e.id
+WHERE p.env_id IS NULL
+   OR p.enabled IS NULL OR p.schedule IS NULL OR p.keep_n IS NULL OR p.grace_hours IS NULL
+   OR p.remove_unused_networks IS NULL OR p.remove_stopped_containers IS NULL
+`
+
+// How many environments follow at least one instance default: those with no policy row and those whose
+// row leaves any field NULL (the schedule and its preset are set together, so the schedule stands for both).
+func (q *Queries) CountJanitorFollowers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJanitorFollowers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countJanitorRuns = `-- name: CountJanitorRuns :one
 SELECT COUNT(*) FROM janitor_runs WHERE env_id = ?
 `
@@ -20,6 +37,37 @@ func (q *Queries) CountJanitorRuns(ctx context.Context, envID string) (int64, er
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countJanitorRunsToPrune = `-- name: CountJanitorRunsToPrune :one
+SELECT COUNT(*) AS runs, COUNT(DISTINCT janitor_runs.env_id) AS environments
+FROM janitor_runs
+WHERE (CAST(?1 AS TEXT) = '' OR janitor_runs.env_id = ?1)
+  AND janitor_runs.state NOT IN ('waiting', 'running')
+  AND janitor_runs.started_at < ?2
+  AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
+                              WHERE k.env_id = janitor_runs.env_id
+                              ORDER BY k.started_at DESC, k.id DESC LIMIT ?3)
+`
+
+type CountJanitorRunsToPruneParams struct {
+	EnvID  string
+	Cutoff int64
+	Keep   int64
+}
+
+type CountJanitorRunsToPruneRow struct {
+	Runs         int64
+	Environments int64
+}
+
+// How many runs PruneAllJanitorRuns (or PruneJanitorRuns, when env_id is not empty) would delete now, and
+// from how many environments, by the same rule: the answer a retention preview gives.
+func (q *Queries) CountJanitorRunsToPrune(ctx context.Context, arg CountJanitorRunsToPruneParams) (CountJanitorRunsToPruneRow, error) {
+	row := q.db.QueryRowContext(ctx, countJanitorRunsToPrune, arg.EnvID, arg.Cutoff, arg.Keep)
+	var i CountJanitorRunsToPruneRow
+	err := row.Scan(&i.Runs, &i.Environments)
+	return i, err
 }
 
 const finishJanitorRun = `-- name: FinishJanitorRun :execrows
@@ -652,6 +700,52 @@ type SetJanitorRunStateParams struct {
 // changed by this, so a late call cannot undo the final state.
 func (q *Queries) SetJanitorRunState(ctx context.Context, arg SetJanitorRunStateParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setJanitorRunState, arg.State, arg.JobID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateJanitorDefaults = `-- name: UpdateJanitorDefaults :execrows
+UPDATE janitor_defaults
+SET enabled = ?, schedule = ?, schedule_preset = ?, keep_n = ?, grace_hours = ?,
+    remove_unused_networks = ?, remove_stopped_containers = ?, retention_days = ?, retention_runs = ?,
+    version = version + 1, updated_by = ?, updated_at = ?
+WHERE id = 1 AND version = ?
+`
+
+type UpdateJanitorDefaultsParams struct {
+	Enabled                 int64
+	Schedule                string
+	SchedulePreset          string
+	KeepN                   int64
+	GraceHours              int64
+	RemoveUnusedNetworks    int64
+	RemoveStoppedContainers int64
+	RetentionDays           int64
+	RetentionRuns           int64
+	UpdatedBy               string
+	UpdatedAt               int64
+	Version                 int64
+}
+
+// Saves the instance defaults and the run-history retention only when the version is the one the caller
+// read; zero rows means it was not. The row is seeded by the migration, so there is always one.
+func (q *Queries) UpdateJanitorDefaults(ctx context.Context, arg UpdateJanitorDefaultsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateJanitorDefaults,
+		arg.Enabled,
+		arg.Schedule,
+		arg.SchedulePreset,
+		arg.KeepN,
+		arg.GraceHours,
+		arg.RemoveUnusedNetworks,
+		arg.RemoveStoppedContainers,
+		arg.RetentionDays,
+		arg.RetentionRuns,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.Version,
+	)
 	if err != nil {
 		return 0, err
 	}

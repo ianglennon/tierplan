@@ -26,7 +26,17 @@ type PolicyStore struct {
 
 // Defaults are the instance defaults, the retention of the run history and the version of the row.
 func (p PolicyStore) Defaults(ctx context.Context) (Policy, Retention, int64, error) {
-	row, err := p.St.RQ.GetJanitorDefaults(ctx)
+	return readDefaults(ctx, p.St.RQ)
+}
+
+// DefaultsOn is Defaults read on the caller's transaction q, so that a save reads the defaults it replaces in
+// the same transaction that writes the new ones.
+func (p PolicyStore) DefaultsOn(ctx context.Context, q *sqlc.Queries) (Policy, Retention, int64, error) {
+	return readDefaults(ctx, q)
+}
+
+func readDefaults(ctx context.Context, q *sqlc.Queries) (Policy, Retention, int64, error) {
+	row, err := q.GetJanitorDefaults(ctx)
 	if err != nil {
 		return Policy{}, Retention{}, 0, fmt.Errorf("read the janitor defaults: %w", err)
 	}
@@ -36,6 +46,44 @@ func (p PolicyStore) Defaults(ctx context.Context) (Policy, Retention, int64, er
 		RemoveUnusedNetworks: row.RemoveUnusedNetworks != 0, RemoveStoppedContainers: row.RemoveStoppedContainers != 0,
 	}
 	return pol, Retention{Days: int(row.RetentionDays), Runs: int(row.RetentionRuns)}, row.Version, nil
+}
+
+// Retention is how long the run history is kept now: the one the instance defaults store (D-16). The runner,
+// the startup prune and the status read it, so a saved change reaches all three.
+func (p PolicyStore) Retention(ctx context.Context) (Retention, error) {
+	_, r, _, err := p.Defaults(ctx)
+	return r, err
+}
+
+// Followers is how many environments follow at least one instance default: those with no policy of their own
+// and those whose policy leaves any field to the default.
+func (p PolicyStore) Followers(ctx context.Context) (int, error) {
+	n, err := p.St.RQ.CountJanitorFollowers(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count the environments that follow a janitor default: %w", err)
+	}
+	return int(n), nil
+}
+
+// RetentionPreview is how many runs, of how many environments, saving the retention r would delete now. It
+// answers what SetDefaults would do, so a retention that does not lower the stored one deletes nothing and
+// answers zero. r must be in range.
+func (p PolicyStore) RetentionPreview(ctx context.Context, r Retention, now time.Time) (runs, environments int, err error) {
+	if !r.InRange() {
+		return 0, 0, fmt.Errorf("%w: a retention is %d to %d days and %d to %d runs", ErrOutOfRange, MinRetentionDays, MaxRetentionDays, MinRetentionRuns, MaxRetentionRuns)
+	}
+	cur, err := p.Retention(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !r.lowers(cur) {
+		return 0, 0, nil
+	}
+	row, err := p.St.RQ.CountJanitorRunsToPrune(ctx, sqlc.CountJanitorRunsToPruneParams{Cutoff: r.cutoff(now), Keep: int64(r.Runs)})
+	if err != nil {
+		return 0, 0, fmt.Errorf("count the janitor runs a retention would delete: %w", err)
+	}
+	return int(row.Runs), int(row.Environments), nil
 }
 
 // Env is an environment's overrides and the version they were read at. An environment with no row
@@ -139,6 +187,65 @@ func (p PolicyStore) SetEnv(ctx context.Context, q *sqlc.Queries, envID string, 
 		return false, ErrPolicyVersion
 	}
 	return true, nil
+}
+
+// SetDefaults saves the instance defaults and the retention of the run history on the caller's transaction q,
+// which also records the audit row. version is the one Defaults answered when the caller read them: a save made
+// since is ErrPolicyVersion and writes nothing. Saving what is already stored writes nothing and answers changed
+// false. Every value passes the same checks an environment's do, and the retention must be in range.
+//
+// A retention that lowers the stored one deletes, on the same transaction, the runs it no longer keeps in every
+// environment (never one that is waiting or running, and a run's items and evidence go with it); removedRuns says
+// how many. A retention that does not lower it deletes nothing.
+func (p PolicyStore) SetDefaults(ctx context.Context, q *sqlc.Queries, pol Policy, r Retention, version int64, by string, now time.Time) (removedRuns int64, changed bool, err error) {
+	if err := validateDefaults(pol, r); err != nil {
+		return 0, false, err
+	}
+	cur, curRet, curVersion, err := readDefaults(ctx, q)
+	if err != nil {
+		return 0, false, err
+	}
+	if curVersion != version {
+		return 0, false, ErrPolicyVersion
+	}
+	if cur == pol && curRet == r {
+		return 0, false, nil
+	}
+	n, err := q.UpdateJanitorDefaults(ctx, sqlc.UpdateJanitorDefaultsParams{
+		Enabled: boolInt(pol.Enabled), Schedule: pol.Schedule, SchedulePreset: pol.SchedulePreset, KeepN: int64(pol.KeepN),
+		GraceHours: int64(pol.Grace / time.Hour), RemoveUnusedNetworks: boolInt(pol.RemoveUnusedNetworks),
+		RemoveStoppedContainers: boolInt(pol.RemoveStoppedContainers), RetentionDays: int64(r.Days), RetentionRuns: int64(r.Runs),
+		UpdatedBy: by, UpdatedAt: now.UTC().UnixNano(), Version: version,
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("save the janitor defaults: %w", err)
+	}
+	if n == 0 {
+		return 0, false, ErrPolicyVersion
+	}
+	if r.lowers(curRet) {
+		removed, err := q.PruneAllJanitorRuns(ctx, sqlc.PruneAllJanitorRunsParams{Cutoff: r.cutoff(now), Keep: int64(r.Runs)})
+		if err != nil {
+			return 0, false, fmt.Errorf("prune the janitor runs the new retention does not keep: %w", err)
+		}
+		removedRuns = removed
+	}
+	return removedRuns, true, nil
+}
+
+// validateDefaults checks a full policy and retention: every field is set, so there is nothing to follow.
+func validateDefaults(pol Policy, r Retention) error {
+	if pol.Grace%time.Hour != 0 {
+		return fmt.Errorf("%w: the grace period is whole hours", ErrOutOfRange)
+	}
+	keep, grace := pol.KeepN, int(pol.Grace/time.Hour)
+	if err := Validate(Overrides{KeepN: &keep, GraceHours: &grace, Schedule: &pol.Schedule, SchedulePreset: &pol.SchedulePreset}); err != nil {
+		return err
+	}
+	if !r.InRange() {
+		return fmt.Errorf("%w: a retention is %d to %d days and %d to %d runs", ErrOutOfRange, MinRetentionDays, MaxRetentionDays, MinRetentionRuns, MaxRetentionRuns)
+	}
+	return nil
 }
 
 // envRow is Overrides as the columns store them, comparable so that "nothing changed" is one ==.

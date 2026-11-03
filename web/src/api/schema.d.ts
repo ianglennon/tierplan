@@ -4310,6 +4310,50 @@ export interface paths {
         patch: operations["updateSettings"];
         trace?: never;
     };
+    "/api/settings/janitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the instance-wide janitor defaults
+         * @description The settings every environment's janitor follows until the environment sets the field itself (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), how long the run history is kept (retentionDays and retentionRuns), the version a save must send back, the server's time zone and how many environments follow at least one default. Needs settings.read.
+         */
+        get: operations["getJanitorDefaults"];
+        /**
+         * Change the instance-wide janitor defaults
+         * @description Replaces every default and the run-history retention. A change reaches every environment that follows the field and none that sets it itself; nothing is written to an environment. keepN is 0 to 20, graceHours 1 to 720, retentionDays 7 to 3650, retentionRuns 10 to 1000, and the schedule a five-field cron expression that fires no more often than every 15 minutes (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the defaults: a save made against any other version is 409 settings_changed and names who saved last. Lowering the retention deletes the run records it no longer keeps, in every environment, in the same transaction as the new value; the answer's removedRuns says how many, and a run that is waiting or running is never deleted. Use the retention preview to count them first. A save that changes nothing answers 200 and writes nothing. Needs settings.write: an instance admin, not an environment admin or an operator with janitor.policy. A change is audited as janitor.defaults_changed, naming the fields and how many runs were removed.
+         */
+        put: operations["setJanitorDefaults"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/janitor/retention-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count the runs a lower retention would delete
+         * @description Answers how many run records across how many environments saving a retention of days and runs would delete now, by the rule saving applies: a run stays while it is recent enough or among the newest runs of its environment, and a run that is waiting or running is never counted. A retention that does not lower the stored one deletes nothing and answers 0. It only reads. Needs settings.write, as the change it previews does.
+         */
+        get: operations["previewJanitorRetention"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/shells": {
         parameters: {
             query?: never;
@@ -7937,6 +7981,98 @@ export interface components {
             /** @description The value that applies: the environment's own when it set one, else the instance default */
             value: boolean;
         };
+        JanitorDefaultsBody: {
+            /** @description Whether the schedule runs the janitor on an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many environments follow at least one of these defaults, because they set nothing themselves or leave a field to the default
+             */
+            followingEnvironments: number;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720
+             */
+            graceHours: number;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20
+             */
+            keepN: number;
+            /** @description Whether stopped containers no stack or project ever owned are removed too */
+            removeStoppedContainers: boolean;
+            /** @description Whether networks no stack ever owned are removed too */
+            removeUnusedNetworks: boolean;
+            /**
+             * Format: int64
+             * @description How many run records the save removed because it lowered the retention; 0 for a read and for a save that kept every run
+             */
+            removedRuns: number;
+            /**
+             * Format: int64
+             * @description How many days a run stays in the history, 7 to 3650. A run is kept while it is that recent or among the newest retentionRuns runs of its environment, whichever keeps more
+             */
+            retentionDays: number;
+            /**
+             * Format: int64
+             * @description How many of the newest runs of each environment stay in the history, 10 to 1000
+             */
+            retentionRuns: number;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes, read in the server's time zone */
+            schedule: string;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times the defaults were saved, starting at 1. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorDefaultsRequest: {
+            /** @description Whether the schedule runs the janitor on an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720
+             */
+            graceHours: number;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20
+             */
+            keepN: number;
+            /** @description Whether stopped containers no stack or project ever owned are removed too */
+            removeStoppedContainers: boolean;
+            /** @description Whether networks no stack ever owned are removed too */
+            removeUnusedNetworks: boolean;
+            /**
+             * Format: int64
+             * @description How many days a run stays in the history, 7 to 3650. A run is kept while it is that recent or among the newest retentionRuns runs of its environment, whichever keeps more
+             */
+            retentionDays: number;
+            /**
+             * Format: int64
+             * @description How many of the newest runs of each environment stay in the history, 10 to 1000
+             */
+            retentionRuns: number;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes, read in the server's time zone */
+            schedule: string;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /**
+             * Format: int64
+             * @description The version read with the defaults; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
         JanitorEvidenceBody: {
             /** @description The engine's last start error, empty for none */
             error: string;
@@ -8219,6 +8355,18 @@ export interface components {
             /**
              * Format: int64
              * @description A run is also kept while it is among this many newest runs of the environment, whichever of the two keeps more
+             */
+            runs: number;
+        };
+        JanitorRetentionPreviewBody: {
+            /**
+             * Format: int64
+             * @description How many environments those runs belong to
+             */
+            environments: number;
+            /**
+             * Format: int64
+             * @description How many run records saving this retention would delete now, across all environments
              */
             runs: number;
         };
@@ -22938,6 +23086,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setJanitorDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorDefaultsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewJanitorRetention: {
+        parameters: {
+            query: {
+                /** @description The days to count for, 7 to 3650 */
+                days: number;
+                /** @description The runs per environment to count for, 10 to 1000 */
+                runs: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRetentionPreviewBody"];
                 };
             };
             /** @description Error */
