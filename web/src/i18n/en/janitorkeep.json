@@ -38,6 +38,7 @@
       "switch": "Exclude this stack from the janitor",
       "helper": "The janitor then leaves everything this stack owns alone: its containers, networks and images. Turn this on for a stack whose old containers you want to keep.",
       "badge": "Excluded",
+      "saving": "Saving",
       "declared": "This stack's compose file sets tierplan.keep=true, so the janitor already skips it.",
       "declaredReason": "This stack's compose file sets tierplan.keep=true, so the janitor already skips it. Remove the label to change this.",
       "excluded": "{{name}} is excluded from the janitor.",

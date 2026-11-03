@@ -478,6 +478,31 @@ describe("StackOverview details", () => {
   });
 });
 
+describe("StackOverview Janitor card", () => {
+  it("sits directly below the Details card, with the anchor #janitor", async () => {
+    detail = { ...detail, janitor: { excluded: false, declared: false } };
+    mount();
+    const details = await screen.findByRole("region", { name: "Details" });
+    const janitor = await screen.findByRole("region", { name: "Janitor" });
+    expect(janitor.id).toBe("janitor");
+    expect(
+      details.compareDocumentPosition(janitor) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(details.parentElement).toBe(janitor.parentElement);
+  });
+
+  it("is not drawn for an unmanaged stack", async () => {
+    detail = {
+      ...detail,
+      janitor: { excluded: false, declared: false },
+      unmanaged: { adoptable: true, orphan: false },
+    };
+    mount();
+    await screen.findByRole("region", { name: "Details" });
+    expect(screen.queryByRole("region", { name: "Janitor" })).toBeNull();
+  });
+});
+
 describe("StackOverview of a stack that was never deployed", () => {
   beforeEach(() => {
     detail = {

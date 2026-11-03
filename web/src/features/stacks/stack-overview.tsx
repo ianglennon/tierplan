@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DriftAlert } from "@/features/stack-drift/drift-alert";
 import { AdoptedBanner } from "@/features/stacks/adopted-banner";
 import { StackDetailsCard } from "@/features/stacks/stack-details-card";
+import { StackJanitorCard } from "@/features/stacks/stack-janitor-card";
 import { StackServicesCard } from "@/features/stacks/stack-services-card";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -68,7 +69,8 @@ export function NotDeployed({ envId, stackId, name }: StackOverviewProps & { nam
 
 // StackOverview is the Overview tab (UI-SPEC "Stack page"): the Services card, or the Not deployed
 // yet state in its place, beside the Details card, in two columns above 1024px and one below. The
-// Details card never waits for Docker: it is the stack's own record. Every value renders as text.
+// Details card never waits for Docker: it is the stack's own record. The Janitor card sits under it.
+// Every value renders as text.
 export function StackOverview({ envId, stackId }: StackOverviewProps) {
   const { data } = useQuery(stackQuery(envId, stackId));
   // The stack is checked against its deployed revision once, when the Overview opens (D-22).
@@ -98,7 +100,11 @@ export function StackOverview({ envId, stackId }: StackOverviewProps) {
             busy={data.lastOperation?.state === "running"}
           />
         )}
-        <StackDetailsCard stack={data} drift={drift} />
+        <div className="flex min-w-0 flex-col gap-6">
+          <StackDetailsCard stack={data} drift={drift} />
+          {/* An unmanaged stack is not TierPlan's to exclude, and has no card (D-10). */}
+          {data.unmanaged || !data.janitor ? null : <StackJanitorCard envId={envId} stack={data} />}
+        </div>
       </div>
     </div>
   );
