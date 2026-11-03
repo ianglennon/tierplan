@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The janitor settings of one swarm node (plan 11-23, JAN-01, D-04, D-15, D-21): a node can be switched off or keep
@@ -89,6 +93,27 @@ func (s *swarmFix) putNode(t *testing.T, nodeID, body string) *envRec {
 func (s *swarmFix) resetNode(t *testing.T, nodeID string) *envRec {
 	t.Helper()
 	return s.req(t, http.MethodDelete, s.nodePath(nodeID), "")
+}
+
+// policyNodes reads the nodes of the environment's policy.
+func (s *swarmFix) policyNodes(t *testing.T) []janitorNodeRow {
+	t.Helper()
+	rec := s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/janitor/policy", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("policy: %d %s", rec.code, rec.body)
+	}
+	return decode[janitorNodesAnswer](t, rec).Nodes
+}
+
+func nodeRowOf(t *testing.T, rows []janitorNodeRow, id string) janitorNodeRow {
+	t.Helper()
+	for _, r := range rows {
+		if r.NodeID == id {
+			return r
+		}
+	}
+	t.Fatalf("no node %s in %+v", id, rows)
+	return janitorNodeRow{}
 }
 
 type nodeAudit struct {
@@ -251,5 +276,273 @@ func TestJanitorNodePreviewCandidate(t *testing.T) {
 	// A value the save would refuse is refused.
 	if rec, _ := s.previewWith(t, `{"nodes": {"`+nodeWrk1+`": {"keepN": 21}}}`); rec.code != http.StatusUnprocessableEntity {
 		t.Fatalf("preview with keepN 21: %d %s, want 422", rec.code, rec.body)
+	}
+}
+
+// A standalone host has no nodes to set.
+func TestJanitorNodeNotSwarm(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, orphanEngine())
+	awaitOnline(t, f.mon, e.ID)
+	path := "/api/env/" + e.ID + "/janitor/nodes/node-1"
+	if rec := f.req(t, http.MethodPut, path, `{"enabled": false}`); rec.code != http.StatusConflict || rec.ptyp != "not_swarm" {
+		t.Fatalf("PUT on a standalone host: %d %s (%s), want 409 not_swarm", rec.code, rec.body, rec.ptyp)
+	}
+	if rec := f.req(t, http.MethodDelete, path, ""); rec.code != http.StatusConflict || rec.ptyp != "not_swarm" {
+		t.Fatalf("DELETE on a standalone host: %d %s (%s), want 409 not_swarm", rec.code, rec.body, rec.ptyp)
+	}
+	if pol := decode[janitorNodesAnswer](t, f.req(t, http.MethodGet, "/api/env/"+e.ID+"/janitor/policy", "")); pol.Nodes == nil || len(pol.Nodes) != 0 {
+		t.Fatalf("a standalone host's nodes = %v, want an empty list and not null", pol.Nodes)
+	}
+}
+
+// A node ID the swarm does not have is 404 node_not_found, and nothing is written.
+func TestJanitorNodeUnknown(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, nil)
+	for _, id := range []string{"node-nobody", "node-mgr-1x", "NODE-MGR-1"} {
+		if rec := s.putNode(t, id, `{"enabled": false}`); rec.code != http.StatusNotFound || rec.ptyp != "node_not_found" {
+			t.Errorf("PUT %s: %d %s (%s), want 404 node_not_found", id, rec.code, rec.body, rec.ptyp)
+		}
+		if rec := s.resetNode(t, id); rec.code != http.StatusNotFound || rec.ptyp != "node_not_found" {
+			t.Errorf("DELETE %s: %d %s (%s), want 404 node_not_found", id, rec.code, rec.body, rec.ptyp)
+		}
+	}
+	if n := s.storedNodeRows(t); n != 0 {
+		t.Fatalf("%d node rows stored, want none", n)
+	}
+	if rows := s.nodeAudits(t); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v, want none", rows)
+	}
+}
+
+// keepN is 0 to 20: the schema refuses anything else before the route runs.
+func TestJanitorNodeRange(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, nil)
+	for _, body := range []string{`{"keepN": 21}`, `{"keepN": -1}`, `{"keepN": "many"}`, `{"enabled": "yes"}`} {
+		if rec := s.putNode(t, nodeWrk1, body); rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("PUT %s: %d %s, want 422", body, rec.code, rec.body)
+		}
+	}
+	for _, keep := range []int{0, 20} {
+		if rec := s.putNode(t, nodeWrk1, fmt.Sprintf(`{"keepN": %d}`, keep)); rec.code != http.StatusOK {
+			t.Errorf("PUT keepN %d: %d %s, want 200", keep, rec.code, rec.body)
+		}
+	}
+	if row := nodeRowOf(t, s.policyNodes(t), nodeWrk1); !row.KeepN.Overridden || row.KeepN.Value != 20 {
+		t.Errorf("worker = %+v, want the last accepted keep-N, 20", row)
+	}
+	if rows := s.nodeAudits(t); len(rows) != 2 {
+		t.Errorf("audit rows = %+v, want one for each accepted save and none for the refused", rows)
+	}
+}
+
+// Changing a node needs janitor.policy: an Operator without the extra and a Viewer get 403 and nothing is written.
+func TestJanitorNodeNeedsExtra(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, nil)
+	path := s.nodePath(nodeWrk1)
+	as := func(user, role string, extra bool) (cookie, csrf string) {
+		s.addUser(t, user, false)
+		s.addEnvRole(t, user, s.env.ID, role)
+		if extra {
+			if _, err := s.st.Write.Exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, 'janitor.policy')`, "ra-"+user+"-"+s.env.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s.signIn(t, user, false)
+	}
+	put := func(cookie, csrf string) *httptest.ResponseRecorder {
+		return s.call(t, authReq{method: http.MethodPut, path: path, body: `{"enabled": false}`, cookie: cookie, csrf: csrf})
+	}
+	del := func(cookie, csrf string) *httptest.ResponseRecorder {
+		return s.call(t, authReq{method: http.MethodDelete, path: path, cookie: cookie, csrf: csrf})
+	}
+	oc, ocsrf := as("olive", "operator", false)
+	vc, vcsrf := as("vera", "viewer", false)
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"an operator without the extra, PUT": put(oc, ocsrf), "an operator without the extra, DELETE": del(oc, ocsrf),
+		"a viewer, PUT": put(vc, vcsrf), "a viewer, DELETE": del(vc, vcsrf),
+	} {
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := s.call(t, authReq{method: http.MethodPut, path: path, body: `{"enabled": false}`}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("signed out: %d, want 401", rec.Code)
+	}
+	if n := s.storedNodeRows(t); n != 0 {
+		t.Fatalf("%d node rows after the refusals, want none", n)
+	}
+	// Reading the policy, the nodes with it, needs only the environment's read access.
+	if rec := s.call(t, authReq{method: http.MethodGet, path: "/api/env/" + s.env.ID + "/janitor/policy", cookie: vc}); rec.Code != http.StatusOK {
+		t.Errorf("a viewer reading the policy: %d %s, want 200", rec.Code, rec.Body)
+	}
+	tc, tcsrf := as("trent", "operator", true)
+	if rec := put(tc, tcsrf); rec.Code != http.StatusOK {
+		t.Fatalf("an operator with janitor.policy: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if row := nodeRowOf(t, s.policyNodes(t), nodeWrk1); !row.Enabled.Overridden || row.Enabled.Value {
+		t.Errorf("worker = %+v, want it switched off", row)
+	}
+	var actor string
+	if err := s.st.Read.QueryRow(`SELECT actor_id FROM audit_log WHERE action = 'janitor.node_policy_changed'`).Scan(&actor); err != nil || actor != "id-trent" {
+		t.Errorf("actor = %q (%v), want the person who saved, id-trent", actor, err)
+	}
+	if rec := del(tc, tcsrf); rec.Code != http.StatusOK {
+		t.Errorf("the same operator resetting: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// Resetting a node that follows the environment, and saving what is stored, write nothing and audit nothing.
+func TestJanitorNodeResetNoOp(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, nil)
+	rec := s.resetNode(t, nodeWrk1)
+	if rec.code != http.StatusOK {
+		t.Fatalf("DELETE a node that follows: %d %s, want 200", rec.code, rec.body)
+	}
+	var row janitorNodeRow
+	if err := json.Unmarshal(rec.body, &row); err != nil || row.NodeID != nodeWrk1 || row.Enabled.Overridden || row.KeepN.Overridden || !row.Enabled.Value || row.KeepN.Value != 2 {
+		t.Fatalf("answer = %s (%v), want the worker following the environment", rec.body, err)
+	}
+	if n := s.storedNodeRows(t); n != 0 {
+		t.Fatalf("%d node rows, want none", n)
+	}
+	if rows := s.nodeAudits(t); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v after a reset of nothing, want none", rows)
+	}
+	for range 2 {
+		if rec := s.putNode(t, nodeWrk1, `{"keepN": 5}`); rec.code != http.StatusOK {
+			t.Fatalf("PUT: %d %s", rec.code, rec.body)
+		}
+	}
+	if rows := s.nodeAudits(t); len(rows) != 1 || rows[0].Details["fields"] != "keepN" || rows[0].Details["node"] != "wrk-1" {
+		t.Fatalf("audit rows = %+v after the same save twice, want one", rows)
+	}
+	// Nothing set at all is a reset, and it is audited once, naming what the node had set.
+	if rec := s.putNode(t, nodeWrk1, `{"enabled": null, "keepN": null}`); rec.code != http.StatusOK {
+		t.Fatalf("PUT nulls: %d %s", rec.code, rec.body)
+	}
+	if rec := s.resetNode(t, nodeWrk1); rec.code != http.StatusOK {
+		t.Fatalf("DELETE: %d %s", rec.code, rec.body)
+	}
+	rows := s.nodeAudits(t)
+	if len(rows) != 2 || rows[1].Details["fields"] != "keepN" || s.storedNodeRows(t) != 0 {
+		t.Fatalf("audit rows = %+v rows stored %d, want the reset audited once and no row left", rows, s.storedNodeRows(t))
+	}
+}
+
+// RESEARCH F12: settings are kept under the swarm node ID, so they follow the node when its agent is enrolled
+// again as a new agent.
+func TestJanitorNodeSurvivesReenrol(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, map[string][]taskBox{"wrk-1": exitedSlot(4)})
+	if rec := s.putNode(t, nodeWrk1, `{"enabled": false}`); rec.code != http.StatusOK {
+		t.Fatalf("PUT: %d %s", rec.code, rec.body)
+	}
+	_, first := s.previewJanitor(t)
+	if len(first.Items) != 0 || len(first.NotRemoved) != 2 || first.NotRemoved[0].NodeID != s.w.id {
+		t.Fatalf("before: items %v notRemoved %+v, want the worker's two protected under its agent %s", refsOf(first.Items), first.NotRemoved, s.w.id)
+	}
+
+	s.kickWorker(t)
+	cfg := dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active"}
+	for _, b := range exitedSlot(4) {
+		cfg.Containers = append(cfg.Containers, b.fake())
+	}
+	facts := &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: nodeWrk1}}
+	again := s.connectAs(t, s.env, cfg, facts, tunneltest.Agent{})
+	awaitFirstProbe(t, s.mon, envs.AgentTarget(again.id))
+	if again.id == s.w.id {
+		t.Fatalf("the worker's agent kept its ID %s: this is not a re-enrolment", again.id)
+	}
+
+	_, after := s.previewJanitor(t)
+	var onNew []janitorItem
+	for _, it := range after.NotRemoved {
+		if it.NodeID == again.id {
+			onNew = append(onNew, it)
+		}
+	}
+	if len(onNew) != 2 {
+		t.Fatalf("notRemoved on the new agent = %+v (all %+v), want the worker's two", onNew, after.NotRemoved)
+	}
+	for _, it := range onNew {
+		if it.Class != "protected" || it.Reason.Code != "node_disabled" {
+			t.Errorf("%+v, want protected node_disabled: the setting followed the node to its new agent", it)
+		}
+	}
+	for _, it := range after.Items {
+		if it.NodeID == again.id {
+			t.Errorf("%+v is removable on the re-enrolled node, want its setting kept", it)
+		}
+	}
+	if row := nodeRowOf(t, s.policyNodes(t), nodeWrk1); !row.Enabled.Overridden || row.Enabled.Value || !row.Reporting {
+		t.Errorf("worker = %+v, want it reporting through the new agent with its setting kept", row)
+	}
+}
+
+// The nodes of the policy: every node the swarm lists, by name, with whether an agent reports it and where each
+// setting comes from. A node nothing reaches is listed as not reporting, and can still be given settings.
+func TestJanitorNodeNotReporting(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, nil)
+	rows := s.policyNodes(t)
+	var names []string
+	for _, r := range rows {
+		names = append(names, r.Name)
+	}
+	if !slices.Equal(names, []string{"ghost-1", "mgr-1", "mgr-2", "wrk-1"}) {
+		t.Fatalf("nodes = %v, want every node the swarm lists, by name", names)
+	}
+	ghost := nodeRowOf(t, rows, nodeGhost)
+	if ghost.Reporting || !ghost.Enabled.Value || ghost.Enabled.Overridden || ghost.KeepN.Value != 2 || ghost.KeepN.Overridden {
+		t.Errorf("the down node = %+v, want it not reporting and following the environment", ghost)
+	}
+	for _, id := range []string{nodeMgr1, nodeMgr2, nodeWrk1} {
+		if r := nodeRowOf(t, rows, id); !r.Reporting {
+			t.Errorf("%+v, want it reporting: an agent is connected on it", r)
+		}
+	}
+	if rec := s.putNode(t, nodeGhost, `{"keepN": 7}`); rec.code != http.StatusOK {
+		t.Fatalf("PUT the down node: %d %s, want 200: the swarm has it", rec.code, rec.body)
+	}
+	s.kickWorker(t)
+	rows = s.policyNodes(t)
+	if w := nodeRowOf(t, rows, nodeWrk1); w.Reporting {
+		t.Errorf("worker = %+v, want it not reporting once its agent is gone", w)
+	}
+	if g := nodeRowOf(t, rows, nodeGhost); g.Reporting || !g.KeepN.Overridden || g.KeepN.Value != 7 {
+		t.Errorf("the down node = %+v, want its own keep-N of 7", g)
+	}
+	// What the environment follows reaches a node that follows it.
+	if rec := s.req(t, http.MethodPut, "/api/env/"+s.env.ID+"/janitor/policy", policyJSON(0, map[string]any{"keepN": 4, "enabled": false})); rec.code != http.StatusOK {
+		t.Fatalf("PUT policy: %d %s", rec.code, rec.body)
+	}
+	rows = s.policyNodes(t)
+	if m := nodeRowOf(t, rows, nodeMgr2); m.KeepN.Value != 4 || m.KeepN.Overridden || m.Enabled.Value || m.Enabled.Overridden {
+		t.Errorf("mgr-2 = %+v, want it to follow the environment's keep 4 and off", m)
+	}
+	if g := nodeRowOf(t, rows, nodeGhost); g.KeepN.Value != 7 || !g.KeepN.Overridden {
+		t.Errorf("the down node = %+v, want its own keep-N kept", g)
+	}
+}
+
+// A node that sets itself on is still cleaned by a run while the environment's schedule is off, and the
+// environment being off never protects a node: Clean now cleans every node that was not switched off.
+func TestJanitorNodeEnvironmentOffStillCleans(t *testing.T) {
+	t.Parallel()
+	s := nodeSwarm(t, twoNodeBoxes())
+	if rec := s.req(t, http.MethodPut, "/api/env/"+s.env.ID+"/janitor/policy", policyJSON(0, map[string]any{"enabled": false})); rec.code != http.StatusOK {
+		t.Fatalf("PUT policy: %d %s", rec.code, rec.body)
+	}
+	if rec := s.putNode(t, nodeMgr1, `{"enabled": true}`); rec.code != http.StatusOK {
+		t.Fatalf("PUT node: %d %s", rec.code, rec.body)
+	}
+	_, got := s.previewJanitor(t)
+	if want := []string{"m-x1", "m-x2", "web-x1", "web-x2"}; !slices.Equal(sortedStrings(refsOf(got.Items)), want) {
+		t.Fatalf("items = %v, want every node cleaned: the schedule being off is not a node being switched off", refsOf(got.Items))
 	}
 }

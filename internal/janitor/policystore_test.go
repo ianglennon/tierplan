@@ -415,3 +415,114 @@ func TestPolicyStoreSetDefaultsStaleNoOpInvalid(t *testing.T) {
 		t.Errorf("stored = %+v %+v v%d, want the seeded defaults untouched", got, gotRet, v)
 	}
 }
+
+// changeNode runs SetNode (or ResetNode when o is nil) in a transaction of its own and commits it unless it failed.
+func (f policyFix) changeNode(t *testing.T, env, node string, o *NodeOverrides) (bool, error) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	tx, err := f.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changed bool
+	if o == nil {
+		changed, err = f.ps.ResetNode(ctx, f.st.Q.WithTx(tx), env, node)
+	} else {
+		changed, err = f.ps.SetNode(ctx, f.st.Q.WithTx(tx), env, node, *o, "ada", time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC))
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return changed, nil
+}
+
+// D-04: a node saves its two fields, each a value or NULL; saving what is stored writes nothing; a node whose
+// fields are all NULL has no row; a reset removes the row and a second one changes nothing.
+func TestPolicyStoreSetNode(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFix(t)
+	ctx := testsupport.Context(t)
+	off, three := false, 3
+	if changed, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{Enabled: &off, KeepN: &three}); err != nil || !changed {
+		t.Fatalf("first save = %v, %v, want changed", changed, err)
+	}
+	got, err := f.ps.Nodes(ctx, "env-1")
+	if err != nil || len(got) != 1 || got["node-a"].Enabled == nil || *got["node-a"].Enabled || got["node-a"].KeepN == nil || *got["node-a"].KeepN != 3 {
+		t.Fatalf("Nodes = %+v, %v, want node-a disabled with keep 3", got, err)
+	}
+	if changed, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{Enabled: &off, KeepN: &three}); err != nil || changed {
+		t.Errorf("the same save again = %v, %v, want nothing changed", changed, err)
+	}
+	// A field set back to NULL follows the environment again; the other is kept.
+	if changed, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{Enabled: &off}); err != nil || !changed {
+		t.Errorf("dropping keep-N = %v, %v, want changed", changed, err)
+	}
+	if got, _ := f.ps.Nodes(ctx, "env-1"); got["node-a"].KeepN != nil || got["node-a"].Enabled == nil {
+		t.Errorf("node-a = %+v, want keep-N back to following and enabled kept", got["node-a"])
+	}
+	// The same swarm node ID in another environment is another row.
+	if _, err := f.changeNode(t, "env-2", "node-a", &NodeOverrides{KeepN: &three}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.ps.Nodes(ctx, "env-1"); got["node-a"].KeepN != nil {
+		t.Errorf("env-1 node-a = %+v after a save in env-2, want it untouched", got["node-a"])
+	}
+	// All NULL is no row: it is a reset.
+	if changed, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{}); err != nil || !changed {
+		t.Errorf("saving nothing over a stored node = %v, %v, want it reset", changed, err)
+	}
+	if got, _ := f.ps.Nodes(ctx, "env-1"); len(got) != 0 {
+		t.Errorf("Nodes = %+v, want no row", got)
+	}
+	if changed, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{}); err != nil || changed {
+		t.Errorf("saving nothing over no row = %v, %v, want nothing written", changed, err)
+	}
+	if changed, err := f.changeNode(t, "env-1", "node-a", nil); err != nil || changed {
+		t.Errorf("reset of a node that follows = %v, %v, want nothing changed", changed, err)
+	}
+	var by string
+	if err := f.st.Read.QueryRow(`SELECT updated_by FROM janitor_node_policy WHERE env_id = 'env-2' AND node_id = 'node-a'`).Scan(&by); err != nil || by != "ada" {
+		t.Errorf("updated_by = %q, %v, want ada", by, err)
+	}
+}
+
+func TestPolicyStoreResetNode(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFix(t)
+	ctx := testsupport.Context(t)
+	two := 2
+	for _, n := range []string{"node-a", "node-b"} {
+		if _, err := f.changeNode(t, "env-1", n, &NodeOverrides{KeepN: &two}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if changed, err := f.changeNode(t, "env-1", "node-a", nil); err != nil || !changed {
+		t.Fatalf("reset = %v, %v, want changed", changed, err)
+	}
+	got, _ := f.ps.Nodes(ctx, "env-1")
+	if _, ok := got["node-a"]; ok || got["node-b"].KeepN == nil {
+		t.Errorf("Nodes = %+v, want node-a gone and node-b untouched", got)
+	}
+}
+
+func TestPolicyStoreNodeRange(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFix(t)
+	for _, n := range []int{-1, 21} {
+		if changed, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{KeepN: &n}); !errors.Is(err, ErrOutOfRange) || changed {
+			t.Errorf("keep-N %d: SetNode = %v, %v, want ErrOutOfRange", n, changed, err)
+		}
+	}
+	for _, n := range []int{0, 20} {
+		if _, err := f.changeNode(t, "env-1", "node-a", &NodeOverrides{KeepN: &n}); err != nil {
+			t.Errorf("keep-N %d: %v, want it accepted", n, err)
+		}
+	}
+	if got, _ := f.ps.Nodes(testsupport.Context(t), "env-1"); got["node-a"].KeepN == nil || *got["node-a"].KeepN != 20 {
+		t.Errorf("Nodes = %+v, want the last accepted value, 20", got)
+	}
+}
