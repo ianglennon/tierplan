@@ -1504,3 +1504,40 @@ func TestRunnerImageRefusals(t *testing.T) {
 		t.Errorf("state = %s, want partial: one image failed", got.State)
 	}
 }
+
+// D-04: a scheduled run (All) removes nothing from a node whose janitor is switched off, and a node's own
+// keep-N is the N its containers are judged by; the run reads both through Runner.Nodes.
+func TestRunnerAllSkipsDisabledNode(t *testing.T) {
+	t.Parallel()
+	var cs []Container
+	for i := range 4 {
+		cs = append(cs, onNode(task(fmt.Sprintf("a%d", i), "1", i), "A"), onNode(task(fmt.Sprintf("b%d", i), "2", i), "B"))
+	}
+	eng := newFakeEngine(0)
+	eng.snap = twoNodes(cs...)
+	run, _, hub := newRunner(t, eng)
+	nodes := map[string]NodeOverrides{"swarm-b": {Enabled: boolp(false)}}
+	run.Nodes = func(context.Context, string) (map[string]NodeOverrides, error) { return nodes, nil }
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	if want := []string{"a0", "a1"}; !slices.Equal(eng.removedIDs(), want) {
+		t.Fatalf("removed = %v, want %v: node B is switched off and nothing of it is asked of its engine", eng.removedIDs(), want)
+	}
+	if got.State != StateCompleted || got.Counts.RemovedContainers != 2 || len(items) != 2 {
+		t.Fatalf("run = %+v items %+v, want completed with node A's two", got, items)
+	}
+}
+
+// A policy of the nodes that cannot be read stops the run before anything is removed: guessing that no node is
+// switched off could remove from one that is.
+func TestRunnerFailsWhenNodePolicyUnreadable(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	run, _, hub := newRunner(t, eng)
+	run.Nodes = func(context.Context, string) (map[string]NodeOverrides, error) {
+		return nil, errors.New("the store is gone")
+	}
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	if got.State != StateFailed || len(items) != 0 || len(eng.removeCalls()) != 0 {
+		t.Fatalf("run = %+v items %+v removed %v, want a failed run that removed nothing", got, items, eng.removeCalls())
+	}
+}
