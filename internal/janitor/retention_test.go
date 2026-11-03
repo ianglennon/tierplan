@@ -4,6 +4,7 @@
 package janitor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -299,5 +300,162 @@ func TestRunnerPrunesItsEnvironmentWhenARunFinishes(t *testing.T) {
 	got2, _ := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "ada", Owner: "user:u1", Ticked: ticked("c1")})
 	if got2.State != StateFailed || len(mem.prunes()) != 2 {
 		t.Fatalf("run = %+v after %d prunes, want failed on record and a prune tried", got2, len(mem.prunes()))
+	}
+}
+
+// After a run the environment is pruned by the retention the policy stores, not by the built-in one
+// (plan 11-21, D-16). A retention that cannot be read prunes nothing: it is not guessed.
+func TestRunnerUsesStoredRetention(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	run, _, hub := newRunner(t, eng)
+	mem := recordOf(run)
+	stored := Retention{Days: 30, Runs: 12}
+	run.Retention = func(context.Context) (Retention, error) { return stored, nil }
+	req := RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "ada", Owner: "user:u1", Ticked: ticked("c1")}
+	finished(t, run, hub, req)
+	if got := mem.prunes(); len(got) != 1 || got[0].keep != stored {
+		t.Fatalf("prunes = %+v, want one by the stored retention %+v", got, stored)
+	}
+
+	// Saving another retention reaches the next run.
+	stored = Retention{Days: 365, Runs: 500}
+	finished(t, run, hub, req)
+	if got := mem.prunes(); len(got) != 2 || got[1].keep != stored {
+		t.Fatalf("prunes = %+v, want the second by %+v", got, stored)
+	}
+
+	// A retention that cannot be read is not replaced by a guess: the run has ended and nothing is pruned.
+	run.Retention = func(context.Context) (Retention, error) { return Retention{}, errors.New("database is locked") }
+	got, _ := finished(t, run, hub, req)
+	if got.FinishedAt.IsZero() || len(mem.prunes()) != 2 {
+		t.Errorf("run %+v after %d prunes, want it finished and no third prune", got, len(mem.prunes()))
+	}
+}
+
+// seedHistory puts runs on record: env-1 has 130 completed runs five days apart, the oldest 650 days back,
+// env-2 has 25 twelve days apart, and env-1 has one run that has been running for 400 days.
+func (f retentionFix) seedHistory(t *testing.T) {
+	t.Helper()
+	for i := range 130 {
+		f.add(t, "env-1", runName(i), StateCompleted, f.now.Add(-time.Duration(i)*5*day))
+	}
+	for i := range 25 {
+		f.add(t, "env-2", "two-"+runName(i), StateCompleted, f.now.Add(-time.Duration(i)*12*day))
+	}
+	f.add(t, "env-1", "stuck", StateRunning, f.now.Add(-400*day))
+}
+
+// save runs SetDefaults on a transaction of its own; it commits when commit is true.
+func (f retentionFix) saveRetention(t *testing.T, ps PolicyStore, r Retention, commit bool) (int64, error) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	pol, _, version, err := ps.Defaults(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, _, err := ps.SetDefaults(ctx, f.st.Q.WithTx(tx), pol, r, version, "ada", f.now)
+	if err != nil || !commit {
+		_ = tx.Rollback()
+		return removed, err
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return removed, nil
+}
+
+// The count a preview gives is what the save deletes, the save deletes it with the runs' items and evidence
+// and never a run that is working, and a save that does not commit deletes nothing and keeps the old retention
+// (plan 11-21, JAN-10, D-16, T-11-55).
+func TestPolicyStoreRetentionPreviewMatchesSave(t *testing.T) {
+	t.Parallel()
+	f := newRetentionFix(t)
+	ctx := testsupport.Context(t)
+	ps := PolicyStore{St: f.st}
+	f.seedHistory(t)
+	// An item and evidence on the oldest completed run of env-1, which a lower retention deletes.
+	oldest := runName(129)
+	if err := f.s.AddItems(ctx, oldest, []RunItem{{Seq: 1, Type: KindContainer, Ref: "c1", Outcome: OutcomeRemoved, Size: -1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SaveEvidence(ctx, oldest, 1, Evidence{ExitCode: 1, State: EvidenceEmpty}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 30 days or the newest 10: env-1 keeps its newest 10 (the 7 within 30 days are among them) and env-2 its
+	// newest 10 (3 are within 30 days); the stuck run is never counted.
+	want := Retention{Days: 30, Runs: 10}
+	runs, envs, err := ps.RetentionPreview(ctx, want, f.now)
+	if err != nil || runs != 120+15 || envs != 2 {
+		t.Fatalf("RetentionPreview = %d runs of %d environments, %v; want 135 of 2", runs, envs, err)
+	}
+	// Previewing deletes nothing.
+	if n := f.count(t, "janitor_runs"); n != 130+25+1 {
+		t.Fatalf("runs = %d after a preview, want all 156", n)
+	}
+
+	// A save that does not commit leaves the runs and the old retention.
+	if removed, err := f.saveRetention(t, ps, want, false); err != nil || removed != 135 {
+		t.Fatalf("an uncommitted SetDefaults = %d, %v, want 135 removed inside the transaction", removed, err)
+	}
+	if n := f.count(t, "janitor_runs"); n != 156 {
+		t.Errorf("runs = %d after a rolled-back save, want all 156", n)
+	}
+	if r, err := ps.Retention(ctx); err != nil || r != DefaultRetention {
+		t.Errorf("retention = %+v, %v after a rolled-back save, want the old one", r, err)
+	}
+
+	removed, err := f.saveRetention(t, ps, want, true)
+	if err != nil || int(removed) != runs {
+		t.Fatalf("SetDefaults removed %d, %v; the preview said %d", removed, err, runs)
+	}
+	if f.count(t, "janitor_runs") != 156-135 || len(f.ids(t, "env-1")) != 10+1 || len(f.ids(t, "env-2")) != 10 {
+		t.Errorf("runs left = %d (env-1 %d, env-2 %d), want 21: 10 + the stuck one, and 10", f.count(t, "janitor_runs"), len(f.ids(t, "env-1")), len(f.ids(t, "env-2")))
+	}
+	if !slices.Contains(f.ids(t, "env-1"), "stuck") {
+		t.Error("the run that is still running was deleted")
+	}
+	if f.count(t, "janitor_run_items") != 0 || f.count(t, "janitor_evidence") != 0 {
+		t.Errorf("items/evidence = %d/%d, want the deleted run's gone with it", f.count(t, "janitor_run_items"), f.count(t, "janitor_evidence"))
+	}
+	if r, err := ps.Retention(ctx); err != nil || r != want {
+		t.Errorf("retention = %+v, %v, want %+v", r, err, want)
+	}
+	// The same retention again has nothing left to delete.
+	if runs, envs, err := ps.RetentionPreview(ctx, want, f.now); err != nil || runs != 0 || envs != 0 {
+		t.Errorf("RetentionPreview of the stored retention = %d/%d, %v, want 0/0", runs, envs, err)
+	}
+}
+
+// Raising either limit deletes nothing, even where the history holds runs the old retention would no longer
+// keep, and the preview says so (plan 11-21, D-16).
+func TestPolicyStoreRetentionRaiseDeletesNothing(t *testing.T) {
+	t.Parallel()
+	f := newRetentionFix(t)
+	ctx := testsupport.Context(t)
+	ps := PolicyStore{St: f.st}
+	f.seedHistory(t) // env-1 holds 30 runs the default 90 days or 100 runs has stopped keeping
+	for name, r := range map[string]Retention{
+		"days up":       {Days: 100, Runs: 100},
+		"runs up":       {Days: 90, Runs: 101},
+		"both up":       {Days: 365, Runs: 500},
+		"the same ones": DefaultRetention,
+	} {
+		if runs, envs, err := ps.RetentionPreview(ctx, r, f.now); err != nil || runs != 0 || envs != 0 {
+			t.Errorf("%s: RetentionPreview = %d/%d, %v, want 0/0", name, runs, envs, err)
+		}
+	}
+	removed, err := f.saveRetention(t, ps, Retention{Days: 365, Runs: 500}, true)
+	if err != nil || removed != 0 || f.count(t, "janitor_runs") != 156 {
+		t.Fatalf("raising: removed %d, %v with %d runs left, want nothing deleted", removed, err, f.count(t, "janitor_runs"))
+	}
+	// A retention outside the ranges is refused, not previewed.
+	if _, _, err := ps.RetentionPreview(ctx, Retention{Days: 6, Runs: 10}, f.now); !errors.Is(err, ErrOutOfRange) {
+		t.Errorf("RetentionPreview(6 days) = %v, want ErrOutOfRange", err)
 	}
 }

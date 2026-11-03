@@ -124,3 +124,51 @@ func TestJanitorStartupSweep(t *testing.T) {
 		t.Errorf("audited runs = %v, want r-running and r-waiting once each", seen)
 	}
 }
+
+// The startup prune keeps the history the instance defaults say to keep, not a built-in limit (plan 11-21, D-16): with
+// the stored retention lowered to 7 days or the newest 10 runs, 50 runs a day apart from 20 days back leave the
+// newest 10 after the next start, and a retention raised past them leaves all 50.
+func TestJanitorStartupPruneUsesStoredRetention(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	clock := sweepClock{now}
+	ctx := testsupport.Context(t)
+	for name, tc := range map[string]struct {
+		days, runs, want int
+	}{
+		"lowered": {7, 10, 10},
+		"raised":  {365, 1000, 50},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "data")
+			first, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler), WithJanitorClock(clock))
+			if err != nil {
+				t.Fatal(err)
+			}
+			seed := func(query string, args ...any) {
+				t.Helper()
+				if _, err := first.Store().Write.ExecContext(ctx, query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			seed(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-j', 'agent', 'Janitor env', '', 1, 1, 1)`)
+			for i := range 50 {
+				started := now.Add(-time.Duration(20+i) * 24 * time.Hour)
+				seed(`INSERT INTO janitor_runs (id, env_id, trigger, actor, state, started_at, finished_at) VALUES (?, 'env-j', 'manual', 'u1', 'completed', ?, ?)`,
+					fmt.Sprintf("old-%03d", i), started.UnixNano(), started.Add(time.Minute).UnixNano())
+			}
+			seed(`UPDATE janitor_defaults SET retention_days = ?, retention_runs = ? WHERE id = 1`, tc.days, tc.runs)
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			srv, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler), WithJanitorClock(clock))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = srv.Close() })
+			list, err := (&janitor.SQLStore{St: srv.Store()}).ListRuns(ctx, "env-j", 1000)
+			if err != nil || len(list) != tc.want {
+				t.Fatalf("history = %d runs (%v), want %d", len(list), err, tc.want)
+			}
+		})
+	}
+}

@@ -573,10 +573,14 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		log.Warn("janitor runs that were working when the server stopped were marked failed", "count", len(swept))
 		janitor.AuditInterrupted(ctx, aud, log, swept)
 	}
-	if pruned, perr := janitorRuns.PruneAll(ctx, janitor.DefaultRetention, sweepAt); perr != nil {
+	// The retention is the one the instance defaults store (D-16), so a limit saved on the settings page
+	// holds across a restart. One that cannot be read prunes nothing rather than guessing.
+	if keep, rerr := (janitor.PolicyStore{St: st}).Retention(ctx); rerr != nil {
+		log.Warn("could not read the janitor run history retention, so the history was not pruned", "error", rerr)
+	} else if pruned, perr := janitorRuns.PruneAll(ctx, keep, sweepAt); perr != nil {
 		log.Warn("could not prune the janitor run history beyond the retention", "error", perr)
 	} else if pruned > 0 {
-		log.Info("pruned janitor runs beyond the retention", "count", pruned, "days", janitor.DefaultRetention.Days, "runs", janitor.DefaultRetention.Runs)
+		log.Info("pruned janitor runs beyond the retention", "count", pruned, "days", keep.Days, "runs", keep.Runs)
 	}
 
 	// While no user exists every start mints a fresh setup token, writes it to
@@ -872,7 +876,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	janitorDeps.Policies = janitorPolicies
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
-		Policy: janitorPolicies.Effective, Store: janitorRuns, Audit: aud, Log: log,
+		Policy: janitorPolicies.Effective, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}
 	// The scheduler cleans each enabled environment at its slot, as the system, through the Runner Clean now uses. It

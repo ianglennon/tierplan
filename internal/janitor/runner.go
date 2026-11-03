@@ -51,6 +51,9 @@ type Runner struct {
 	Clock stackops.Clock
 	// Policy gives the policy of an environment. Nil means DefaultPolicy.
 	Policy func(ctx context.Context, envID string) (Policy, error)
+	// Retention gives how long the run history is kept, read at the end of every run so a saved change reaches
+	// the next one. Nil means DefaultRetention. A retention it cannot read prunes nothing.
+	Retention func(ctx context.Context) (Retention, error)
 	// Store keeps the record of the runs. It is required: a run is on record before it removes
 	// anything, so a Runner with no Store starts nothing.
 	Store RunStore
@@ -233,10 +236,18 @@ func (r *Runner) endRecord(ctx context.Context, req RunRequest, run Run) {
 }
 
 // prune applies the retention to the environment's run history once a run has ended, so the history
-// never grows without bound (T-11-41). Until the policy makes it configurable it is DefaultRetention.
-// A prune that fails is logged: the run has ended all the same.
+// never grows without bound (T-11-41). The retention is the one the instance defaults store (D-16). A
+// prune that fails, or a retention that cannot be read, is logged: the run has ended all the same.
 func (r *Runner) prune(ctx context.Context, envID string) {
-	n, err := r.Store.PruneRuns(ctx, envID, DefaultRetention, r.clock().Now())
+	keep := DefaultRetention
+	if r.Retention != nil {
+		var err error
+		if keep, err = r.Retention(ctx); err != nil {
+			r.log().Error("the janitor's run history could not be pruned: its retention could not be read", "environment", envID, "error", err)
+			return
+		}
+	}
+	n, err := r.Store.PruneRuns(ctx, envID, keep, r.clock().Now())
 	if err != nil {
 		r.log().Error("the janitor's run history could not be pruned", "environment", envID, "error", err)
 		return

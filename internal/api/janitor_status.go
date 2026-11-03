@@ -91,6 +91,15 @@ func (d JanitorDeps) location() *time.Location {
 	return time.Local
 }
 
+// retention is how long the run history is kept: the one the instance defaults store (D-16), and
+// DefaultRetention for deps with no policy store.
+func (d JanitorDeps) retention(ctx context.Context) (janitor.Retention, error) {
+	if d.Policies.St == nil {
+		return janitor.DefaultRetention, nil
+	}
+	return d.Policies.Retention(ctx)
+}
+
 // registerJanitorStatus registers the status of an environment's janitor and the schedule preview.
 func registerJanitorStatus(r *httpx.Router, d JanitorDeps) {
 	httpx.Register(r, huma.Operation{
@@ -156,6 +165,10 @@ func janitorStatus(ctx context.Context, d JanitorDeps, envID string) (JanitorSta
 		}
 		pol = p
 	}
+	keep, err := d.retention(ctx)
+	if err != nil {
+		return JanitorStatusBody{}, err
+	}
 	now := d.now()
 	loc := d.location()
 	spec := pol.Schedule
@@ -170,7 +183,7 @@ func janitorStatus(ctx context.Context, d JanitorDeps, envID string) (JanitorSta
 	}
 	b := JanitorStatusBody{
 		Enabled: pol.Enabled, Schedule: spec, SchedulePreset: preset, Timezone: janitor.ZoneName(loc, now),
-		Retention: JanitorRetentionBody{Days: janitor.DefaultRetention.Days, Runs: janitor.DefaultRetention.Runs},
+		Retention: JanitorRetentionBody{Days: keep.Days, Runs: keep.Runs},
 	}
 	if pol.Enabled {
 		// The scheduler's own slot is the truth when it has one: it is the very time it fires at. Before
