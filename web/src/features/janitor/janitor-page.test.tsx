@@ -38,6 +38,7 @@ let client: QueryClient;
 let lockAnswer: (() => Response) | undefined;
 let statusBody: ReturnType<typeof janitorStatus>;
 let history: ReturnType<typeof runSummary>[];
+let statusFails: boolean;
 
 beforeEach(() => {
   setCsrfToken(null);
@@ -54,6 +55,7 @@ beforeEach(() => {
   lockAnswer = undefined;
   statusBody = janitorStatus();
   history = [];
+  statusFails = false;
   toasts.error.mockReset();
   toasts.info.mockReset();
   runBody = run({
@@ -85,7 +87,11 @@ beforeEach(() => {
         if (lockAnswer) return lockAnswer();
         return Response.json({ runId: "r1", jobId: "j1" }, { status: 202 });
       }
-      if (url.pathname === `/api/env/${ENV}/janitor`) return Response.json(statusBody);
+      if (url.pathname === `/api/env/${ENV}/janitor`) {
+        return statusFails
+          ? Response.json({ title: "x", status: 500 }, { status: 500 })
+          : Response.json(statusBody);
+      }
       if (url.pathname === `/api/env/${ENV}/janitor/runs` && req.method === "GET") {
         const limit = Number(url.searchParams.get("limit") ?? 25);
         return Response.json({ runs: history.slice(0, limit), total: history.length });
@@ -206,6 +212,28 @@ describe("JanitorPageStatusAndHistory", () => {
     const link = within(table).getAllByRole("link", { name: /^Open run from / })[1] as HTMLElement;
     fireEvent.click(link);
     await waitFor(() => expect(router.state.location.pathname).toBe(`/env/${ENV}/janitor/runs/r1`));
+  });
+
+  it("says it couldn't load the janitor, keeps Clean now and reads again on request", async () => {
+    statusFails = true;
+    mount();
+    expect(await screen.findByText("Couldn't load the janitor.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clean now" })).toBeTruthy();
+    statusFails = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading janitor" }));
+    expect(await screen.findByRole("region", { name: "Janitor status" })).toBeTruthy();
+    expect(screen.queryByText("Couldn't load the janitor.")).toBeNull();
+  });
+
+  it("asks for 25 more runs through the page and lands on the longer list", async () => {
+    history = Array.from({ length: 30 }, (_, i) => runSummary({ id: `h${i}` }));
+    mount();
+    expect(await screen.findAllByRole("link", { name: /^Open run from / })).toHaveLength(25);
+    fireEvent.click(screen.getByRole("button", { name: "Show 25 more" }));
+    await waitFor(() =>
+      expect(screen.getAllByRole("link", { name: /^Open run from / })).toHaveLength(30),
+    );
+    expect(screen.queryByRole("button", { name: "Show 25 more" })).toBeNull();
   });
 
   it("keeps the rules open until the janitor has run once, then closed", async () => {
