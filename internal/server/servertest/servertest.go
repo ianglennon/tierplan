@@ -65,6 +65,9 @@ type Options struct {
 	// be past the grace period at once (server.WithJanitorClock). Nil keeps real time. It is kept
 	// across Restart.
 	JanitorClock stackops.Clock
+	// JanitorSchedule lets the janitor's scheduler run, on JanitorClock when that is set. By default it
+	// does not, so that no test depends on the time of day it runs at (server.WithoutJanitorScheduler).
+	JanitorSchedule bool
 }
 
 // Server is a running TierPlan with an admin signed in.
@@ -113,6 +116,9 @@ func Start(t testing.TB, o Options) *Server {
 	}
 	if o.JanitorClock != nil {
 		s.opts = append(s.opts, server.WithJanitorClock(o.JanitorClock))
+	}
+	if !o.JanitorSchedule {
+		s.opts = append(s.opts, server.WithoutJanitorScheduler())
 	}
 	// The port has to be known before Build (it is in the public URL), so one is
 	// picked by binding and releasing it. The window is small; a taken port makes

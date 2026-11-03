@@ -121,9 +121,11 @@ func (e *LockedError) Error() string {
 }
 
 // Start takes the environment's operation lock and starts a run as a job. It answers a
-// *LockedError at once when the lock is held, and starts nothing. The job holds the lock only
-// while it removes, and has freed it before the job reads finished. jobs.ErrTooMany is passed on
-// when the owner has the most jobs running.
+// *LockedError at once when the lock is held, and starts nothing, except for a scheduled run: that
+// one is on record as waiting and its job polls the lock for up to LockWait before it gives up and
+// ends skipped with the reason deploy_in_progress (D-08). The job holds the lock only while it
+// removes, and has freed it before the job reads finished. jobs.ErrTooMany is passed on when the
+// owner has the most jobs running.
 func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
 	if r.Store == nil {
 		return Started{}, errors.New("janitor: the runner has no store to record a run in")
@@ -133,11 +135,20 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
 		return Started{}, fmt.Errorf("new run id: %w", err)
 	}
 	runID := id.String()
-	release, held, ok := r.Locks.TryAcquire(req.EnvID, stackops.Holder{
-		Kind: stackops.HolderKindJanitor, By: req.Actor, RunID: runID, Started: r.clock().Now().UTC(),
-	})
-	if !ok {
+	release, held, ok := r.Locks.TryAcquire(req.EnvID, r.holder(req, runID))
+	state := StateRunning
+	switch {
+	case ok:
+	case req.Trigger == TriggerSchedule:
+		// A schedule never fights a deploy: it waits its turn, and the record says so.
+		state = StateWaiting
+	default:
 		return Started{}, &LockedError{Holder: held}
+	}
+	free := func() {
+		if release != nil {
+			release()
+		}
 	}
 	// The run is on record before anything can be removed (T-11-12). A run that cannot be
 	// recorded is not started.
@@ -147,24 +158,66 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
 	}
 	started := r.clock().Now().UTC()
 	if err := r.Store.CreateRun(ctx, Run{
-		ID: runID, EnvID: req.EnvID, Trigger: req.Trigger, Actor: actor, State: StateRunning, StartedAt: started, EstBytes: -1,
+		ID: runID, EnvID: req.EnvID, Trigger: req.Trigger, Actor: actor, State: state, StartedAt: started, EstBytes: -1,
 	}); err != nil {
-		release()
+		free()
 		return Started{}, err
 	}
+	taken := release
 	job, err := r.Jobs.Start(jobs.Spec{
 		Kind: JobKind, EnvID: req.EnvID, Owner: req.Owner,
 		Meta: map[string]string{MetaRunID: runID, MetaTrigger: req.Trigger, MetaBy: req.Actor},
 	}, func(ctx context.Context, rep *jobs.Reporter) {
-		r.execute(ctx, req, runID, release, rep)
+		if state == StateWaiting {
+			var got bool
+			if taken, got = r.waitForLock(ctx, req, runID, rep); !got {
+				return
+			}
+		}
+		r.execute(ctx, req, runID, taken, rep)
 	})
 	if err != nil {
 		// The job never started, so the run never worked: it is on record as failed.
 		r.endRecord(ctx, req, Run{ID: runID, State: StateFailed, Reason: ReasonRunFailed, EstBytes: -1})
-		release()
+		free()
 		return Started{}, err
 	}
 	return Started{RunID: runID, JobID: job.ID}, nil
+}
+
+// holder is the lock holder a run of this request is.
+func (r *Runner) holder(req RunRequest, runID string) stackops.Holder {
+	return stackops.Holder{Kind: stackops.HolderKindJanitor, By: req.Actor, RunID: runID, Started: r.clock().Now().UTC()}
+}
+
+// waitForLock is the first thing a scheduled run does when the environment was taken as it started:
+// it polls the lock every LockPoll on the runner's clock for up to LockWait. It answers the freed
+// lock's release function, or false when the run ended without it: skipped with the reason
+// deploy_in_progress, so that nothing is removed under a deploy and the next attempt is the next slot
+// (D-08, T-11-44), or failed when the job was cancelled while it waited.
+func (r *Runner) waitForLock(ctx context.Context, req RunRequest, runID string, rep *jobs.Reporter) (func(), bool) {
+	rec := context.WithoutCancel(ctx)
+	if err := r.Store.SetState(rec, runID, StateWaiting, rep.JobID()); err != nil {
+		r.log().Error("a waiting janitor run could not be given its job on record", "run", runID, "error", err)
+	}
+	r.log().Info("a scheduled janitor run is waiting for the environment", "environment", req.EnvID, "run", runID)
+	deadline := r.clock().Now().Add(LockWait)
+	for {
+		select {
+		case <-ctx.Done():
+			r.endRecord(rec, req, Run{ID: runID, State: StateFailed, Reason: ReasonRunFailed, EstBytes: -1})
+			return nil, false
+		case <-r.clock().After(LockPoll):
+		}
+		if release, _, ok := r.Locks.TryAcquire(req.EnvID, r.holder(req, runID)); ok {
+			return release, true
+		}
+		if !r.clock().Now().Before(deadline) {
+			r.log().Info("a scheduled janitor run gave up waiting for the environment", "environment", req.EnvID, "run", runID)
+			r.endRecord(rec, req, Run{ID: runID, State: StateSkipped, Reason: ReasonDeployInProgress, EstBytes: -1})
+			return nil, false
+		}
+	}
 }
 
 // endRecord finishes a run's record at the current time and writes the run's one audit row. A store

@@ -38,6 +38,9 @@ type JanitorDeps struct {
 	Jobs   *jobs.Hub
 	Clock  stackops.Clock
 	Runner *janitor.Runner
+	// Scheduler is the janitor's scheduler, which the status reads the next run from. Nil means the
+	// next run is worked out from the policy alone.
+	Scheduler *janitor.Scheduler
 	// Runs reads the record of the runs. The server gives the Runner and the routes the same store.
 	Runs janitor.RunStore
 	// AddressSpaces is the orphan check the preview judges networks by, the one the Address space
@@ -88,6 +91,7 @@ func (d JanitorDeps) log() *slog.Logger {
 // RegisterJanitor registers the janitor routes.
 func RegisterJanitor(r *httpx.Router, d JanitorDeps) {
 	registerJanitorPreview(r, d)
+	registerJanitorStatus(r, d)
 	registerJanitorRuns(r, d)
 	registerJanitorStream(r, d)
 	registerJanitorEvidence(r, d)

@@ -7401,6 +7401,33 @@
         ],
         "type": "object"
       },
+      "JanitorActiveBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The job that does the removing; empty while the run has none yet",
+            "type": "string"
+          },
+          "runId": {
+            "description": "The ID of the run",
+            "type": "string"
+          },
+          "state": {
+            "description": "waiting: a scheduled run is waiting for a deploy or another operation to free the environment. running: it holds the environment and is working",
+            "enum": [
+              "waiting",
+              "running"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "jobId",
+          "state"
+        ],
+        "type": "object"
+      },
       "JanitorEvidenceBody": {
         "additionalProperties": false,
         "properties": {
@@ -7813,6 +7840,28 @@
         ],
         "type": "object"
       },
+      "JanitorRetentionBody": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "description": "A run is kept while it started within this many days",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "runs": {
+            "description": "A run is also kept while it is among this many newest runs of the environment, whichever of the two keeps more",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "days",
+          "runs"
+        ],
+        "type": "object"
+      },
       "JanitorRunBody": {
         "additionalProperties": false,
         "properties": {
@@ -8206,6 +8255,62 @@
           "counts",
           "estBytes",
           "jobId"
+        ],
+        "type": "object"
+      },
+      "JanitorStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "$ref": "#/components/schemas/JanitorActiveBody",
+            "description": "The run that is waiting or working. Absent when there is none"
+          },
+          "enabled": {
+            "description": "Whether the schedule runs the janitor on this environment",
+            "type": "boolean"
+          },
+          "lastRun": {
+            "$ref": "#/components/schemas/JanitorRunSummaryBody",
+            "description": "The newest run that has ended, whatever started it. Absent when there is none"
+          },
+          "nextRunAt": {
+            "description": "When the next scheduled run starts, in the server's time zone, including this environment's start offset of up to 10 minutes. Null when the janitor is off or the schedule cannot be used",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retention": {
+            "$ref": "#/components/schemas/JanitorRetentionBody"
+          },
+          "schedule": {
+            "description": "The cron expression, read in the server's time zone",
+            "type": "string"
+          },
+          "schedulePreset": {
+            "description": "The preset the expression came from; custom for one written by hand",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "description": "The server's time zone, which the schedule is read in",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "schedule",
+          "schedulePreset",
+          "timezone",
+          "nextRunAt",
+          "retention"
         ],
         "type": "object"
       },
@@ -26648,6 +26753,57 @@
           }
         },
         "summary": "What uses one image",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor": {
+      "get": {
+        "description": "Answers whether the janitor runs by itself on this environment, its schedule and the time zone it is read in, when the next run starts, the newest run that ended, the run that is waiting or working now, and how long the run history is kept. The schedule runs every environment at its slot, daily at 03:00 server time by default, moved later by a start offset of up to 10 minutes that depends on the environment and never changes. A run missed while the server was stopped is not made up. Needs environments.read on the environment.",
+        "operationId": "getJanitorStatus",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the state of an environment's janitor",
         "tags": [
           "environments"
         ]

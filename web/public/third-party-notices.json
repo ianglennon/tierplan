@@ -1870,6 +1870,11 @@
     "licence": "BSD-3-Clause"
   },
   {
+    "name": "github.com/robfig/cron/v3",
+    "version": "v3.0.1",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/santhosh-tekuri/jsonschema/v6",
     "version": "v6.0.3",
     "licence": "Apache-2.0"

@@ -23,6 +23,7 @@ require (
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/realclientip/realclientip-go v1.0.0
 	github.com/regclient/regclient v0.11.6
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10

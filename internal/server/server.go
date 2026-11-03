@@ -272,6 +272,7 @@ type buildOptions struct {
 	refusalClock    func() time.Time
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
+	noJanitorSched  bool
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
@@ -296,6 +297,14 @@ func WithAddressSpaceClock(now func() time.Time) Option {
 // always reads the real time. A nil clock keeps the wall clock.
 func WithJanitorClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.janitorClock = c }
+}
+
+// WithoutJanitorScheduler keeps the janitor's scheduler from running, so that no environment is cleaned
+// by itself at 03:00. It exists for tests, which must not depend on the time of day they run at. It is
+// a Go option only: a production build calls Build without it and every environment's janitor runs on
+// its schedule.
+func WithoutJanitorScheduler() Option {
+	return func(o *buildOptions) { o.noJanitorSched = true }
 }
 
 // WithSelfContainerID supplies the ID of the container TierPlan runs in. The
@@ -864,6 +873,25 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}
+	// The scheduler cleans each enabled environment at its slot, as the system, through the Runner Clean now uses. It
+	// reads a policy through the Runner and starts after the sweep of interrupted runs above (RESEARCH F11).
+	janitorSched := &janitor.Scheduler{
+		Envs: func(ctx context.Context) ([]string, error) {
+			rows, err := st.RQ.ListEnvironments(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(rows))
+			for _, row := range rows {
+				if row.Enabled != 0 {
+					ids = append(ids, row.ID)
+				}
+			}
+			return ids, nil
+		},
+		Runner: janitorDeps.Runner, Clock: bo.janitorClock, Loc: time.Local, Log: log,
+	}
+	janitorDeps.Scheduler = janitorSched
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
@@ -1028,6 +1056,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// and service events, so the overview, the health and the last-seen times of networks stay current
 	// when nobody has the page open (D-09).
 	srv.background.Go(func() { addressSpaces.Run(bg) })
+	// Every environment's janitor runs at its slot, daily at 03:00 server time by default (JAN-01).
+	if !bo.noJanitorSched {
+		srv.background.Go(func() { janitorSched.Run(bg) })
+	}
 	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
 	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
 	// The mirrors of those repositories are a cache: the ones whose repository is gone, that nothing has used for

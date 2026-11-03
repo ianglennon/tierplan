@@ -42,6 +42,9 @@ const (
 	// ReasonServerRestarted: the server stopped while the run was waiting or working, so it was ended at
 	// the next start.
 	ReasonServerRestarted = "server_restarted"
+	// ReasonDeployInProgress: a scheduled run waited LockWait for the environment's operation lock and
+	// a deploy or another operation still held it, so nothing was cleaned and the next attempt is the next slot.
+	ReasonDeployInProgress = "deploy_in_progress"
 	// ReasonNoNodeReporting: no node of the environment reported, so there was nothing to judge.
 	ReasonNoNodeReporting = "no_node_reporting"
 )

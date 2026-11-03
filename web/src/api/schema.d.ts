@@ -1428,6 +1428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the state of an environment's janitor
+         * @description Answers whether the janitor runs by itself on this environment, its schedule and the time zone it is read in, when the next run starts, the newest run that ended, the run that is waiting or working now, and how long the run history is kept. The schedule runs every environment at its slot, daily at 03:00 server time by default, moved later by a start offset of up to 10 minutes that depends on the environment and never changes. A run missed while the server was stopped is not made up. Needs environments.read on the environment.
+         */
+        get: operations["getJanitorStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor/preview": {
         parameters: {
             query?: never;
@@ -7856,6 +7876,17 @@ export interface components {
             /** @description The registry user name; 422 username_required */
             username?: string;
         };
+        JanitorActiveBody: {
+            /** @description The job that does the removing; empty while the run has none yet */
+            jobId: string;
+            /** @description The ID of the run */
+            runId: string;
+            /**
+             * @description waiting: a scheduled run is waiting for a deploy or another operation to free the environment. running: it holds the environment and is working
+             * @enum {string}
+             */
+            state: "waiting" | "running";
+        };
         JanitorEvidenceBody: {
             /** @description The engine's last start error, empty for none */
             error: string;
@@ -8022,6 +8053,18 @@ export interface components {
             /** @description The swarm stack the object is labelled with */
             stack?: string;
         };
+        JanitorRetentionBody: {
+            /**
+             * Format: int64
+             * @description A run is kept while it started within this many days
+             */
+            days: number;
+            /**
+             * Format: int64
+             * @description A run is also kept while it is among this many newest runs of the environment, whichever of the two keeps more
+             */
+            runs: number;
+        };
         JanitorRunBody: {
             /** @description Who started it: the user's ID, or the name of the system for a scheduled run */
             actor: string;
@@ -8187,6 +8230,29 @@ export interface components {
              * @enum {string}
              */
             trigger: "schedule" | "manual";
+        };
+        JanitorStatusBody: {
+            /** @description The run that is waiting or working. Absent when there is none */
+            active?: components["schemas"]["JanitorActiveBody"];
+            /** @description Whether the schedule runs the janitor on this environment */
+            enabled: boolean;
+            /** @description The newest run that has ended, whatever started it. Absent when there is none */
+            lastRun?: components["schemas"]["JanitorRunSummaryBody"];
+            /**
+             * Format: date-time
+             * @description When the next scheduled run starts, in the server's time zone, including this environment's start offset of up to 10 minutes. Null when the janitor is off or the schedule cannot be used
+             */
+            nextRunAt: string | null;
+            retention: components["schemas"]["JanitorRetentionBody"];
+            /** @description The cron expression, read in the server's time zone */
+            schedule: string;
+            /**
+             * @description The preset the expression came from; custom for one written by hand
+             * @enum {string}
+             */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
         };
         JanitorSummaryBody: {
             /**
@@ -16628,6 +16694,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageUsedByBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorStatusBody"];
                 };
             };
             /** @description Error */
