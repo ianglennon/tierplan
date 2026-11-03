@@ -84,6 +84,35 @@ func TestClassifyGraceBoundary(t *testing.T) {
 	}
 }
 
+// TestClassifyEnvironmentGrace: the grace is the environment's (D-20). A zero Grace is the default
+// of 24 hours, so a caller that knows no setting is judged as before, and any other value moves the
+// boundary with it; at exactly the grace the network is listed.
+func TestClassifyEnvironmentGrace(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		grace time.Duration
+		idle  time.Duration
+		want  Class
+	}{
+		{"zero grace is 24h: idle 23h is grace", 0, 23 * time.Hour, ClassGrace},
+		{"zero grace is 24h: idle exactly 24h is listed", 0, 24 * time.Hour, ClassUnused},
+		{"the default grace given outright is the same", GracePeriod, 23 * time.Hour, ClassGrace},
+		{"48h grace: idle 30h is grace", 48 * time.Hour, 30 * time.Hour, ClassGrace},
+		{"48h grace: idle 48h less 1ns is grace", 48 * time.Hour, 48*time.Hour - 1, ClassGrace},
+		{"48h grace: idle exactly 48h is listed", 48 * time.Hour, 48 * time.Hour, ClassUnused},
+		{"48h grace: idle 72h is listed", 48 * time.Hour, 72 * time.Hour, ClassUnused},
+		{"1h grace: idle 2h is listed, not held to 24h", time.Hour, 2 * time.Hour, ClassUnused},
+		{"1h grace: idle 30m is grace", time.Hour, 30 * time.Minute, ClassGrace},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := OrphanInput{Known: true, Created: orphanNow.Add(-c.idle), Grace: c.grace}
+			if got := Classify(in, orphanNow); got != c.want {
+				t.Errorf("Classify = %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
 func TestIdleSince(t *testing.T) {
 	a, b := orphanNow.Add(-time.Hour), orphanNow.Add(-2*time.Hour)
 	if got := IdleSince(b, a); !got.Equal(a) {

@@ -550,6 +550,11 @@ func setJanitorPolicy(ctx context.Context, d JanitorDeps, p *rbac.Principal, env
 	if err := tx.Commit(); err != nil {
 		return JanitorPolicyBody{}, janitorPolicyFailure(d, envID, "commit", err)
 	}
+	// The Address space orphan list judges by this grace too (D-20): drop its kept report so the page
+	// and the janitor change together.
+	if changed && !samePtr(old.GraceHours, want.GraceHours) && d.AddressSpaces != nil {
+		d.AddressSpaces.ForgetOrphans(envID)
+	}
 	body, err := janitorPolicyBody(ctx, d, envID)
 	if err != nil {
 		return JanitorPolicyBody{}, janitorPolicyFailure(d, envID, "read the policy", err)

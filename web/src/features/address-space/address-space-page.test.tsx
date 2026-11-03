@@ -54,6 +54,7 @@ const overlay = (name: string, extra: Partial<OverlayUsage> = {}): OverlayUsage 
 
 const space = (extra: Partial<AddressSpace> = {}): AddressSpace => ({
   envType: "swarm",
+  graceHours: 24,
   measured: true,
   networks: [],
   networksTotal: 0,

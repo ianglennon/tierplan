@@ -101,13 +101,19 @@ func TestClassifyNetworkGrace(t *testing.T) {
 			t.Errorf("item = %+v, want grace with 42h remaining", item)
 		}
 	})
-	t.Run("a policy grace shorter than the check's does not hurry it", func(t *testing.T) {
+	t.Run("a policy grace shorter than 24 h releases a network the check listed", func(t *testing.T) {
 		t.Parallel()
+		// The check reads the environment's grace too (D-20), so a 1 h grace lists a network idle for 10 h and
+		// the janitor holds it to the same hour.
 		p := DefaultPolicy()
 		p.Grace = time.Hour
-		item, _ := ClassifyNetwork(netRow(netspace.ClassGrace, 10*time.Hour), true, p, t0)
-		if item.Class != ClassGrace || item.Reason.Remaining != 14*time.Hour {
-			t.Errorf("item = %+v, want grace with 14h remaining: the check's 24h still holds", item)
+		item, _ := ClassifyNetwork(netRow(netspace.ClassOrphaned, 10*time.Hour), true, p, t0)
+		if item.Class != ClassRemovable || item.Reason.Code != ReasonNetworkOrphaned {
+			t.Errorf("item = %+v, want removable: idle 10 h of a 1 h grace", item)
+		}
+		held, _ := ClassifyNetwork(netRow(netspace.ClassGrace, 30*time.Minute), true, p, t0)
+		if held.Class != ClassGrace || held.Reason.Remaining != 30*time.Minute {
+			t.Errorf("item = %+v, want grace with 30m remaining", held)
 		}
 	})
 	t.Run("at exactly the grace period it is removable", func(t *testing.T) {

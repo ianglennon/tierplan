@@ -549,3 +549,48 @@ func TestJudgeManagerMissing(t *testing.T) {
 		t.Errorf("report = %+v, want a missing manager and no node named", rep)
 	}
 }
+
+// An environment's grace (plan 11-25, D-20, JAN-04): the orphan check judges by the grace its source
+// gives, so the Address space list and the janitor change together. No source, or a source that
+// fails, is the 24 hours of Phase 10.
+
+// graceSource makes a GraceSource that answers g and err, and counts the calls it gets.
+func graceSource(g time.Duration, err error, calls *int) GraceSource {
+	return func(context.Context, string) (time.Duration, error) {
+		if calls != nil {
+			*calls++
+		}
+		return g, err
+	}
+}
+
+// graceNets are an engine's bridge and two networks that have been idle 30 hours and 20 hours.
+func graceNets(now time.Time) []dockertest.FakeNetwork {
+	return []dockertest.FakeNetwork{
+		{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Created: now.Add(-72 * time.Hour)},
+		{ID: "n30", Name: "idle30", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}, Created: now.Add(-30 * time.Hour)},
+		{ID: "n20", Name: "idle20", Driver: "bridge", Scope: "local", Subnets: []string{"172.31.0.0/24"}, Created: now.Add(-20 * time.Hour)},
+	}
+}
+
+func TestOrphansEnvironmentGraceMovesTheList(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, graceNets)
+	grace := 48 * time.Hour
+	var calls int
+	as.WithGrace(func(context.Context, string) (time.Duration, error) { calls++; return grace, nil })
+
+	rep := orphans(t, as, envID)
+	wantRows(t, rep)
+	if rep.Grace != 48*time.Hour {
+		t.Errorf("grace = %v, want 48h", rep.Grace)
+	}
+	// The report is kept for the TTL; the change shows once it is dropped.
+	grace = 12 * time.Hour
+	wantRows(t, orphans(t, as, envID))
+	as.ForgetOrphans(envID)
+	rep = orphans(t, as, envID)
+	wantRows(t, rep, "idle20@edge-1=unused", "idle30@edge-1=unused")
+	if rep.Grace != 12*time.Hour {
+		t.Errorf("grace = %v, want 12h after the change", rep.Grace)
+	}
+}

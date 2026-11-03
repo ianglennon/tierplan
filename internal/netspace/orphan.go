@@ -3,11 +3,17 @@
 
 package netspace
 
-import "time"
+import (
+	"cmp"
+	"time"
+)
 
-// GracePeriod is how long a network must have been idle before it is listed as orphaned or
-// unused (D-08). It is measured from the later of the network's creation and the last time
-// TierPlan saw it in use, so a network that was busy until an hour ago is not listed today.
+// GracePeriod is the default of an environment's grace setting (D-08, D-20): how long a network
+// must have been idle before it is listed as orphaned or unused when nobody has set the grace of
+// the environment. It is measured from the later of the network's creation and the last time
+// TierPlan saw it in use, so a network that was busy until an hour ago is not listed today. The
+// orphan check reads the environment's own grace through OrphanInput.Grace and falls back to
+// this value only when none is given.
 const GracePeriod = 24 * time.Hour
 
 // Class is what the orphan check made of one network.
@@ -27,7 +33,7 @@ const (
 	// ClassSkipped: the stack that owns it holds an operation on the environment, and a deploy
 	// makes networks before it makes the services that use them.
 	ClassSkipped Class = "skipped"
-	// ClassGrace: idle, but not yet for the whole grace period.
+	// ClassGrace: idle, but not yet for the whole of the environment's grace.
 	ClassGrace Class = "grace"
 	// ClassCantTell: TierPlan cannot be sure, because a node that could hold an attachment did not
 	// report, no manager answered, or a stack that may declare the network external did not load.
@@ -68,6 +74,10 @@ type OrphanInput struct {
 	// Created is when the network was made, LastInUse the last time TierPlan saw it in use (the
 	// zero time for never).
 	Created, LastInUse time.Time
+	// Grace is the environment's grace: how long the network must have been idle before it is
+	// judged. Zero means GracePeriod, the default of the environment's grace setting, so a caller
+	// that knows no setting behaves as before (D-20).
+	Grace time.Duration
 }
 
 // IdleSince is when a network's idle time starts: the later of its creation and the last time it
@@ -89,7 +99,7 @@ func IdleSince(created, lastInUse time.Time) time.Time {
 //  3. kept by label or by row: kept
 //  4. declared external by a TierPlan stack: excluded
 //  5. owned by the stack that holds the operation lock: skipped
-//  6. idle for less than GracePeriod: grace (at exactly GracePeriod it is listed)
+//  6. idle for less than the environment's grace: grace (at exactly the grace it is listed)
 //  7. the picture is incomplete: cant_tell
 //  8. its owner label names a stack that exists: owned
 //  9. its owner label names a stack that is gone: orphaned
@@ -109,7 +119,7 @@ func Classify(in OrphanInput, now time.Time) Class {
 		return ClassExcluded
 	case in.Busy:
 		return ClassSkipped
-	case now.Before(IdleSince(in.Created, in.LastInUse).Add(GracePeriod)):
+	case now.Before(IdleSince(in.Created, in.LastInUse).Add(cmp.Or(in.Grace, GracePeriod))):
 		return ClassGrace
 	case !in.Known:
 		return ClassCantTell

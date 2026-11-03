@@ -5323,6 +5323,11 @@ export interface components {
              * @enum {string}
              */
             envType: "swarm" | "standalone";
+            /**
+             * Format: int64
+             * @description The grace the orphan list was judged by, in whole hours: how long a network must have been idle before it is listed. It is the environment's janitor grace (the instance default of 24 hours until the environment or the instance changes it), so this page and the janitor never disagree about whether a network is old enough
+             */
+            graceHours: number;
             /** @description The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none */
             ingress?: components["schemas"]["OverlayUsageBody"];
             /** @description The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the tierplan.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name */
@@ -5345,7 +5350,7 @@ export interface components {
             notMeasured?: "no_manager";
             /** @description The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered */
             notReporting: string[] | null;
-            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time TierPlan saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
+            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for the environment's grace (graceHours), counted from the later of its creation and the last time TierPlan saw it in use; at exactly the grace it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
             orphans: components["schemas"]["OrphanRowBody"][] | null;
             /** @description Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld */
             orphansWithheld?: components["schemas"]["OrphansWithheldBody"];

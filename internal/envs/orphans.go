@@ -41,6 +41,39 @@ func (s *AddressSpaces) WithStackFacts(f StackFacts) *AddressSpaces {
 	return s
 }
 
+// GraceSource says how long a network of an environment must have been idle before the orphan check
+// judges it: the environment's grace setting (D-20). The server backs it with the janitor's policy
+// store; this package never imports the janitor.
+type GraceSource func(ctx context.Context, envID string) (time.Duration, error)
+
+// WithGrace sets where the orphan check learns an environment's grace, the one the janitor reads for
+// every resource it removes. It returns s, and is called before the reader is used. With none set, or
+// with a source that answers zero, the check uses netspace.GracePeriod.
+func (s *AddressSpaces) WithGrace(g GraceSource) *AddressSpaces {
+	s.grace = g
+	return s
+}
+
+// graceOf is the grace a check of the environment judges by, read once for the whole pass. A source
+// that fails, or answers nothing usable, never fails the check: the check falls back to the default of
+// 24 hours (T-11-64) and logs the failure. That can list a network earlier than the environment's own
+// grace would; the janitor still holds each network to the policy's grace itself before it removes one,
+// and a person's delete from the Address space page never waits for a grace period.
+func (s *AddressSpaces) graceOf(ctx context.Context, envID string) time.Duration {
+	if s.grace == nil {
+		return netspace.GracePeriod
+	}
+	g, err := s.grace(ctx, envID)
+	switch {
+	case err != nil:
+		s.log.Warn("could not read the grace period of an environment, using the default for the orphan check", "environment", envID, "default", netspace.GracePeriod, "error", err)
+		return netspace.GracePeriod
+	case g <= 0:
+		return netspace.GracePeriod
+	}
+	return g
+}
+
 // OrphanRow is one network the orphan check lists: orphaned (its stack is gone), unused (no stack
 // ever owned it) or cant_tell (TierPlan cannot be sure).
 type OrphanRow struct {
@@ -71,6 +104,8 @@ type OrphanReport struct {
 	// Complete is true when every node reported (and on a swarm a manager answered): the check
 	// saw everything it needed.
 	Complete bool
+	// Grace is the environment's grace the check judged by: a network idle for less is not listed.
+	Grace time.Duration
 }
 
 func cloneReport(r OrphanReport) OrphanReport {
@@ -84,7 +119,8 @@ func cloneReport(r OrphanReport) OrphanReport {
 }
 
 // Orphans lists the networks of an environment that nothing uses any more, split into orphaned
-// and unused, once they have been idle for netspace.GracePeriod, and the ones it cannot judge.
+// and unused, once they have been idle for the environment's grace (24 hours unless the grace
+// source says otherwise, D-20), and the ones it cannot judge.
 // It reads who uses every network fresh (ResolveUsage), so it is never judged on a stale view,
 // stamps the networks it sees in use so the grace clock has something to run on, and keeps the
 // answer for the reader's TTL. Listing is report-only: removing re-checks (D-12).
@@ -139,6 +175,8 @@ type JudgeReport struct {
 	// Complete is true when every node reported, on a swarm a manager answered and its services were
 	// read: the check saw everything a verdict on a network needs.
 	Complete bool
+	// Grace is the environment's grace the check judged by.
+	Grace time.Duration
 }
 
 // judgeMeta is what a check learned beyond the report it lists: the reasons a verdict could be
@@ -165,7 +203,7 @@ func (s *AddressSpaces) Judge(ctx context.Context, envID string) (JudgeReport, e
 	}
 	out := JudgeReport{
 		Rows: rows, WithheldNodes: []string{}, WithheldStacks: slices.Clone(rep.WithheldStacks),
-		Complete: rep.Complete && meta.workComplete,
+		Complete: rep.Complete && meta.workComplete, Grace: rep.Grace,
 	}
 	if out.Rows == nil {
 		out.Rows = []JudgedRow{}
@@ -213,7 +251,8 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 		}
 	}
 
-	rep := OrphanReport{Rows: []OrphanRow{}, WithheldNodes: []string{}, WithheldStacks: []string{}}
+	grace := s.graceOf(ctx, envID)
+	rep := OrphanReport{Rows: []OrphanRow{}, WithheldNodes: []string{}, WithheldStacks: []string{}, Grace: grace}
 	complete := len(usage.Missing) == 0 && (!usage.Swarm || usage.ManagerRead)
 	rep.Complete = complete
 	var stamps []seenStamp
@@ -238,6 +277,7 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 			KeepRow:          keeps[NetKey{NodeID: key.NodeID, NetworkID: row.Name}],
 			External:         sf.externals[row.Name],
 			ExternalsUnknown: len(sf.unknown) > 0,
+			Grace:            grace,
 		}
 		if have {
 			if in.Created.IsZero() {

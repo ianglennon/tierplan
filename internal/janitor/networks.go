@@ -16,7 +16,7 @@ import (
 // adds only the policy on top, in this order:
 //
 //  1. kept by the tierplan.keep label or by a keep row a person made: protected
-//  2. inside the grace period: grace (the longer of the policy's and the orphan check's)
+//  2. inside the grace period: grace (the policy's, which the orphan check reads too)
 //  3. TierPlan cannot be sure, or the picture is incomplete: cant_tell, never removable
 //  4. its stack or project is gone: removable (network_orphaned)
 //  5. no stack ever owned it and nothing uses it: removable (network_unused) once the environment
@@ -41,9 +41,10 @@ func ClassifyNetwork(row NetworkRow, complete bool, p Policy, now time.Time) (it
 			item.Reason.Age = item.Age
 		}
 	}
-	// The orphan check never lists a network idle for less than its own grace period, so a policy
-	// with a shorter one cannot make the janitor quicker than the check.
-	grace := max(p.grace(), netspace.GracePeriod)
+	// The orphan check judges by the environment's own grace, the policy's, so the janitor and the
+	// Address space page agree on when a network is old enough (D-20). A report judged by an older
+	// grace (a candidate policy previewed before it is saved) is still held by the check's class.
+	grace := p.grace()
 
 	switch row.Class {
 	case netspace.ClassKept:

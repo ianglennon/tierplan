@@ -273,12 +273,40 @@ func setJanitorDefaults(ctx context.Context, d JanitorDeps, p *rbac.Principal, i
 	if err := tx.Commit(); err != nil {
 		return JanitorDefaultsBody{}, janitorDefaultsFailure(d, "commit", err)
 	}
+	if changed && oldPol.Grace != pol.Grace {
+		forgetOrphansFollowingGrace(ctx, d)
+	}
 	body, err := janitorDefaultsBody(ctx, d)
 	if err != nil {
 		return JanitorDefaultsBody{}, janitorDefaultsFailure(d, "read the defaults", err)
 	}
 	body.RemovedRuns = int(removed)
 	return body, nil
+}
+
+// forgetOrphansFollowingGrace drops the kept orphan report of every environment whose grace follows the
+// default, so the Address space page judges by the new default at its next read (D-20). An environment that
+// sets its own grace keeps its report. A failure is logged and changes nothing else: a report is kept for a
+// few seconds only.
+func forgetOrphansFollowingGrace(ctx context.Context, d JanitorDeps) {
+	if d.AddressSpaces == nil {
+		return
+	}
+	rows, err := d.Store.RQ.ListEnvironments(ctx)
+	if err != nil {
+		d.log().Warn("could not list the environments to refresh their orphan lists after the default grace changed", "error", err)
+		return
+	}
+	for _, row := range rows {
+		over, _, err := d.Policies.Env(ctx, row.ID)
+		if err != nil {
+			d.log().Warn("could not read an environment's janitor policy to refresh its orphan list", "environment", row.ID, "error", err)
+		}
+		if err != nil || over.GraceHours == nil {
+			// A policy that could not be read is dropped too: a stale list is worse than one more read.
+			d.AddressSpaces.ForgetOrphans(row.ID)
+		}
+	}
 }
 
 // lastJanitorDefaultsAuthor is the display name of whoever saved the defaults last, empty when nobody did or

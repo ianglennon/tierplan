@@ -874,6 +874,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	janitorDeps.Runs = janitorRuns
 	janitorPolicies := janitor.PolicyStore{St: st}
 	janitorDeps.Policies = janitorPolicies
+	// One grace per environment, for everything (D-20): the Address space orphan list judges by the grace the
+	// janitor's policy gives the environment, the instance default of 24 hours until someone sets it. It is set
+	// before the reader serves its first request.
+	addressSpaces.WithGrace(func(ctx context.Context, envID string) (time.Duration, error) {
+		p, err := janitorPolicies.Effective(ctx, envID)
+		return p.Grace, err
+	})
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
 		Policy: janitorPolicies.Effective, Nodes: janitorPolicies.Nodes, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,

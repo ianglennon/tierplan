@@ -415,6 +415,14 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		janitorClock := nowClock(f.clk.now)
 		janitorRuns := &janitor.SQLStore{St: f.st}
 		janitorPolicies := janitor.PolicyStore{St: f.st}
+		// As on a real server, the orphan list judges by the grace the janitor's policy gives the environment.
+		addressSpaces.WithGrace(func(ctx context.Context, envID string) (time.Duration, error) {
+			if f.janitorPolicy != nil {
+				return f.janitorPolicy().Grace, nil
+			}
+			p, err := janitorPolicies.Effective(ctx, envID)
+			return p.Grace, err
+		})
 		// The janitor asks the stack records which stacks and projects still exist, as the server does.
 		janitorFacts := stackops.NetFacts{Repo: stackops.Repo{Store: f.st, Vault: f.v}, Locks: f.stackLocks}
 		janitorDeps := api.JanitorDeps{
