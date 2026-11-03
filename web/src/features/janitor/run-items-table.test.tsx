@@ -203,7 +203,7 @@ describe("the columns", () => {
   });
 
   it("show an unknown reason as a dash", () => {
-    mount([runItem({ reason: { code: "" } })]);
+    mount([runItem({ reason: { code: "" } as unknown as JanitorRunItem["reason"] })]);
     const cells = within(bodyRows()[0] as HTMLElement).getAllByRole("cell");
     expect(cells.map((c) => c.textContent)).toContain("—");
   });

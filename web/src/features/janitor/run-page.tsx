@@ -3,13 +3,12 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleCheck, CircleX, Info, Lock, ShieldCheck, TriangleAlert } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { CircleCheck, CircleX, Info, Lock, TriangleAlert } from "lucide-react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import {
   JanitorRequestError,
   type JanitorRun,
-  type JanitorRunItem,
   janitorRunKey,
   janitorRunQuery,
   runPollMs,
@@ -18,31 +17,29 @@ import { NoPermission } from "@/components/full-page-state";
 import { LiveChip } from "@/components/live-chip";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { SearchBox } from "@/features/containers/container-list";
+import { countParts, durationText, formatSize } from "@/features/janitor/preview-summary";
 import {
-  countParts,
-  durationText,
-  formatSize,
-  reasonText,
-  type Translate,
-} from "@/features/janitor/preview-summary";
+  RunItemsTable,
+  type RunSearch,
+  type RunSearchPatch,
+  SHOW_VALUES,
+  type Show,
+} from "@/features/janitor/run-items-table";
 import {
   type JanitorStreamState,
   progressOf,
   useJanitorRunStream,
 } from "@/features/janitor/run-job-stream";
-import { TruncatedText } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute } from "@/lib/format";
-import { cn } from "@/lib/utils";
-
-const ROW = "h-9 max-md:h-11";
-const CELL = "px-3 py-0";
 
 // The icon of a run's state: always beside a word, never colour alone (UI-SPEC "Color").
 function StateIcon({ state }: { state: JanitorRun["state"] }) {
@@ -62,31 +59,12 @@ function StateIcon({ state }: { state: JanitorRun["state"] }) {
   }
 }
 
-function OutcomeIcon({ outcome }: { outcome: JanitorRunItem["outcome"] }) {
-  switch (outcome) {
-    case "removed":
-      return <CircleCheck aria-hidden="true" className="size-4 text-status-online-text" />;
-    case "refused_in_use":
-      return <Info aria-hidden="true" className="size-4 text-muted-foreground" />;
-    case "skipped_protected":
-      return <ShieldCheck aria-hidden="true" className="size-4 text-muted-foreground" />;
-    case "skipped_node_offline":
-      return <TriangleAlert aria-hidden="true" className="size-4 text-status-warning-text" />;
-    default:
-      return <CircleX aria-hidden="true" className="size-4 text-status-offline-text" />;
-  }
-}
-
-// itemReason is why an item ended as it did. A code names a refusal or a failure of the attempt, and is
-// worded with the item's own name and node; with none, the reason the run selected it for is shown.
-// The run item's name is whatever Docker called it, and is placed as text.
-export function itemReason(item: JanitorRunItem, t: Translate): string {
-  if (item.code) {
-    const key = `janitorRun.itemReason.${item.code}`;
-    const words = t(key, { name: item.name, node: item.node });
-    if (words !== key) return words;
-  }
-  return reasonText(item.reason, t);
+export interface RunPageProps {
+  envId: string;
+  runId: string;
+  // The filters, as the address holds them. A page without an address keeps them itself.
+  search?: RunSearch;
+  onSearchChange?: (patch: RunSearchPatch) => void;
 }
 
 // RunPage is one run of the janitor, live or recorded (D-14): what started it, how it ended, what it
@@ -96,11 +74,17 @@ export function itemReason(item: JanitorRunItem, t: Translate): string {
 // once when the plan becomes known and when the run ends. A run that has ended, or whose job the
 // server no longer holds, is the record alone. It reads a run of this environment only; a run the
 // history limit removed is a not-found page, not an error.
-export function RunPage({ envId, runId }: { envId: string; runId: string }) {
+export function RunPage({ envId, runId, search, onSearchChange }: RunPageProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const readable = usePermission("environments.read", envId);
   const envName = useEnvName(envId);
+  const [kept, setKept] = useState<RunSearch>({});
+  const filters = search ?? kept;
+  const changeFilters = (patch: RunSearchPatch) => {
+    if (onSearchChange) onSearchChange(patch);
+    else setKept((s) => ({ ...s, ...patch }));
+  };
   const streamLive = useRef(false);
   const query = useQuery({
     ...janitorRunQuery(envId, runId),
@@ -169,7 +153,16 @@ export function RunPage({ envId, runId }: { envId: string; runId: string }) {
       </div>
     );
   }
-  return <RunBody envId={envId} envName={envName} run={run} stream={stream} />;
+  return (
+    <RunBody
+      envId={envId}
+      envName={envName}
+      run={run}
+      stream={stream}
+      search={filters}
+      onSearchChange={changeFilters}
+    />
+  );
 }
 
 function Crumb({ envId, label }: { envId: string; label: ReactNode }) {
@@ -324,9 +317,62 @@ interface RunBodyProps {
   envName: string;
   run: JanitorRun;
   stream: JanitorStreamState;
+  search: RunSearch;
+  onSearchChange: (patch: RunSearchPatch) => void;
 }
 
-function RunBody({ envId, envName, run, stream }: RunBodyProps) {
+// RunFilters is the Show choice (one of All, Removed, Kept, Problems) and the search by name.
+function RunFilters({
+  search,
+  onChange,
+}: {
+  search: RunSearch;
+  onChange: (patch: RunSearchPatch) => void;
+}) {
+  const t = useT();
+  const labelId = useId();
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <SearchBox
+        value={search.q}
+        onCommit={(q) => onChange({ q })}
+        label={t("janitorRun.search.label")}
+        placeholder={t("janitorRun.search.placeholder")}
+        clearLabel={t("janitorRun.search.clear")}
+      />
+      <div className="flex items-center gap-2">
+        <Label id={labelId} className="text-sm text-muted-foreground">
+          {t("janitorRun.filter.label")}
+        </Label>
+        <ToggleGroup
+          type="single"
+          role="group"
+          variant="outline"
+          size="sm"
+          spacing={2}
+          aria-labelledby={labelId}
+          value={search.show ?? "all"}
+          onValueChange={(v) => {
+            // Choosing the chosen one again is not a choice.
+            if (v) onChange({ show: v === "all" ? undefined : (v as Show) });
+          }}
+        >
+          {SHOW_VALUES.map((v) => (
+            <ToggleGroupItem
+              key={v}
+              value={v}
+              className="aria-checked:border-ring aria-checked:text-ring max-md:h-11"
+            >
+              {t(`janitorRun.filter.${v}`)}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
+    </div>
+  );
+}
+
+function RunBody({ envId, envName, run, stream, search, onSearchChange }: RunBodyProps) {
   const t = useT();
   const items = run.items ?? [];
   const counts = run.counts;
@@ -340,7 +386,6 @@ function RunBody({ envId, envName, run, stream }: RunBodyProps) {
   );
   const removedTotal = counts.removedContainers + counts.removedNetworks + counts.removedImages;
   const started = formatAbsolute(run.startedAt);
-  const showNode = items.some((i) => i.node !== "");
   const reasonWords = run.reason ? t(`janitorRun.reason.${run.reason}`) : "";
   const attempted = items.length;
 
@@ -360,7 +405,14 @@ function RunBody({ envId, envName, run, stream }: RunBodyProps) {
 
       <p className="text-sm">
         {removed.length > 0
-          ? t("janitorRun.summary.removed", { parts: removed.join(", ") })
+          ? t("janitorRun.summary.removed", {
+              parts: [
+                ...removed,
+                ...(run.estBytes === null
+                  ? []
+                  : [t("janitor.counts.size", { size: formatSize(run.estBytes, t) })]),
+              ].join(", "),
+            })
           : t("janitorRun.summary.removedNone")}{" "}
         {t("janitorRun.summary.kept", { count: counts.kept })}{" "}
         {t("janitorRun.summary.failed", { count: counts.failed })}
@@ -404,7 +456,9 @@ function RunBody({ envId, envName, run, stream }: RunBodyProps) {
           <CircleX aria-hidden="true" />
           <AlertTitle>{t("janitorRun.alert.failed.title")}</AlertTitle>
           <AlertDescription>
-            {t("janitorRun.alert.failed.body", { reason: reasonWords })}
+            {reasonWords
+              ? t("janitorRun.alert.failed.body", { reason: reasonWords })
+              : t("janitorRun.alert.failed.bodyNoReason")}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -413,61 +467,15 @@ function RunBody({ envId, envName, run, stream }: RunBodyProps) {
         <p className="text-sm text-muted-foreground">{t("janitorRun.empty")}</p>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full caption-bottom text-sm">
-              <caption className="sr-only">{t("janitorRun.caption")}</caption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col" className="w-32">
-                    {t("janitorRun.columns.type")}
-                  </TableHead>
-                  <TableHead scope="col" className="min-w-48">
-                    {t("janitorRun.columns.name")}
-                  </TableHead>
-                  {showNode ? (
-                    <TableHead scope="col" className="w-36">
-                      {t("janitorRun.columns.node")}
-                    </TableHead>
-                  ) : null}
-                  <TableHead scope="col" className="min-w-64">
-                    {t("janitorRun.columns.reason")}
-                  </TableHead>
-                  <TableHead scope="col" className="w-48">
-                    {t("janitorRun.columns.outcome")}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.seq} className={ROW}>
-                    <TableCell className={cn(CELL, "w-32")}>
-                      {t(`janitor.type.${item.type}`)}
-                    </TableCell>
-                    <TableCell className={cn(CELL, "min-w-48")}>
-                      <TruncatedText mono>{item.name}</TruncatedText>
-                    </TableCell>
-                    {showNode ? (
-                      <TableCell className={cn(CELL, "w-36")}>
-                        <TruncatedText mono>{item.node || "—"}</TruncatedText>
-                      </TableCell>
-                    ) : null}
-                    <TableCell className={cn(CELL, "min-w-64 whitespace-normal")}>
-                      {itemReason(item, t) || "—"}
-                    </TableCell>
-                    <TableCell className={cn(CELL, "w-48")}>
-                      <span className="inline-flex items-center gap-1.5">
-                        <OutcomeIcon outcome={item.outcome} />
-                        {t(`janitorRun.outcome.${item.outcome}`)}
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </table>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {t("janitorRun.items", { count: items.length })}
-          </p>
+          <RunFilters search={search} onChange={onSearchChange} />
+          <RunItemsTable
+            envId={envId}
+            runId={run.id}
+            items={items}
+            show={search.show ?? "all"}
+            q={search.q}
+            onClearFilters={() => onSearchChange({ show: undefined, q: undefined })}
+          />
         </>
       )}
     </div>
