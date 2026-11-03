@@ -44,6 +44,12 @@ func (p PolicyStore) Env(ctx context.Context, envID string) (Overrides, int64, e
 	return readEnvPolicy(ctx, p.St.RQ, envID)
 }
 
+// EnvOn is Env read on the caller's transaction q, so that a save reads the overrides it replaces in the
+// same transaction that writes the new ones.
+func (p PolicyStore) EnvOn(ctx context.Context, q *sqlc.Queries, envID string) (Overrides, int64, error) {
+	return readEnvPolicy(ctx, q, envID)
+}
+
 func readEnvPolicy(ctx context.Context, q *sqlc.Queries, envID string) (Overrides, int64, error) {
 	row, err := q.GetJanitorEnvPolicy(ctx, envID)
 	if errors.Is(err, sql.ErrNoRows) {

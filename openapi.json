@@ -7428,6 +7428,24 @@
         ],
         "type": "object"
       },
+      "JanitorBoolField": {
+        "additionalProperties": false,
+        "properties": {
+          "overridden": {
+            "description": "True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value that applies: the environment's own when it set one, else the instance default",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value",
+          "overridden"
+        ],
+        "type": "object"
+      },
       "JanitorEvidenceBody": {
         "additionalProperties": false,
         "properties": {
@@ -7509,6 +7527,25 @@
           "node",
           "logLines",
           "logState"
+        ],
+        "type": "object"
+      },
+      "JanitorIntField": {
+        "additionalProperties": false,
+        "properties": {
+          "overridden": {
+            "description": "True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value that applies: the environment's own when it set one, else the instance default",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value",
+          "overridden"
         ],
         "type": "object"
       },
@@ -7697,6 +7734,188 @@
           "trigger",
           "by",
           "startedAt"
+        ],
+        "type": "object"
+      },
+      "JanitorPolicyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/JanitorPolicyValues",
+            "description": "The instance defaults every field that is not overridden follows"
+          },
+          "enabled": {
+            "$ref": "#/components/schemas/JanitorBoolField"
+          },
+          "graceHours": {
+            "$ref": "#/components/schemas/JanitorIntField"
+          },
+          "keepN": {
+            "$ref": "#/components/schemas/JanitorIntField"
+          },
+          "removeStoppedContainers": {
+            "$ref": "#/components/schemas/JanitorBoolField"
+          },
+          "removeUnusedNetworks": {
+            "$ref": "#/components/schemas/JanitorBoolField"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/JanitorScheduleField"
+          },
+          "timezone": {
+            "description": "The server's time zone, which the schedule is read in",
+            "type": "string"
+          },
+          "version": {
+            "description": "How many times this environment's policy was saved, 0 while it has never been. Send it back with a save: a save made against any other version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "timezone",
+          "enabled",
+          "schedule",
+          "keepN",
+          "graceHours",
+          "removeUnusedNetworks",
+          "removeStoppedContainers",
+          "defaults"
+        ],
+        "type": "object"
+      },
+      "JanitorPolicyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether the schedule runs the janitor. Null follows the instance default",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "graceHours": {
+            "description": "How many hours an object must have been stopped or idle before it can be removed, 1 to 720. Null follows the instance default",
+            "format": "int64",
+            "maximum": 720,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "keepN": {
+            "description": "How many of the newest exited task containers of each service slot are kept, 0 to 20. Null follows the instance default",
+            "format": "int64",
+            "maximum": 20,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "removeStoppedContainers": {
+            "description": "Whether stopped containers no stack or project ever owned are removed too. Null follows the instance default",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "removeUnusedNetworks": {
+            "description": "Whether networks no stack ever owned are removed too. Null follows the instance default",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "schedule": {
+            "description": "A five-field cron expression that fires no more often than every 15 minutes. Null follows the instance default",
+            "maxLength": 100,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedulePreset": {
+            "description": "The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version read with the policy; a save against another version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "type": "object"
+      },
+      "JanitorPolicyValues": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether the schedule runs the janitor",
+            "type": "boolean"
+          },
+          "graceHours": {
+            "description": "How many hours an object must have been stopped or idle before it can be removed",
+            "format": "int64",
+            "maximum": 720,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "keepN": {
+            "description": "How many of the newest exited task containers of each service slot are kept",
+            "format": "int64",
+            "maximum": 20,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removeStoppedContainers": {
+            "description": "Whether stopped containers no stack or project ever owned are removed too",
+            "type": "boolean"
+          },
+          "removeUnusedNetworks": {
+            "description": "Whether networks no stack ever owned are removed too",
+            "type": "boolean"
+          },
+          "schedule": {
+            "description": "The five-field cron expression",
+            "type": "string"
+          },
+          "schedulePreset": {
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "schedule",
+          "schedulePreset",
+          "keepN",
+          "graceHours",
+          "removeUnusedNetworks",
+          "removeStoppedContainers"
         ],
         "type": "object"
       },
@@ -8255,6 +8474,36 @@
           "counts",
           "estBytes",
           "jobId"
+        ],
+        "type": "object"
+      },
+      "JanitorScheduleField": {
+        "additionalProperties": false,
+        "properties": {
+          "overridden": {
+            "description": "True when this environment set the schedule itself. False means it follows the instance default",
+            "type": "boolean"
+          },
+          "preset": {
+            "description": "The preset the expression came from; custom for one written by hand",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "description": "The five-field cron expression that applies, read in the server's time zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "preset",
+          "overridden"
         ],
         "type": "object"
       },
@@ -26857,6 +27106,116 @@
           }
         },
         "summary": "Read the state of an environment's janitor",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/policy": {
+      "get": {
+        "description": "Answers, for each setting (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), the value that applies and whether this environment set it or follows the instance default, the instance defaults, the version a save must send back and the server's time zone the schedule is read in. Needs environments.read on the environment.",
+        "operationId": "getJanitorPolicy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorPolicyBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read an environment's janitor policy",
+        "tags": [
+          "environments"
+        ]
+      },
+      "put": {
+        "description": "Replaces the settings this environment sets itself: every field is a value, or null to follow the instance default again. keepN is 0 to 20, graceHours 1 to 720, and the schedule a five-field cron expression that fires no more often than every 15 minutes (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the policy: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the janitor off stops its scheduled runs at once; Clean now still works. Use the janitor preview with the candidate policy to see what the change would remove before it is saved. Needs janitor.policy (an Operator with that extra, or an Env Admin) on the environment. A change is audited as janitor.policy_changed, naming the fields that changed.",
+        "operationId": "setJanitorPolicy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JanitorPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorPolicyBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an environment's janitor policy",
         "tags": [
           "environments"
         ]

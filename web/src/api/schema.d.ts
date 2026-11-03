@@ -1448,6 +1448,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read an environment's janitor policy
+         * @description Answers, for each setting (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), the value that applies and whether this environment set it or follows the instance default, the instance defaults, the version a save must send back and the server's time zone the schedule is read in. Needs environments.read on the environment.
+         */
+        get: operations["getJanitorPolicy"];
+        /**
+         * Change an environment's janitor policy
+         * @description Replaces the settings this environment sets itself: every field is a value, or null to follow the instance default again. keepN is 0 to 20, graceHours 1 to 720, and the schedule a five-field cron expression that fires no more often than every 15 minutes (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the policy: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the janitor off stops its scheduled runs at once; Clean now still works. Use the janitor preview with the candidate policy to see what the change would remove before it is saved. Needs janitor.policy (an Operator with that extra, or an Env Admin) on the environment. A change is audited as janitor.policy_changed, naming the fields that changed.
+         */
+        put: operations["setJanitorPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor/preview": {
         parameters: {
             query?: never;
@@ -7907,6 +7931,12 @@ export interface components {
              */
             state: "waiting" | "running";
         };
+        JanitorBoolField: {
+            /** @description True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it */
+            overridden: boolean;
+            /** @description The value that applies: the environment's own when it set one, else the instance default */
+            value: boolean;
+        };
         JanitorEvidenceBody: {
             /** @description The engine's last start error, empty for none */
             error: string;
@@ -7942,6 +7972,15 @@ export interface components {
              * @description When the container last started; null when the engine reported none
              */
             startedAt: string | null;
+        };
+        JanitorIntField: {
+            /** @description True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it */
+            overridden: boolean;
+            /**
+             * Format: int64
+             * @description The value that applies: the environment's own when it set one, else the instance default
+             */
+            value: number;
         };
         JanitorItemBody: {
             /**
@@ -8019,6 +8058,75 @@ export interface components {
              * @enum {string}
              */
             trigger: "schedule" | "manual";
+        };
+        JanitorPolicyBody: {
+            /** @description The instance defaults every field that is not overridden follows */
+            defaults: components["schemas"]["JanitorPolicyValues"];
+            enabled: components["schemas"]["JanitorBoolField"];
+            graceHours: components["schemas"]["JanitorIntField"];
+            keepN: components["schemas"]["JanitorIntField"];
+            removeStoppedContainers: components["schemas"]["JanitorBoolField"];
+            removeUnusedNetworks: components["schemas"]["JanitorBoolField"];
+            schedule: components["schemas"]["JanitorScheduleField"];
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times this environment's policy was saved, 0 while it has never been. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorPolicyRequest: {
+            /** @description Whether the schedule runs the janitor. Null follows the instance default */
+            enabled?: boolean | null;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720. Null follows the instance default
+             */
+            graceHours?: number | null;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20. Null follows the instance default
+             */
+            keepN?: number | null;
+            /** @description Whether stopped containers no stack or project ever owned are removed too. Null follows the instance default */
+            removeStoppedContainers?: boolean | null;
+            /** @description Whether networks no stack ever owned are removed too. Null follows the instance default */
+            removeUnusedNetworks?: boolean | null;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes. Null follows the instance default */
+            schedule?: string | null;
+            /**
+             * @description The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule
+             * @enum {string|null}
+             */
+            schedulePreset?: "hourly" | "every_6h" | "daily" | "weekly" | "custom" | null;
+            /**
+             * Format: int64
+             * @description The version read with the policy; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorPolicyValues: {
+            /** @description Whether the schedule runs the janitor */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed
+             */
+            graceHours: number;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept
+             */
+            keepN: number;
+            /** @description Whether stopped containers no stack or project ever owned are removed too */
+            removeStoppedContainers: boolean;
+            /** @description Whether networks no stack ever owned are removed too */
+            removeUnusedNetworks: boolean;
+            /** @description The five-field cron expression */
+            schedule: string;
+            /** @enum {string} */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
         };
         JanitorPreviewBody: {
             /** @description What the janitor would remove now, ordered by type (container, network, image), then node, name and ID */
@@ -8250,6 +8358,17 @@ export interface components {
              * @enum {string}
              */
             trigger: "schedule" | "manual";
+        };
+        JanitorScheduleField: {
+            /** @description True when this environment set the schedule itself. False means it follows the instance default */
+            overridden: boolean;
+            /**
+             * @description The preset the expression came from; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The five-field cron expression that applies, read in the server's time zone */
+            value: string;
         };
         JanitorStatusBody: {
             /** @description The run that is waiting or working. Absent when there is none */
@@ -16764,6 +16883,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JanitorStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorPolicyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setJanitorPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorPolicyBody"];
                 };
             };
             /** @description Error */
