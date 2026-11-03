@@ -10,11 +10,12 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+import { addressSpaceKey } from "@/api/address-space";
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
-import type { StackLock } from "@/api/stacks";
+import { type StackDetail, type StackLock, stackKey } from "@/api/stacks";
 
 export type JanitorPreview = components["schemas"]["JanitorPreviewBody"];
 export type JanitorItem = components["schemas"]["JanitorItemBody"];
@@ -41,6 +42,9 @@ export type JanitorNode = components["schemas"]["JanitorNodeBody"];
 export type JanitorNodeRequest = components["schemas"]["JanitorNodeRequest"];
 export type TaskHistory = components["schemas"]["TaskHistoryBody"];
 export type TaskHistoryChange = components["schemas"]["TaskHistoryChangeBody"];
+export type JanitorKeepTarget = components["schemas"]["JanitorKeepTarget"];
+export type JanitorKept = components["schemas"]["JanitorKeptItem"];
+export type StackJanitor = components["schemas"]["StackJanitorBody"];
 
 // The frames of a run's stream (GET .../janitor/runs/{runId}/stream). The server sends them but
 // does not describe them in the OpenAPI document, so they are written here by hand from
@@ -712,5 +716,116 @@ export function useSaveTaskHistory(envId: string) {
         dockerDefault,
         keepsAll,
       }),
+  });
+}
+
+// The key of an environment's kept items. It sits under the overview, which the events feed makes
+// stale on a container, image or network event: a kept object that is removed by hand, or made again,
+// changes its `present` flag.
+export function janitorKeepsKey(envId: string) {
+  return [...janitorOverviewKey(envId), "keeps"] as const;
+}
+
+// janitorKeepsQuery is everything the janitor never removes in an environment because a person chose
+// Keep on it or it carries the tierplan.keep label (one item per object; the label wins). Reading
+// needs environments.read.
+export function janitorKeepsQuery(envId: string) {
+  return queryOptions({
+    queryKey: janitorKeepsKey(envId),
+    queryFn: async (): Promise<JanitorKept[]> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/janitor/keeps", {
+          params: { path: { envId } },
+        });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data.items ?? [];
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+  });
+}
+
+// useJanitorKeeps reads the kept items; enabled is false for a person who may not read the environment.
+export function useJanitorKeeps(envId: string, enabled = true) {
+  return useQuery({ ...janitorKeepsQuery(envId), enabled });
+}
+
+// A keep or an unkeep changes three things that show the same fact: the kept list, the next preview
+// and, for a network, the Address space page (one table, D-12).
+function afterKeepChange(queryClient: ReturnType<typeof useQueryClient>, envId: string) {
+  void queryClient.invalidateQueries({ queryKey: janitorKeepsKey(envId) });
+  void queryClient.invalidateQueries({ queryKey: addressSpaceKey(envId) });
+}
+
+// useKeepJanitorItem keeps containers, images and networks out of every cleanup, by a schedule and
+// by Clean now. It is never retried (P2 D-42). A target the engine no longer has is 404 not_found,
+// one on several nodes without a node 422 node_required. It answers how many keeps are new.
+export function useKeepJanitorItem(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<number, JanitorRequestError, JanitorKeepTarget[]>({
+    retry: false,
+    mutationFn: async (targets) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/janitor/keeps", {
+          params: { path: { envId } },
+          body: { targets },
+        });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data.kept;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("PUT", 0);
+      }
+    },
+    onSettled: () => afterKeepChange(queryClient, envId),
+  });
+}
+
+// useUnkeepJanitorItem takes a person's keep back. It is never retried (P2 D-42). 409 kept_by_label
+// means the object carries the tierplan.keep label, which only its owner can remove; 404
+// keep_not_found means nobody is keeping it (it was already taken back).
+export function useUnkeepJanitorItem(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, JanitorRequestError, Pick<JanitorKept, "kind" | "nodeId" | "ref">>({
+    retry: false,
+    mutationFn: async ({ kind, nodeId, ref }) => {
+      try {
+        const res = await api.DELETE("/api/env/{envId}/janitor/keeps", {
+          params: { path: { envId }, query: { kind, ref, ...(nodeId ? { nodeId } : {}) } },
+        });
+        if (!res.response.ok) throw failureOf("DELETE", res);
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("DELETE", 0);
+      }
+    },
+    onSettled: () => afterKeepChange(queryClient, envId),
+  });
+}
+
+// useSetStackJanitor switches a stack's exclusion from the janitor on or off. It is never retried
+// (P2 D-42) and is a plain PUT that applies at once. The answer (excluded and declared) is put into the
+// stack the page holds, so the switch follows the server's word rather than the click; a refusal
+// leaves the stack as it was. 404 stack_not_found when the stack is gone.
+export function useSetStackJanitor(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackJanitor, JanitorRequestError, boolean>({
+    retry: false,
+    mutationFn: async (excluded) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/stacks/{stackId}/janitor", {
+          params: { path: { envId, stackId } },
+          body: { excluded },
+        });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("PUT", 0);
+      }
+    },
+    onSuccess: (janitor) =>
+      queryClient.setQueryData<StackDetail>(stackKey(envId, stackId), (old) =>
+        old ? { ...old, janitor } : old,
+      ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: janitorOverviewKey(envId) }),
   });
 }

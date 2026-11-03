@@ -3,17 +3,19 @@
 
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, CircleCheck, Info, TriangleAlert } from "lucide-react";
+import { ChevronDown, CircleCheck, Info, Pin, TriangleAlert } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type JanitorItem,
+  type JanitorKeepTarget,
   type JanitorNodeRequest,
   type JanitorPolicyFields,
   type JanitorPreview,
   JanitorRequestError,
   lockOfError,
   useJanitorPreview,
+  useKeepJanitorItem,
   useStartJanitorRun,
 } from "@/api/janitor";
 import type { StackLock } from "@/api/stacks";
@@ -41,14 +43,14 @@ import { SelectCheckbox, TruncatedText } from "@/features/resources/resource-tab
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
-import { toastError } from "@/lib/toast";
+import { toastError, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const ROW = "h-9 max-md:h-11";
 const CELL = "px-3 py-0";
-// The columns of a section's table: a tick, the name, the reason, the age and the size. A preview of
-// a policy has nothing to tick, and so no first column.
-const columnsOf = (selectable: boolean) => (selectable ? 5 : 4);
+// The columns of a section's table: a tick, the name, the reason, the age, the size and Keep. A
+// preview of a policy has nothing to tick, and so no first column.
+const columnsOf = (selectable: boolean) => (selectable ? 6 : 5);
 
 // A section with more rows than this draws only the rows in view; the ticks and the summary always
 // cover every row (UI-SPEC "Long lists").
@@ -64,6 +66,28 @@ export const itemKey = (i: Pick<JanitorItem, "type" | "nodeId" | "ref">) =>
   `${i.type}|${i.nodeId}|${i.ref}`;
 
 const TYPE_ORDER = ["container", "network", "image"] as const;
+
+// The reasons that say the janitor already leaves the item alone, on purpose: the item shows that
+// reason and the Kept badge, and has no Keep (D-12). The label and an excluded stack can only be
+// undone where they were set; a row the person kept is already kept.
+const KEPT = new Set(["kept_label", "kept_row", "stack_excluded", "stack_declared_keep"]);
+
+// What the keep route is told about an item: its kind, its node (left out for a swarm-wide network)
+// and its ref, which for a network is its NAME (a keep follows the name) and otherwise the engine's ID.
+export function keepTargetOf(item: JanitorItem): JanitorKeepTarget {
+  return {
+    kind: item.type,
+    ...(item.nodeId ? { nodeId: item.nodeId } : {}),
+    ref: item.type === "network" ? item.name : item.ref,
+  };
+}
+
+// The item as the next preview will list it once it is kept: protected, because the person chose Keep.
+const asKept = (item: JanitorItem): JanitorItem => ({
+  ...item,
+  class: "protected",
+  reason: { code: "kept_row" },
+});
 
 interface NodeGroupData {
   nodeId: string;
@@ -169,6 +193,7 @@ export function CleanupPreviewSheet({
   const navigate = useNavigate();
   const preview = useJanitorPreview(envId);
   const start = useStartJanitorRun(envId);
+  const keepItem = useKeepJanitorItem(envId);
   const needs = useNeeds("janitor.run", envId);
   const cancelRef = useRef<HTMLButtonElement>(null);
   // Where focus starts in policy mode: the summary, which says what the policy would do.
@@ -186,7 +211,30 @@ export function CleanupPreviewSheet({
   }, [preview.mutate, policy, nodes]);
 
   const data: JanitorPreview | undefined = preview.data;
-  const items = useMemo(() => data?.items ?? [], [data]);
+
+  // What the person chose Keep on while this preview was open. A keep is not followed by a new
+  // preview, which would put every tick back: the item leaves the list at once, the other ticks stay,
+  // and it appears under Not removed with the Kept badge, as the next preview would list it. A new
+  // preview starts again (the server then lists it as kept_row itself).
+  const [keptNow, setKeptNow] = useState<{ of: JanitorPreview | undefined; items: JanitorItem[] }>({
+    of: undefined,
+    items: [],
+  });
+  const [keeping, setKeeping] = useState<ReadonlySet<string>>(new Set());
+  const keptHere = useMemo(() => (keptNow.of === data ? keptNow.items : []), [keptNow, data]);
+  const items = useMemo(() => {
+    const gone = new Set(keptHere.map(itemKey));
+    return (data?.items ?? []).filter((i) => !gone.has(itemKey(i)));
+  }, [data, keptHere]);
+  const notRemoved = useMemo(() => {
+    const gone = new Set(keptHere.map(itemKey));
+    const listed = data?.notRemoved ?? [];
+    const listedKeys = new Set(listed.map(itemKey));
+    return [
+      ...listed.map((i) => (gone.has(itemKey(i)) ? asKept(i) : i)),
+      ...keptHere.filter((i) => !listedKeys.has(itemKey(i))).map(asKept),
+    ];
+  }, [data, keptHere]);
   const groups = useMemo(() => groupItems(items), [items]);
 
   // The ticks belong to one preview: a new preview (Refresh) starts again with everything ticked,
@@ -232,6 +280,37 @@ export function CleanupPreviewSheet({
   const permissionReason = needs.allowed
     ? undefined
     : t("janitor.needsOn", { need: needs.reason ?? t("needs.role.admin"), name: envName });
+
+  // Keep protects the item from this and every later cleanup. It needs the same permission as Clean
+  // now and has no confirm: it is reversible (Stop keeping) and only narrows what the janitor does.
+  async function keep(item: JanitorItem) {
+    const key = itemKey(item);
+    if (keeping.has(key)) return;
+    setKeeping((prev) => new Set(prev).add(key));
+    try {
+      await keepItem.mutateAsync([keepTargetOf(item)]);
+      toastSuccess(t("janitorKeep.row.kept", { name: item.name }));
+      setKeptNow((prev) => ({
+        of: data,
+        items: [...(prev.of === data ? prev.items : []), item],
+      }));
+      setTicks((prev) => {
+        const next = new Set(
+          prev.of === data ? prev.set : (data?.items ?? []).map((i) => itemKey(i)),
+        );
+        next.delete(key);
+        return { of: data, set: next };
+      });
+    } catch {
+      toastError(t("janitorKeep.row.failed", { name: item.name }));
+    } finally {
+      setKeeping((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }
   const lockReason = lock
     ? lock.kind === "janitor"
       ? t("janitor.refused.janitor", { env: envName })
@@ -401,10 +480,19 @@ export function CleanupPreviewSheet({
               ticked={ticked}
               onToggle={toggle}
               onToggleGroup={toggleGroup}
+              keeping={keeping}
+              keepReason={permissionReason}
+              onKeep={(item) => void keep(item)}
             />
           ))}
-          {data && (data.notRemoved?.length ?? 0) > 0 ? (
-            <NotRemovedList envId={envId} items={data.notRemoved ?? []} />
+          {data && notRemoved.length > 0 ? (
+            <NotRemovedList
+              envId={envId}
+              items={notRemoved}
+              keeping={keeping}
+              keepReason={permissionReason}
+              onKeep={(item) => void keep(item)}
+            />
           ) : null}
         </div>
         <PreviewFooter
@@ -562,6 +650,10 @@ interface TypeSectionProps {
   ticked: ReadonlySet<string>;
   onToggle: (key: string) => void;
   onToggleGroup: (items: readonly JanitorItem[]) => void;
+  // The items whose keep is on its way, why Keep is unavailable (when it is) and the Keep itself.
+  keeping: ReadonlySet<string>;
+  keepReason: string | undefined;
+  onKeep: (item: JanitorItem) => void;
 }
 
 // A type section is a collapsible card, open to start with: its title says how many there are and
@@ -573,6 +665,9 @@ function TypeSection({
   ticked,
   onToggle,
   onToggleGroup,
+  keeping,
+  keepReason,
+  onKeep,
 }: TypeSectionProps) {
   const t = useT();
   const rows = useMemo(() => rowsOf(group, swarm), [group, swarm]);
@@ -598,6 +693,9 @@ function TypeSection({
         selectable={selectable}
         ticked={ticked.has(row.key)}
         onToggle={() => onToggle(row.key)}
+        keeping={keeping.has(row.key)}
+        keepReason={keepReason}
+        onKeep={() => onKeep(row.item)}
       />
     );
 
@@ -636,6 +734,9 @@ function TypeSection({
                   <TableHead className="w-24">{t("janitor.preview.columns.age")}</TableHead>
                   <TableHead className="w-24 text-end">
                     {t("janitor.preview.columns.size")}
+                  </TableHead>
+                  <TableHead className="w-22">
+                    <span className="sr-only">{t("janitorKeep.row.actions")}</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -743,11 +844,54 @@ interface PreviewRowProps {
   selectable: boolean;
   ticked: boolean;
   onToggle: () => void;
+  keeping: boolean;
+  keepReason: string | undefined;
+  onKeep: () => void;
+}
+
+// KeepButton is Keep on one row (a ghost button named "Keep {name}"): without the permission it is
+// aria-disabled with what it needs, and while the keep is on its way it shows a spinner and waits.
+function KeepButton({
+  item,
+  keeping,
+  reason,
+  onKeep,
+}: {
+  item: JanitorItem;
+  keeping: boolean;
+  reason: string | undefined;
+  onKeep: () => void;
+}) {
+  const t = useT();
+  return (
+    <NeedsTooltip reason={reason}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="max-md:h-11"
+        disabled={keeping}
+        aria-label={t("janitorKeep.row.keepLabel", { name: item.name })}
+        onClick={onKeep}
+      >
+        {keeping ? <Spinner aria-hidden="true" /> : <Pin aria-hidden="true" />}
+        {t("janitorKeep.row.keep")}
+      </Button>
+    </NeedsTooltip>
+  );
 }
 
 // PreviewRow is one thing the janitor would remove: its name (text, never markup), the reason in
-// words and how long it has waited and how much it holds.
-function PreviewRow({ item, selectable, ticked, onToggle }: PreviewRowProps) {
+// words, how long it has waited, how much it holds and Keep.
+function PreviewRow({
+  item,
+  selectable,
+  ticked,
+  onToggle,
+  keeping,
+  keepReason,
+  onKeep,
+}: PreviewRowProps) {
   const t = useT();
   return (
     <TableRow className={ROW}>
@@ -772,6 +916,9 @@ function PreviewRow({ item, selectable, ticked, onToggle }: PreviewRowProps) {
       <TableCell className={cn(CELL, "w-24 text-end tabular-nums")}>
         {formatSize(item.sizeBytes, t)}
       </TableCell>
+      <TableCell className={cn(CELL, "w-22 text-end")}>
+        <KeepButton item={item} keeping={keeping} reason={keepReason} onKeep={onKeep} />
+      </TableCell>
     </TableRow>
   );
 }
@@ -783,12 +930,23 @@ interface NotRemovedRow {
 
 // The reasons that say an opt-in is off: the row links to the policy, where it is turned on.
 const OPT_IN_OFF = new Set(["opt_in_off_containers", "opt_in_off_networks"]);
-const KEPT = new Set(["kept_label", "kept_row", "stack_excluded", "stack_declared_keep"]);
 
 // NotRemovedList is what the janitor looked at and left, closed to start with: reported only, or
 // protected, or too young, or not judged yet. Nothing in it is touched, so it has no checkboxes and
 // each row says why in words, not in a tooltip alone.
-function NotRemovedList({ envId, items }: { envId: string; items: readonly JanitorItem[] }) {
+function NotRemovedList({
+  envId,
+  items,
+  keeping,
+  keepReason,
+  onKeep,
+}: {
+  envId: string;
+  items: readonly JanitorItem[];
+  keeping: ReadonlySet<string>;
+  keepReason: string | undefined;
+  onKeep: (item: JanitorItem) => void;
+}) {
   const t = useT();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const rows = useMemo(
@@ -823,6 +981,16 @@ function NotRemovedList({ envId, items }: { envId: string; items: readonly Janit
           ) : null}
         </span>
       </TableCell>
+      <TableCell className={cn(CELL, "w-22 text-end")}>
+        {KEPT.has(row.item.reason.code) ? null : (
+          <KeepButton
+            item={row.item}
+            keeping={keeping.has(itemKey(row.item))}
+            reason={keepReason}
+            onKeep={() => onKeep(row.item)}
+          />
+        )}
+      </TableCell>
     </TableRow>
   );
   return (
@@ -846,7 +1014,7 @@ function NotRemovedList({ envId, items }: { envId: string; items: readonly Janit
             <table className="w-full caption-bottom text-sm">
               <TableBody>
                 {virtual ? (
-                  <VirtualRows rows={rows} scroller={scroller} renderRow={renderRow} columns={3} />
+                  <VirtualRows rows={rows} scroller={scroller} renderRow={renderRow} columns={4} />
                 ) : (
                   rows.map(renderRow)
                 )}

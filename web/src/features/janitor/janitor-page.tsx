@@ -14,6 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { CleanupPreviewSheet } from "@/features/janitor/cleanup-preview-sheet";
+import { KeptItemsList } from "@/features/janitor/kept-items-list";
 import { PolicyCard } from "@/features/janitor/policy-card";
 import { RunHistoryCard } from "@/features/janitor/run-history-card";
 import { StatusCard } from "@/features/janitor/status-card";
@@ -35,7 +36,8 @@ interface JanitorPageProps {
 // JanitorPage is where an operator cleans an environment (D-13): the title, what the janitor does and
 // never does, and Clean now, which opens the dry run, then whether the janitor is on, what it last
 // did and when it runs next, its policy (with the note on what it removes and never touches), on a swarm
-// the task history limit, and every run it has made. Clean now is the page's one accent control.
+// the task history limit, every run it has made and, when there are any, what is kept. Clean now is the
+// page's one accent control.
 export function JanitorPage({ envId, limit, onLimitChange }: JanitorPageProps) {
   const t = useT();
   const hintId = useId();
@@ -129,6 +131,8 @@ export function JanitorPage({ envId, limit, onLimitChange }: JanitorPageProps) {
         onLimitChange={changeLimit}
         status={status.data}
       />
+
+      <KeptItemsList envId={envId} envName={envName} />
 
       {open ? (
         <CleanupPreviewSheet

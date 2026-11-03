@@ -38,6 +38,9 @@ let started: { items: { type: string; nodeId: string; ref: string }[] } | undefi
 // What the stubbed server answers instead of the usual, when a test needs it to.
 let previewAnswer: (() => Response | Promise<Response>) | undefined;
 let runsAnswer: (() => Response) | undefined;
+// The body of each keep request, and what the stubbed server answers to it instead of the usual.
+let keepRequests: { targets: { kind: string; nodeId?: string; ref: string }[] }[];
+let keepAnswer: (() => Response) | undefined;
 let client: QueryClient;
 
 // jsdom lays nothing out, so the scrolling area is given a height and the virtualiser can tell how
@@ -58,6 +61,8 @@ beforeEach(() => {
   started = undefined;
   previewAnswer = undefined;
   runsAnswer = undefined;
+  keepRequests = [];
+  keepAnswer = undefined;
   toasts.success.mockReset();
   toasts.error.mockReset();
   toasts.info.mockReset();
@@ -73,6 +78,11 @@ beforeEach(() => {
         previewRequests.push(await req.text());
         if (previewAnswer) return previewAnswer();
         return Response.json(body);
+      }
+      if (url.pathname === `/api/env/${ENV}/janitor/keeps` && req.method === "PUT") {
+        keepRequests.push(await req.json());
+        if (keepAnswer) return keepAnswer();
+        return Response.json({ kept: 1 });
       }
       if (url.pathname === `/api/env/${ENV}/janitor/runs` && req.method === "POST") {
         started = await req.json();
@@ -592,5 +602,57 @@ describe("the preview sheet in policy mode", () => {
     expect(within(sheet).getByRole("button", { name: "Cancel" })).toBeTruthy();
     release();
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  });
+});
+
+describe("KeepFromPreview", () => {
+  it("keeps a container: unticks it, drops it from the summary and moves it to Not removed as Kept", async () => {
+    previews = [mixed()];
+    mount();
+    await screen.findByRole("button", { name: "Remove 5 items" });
+    expect(visibleLine()).toBe("Would remove 3 containers, 1 network, 1 image, ~600 MB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep web.2.bbb" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("checkbox", { name: "Select web.2.bbb" })).toBeNull(),
+    );
+    expect(keepRequests).toEqual([{ targets: [{ kind: "container", nodeId: "n1", ref: "c2" }] }]);
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Keeping web.2.bbb. The janitor won't list it again.",
+    );
+    // The summary and the commit no longer count it, and nothing else was unticked or asked again.
+    expect(visibleLine()).toBe("Would remove 2 containers, 1 network, 1 image, ~400 MB");
+    expect(screen.getByRole("button", { name: "Remove 4 items" })).toBeTruthy();
+    expect(asked).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Not removed \(1\)/ }));
+    expect(await screen.findByText("Protected: you chose Keep on it.")).toBeTruthy();
+    const row = screen.getByText("web.2.bbb").closest("tr");
+    expect(within(row as HTMLElement).getByText("Kept")).toBeTruthy();
+    // It is already kept, so it offers no Keep.
+    expect(screen.queryByRole("button", { name: "Keep web.2.bbb" })).toBeNull();
+  });
+
+  it("leaves the other ticks alone", async () => {
+    previews = [mixed()];
+    mount();
+    await screen.findByRole("button", { name: "Remove 5 items" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select web.1.aaa" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep web.2.bbb" }));
+    await screen.findByRole("button", { name: "Remove 3 items" });
+    expect(screen.getByRole("button", { name: "Remove 3 items" })).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "Select web.1.aaa" }).getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("names a network by its name, and a swarm-wide one has no node", async () => {
+    previews = [mixed()];
+    mount();
+    await screen.findByRole("button", { name: "Remove 5 items" });
+    fireEvent.click(screen.getByRole("button", { name: "Keep old_default" }));
+    await waitFor(() => expect(keepRequests).toHaveLength(1));
+    expect(keepRequests[0]).toEqual({ targets: [{ kind: "network", ref: "old_default" }] });
   });
 });
