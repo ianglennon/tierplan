@@ -105,4 +105,5 @@ func RegisterJanitor(r *httpx.Router, d JanitorDeps) {
 	registerJanitorNodes(r, d)
 	registerJanitorDefaults(r, d)
 	registerJanitorKeeps(r, d)
+	registerJanitorStack(r, d)
 }

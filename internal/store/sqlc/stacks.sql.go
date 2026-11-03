@@ -230,7 +230,7 @@ func (q *Queries) GetSnapshotPinsAndRendered(ctx context.Context, id string) (Ge
 }
 
 const getStack = `-- name: GetStack :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption, janitor_excluded
 FROM stacks WHERE env_id = ? AND id = ?
 `
 
@@ -254,12 +254,13 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (Stack, erro
 		&i.CreatedAt,
 		&i.Stopped,
 		&i.Adoption,
+		&i.JanitorExcluded,
 	)
 	return i, err
 }
 
 const getStackByName = `-- name: GetStackByName :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption, janitor_excluded
 FROM stacks WHERE env_id = ? AND name = ?
 `
 
@@ -282,6 +283,7 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 		&i.CreatedAt,
 		&i.Stopped,
 		&i.Adoption,
+		&i.JanitorExcluded,
 	)
 	return i, err
 }
@@ -1044,7 +1046,7 @@ func (q *Queries) ListStackIDs(ctx context.Context) ([]string, error) {
 }
 
 const listStacksByEnv = `-- name: ListStacksByEnv :many
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption, janitor_excluded
 FROM stacks WHERE env_id = ? ORDER BY name
 `
 
@@ -1068,6 +1070,7 @@ func (q *Queries) ListStacksByEnv(ctx context.Context, envID string) ([]Stack, e
 			&i.CreatedAt,
 			&i.Stopped,
 			&i.Adoption,
+			&i.JanitorExcluded,
 		); err != nil {
 			return nil, err
 		}
@@ -1364,6 +1367,25 @@ type SetStackAdoptionParams struct {
 // Replaces the adoption record of a stack. The caller read the stack by environment and ID first.
 func (q *Queries) SetStackAdoption(ctx context.Context, arg SetStackAdoptionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setStackAdoption, arg.Adoption, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setStackJanitorExcluded = `-- name: SetStackJanitorExcluded :execrows
+UPDATE stacks SET janitor_excluded = ? WHERE id = ?
+`
+
+type SetStackJanitorExcludedParams struct {
+	JanitorExcluded int64
+	ID              string
+}
+
+// A person excluded the stack from the janitor (1) or included it again (0). The caller read the stack by environment and
+// ID first, and writes nothing when the value is the one already stored.
+func (q *Queries) SetStackJanitorExcluded(ctx context.Context, arg SetStackJanitorExcludedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackJanitorExcluded, arg.JanitorExcluded, arg.ID)
 	if err != nil {
 		return 0, err
 	}

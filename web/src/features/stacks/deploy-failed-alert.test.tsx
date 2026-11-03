@@ -38,6 +38,7 @@ const stackOf = (over: Partial<StackDetail> = {}): StackDetail => ({
   createdBy: "ada",
   createdAt: "2026-10-19T10:00:00Z",
   stopped: false,
+  janitor: { excluded: false },
   draftSavedAt: "",
   draftSavedBy: "",
   rollback: rollbackInfo,

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The ports of the janitor. Nothing here is a Docker type: the server fills these from the
@@ -66,6 +67,14 @@ type Image struct {
 	Labels                map[string]string
 }
 
+// StackFact is one TierPlan stack of the environment and whether a person excluded it from the janitor
+// (D-10). Everything a stack owns is found by its ID (tierplan.stack.id), or by its name as the swarm
+// namespace or the compose project of the object.
+type StackFact struct {
+	ID, Name string
+	Excluded bool
+}
+
 // Snapshot is what the janitor reads of an environment at one moment.
 type Snapshot struct {
 	// Swarm is true for a swarm environment; ManagerRead is true when a manager answered the
@@ -108,8 +117,35 @@ type Snapshot struct {
 	// Keeps are the objects a person kept out of cleanup from the Janitor page (D-12), read with the
 	// snapshot so a preview and every run judge by the same ones. A container or image with a keep is
 	// never removed. Nil means none.
-	Keeps  map[KeepKey]bool
-	ReadAt time.Time
+	Keeps map[KeepKey]bool
+	// StackFacts are the TierPlan stacks of the environment with their janitor exclusion, read with the
+	// snapshot so a preview and every run judge by the same ones. A container or image a stack with
+	// Excluded owns is never removed. Nil means none.
+	StackFacts []StackFact
+	ReadAt     time.Time
+}
+
+// OwnedByExcludedStack reports whether an object with these labels belongs to a stack in facts that is excluded
+// from the janitor: it carries the stack's ID, or the stack's name as its swarm namespace or compose project.
+func OwnedByExcludedStack(facts []StackFact, labels map[string]string) bool {
+	if len(labels) == 0 {
+		return false
+	}
+	for _, f := range facts {
+		if !f.Excluded {
+			continue
+		}
+		if (f.ID != "" && labels[stacks.LabelStackID] == f.ID) ||
+			(f.Name != "" && (labels[stacks.LabelSwarmNamespace] == f.Name || labels[stacks.LabelComposeProject] == f.Name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedByExcludedStack is OwnedByExcludedStack over the snapshot's stacks.
+func (s Snapshot) ownedByExcludedStack(labels map[string]string) bool {
+	return OwnedByExcludedStack(s.StackFacts, labels)
 }
 
 // kept reports whether a person kept the container or image of kind k, on node nodeID, with ID ref.

@@ -80,6 +80,8 @@ type taskBox struct {
 	finishedAgo time.Duration
 	size        int64
 	keep        string
+	// labels are added to the container's labels, after the swarm's own.
+	labels map[string]string
 }
 
 // fake makes the FakeContainer of a task box.
@@ -94,6 +96,9 @@ func (b taskBox) fake() dockertest.FakeContainer {
 	}
 	if b.keep != "" {
 		labels["tierplan.keep"] = b.keep
+	}
+	for k, v := range b.labels {
+		labels[k] = v
 	}
 	created := janitorNow.Add(-72 * time.Hour).Add(time.Duration(b.ageIdx) * time.Hour)
 	fc := dockertest.FakeContainer{

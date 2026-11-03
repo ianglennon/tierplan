@@ -110,6 +110,10 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 	if snap.Keeps, err = e.keeps.List(ctx, envID); err != nil {
 		return janitor.Snapshot{}, err
 	}
+	// Likewise the stacks a person excluded: their objects must never be judged without it.
+	if snap.StackFacts, err = (janitor.StackStore{St: e.keeps.St}).List(ctx, envID); err != nil {
+		return janitor.Snapshot{}, err
+	}
 	snap.NodeTimes = e.readNodeTimes(ctx, envID, agg.Nodes)
 	if e.clusters == nil {
 		return snap, nil
@@ -279,13 +283,19 @@ func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id s
 	if err := e.stillNotKept(ctx, envID, janitor.KindContainer, nodeID, id); err != nil {
 		return err
 	}
-	err := e.agg.WriteOnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
+	// A stack excluded since the run planned keeps what it owns, so the stacks are read again too; ones that
+	// cannot be read stop the removal.
+	facts, err := (janitor.StackStore{St: e.keeps.St}).List(ctx, envID)
+	if err != nil {
+		return &janitor.CodedError{Code: janitor.CodeActionFailed, Err: err}
+	}
+	err = e.agg.WriteOnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
 		d, _, err := c.ContainerDetail(ctx, id)
 		if err != nil {
 			return err
 		}
 		// The engine's own word for the state: only a container that ran and stopped is stale.
-		if d.Status != "exited" || d.Labels[stacks.LabelKeep] == "true" {
+		if d.Status != "exited" || d.Labels[stacks.LabelKeep] == "true" || janitor.OwnedByExcludedStack(facts, d.Labels) {
 			return janitor.ErrNoLongerStale
 		}
 		return c.ContainerRemove(ctx, id, dockerx.RemoveOptions{})

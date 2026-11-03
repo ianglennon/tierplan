@@ -3008,6 +3008,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/janitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Exclude a stack from the janitor, or include it again
+         * @description Sets whether the janitor leaves everything the stack owns alone (excluded true): its containers, matched by the stack's tierplan.stack.id, its swarm namespace or its compose project, are listed as protected (stack_excluded) in what a cleanup would not remove and are never removed, by a schedule or by Clean now, until the stack is included again. The change applies at once and is audited as stack.janitor_excluded or stack.janitor_included; the same value twice writes nothing and records nothing. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs janitor.policy (Operator with the extra permission).
+         */
+        put: operations["setStackJanitorExclusion"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/removal-preview": {
         parameters: {
             query?: never;
@@ -11630,6 +11650,8 @@ export interface components {
             hasDraft: boolean;
             /** @description The stack ID */
             id: string;
+            /** @description Whether the stack is excluded from the janitor: set by PUT .../stacks/{stackId}/janitor */
+            janitor: components["schemas"]["StackJanitorBody"];
             /** @description When the newest successful deploy ended, RFC 3339 UTC; empty when there is none */
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
@@ -12308,6 +12330,14 @@ export interface components {
             target: "swarm" | "standalone";
             /** @description Set on an unmanaged stack only: what was found about it */
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
+        };
+        StackJanitorBody: {
+            /** @description True when the stack is excluded from the janitor: everything it owns is left alone by every cleanup until it is included again */
+            excluded: boolean;
+        };
+        StackJanitorRequest: {
+            /** @description True to exclude the stack from the janitor, false to include it again */
+            excluded: boolean;
         };
         StackJobBody: {
             /** @description Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys */
@@ -20659,6 +20689,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackGitWebhookBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setStackJanitorExclusion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackJanitorRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackJanitorBody"];
                 };
             };
             /** @description Error */

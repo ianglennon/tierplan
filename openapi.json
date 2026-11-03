@@ -16285,6 +16285,10 @@
             "description": "The stack ID",
             "type": "string"
           },
+          "janitor": {
+            "$ref": "#/components/schemas/StackJanitorBody",
+            "description": "Whether the stack is excluded from the janitor: set by PUT .../stacks/{stackId}/janitor"
+          },
           "lastDeployedAt": {
             "description": "When the newest successful deploy ended, RFC 3339 UTC; empty when there is none",
             "type": "string"
@@ -16386,6 +16390,7 @@
           "createdBy",
           "createdAt",
           "stopped",
+          "janitor",
           "draftSavedAt",
           "draftSavedBy",
           "rollback",
@@ -17854,6 +17859,32 @@
           "lastDeployedAt",
           "lastDeployedBy",
           "hasDraft"
+        ],
+        "type": "object"
+      },
+      "StackJanitorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "excluded": {
+            "description": "True when the stack is excluded from the janitor: everything it owns is left alone by every cleanup until it is included again",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "excluded"
+        ],
+        "type": "object"
+      },
+      "StackJanitorRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "excluded": {
+            "description": "True to exclude the stack from the janitor, false to include it again",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "excluded"
         ],
         "type": "object"
       },
@@ -33737,6 +33768,77 @@
         "tags": [
           "stacks",
           "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/janitor": {
+      "put": {
+        "description": "Sets whether the janitor leaves everything the stack owns alone (excluded true): its containers, matched by the stack's tierplan.stack.id, its swarm namespace or its compose project, are listed as protected (stack_excluded) in what a cleanup would not remove and are never removed, by a schedule or by Clean now, until the stack is included again. The change applies at once and is audited as stack.janitor_excluded or stack.janitor_included; the same value twice writes nothing and records nothing. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs janitor.policy (Operator with the extra permission).",
+        "operationId": "setStackJanitorExclusion",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackJanitorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackJanitorBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Exclude a stack from the janitor, or include it again",
+        "tags": [
+          "stacks"
         ]
       }
     },

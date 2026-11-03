@@ -361,16 +361,17 @@ type Setting struct {
 }
 
 type Stack struct {
-	ID         string
-	EnvID      string
-	Name       string
-	Target     string
-	SourceKind string
-	SourceRef  string
-	CreatedBy  string
-	CreatedAt  int64
-	Stopped    int64
-	Adoption   string
+	ID              string
+	EnvID           string
+	Name            string
+	Target          string
+	SourceKind      string
+	SourceRef       string
+	CreatedBy       string
+	CreatedAt       int64
+	Stopped         int64
+	Adoption        string
+	JanitorExcluded int64
 }
 
 type StackDeploy struct {

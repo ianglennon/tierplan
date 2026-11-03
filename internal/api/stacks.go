@@ -299,6 +299,8 @@ type StackDetail struct {
 	CreatedBy string `json:"createdBy" doc:"Who created the stack"`
 	CreatedAt string `json:"createdAt" doc:"When it was created, RFC 3339 UTC"`
 	Stopped   bool   `json:"stopped" doc:"True while the stack is stopped"`
+	// Janitor says whether the stack is excluded from the janitor.
+	Janitor StackJanitorBody `json:"janitor" doc:"Whether the stack is excluded from the janitor: set by PUT .../stacks/{stackId}/janitor"`
 	// DraftSavedAt and DraftSavedBy say who last saved the draft that holds changes not yet deployed.
 	DraftSavedAt string `json:"draftSavedAt" doc:"When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft"`
 	DraftSavedBy string `json:"draftSavedBy" doc:"Who saved it, as a name; empty when there is no such draft"`
@@ -621,6 +623,7 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	detail := StackDetail{
 		StackItem: stackItemOf(newStackReads(ctx, d, st.EnvID), st, latest, hasLatest, like, hasLike, g, hasG, draft.Pending),
 		EnvID:     st.EnvID, SourceRef: st.Source.Ref, CreatedBy: st.CreatedBy, CreatedAt: rfc3339(st.CreatedAt), Stopped: st.Stopped,
+		Janitor: StackJanitorBody{Excluded: st.JanitorExcluded},
 	}
 	if draft.Pending {
 		detail.DraftSavedAt, detail.DraftSavedBy = rfc3339(draft.At), draft.By
