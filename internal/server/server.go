@@ -856,7 +856,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	runIndex := updates.NewRunIndex()
 	updateService := &updates.Service{
 		Store: updates.SQLStore{Q: st.Q, W: st.Write}, Resolver: resolver, Clusters: clusters, Aggregator: aggregator, Runs: runIndex,
-		Checker: &updates.Checker{Heads: updates.NewHeads(resolver, registryClients), Store: updates.SQLStore{Q: st.Q, W: st.Write}, Runs: runIndex, Log: log},
+		Checker: &updates.Checker{Heads: updates.NewHeads(resolver, registryClients), Store: updates.SQLStore{Q: st.Q, W: st.Write}, Runs: runIndex, Creds: resolver, Log: log},
 	}
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,

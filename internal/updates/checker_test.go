@@ -131,6 +131,18 @@ func (f *fakeHeads) Digest(_ context.Context, envID string, ref registry.Ref) (s
 	return a.digest, a.credID, a.err
 }
 
+// CredentialID names the credential the scripted answer for the tag carries, without counting a request.
+func (f *fakeHeads) CredentialID(_ context.Context, envID string, ref registry.Ref) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k := ref.Repo() + ":" + ref.Tag
+	a, ok := f.byEnv[envID+"|"+k]
+	if !ok {
+		a = f.answers[k]
+	}
+	return a.credID, nil
+}
+
 func (f *fakeHeads) Index(_ context.Context, _ string, _ registry.Ref, digest string) (bool, map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
