@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -188,5 +189,257 @@ func mapKeys[K comparable, V any](m map[K]V) func(yield func(K) bool) {
 				return
 			}
 		}
+	}
+}
+
+// recreateCase is one row of the keep-list table: how the old container differs from oldContainer
+// and what the replacement must then be.
+type recreateCase struct {
+	name   string
+	change func(*container.InspectResponse)
+	check  func(t *testing.T, old container.InspectResponse, cfg *container.Config, host *container.HostConfig, first *network.NetworkingConfig, more map[string]*network.EndpointSettings)
+}
+
+func onlyEndpoint(t *testing.T, first *network.NetworkingConfig) (string, *network.EndpointSettings) {
+	t.Helper()
+	if first == nil || len(first.EndpointsConfig) != 1 {
+		t.Fatalf("first = %+v, want exactly one endpoint", first)
+	}
+	for n, es := range first.EndpointsConfig {
+		return n, es
+	}
+	return "", nil
+}
+
+func TestRecreateSpecKeepsEverythingButImage(t *testing.T) {
+	const image = "registry.example/app:2.0"
+	cases := []recreateCase{
+		{
+			name: "only the image changes in the container's own settings",
+			check: func(t *testing.T, old container.InspectResponse, cfg *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				if cfg.Image != image {
+					t.Errorf("image = %q, want %q", cfg.Image, image)
+				}
+				want := *old.Config
+				want.Image, want.Hostname, want.Volumes = image, "", nil
+				got := *cfg
+				got.Volumes = nil
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("config = %+v, want the old one on the new image: %+v", got, want)
+				}
+				if !slices.Equal(cfg.Env, []string{"MODE=prod", "TOKEN=abc"}) || !slices.Equal(cfg.Cmd, []string{"serve", "--fast"}) ||
+					!slices.Equal(cfg.Entrypoint, []string{"/entry.sh"}) || cfg.User != "app:app" || cfg.WorkingDir != "/srv" {
+					t.Errorf("env, command, entrypoint, user or working directory lost: %+v", cfg)
+				}
+				if cfg.Labels["app"] != "web" || cfg.Labels["tier"] != "front" {
+					t.Errorf("labels = %v", cfg.Labels)
+				}
+				if cfg.Healthcheck == nil || cfg.Healthcheck.Retries != 3 || !slices.Equal(cfg.Healthcheck.Test, []string{"CMD", "true"}) {
+					t.Errorf("healthcheck = %+v", cfg.Healthcheck)
+				}
+				if host.RestartPolicy.Name != "on-failure" || host.RestartPolicy.MaximumRetryCount != 5 {
+					t.Errorf("restart policy = %+v", host.RestartPolicy)
+				}
+				port := network.MustParsePort("8080/tcp")
+				if b := host.PortBindings[port]; len(b) != 1 || b[0].HostPort != "8081" {
+					t.Errorf("port bindings = %+v", host.PortBindings)
+				}
+				if _, ok := cfg.ExposedPorts[port]; !ok {
+					t.Errorf("exposed ports = %+v", cfg.ExposedPorts)
+				}
+				if !slices.Equal(host.Binds, []string{"named:/named", "/srv/host:/hostdir:ro"}) {
+					t.Errorf("binds = %v: a named volume and a bind mount are kept as they were", host.Binds)
+				}
+			},
+		},
+		{
+			name: "an anonymous volume is attached again by its name and is not asked for as a new one",
+			check: func(t *testing.T, _ container.InspectResponse, cfg *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				want := []mount.Mount{
+					{Type: mount.TypeVolume, Source: "anon0123", Target: "/data"},
+					{Type: mount.TypeVolume, Source: "anon4567", Target: "/cache", ReadOnly: true},
+				}
+				got := slices.Clone(host.Mounts)
+				slices.SortFunc(got, func(a, b mount.Mount) int { return compareStrings(a.Target, b.Target) })
+				slices.SortFunc(want, func(a, b mount.Mount) int { return compareStrings(a.Target, b.Target) })
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("mounts = %+v, want %+v", got, want)
+				}
+				if len(cfg.Volumes) != 0 {
+					t.Errorf("Config.Volumes = %v, want none: it would make the engine create new empty volumes", cfg.Volumes)
+				}
+			},
+		},
+		{
+			name: "a volume that a mount or a bind already attaches is not attached twice",
+			change: func(old *container.InspectResponse) {
+				old.HostConfig.Mounts = []mount.Mount{{Type: mount.TypeVolume, Source: "anon0123", Target: "/data"}}
+			},
+			check: func(t *testing.T, _ container.InspectResponse, cfg *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				n := 0
+				for _, m := range host.Mounts {
+					if m.Target == "/data" {
+						n++
+					}
+				}
+				if n != 1 {
+					t.Errorf("/data is mounted %d times in %+v, want once", n, host.Mounts)
+				}
+			},
+		},
+		{
+			name: "a volume that comes from another container stays with VolumesFrom",
+			change: func(old *container.InspectResponse) {
+				old.HostConfig.VolumesFrom = []string{"sidecar"}
+				old.Mounts = append(old.Mounts, container.MountPoint{Type: mount.TypeVolume, Name: "theirs", Destination: "/shared", RW: true})
+			},
+			check: func(t *testing.T, _ container.InspectResponse, _ *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				if !slices.Equal(host.VolumesFrom, []string{"sidecar"}) {
+					t.Errorf("VolumesFrom = %v", host.VolumesFrom)
+				}
+				for _, m := range host.Mounts {
+					if m.Target == "/shared" {
+						t.Errorf("mounts = %+v: the sidecar's volume is not this container's to mount", host.Mounts)
+					}
+				}
+			},
+		},
+		{
+			name: "two networks: the one the network mode names is in the create, the other is connected, and what somebody chose is kept",
+			check: func(t *testing.T, old container.InspectResponse, _ *container.Config, _ *container.HostConfig, first *network.NetworkingConfig, more map[string]*network.EndpointSettings) {
+				name, front := onlyEndpoint(t, first)
+				if name != "front" {
+					t.Fatalf("first network = %q, want the network mode's front", name)
+				}
+				if len(more) != 1 || more["back"] == nil {
+					t.Fatalf("more = %+v, want back only", more)
+				}
+				if !slices.Equal(front.Aliases, []string{"web", "frontend"}) {
+					t.Errorf("front aliases = %v, want them without the old short ID %s", front.Aliases, oldShort)
+				}
+				if !slices.Equal(more["back"].Aliases, []string{"web-db"}) {
+					t.Errorf("back aliases = %v", more["back"].Aliases)
+				}
+				if front.IPAMConfig == nil || front.IPAMConfig.IPv4Address != netip.MustParseAddr("10.20.0.5") {
+					t.Errorf("static IPv4 = %+v, want 10.20.0.5", front.IPAMConfig)
+				}
+				if !slices.Equal(front.MacAddress, old.NetworkSettings.Networks["front"].MacAddress) || len(front.MacAddress) == 0 {
+					t.Errorf("MAC address = %v, want the old one", front.MacAddress)
+				}
+				if more["back"].DriverOpts["k"] != "v" {
+					t.Errorf("driver options = %v", more["back"].DriverOpts)
+				}
+				for n, es := range map[string]*network.EndpointSettings{"front": front, "back": more["back"]} {
+					if es.IPAddress.IsValid() || es.Gateway.IsValid() || es.EndpointID != "" || es.NetworkID != "" || es.IPPrefixLen != 0 || len(es.DNSNames) != 0 {
+						t.Errorf("%s keeps what the engine assigned: %+v", n, es)
+					}
+				}
+			},
+		},
+		{
+			name: "the default network mode is the bridge",
+			change: func(old *container.InspectResponse) {
+				old.HostConfig.NetworkMode = "default"
+				old.NetworkSettings.Networks = map[string]*network.EndpointSettings{
+					"bridge": {NetworkID: "b", IPAddress: netip.MustParseAddr("172.17.0.2")},
+					"alpha":  {NetworkID: "a"},
+				}
+			},
+			check: func(t *testing.T, _ container.InspectResponse, _ *container.Config, _ *container.HostConfig, first *network.NetworkingConfig, more map[string]*network.EndpointSettings) {
+				if name, _ := onlyEndpoint(t, first); name != "bridge" {
+					t.Errorf("first network = %q, want bridge", name)
+				}
+				if len(more) != 1 || more["alpha"] == nil {
+					t.Errorf("more = %+v, want alpha", more)
+				}
+			},
+		},
+		{
+			name: "a network mode that names none of the networks falls back to the first by name",
+			change: func(old *container.InspectResponse) {
+				old.HostConfig.NetworkMode = "somethingelse"
+			},
+			check: func(t *testing.T, _ container.InspectResponse, _ *container.Config, _ *container.HostConfig, first *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				if name, _ := onlyEndpoint(t, first); name != "back" {
+					t.Errorf("first network = %q, want back (first by name), so the choice is the same every time", name)
+				}
+			},
+		},
+		{
+			name: "a hostname equal to the old short ID is reset",
+			check: func(t *testing.T, _ container.InspectResponse, cfg *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				if cfg.Hostname != "" {
+					t.Errorf("hostname = %q, want it reset", cfg.Hostname)
+				}
+			},
+		},
+		{
+			name:   "a hostname somebody chose is kept",
+			change: func(old *container.InspectResponse) { old.Config.Hostname = "web-1.internal" },
+			check: func(t *testing.T, _ container.InspectResponse, cfg *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ map[string]*network.EndpointSettings) {
+				if cfg.Hostname != "web-1.internal" {
+					t.Errorf("hostname = %q, want web-1.internal", cfg.Hostname)
+				}
+			},
+		},
+		{
+			name: "a container with no network and no host configuration still gets a document",
+			change: func(old *container.InspectResponse) {
+				old.NetworkSettings, old.HostConfig, old.Mounts = nil, nil, nil
+			},
+			check: func(t *testing.T, _ container.InspectResponse, cfg *container.Config, host *container.HostConfig, first *network.NetworkingConfig, more map[string]*network.EndpointSettings) {
+				if cfg == nil || host == nil || cfg.Image != image {
+					t.Fatalf("cfg = %+v, host = %+v", cfg, host)
+				}
+				if first != nil || len(more) != 0 {
+					t.Errorf("first = %+v, more = %+v, want none", first, more)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			old := oldContainer()
+			if tc.change != nil {
+				tc.change(&old)
+			}
+			cfg, host, first, more := updates.RecreateSpec(old, image)
+			tc.check(t, old, cfg, host, first, more)
+		})
+	}
+}
+
+func compareStrings(a, b string) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// TestRecreateSpecDoesNotMutateInput proves the old container's inspect is the same after the
+// call as before it, and that changing what comes back does not reach into it.
+func TestRecreateSpecDoesNotMutateInput(t *testing.T) {
+	old := oldContainer()
+	before := asJSON(t, old)
+	cfg, host, first, more := updates.RecreateSpec(old, "registry.example/app:2.0")
+	if !reflect.DeepEqual(old, oldContainer()) || asJSON(t, old) != before {
+		t.Fatalf("the old inspect changed:\n got  %s\n want %s", asJSON(t, old), before)
+	}
+	// The parts RecreateSpec itself rewrites are copies: the caller can change them freely.
+	cfg.Image = "other"
+	cfg.Volumes["/extra"] = struct{}{}
+	host.Mounts = append(host.Mounts, mount.Mount{Target: "/extra"})
+	for _, es := range first.EndpointsConfig {
+		es.Aliases = append(es.Aliases, "extra")
+		es.IPAMConfig.IPv4Address = netip.MustParseAddr("10.20.0.99")
+	}
+	for _, es := range more {
+		es.DriverOpts["x"] = "y"
+	}
+	if asJSON(t, old) != before {
+		t.Errorf("changing the replacement's document changed the old inspect:\n got  %s\n want %s", asJSON(t, old), before)
 	}
 }
