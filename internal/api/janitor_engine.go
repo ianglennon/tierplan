@@ -128,7 +128,7 @@ func (e *janitorEngine) stillNotKept(ctx context.Context, envID string, kind jan
 	if err != nil {
 		return &janitor.CodedError{Code: janitor.CodeActionFailed, Err: err}
 	}
-	if keeps[janitor.KeepKey{Kind: kind, NodeID: nodeID, Ref: ref}] {
+	if janitor.IsKept(keeps, kind, nodeID, ref) {
 		return janitor.ErrNoLongerStale
 	}
 	return nil

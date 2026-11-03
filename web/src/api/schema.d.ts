@@ -8315,9 +8315,9 @@ export interface components {
             kind: "network" | "container" | "image";
             /** @description What to call it: the container's name, the image's first tag or short ID, the network's name */
             name: string;
-            /** @description The node's name, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known */
+            /** @description The name of the node the object is on, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known */
             node: string;
-            /** @description The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network */
+            /** @description The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network. A container or an image is kept by its ID on any node, so after an agent is enrolled again this can be a node ID the environment no longer has; node then names the node the object is on now */
             nodeId: string;
             /** @description True when the object exists now. A keep outlives its object, and a network of the same name made again is still kept */
             present: boolean;

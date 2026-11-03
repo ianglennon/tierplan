@@ -114,7 +114,7 @@ You cannot add a label to a container or an image that already exists. For those
 A few things to know about Keep:
 
 - A keep is stored against the object, not a pattern. It names a container or an image by its ID on a node, and a network by its name (so a network that is created again under the same name is still kept). The container or image is a different object after a redeploy, and the new one is judged as itself.
-- A keep on a container or an image is stored against the node as TierPlan knows it. If you remove a node's agent and install a new one, TierPlan sees a new node and the keeps on that node's local containers and images no longer match; keep them again if you still want them kept. A label has no such limit, and neither do node settings on a swarm.
+- A keep on a container or an image is stored against the node as TierPlan knows it, but it is matched by the object's ID on any node: a container's ID is unique across hosts, and an image's ID is its content. If you remove a node's agent and install a new one, TierPlan sees a new node ID, and the keeps stored under the old one still protect the same containers and images; **Kept items** shows them on the node they are on now. Keeping an image keeps every copy of it, on every node.
 - Keep works for networks too, and is the same keep the Address space page uses.
 
 ### Keeping a whole stack

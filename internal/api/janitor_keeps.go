@@ -72,8 +72,8 @@ type JanitorUnkeepInput struct {
 // JanitorKeptItem is one thing kept out of cleanup.
 type JanitorKeptItem struct {
 	Kind       string `json:"kind" enum:"network,container,image"`
-	NodeID     string `json:"nodeId" doc:"The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network"`
-	Node       string `json:"node" doc:"The node's name, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known"`
+	NodeID     string `json:"nodeId" doc:"The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network. A container or an image is kept by its ID on any node, so after an agent is enrolled again this can be a node ID the environment no longer has; node then names the node the object is on now"`
+	Node       string `json:"node" doc:"The name of the node the object is on, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known"`
 	Ref        string `json:"ref" doc:"The container's ID, the image's ID, or the network's name"`
 	Name       string `json:"name" doc:"What to call it: the container's name, the image's first tag or short ID, the network's name"`
 	KeptBy     string `json:"keptBy" enum:"label,user" doc:"label: it carries the tierplan.keep=true label, which only its owner can remove. user: a person kept it"`
@@ -413,10 +413,16 @@ func listJanitorKeeps(ctx context.Context, d JanitorDeps, envID string) (Janitor
 
 	items := make([]JanitorKeptItem, 0, len(rows))
 	at := make(map[janitor.KeepKey]int, len(rows))
+	// byRef finds the keeps of a container or an image by its ID alone, which is how they are matched
+	// (janitor.IsKept): a keep stored against a node ID the environment no longer has still holds.
+	byRef := make(map[janitor.KeepKey][]int, len(rows))
 	keeper := make(map[int]string, len(rows)) // item index -> the user ID that kept it
 	for _, r := range rows {
 		k := janitor.KeepKey{Kind: janitor.Kind(r.Kind), NodeID: r.NodeID, Ref: r.Ref}
 		at[k] = len(items)
+		if k.Kind != janitor.KindNetwork {
+			byRef[janitor.KeepKey{Kind: k.Kind, Ref: k.Ref}] = append(byRef[janitor.KeepKey{Kind: k.Kind, Ref: k.Ref}], len(items))
+		}
 		items = append(items, JanitorKeptItem{
 			Kind: r.Kind, NodeID: r.NodeID, Node: nodes[r.NodeID], Ref: r.Ref, Name: cmp.Or(r.Name, r.Ref), KeptBy: "user",
 			KeptAt: time.Unix(0, r.KeptAt).UTC().Format(time.RFC3339),
@@ -428,6 +434,16 @@ func listJanitorKeeps(ctx context.Context, d JanitorDeps, envID string) (Janitor
 	see := func(kind janitor.Kind, nodeID, ref, name, node string, label bool) {
 		k := janitor.KeepKey{Kind: kind, NodeID: nodeID, Ref: ref}
 		i, have := at[k]
+		if !have && kind != janitor.KindNetwork {
+			// A keep of this object stored under another node ID, which still protects it: it is shown on the
+			// node the object is on now, under the node ID it was stored with, so Stop keeping finds it.
+			for _, j := range byRef[janitor.KeepKey{Kind: kind, Ref: ref}] {
+				if !items[j].Present {
+					i, have = j, true
+					break
+				}
+			}
+		}
 		if !have && !label {
 			return
 		}

@@ -286,7 +286,10 @@ func TestClockSkewRail(t *testing.T) {
 
 // D-12: a container or image with a keep row is never removable, whatever the rules say, and is listed
 // protected (kept_row) with its place in the group kept; a label's own, more specific, reason stays, and a
-// keep on another node, another kind or another ref changes nothing. Candidates does not inspect it.
+// keep of another kind or another ref changes nothing. A keep stored against another node ID still holds
+// (WR-06): a container's ID is unique across hosts and an image's ID is its content, and an agent enrolled
+// again gives its node a new ID, so a keep that stopped matching would lapse in silence and the next run
+// would remove what a person kept. Candidates does not inspect it.
 func TestBuildKeptRowProtects(t *testing.T) {
 	t.Parallel()
 	var cs []Container
@@ -302,27 +305,28 @@ func TestBuildKeptRowProtects(t *testing.T) {
 	s.Images = []Image{img, img2}
 	s.ServicesRead = true
 	s.Keeps = map[KeepKey]bool{
-		{Kind: KindContainer, NodeID: "n1-id", Ref: "c1"}:       true,
-		{Kind: KindContainer, NodeID: "n1-id", Ref: "c0"}:       true,
-		{Kind: KindContainer, NodeID: "other", Ref: "c2"}:       true, // another node's c2
-		{Kind: KindImage, NodeID: img.NodeID, Ref: "sha256:ia"}: true,
-		{Kind: KindNetwork, NodeID: "n1-id", Ref: "c3"}:         true, // a network, not the container
+		{Kind: KindContainer, NodeID: "n1-id", Ref: "c1"}:          true,
+		{Kind: KindContainer, NodeID: "n1-id", Ref: "c0"}:          true,
+		{Kind: KindContainer, NodeID: "re-enrolled", Ref: "c2"}:    true, // c2, kept under its node's old agent ID
+		{Kind: KindImage, NodeID: "re-enrolled", Ref: "sha256:ia"}: true,
+		{Kind: KindNetwork, NodeID: "n1-id", Ref: "c3"}:            true, // a network, not the container
+		{Kind: KindImage, NodeID: img.NodeID, Ref: "c4"}:           true, // an image, not the container
 	}
 
 	for _, r := range Candidates(s, DefaultPolicy()) {
-		if r.ID == "c1" {
+		if r.ID == "c1" || r.ID == "c2" {
 			t.Errorf("candidate %+v is kept: nothing of it is inspected", r)
 		}
 	}
 	got := planOf(s, DefaultPolicy())
-	if want := []string{"c2", "c3", "sha256:ib"}; !reflect.DeepEqual(refs(got.Items), want) {
-		t.Fatalf("items = %v, want %v: the kept c1 and the kept image are left", refs(got.Items), want)
+	if want := []string{"c3", "sha256:ib"}; !reflect.DeepEqual(refs(got.Items), want) {
+		t.Fatalf("items = %v, want %v: the kept c1 and c2 and the kept image are left", refs(got.Items), want)
 	}
 	byRef := map[string]Item{}
 	for _, it := range got.NotRemoved {
 		byRef[it.Ref] = it
 	}
-	for _, id := range []string{"c1", "sha256:ia"} {
+	for _, id := range []string{"c1", "c2", "sha256:ia"} {
 		it, ok := byRef[id]
 		if !ok || it.Class != ClassProtected || it.Reason.Code != ReasonKeptRow || it.Age != 0 {
 			t.Errorf("%s = %+v (listed %v), want protected kept_row", id, it, ok)

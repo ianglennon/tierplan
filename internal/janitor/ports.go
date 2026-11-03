@@ -183,7 +183,28 @@ func (s Snapshot) heldByStack(labels map[string]string) (ReasonCode, bool) {
 
 // kept reports whether a person kept the container or image of kind k, on node nodeID, with ID ref.
 func (s Snapshot) kept(k Kind, nodeID, ref string) bool {
-	return s.Keeps[KeepKey{Kind: k, NodeID: nodeID, Ref: ref}]
+	return IsKept(s.Keeps, k, nodeID, ref)
+}
+
+// IsKept reports whether keeps hold the object of kind k with ID ref on node nodeID. A container or an
+// image is matched by its ID on any node, not only on the node its keep was stored against (WR-06): a
+// container's ID is unique across hosts and an image's ID is its content, while a node's ID is its agent's,
+// which changes when the agent is enrolled again. Matched by node, every keep on that node would stop
+// matching in silence and the next run would remove what a person kept; matched by ID, a keep fails
+// closed. A network keep is matched by its name and node, as the Address space page stores it.
+func IsKept(keeps map[KeepKey]bool, k Kind, nodeID, ref string) bool {
+	if keeps[KeepKey{Kind: k, NodeID: nodeID, Ref: ref}] {
+		return true
+	}
+	if k != KindContainer && k != KindImage {
+		return false
+	}
+	for key, on := range keeps {
+		if on && key.Kind == k && key.Ref == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // ContainerEnd is how a container ended: what a list does not carry and an inspect does.

@@ -543,3 +543,32 @@ func TestJanitorKeptImageNeverRemoved(t *testing.T) {
 		t.Fatalf("writes = %v after the engine's refusal, want none", w)
 	}
 }
+
+// A keep stored against a node ID the environment no longer has, as after an agent is enrolled again,
+// still holds (WR-06): the image is protected kept_row in the preview, the engine refuses it at the moment
+// of removal, and the Kept list shows the keep as present on the node the image is on now.
+func TestJanitorKeepSurvivesANewNodeID(t *testing.T) {
+	t.Parallel()
+	id := imageIDOf("a")
+	f, e := dashEnv(t, janitorImageEngine(danglingImage("a")))
+	if _, err := f.st.Write.ExecContext(testsupport.Context(t),
+		`INSERT INTO janitor_keeps (env_id, kind, node_id, ref, name, kept_by, kept_at) VALUES (?, 'image', 'old-agent', ?, '', 'someone', 1)`,
+		e.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	preview := f.previewJanitor(t, e)
+	if it, ok := notRemovedRef(preview, id); len(preview.Items) != 0 || !ok || it.Class != "protected" || it.Reason.Code != "kept_row" {
+		t.Fatalf("preview items = %+v kept %+v (%v), want the image protected kept_row", preview.Items, it, ok)
+	}
+	eng := api.NewJanitorEngine(f.agg, f.clusters, nil, janitor.KeepStore{St: f.st}, nil)
+	if err := eng.RemoveImage(testsupport.Context(t), e.ID, e.ID, id); !errors.Is(err, janitor.ErrNoLongerStale) {
+		t.Fatalf("RemoveImage of an image kept under an old node ID = %v, want ErrNoLongerStale", err)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("writes = %v, want none", w)
+	}
+	kept := f.keptList(t, e.ID)
+	if len(kept) != 1 || kept[0].Ref != id || kept[0].NodeID != "old-agent" || !kept[0].Present || kept[0].Node != "node-1" {
+		t.Fatalf("kept list = %+v, want the keep present on node-1 under the node ID it was stored with", kept)
+	}
+}

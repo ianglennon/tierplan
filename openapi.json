@@ -8043,11 +8043,11 @@
             "type": "string"
           },
           "node": {
-            "description": "The node's name, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known",
+            "description": "The name of the node the object is on, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known",
             "type": "string"
           },
           "nodeId": {
-            "description": "The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network",
+            "description": "The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network. A container or an image is kept by its ID on any node, so after an agent is enrolled again this can be a node ID the environment no longer has; node then names the node the object is on now",
             "type": "string"
           },
           "present": {
