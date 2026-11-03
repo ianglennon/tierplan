@@ -792,27 +792,10 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin str
 	if err := r.copyGit(ctx, q, id.String(), from.Git, ""); err != nil {
 		return Snapshot{}, err
 	}
-	// The copy starts with the platforms of the revision it copies, as it starts with its pins (G-08-4). The record
-	// is the one the snapshot given carries, which a Repo read from the stored row (a record that did not read is none).
-	recorded := from.Platforms
-	if len(recorded) > 0 {
-		raw, err := json.Marshal(recorded)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("encode platforms: %w", err)
-		}
-		if _, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(raw), ID: id.String()}); err != nil {
-			return Snapshot{}, fmt.Errorf("copy platforms: %w", err)
-		}
-	}
-	// And with the subnets it gave its networks, so a roll back that has to create one again reuses it (D-20).
-	if len(from.Subnets) > 0 {
-		raw, err := json.Marshal(from.Subnets)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("encode subnets: %w", err)
-		}
-		if _, err := q.SetSnapshotSubnets(ctx, sqlc.SetSnapshotSubnetsParams{Subnets: string(raw), ID: id.String()}); err != nil {
-			return Snapshot{}, fmt.Errorf("copy subnets: %w", err)
-		}
+	// The copy starts with the platforms of the revision it copies, as it starts with its pins (G-08-4), and with the
+	// subnets it gave its networks, so a roll back that has to create one again reuses it (D-20).
+	if err := copyPlatformsAndSubnets(ctx, q, id.String(), from); err != nil {
+		return Snapshot{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, fmt.Errorf("commit: %w", err)
@@ -820,7 +803,86 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin str
 	return Snapshot{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
 		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Git: from.Git, Copy: from.Copy,
-		Platforms: recorded, Subnets: from.Subnets,
+		Platforms: from.Platforms, Subnets: from.Subnets,
+	}, nil
+}
+
+// copyPlatformsAndSubnets stores on the snapshot id the platforms and the network subnets that the revision from
+// recorded. The record is the one the Snapshot given carries, which a Repo read from the stored row (a record that did
+// not read is none). A revision with none stores none.
+func copyPlatformsAndSubnets(ctx context.Context, q *sqlc.Queries, id string, from Snapshot) error {
+	if len(from.Platforms) > 0 {
+		raw, err := json.Marshal(from.Platforms)
+		if err != nil {
+			return fmt.Errorf("encode platforms: %w", err)
+		}
+		if _, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(raw), ID: id}); err != nil {
+			return fmt.Errorf("copy platforms: %w", err)
+		}
+	}
+	if len(from.Subnets) > 0 {
+		raw, err := json.Marshal(from.Subnets)
+		if err != nil {
+			return fmt.Errorf("encode subnets: %w", err)
+		}
+		if _, err := q.SetSnapshotSubnets(ctx, sqlc.SetSnapshotSubnetsParams{Subnets: string(raw), ID: id}); err != nil {
+			return fmt.Errorf("copy subnets: %w", err)
+		}
+	}
+	return nil
+}
+
+// NewUpdateRevision makes the revision a one-click image update deploys (D-06): a new revision, numbered after the
+// stack's last one and pending until its deploy ends, with the files, variables, git record, platforms and subnets of
+// from, which is the newest good revision (LatestGoodRevision). The draft is never read, so an unreviewed edit cannot
+// ride along with an update, and it is not touched (an unedited draft is rebased by RebaseDraftAt afterwards).
+//
+// Unlike CopyRevision it is not a roll back: Origin is OriginUpdate and RestoredFrom stays 0, so History, the deploy
+// review and git sync, which read RestoredFrom above 0 as a roll back (and git sync pauses automatic deploys after
+// one), read it as the update it is (D-08). It starts with no pins and no rendering: the update resolves the new
+// images and stores them as a deploy does. Each sealed value is opened with from and sealed again under the new
+// snapshot's ID.
+func (r Repo) NewUpdateRevision(ctx context.Context, from Snapshot, actor string) (Snapshot, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+	}
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	seq, err := q.NextRevisionSeq(ctx, from.StackID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("next revision: %w", err)
+	}
+	now := r.now()
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
+		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Origin: OriginUpdate, RestoredFrom: 0,
+	}); err != nil {
+		return Snapshot{}, fmt.Errorf("insert revision: %w", err)
+	}
+	if err := r.writeContent(ctx, q, id.String(), from.Copy); err != nil {
+		return Snapshot{}, err
+	}
+	// The same commit and source as the revision it copies, so the update still restores without the repository (D-08).
+	if err := r.copyGit(ctx, q, id.String(), from.Git, ""); err != nil {
+		return Snapshot{}, err
+	}
+	if err := copyPlatformsAndSubnets(ctx, q, id.String(), from); err != nil {
+		return Snapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Snapshot{}, fmt.Errorf("commit: %w", err)
+	}
+	return Snapshot{
+		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: OriginUpdate, Git: from.Git, Copy: from.Copy,
+		Platforms: from.Platforms, Subnets: from.Subnets,
 	}, nil
 }
 
@@ -1044,9 +1106,10 @@ func (r Repo) RebaseDraft(ctx context.Context, stackID string, seq int64) error 
 // (it never moves backward) and that is not an error. A draft at another version, or no draft, is a *DraftConflictError
 // and nothing changes.
 //
-// Only the automatic deploy calls it, for a draft it has just proven to hold the repository's head plus the variables
-// and overlay files of revision seq (no unreviewed local edit, no pending source). A person's draft is never rebased this
-// way, so a review of it still shows a roll back or a deploy made since as one.
+// Two callers: the automatic deploy, for a draft it has just proven to hold the repository's head plus the variables
+// and overlay files of revision seq (no unreviewed local edit, no pending source), and an image update, for an unedited
+// draft that it rebases onto the update revision it made with NewUpdateRevision (12-18). A person's edited draft is never
+// rebased this way, so a review of it still shows a roll back or a deploy made since as one.
 func (r Repo) RebaseDraftAt(ctx context.Context, stackID string, version, seq int64) error {
 	tx, err := r.Store.Write.BeginTx(ctx, nil)
 	if err != nil {
