@@ -435,3 +435,148 @@ func TestPlannerExcludedStackNetworksOwned(t *testing.T) {
 		}
 	}
 }
+
+// D-10, D-19: the objects of a stack whose compose file says x-tierplan: {keep: true} are never removable, exactly
+// as if a person had excluded it, but with the reason stack_declared_keep. Its old one-offs and its swarm task
+// containers are listed protected and none is inspected; a stack that does not declare is judged as before.
+func TestPlannerDeclaredStack(t *testing.T) {
+	t.Parallel()
+	oneoff := func(id, project string, idx int) Container { return box(id, idx, composed(project, "migrate", true)) }
+	s := hostOf([]string{"shop", "blog"},
+		oneoff("r1", "shop", 0), oneoff("r2", "shop", 1), oneoff("r3", "shop", 2),
+		oneoff("b1", "blog", 0), oneoff("b2", "blog", 1), oneoff("b3", "blog", 2))
+	s.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Declared: true}, {ID: "stk-blog", Name: "blog"}}
+	p := DefaultPolicy()
+
+	for _, c := range Candidates(s, p) {
+		if c.ID[0] == 'r' {
+			t.Errorf("candidate %+v belongs to a declared stack: nothing of it is inspected", c)
+		}
+	}
+	got := planOf(s, p)
+	if want := []string{"b1"}; !reflect.DeepEqual(refs(got.Items), want) {
+		t.Fatalf("items = %v, want %v: only the stack that does not declare loses its oldest one-off", refs(got.Items), want)
+	}
+	if len(got.NotRemoved) != 1 {
+		t.Fatalf("notRemoved = %+v, want only r1", got.NotRemoved)
+	}
+	it := got.NotRemoved[0]
+	if it.Ref != "r1" || it.Class != ClassProtected || it.Reason.Code != ReasonStackDeclaredKeep || it.Age != 0 || it.Reason.Project != "shop" || it.Reason.Service != "migrate" {
+		t.Errorf("r1 = %+v, want protected stack_declared_keep still naming its project and service", it)
+	}
+
+	// The same for the task containers of a swarm stack found by its namespace, with a person's keep staying more specific.
+	var cs []Container
+	for i := range 5 {
+		c := task(fmt.Sprintf("c%d", i+1), "1", i)
+		c.Labels[stacks.LabelSwarmNamespace] = "shop"
+		cs = append(cs, c)
+	}
+	sw := swarmOf(cs...)
+	sw.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Declared: true}}
+	sw.Keeps = map[KeepKey]bool{{Kind: KindContainer, NodeID: "n1-id", Ref: "c1"}: true}
+	got = planOf(sw, p)
+	if len(got.Items) != 0 {
+		t.Fatalf("swarm items = %v, want none: the stack declares keep", refs(got.Items))
+	}
+	want := map[string]ReasonCode{"c1": ReasonKeptRow, "c2": ReasonStackDeclaredKeep, "c3": ReasonStackDeclaredKeep}
+	if len(got.NotRemoved) != len(want) {
+		t.Fatalf("swarm notRemoved = %+v, want %d protected", got.NotRemoved, len(want))
+	}
+	for _, it := range got.NotRemoved {
+		if it.Class != ClassProtected || it.Reason.Code != want[it.Ref] {
+			t.Errorf("%s = %+v, want protected %s", it.Ref, it, want[it.Ref])
+		}
+	}
+
+	// Taking the declaration away makes the one-off removable again.
+	s.StackFacts[0].Declared = false
+	if got := planOf(s, p); !reflect.DeepEqual(refs(got.Items), []string{"b1", "r1"}) {
+		t.Fatalf("items = %v, want r1 and b1 removable once the stack no longer declares keep", refs(got.Items))
+	}
+}
+
+// A stack whose definition did not load is left alone: what it owns is cant_tell stack_unknown, never removable,
+// and nothing of it is inspected. The stack beside it that loaded is judged as usual (T-11-83).
+func TestPlannerStackUnknown(t *testing.T) {
+	t.Parallel()
+	oneoff := func(id, project string, idx int) Container { return box(id, idx, composed(project, "migrate", true)) }
+	s := hostOf([]string{"shop", "blog"},
+		oneoff("r1", "shop", 0), oneoff("r2", "shop", 1), oneoff("r3", "shop", 2),
+		oneoff("b1", "blog", 0), oneoff("b2", "blog", 1), oneoff("b3", "blog", 2))
+	s.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Unknown: true}, {ID: "stk-blog", Name: "blog"}}
+	p := DefaultPolicy()
+
+	for _, c := range Candidates(s, p) {
+		if c.ID[0] == 'r' {
+			t.Errorf("candidate %+v belongs to a stack that did not load: nothing of it is inspected", c)
+		}
+	}
+	got := planOf(s, p)
+	if want := []string{"b1"}; !reflect.DeepEqual(refs(got.Items), want) {
+		t.Fatalf("items = %v, want %v", refs(got.Items), want)
+	}
+	if len(got.NotRemoved) != 1 {
+		t.Fatalf("notRemoved = %+v, want only r1", got.NotRemoved)
+	}
+	if it := got.NotRemoved[0]; it.Ref != "r1" || it.Class != ClassCantTell || it.Reason.Code != ReasonStackUnknown || it.Reason.Project != "shop" {
+		t.Errorf("r1 = %+v, want cant_tell stack_unknown naming its project", it)
+	}
+
+	// The swarm task containers of an unreadable stack too, and a label that protects one keeps its own reason.
+	var cs []Container
+	for i := range 5 {
+		c := task(fmt.Sprintf("c%d", i+1), "1", i)
+		c.Labels[stacks.LabelSwarmNamespace] = "shop"
+		if i == 0 {
+			c.Labels[stacks.LabelKeep] = "true"
+		}
+		cs = append(cs, c)
+	}
+	sw := swarmOf(cs...)
+	sw.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Unknown: true}}
+	got = planOf(sw, p)
+	if len(got.Items) != 0 {
+		t.Fatalf("swarm items = %v, want none: the stack did not load", refs(got.Items))
+	}
+	for _, it := range got.NotRemoved {
+		switch it.Ref {
+		case "c1":
+			if it.Class != ClassProtected || it.Reason.Code != ReasonKeptLabel {
+				t.Errorf("c1 = %+v, want the keep label's own protected reason", it)
+			}
+		default:
+			if it.Class != ClassCantTell || it.Reason.Code != ReasonStackUnknown {
+				t.Errorf("%s = %+v, want cant_tell stack_unknown", it.Ref, it)
+			}
+		}
+	}
+}
+
+// A stack both excluded by the switch and declared by its file is worded stack_excluded: the switch is named
+// first. A stack that is declared and another that is unreadable, matching one object between them, give the
+// declared one, which is a statement and not a failure.
+func TestPlannerExcludedAndDeclared(t *testing.T) {
+	t.Parallel()
+	oneoff := func(id, project string, idx int) Container { return box(id, idx, composed(project, "migrate", true)) }
+	s := hostOf([]string{"shop"}, oneoff("r1", "shop", 0), oneoff("r2", "shop", 1), oneoff("r3", "shop", 2))
+	p := DefaultPolicy()
+	for name, facts := range map[string][]StackFact{
+		"excluded and declared": {{ID: "stk-shop", Name: "shop", Excluded: true, Declared: true}},
+		"two stacks":            {{ID: "stk-shop", Name: "shop", Declared: true}, {ID: "stk-other", Name: "shop", Excluded: true}},
+	} {
+		s.StackFacts = facts
+		got := planOf(s, p)
+		if len(got.Items) != 0 || len(got.NotRemoved) != 1 {
+			t.Fatalf("%s: plan = %+v, want nothing removable and r1 protected", name, got)
+		}
+		if it := got.NotRemoved[0]; it.Class != ClassProtected || it.Reason.Code != ReasonStackExcluded {
+			t.Errorf("%s: r1 = %+v, want protected stack_excluded (the switch is named first)", name, it)
+		}
+	}
+	s.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Declared: true}, {ID: "stk-bad", Name: "shop", Unknown: true}}
+	got := planOf(s, p)
+	if len(got.Items) != 0 || len(got.NotRemoved) != 1 || got.NotRemoved[0].Reason.Code != ReasonStackDeclaredKeep {
+		t.Errorf("declared beside unknown: plan = %+v, want r1 protected stack_declared_keep", got)
+	}
+}

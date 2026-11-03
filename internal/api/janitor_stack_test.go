@@ -336,3 +336,74 @@ func TestDeclaredStackNeverCleaned(t *testing.T) {
 		t.Fatalf("the daemons saw %v, want the three old containers deleted once the file no longer keeps the stack", got)
 	}
 }
+
+// The switch cannot undo what the file says: turning exclusion on and off again on a stack whose compose file
+// declares keep answers 200 with declared still true, and the stack's objects stay protected, worded by the switch
+// while it is on and by the file when it is off. A file that stops loading leaves them cant_tell stack_unknown,
+// never removable (D-10, D-19, T-11-83).
+func TestStackJanitorDeclaredStays(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(namespacedSlot(5)), nil)
+	repo := stackops.Repo{Store: s.st, Vault: s.v}
+	ctx := testsupport.Context(t)
+	st, _, err := repo.CreateStack(ctx, s.env.ID, "shop", stacks.TargetSwarm, "ada", declaredCompose("x-tierplan:\n  keep: true\n"))
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	reasons := func(wantClass string) map[string]bool {
+		t.Helper()
+		rec, p := s.previewJanitor(t)
+		if rec.code != http.StatusOK || len(p.Items) != 0 || len(p.NotRemoved) != 3 {
+			t.Fatalf("preview: %d items %+v notRemoved %+v, want nothing removable and three held back", rec.code, p.Items, p.NotRemoved)
+		}
+		out := map[string]bool{}
+		for _, it := range p.NotRemoved {
+			if it.Class != wantClass {
+				t.Errorf("%+v, want class %s", it, wantClass)
+			}
+			out[it.Reason.Code] = true
+		}
+		return out
+	}
+	only := func(got map[string]bool, code string) {
+		t.Helper()
+		if len(got) != 1 || !got[code] {
+			t.Fatalf("reasons = %v, want only %s", got, code)
+		}
+	}
+	only(reasons("protected"), "stack_declared_keep")
+
+	rec := s.req(t, http.MethodPut, stackJanitorURL(s.env.ID, st.ID), `{"excluded":true}`)
+	if got := decode[stackJanitorJSON](t, rec); rec.code != http.StatusOK || !got.Excluded || !got.Declared {
+		t.Fatalf("exclude: %d %s, want 200 excluded and declared", rec.code, rec.body)
+	}
+	only(reasons("protected"), "stack_excluded")
+
+	rec = s.req(t, http.MethodPut, stackJanitorURL(s.env.ID, st.ID), `{"excluded":false}`)
+	if got := decode[stackJanitorJSON](t, rec); rec.code != http.StatusOK || got.Excluded || !got.Declared {
+		t.Fatalf("include: %d %s, want 200, no longer excluded and still declared", rec.code, rec.body)
+	}
+	rec = s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/stacks/"+st.ID, "")
+	if got := decode[stackDetailJSON](t, rec); rec.code != http.StatusOK || got.Janitor.Excluded || !got.Janitor.Declared {
+		t.Fatalf("stack body: %d %s, want declared true and excluded false", rec.code, rec.body)
+	}
+	only(reasons("protected"), "stack_declared_keep")
+
+	// A file that no longer loads is not believed either way: the stack's objects are left alone as cant_tell.
+	draft, err := repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte("x-tierplan:\n  keep: true\nservices: [this is not a mapping\n")}}}
+	if _, _, err := repo.SaveDraft(ctx, st.ID, draft.Version, "ada", broken); err != nil {
+		t.Fatal(err)
+	}
+	only(reasons("cant_tell"), "stack_unknown")
+	rec = s.req(t, http.MethodPut, stackJanitorURL(s.env.ID, st.ID), `{"excluded":false}`)
+	if got := decode[stackJanitorJSON](t, rec); rec.code != http.StatusOK || got.Declared {
+		t.Fatalf("a file that does not load: %d %s, want 200 and declared false", rec.code, rec.body)
+	}
+	if got := s.containerDeletes(); len(got) != 0 {
+		t.Fatalf("the daemons saw %v, want no delete", got)
+	}
+}
