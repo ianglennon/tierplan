@@ -34,6 +34,7 @@ var sharedSwarmCases = []struct {
 	{"Enrol", sharedEnrol},
 	{"HostRoutes", sharedHostRoutes},
 	{"ImagePullFanOut", sharedImagePullFanOut},
+	{"Janitor", sharedJanitor},
 	{"NetworkConnect", sharedNetworkConnect},
 	{"Networks", sharedNetworks},
 	{"OrphanMatrix", sharedOrphanMatrix},
@@ -72,6 +73,12 @@ var sharedSwarmCases = []struct {
 // name, over the defaults every case gets. A case missing here gets the defaults. They are
 // the Go-level test hooks of servertest, never settings of a real server.
 var sharedCaseOptions = map[string]func(*servertest.Options){
+	// Janitor moves the janitor's clock and the address-space reader's two days on, so the task containers and
+	// the orphan overlay it makes are past the 24-hour grace period at once.
+	"Janitor": func(o *servertest.Options) {
+		o.JanitorClock = func() *janitorShift { c := &janitorShift{}; c.by.Store(int64(janitorSwarmShift)); return c }()
+		o.AddressSpaceClock = func() time.Time { return time.Now().Add(janitorSwarmShift) }
+	},
 	// OrphanMatrix moves the address-space reader's clock a day and an hour on, so every
 	// network it makes is past the 24-hour orphan grace period at once.
 	"OrphanMatrix": func(o *servertest.Options) {
