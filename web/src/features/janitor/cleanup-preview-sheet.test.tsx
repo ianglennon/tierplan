@@ -627,7 +627,7 @@ describe("KeepFromPreview", () => {
     expect(asked).toBe(1);
 
     fireEvent.click(screen.getByRole("button", { name: /^Not removed \(1\)/ }));
-    expect(await screen.findByText("Protected: you chose Keep on it.")).toBeTruthy();
+    expect(await screen.findByText("Protected: marked Keep on the Janitor page.")).toBeTruthy();
     const row = screen.getByText("web.2.bbb").closest("tr");
     expect(within(row as HTMLElement).getByText("Kept")).toBeTruthy();
     // It is already kept, so it offers no Keep.
@@ -724,7 +724,7 @@ describe("Keep and what already keeps an item", () => {
       expect(screen.queryByRole("button", { name: "Keep young.1.eee" })).toBeNull(),
     );
     const row = screen.getByText("young.1.eee").closest("tr") as HTMLElement;
-    expect(within(row).getByText("Protected: you chose Keep on it.")).toBeTruthy();
+    expect(within(row).getByText("Protected: marked Keep on the Janitor page.")).toBeTruthy();
     expect(within(row).getByText("Kept")).toBeTruthy();
   });
 

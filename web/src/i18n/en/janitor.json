@@ -76,7 +76,7 @@
       "opt_in_off_networks": "Opt-in off: unused networks aren't removed until you turn that on.",
       "lone_compose_container": "Stopped container of compose project {{project}}, which still exists.",
       "kept_label": "Protected: labelled tierplan.keep=true.",
-      "kept_row": "Protected: you chose Keep on it.",
+      "kept_row": "Protected: marked Keep on the Janitor page.",
       "stack_excluded": "Protected: stack {{stack}} is excluded from the janitor.",
       "stack_declared_keep": "Protected: stack {{stack}} sets tierplan.keep=true in its compose file.",
       "younger_than_grace": "Younger than the grace period: {{time}} left.",
