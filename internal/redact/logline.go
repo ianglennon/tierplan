@@ -123,15 +123,34 @@ func literalReplacer(secrets []string) *strings.Replacer {
 // turn up inside ordinary words, so hiding it would only spoil the line.
 const minLogSecret = 4
 
+// maxSecretLines and maxSecretBytes bound the work of hiding a multi-line secret line by line, as the
+// stack masker's limits do. The value as a whole is always hidden, whatever its size.
+const (
+	maxSecretLines = 200
+	maxSecretBytes = 64 << 10
+)
+
 // SecretEnvValues are the values of the "NAME=value" entries of a container's environment whose
 // name looks like a secret (see secretName), at least minLogSecret characters long. They are what a
-// container's log is most likely to echo, so MaskLogLine hides them wherever they appear.
+// container's log is most likely to echo, so MaskLogLine hides them wherever they appear. A value of
+// several lines (a PEM key, a JSON credential) never appears whole in one log line, so each of its
+// lines, trimmed and at least minLogSecret characters long, is a value of its own after the whole.
 func SecretEnvValues(env []string) []string {
 	var out []string
 	for _, kv := range env {
 		name, value, ok := strings.Cut(kv, "=")
-		if ok && len(value) >= minLogSecret && secretName(name) {
-			out = append(out, value)
+		if !ok || len(value) < minLogSecret || !secretName(name) {
+			continue
+		}
+		out = append(out, value)
+		if len(value) > maxSecretBytes || !strings.Contains(value, "\n") {
+			continue
+		}
+		lines := strings.Split(value, "\n")
+		for _, line := range lines[:min(len(lines), maxSecretLines)] {
+			if line = strings.TrimSpace(line); len(line) >= minLogSecret && !slices.Contains(out, line) {
+				out = append(out, line)
+			}
 		}
 	}
 	return out

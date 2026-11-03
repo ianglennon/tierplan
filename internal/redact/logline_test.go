@@ -71,6 +71,25 @@ func TestMaskLogLineCutsLongLines(t *testing.T) {
 	}
 }
 
+// A multi-line secret (a PEM key, a JSON credential) is never one line of a log, so each of its lines
+// is a value of its own as well as the whole (WR-04), and an app that prints the key has every body
+// line of it hidden.
+func TestSecretEnvValuesMultiLine(t *testing.T) {
+	t.Parallel()
+	key := "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\r\n  bKcwggSjAgEAAoIBAQC7  \nab\n\n-----END PRIVATE KEY-----\n"
+	got := redact.SecretEnvValues([]string{"TLS_KEY=" + key, "PORT=8080"})
+	want := []string{key, "-----BEGIN PRIVATE KEY-----", "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC", "bKcwggSjAgEAAoIBAQC7", "-----END PRIVATE KEY-----"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("SecretEnvValues = %q, want %q: the whole value and each line of 4 characters or more", got, want)
+	}
+	for _, line := range strings.Split(key, "\n") {
+		masked, _ := redact.MaskLogLine("key line: "+line, got)
+		if body := strings.TrimSpace(line); len(body) >= 4 && strings.Contains(masked, body) {
+			t.Errorf("MaskLogLine(%q) = %q, want the key's line hidden", line, masked)
+		}
+	}
+}
+
 func TestSecretEnvValues(t *testing.T) {
 	t.Parallel()
 	got := redact.SecretEnvValues([]string{"DB_PASSWORD=hunter2", "PORT=8080", "API_TOKEN=a=b", "EMPTY_SECRET=", "SHORT_KEY=abc", "NOEQUALS", "SESSION_KEY=abcd"})
