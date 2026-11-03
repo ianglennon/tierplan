@@ -16,10 +16,57 @@ export type JanitorSummary = components["schemas"]["JanitorSummaryBody"];
 export type JanitorRun = components["schemas"]["JanitorRunBody"];
 export type JanitorRunItem = components["schemas"]["JanitorRunItemBody"];
 export type JanitorRunStarted = components["schemas"]["JanitorRunStartedBody"];
+export type JanitorEvidence = components["schemas"]["JanitorEvidenceBody"];
 
-// How often a run that is waiting or working is read again, until the live stream of plan 11-16
-// takes over. A run that has ended is not read again.
+// The frames of a run's stream (GET .../janitor/runs/{runId}/stream). The server sends them but
+// does not describe them in the OpenAPI document, so they are written here by hand from
+// internal/api/janitor_stream.go. The job's state is the job hub's and not the run's: a run whose
+// record says completed can have a job that ended failed or partial, because an item the engine kept
+// in use ends failed in the hub. Word an outcome from the run record, never from this.
+export type JanitorJobItemState =
+  | "waiting"
+  | "running"
+  | "done"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export interface JanitorJobItemFrame {
+  // The type of the object, its node and its engine ID, joined by slashes.
+  id: string;
+  // The object's name.
+  label: string;
+  // container, image or network, or step for the one item of a run that could not plan.
+  kind: string;
+  state: JanitorJobItemState;
+  code: string;
+  message: string;
+  // The node and the engine ID of the object, once the removal ended.
+  result: Record<string, string>;
+}
+
+export interface JanitorJobFrame {
+  id: string;
+  runId: string;
+  state: "running" | "done" | "partial" | "failed" | "cancelled";
+  trigger: "schedule" | "manual";
+  by: string;
+  createdAt: string;
+  // Empty while the job runs.
+  finishedAt: string;
+  // How many removals have ended, and how many the run planned.
+  done: number;
+  total: number;
+  items: JanitorJobItemFrame[];
+}
+
+// How often a run that is waiting or working is read again while its stream is not live. A run that
+// has ended is not read again.
 export const RUN_REFETCH_MS = 2_000;
+
+// How often it is read again while its stream is live: the stream tells the page when the plan is
+// known and when the run ends, so this only keeps the counts and the items table from going stale.
+export const RUN_LIVE_REFETCH_MS = 5_000;
 
 // The key of one run, so the run page and the list of runs can be made stale together.
 export function janitorRunKey(envId: string, runId: string) {
@@ -124,11 +171,15 @@ export function janitorRunQuery(envId: string, runId: string) {
       }
     },
     retry: (count, error) => !(error instanceof JanitorRequestError && error.notFound) && count < 2,
-    refetchInterval: (query) => {
-      const state = query.state.data?.state;
-      return state === "waiting" || state === "running" ? RUN_REFETCH_MS : false;
-    },
+    refetchInterval: (query) => runPollMs(query.state.data?.state, false),
   });
+}
+
+// runPollMs is how long to wait before reading a run again: never for a run that has ended (or is not
+// known yet), and for one that waits or works, 2 s, or 5 s while its stream is live.
+export function runPollMs(state: JanitorRun["state"] | undefined, streamLive: boolean) {
+  if (state !== "waiting" && state !== "running") return false;
+  return streamLive ? RUN_LIVE_REFETCH_MS : RUN_REFETCH_MS;
 }
 
 // useJanitorRun reads one run and follows it while it is waiting or working.
@@ -150,4 +201,40 @@ export function lockOfError(err: JanitorRequestError): StackLock {
     startedAt: err.fieldOf("started"),
     startedBy: "",
   };
+}
+
+// The key of one item's crash evidence.
+export function janitorEvidenceKey(envId: string, runId: string, seq: number) {
+  return [...janitorRunKey(envId, runId), "evidence", seq] as const;
+}
+
+// The crash evidence of one container a run removed. A 404 is the answer "none was saved" (a
+// container that did not crash, or evidence removed with its run) and is not asked for again.
+export function janitorEvidenceQuery(envId: string, runId: string, seq: number) {
+  return queryOptions({
+    queryKey: janitorEvidenceKey(envId, runId, seq),
+    queryFn: async (): Promise<JanitorEvidence> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/janitor/runs/{runId}/items/{seq}/evidence", {
+          params: { path: { envId, runId, seq } },
+        });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+    retry: (count, error) => !(error instanceof JanitorRequestError && error.notFound) && count < 2,
+    // Evidence is saved once and never changes.
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+// useJanitorEvidence reads the evidence of an item while the sheet that shows it is open (seq is
+// undefined when it is not).
+export function useJanitorEvidence(envId: string, runId: string, seq: number | undefined) {
+  return useQuery({
+    ...janitorEvidenceQuery(envId, runId, seq ?? 0),
+    enabled: seq !== undefined,
+  });
 }

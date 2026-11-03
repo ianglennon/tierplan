@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleCheck, CircleX, Info, Lock, ShieldCheck, TriangleAlert } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import {
   JanitorRequestError,
   type JanitorRun,
   type JanitorRunItem,
-  useJanitorRun,
+  janitorRunKey,
+  janitorRunQuery,
+  runPollMs,
 } from "@/api/janitor";
 import { NoPermission } from "@/components/full-page-state";
+import { LiveChip } from "@/components/live-chip";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -24,6 +29,11 @@ import {
   reasonText,
   type Translate,
 } from "@/features/janitor/preview-summary";
+import {
+  type JanitorStreamState,
+  progressOf,
+  useJanitorRunStream,
+} from "@/features/janitor/run-job-stream";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { usePermission } from "@/hooks/use-me";
@@ -72,7 +82,7 @@ function OutcomeIcon({ outcome }: { outcome: JanitorRunItem["outcome"] }) {
 // The run item's name is whatever Docker called it, and is placed as text.
 export function itemReason(item: JanitorRunItem, t: Translate): string {
   if (item.code) {
-    const key = `janitor.run.itemReason.${item.code}`;
+    const key = `janitorRun.itemReason.${item.code}`;
     const words = t(key, { name: item.name, node: item.node });
     if (words !== key) return words;
   }
@@ -80,26 +90,48 @@ export function itemReason(item: JanitorRunItem, t: Translate): string {
 }
 
 // RunPage is one run of the janitor, live or recorded (D-14): what started it, how it ended, what it
-// counted, and every item it attempted with the outcome in words. A run that is waiting or working is
-// read again every two seconds. It reads a run of this environment only; a run the history limit
-// removed is a not-found page, not an error.
+// counted, and every item it attempted with the outcome in words. While the run waits or works the
+// page follows its job stream for the progress, and reads the run record from the server for its
+// counts and items: every two seconds while the stream is not live, every five while it is, and at
+// once when the plan becomes known and when the run ends. A run that has ended, or whose job the
+// server no longer holds, is the record alone. It reads a run of this environment only; a run the
+// history limit removed is a not-found page, not an error.
 export function RunPage({ envId, runId }: { envId: string; runId: string }) {
   const t = useT();
+  const queryClient = useQueryClient();
   const readable = usePermission("environments.read", envId);
   const envName = useEnvName(envId);
-  const query = useJanitorRun(envId, runId);
-  if (!readable) return <NoPermission />;
+  const streamLive = useRef(false);
+  const query = useQuery({
+    ...janitorRunQuery(envId, runId),
+    refetchInterval: (q) => runPollMs(q.state.data?.state, streamLive.current),
+  });
   const run = query.data;
+  const active = run?.state === "waiting" || run?.state === "running";
+  const stream = useJanitorRunStream(envId, runId, active);
+  streamLive.current = stream.status === "live" && !stream.finished;
+
+  // The record is read again the moment the stream says the plan is known (a waiting run starts
+  // working) or the job ended, instead of waiting for the next read.
+  const planned = stream.job?.total ?? 0;
+  const jobEnded = stream.finished;
+  useEffect(() => {
+    if (planned > 0 || jobEnded) {
+      void queryClient.invalidateQueries({ queryKey: janitorRunKey(envId, runId) });
+    }
+  }, [planned, jobEnded, queryClient, envId, runId]);
+
+  if (!readable) return <NoPermission />;
   const gone = query.error instanceof JanitorRequestError && query.error.notFound;
 
   if (gone) {
     return (
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
         <Crumb envId={envId} label={null} />
-        <h1 className="text-2xl font-semibold">{t("janitor.run.notFound.title")}</h1>
+        <h1 className="text-2xl font-semibold">{t("janitorRun.notFound.title")}</h1>
         <Button asChild variant="outline" className="w-fit max-md:h-11">
           <Link to="/env/$envId/janitor" params={{ envId }} hash="history">
-            {t("janitor.run.notFound.link")}
+            {t("janitorRun.notFound.link")}
           </Link>
         </Button>
       </div>
@@ -110,9 +142,9 @@ export function RunPage({ envId, runId }: { envId: string; runId: string }) {
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
         <Crumb envId={envId} label={null} />
         <Alert variant="destructive">
-          <AlertTitle>{t("janitor.run.error.title")}</AlertTitle>
+          <AlertTitle>{t("janitorRun.error.title")}</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{t("janitor.run.error.body")}</span>
+            <span>{t("janitorRun.error.body")}</span>
             <Button
               variant="outline"
               size="sm"
@@ -120,7 +152,7 @@ export function RunPage({ envId, runId }: { envId: string; runId: string }) {
               onClick={() => void query.refetch()}
             >
               {query.isFetching ? <Spinner aria-hidden="true" /> : null}
-              {t("janitor.run.error.retry")}
+              {t("janitorRun.error.retry")}
             </Button>
           </AlertDescription>
         </Alert>
@@ -131,19 +163,19 @@ export function RunPage({ envId, runId }: { envId: string; runId: string }) {
     return (
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4" aria-busy="true">
         <Crumb envId={envId} label={null} />
-        <h1 className="text-2xl font-semibold">{t("janitor.run.title", { env: envName })}</h1>
+        <h1 className="text-2xl font-semibold">{t("janitorRun.title", { env: envName })}</h1>
         <Skeleton className="h-4 w-80" />
         <Skeleton className="h-32 w-full" />
       </div>
     );
   }
-  return <RunBody envId={envId} envName={envName} run={run} />;
+  return <RunBody envId={envId} envName={envName} run={run} stream={stream} />;
 }
 
 function Crumb({ envId, label }: { envId: string; label: ReactNode }) {
   const t = useT();
   return (
-    <nav aria-label={t("janitor.run.breadcrumb.label")}>
+    <nav aria-label={t("janitorRun.breadcrumb.label")}>
       <ol className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground [&>li:not(:last-child)]:after:ms-2 [&>li:not(:last-child)]:after:content-['/']">
         <li>
           <Link
@@ -151,7 +183,7 @@ function Crumb({ envId, label }: { envId: string; label: ReactNode }) {
             params={{ envId }}
             className="rounded-sm text-accent-ink hover:underline"
           >
-            {t("janitor.run.breadcrumb.janitor")}
+            {t("janitorRun.breadcrumb.janitor")}
           </Link>
         </li>
         {label ? <li className="min-w-0">{label}</li> : null}
@@ -160,7 +192,141 @@ function Crumb({ envId, label }: { envId: string; label: ReactNode }) {
   );
 }
 
-function RunBody({ envId, envName, run }: { envId: string; envName: string; run: JanitorRun }) {
+// The LiveChip shows while the stream is connected or retrying for a run that is still going, and
+// nowhere else: a page that has fallen back to reading the record claims nothing it cannot know.
+function chipOf(run: JanitorRun, stream: JanitorStreamState): "live" | "reconnecting" | undefined {
+  const going = run.state === "waiting" || run.state === "running";
+  if (!going || stream.finished) return undefined;
+  return stream.status === "live" || stream.status === "reconnecting" ? stream.status : undefined;
+}
+
+// RunHeader is the title with the outcome icon and word beside it, the live chip while the run is
+// going, and the line that says what started the run and when it ended.
+function RunHeader({
+  envName,
+  run,
+  chip,
+}: {
+  envName: string;
+  run: JanitorRun;
+  chip: "live" | "reconnecting" | undefined;
+}) {
+  const t = useT();
+  const started = formatAbsolute(run.startedAt);
+  const seconds = run.finishedAt
+    ? Math.max(0, (Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000)
+    : undefined;
+  return (
+    <header className="flex flex-col gap-1">
+      <h1 className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xl font-semibold">
+        <span className="break-all">{t("janitorRun.title", { env: envName })}</span>
+        <span className="inline-flex items-center gap-1.5 text-base">
+          <StateIcon state={run.state} />
+          {t(`janitorRun.state.${run.state}`)}
+        </span>
+        {chip ? <LiveChip state={chip} /> : null}
+      </h1>
+      <p className="text-xs text-muted-foreground">
+        {run.trigger === "schedule"
+          ? t("janitorRun.subtitle.schedule", { started })
+          : t("janitorRun.subtitle.manual", { user: run.actorName, started })}{" "}
+        {run.finishedAt && seconds !== undefined
+          ? t("janitorRun.subtitle.finished", {
+              finished: formatAbsolute(run.finishedAt),
+              duration: durationText(seconds, t),
+            })
+          : null}
+      </p>
+    </header>
+  );
+}
+
+// RunProgress is the one bar of a run that is going: how many removals have ended of the number the
+// run planned, with the removal it is working on in mono. Its movement is not announced here; the
+// announcer speaks once per quarter. It shows once the plan is known and the stream has a job.
+function RunProgress({ run, stream }: { run: JanitorRun; stream: JanitorStreamState }) {
+  const t = useT();
+  const going = run.state === "waiting" || run.state === "running";
+  const job = stream.job;
+  if (!going || !job) return null;
+  const { done, total } = progressOf(job);
+  if (total === 0) return null;
+  const current = job.items.find((i) => i.state === "running")?.label;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Progress
+        value={Math.floor((done / total) * 100)}
+        aria-label={t("janitorRun.progressLabel")}
+        aria-valuetext={t("janitorRun.progressValue", { done, total })}
+      />
+      <p aria-live="off" className="text-sm text-muted-foreground">
+        {t("janitorRun.progress", { done, total })}
+        {current ? (
+          <>
+            {" "}
+            <span className="font-mono text-xs break-all text-foreground">{current}</span>
+          </>
+        ) : null}
+      </p>
+    </div>
+  );
+}
+
+// RunAnnouncer is the page's one polite region. It speaks the progress once for each quarter of the
+// run, and the end of a run that finished in front of the person once; it says nothing about a run
+// as it was when the page opened, and it never moves the focus. A run that fails or is partly done
+// is announced by its own alert.
+function RunAnnouncer({ run, stream }: { run: JanitorRun; stream: JanitorStreamState }) {
+  const t = useT();
+  const seen = useRef<{ going: boolean; quarter: number } | null>(null);
+  const [spoken, setSpoken] = useState<string[]>([]);
+  const { done, total } = stream.job ? progressOf(stream.job) : { done: 0, total: 0 };
+  const going = run.state === "waiting" || run.state === "running";
+  const quarter = total > 0 ? Math.floor((done * 4) / total) : 0;
+  const state = run.state;
+  const counts = run.counts;
+  useEffect(() => {
+    const before = seen.current;
+    seen.current = { going, quarter: Math.max(quarter, before?.quarter ?? 0) };
+    if (!before) return;
+    const next: string[] = [];
+    if (going && quarter > before.quarter)
+      next.push(t("janitorRun.announce.progress", { done, total }));
+    if (before.going && state === "completed") {
+      const parts = countParts(
+        {
+          containers: counts.removedContainers,
+          networks: counts.removedNetworks,
+          images: counts.removedImages,
+        },
+        t,
+      );
+      next.push(
+        parts.length > 0
+          ? t("janitorRun.announce.completed", { parts: parts.join(", ") })
+          : t("janitorRun.announce.completedNone"),
+      );
+    }
+    if (next.length > 0) setSpoken((s) => [...s, ...next].slice(-50));
+  }, [going, quarter, done, total, state, counts, t]);
+  return (
+    <div data-slot="run-announcer" aria-live="polite" className="sr-only">
+      {spoken.map((message, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a message is only ever added at the end
+        <p key={i}>{message}</p>
+      ))}
+    </div>
+  );
+}
+
+interface RunBodyProps {
+  envId: string;
+  envName: string;
+  run: JanitorRun;
+  stream: JanitorStreamState;
+}
+
+function RunBody({ envId, envName, run, stream }: RunBodyProps) {
   const t = useT();
   const items = run.items ?? [];
   const counts = run.counts;
@@ -174,60 +340,38 @@ function RunBody({ envId, envName, run }: { envId: string; envName: string; run:
   );
   const removedTotal = counts.removedContainers + counts.removedNetworks + counts.removedImages;
   const started = formatAbsolute(run.startedAt);
-  const seconds = run.finishedAt
-    ? Math.max(0, (Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000)
-    : undefined;
   const showNode = items.some((i) => i.node !== "");
-  const reasonWords = run.reason ? t(`janitor.run.reason.${run.reason}`) : "";
+  const reasonWords = run.reason ? t(`janitorRun.reason.${run.reason}`) : "";
   const attempted = items.length;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
-      <Crumb envId={envId} label={t("janitor.run.breadcrumb.run", { time: started })} />
-      <header className="flex flex-col gap-1">
-        <h1 className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xl font-semibold">
-          <span className="break-all">{t("janitor.run.title", { env: envName })}</span>
-          <span className="inline-flex items-center gap-1.5 text-base">
-            <StateIcon state={run.state} />
-            {t(`janitor.run.state.${run.state}`)}
-          </span>
-        </h1>
-        <p className="text-xs text-muted-foreground">
-          {run.trigger === "schedule"
-            ? t("janitor.run.subtitle.schedule", { started })
-            : t("janitor.run.subtitle.manual", { user: run.actorName, started })}{" "}
-          {run.finishedAt && seconds !== undefined
-            ? t("janitor.run.subtitle.finished", {
-                finished: formatAbsolute(run.finishedAt),
-                duration: durationText(seconds, t),
-              })
-            : null}
-        </p>
-      </header>
+      <Crumb envId={envId} label={t("janitorRun.breadcrumb.run", { time: started })} />
+      <RunHeader envName={envName} run={run} chip={chipOf(run, stream)} />
+      <RunProgress run={run} stream={stream} />
+      <RunAnnouncer run={run} stream={stream} />
 
       {run.state === "waiting" ? (
         <Alert variant="warning" role="status">
           <Lock aria-hidden="true" />
-          <AlertDescription className="text-foreground">
-            {t("janitor.run.waiting")}
-          </AlertDescription>
+          <AlertDescription className="text-foreground">{t("janitorRun.waiting")}</AlertDescription>
         </Alert>
       ) : null}
 
       <p className="text-sm">
         {removed.length > 0
-          ? t("janitor.run.summary.removed", { parts: removed.join(", ") })
-          : t("janitor.run.summary.removedNone")}{" "}
-        {t("janitor.run.summary.kept", { count: counts.kept })}{" "}
-        {t("janitor.run.summary.failed", { count: counts.failed })}
+          ? t("janitorRun.summary.removed", { parts: removed.join(", ") })
+          : t("janitorRun.summary.removedNone")}{" "}
+        {t("janitorRun.summary.kept", { count: counts.kept })}{" "}
+        {t("janitorRun.summary.failed", { count: counts.failed })}
       </p>
       <p className="text-sm">
         <span className="text-xs font-semibold text-muted-foreground">
-          {t("janitor.run.summary.space")}
+          {t("janitorRun.summary.space")}
         </span>{" "}
         <span className="tabular-nums">
           {run.estBytes === null
-            ? t("janitor.run.summary.spaceUnknown")
+            ? t("janitorRun.summary.spaceUnknown")
             : t("janitor.counts.size", { size: formatSize(run.estBytes, t) })}
         </span>
       </p>
@@ -235,9 +379,9 @@ function RunBody({ envId, envName, run }: { envId: string; envName: string; run:
       {run.state === "partial" ? (
         <Alert variant="warning" role="status">
           <TriangleAlert aria-hidden="true" />
-          <AlertTitle>{t("janitor.run.alert.partial.title")}</AlertTitle>
+          <AlertTitle>{t("janitorRun.alert.partial.title")}</AlertTitle>
           <AlertDescription className="text-foreground">
-            {t("janitor.run.alert.partial.body", {
+            {t("janitorRun.alert.partial.body", {
               removed: removedTotal,
               total: attempted,
               failed: counts.failed,
@@ -249,7 +393,7 @@ function RunBody({ envId, envName, run }: { envId: string; envName: string; run:
       {run.state === "skipped" ? (
         <Alert role="status">
           <Info aria-hidden="true" />
-          <AlertTitle>{t("janitor.run.alert.skipped.title")}</AlertTitle>
+          <AlertTitle>{t("janitorRun.alert.skipped.title")}</AlertTitle>
           {reasonWords ? (
             <AlertDescription className="text-foreground">{reasonWords}</AlertDescription>
           ) : null}
@@ -258,38 +402,38 @@ function RunBody({ envId, envName, run }: { envId: string; envName: string; run:
       {run.state === "failed" ? (
         <Alert variant="destructive" role="alert">
           <CircleX aria-hidden="true" />
-          <AlertTitle>{t("janitor.run.alert.failed.title")}</AlertTitle>
+          <AlertTitle>{t("janitorRun.alert.failed.title")}</AlertTitle>
           <AlertDescription>
-            {t("janitor.run.alert.failed.body", { reason: reasonWords })}
+            {t("janitorRun.alert.failed.body", { reason: reasonWords })}
           </AlertDescription>
         </Alert>
       ) : null}
 
       {items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t("janitor.run.empty")}</p>
+        <p className="text-sm text-muted-foreground">{t("janitorRun.empty")}</p>
       ) : (
         <>
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full caption-bottom text-sm">
-              <caption className="sr-only">{t("janitor.run.caption")}</caption>
+              <caption className="sr-only">{t("janitorRun.caption")}</caption>
               <TableHeader>
                 <TableRow>
                   <TableHead scope="col" className="w-32">
-                    {t("janitor.run.columns.type")}
+                    {t("janitorRun.columns.type")}
                   </TableHead>
                   <TableHead scope="col" className="min-w-48">
-                    {t("janitor.run.columns.name")}
+                    {t("janitorRun.columns.name")}
                   </TableHead>
                   {showNode ? (
                     <TableHead scope="col" className="w-36">
-                      {t("janitor.run.columns.node")}
+                      {t("janitorRun.columns.node")}
                     </TableHead>
                   ) : null}
                   <TableHead scope="col" className="min-w-64">
-                    {t("janitor.run.columns.reason")}
+                    {t("janitorRun.columns.reason")}
                   </TableHead>
                   <TableHead scope="col" className="w-48">
-                    {t("janitor.run.columns.outcome")}
+                    {t("janitorRun.columns.outcome")}
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -313,7 +457,7 @@ function RunBody({ envId, envName, run }: { envId: string; envName: string; run:
                     <TableCell className={cn(CELL, "w-48")}>
                       <span className="inline-flex items-center gap-1.5">
                         <OutcomeIcon outcome={item.outcome} />
-                        {t(`janitor.run.outcome.${item.outcome}`)}
+                        {t(`janitorRun.outcome.${item.outcome}`)}
                       </span>
                     </TableCell>
                   </TableRow>
@@ -322,7 +466,7 @@ function RunBody({ envId, envName, run }: { envId: string; envName: string; run:
             </table>
           </div>
           <p className="text-xs text-muted-foreground">
-            {t("janitor.run.items", { count: items.length })}
+            {t("janitorRun.items", { count: items.length })}
           </p>
         </>
       )}
