@@ -307,3 +307,28 @@ func TestJanitorEvidenceMasksTheStacksSecrets(t *testing.T) {
 		t.Fatalf("source of a container with no stack = %+v, %v; want its log read", src, err)
 	}
 }
+
+// A tail of long lines is read whole (WR-05): the newest lines, which say why the container crashed,
+// are the ones kept, and no line is cut in the middle by the read's own limit.
+func TestJanitorEvidenceKeepsTheNewestOfALongTail(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), crashed("web-x1", 1, false, nil))
+	body := strings.Repeat("x", 8<<10)
+	lines := make([]dockertest.FakeLogLine, 0, janitor.EvidenceLines)
+	for i := range janitor.EvidenceLines {
+		lines = append(lines, dockertest.FakeLogLine{Text: "line " + strconv.Itoa(1000+i) + " " + body})
+	}
+	s.w.fake.AppendLogs("web-x1", lines...)
+	_, preview := s.previewJanitor(t)
+	src, err := api.NewJanitorEngine(s.agg, s.clusters, nil, janitor.KeepStore{}, nil).Evidence(testsupport.Context(t), s.env.ID, preview.Items[0].NodeID, "web-x1")
+	if err != nil {
+		t.Fatalf("Evidence: %v", err)
+	}
+	if len(src.Lines) != janitor.EvidenceLines {
+		t.Fatalf("read %d lines, want all %d of the tail", len(src.Lines), janitor.EvidenceLines)
+	}
+	last := src.Lines[len(src.Lines)-1]
+	if !strings.Contains(last, "line 1199 ") || !strings.HasSuffix(last, body) {
+		t.Fatalf("the last line read is %q..., want the newest line of the tail, whole", last[:min(len(last), 40)])
+	}
+}

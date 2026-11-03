@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -381,8 +382,10 @@ func heldByStack(facts []janitor.StackFact, labels map[string]string) bool {
 }
 
 // evidenceReadLimit is the most bytes read from a crashed container's log. The engine is asked for
-// the last lines only; the limit keeps a daemon that ignores that from sending a whole log.
-const evidenceReadLimit = 1 << 20
+// the last lines only, and those are read whole however long they are, so the newest lines are never
+// lost to the limit; it only keeps a daemon that ignores the tail from sending a whole log. It also
+// bounds what the read holds at once.
+const evidenceReadLimit = 16 << 20
 
 // evidenceTimeout is how long reading a crashed container's end, image and log may take.
 const evidenceTimeout = time.Minute
@@ -458,14 +461,7 @@ func (e *janitorEngine) crashLog(ctx context.Context, c *dockerx.Client, id stri
 		return nil, true
 	}
 	defer func() { _ = rc.Close() }()
-	// A log is read to its end, but never further than the tail asked for plus the line that
-	// straddles it, so a daemon that ignores the tail cannot make this read a whole log.
-	err = pumpLogs(ctx, io.LimitReader(rc, evidenceReadLimit), tty, func(l LogLine) {
-		lines = append(lines, l.T+" "+l.M)
-		if len(lines) > 2*janitor.EvidenceLines {
-			lines = lines[len(lines)-janitor.EvidenceLines:]
-		}
-	})
+	lines, err = tailLines(ctx, rc, tty, evidenceReadLimit, janitor.EvidenceLines)
 	if err != nil {
 		e.log.Warn("the janitor could not read the whole log of a crashed container", "container", id, "error", err)
 		if len(lines) == 0 {
@@ -473,6 +469,49 @@ func (e *janitorEngine) crashLog(ctx context.Context, c *dockerx.Client, id stri
 		}
 	}
 	return lines, false
+}
+
+// tailLines reads a log stream to its end, or to limit bytes, and answers its last keep lines, each
+// with the engine's timestamp in front. When the limit ends the read before the log does, the lines
+// still unfinished at that point are dropped and not kept: one of them was cut by the limit, and a
+// line cut in the middle could hold the first half of a secret that no mask would then recognise.
+func tailLines(ctx context.Context, r io.Reader, tty bool, limit int64, keep int) ([]string, error) {
+	cr := &cappedReader{r: r, left: limit}
+	var lines []string
+	err := pumpLogs(ctx, cr, tty, func(l LogLine) {
+		if cr.hit {
+			return
+		}
+		lines = append(lines, l.T+" "+l.M)
+		if len(lines) > 2*keep {
+			lines = slices.Clone(lines[len(lines)-keep:])
+		}
+	})
+	if len(lines) > keep {
+		lines = lines[len(lines)-keep:]
+	}
+	return lines, err
+}
+
+// cappedReader reads at most left bytes of r, and records in hit that a read was asked for past them.
+// io.LimitReader cannot tell its own end from the stream's.
+type cappedReader struct {
+	r    io.Reader
+	left int64
+	hit  bool
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		c.hit = true
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }
 
 // engineInstant parses a time the engine sends in RFC 3339; the zero time (year 1), an empty text and
