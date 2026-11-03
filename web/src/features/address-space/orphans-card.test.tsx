@@ -89,6 +89,7 @@ interface MountProps {
   orphans?: OrphanRow[] | undefined;
   withheld?: OrphansWithheld;
   swarm?: boolean;
+  graceHours?: number;
 }
 
 function mount(props: MountProps = {}) {
@@ -102,6 +103,7 @@ function mount(props: MountProps = {}) {
             orphans={"orphans" in p ? p.orphans : []}
             withheld={p.withheld}
             swarm={p.swarm ?? true}
+            {...(p.graceHours === undefined ? {} : { graceHours: p.graceHours })}
           />
           <Toaster />
         </TooltipProvider>
@@ -147,6 +149,57 @@ describe("groupOrphans", () => {
     expect(groups.orphaned.map((r) => r.name)).toEqual(["a", "d"]);
     expect(groups.unused.map((r) => r.name)).toEqual(["b"]);
     expect(groups.cant_tell.map((r) => r.name)).toEqual(["c"]);
+  });
+});
+
+describe("OrphansCard and the janitor", () => {
+  it("points at the janitor, which removes orphaned networks on its schedule", () => {
+    mount({ orphans: [orphan("old-net")] });
+    expect(screen.getByText("The janitor removes orphaned networks on its schedule.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open janitor" }).getAttribute("href")).toBe(
+      "/env/e1/janitor",
+    );
+  });
+
+  it("points at the janitor when there is nothing to list, and while it loads", () => {
+    mount({ orphans: [] });
+    expect(screen.getByRole("link", { name: "Open janitor" })).toBeTruthy();
+    cleanup();
+    mount({ orphans: undefined });
+    expect(screen.getByRole("link", { name: "Open janitor" })).toBeTruthy();
+  });
+
+  it("says 24 hours when the environment keeps the default grace", () => {
+    mount({ orphans: [orphan("old-net")] });
+    expect(
+      screen.getByText(/^TierPlan lists a network here when nothing has used it for 24 hours\./),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: /TierPlan waits 24 hours after that, or after/ }),
+    ).toBeTruthy();
+  });
+
+  it("words the caption, the empty state and the idle tooltip with the environment's grace", () => {
+    mount({ orphans: [orphan("old-net")], graceHours: 48 });
+    expect(
+      screen.getByText(/^TierPlan lists a network here when nothing has used it for 48 hours\./),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: /TierPlan waits 48 hours after that, or after/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/24 hours/)).toBeNull();
+    cleanup();
+    mount({ orphans: [], graceHours: 72 });
+    expect(
+      screen.getByText("TierPlan lists a network here when nothing has used it for 72 hours."),
+    ).toBeTruthy();
+  });
+
+  it("says one hour in the singular", () => {
+    mount({ orphans: [], graceHours: 1 });
+    expect(
+      screen.getByText("TierPlan lists a network here when nothing has used it for 1 hour."),
+    ).toBeTruthy();
   });
 });
 
