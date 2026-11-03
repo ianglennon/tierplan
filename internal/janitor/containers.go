@@ -24,6 +24,9 @@ const composeOneoff = "True"
 // the newest KeepN of its group or its service is gone. A container that is not a swarm task is
 // inspected when one of the standalone rules would remove or report it once it is old enough.
 func needsInspect(ci ContainerInput) bool {
+	if ci.NodeOff {
+		return false
+	}
 	if ci.Standalone {
 		call, _, _ := standaloneRule(ci)
 		return call == callGrace

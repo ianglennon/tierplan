@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"time"
 
@@ -20,7 +21,8 @@ const maxJanitorPreviewBody = 64 << 10
 
 // JanitorPreviewRequest is the optional body of the preview route.
 type JanitorPreviewRequest struct {
-	Policy *JanitorPolicyFields `json:"policy,omitempty" doc:"A candidate policy: the settings this environment would set itself if it were saved, exactly as a save would store them. A field that is null or left out follows the instance default, so the preview shows what a save of these fields would remove, whatever the environment has saved now. Omit it to preview the saved policy. Nothing is saved"`
+	Policy *JanitorPolicyFields          `json:"policy,omitempty" doc:"A candidate policy: the settings this environment would set itself if it were saved, exactly as a save would store them. A field that is null or left out follows the instance default, so the preview shows what a save of these fields would remove, whatever the environment has saved now. Omit it to preview the saved policy. Nothing is saved"`
+	Nodes  map[string]JanitorNodeRequest `json:"nodes,omitempty" maxProperties:"500" doc:"Candidate settings of swarm nodes, by swarm node ID, each exactly as saving that node would store it. A node named here is judged by these settings instead of the ones it has saved (a field that is null or left out follows the environment); a node not named keeps its saved settings. Use it to preview switching a node on or lowering its keep-N before saving. Nothing is saved"`
 }
 
 // JanitorPreviewInput is the path and optional body of the preview route: a pointer, so that a request
@@ -40,7 +42,7 @@ type JanitorSummaryBody struct {
 
 // JanitorReasonBody is why an item has its class.
 type JanitorReasonBody struct {
-	Code             string `json:"code" enum:"task_beyond_keep,task_service_gone,stack_gone,compose_project_gone,compose_oneoff,stopped_standalone,dangling_image,network_orphaned,network_unused,opt_in_off_containers,opt_in_off_networks,lone_compose_container,kept_label,kept_row,stack_excluded,stack_declared_keep,younger_than_grace,node_not_reporting,networks_withheld,stack_unknown,inspect_capped,clock_skew,task_labels_missing,services_unread" doc:"A stable word the SPA maps to its own copy"`
+	Code             string `json:"code" enum:"task_beyond_keep,task_service_gone,stack_gone,compose_project_gone,compose_oneoff,stopped_standalone,dangling_image,network_orphaned,network_unused,opt_in_off_containers,opt_in_off_networks,lone_compose_container,kept_label,kept_row,stack_excluded,stack_declared_keep,younger_than_grace,node_not_reporting,networks_withheld,stack_unknown,inspect_capped,clock_skew,task_labels_missing,services_unread,node_disabled" doc:"A stable word the SPA maps to its own copy"`
 	Service          string `json:"service,omitempty" doc:"The swarm service of a task container"`
 	Slot             string `json:"slot,omitempty" doc:"The replica slot of a replicated service's task container. Empty for a global service"`
 	Project          string `json:"project,omitempty" doc:"The compose project the object is labelled with"`
@@ -95,7 +97,7 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 			"A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. " +
 			"Containers that are not swarm tasks are judged too: the leftovers of a TierPlan stack that no longer exists (stack_gone) and the old one-offs of docker compose run beyond the newest the policy keeps (compose_oneoff) are removable once stopped for the grace period, " +
 			"while a lone stopped container of a compose project TierPlan does not manage (lone_compose_container) and a stopped docker run container (opt_in_off_containers) are only reported until the environment opts in to removing stopped containers. " +
-			"A container of a compose project that still has another container is never listed. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. " +
+			"A container of a compose project that still has another container is never listed. On a swarm, a node whose janitor is switched off (its own setting) has its containers and images listed under notRemoved as protected, with the reason node_disabled, and a node's own keep-N replaces the environment's for the containers on it. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. " +
 			"While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, " +
 			"one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes " +
 			"and none of their objects is listed. The server decides what is removable; the client only shows it. " +
@@ -110,6 +112,20 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			var candidate *janitor.Overrides
+			var candidateNodes map[string]janitor.NodeOverrides
+			if in.Body != nil && len(in.Body.Nodes) > 0 {
+				candidateNodes = make(map[string]janitor.NodeOverrides, len(in.Body.Nodes))
+				for id, n := range in.Body.Nodes {
+					o := n.overrides()
+					if err := janitor.ValidateNode(o); err != nil {
+						if prob := janitorPolicyValueProblem(err); prob != nil {
+							return nil, prob
+						}
+						return nil, janitorPolicyFailure(d, env.ID, "validate a candidate node", err)
+					}
+					candidateNodes[id] = o
+				}
+			}
 			if in.Body != nil && in.Body.Policy != nil {
 				o := in.Body.Policy.overrides()
 				if err := janitor.Validate(o); err != nil {
@@ -120,7 +136,7 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 				}
 				candidate = &o
 			}
-			body, err := previewJanitor(ctx, d, eng, d.networks(), env.ID, candidate)
+			body, err := previewJanitor(ctx, d, eng, d.networks(), env.ID, candidate, candidateNodes)
 			if err != nil {
 				return nil, err
 			}
@@ -132,8 +148,9 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 // networks and builds the plan. The policy is the one the runs follow, read through Runner.Policy, so
 // the preview and a run judge alike, unless candidate is given: then it is the policy that saving
 // candidate would leave, the instance defaults with those overrides. nets may be nil, and then no network
-// is listed. A network check that fails withholds every network, as a node that does not answer does.
-func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets janitor.Networks, envID string, candidate *janitor.Overrides) (JanitorPreviewBody, error) {
+// is listed. A network check that fails withholds every network, as a node that does not answer does. The
+// nodes' own settings are the saved ones, with those of candidateNodes (by swarm node ID) laid over them.
+func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets janitor.Networks, envID string, candidate *janitor.Overrides, candidateNodes map[string]janitor.NodeOverrides) (JanitorPreviewBody, error) {
 	snap, err := eng.Snapshot(ctx, envID)
 	if err != nil {
 		return JanitorPreviewBody{}, snapshotProblem(d.log(), envID, err)
@@ -142,8 +159,12 @@ func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets
 	if err != nil {
 		return JanitorPreviewBody{}, err
 	}
-	ends := janitor.InspectCandidates(ctx, eng, envID, janitor.Candidates(snap, pol))
-	in := janitor.Input{Snapshot: snap, Ends: ends}
+	nodes, err := previewNodes(ctx, d, envID, candidateNodes)
+	if err != nil {
+		return JanitorPreviewBody{}, err
+	}
+	ends := janitor.InspectCandidates(ctx, eng, envID, janitor.CandidatesFor(snap, pol, nodes))
+	in := janitor.Input{Snapshot: snap, Ends: ends, Nodes: nodes}
 	if nets != nil {
 		rep, err := nets.Report(ctx, envID)
 		if err != nil {
@@ -175,6 +196,29 @@ func previewPolicy(ctx context.Context, d JanitorDeps, envID string, candidate *
 		return d.Runner.Policy(ctx, envID)
 	}
 	return fallbackPolicy(), nil
+}
+
+// previewNodes are the settings of the swarm nodes a preview judges by: the ones the runs follow, read through
+// Runner.Nodes, with each node of candidate replaced by its candidate settings.
+func previewNodes(ctx context.Context, d JanitorDeps, envID string, candidate map[string]janitor.NodeOverrides) (map[string]janitor.NodeOverrides, error) {
+	var saved map[string]janitor.NodeOverrides
+	var err error
+	switch {
+	case d.Runner != nil && d.Runner.Nodes != nil:
+		saved, err = d.Runner.Nodes(ctx, envID)
+	case d.Policies.St != nil:
+		saved, err = d.Policies.Nodes(ctx, envID)
+	}
+	if err != nil {
+		return nil, janitorPolicyFailure(d, envID, "read the policy of the nodes", err)
+	}
+	if len(candidate) == 0 {
+		return saved, nil
+	}
+	merged := make(map[string]janitor.NodeOverrides, len(saved)+len(candidate))
+	maps.Copy(merged, saved)
+	maps.Copy(merged, candidate)
+	return merged, nil
 }
 
 // previewBody is the wire form of a plan.

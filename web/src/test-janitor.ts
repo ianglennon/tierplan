@@ -150,7 +150,7 @@ export function janitorStatus(over: Partial<JanitorStatus> = {}): JanitorStatus 
 }
 
 // An environment's janitor policy as the server answers it: every field follows the instance default
-// (on, daily at 03:00, keep 2, 24 hours, both opt-ins off) until a test overrides it. Pass `defaults`
+// (on, daily at 03:00, keep 2, 24 hours, both opt-ins off, no swarm nodes) until a test overrides it. Pass `defaults`
 // to change what the defaults are, and a field to give it an own value.
 export function janitorPolicy(over: Partial<JanitorPolicy> = {}): JanitorPolicy {
   return {
@@ -171,6 +171,7 @@ export function janitorPolicy(over: Partial<JanitorPolicy> = {}): JanitorPolicy 
       removeUnusedNetworks: false,
       removeStoppedContainers: false,
     },
+    nodes: [],
     ...over,
   };
 }

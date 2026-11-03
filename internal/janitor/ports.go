@@ -97,6 +97,11 @@ type Snapshot struct {
 	// stack or project still exists, so while StacksRead is false none of them is removable.
 	StackNames, StackIDs map[string]bool
 	StacksRead           bool
+	// SwarmNodeOf maps the ID of a node of this snapshot (the one Container.NodeID and Image.NodeID carry)
+	// to its swarm node ID, which is what a node's own settings are stored under: an agent that is
+	// enrolled again is a new node ID with the same swarm node ID. A node with no entry is looked up by
+	// its own ID. Nil for an environment that is not a swarm.
+	SwarmNodeOf map[string]string
 	// NodeTimes is the time each node's engine reported when it was read, by node ID. A node whose
 	// engine did not say what time it is has no entry (or the zero time).
 	NodeTimes map[string]time.Time

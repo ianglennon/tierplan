@@ -421,7 +421,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Jobs: f.jobHub,
 			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, Policies: janitorPolicies, AddressSpaces: addressSpaces, StackFacts: janitorFacts,
 			Runner: &janitor.Runner{
-				Engine: api.NewJanitorEngine(f.agg, addrClusters, janitorFacts, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log, Retention: janitorPolicies.Retention,
+				Engine: api.NewJanitorEngine(f.agg, addrClusters, janitorFacts, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log, Retention: janitorPolicies.Retention, Nodes: janitorPolicies.Nodes,
 				Policy: func(ctx context.Context, envID string) (janitor.Policy, error) {
 					if f.janitorPolicy != nil {
 						return f.janitorPolicy(), nil

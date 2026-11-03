@@ -142,6 +142,20 @@ func EffectiveForNode(env Policy, n NodeOverrides) Policy {
 	return p
 }
 
+// ValidateNode checks the values a node would save: keep-N in MinKeepN..MaxKeepN (ErrOutOfRange). A nil
+// field is not checked: it follows the environment.
+func ValidateNode(o NodeOverrides) error {
+	if o.KeepN != nil && (*o.KeepN < MinKeepN || *o.KeepN > MaxKeepN) {
+		return fmt.Errorf("%w: keep-N is %d, it must be %d to %d", ErrOutOfRange, *o.KeepN, MinKeepN, MaxKeepN)
+	}
+	return nil
+}
+
+// Disabled reports whether the node switched its own janitor off. A node that sets nothing, or sets
+// it on, is not disabled: whether the environment's schedule runs is the environment's business, and a
+// Clean now cleans every node that has not been switched off.
+func (n NodeOverrides) Disabled() bool { return n.Enabled != nil && !*n.Enabled }
+
 // Validate checks the values an environment would save: keep-N in MinKeepN..MaxKeepN and grace in
 // MinGraceHours..MaxGraceHours (ErrOutOfRange), the schedule through ParseSchedule, which includes
 // the 15-minute floor (ErrInvalidSchedule, ErrScheduleTooFrequent), and a preset that names a

@@ -87,6 +87,7 @@
       "clock_skew": "Can't tell yet: the node's clock is out of step with TierPlan's.",
       "task_labels_missing": "Can't tell yet: it has no swarm task labels, so TierPlan can't place it.",
       "services_unread": "Can't tell yet: no manager answered, so TierPlan can't tell which services still exist.",
+      "node_disabled": "Protected: the janitor is turned off for {{node}}.",
       "unknown": "TierPlan left it alone."
     },
     "preview": {

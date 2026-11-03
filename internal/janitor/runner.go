@@ -51,6 +51,11 @@ type Runner struct {
 	Clock stackops.Clock
 	// Policy gives the policy of an environment. Nil means DefaultPolicy.
 	Policy func(ctx context.Context, envID string) (Policy, error)
+	// Nodes gives the overrides of the swarm nodes of an environment, by swarm node ID: a node whose janitor is
+	// switched off is left alone and a node's keep-N replaces the environment's for the containers on it. Nil
+	// means every node follows the environment. Overrides it cannot read stop the run, as a policy it cannot read
+	// does: guessing that no node is switched off could remove from a node that is.
+	Nodes func(ctx context.Context, envID string) (map[string]NodeOverrides, error)
 	// Retention gives how long the run history is kept, read at the end of every run so a saved change reaches
 	// the next one. Nil means DefaultRetention. A retention it cannot read prunes nothing.
 	Retention func(ctx context.Context) (Retention, error)
@@ -552,6 +557,14 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 		pol = p
 	}
 	run.pol = pol
+	var nodes map[string]NodeOverrides
+	if r.Nodes != nil {
+		n, err := r.Nodes(ctx, req.EnvID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read the policy of the nodes: %w", err)
+		}
+		nodes = n
+	}
 	snap, err := r.Engine.Snapshot(ctx, req.EnvID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read the environment: %w", err)
@@ -570,9 +583,9 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 		run.noNode = true
 		return nil, nil, nil
 	}
-	ends := InspectCandidates(ctx, r.Engine, req.EnvID, Candidates(snap, pol))
+	ends := InspectCandidates(ctx, r.Engine, req.EnvID, CandidatesFor(snap, pol, nodes))
 	run.ends = ends
-	plan := Build(Input{Snapshot: snap, Ends: ends}, pol, r.clock().Now().UTC())
+	plan := Build(Input{Snapshot: snap, Ends: ends, Nodes: nodes}, pol, r.clock().Now().UTC())
 	if req.All {
 		return plan.Items, nil, nil
 	}

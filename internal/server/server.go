@@ -876,7 +876,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	janitorDeps.Policies = janitorPolicies
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
-		Policy: janitorPolicies.Effective, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,
+		Policy: janitorPolicies.Effective, Nodes: janitorPolicies.Nodes, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}
 	// The scheduler cleans each enabled environment at its slot, as the system, through the Runner Clean now uses. It

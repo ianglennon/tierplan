@@ -100,8 +100,28 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 	if swarm {
 		snap.ServicesRead = false
 		e.readManager(ctx, envID, &snap)
+		if err := e.mapSwarmNodes(ctx, envID, &snap); err != nil {
+			return janitor.Snapshot{}, err
+		}
 	}
 	return snap, nil
+}
+
+// mapSwarmNodes fills Snapshot.SwarmNodeOf: the swarm node ID of each node the snapshot was read from, which is
+// what a node's own janitor settings are stored under. The IDs of the snapshot are the agents' (or the local
+// socket's), so a node whose agent is enrolled again keeps its settings. A node that no agent reports a swarm
+// node ID for has no entry and follows its environment. A mapping that cannot be read is an error and not an
+// empty map: without it a node that was switched off could not be told from one that was not.
+func (e *janitorEngine) mapSwarmNodes(ctx context.Context, envID string, snap *janitor.Snapshot) error {
+	targets, err := e.agg.SwarmNodeTargets(ctx, envID)
+	if err != nil {
+		return fmt.Errorf("map the swarm's nodes to their agents: %w", err)
+	}
+	snap.SwarmNodeOf = make(map[string]string, len(targets))
+	for swarmID, ref := range targets {
+		snap.SwarmNodeOf[ref.ID] = swarmID
+	}
+	return nil
 }
 
 // readStacks fills the names and IDs of the TierPlan stacks of the environment. When they cannot be

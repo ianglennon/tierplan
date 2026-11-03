@@ -7918,6 +7918,62 @@
         ],
         "type": "object"
       },
+      "JanitorNodeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "$ref": "#/components/schemas/JanitorBoolField",
+            "description": "Whether the janitor cleans this node. Off leaves everything on the node alone, in scheduled runs and in Clean now. Not overridden means it follows the environment"
+          },
+          "keepN": {
+            "$ref": "#/components/schemas/JanitorIntField",
+            "description": "How many of the newest exited task containers of a service slot (of a global service on this node) are kept when they are on this node. Not overridden means it follows the environment"
+          },
+          "name": {
+            "description": "The node's host name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The swarm node ID, which the node's settings are stored under and which stays the same when its agent is enrolled again",
+            "type": "string"
+          },
+          "reporting": {
+            "description": "True when an agent on the node is connected now. A node that is not reporting is never cleaned by a run, whatever its settings say",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "nodeId",
+          "name",
+          "reporting",
+          "enabled",
+          "keepN"
+        ],
+        "type": "object"
+      },
+      "JanitorNodeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether the janitor cleans this node. False leaves everything on it alone. Null follows the environment",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "keepN": {
+            "description": "How many of the newest exited task containers of a service slot are kept when they are on this node, 0 to 20. Null follows the environment",
+            "format": "int64",
+            "maximum": 20,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "JanitorPolicyBody": {
         "additionalProperties": false,
         "properties": {
@@ -7933,6 +7989,16 @@
           },
           "keepN": {
             "$ref": "#/components/schemas/JanitorIntField"
+          },
+          "nodes": {
+            "description": "The nodes of a swarm, by name, each with the two settings a node can set itself (whether the janitor cleans it and how many exited task containers it keeps) and whether it sets them. Empty for a standalone host, and while the swarm's nodes cannot be read",
+            "items": {
+              "$ref": "#/components/schemas/JanitorNodeBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "removeStoppedContainers": {
             "$ref": "#/components/schemas/JanitorBoolField"
@@ -7963,7 +8029,8 @@
           "graceHours",
           "removeUnusedNetworks",
           "removeStoppedContainers",
-          "defaults"
+          "defaults",
+          "nodes"
         ],
         "type": "object"
       },
@@ -8235,6 +8302,14 @@
       "JanitorPreviewRequest": {
         "additionalProperties": false,
         "properties": {
+          "nodes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JanitorNodeRequest"
+            },
+            "description": "Candidate settings of swarm nodes, by swarm node ID, each exactly as saving that node would store it. A node named here is judged by these settings instead of the ones it has saved (a field that is null or left out follows the environment); a node not named keeps its saved settings. Use it to preview switching a node on or lowering its keep-N before saving. Nothing is saved",
+            "maxProperties": 500,
+            "type": "object"
+          },
           "policy": {
             "$ref": "#/components/schemas/JanitorPolicyFields",
             "description": "A candidate policy: the settings this environment would set itself if it were saved, exactly as a save would store them. A field that is null or left out follows the instance default, so the preview shows what a save of these fields would remove, whatever the environment has saved now. Omit it to preview the saved policy. Nothing is saved"
@@ -8277,7 +8352,8 @@
               "inspect_capped",
               "clock_skew",
               "task_labels_missing",
-              "services_unread"
+              "services_unread",
+              "node_disabled"
             ],
             "type": "string"
           },
@@ -27391,6 +27467,140 @@
         ]
       }
     },
+    "/api/env/{envId}/janitor/nodes/{nodeId}": {
+      "delete": {
+        "description": "Removes what this swarm node set itself, so it follows the environment again. A node that already followed it answers 200 and nothing is written or audited. 409 not_swarm for a standalone host, 404 node_not_found when the swarm has no such node and none of its settings is stored. Needs janitor.policy on the environment. A reset is audited as janitor.node_policy_changed, naming the node and the fields it had set.",
+        "operationId": "resetJanitorNodePolicy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the nodeId of a node of the policy answer",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the nodeId of a node of the policy answer",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorNodeBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Make a swarm node follow its environment's janitor settings",
+        "tags": [
+          "environments"
+        ]
+      },
+      "put": {
+        "description": "Replaces the settings this swarm node sets itself: enabled (false leaves everything on the node alone, in scheduled runs and in Clean now) and keepN (0 to 20, how many of the newest exited task containers of a service slot are kept when they are on this node). Each is a value, or null to follow the environment again. Everything else follows the environment. The node is named by its swarm node ID, so its settings stay with it when its agent is enrolled again. 409 not_swarm for a standalone host, 404 node_not_found when the swarm has no such node. A save that changes nothing answers 200 and writes nothing. Use the janitor preview with candidate nodes to see what a change would remove before it is saved. Needs janitor.policy (an Operator with that extra, or an Env Admin) on the environment. A change is audited as janitor.node_policy_changed, naming the node and the fields that changed.",
+        "operationId": "setJanitorNodePolicy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm node ID: the nodeId of a node of the policy answer",
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "description": "The swarm node ID: the nodeId of a node of the policy answer",
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JanitorNodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorNodeBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change one swarm node's janitor settings",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/janitor/policy": {
       "get": {
         "description": "Answers, for each setting (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), the value that applies and whether this environment set it or follows the instance default, the instance defaults, the version a save must send back and the server's time zone the schedule is read in. Needs environments.read on the environment.",
@@ -27503,7 +27713,7 @@
     },
     "/api/env/{envId}/janitor/preview": {
       "post": {
-        "description": "Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. Containers that are not swarm tasks are judged too: the leftovers of a TierPlan stack that no longer exists (stack_gone) and the old one-offs of docker compose run beyond the newest the policy keeps (compose_oneoff) are removable once stopped for the grace period, while a lone stopped container of a compose project TierPlan does not manage (lone_compose_container) and a stopped docker run container (opt_in_off_containers) are only reported until the environment opts in to removing stopped containers. A container of a compose project that still has another container is never listed. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. The body is optional. With a candidate policy in it the preview judges by that policy instead of the saved one, so the page can show what a change would remove before it is saved or before the janitor is turned on: the fields are those of the policy save, checked the same way (422 for a value it would refuse), and nothing is saved. Needs environments.read on the environment.",
+        "description": "Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. Containers that are not swarm tasks are judged too: the leftovers of a TierPlan stack that no longer exists (stack_gone) and the old one-offs of docker compose run beyond the newest the policy keeps (compose_oneoff) are removable once stopped for the grace period, while a lone stopped container of a compose project TierPlan does not manage (lone_compose_container) and a stopped docker run container (opt_in_off_containers) are only reported until the environment opts in to removing stopped containers. A container of a compose project that still has another container is never listed. On a swarm, a node whose janitor is switched off (its own setting) has its containers and images listed under notRemoved as protected, with the reason node_disabled, and a node's own keep-N replaces the environment's for the containers on it. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. The body is optional. With a candidate policy in it the preview judges by that policy instead of the saved one, so the page can show what a change would remove before it is saved or before the janitor is turned on: the fields are those of the policy save, checked the same way (422 for a value it would refuse), and nothing is saved. Needs environments.read on the environment.",
         "operationId": "previewJanitor",
         "parameters": [
           {

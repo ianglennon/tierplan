@@ -70,6 +70,24 @@ func (q *Queries) CountJanitorRunsToPrune(ctx context.Context, arg CountJanitorR
 	return i, err
 }
 
+const deleteJanitorNodePolicy = `-- name: DeleteJanitorNodePolicy :execrows
+DELETE FROM janitor_node_policy WHERE env_id = ? AND node_id = ?
+`
+
+type DeleteJanitorNodePolicyParams struct {
+	EnvID  string
+	NodeID string
+}
+
+// Resets one swarm node to follow its environment; zero rows means it already did.
+func (q *Queries) DeleteJanitorNodePolicy(ctx context.Context, arg DeleteJanitorNodePolicyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteJanitorNodePolicy, arg.EnvID, arg.NodeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const finishJanitorRun = `-- name: FinishJanitorRun :execrows
 UPDATE janitor_runs
 SET state = ?, reason = ?, finished_at = ?,
@@ -213,6 +231,31 @@ func (q *Queries) GetJanitorEvidence(ctx context.Context, arg GetJanitorEvidence
 		&i.LogText,
 		&i.LogLines,
 		&i.LogState,
+	)
+	return i, err
+}
+
+const getJanitorNodePolicy = `-- name: GetJanitorNodePolicy :one
+SELECT env_id, node_id, enabled, keep_n, updated_by, updated_at
+FROM janitor_node_policy WHERE env_id = ? AND node_id = ?
+`
+
+type GetJanitorNodePolicyParams struct {
+	EnvID  string
+	NodeID string
+}
+
+// One swarm node's overrides; no row means the node follows its environment.
+func (q *Queries) GetJanitorNodePolicy(ctx context.Context, arg GetJanitorNodePolicyParams) (JanitorNodePolicy, error) {
+	row := q.db.QueryRowContext(ctx, getJanitorNodePolicy, arg.EnvID, arg.NodeID)
+	var i JanitorNodePolicy
+	err := row.Scan(
+		&i.EnvID,
+		&i.NodeID,
+		&i.Enabled,
+		&i.KeepN,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -794,4 +837,34 @@ func (q *Queries) UpdateJanitorEnvPolicy(ctx context.Context, arg UpdateJanitorE
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const upsertJanitorNodePolicy = `-- name: UpsertJanitorNodePolicy :exec
+INSERT INTO janitor_node_policy (env_id, node_id, enabled, keep_n, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (env_id, node_id) DO UPDATE
+SET enabled = excluded.enabled, keep_n = excluded.keep_n,
+    updated_by = excluded.updated_by, updated_at = excluded.updated_at
+`
+
+type UpsertJanitorNodePolicyParams struct {
+	EnvID     string
+	NodeID    string
+	Enabled   sql.NullInt64
+	KeepN     sql.NullInt64
+	UpdatedBy string
+	UpdatedAt int64
+}
+
+// Saves one swarm node's overrides (NULL for a field it follows), replacing any it had.
+func (q *Queries) UpsertJanitorNodePolicy(ctx context.Context, arg UpsertJanitorNodePolicyParams) error {
+	_, err := q.db.ExecContext(ctx, upsertJanitorNodePolicy,
+		arg.EnvID,
+		arg.NodeID,
+		arg.Enabled,
+		arg.KeepN,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+	)
+	return err
 }

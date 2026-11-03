@@ -143,6 +143,23 @@ WHERE env_id = ? AND version = ?;
 SELECT env_id, node_id, enabled, keep_n, updated_by, updated_at
 FROM janitor_node_policy WHERE env_id = ? ORDER BY node_id;
 
+-- name: GetJanitorNodePolicy :one
+-- One swarm node's overrides; no row means the node follows its environment.
+SELECT env_id, node_id, enabled, keep_n, updated_by, updated_at
+FROM janitor_node_policy WHERE env_id = ? AND node_id = ?;
+
+-- name: UpsertJanitorNodePolicy :exec
+-- Saves one swarm node's overrides (NULL for a field it follows), replacing any it had.
+INSERT INTO janitor_node_policy (env_id, node_id, enabled, keep_n, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (env_id, node_id) DO UPDATE
+SET enabled = excluded.enabled, keep_n = excluded.keep_n,
+    updated_by = excluded.updated_by, updated_at = excluded.updated_at;
+
+-- name: DeleteJanitorNodePolicy :execrows
+-- Resets one swarm node to follow its environment; zero rows means it already did.
+DELETE FROM janitor_node_policy WHERE env_id = ? AND node_id = ?;
+
 -- name: UpdateJanitorDefaults :execrows
 -- Saves the instance defaults and the run-history retention only when the version is the one the caller
 -- read; zero rows means it was not. The row is seeded by the migration, so there is always one.

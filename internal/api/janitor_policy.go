@@ -4,10 +4,12 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -72,6 +75,51 @@ type JanitorPolicyBody struct {
 	RemoveUnusedNetworks    JanitorBoolField     `json:"removeUnusedNetworks"`
 	RemoveStoppedContainers JanitorBoolField     `json:"removeStoppedContainers"`
 	Defaults                JanitorPolicyValues  `json:"defaults" doc:"The instance defaults every field that is not overridden follows"`
+	Nodes                   []JanitorNodeBody    `json:"nodes" doc:"The nodes of a swarm, by name, each with the two settings a node can set itself (whether the janitor cleans it and how many exited task containers it keeps) and whether it sets them. Empty for a standalone host, and while the swarm's nodes cannot be read"`
+}
+
+// JanitorNodeBody is one swarm node with the two settings a node can set itself.
+type JanitorNodeBody struct {
+	NodeID    string           `json:"nodeId" doc:"The swarm node ID, which the node's settings are stored under and which stays the same when its agent is enrolled again"`
+	Name      string           `json:"name" doc:"The node's host name"`
+	Reporting bool             `json:"reporting" doc:"True when an agent on the node is connected now. A node that is not reporting is never cleaned by a run, whatever its settings say"`
+	Enabled   JanitorBoolField `json:"enabled" doc:"Whether the janitor cleans this node. Off leaves everything on the node alone, in scheduled runs and in Clean now. Not overridden means it follows the environment"`
+	KeepN     JanitorIntField  `json:"keepN" doc:"How many of the newest exited task containers of a service slot (of a global service on this node) are kept when they are on this node. Not overridden means it follows the environment"`
+}
+
+// JanitorNodeRequest is the body of PUT /api/env/{envId}/janitor/nodes/{nodeId}: the node's own value for each
+// of the two settings, or null to follow the environment.
+type JanitorNodeRequest struct {
+	Enabled *bool `json:"enabled,omitempty" nullable:"true" doc:"Whether the janitor cleans this node. False leaves everything on it alone. Null follows the environment"`
+	KeepN   *int  `json:"keepN,omitempty" nullable:"true" minimum:"0" maximum:"20" doc:"How many of the newest exited task containers of a service slot are kept when they are on this node, 0 to 20. Null follows the environment"`
+}
+
+// overrides is the request as the policy store takes it.
+func (r JanitorNodeRequest) overrides() janitor.NodeOverrides {
+	return janitor.NodeOverrides{Enabled: r.Enabled, KeepN: r.KeepN}
+}
+
+// JanitorNodeInput is the path and body of the node save.
+type JanitorNodeInput struct {
+	EnvironmentPathInput
+	NodeID string `path:"nodeId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The swarm node ID: the nodeId of a node of the policy answer"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      JanitorNodeRequest
+}
+
+// JanitorNodeResetInput is the path of the node reset.
+type JanitorNodeResetInput struct {
+	EnvironmentPathInput
+	NodeID string `path:"nodeId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The swarm node ID: the nodeId of a node of the policy answer"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// JanitorNodeOutput wraps JanitorNodeBody for huma.
+type JanitorNodeOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         JanitorNodeBody
 }
 
 // JanitorPolicyOutput wraps JanitorPolicyBody for huma.
@@ -159,6 +207,50 @@ func registerJanitorPolicy(r *httpx.Router, d JanitorDeps) {
 		})
 }
 
+// registerJanitorNodes registers the routes that change one swarm node's settings.
+func registerJanitorNodes(r *httpx.Router, d JanitorDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "setJanitorNodePolicy", Method: http.MethodPut, Path: "/api/env/{envId}/janitor/nodes/{nodeId}",
+		Summary: "Change one swarm node's janitor settings",
+		Description: "Replaces the settings this swarm node sets itself: enabled (false leaves everything on the node alone, in scheduled runs and in Clean now) and keepN (0 to 20, how many of the newest exited task containers of a service slot are kept when they are on this node). " +
+			"Each is a value, or null to follow the environment again. Everything else follows the environment. The node is named by its swarm node ID, so its settings stay with it when its agent is enrolled again. " +
+			"409 not_swarm for a standalone host, 404 node_not_found when the swarm has no such node. A save that changes nothing answers 200 and writes nothing. " +
+			"Use the janitor preview with candidate nodes to see what a change would remove before it is saved. " +
+			"Needs janitor.policy (an Operator with that extra, or an Env Admin) on the environment. A change is audited as janitor.node_policy_changed, naming the node and the fields that changed.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermJanitorPolicy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *JanitorNodeInput) (*JanitorNodeOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil || d.Store == nil || d.Audit == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := changeJanitorNode(ctx, d, p, env.ID, in.NodeID, in.UserAgent, &in.Body)
+			if err != nil {
+				return nil, err
+			}
+			return &JanitorNodeOutput{CacheControl: "no-store", Body: body}, nil
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "resetJanitorNodePolicy", Method: http.MethodDelete, Path: "/api/env/{envId}/janitor/nodes/{nodeId}",
+		Summary: "Make a swarm node follow its environment's janitor settings",
+		Description: "Removes what this swarm node set itself, so it follows the environment again. A node that already followed it answers 200 and nothing is written or audited. " +
+			"409 not_swarm for a standalone host, 404 node_not_found when the swarm has no such node and none of its settings is stored. " +
+			"Needs janitor.policy on the environment. A reset is audited as janitor.node_policy_changed, naming the node and the fields it had set.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermJanitorPolicy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *JanitorNodeResetInput) (*JanitorNodeOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil || d.Store == nil || d.Audit == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := changeJanitorNode(ctx, d, p, env.ID, in.NodeID, in.UserAgent, nil)
+			if err != nil {
+				return nil, err
+			}
+			return &JanitorNodeOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
 // presetName is the preset the page shows, custom for any word it does not know.
 func presetName(preset string) string {
 	switch preset {
@@ -196,7 +288,172 @@ func janitorPolicyBody(ctx context.Context, d JanitorDeps, envID string) (Janito
 		RemoveUnusedNetworks:    JanitorBoolField{Value: eff.RemoveUnusedNetworks, Overridden: env.RemoveUnusedNetworks != nil},
 		RemoveStoppedContainers: JanitorBoolField{Value: eff.RemoveStoppedContainers, Overridden: env.RemoveStoppedContainers != nil},
 		Defaults:                policyValues(def),
+		Nodes:                   janitorNodeBodies(ctx, d, envID, janitor.Effective(def, env)),
 	}, nil
+}
+
+// swarmNode is a node of the swarm as the policy routes know it.
+type swarmNode struct {
+	ID, Name  string
+	Reporting bool
+}
+
+// swarmNodes lists the nodes of the swarm of an environment: the ones a manager lists, and the ones an agent
+// reaches that it does not (a manager that cannot be read leaves only the second). swarm is false for a
+// standalone host or when that cannot be told. Reporting is true for a node an agent on it is connected to now.
+func swarmNodes(ctx context.Context, d JanitorDeps, envID string) (nodes []swarmNode, swarm bool, err error) {
+	if d.Clusters == nil {
+		return nil, false, nil
+	}
+	swarm, err = d.Clusters.IsSwarm(ctx, envID)
+	if err != nil || !swarm {
+		return nil, false, err
+	}
+	var targets map[string]envs.NodeRef
+	if d.Aggregator != nil {
+		if targets, err = d.Aggregator.SwarmNodeTargets(ctx, envID); err != nil {
+			return nil, true, err
+		}
+	}
+	byID := map[string]swarmNode{}
+	// A state that was never read, or that cannot be read now, still serves the nodes the agents reach.
+	if st, serr := d.Clusters.State(ctx, envID); serr == nil || !st.FetchedAt.IsZero() {
+		for _, n := range st.Read.Nodes {
+			byID[n.ID] = swarmNode{ID: n.ID, Name: cmp.Or(n.Hostname, n.ID)}
+		}
+	}
+	for id, ref := range targets {
+		n := byID[id]
+		n.ID, n.Reporting = id, true
+		n.Name = cmp.Or(n.Name, ref.Name, id)
+		byID[id] = n
+	}
+	nodes = make([]swarmNode, 0, len(byID))
+	for _, n := range byID {
+		nodes = append(nodes, n)
+	}
+	slices.SortFunc(nodes, func(a, b swarmNode) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID)) })
+	return nodes, true, nil
+}
+
+// janitorNodeBody is one node with its settings: its own where it sets them, the environment's where it follows.
+func janitorNodeBody(n swarmNode, o janitor.NodeOverrides, env janitor.Policy) JanitorNodeBody {
+	eff := janitor.EffectiveForNode(env, o)
+	return JanitorNodeBody{
+		NodeID: n.ID, Name: n.Name, Reporting: n.Reporting,
+		Enabled: JanitorBoolField{Value: eff.Enabled, Overridden: o.Enabled != nil},
+		KeepN:   JanitorIntField{Value: eff.KeepN, Overridden: o.KeepN != nil},
+	}
+}
+
+// janitorNodeBodies lists the swarm's nodes with their settings, never nil. A read that fails is logged and
+// answers no nodes: the environment's own policy is still worth showing.
+func janitorNodeBodies(ctx context.Context, d JanitorDeps, envID string, env janitor.Policy) []JanitorNodeBody {
+	out := []JanitorNodeBody{}
+	nodes, swarm, err := swarmNodes(ctx, d, envID)
+	if err != nil {
+		d.log().Warn("the janitor could not list the nodes of a swarm", "environment", envID, "error", err)
+		return out
+	}
+	if !swarm {
+		return out
+	}
+	overrides, err := d.Policies.Nodes(ctx, envID)
+	if err != nil {
+		d.log().Warn("the janitor could not read the policy of the nodes of a swarm", "environment", envID, "error", err)
+		return out
+	}
+	for _, n := range nodes {
+		out = append(out, janitorNodeBody(n, overrides[n.ID], env))
+	}
+	return out
+}
+
+// changedNodeFields names, in a fixed order, the node settings that differ between two sets of overrides.
+func changedNodeFields(old, now janitor.NodeOverrides) []string {
+	var out []string
+	if !samePtr(old.Enabled, now.Enabled) {
+		out = append(out, "enabled")
+	}
+	if !samePtr(old.KeepN, now.KeepN) {
+		out = append(out, "keepN")
+	}
+	return out
+}
+
+// changeJanitorNode saves one node's settings, or resets the node when set is nil. The environment must be a
+// swarm that has the node (a reset may also clear settings stored for a node that has left the swarm). The old
+// settings are read, the new ones written and the audit row recorded in one transaction; a change that
+// changes nothing writes nothing.
+func changeJanitorNode(ctx context.Context, d JanitorDeps, p *rbac.Principal, envID, nodeID, userAgent string, set *JanitorNodeRequest) (JanitorNodeBody, error) {
+	nodes, swarm, err := swarmNodes(ctx, d, envID)
+	switch {
+	case err != nil:
+		return JanitorNodeBody{}, snapshotProblem(d.log(), envID, err)
+	case !swarm:
+		return JanitorNodeBody{}, httpx.Problem(http.StatusConflict, problemNotSwarm, "This environment is not a swarm, so it has no nodes to set the janitor for.")
+	}
+	var want janitor.NodeOverrides
+	if set != nil {
+		want = set.overrides()
+		if err := janitor.ValidateNode(want); err != nil {
+			if prob := janitorPolicyValueProblem(err); prob != nil {
+				return JanitorNodeBody{}, prob
+			}
+			return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "validate the node", err)
+		}
+	}
+	tx, err := d.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "begin", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := d.Store.Q.WithTx(tx)
+	old, err := d.Policies.NodeOn(ctx, q, envID, nodeID)
+	if err != nil {
+		return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "read the node", err)
+	}
+	i := slices.IndexFunc(nodes, func(n swarmNode) bool { return n.ID == nodeID })
+	node := swarmNode{ID: nodeID, Name: nodeID}
+	switch {
+	case i >= 0:
+		node = nodes[i]
+	case set != nil || (old.Enabled == nil && old.KeepN == nil):
+		return JanitorNodeBody{}, httpx.Problem(http.StatusNotFound, problemNodeNotFound, "This swarm has no node with that ID.")
+	}
+	var changed bool
+	if set != nil {
+		changed, err = d.Policies.SetNode(ctx, q, envID, nodeID, want, p.ID, d.now())
+	} else {
+		changed, err = d.Policies.ResetNode(ctx, q, envID, nodeID)
+	}
+	if err != nil {
+		if prob := janitorPolicyValueProblem(err); prob != nil {
+			return JanitorNodeBody{}, prob
+		}
+		return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "save the node", err)
+	}
+	if changed {
+		if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionJanitorNodePolicyChanged, TargetType: auditTargetEnvironment, TargetID: envID, EnvID: envID,
+			Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+			Details: map[string]string{"node": node.Name, "fields": strings.Join(changedNodeFields(old, want), ",")},
+		}); err != nil {
+			return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "audit", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "commit", err)
+	}
+	def, _, _, err := d.Policies.Defaults(ctx)
+	if err != nil {
+		return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "read the policy", err)
+	}
+	env, _, err := d.Policies.Env(ctx, envID)
+	if err != nil {
+		return JanitorNodeBody{}, janitorPolicyFailure(d, envID, "read the policy", err)
+	}
+	return janitorNodeBody(node, want, janitor.Effective(def, env)), nil
 }
 
 // janitorPolicyValueProblem maps a value the policy refuses to its 422, and answers nil for any other error.

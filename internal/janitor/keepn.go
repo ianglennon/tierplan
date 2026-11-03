@@ -103,12 +103,15 @@ type ContainerInput struct {
 	ProjectBusy, ProjectOthers bool
 	// OptIn is the policy's "also remove stopped standalone containers".
 	OptIn bool
+	// NodeOff: the janitor is switched off for the container's swarm node. Nothing on it is inspected
+	// or removed, and Build lists what it would have judged as protected (node_disabled).
+	NodeOff bool
 }
 
 // taskContainers builds the input of every swarm task container of a snapshot, with its rank in
 // its group. Containers that are not exited are in the result (ClassifyContainer drops them) but
 // are not ranked, so they never count towards a group's KeepN.
-func taskContainers(s Snapshot, p Policy) []ContainerInput {
+func taskContainers(s Snapshot, p Policy, nodes map[string]NodeOverrides) []ContainerInput {
 	wanted := map[string]bool{}
 	for _, t := range s.Tasks {
 		if t.DesiredState != "running" {
@@ -129,8 +132,10 @@ func taskContainers(s Snapshot, p Policy) []ContainerInput {
 		}
 		svcID := c.Labels[labelSwarmServiceID]
 		svc, known := s.Services[svcID]
+		// KeepN is the node's own where it sets one. The group is still the whole slot, ranked across
+		// the nodes it ran on, so each container is judged against the N of the node it is on.
 		ci := ContainerInput{
-			Container: c, KeepN: p.keepN(), Grace: p.grace(),
+			Container: c, KeepN: nodePolicy(s, p, nodes, c.NodeID).keepN(), Grace: p.grace(),
 			DesiredRunning: wanted[c.ID] || (c.Labels[labelSwarmTaskID] != "" && wanted[c.Labels[labelSwarmTaskID]]),
 			ServiceGone:    s.ManagerRead && s.Services != nil && svcID != "" && !known,
 		}
@@ -214,9 +219,28 @@ func standaloneContainers(s Snapshot, p Policy) []ContainerInput {
 }
 
 // allContainers is the input of every container of a snapshot: the swarm's task containers, then
-// the rest.
-func allContainers(s Snapshot, p Policy) []ContainerInput {
-	return append(taskContainers(s, p), standaloneContainers(s, p)...)
+// the rest. nodes are the overrides of the swarm nodes by swarm node ID, nil when none sets any.
+func allContainers(s Snapshot, p Policy, nodes map[string]NodeOverrides) []ContainerInput {
+	out := append(taskContainers(s, p, nodes), standaloneContainers(s, p)...)
+	if len(nodes) > 0 {
+		for i := range out {
+			out[i].NodeOff = nodeOverrides(s, nodes, out[i].Container.NodeID).Disabled()
+		}
+	}
+	return out
+}
+
+// nodeOverrides are the overrides of the swarm node that a snapshot node is: the node IDs of a snapshot
+// are the ones the engines are reached by, and Snapshot.SwarmNodeOf maps them to the swarm node IDs the
+// overrides are stored under. A node the map does not know is looked up by its own ID.
+func nodeOverrides(s Snapshot, nodes map[string]NodeOverrides, nodeID string) NodeOverrides {
+	if len(nodes) == 0 {
+		return NodeOverrides{}
+	}
+	if id := s.SwarmNodeOf[nodeID]; id != "" {
+		return nodes[id]
+	}
+	return nodes[nodeID]
 }
 
 // beyondKeep reports whether a ranked container is older than the newest KeepN of its group.

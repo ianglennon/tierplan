@@ -156,8 +156,8 @@ func TestReasonCodesAreDistinct(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(seen) != 24 {
-		t.Fatalf("%d reason codes, want the 24 the API enum promises", len(seen))
+	if len(seen) != 25 {
+		t.Fatalf("%d reason codes, want the 25 the API enum promises", len(seen))
 	}
 }
 

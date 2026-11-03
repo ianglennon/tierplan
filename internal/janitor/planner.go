@@ -110,6 +110,8 @@ const (
 	ReasonTaskLabelsMissing ReasonCode = "task_labels_missing"
 	// ReasonServicesUnread: no manager answered, so which services exist is not known.
 	ReasonServicesUnread ReasonCode = "services_unread"
+	// ReasonNodeDisabled: the janitor is switched off for the swarm node that holds the object.
+	ReasonNodeDisabled ReasonCode = "node_disabled"
 )
 
 // Reasons lists every reason code, for the API's enum.
@@ -120,7 +122,7 @@ func Reasons() []ReasonCode {
 		ReasonOptInOffContainers, ReasonOptInOffNetworks, ReasonLoneComposeContainer, ReasonKeptLabel, ReasonKeptRow,
 		ReasonStackExcluded, ReasonStackDeclaredKeep, ReasonYoungerThanGrace, ReasonNodeNotReporting,
 		ReasonNetworksWithheld, ReasonStackUnknown, ReasonInspectCapped, ReasonClockSkew, ReasonTaskLabelsMissing,
-		ReasonServicesUnread,
+		ReasonServicesUnread, ReasonNodeDisabled,
 	}
 }
 
@@ -186,11 +188,14 @@ func (p Plan) Summary() (containers, networks, images int, estBytes int64, known
 
 // Input is everything Build decides on. Ends are the inspect facts of the containers Candidates
 // named, by container ID. Networks is the orphan check's judgement of every network, nil when
-// networks were not read: Build then lists none and withholds none.
+// networks were not read: Build then lists none and withholds none. Nodes are the overrides of the
+// swarm nodes by swarm node ID (Snapshot.SwarmNodeOf maps a snapshot's nodes to them); nil means
+// every node follows the environment's policy.
 type Input struct {
 	Snapshot Snapshot
 	Ends     map[string]ContainerEnd
 	Networks *NetworkReport
+	Nodes    map[string]NodeOverrides
 }
 
 // Build says what the janitor would remove at now, and why it leaves the rest. It is pure: the
@@ -218,6 +223,11 @@ type Input struct {
 // manage, a plain docker run container) is reported until the environment opts in to removing them,
 // and a container of a project that still exists is never touched. Each waits for the grace period.
 //
+// A node whose janitor is switched off (its own override, D-04) has the containers and images the rules
+// above would have judged listed as protected (node_disabled): none of them is inspected or removed, by a
+// schedule or by Clean now. Its networks are not its own, so they are judged as before. A node's keep-N
+// override replaces the environment's N for the containers on that node, in rule 5.
+//
 // A node whose engine clock differs from the snapshot's read time by more than ClockSkewTolerance
 // has its containers and images left alone (cant_tell, clock_skew), whatever the rules above say.
 //
@@ -236,7 +246,7 @@ func Build(in Input, p Policy, now time.Time) Plan {
 	}
 	slices.Sort(plan.WithheldNodes)
 
-	for _, ci := range allContainers(s, p) {
+	for _, ci := range allContainers(s, p, in.Nodes) {
 		end, inspected := in.Ends[ci.Container.ID]
 		ci.End, ci.Inspected = end, inspected
 		item, listed := ClassifyContainer(ci, now)
@@ -249,6 +259,7 @@ func Build(in Input, p Policy, now time.Time) Plan {
 		}
 	}
 	addImages(&plan, s, p, now)
+	protectDisabled(&plan, disabledNodes(s, in.Nodes))
 	withholdSkewed(&plan, skewedNodes(s))
 	if in.Networks != nil {
 		addNetworks(&plan, *in.Networks, p, now)
@@ -256,6 +267,73 @@ func Build(in Input, p Policy, now time.Time) Plan {
 	sortItems(plan.Items)
 	sortItems(plan.NotRemoved)
 	return plan
+}
+
+// nodePolicy is the policy of the swarm node that the snapshot node nodeID is: its environment's, with the
+// node's own keep-N where it sets one.
+func nodePolicy(s Snapshot, env Policy, nodes map[string]NodeOverrides, nodeID string) Policy {
+	return EffectiveForNode(env, nodeOverrides(s, nodes, nodeID))
+}
+
+// disabledNodes names, by snapshot node ID, the nodes the janitor is switched off for.
+func disabledNodes(s Snapshot, nodes map[string]NodeOverrides) map[string]bool {
+	if len(nodes) == 0 {
+		return nil
+	}
+	var off map[string]bool
+	mark := func(id string) {
+		if id == "" || !nodeOverrides(s, nodes, id).Disabled() {
+			return
+		}
+		if off == nil {
+			off = map[string]bool{}
+		}
+		off[id] = true
+	}
+	for _, n := range s.Nodes {
+		mark(n.ID)
+	}
+	for _, c := range s.Containers {
+		mark(c.NodeID)
+	}
+	for _, img := range s.Images {
+		mark(img.NodeID)
+	}
+	return off
+}
+
+// protectDisabled makes protected (node_disabled) every container and image the planner would have removed,
+// held back by grace, reported or could not tell about, on a node in off, and moves it to the list of what was
+// not removed. What a person or a label already protects keeps its own, more specific, reason.
+func protectDisabled(plan *Plan, off map[string]bool) {
+	if len(off) == 0 {
+		return
+	}
+	judge := func(it Item) (Item, bool) {
+		if !off[it.NodeID] || (it.Type != KindContainer && it.Type != KindImage) {
+			return it, false
+		}
+		switch it.Class {
+		case ClassRemovable, ClassGrace, ClassReported, ClassCantTell:
+			it.Class = ClassProtected
+			it.Reason = Reason{Code: ReasonNodeDisabled, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Node}
+			it.Age = 0
+			return it, true
+		}
+		return it, false
+	}
+	items := plan.Items[:0:0]
+	for _, it := range plan.Items {
+		if out, changed := judge(it); changed {
+			plan.NotRemoved = append(plan.NotRemoved, out)
+			continue
+		}
+		items = append(items, it)
+	}
+	plan.Items = items
+	for i, it := range plan.NotRemoved {
+		plan.NotRemoved[i], _ = judge(it)
+	}
 }
 
 // skewedNodes names the nodes whose engine reported a time that differs from the time the snapshot
@@ -362,9 +440,15 @@ func sortItems(items []Item) {
 // exited swarm task containers beyond the newest KeepN of their group, or of a service that is
 // gone, that nothing protects. Only these are inspected, and at most MaxInspectsPerRun of them,
 // the oldest first; a candidate over the cap is cant_tell in the plan.
-func Candidates(s Snapshot, p Policy) []ContainerRef {
+// Candidates judges every node by the policy p.
+func Candidates(s Snapshot, p Policy) []ContainerRef { return CandidatesFor(s, p, nil) }
+
+// CandidatesFor is Candidates where the swarm nodes in nodes (by swarm node ID) have overrides of their
+// own: a node's keep-N replaces the environment's for the containers on it, and the containers of a node
+// the janitor is switched off for are not inspected.
+func CandidatesFor(s Snapshot, p Policy, nodes map[string]NodeOverrides) []ContainerRef {
 	var cands []ContainerInput
-	for _, ci := range allContainers(s, p) {
+	for _, ci := range allContainers(s, p, nodes) {
 		if needsInspect(ci) {
 			cands = append(cands, ci)
 		}

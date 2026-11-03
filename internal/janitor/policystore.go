@@ -140,6 +140,56 @@ func (p PolicyStore) Nodes(ctx context.Context, envID string) (map[string]NodeOv
 	return out, nil
 }
 
+// NodeOn is one node's overrides read on the caller's transaction q, so that a save reads the overrides it
+// replaces in the same transaction that writes the new ones. A node with no row follows its environment.
+func (p PolicyStore) NodeOn(ctx context.Context, q *sqlc.Queries, envID, nodeID string) (NodeOverrides, error) {
+	row, err := q.GetJanitorNodePolicy(ctx, sqlc.GetJanitorNodePolicyParams{EnvID: envID, NodeID: nodeID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return NodeOverrides{}, nil
+	}
+	if err != nil {
+		return NodeOverrides{}, fmt.Errorf("read the janitor policy of a node: %w", err)
+	}
+	return NodeOverrides{Enabled: boolPtr(row.Enabled), KeepN: intPtr(row.KeepN)}, nil
+}
+
+// SetNode saves the overrides of one swarm node, named by its swarm node ID, on the caller's transaction
+// q, which also records the audit row. Saving what is already stored writes nothing and answers changed
+// false. keep-N passes ValidateNode first. A nil field is stored as NULL, so it follows the environment
+// again, and a node whose fields are all nil has no row at all.
+func (p PolicyStore) SetNode(ctx context.Context, q *sqlc.Queries, envID, nodeID string, o NodeOverrides, by string, now time.Time) (changed bool, err error) {
+	if err := ValidateNode(o); err != nil {
+		return false, err
+	}
+	if o.Enabled == nil && o.KeepN == nil {
+		return p.ResetNode(ctx, q, envID, nodeID)
+	}
+	cur, err := p.NodeOn(ctx, q, envID, nodeID)
+	if err != nil {
+		return false, err
+	}
+	if nullBool(cur.Enabled) == nullBool(o.Enabled) && nullInt(cur.KeepN) == nullInt(o.KeepN) {
+		return false, nil
+	}
+	if err := q.UpsertJanitorNodePolicy(ctx, sqlc.UpsertJanitorNodePolicyParams{
+		EnvID: envID, NodeID: nodeID, Enabled: nullBool(o.Enabled), KeepN: nullInt(o.KeepN),
+		UpdatedBy: by, UpdatedAt: now.UTC().UnixNano(),
+	}); err != nil {
+		return false, fmt.Errorf("save the janitor policy of a node: %w", err)
+	}
+	return true, nil
+}
+
+// ResetNode makes one swarm node follow its environment again, on the caller's transaction q. A node that
+// already followed it writes nothing and answers changed false.
+func (p PolicyStore) ResetNode(ctx context.Context, q *sqlc.Queries, envID, nodeID string) (changed bool, err error) {
+	n, err := q.DeleteJanitorNodePolicy(ctx, sqlc.DeleteJanitorNodePolicyParams{EnvID: envID, NodeID: nodeID})
+	if err != nil {
+		return false, fmt.Errorf("reset the janitor policy of a node: %w", err)
+	}
+	return n > 0, nil
+}
+
 // SetEnv saves the overrides of an environment on the caller's transaction q, which also records the
 // audit row. version is the one Env answered when the caller read the policy: a save made since is
 // ErrPolicyVersion and writes nothing. Saving what is already stored writes nothing and answers
