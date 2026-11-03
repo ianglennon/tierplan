@@ -213,7 +213,8 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 // mapSwarmNodes fills Snapshot.SwarmNodeOf: the swarm node ID of each node the snapshot was read from, which is
 // what a node's own janitor settings are stored under. The IDs of the snapshot are the agents' (or the local
 // socket's), so a node whose agent is enrolled again keeps its settings. A node that no agent reports a swarm
-// node ID for has no entry and follows its environment. A mapping that cannot be read is an error and not an
+// node ID for has no entry: it follows its environment when the environment has no node settings, and the
+// planner holds it back (node_unmapped) when it has some. A mapping that cannot be read is an error and not an
 // empty map: without it a node that was switched off could not be told from one that was not.
 func (e *janitorEngine) mapSwarmNodes(ctx context.Context, envID string, snap *janitor.Snapshot) error {
 	targets, err := e.agg.SwarmNodeTargets(ctx, envID)
