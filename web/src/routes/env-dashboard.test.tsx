@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { janitorStatus } from "@/test-janitor";
 import { makeMe } from "@/test-me";
 
 const ME = makeMe({
@@ -86,6 +87,7 @@ function stubApi() {
       }
       if (path === "/api/env/e1/summary") return summary();
       if (path === "/api/env/e1/events") return Response.json({ items: [] });
+      if (path === "/api/env/e1/janitor") return Response.json(janitorStatus());
       return Response.json({}, { status: 404 });
     }),
   );
@@ -200,6 +202,23 @@ describe("dashboard", () => {
     // The layout and the page share one cache entry, so there is one request.
     expect(sent.filter((p) => p === "/api/env/e1/summary")).toHaveLength(1);
     expect(document.title).toBe("Dashboard · Lab");
+  });
+
+  it("stacks the engine, address space and janitor cards in that order in the left column", async () => {
+    me = makeMe({ instanceAdmin: true });
+    renderAt("/env/e1");
+    const janitor = await screen.findByRole("region", { name: "Janitor" });
+    const engine = (await screen.findByText("Docker engine")).closest("[data-slot=card]");
+    const address = screen.getByRole("region", { name: "Address space" });
+    expect(engine).not.toBeNull();
+    const column = janitor.parentElement as HTMLElement;
+    expect(column.contains(address)).toBe(true);
+    expect(column.contains(engine)).toBe(true);
+    const order = Array.from(column.children);
+    const at = (el: Element | null) => order.findIndex((child) => child.contains(el));
+    expect(at(engine)).toBeLessThan(at(address));
+    expect(at(address)).toBeLessThan(at(janitor));
+    expect(await within(janitor).findByText("Hasn't run yet")).toBeTruthy();
   });
 
   it("refetches the counts every 30 seconds as the polling fallback (D-57)", () => {

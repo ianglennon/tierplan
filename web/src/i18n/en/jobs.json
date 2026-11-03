@@ -12,6 +12,7 @@
       "error": {
         "pulls": "Couldn't load the pulls.",
         "stack": "Couldn't load the stack jobs.",
+        "janitor": "Couldn't load the cleanups.",
         "retry": "Retry"
       },
       "state": {
@@ -28,6 +29,18 @@
       "open": {
         "action": "Open",
         "label": "Open console of {{name}}"
+      },
+      "janitor": {
+        "title": "Cleaning {{name}}",
+        "waiting": "Waiting to start",
+        "running": "Removing {{done}} of {{total}}",
+        "finished": "Finished",
+        "completed": "Cleaned",
+        "partial": "Partly cleaned",
+        "failed": "Failed",
+        "skipped": "Skipped",
+        "byTierPlan": "by TierPlan",
+        "open": "Open the cleanup of {{name}}"
       },
       "stack": {
         "deploy": {

@@ -3,9 +3,16 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Download, GitBranch, ListRestart, Rocket, Undo2 } from "lucide-react";
+import { BrushCleaning, Download, GitBranch, ListRestart, Rocket, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { environmentsQuery } from "@/api/environments";
+import {
+  type JanitorJobSummary,
+  type JanitorRun,
+  janitorRunQuery,
+  useJanitorJobs,
+} from "@/api/janitor";
 import { type PullSummary, pullsListQuery } from "@/api/pulls";
 import { type StackJobSummary, stackJobsListQuery } from "@/api/stacks";
 import { RelativeTime } from "@/components/relative-time";
@@ -27,19 +34,28 @@ import { cn } from "@/lib/utils";
 // The badge reads "9+" past this many running jobs.
 const BADGE_CAP = 9;
 
-// A job of either kind, as one row of the list.
-type Job = { type: "pull"; pull: PullSummary } | { type: "stack"; job: StackJobSummary };
+// A job of any of the three kinds, as one row of the list.
+type Job =
+  | { type: "pull"; pull: PullSummary }
+  | { type: "stack"; job: StackJobSummary }
+  | { type: "janitor"; job: JanitorJobSummary };
 
 const startedOf = (j: Job): string => (j.type === "pull" ? j.pull.createdAt : j.job.startedAt);
 const runningOf = (j: Job): boolean =>
   j.type === "pull" ? j.pull.state === "running" : j.job.state === "running";
-const idOf = (j: Job): string => (j.type === "pull" ? j.pull.id : j.job.id);
+const idOf = (j: Job): string =>
+  j.type === "pull" ? j.pull.id : j.type === "stack" ? j.job.id : j.job.jobId;
 
-// jobsOf merges the two lists: running jobs first, then the newest first within each group.
-function jobsOf(pulls: PullSummary[], stack: StackJobSummary[]): Job[] {
+// jobsOf merges the three lists: running jobs first, then the newest first within each group.
+function jobsOf(
+  pulls: PullSummary[],
+  stack: StackJobSummary[],
+  janitor: JanitorJobSummary[],
+): Job[] {
   const all: Job[] = [
     ...pulls.map((pull): Job => ({ type: "pull", pull })),
     ...stack.map((job): Job => ({ type: "stack", job })),
+    ...janitor.map((job): Job => ({ type: "janitor", job })),
   ];
   return all.sort((a, b) => {
     if (runningOf(a) !== runningOf(b)) return runningOf(a) ? -1 : 1;
@@ -146,21 +162,23 @@ function useStackJobToasts(jobs: StackJobSummary[] | undefined, username: string
 }
 
 // JobsIndicator (the Pulls indicator of Phase 5, now for every kind of job) is the header button for
-// the work the person can follow (D-26): pulls, and the deploys, updates and roll backs of stacks. It
-// lists the jobs running and those that ended in the last ten minutes, running ones first and the
-// newest first, and a click on a pull reopens its progress panel while a click on a stack job opens
-// its console. Both open on the job as it stands: they reconnect to its stream. It is hidden while
+// the work the person can follow (D-26): pulls, the deploys, updates and roll backs of stacks, and
+// the clean-ups of the janitor, a scheduled one included. It lists the jobs running and those that
+// ended in the last ten minutes, running ones first and the newest first, and a click on a pull
+// reopens its progress panel while a click on a stack job opens its console and on a clean-up its
+// run. A clean-up has no Cancel (UI-SPEC interpretation 6). Both open on the job as it stands: they reconnect to its stream. It is hidden while
 // there is nothing to list, and it never changes colour: the count badge is neutral.
 export function JobsIndicator() {
   const t = useT();
   const pullsQuery = useQuery(pullsListQuery);
   const stackQuery = useQuery(stackJobsListQuery);
+  const janitorQuery = useJanitorJobs();
   const me = useMe();
   useStackJobToasts(stackQuery.data, me.data?.user.username);
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState<PullSummary | null>(null);
 
-  const jobs = jobsOf(pullsQuery.data ?? [], stackQuery.data ?? []);
+  const jobs = jobsOf(pullsQuery.data ?? [], stackQuery.data ?? [], janitorQuery.data ?? []);
   const running = jobs.filter(runningOf).length;
 
   if (jobs.length === 0 && !opened) return null;
@@ -168,6 +186,7 @@ export function JobsIndicator() {
   // A list that cannot be read now, though it was: the jobs on it are shown as last seen and say so.
   const pullsStale = pullsQuery.isRefetchError;
   const stackStale = stackQuery.isRefetchError;
+  const janitorStale = janitorQuery.isRefetchError;
 
   return (
     <>
@@ -221,17 +240,26 @@ export function JobsIndicator() {
                         setOpened(j.pull);
                       }}
                     />
-                  ) : (
+                  ) : j.type === "stack" ? (
                     <StackJobRow
                       key={`stack:${idOf(j)}`}
                       job={j.job}
                       stale={stackStale}
                       onOpen={() => setOpen(false)}
                     />
+                  ) : (
+                    <JanitorJobRow
+                      key={`janitor:${idOf(j)}`}
+                      job={j.job}
+                      stale={janitorStale}
+                      onOpen={() => setOpen(false)}
+                    />
                   ),
                 )}
               </ul>
-              {pullsQuery.isPending || stackQuery.isPending ? <LoadingRows /> : null}
+              {pullsQuery.isPending || stackQuery.isPending || janitorQuery.isPending ? (
+                <LoadingRows />
+              ) : null}
               {pullsQuery.isError && !pullsQuery.data ? (
                 <LoadError
                   message={t("jobs.indicator.error.pulls")}
@@ -242,6 +270,12 @@ export function JobsIndicator() {
                 <LoadError
                   message={t("jobs.indicator.error.stack")}
                   onRetry={() => void stackQuery.refetch()}
+                />
+              ) : null}
+              {janitorQuery.isError && !janitorQuery.data ? (
+                <LoadError
+                  message={t("jobs.indicator.error.janitor")}
+                  onRetry={() => void janitorQuery.refetch()}
                 />
               ) : null}
             </ScrollArea>
@@ -411,6 +445,88 @@ function StackJobRow({
           to="/env/$envId/stacks/$stackId/deploys/$jobId"
           params={{ envId: job.envId, stackId: job.stackId, jobId: job.id }}
           aria-label={t("jobs.indicator.open.label", { name: job.stackName })}
+          onClick={onOpen}
+        >
+          {t("jobs.indicator.open.action")}
+        </Link>
+      </Button>
+    </li>
+  );
+}
+
+// janitorStateKey is the words for where a clean-up stands, from the run's record and not from the
+// job: the job counts its items, so one the engine kept in use ends it failed or partial for a run
+// whose record says completed. Until the record is read, a job that has ended says only that it
+// finished.
+function janitorStateKey(
+  job: JanitorJobSummary,
+  record: JanitorRun["state"] | undefined,
+): { key: string; values: Record<string, number> } {
+  const values = { done: job.done, total: job.total };
+  if (job.state === "running" || record === "running" || record === "waiting") {
+    return {
+      key: job.total > 0 ? "jobs.indicator.janitor.running" : "jobs.indicator.janitor.waiting",
+      values,
+    };
+  }
+  if (record) return { key: `jobs.indicator.janitor.${record}`, values };
+  return { key: "jobs.indicator.janitor.finished", values };
+}
+
+// JanitorJobRow is a clean-up of an environment: "Cleaning {environment}", where it stands ("Removing
+// 3 of 8", then Cleaned, Partly cleaned, Failed or Skipped), who started it (TierPlan for a scheduled
+// run) and Open, which goes to the run. There is no Cancel. The environment's name is text, cut at the
+// row's edge and given whole in a tooltip.
+function JanitorJobRow({
+  job,
+  stale,
+  onOpen,
+}: {
+  job: JanitorJobSummary;
+  stale: boolean;
+  onOpen: () => void;
+}) {
+  const t = useT();
+  const live = job.state === "running";
+  const environments = useQuery(environmentsQuery);
+  const name =
+    environments.data?.items?.find((e) => e.id === job.envId)?.name ??
+    t("dashboard.environmentFallback");
+  // The record of a clean-up that has ended says how it ended; one that goes is read on its page.
+  const record = useQuery({ ...janitorRunQuery(job.envId, job.runId), enabled: !live });
+  const state = janitorStateKey(job, record.data?.state);
+  const title = t("jobs.indicator.janitor.title", { name });
+  return (
+    <li className="flex min-w-0 items-center gap-2 rounded-md hover:bg-muted/50">
+      <BrushCleaning aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="truncate text-sm">{title}</span>
+          </TooltipTrigger>
+          <TooltipContent className="break-all">{title}</TooltipContent>
+        </Tooltip>
+        <span className="flex flex-wrap items-center gap-x-2 text-xs">
+          <span>
+            {stale && live ? t("jobs.indicator.reconnecting") : t(state.key, state.values)}
+          </span>
+          <span className="text-muted-foreground">
+            {job.trigger === "schedule"
+              ? t("jobs.indicator.janitor.byTierPlan")
+              : t("jobs.indicator.by", { name: job.by })}
+          </span>
+          {live ? null : (
+            <span className="text-muted-foreground">
+              <RelativeTime value={record.data?.finishedAt ?? job.startedAt} />
+            </span>
+          )}
+        </span>
+      </div>
+      <Button asChild variant="ghost" size="sm" className="shrink-0 max-md:h-11">
+        <Link
+          to="/env/$envId/janitor/runs/$runId"
+          params={{ envId: job.envId, runId: job.runId }}
+          aria-label={t("jobs.indicator.janitor.open", { name })}
           onClick={onOpen}
         >
           {t("jobs.indicator.open.action")}
