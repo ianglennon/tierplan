@@ -37,6 +37,8 @@ export type JanitorDefaults = components["schemas"]["JanitorDefaultsBody"];
 export type JanitorDefaultsRequest = components["schemas"]["JanitorDefaultsRequest"];
 export type JanitorRetentionPreview = components["schemas"]["JanitorRetentionPreviewBody"];
 export type SchedulePreset = NonNullable<JanitorPolicyFields["schedulePreset"]>;
+export type JanitorNode = components["schemas"]["JanitorNodeBody"];
+export type JanitorNodeRequest = components["schemas"]["JanitorNodeRequest"];
 export type TaskHistory = components["schemas"]["TaskHistoryBody"];
 export type TaskHistoryChange = components["schemas"]["TaskHistoryChangeBody"];
 
@@ -130,21 +132,35 @@ function failureOf(method: string, res: { error?: unknown; response: Response })
   return new JanitorRequestError(method, problem.status, problem.type, problem.fields);
 }
 
+// What a preview is asked about when it is not the saved policy: a candidate policy (the fields a
+// save of the policy card would store) and/or candidate settings of swarm nodes, by swarm node ID,
+// each exactly as saving that node would store it. Nothing is saved either way.
+export interface JanitorPreviewCandidate {
+  policy?: JanitorPolicyFields;
+  nodes?: Record<string, JanitorNodeRequest>;
+}
+
 // useJanitorPreview asks for a dry run. It is a mutation and not a query on purpose: the preview is
 // computed from Docker at the moment it is asked for, and nothing may ask for it again in the
 // background, because that would reset the ticks under a person's hands. The sheet calls it on open
-// and on Refresh preview, and it is not retried. The variable is a candidate policy (the fields a
-// save of the policy card would store): with it the preview shows what that policy would remove,
-// without it the saved policy. Nothing is saved either way.
+// and on Refresh preview, and it is not retried. The variable is a candidate: with one the preview
+// shows what that policy and those node settings would remove, without it the saved policy.
 export function useJanitorPreview(envId: string) {
-  return useMutation<JanitorPreview, JanitorRequestError, JanitorPolicyFields | undefined>({
+  return useMutation<JanitorPreview, JanitorRequestError, JanitorPreviewCandidate | undefined>({
     retry: false,
     gcTime: 0,
-    mutationFn: async (policy) => {
+    mutationFn: async (candidate) => {
       try {
+        const body =
+          candidate && (candidate.policy || candidate.nodes)
+            ? {
+                ...(candidate.policy ? { policy: candidate.policy } : {}),
+                ...(candidate.nodes ? { nodes: candidate.nodes } : {}),
+              }
+            : undefined;
         const res = await api.POST("/api/env/{envId}/janitor/preview", {
           params: { path: { envId } },
-          ...(policy ? { body: { policy } } : {}),
+          ...(body ? { body } : {}),
         });
         if (!res.data) throw failureOf("POST", res);
         return res.data;
@@ -431,6 +447,71 @@ export function useSaveJanitorPolicy(envId: string) {
 // server did not know the person.
 export function conflictOf(err: JanitorRequestError): string {
   return err.fieldOf("changedBy");
+}
+
+// patchNode puts a node as the server answered it into the policy the page holds, in place, so the
+// table follows a change without a read and the policy's own version is left alone (a node's settings
+// are stored apart from the environment's).
+function patchNode(
+  queryClient: ReturnType<typeof useQueryClient>,
+  envId: string,
+  node: JanitorNode,
+) {
+  queryClient.setQueryData<JanitorPolicy>(janitorPolicyKey(envId), (old) =>
+    old
+      ? { ...old, nodes: (old.nodes ?? []).map((n) => (n.nodeId === node.nodeId ? node : n)) }
+      : old,
+  );
+}
+
+// useSaveJanitorNode sets one swarm node's two settings: whether the janitor cleans it and how many
+// exited task containers of a slot it keeps. A PUT replaces the node's settings, so a field that is
+// null follows the environment and the caller sends the one it is not changing as it stands. It is
+// never retried (P2 D-42). The answer is the node as stored. A node the swarm no longer has is 404
+// node_not_found, and a value out of range is huma's own 422.
+export function useSaveJanitorNode(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    JanitorNode,
+    JanitorRequestError,
+    { nodeId: string; body: JanitorNodeRequest }
+  >({
+    retry: false,
+    mutationFn: async ({ nodeId, body }) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/janitor/nodes/{nodeId}", {
+          params: { path: { envId, nodeId } },
+          body,
+        });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("PUT", 0);
+      }
+    },
+    onSuccess: (node) => patchNode(queryClient, envId, node),
+  });
+}
+
+// useResetJanitorNode returns one swarm node to following the environment (it removes the node's
+// stored settings). It is never retried (P2 D-42).
+export function useResetJanitorNode(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<JanitorNode, JanitorRequestError, string>({
+    retry: false,
+    mutationFn: async (nodeId) => {
+      try {
+        const res = await api.DELETE("/api/env/{envId}/janitor/nodes/{nodeId}", {
+          params: { path: { envId, nodeId } },
+        });
+        if (!res.data) throw failureOf("DELETE", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("DELETE", 0);
+      }
+    },
+    onSuccess: (node) => patchNode(queryClient, envId, node),
+  });
 }
 
 // How long after the last keystroke the server is asked what a cron expression would do. The server

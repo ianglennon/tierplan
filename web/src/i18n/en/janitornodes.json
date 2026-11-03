@@ -21,6 +21,34 @@
       "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so TierPlan can only read from it.",
       "loadFailed": "Couldn't read the task history limit.",
       "loadRetry": "Retry reading the limit"
+    },
+    "nodes": {
+      "title": "Nodes",
+      "caption": "Skip a fragile node, or keep more of its task containers. Every other setting follows the environment.",
+      "table": "Node overrides",
+      "columns": {
+        "node": "Node",
+        "cleanup": "Cleanup",
+        "keep": "Keep newest",
+        "state": "State",
+        "actions": "Actions"
+      },
+      "cleanupOn": "Cleanup on {{node}}",
+      "keepOn": "Keep newest on {{node}}",
+      "on": "On",
+      "off": "Off",
+      "state": {
+        "default": "Default",
+        "overridden": "Overridden",
+        "notReporting": "Not reporting"
+      },
+      "reset": "Reset {{node}} to default",
+      "resetTip": "Reset to default",
+      "saved": "Saved the janitor setting for {{node}}.",
+      "keepError": "Use a whole number from 0 to 20.",
+      "saveFailed": "Couldn't change the janitor setting for {{node}}.",
+      "retry": "Try again.",
+      "notFound": "{{node}} is no longer in this swarm. Reload the page to see the current nodes."
     }
   }
 }

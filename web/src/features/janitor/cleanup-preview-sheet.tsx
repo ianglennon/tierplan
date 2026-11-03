@@ -8,6 +8,7 @@ import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } 
 
 import {
   type JanitorItem,
+  type JanitorNodeRequest,
   type JanitorPolicyFields,
   type JanitorPreview,
   JanitorRequestError,
@@ -137,6 +138,9 @@ interface CleanupPreviewSheetProps {
   mode?: "clean" | "policy";
   // In policy mode, the policy to preview: the fields a save of it would store.
   policy?: JanitorPolicyFields;
+  // In policy mode, candidate settings of swarm nodes, by swarm node ID, each exactly as saving that
+  // node would store it. A node named here is judged by these settings instead of its saved ones.
+  nodes?: Record<string, JanitorNodeRequest>;
   // In policy mode, saves the policy. It answers whether it was saved; the sheet closes either way,
   // because a refusal is worded where the policy is edited.
   onSavePolicy?: () => Promise<boolean>;
@@ -157,6 +161,7 @@ export function CleanupPreviewSheet({
   onLocked,
   mode = "clean",
   policy,
+  nodes,
   onSavePolicy,
 }: CleanupPreviewSheetProps) {
   const t = useT();
@@ -177,8 +182,8 @@ export function CleanupPreviewSheet({
   useEffect(() => {
     if (asked.current) return;
     asked.current = true;
-    preview.mutate(policy);
-  }, [preview.mutate, policy]);
+    preview.mutate({ policy, nodes });
+  }, [preview.mutate, policy, nodes]);
 
   const data: JanitorPreview | undefined = preview.data;
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -240,7 +245,7 @@ export function CleanupPreviewSheet({
   // Asking again is a fresh look: the ticks start over and a lock that was seen is forgotten.
   function ask() {
     setLock(undefined);
-    preview.mutate(policy);
+    preview.mutate({ policy, nodes });
   }
 
   // Saving the policy closes the sheet whether or not it was saved: a refusal is worded on the policy

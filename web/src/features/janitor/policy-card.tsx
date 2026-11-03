@@ -30,6 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { CleanupPreviewSheet } from "@/features/janitor/cleanup-preview-sheet";
+import { NodeOverridesTable } from "@/features/janitor/node-overrides-table";
 import {
   couldRemoveMore,
   cronOf,
@@ -416,6 +417,17 @@ export function PolicyCard({ envId, envName, swarm, nodeCount, firstRunDone }: P
           {firstRunDone === undefined ? null : (
             <RulesNote firstRunDone={firstRunDone} keep={keep} graceHours={grace} />
           )}
+
+          {swarm && policy.data ? (
+            <NodeOverridesTable
+              envId={envId}
+              envName={envName}
+              nodes={policy.data.nodes}
+              envKeepN={policy.data.keepN.value}
+              canEdit={canEdit}
+              locked={locked}
+            />
+          ) : null}
 
           {data && view ? (
             <div className="flex flex-col gap-3">
