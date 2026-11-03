@@ -220,6 +220,16 @@ type JanitorEvidence struct {
 	LogState    string
 }
 
+type JanitorKeep struct {
+	EnvID  string
+	Kind   string
+	NodeID string
+	Ref    string
+	Name   string
+	KeptBy string
+	KeptAt int64
+}
+
 type JanitorNodePolicy struct {
 	EnvID     string
 	NodeID    string
@@ -261,14 +271,6 @@ type JanitorRunItem struct {
 	Outcome      string
 	Code         string
 	EstBytes     int64
-}
-
-type NetworkKeep struct {
-	EnvID  string
-	NodeID string
-	Name   string
-	KeptBy string
-	KeptAt int64
 }
 
 type NetworkSeen struct {

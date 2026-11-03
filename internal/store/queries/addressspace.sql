@@ -27,18 +27,21 @@ ON CONFLICT (env_id, node_id, network_id) DO NOTHING;
 DELETE FROM network_seen WHERE env_id = ? AND node_id = ? AND network_id = ?;
 
 -- name: ListNetworkKeeps :many
-SELECT env_id, node_id, name, kept_by, kept_at FROM network_keeps
-WHERE env_id = ?
-ORDER BY node_id, name;
+-- The network keeps of one environment: the janitor_keeps rows of kind network, where ref is the
+-- network's name.
+SELECT env_id, node_id, ref AS name, kept_by, kept_at FROM janitor_keeps
+WHERE env_id = ? AND kind = 'network'
+ORDER BY node_id, ref;
 
 -- name: InsertNetworkKeep :exec
 -- A second keep of the same network keeps the first (who kept it and when).
-INSERT INTO network_keeps (env_id, node_id, name, kept_by, kept_at)
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (env_id, node_id, name) DO NOTHING;
+INSERT INTO janitor_keeps (env_id, kind, node_id, ref, name, kept_by, kept_at)
+VALUES (sqlc.arg(env_id), 'network', sqlc.arg(node_id), sqlc.arg(name), sqlc.arg(name), sqlc.arg(kept_by), sqlc.arg(kept_at))
+ON CONFLICT (env_id, kind, node_id, ref) DO NOTHING;
 
 -- name: DeleteNetworkKeep :execrows
-DELETE FROM network_keeps WHERE env_id = ? AND node_id = ? AND name = ?;
+DELETE FROM janitor_keeps
+WHERE env_id = sqlc.arg(env_id) AND kind = 'network' AND node_id = sqlc.arg(node_id) AND ref = sqlc.arg(name);
 
 -- name: GetAddressSettings :one
 -- The small-subnet opt-in, the entered pools and the version of the two for one environment.

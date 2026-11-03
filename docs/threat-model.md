@@ -481,7 +481,7 @@ networks exist, and when no block is free the check fails before anything is wri
 subnet is sent on every later deploy so the engine's own configuration hash for the network never moves and a deploy never
 recreates a network (a real-engine test, `TestSmallSubnetHashStableOnARealEngine`).
 
-Backups include `network_seen` and `network_keeps` (the grace clock and the keep rows) and the new columns of the
+Backups include `network_seen` and `janitor_keeps` (the grace clock and the keep rows; `janitor_keeps` replaced the earlier `network_keeps` table, and an older backup is migrated forward on restore) and the new columns of the
 environments and revisions tables; nothing in them is secret.
 
 ## Residual risks

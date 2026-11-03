@@ -10,7 +10,8 @@ import (
 )
 
 const deleteNetworkKeep = `-- name: DeleteNetworkKeep :execrows
-DELETE FROM network_keeps WHERE env_id = ? AND node_id = ? AND name = ?
+DELETE FROM janitor_keeps
+WHERE env_id = ?1 AND kind = 'network' AND node_id = ?2 AND ref = ?3
 `
 
 type DeleteNetworkKeepParams struct {
@@ -73,9 +74,9 @@ func (q *Queries) GetAddressSettings(ctx context.Context, id string) (GetAddress
 }
 
 const insertNetworkKeep = `-- name: InsertNetworkKeep :exec
-INSERT INTO network_keeps (env_id, node_id, name, kept_by, kept_at)
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (env_id, node_id, name) DO NOTHING
+INSERT INTO janitor_keeps (env_id, kind, node_id, ref, name, kept_by, kept_at)
+VALUES (?1, 'network', ?2, ?3, ?3, ?4, ?5)
+ON CONFLICT (env_id, kind, node_id, ref) DO NOTHING
 `
 
 type InsertNetworkKeepParams struct {
@@ -127,20 +128,30 @@ func (q *Queries) InsertNetworkSeenIfAbsent(ctx context.Context, arg InsertNetwo
 }
 
 const listNetworkKeeps = `-- name: ListNetworkKeeps :many
-SELECT env_id, node_id, name, kept_by, kept_at FROM network_keeps
-WHERE env_id = ?
-ORDER BY node_id, name
+SELECT env_id, node_id, ref AS name, kept_by, kept_at FROM janitor_keeps
+WHERE env_id = ? AND kind = 'network'
+ORDER BY node_id, ref
 `
 
-func (q *Queries) ListNetworkKeeps(ctx context.Context, envID string) ([]NetworkKeep, error) {
+type ListNetworkKeepsRow struct {
+	EnvID  string
+	NodeID string
+	Name   string
+	KeptBy string
+	KeptAt int64
+}
+
+// The network keeps of one environment: the janitor_keeps rows of kind network, where ref is the
+// network's name.
+func (q *Queries) ListNetworkKeeps(ctx context.Context, envID string) ([]ListNetworkKeepsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listNetworkKeeps, envID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []NetworkKeep
+	var items []ListNetworkKeepsRow
 	for rows.Next() {
-		var i NetworkKeep
+		var i ListNetworkKeepsRow
 		if err := rows.Scan(
 			&i.EnvID,
 			&i.NodeID,
