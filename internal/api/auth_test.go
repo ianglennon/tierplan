@@ -280,6 +280,14 @@ type authFixture struct {
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
 	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &syncBuffer{}, unknown: agents.NewUnknownAgents()}
+	// The fixture lets go of its router when the test ends. Go's testing package keeps a
+	// finished parallel test, with the closures its cleanups leave behind, until the whole
+	// binary ends, and those closures reach this fixture: the broker, the tunnel hub and the
+	// agent updater hold the environment service, whose cluster reader holds the address
+	// reader, whose grace reads f.janitorPolicy. Every test's router, with all of its OpenAPI
+	// schemas, then lived to the end of the run (TestFinishedFixtureLetsGoOfItsRouter). This
+	// cleanup is registered before anything that uses the router, so it runs after them all.
+	t.Cleanup(func() { f.h = nil })
 	log := slog.New(slog.NewJSONHandler(f.logs, nil))
 	v, err := vault.LoadOrCreate(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
