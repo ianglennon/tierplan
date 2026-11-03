@@ -3,7 +3,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleCheck, CircleX, Info, Lock, TriangleAlert } from "lucide-react";
+import { CircleX, Info, Lock, TriangleAlert } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import {
@@ -36,28 +36,11 @@ import {
   progressOf,
   useJanitorRunStream,
 } from "@/features/janitor/run-job-stream";
+import { StateIcon } from "@/features/janitor/run-state-icon";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute } from "@/lib/format";
-
-// The icon of a run's state: always beside a word, never colour alone (UI-SPEC "Color").
-function StateIcon({ state }: { state: JanitorRun["state"] }) {
-  switch (state) {
-    case "running":
-      return <Spinner aria-hidden="true" />;
-    case "waiting":
-      return <Lock aria-hidden="true" className="size-4 text-status-warning-text" />;
-    case "completed":
-      return <CircleCheck aria-hidden="true" className="size-4 text-status-online-text" />;
-    case "partial":
-      return <TriangleAlert aria-hidden="true" className="size-4 text-status-warning-text" />;
-    case "skipped":
-      return <Info aria-hidden="true" className="size-4 text-muted-foreground" />;
-    default:
-      return <CircleX aria-hidden="true" className="size-4 text-status-offline-text" />;
-  }
-}
 
 export interface RunPageProps {
   envId: string;

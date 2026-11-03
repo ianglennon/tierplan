@@ -17,7 +17,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { JanitorPage } from "@/features/janitor/janitor-page";
 import { RunPage } from "@/features/janitor/run-page";
 import "@/i18n";
-import { preview, previewItem, run, runItem } from "@/test-janitor";
+import { janitorStatus, preview, previewItem, run, runItem, runSummary } from "@/test-janitor";
 import { makeMe } from "@/test-me";
 
 const ENV = "e1";
@@ -36,6 +36,8 @@ let started: { body: unknown; calls: number };
 let runBody: ReturnType<typeof run>;
 let client: QueryClient;
 let lockAnswer: (() => Response) | undefined;
+let statusBody: ReturnType<typeof janitorStatus>;
+let history: ReturnType<typeof runSummary>[];
 
 beforeEach(() => {
   setCsrfToken(null);
@@ -50,6 +52,8 @@ beforeEach(() => {
   });
   started = { body: undefined, calls: 0 };
   lockAnswer = undefined;
+  statusBody = janitorStatus();
+  history = [];
   toasts.error.mockReset();
   toasts.info.mockReset();
   runBody = run({
@@ -80,6 +84,11 @@ beforeEach(() => {
         started.body = await req.json();
         if (lockAnswer) return lockAnswer();
         return Response.json({ runId: "r1", jobId: "j1" }, { status: 202 });
+      }
+      if (url.pathname === `/api/env/${ENV}/janitor`) return Response.json(statusBody);
+      if (url.pathname === `/api/env/${ENV}/janitor/runs` && req.method === "GET") {
+        const limit = Number(url.searchParams.get("limit") ?? 25);
+        return Response.json({ runs: history.slice(0, limit), total: history.length });
       }
       if (url.pathname === `/api/env/${ENV}/janitor/runs/r1`) return Response.json(runBody);
       return Response.json({}, { status: 404 });
@@ -156,6 +165,66 @@ describe("JanitorPageCleanNow", () => {
     const removedRows = rows.filter((r) => within(r).queryByText("Removed") !== null);
     expect(removedRows).toHaveLength(2);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("JanitorPageStatusAndHistory", () => {
+  const removedSome = {
+    failed: 0,
+    kept: 0,
+    removedContainers: 14,
+    removedImages: 2,
+    removedNetworks: 3,
+    skippedOffline: 0,
+  };
+
+  it("tells whether the janitor is on, what it last did and when it runs next, and lists the runs", async () => {
+    const newest = runSummary({
+      id: "r2",
+      trigger: "schedule",
+      actor: "system:janitor",
+      actorName: "TierPlan",
+      counts: removedSome,
+      estBytes: 1_200_000_000,
+    });
+    const older = runSummary({ id: "r1", startedAt: "2026-11-01T09:00:00Z" });
+    statusBody = janitorStatus({ lastRun: newest });
+    history = [newest, older];
+    const router = mount();
+
+    const status = await screen.findByRole("region", { name: "Janitor status" });
+    expect(within(status).getByText("On")).toBeTruthy();
+    expect(within(status).getByText("Daily at 03:00, server time (Europe/London).")).toBeTruthy();
+    expect(
+      within(status).getByText("Removed 14 containers, 3 networks, 2 images, ~1.2 GB."),
+    ).toBeTruthy();
+    expect(within(status).getByText("in 5 hours")).toBeTruthy();
+
+    // The history has both runs, and a Started link opens the run.
+    const table = await screen.findByRole("table", { name: "Run history" });
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    const link = within(table).getAllByRole("link", { name: /^Open run from / })[1] as HTMLElement;
+    fireEvent.click(link);
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/env/${ENV}/janitor/runs/r1`));
+  });
+
+  it("keeps the rules open until the janitor has run once, then closed", async () => {
+    statusBody = janitorStatus();
+    mount();
+    const open = await screen.findByRole("button", {
+      name: "What the janitor removes and never touches",
+    });
+    await waitFor(() => expect(open.getAttribute("aria-expanded")).toBe("true"));
+    expect(screen.getByText("Never touches")).toBeTruthy();
+    cleanup();
+
+    statusBody = janitorStatus({ lastRun: runSummary() });
+    mount();
+    const closed = await screen.findByRole("button", {
+      name: "What the janitor removes and never touches",
+    });
+    await waitFor(() => expect(closed.getAttribute("aria-expanded")).toBe("false"));
+    expect(screen.queryByText("Never touches")).toBeNull();
   });
 });
 

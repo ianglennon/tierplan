@@ -4,9 +4,12 @@
 import type {
   JanitorEvidence,
   JanitorItem,
+  JanitorJobSummary,
   JanitorPreview,
   JanitorRun,
   JanitorRunItem,
+  JanitorRunSummary,
+  JanitorStatus,
 } from "@/api/janitor";
 
 // Builders for the janitor's tests: a preview item, a preview, a run item and a run, with the fields
@@ -102,6 +105,61 @@ export function evidence(over: Partial<JanitorEvidence> = {}): JanitorEvidence {
     node: "node-1",
     oomKilled: true,
     startedAt: "2026-11-03T10:00:00Z",
+    ...over,
+  };
+}
+
+// A run as the history lists it and the status names it: no items.
+export function runSummary(over: Partial<JanitorRunSummary> = {}): JanitorRunSummary {
+  return {
+    actor: "u1",
+    actorName: "Ada",
+    counts: {
+      failed: 0,
+      kept: 0,
+      removedContainers: 0,
+      removedImages: 0,
+      removedNetworks: 0,
+      skippedOffline: 0,
+    },
+    durationSeconds: 12,
+    estBytes: null,
+    finishedAt: new Date(Date.now() - 3_588_000).toISOString(),
+    id: "r1",
+    jobId: "j1",
+    reason: "",
+    startedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    state: "completed",
+    trigger: "manual",
+    ...over,
+  };
+}
+
+// The status of an environment's janitor: on, daily at 03:00 in Europe/London, next run in five hours.
+export function janitorStatus(over: Partial<JanitorStatus> = {}): JanitorStatus {
+  return {
+    enabled: true,
+    nextRunAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
+    retention: { days: 90, runs: 100 },
+    schedule: "0 3 * * *",
+    schedulePreset: "daily",
+    timezone: "Europe/London",
+    ...over,
+  };
+}
+
+// A clean-up the Jobs indicator lists.
+export function janitorJob(over: Partial<JanitorJobSummary> = {}): JanitorJobSummary {
+  return {
+    by: "Ada",
+    done: 3,
+    envId: "e1",
+    jobId: "j1",
+    runId: "r1",
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+    state: "running",
+    total: 8,
+    trigger: "manual",
     ...over,
   };
 }

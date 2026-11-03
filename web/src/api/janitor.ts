@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
+import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
 import type { StackLock } from "@/api/stacks";
 
@@ -17,6 +24,10 @@ export type JanitorRun = components["schemas"]["JanitorRunBody"];
 export type JanitorRunItem = components["schemas"]["JanitorRunItemBody"];
 export type JanitorRunStarted = components["schemas"]["JanitorRunStartedBody"];
 export type JanitorEvidence = components["schemas"]["JanitorEvidenceBody"];
+export type JanitorStatus = components["schemas"]["JanitorStatusBody"];
+export type JanitorRunSummary = components["schemas"]["JanitorRunSummaryBody"];
+export type JanitorRunList = components["schemas"]["JanitorRunListBody"];
+export type JanitorJobSummary = components["schemas"]["JanitorJobSummary"];
 
 // The frames of a run's stream (GET .../janitor/runs/{runId}/stream). The server sends them but
 // does not describe them in the OpenAPI document, so they are written here by hand from
@@ -237,4 +248,108 @@ export function useJanitorEvidence(envId: string, runId: string, seq: number | u
     ...janitorEvidenceQuery(envId, runId, seq ?? 0),
     enabled: seq !== undefined,
   });
+}
+
+// The janitor's overview of an environment: its status and the list of its runs. Both sit under one
+// key prefix so the events feed can make them stale together on a container, image, network or
+// service event (a removal or a new stale object changes what the status and the history say).
+export function janitorOverviewKey(envId: string) {
+  return ["env", envId, "janitor", "overview"] as const;
+}
+
+export function janitorStatusKey(envId: string) {
+  return [...janitorOverviewKey(envId), "status"] as const;
+}
+
+export function janitorHistoryKey(envId: string, limit: number) {
+  return [...janitorOverviewKey(envId), "history", limit] as const;
+}
+
+// The runs the history shows to begin with, how many each "Show 25 more" adds, and the most the
+// server answers.
+export const HISTORY_STEP = 25;
+export const HISTORY_MAX = 100;
+
+// janitorStatusQuery is whether the schedule runs the janitor on an environment, when it runs next,
+// the newest run that has ended and the run that is going. Docker is the source of truth, so it is
+// read again on the events described above and every 30 s while the tab is visible (TanStack does
+// not poll a hidden tab).
+export function janitorStatusQuery(envId: string) {
+  return queryOptions({
+    queryKey: janitorStatusKey(envId),
+    queryFn: async (): Promise<JanitorStatus> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/janitor", { params: { path: { envId } } });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+    refetchInterval: LIST_REFETCH_MS,
+  });
+}
+
+// useJanitorStatus reads the status of an environment's janitor; enabled is false for a person who
+// may not read the environment.
+export function useJanitorStatus(envId: string, enabled = true) {
+  return useQuery({ ...janitorStatusQuery(envId), enabled });
+}
+
+// janitorRunsQuery is the newest `limit` runs of an environment, without their items. The rows
+// already on screen stay while a longer list is on its way, so "Show 25 more" does not blank the
+// table.
+export function janitorRunsQuery(envId: string, limit: number) {
+  return queryOptions({
+    queryKey: janitorHistoryKey(envId, limit),
+    queryFn: async (): Promise<JanitorRunList> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/janitor/runs", {
+          params: { path: { envId }, query: { limit } },
+        });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+    placeholderData: keepPreviousData,
+    refetchInterval: LIST_REFETCH_MS,
+  });
+}
+
+// useJanitorRuns reads the run history; enabled is false for a person who may not read the
+// environment.
+export function useJanitorRuns(envId: string, limit: number, enabled = true) {
+  return useQuery({ ...janitorRunsQuery(envId, limit), enabled });
+}
+
+// The key of the clean-ups the Jobs indicator lists.
+export const janitorJobsKey = ["janitor-jobs"] as const;
+
+// Polled every 3 seconds while a clean-up works and every 30 otherwise, as the stack jobs list is.
+export const JANITOR_JOBS_POLL_RUNNING_MS = 3_000;
+export const JANITOR_JOBS_POLL_IDLE_MS = 30_000;
+
+// janitorJobsQuery lists the clean-ups the caller may follow: those working or ended in the last ten
+// minutes, on the environments they may read, a scheduled one included. A poll that fails keeps the
+// last list, so the indicator shows no error chrome for it. A job's own state is the job hub's and
+// not the run's: the indicator words a finished clean-up from the run record (see the frames above).
+export const janitorJobsQuery = queryOptions({
+  queryKey: janitorJobsKey,
+  queryFn: async (): Promise<JanitorJobSummary[]> => {
+    const res = await api.GET("/api/janitor-jobs");
+    if (!res.data) throw failureOf("GET", res);
+    return res.data.jobs ?? [];
+  },
+  refetchInterval: (query) =>
+    query.state.data?.some((j) => j.state === "running")
+      ? JANITOR_JOBS_POLL_RUNNING_MS
+      : JANITOR_JOBS_POLL_IDLE_MS,
+  retry: false,
+});
+
+// useJanitorJobs reads the clean-ups for the Jobs indicator.
+export function useJanitorJobs() {
+  return useQuery(janitorJobsQuery);
 }

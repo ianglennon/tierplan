@@ -146,6 +146,7 @@ describe("invalidationKeys", () => {
   const summary = ["env", "e1", "summary"];
   const list = (resource: string) => ["env", "e1", resource];
   const addressSpace = ["env", "e1", "address-space"];
+  const janitor = ["env", "e1", "janitor", "overview"];
 
   it("maps a container event to the summary, containers, volumes, networks and images", () => {
     expect(invalidationKeys("container", "e1")).toEqual([
@@ -155,6 +156,7 @@ describe("invalidationKeys", () => {
       list("networks"),
       list("images"),
       addressSpace,
+      janitor,
     ]);
   });
 
@@ -176,6 +178,7 @@ describe("invalidationKeys", () => {
       list("networks"),
       list("containers"),
       addressSpace,
+      janitor,
     ]);
   });
 
@@ -189,9 +192,18 @@ describe("invalidationKeys", () => {
     }
   });
 
+  it("makes the janitor's status and history stale on a container, image, network or service event, and on no other", () => {
+    for (const type of ["container", "image", "network", "service"] as const) {
+      expect(invalidationKeys(type, "e1")).toContainEqual(janitor);
+    }
+    for (const type of ["volume", "secret", "config", "node", "tierplan"] as const) {
+      expect(invalidationKeys(type, "e1")).not.toContainEqual(janitor);
+    }
+  });
+
   it("maps a volume event to the summary and volumes, and an image event to the summary and images", () => {
     expect(invalidationKeys("volume", "e1")).toEqual([summary, list("volumes")]);
-    expect(invalidationKeys("image", "e1")).toEqual([summary, list("images")]);
+    expect(invalidationKeys("image", "e1")).toEqual([summary, list("images"), janitor]);
   });
 
   it("makes only the summary stale for a row of TierPlan's own", () => {
@@ -230,6 +242,7 @@ describe("invalidationKeys", () => {
       list("secrets"),
       list("configs"),
       addressSpace,
+      janitor,
     ]);
   });
 
@@ -399,6 +412,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "networks"],
       ["env", "e1", "images"],
       ["env", "e1", "address-space"],
+      ["env", "e1", "janitor", "overview"],
     ]);
 
     // A burst inside the second collapses into one trailing refetch.
@@ -433,6 +447,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "networks"],
       ["env", "e1", "images"],
       ["env", "e1", "address-space"],
+      ["env", "e1", "janitor", "overview"],
       // An invalidate frame carries no attributes, so it may be about a stack's object.
       ["env", "e1", "stacks"],
     ]);
