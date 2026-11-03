@@ -620,3 +620,153 @@ func TestPlatformRebuildNobodyRuns(t *testing.T) {
 		t.Fatalf("amd64 rebuilt, service on amd64: %+v, want update_available naming linux/amd64", v)
 	}
 }
+
+// The registry request budget (plan 12-03, IMG-04, T-12-06): a check is one HEAD, and a read of the
+// index by digest, which Docker Hub counts as a pull, is made only for a digest not seen before.
+
+func TestUnchangedTagCostsOneHeadAndNoGet(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	rows := []dockerx.ServiceRow{
+		row("multi", "docker.io/acme/multi:1@"+dg('1')),
+		row("solo", "docker.io/acme/solo:1@"+dg('2')),
+	}
+	r.heads.setIndex(dg('1'), plats(dg('a'), dg('b')))
+	r.heads.set("docker.io/acme/multi:1", answer{digest: dg('1')})
+	r.heads.set("docker.io/acme/solo:1", answer{digest: dg('2')})
+	ws := workloads(t, rows...)
+
+	// The first time a digest is seen its platforms are read, once.
+	if _, err := r.chk.CheckEnv(ctx, "env-1", ws); err != nil {
+		t.Fatal(err)
+	}
+	if got, heads := r.heads.gets(), r.heads.requests(); got != 2 || heads != 2 {
+		t.Fatalf("first check: %d reads by digest and %d HEADs, want 2 and 2", got, heads)
+	}
+	// Then, however often the tag is checked and found unchanged, it costs a HEAD and nothing else.
+	for range 3 {
+		r.clk.advance(time.Hour)
+		if _, err := r.chk.CheckEnv(ctx, "env-1", ws); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, heads := r.heads.gets(), r.heads.requests(); got != 2 || heads != 8 {
+		t.Errorf("after three more checks: %d reads by digest and %d HEADs, want still 2 reads and 8 HEADs", got, heads)
+	}
+}
+
+func TestMovedTagCostsOneGet(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	rows := []dockerx.ServiceRow{row("web", "docker.io/acme/app:1@"+dg('1'))}
+	ws := workloads(t, rows...)
+	r.heads.setIndex(dg('1'), plats(dg('a'), dg('b')))
+	r.heads.setIndex(dg('2'), plats(dg('a'), dg('c')))
+	r.heads.set("docker.io/acme/app:1", answer{digest: dg('1')})
+	if _, err := r.chk.CheckEnv(ctx, "env-1", ws); err != nil {
+		t.Fatal(err)
+	}
+	gets := r.heads.gets()
+
+	r.heads.set("docker.io/acme/app:1", answer{digest: dg('2')})
+	r.clk.advance(time.Hour)
+	if _, err := r.chk.CheckEnv(ctx, "env-1", ws); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.heads.gets() - gets; got != 1 {
+		t.Errorf("a moved tag cost %d reads by digest, want 1", got)
+	}
+	c := stored(t, r, "docker.io", "acme/app", "1", "")
+	if c.Digest != dg('2') || !c.Index || c.Platforms["linux/arm64"] != dg('c') {
+		t.Errorf("stored = %+v, want the new index with its platforms", c)
+	}
+
+	gets = r.heads.gets()
+	r.clk.advance(time.Hour)
+	if _, err := r.chk.CheckEnv(ctx, "env-1", ws); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.heads.gets() - gets; got != 0 {
+		t.Errorf("the check after it cost %d reads by digest, want 0", got)
+	}
+}
+
+func TestRunIndexFetchedOnce(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	heads := newHeads()
+	heads.setIndex(dg('1'), plats(dg('a'), dg('b')))
+	runs := updates.NewRunIndex()
+	ref, err := registry.ParseRef("docker.io/acme/app:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two environments, and many goroutines in each, ask for the index their services run.
+	var wg sync.WaitGroup
+	for _, env := range []string{"env-1", "env-2"} {
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				p, err := runs.Platforms(ctx, heads, env, ref, dg('1'))
+				if err != nil || p["linux/amd64"] != dg('a') {
+					t.Errorf("Platforms = %v, %v, want the platforms of the index", p, err)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	if got := heads.gets(); got != 1 {
+		t.Errorf("the running index was read %d times, want once", got)
+	}
+
+	// An index the checker is about to replace is remembered without any read.
+	runs.Put(ref, dg('3'), plats(dg('c'), dg('d')))
+	if p, err := runs.Platforms(ctx, heads, "env-1", ref, dg('3')); err != nil || p["linux/arm64"] != dg('d') || heads.gets() != 1 {
+		t.Errorf("a put index: %v, %v after %d reads, want its platforms and no read", p, err, heads.gets())
+	}
+
+	// One that is gone is ErrIndexGone, and a failure is not remembered.
+	heads.goneIndex(dg('4'))
+	if _, err := runs.Platforms(ctx, heads, "env-1", ref, dg('4')); !errors.Is(err, updates.ErrIndexGone) {
+		t.Errorf("a gone index: %v, want ErrIndexGone", err)
+	}
+	heads.setIndex(dg('4'), plats(dg('e'), dg('f')))
+	if p, err := runs.Platforms(ctx, heads, "env-1", ref, dg('4')); err != nil || p["linux/amd64"] != dg('e') {
+		t.Errorf("the index served again: %v, %v, want its platforms", p, err)
+	}
+}
+
+func TestRunningIndexGoneAndServiceWithNoTask(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	r.svc.Aggregator = swarmOf(map[string]string{"n1": "amd64"}, map[string][]string{"gone": {"n1"}})
+	rows := []dockerx.ServiceRow{
+		row("gone", "docker.io/acme/app:1@"+dg('1')),
+		row("notask", "docker.io/acme/app:1@"+dg('1')),
+	}
+	r.heads.setIndex(dg('2'), plats(dg('a'), dg('c')))
+	r.heads.set("docker.io/acme/app:1", answer{digest: dg('2')})
+	r.heads.goneIndex(dg('1'))
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatal(err)
+	}
+	gets := r.heads.gets()
+	got, err := r.svc.ServiceVerdicts(ctx, "env-1", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got["gone"]; v.State != updates.StateUpdateAvailable || v.Note != "running_index_gone" {
+		t.Errorf("gone = %+v, want update_available with the note running_index_gone", v)
+	}
+	if v := got["notask"]; v.State != updates.StateUpdateAvailable || v.Note != "" || len(v.ChangedPlatforms) != 0 {
+		t.Errorf("notask = %+v, want a plain update_available: no task, no platforms to compare", v)
+	}
+	if n := r.heads.gets() - gets; n != 1 {
+		t.Errorf("the verdicts cost %d reads by digest, want 1: the gone index once, none for the service with no task", n)
+	}
+}
