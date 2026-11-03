@@ -255,3 +255,33 @@ func TestAPlatformMemoRemembersAnEmptyAnswer(t *testing.T) {
 		t.Errorf("an answer that conflicts with the empty one left %v, want the entry dropped", got)
 	}
 }
+
+// TestPlatformMemoRemember (12-41): the exported Remember is how an image update hands the platforms its check learned
+// to the deploy. The same environment, repository and digest answer them; another environment or digest answers
+// nothing; no platforms record nothing, so a single-manifest image keeps the deploy's own one daemon call.
+func TestPlatformMemoRemember(t *testing.T) {
+	t.Parallel()
+	both := []swarm.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}}
+
+	m := NewPlatformMemo()
+	m.Remember("env-a", "nginx:1.27", platformsDigestA, both)
+	got, ok := m.recall("env-a", "nginx:1.27", platformsDigestA)
+	if !ok || !slices.Equal(got, both) {
+		t.Fatalf("recall = %v %v, want %v", got, ok, both)
+	}
+	if _, ok := m.recall("env-b", "nginx:1.27", platformsDigestA); ok {
+		t.Error("the memo answered for another environment")
+	}
+	if _, ok := m.recall("env-a", "nginx:1.27", platformsDigestB); ok {
+		t.Error("the memo answered for another digest")
+	}
+
+	m.Remember("env-a", "nginx:1.27", platformsDigestB, nil)
+	m.Remember("env-a", "nginx:1.27", platformsDigestB, []swarm.Platform{})
+	if got, ok := m.recall("env-a", "nginx:1.27", platformsDigestB); ok {
+		t.Errorf("Remember with no platforms recorded %v, want nothing", got)
+	}
+
+	var none *PlatformMemo
+	none.Remember("env-a", "nginx:1.27", platformsDigestA, both) // a nil memo is a no-op, not a panic
+}
