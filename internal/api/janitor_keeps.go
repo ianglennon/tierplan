@@ -180,7 +180,7 @@ func (k keepRef) key() janitor.KeepKey {
 // imageName is what an image is called: its first tag, else its short ID.
 func imageName(img envs.ImageRow) string {
 	for _, t := range img.RepoTags {
-		if t != "" && t != "<none>:<none>" {
+		if !isNoneTag(t) {
 			return t
 		}
 	}
