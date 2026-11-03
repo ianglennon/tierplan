@@ -17,7 +17,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { JanitorPage } from "@/features/janitor/janitor-page";
 import { RunPage } from "@/features/janitor/run-page";
 import "@/i18n";
-import { janitorStatus, preview, previewItem, run, runItem, runSummary } from "@/test-janitor";
+import {
+  janitorPolicy,
+  janitorStatus,
+  preview,
+  previewItem,
+  run,
+  runItem,
+  runSummary,
+} from "@/test-janitor";
 import { makeMe } from "@/test-me";
 
 const ENV = "e1";
@@ -81,6 +89,7 @@ beforeEach(() => {
       if (url.pathname === "/api/me") return Response.json(me);
       if (url.pathname === "/api/environments") return Response.json({ items: [envBody] });
       if (url.pathname === `/api/env/${ENV}/janitor/preview`) return Response.json(previewBody);
+      if (url.pathname === `/api/env/${ENV}/janitor/policy`) return Response.json(janitorPolicy());
       if (url.pathname === `/api/env/${ENV}/janitor/runs` && req.method === "POST") {
         started.calls++;
         started.body = await req.json();
@@ -253,6 +262,30 @@ describe("JanitorPageStatusAndHistory", () => {
     });
     await waitFor(() => expect(closed.getAttribute("aria-expanded")).toBe("false"));
     expect(screen.queryByText("Never touches")).toBeNull();
+  });
+});
+
+describe("JanitorPagePolicy", () => {
+  it("puts the policy under the status and above the history, with the rules note inside it", async () => {
+    mount();
+    const policy = await screen.findByRole("region", { name: "Policy" });
+    expect(policy.id).toBe("policy");
+    const status = await screen.findByRole("region", { name: "Janitor status" });
+    const history = await screen.findByRole("region", { name: "Run history" });
+    expect(status.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(policy.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      await within(policy).findByRole("button", {
+        name: "What the janitor removes and never touches",
+      }),
+    ).toBeTruthy();
+    expect(
+      await within(policy).findByRole("spinbutton", { name: "Exited task containers to keep" }),
+    ).toBeTruthy();
+    // The rules note is not on the page outside the card.
+    expect(
+      screen.getAllByRole("button", { name: "What the janitor removes and never touches" }),
+    ).toHaveLength(1);
   });
 });
 
