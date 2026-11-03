@@ -5,6 +5,7 @@ import type {
   JanitorEvidence,
   JanitorItem,
   JanitorJobSummary,
+  JanitorPolicy,
   JanitorPreview,
   JanitorRun,
   JanitorRunItem,
@@ -144,6 +145,32 @@ export function janitorStatus(over: Partial<JanitorStatus> = {}): JanitorStatus 
     schedule: "0 3 * * *",
     schedulePreset: "daily",
     timezone: "Europe/London",
+    ...over,
+  };
+}
+
+// An environment's janitor policy as the server answers it: every field follows the instance default
+// (on, daily at 03:00, keep 2, 24 hours, both opt-ins off) until a test overrides it. Pass `defaults`
+// to change what the defaults are, and a field to give it an own value.
+export function janitorPolicy(over: Partial<JanitorPolicy> = {}): JanitorPolicy {
+  return {
+    version: 3,
+    timezone: "Europe/London",
+    enabled: { value: true, overridden: false },
+    schedule: { value: "0 3 * * *", preset: "daily", overridden: false },
+    keepN: { value: 2, overridden: false },
+    graceHours: { value: 24, overridden: false },
+    removeUnusedNetworks: { value: false, overridden: false },
+    removeStoppedContainers: { value: false, overridden: false },
+    defaults: {
+      enabled: true,
+      schedule: "0 3 * * *",
+      schedulePreset: "daily",
+      keepN: 2,
+      graceHours: 24,
+      removeUnusedNetworks: false,
+      removeStoppedContainers: false,
+    },
     ...over,
   };
 }

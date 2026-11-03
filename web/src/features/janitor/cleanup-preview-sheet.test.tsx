@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import type { JanitorPolicyFields } from "@/api/janitor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CleanupPreviewSheet } from "@/features/janitor/cleanup-preview-sheet";
 import "@/i18n";
@@ -31,6 +32,8 @@ const problem = (type: string, status: number, errors: { location: string; messa
 let me: ReturnType<typeof makeMe>;
 let previews: ReturnType<typeof preview>[];
 let asked: number;
+// The body of each preview request, as text: empty when the sheet asked for the saved policy.
+let previewRequests: string[];
 let started: { items: { type: string; nodeId: string; ref: string }[] } | undefined;
 // What the stubbed server answers instead of the usual, when a test needs it to.
 let previewAnswer: (() => Response | Promise<Response>) | undefined;
@@ -51,6 +54,7 @@ beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "admin" } });
   previews = [];
   asked = 0;
+  previewRequests = [];
   started = undefined;
   previewAnswer = undefined;
   runsAnswer = undefined;
@@ -66,6 +70,7 @@ beforeEach(() => {
       if (url.pathname === `/api/env/${ENV}/janitor/preview`) {
         const body = previews[Math.min(asked, previews.length - 1)];
         asked++;
+        previewRequests.push(await req.text());
         if (previewAnswer) return previewAnswer();
         return Response.json(body);
       }
@@ -482,5 +487,110 @@ describe("names and reasons that hold markup", () => {
     for (const tag of ["script", "img", "b", "i", "u"]) {
       expect(sheet.querySelector(tag)).toBeNull();
     }
+  });
+});
+
+describe("the preview sheet in policy mode", () => {
+  const candidate: JanitorPolicyFields = { keepN: 0, graceHours: null };
+
+  function mountPolicy(
+    onSavePolicy: () => Promise<boolean>,
+    onOpenChange: (open: boolean) => void = () => {},
+  ) {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <CleanupPreviewSheet
+              mode="policy"
+              envId={ENV}
+              envName="Prod"
+              swarm
+              nodeCount={2}
+              policy={candidate}
+              onSavePolicy={onSavePolicy}
+              onOpenChange={onOpenChange}
+            />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("previews the edited policy, offers nothing to tick and says when saving applies", async () => {
+    previews = [mixed()];
+    mountPolicy(async () => true);
+    const sheet = await screen.findByRole("dialog", { name: "What this policy would remove" });
+    expect(
+      within(sheet).getByText(
+        "Here is what the janitor would remove with the policy you've edited. Nothing is removed by saving.",
+      ),
+    ).toBeTruthy();
+    await within(sheet).findByText("web.1.aaa");
+
+    // The request carried the candidate, and the summary covers every item with nothing to untick.
+    expect(JSON.parse(previewRequests[0] ?? "")).toEqual({ policy: candidate });
+    expect(visibleLine()).toBe("Would remove 3 containers, 1 network, 1 image, ~600 MB");
+    expect(within(sheet).queryAllByRole("checkbox")).toHaveLength(0);
+    expect(within(sheet).queryByRole("button", { name: /^Remove / })).toBeNull();
+    expect(within(sheet).getByText("Saving applies from the next run.")).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Save policy" })).toBeTruthy();
+  });
+
+  it("starts with focus on the summary", async () => {
+    previews = [mixed()];
+    mountPolicy(async () => true);
+    const sheet = await screen.findByRole("dialog", { name: "What this policy would remove" });
+    const summary = within(sheet).getByRole("group", { name: "What the policy would remove" });
+    await waitFor(() => expect(document.activeElement).toBe(summary));
+    // The summary itself is inside what holds focus once the preview has come.
+    await within(sheet).findByText("web.1.aaa");
+    expect(summary.contains(document.querySelector('[data-slot="preview-summary"]'))).toBe(true);
+  });
+
+  it("saves the policy once and closes, whatever the save answers", async () => {
+    for (const saved of [true, false]) {
+      cleanup();
+      previews = [mixed()];
+      const save = vi.fn(async () => saved);
+      const closed = vi.fn();
+      mountPolicy(save, closed);
+      const sheet = await screen.findByRole("dialog", { name: "What this policy would remove" });
+      const button = await within(sheet).findByRole("button", { name: "Save policy" });
+      await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+      fireEvent.click(button);
+      fireEvent.click(button);
+      await waitFor(() => expect(closed).toHaveBeenCalledWith(false));
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(started).toBeUndefined();
+    }
+  });
+
+  it("still offers Save policy when nothing would be removed", async () => {
+    previews = [preview({ items: [] })];
+    mountPolicy(async () => true);
+    const sheet = await screen.findByRole("dialog", { name: "What this policy would remove" });
+    expect(await within(sheet).findByText("Nothing to clean up")).toBeTruthy();
+    const button = within(sheet).getByRole("button", { name: "Save policy" });
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  });
+
+  it("does not offer Save policy until the preview has come, and keeps Cancel", async () => {
+    previews = [mixed()];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    previewAnswer = async () => {
+      await gate;
+      return Response.json(previews[0]);
+    };
+    mountPolicy(async () => true);
+    const sheet = await screen.findByRole("dialog", { name: "What this policy would remove" });
+    const button = within(sheet).getByRole("button", { name: "Save policy" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(within(sheet).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    release();
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
   });
 });

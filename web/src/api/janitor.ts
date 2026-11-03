@@ -8,6 +8,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
@@ -28,6 +29,11 @@ export type JanitorStatus = components["schemas"]["JanitorStatusBody"];
 export type JanitorRunSummary = components["schemas"]["JanitorRunSummaryBody"];
 export type JanitorRunList = components["schemas"]["JanitorRunListBody"];
 export type JanitorJobSummary = components["schemas"]["JanitorJobSummary"];
+export type JanitorPolicy = components["schemas"]["JanitorPolicyBody"];
+export type JanitorPolicyFields = components["schemas"]["JanitorPolicyFields"];
+export type JanitorPolicyRequest = components["schemas"]["JanitorPolicyRequest"];
+export type SchedulePreview = components["schemas"]["SchedulePreviewBody"];
+export type SchedulePreset = NonNullable<JanitorPolicyFields["schedulePreset"]>;
 
 // The frames of a run's stream (GET .../janitor/runs/{runId}/stream). The server sends them but
 // does not describe them in the OpenAPI document, so they are written here by hand from
@@ -122,15 +128,18 @@ function failureOf(method: string, res: { error?: unknown; response: Response })
 // useJanitorPreview asks for a dry run. It is a mutation and not a query on purpose: the preview is
 // computed from Docker at the moment it is asked for, and nothing may ask for it again in the
 // background, because that would reset the ticks under a person's hands. The sheet calls it on open
-// and on Refresh preview, and it is not retried.
+// and on Refresh preview, and it is not retried. The variable is a candidate policy (the fields a
+// save of the policy card would store): with it the preview shows what that policy would remove,
+// without it the saved policy. Nothing is saved either way.
 export function useJanitorPreview(envId: string) {
-  return useMutation<JanitorPreview, JanitorRequestError, void>({
+  return useMutation<JanitorPreview, JanitorRequestError, JanitorPolicyFields | undefined>({
     retry: false,
     gcTime: 0,
-    mutationFn: async () => {
+    mutationFn: async (policy) => {
       try {
         const res = await api.POST("/api/env/{envId}/janitor/preview", {
           params: { path: { envId } },
+          ...(policy ? { body: { policy } } : {}),
         });
         if (!res.data) throw failureOf("POST", res);
         return res.data;
@@ -352,4 +361,119 @@ export const janitorJobsQuery = queryOptions({
 // useJanitorJobs reads the clean-ups for the Jobs indicator.
 export function useJanitorJobs() {
   return useQuery(janitorJobsQuery);
+}
+
+// The key of one environment's janitor policy. The schedule previews sit under it, so one
+// invalidation of the policy makes them stale together.
+export function janitorPolicyKey(envId: string) {
+  return ["env", envId, "janitor", "policy"] as const;
+}
+
+// janitorPolicyQuery is an environment's janitor policy: for each field the value that applies and
+// whether the environment set it itself, the instance defaults, the version to send back with a save
+// and the server's time zone. The defaults come with it because the instance defaults route is for
+// instance admins only. It is read when the page opens and when the window regains focus, not on a
+// timer: a person's unsaved edits are kept against the snapshot they began from.
+export function janitorPolicyQuery(envId: string) {
+  return queryOptions({
+    queryKey: janitorPolicyKey(envId),
+    queryFn: async (): Promise<JanitorPolicy> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/janitor/policy", {
+          params: { path: { envId } },
+        });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("GET", 0);
+      }
+    },
+  });
+}
+
+// useJanitorPolicy reads the policy; enabled is false for a person who may not read the environment.
+export function useJanitorPolicy(envId: string, enabled = true) {
+  return useQuery({ ...janitorPolicyQuery(envId), enabled });
+}
+
+// useSaveJanitorPolicy saves the whole policy (a PUT is a full replace: a field that is null follows
+// the default). It is never retried (P2 D-42). The answer is the policy as saved and replaces what the
+// page holds; the status is made stale because the schedule or the switch may have moved the next run.
+// A save made against another version is 409 settings_changed, and an unusable schedule 422
+// invalid_schedule or schedule_too_frequent.
+export function useSaveJanitorPolicy(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<JanitorPolicy, JanitorRequestError, JanitorPolicyRequest>({
+    retry: false,
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/janitor/policy", {
+          params: { path: { envId } },
+          body,
+        });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof JanitorRequestError ? e : new JanitorRequestError("PUT", 0);
+      }
+    },
+    onSuccess: (saved) => queryClient.setQueryData(janitorPolicyKey(envId), saved),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: janitorOverviewKey(envId) }),
+  });
+}
+
+// conflictOf is who saved the policy last, as a 409 settings_changed names them. Empty when the
+// server did not know the person.
+export function conflictOf(err: JanitorRequestError): string {
+  return err.fieldOf("changedBy");
+}
+
+// How long after the last keystroke the server is asked what a cron expression would do. The server
+// holds a person to 120 calls a minute, so typing never gets near it.
+export const SCHEDULE_DEBOUNCE_MS = 400;
+
+export interface SchedulePreviewState {
+  // The server's answer for the expression as it stands now. Undefined while the person is still
+  // typing, while the answer is on its way, for a blank expression and when the question failed.
+  data: SchedulePreview | undefined;
+  // True from a keystroke until the answer to it has come.
+  waiting: boolean;
+}
+
+// useSchedulePreview asks the server which times an expression would run at, 400 ms after the last
+// change. The times are the scheduler's own (it does the cron arithmetic, with the environment's
+// start offset); the browser does none. It reads only, so asking again is harmless. enabled is false
+// for a preset, whose times need no question.
+export function useSchedulePreview(
+  envId: string,
+  schedule: string,
+  enabled = true,
+): SchedulePreviewState {
+  const typed = schedule.trim();
+  const [settled, setSettled] = useState(typed);
+  useEffect(() => {
+    if (typed === settled) return;
+    const id = setTimeout(() => setSettled(typed), SCHEDULE_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [typed, settled]);
+  const asking = enabled && settled !== "";
+  const query = useQuery({
+    queryKey: [...janitorPolicyKey(envId), "schedule-preview", settled] as const,
+    queryFn: async (): Promise<SchedulePreview> => {
+      const res = await api.POST("/api/env/{envId}/janitor/schedule-preview", {
+        params: { path: { envId } },
+        body: { schedule: settled },
+      });
+      if (!res.data) throw failureOf("POST", res);
+      return res.data;
+    },
+    enabled: asking,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const current = typed === settled;
+  return {
+    data: asking && current ? query.data : undefined,
+    waiting: enabled && typed !== "" && (!current || query.isFetching),
+  };
 }

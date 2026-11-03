@@ -14,7 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { CleanupPreviewSheet } from "@/features/janitor/cleanup-preview-sheet";
-import { RulesNote } from "@/features/janitor/rules-note";
+import { PolicyCard } from "@/features/janitor/policy-card";
 import { RunHistoryCard } from "@/features/janitor/run-history-card";
 import { StatusCard } from "@/features/janitor/status-card";
 import { useEnvName } from "@/features/resources/use-env-name";
@@ -33,7 +33,8 @@ interface JanitorPageProps {
 
 // JanitorPage is where an operator cleans an environment (D-13): the title, what the janitor does and
 // never does, and Clean now, which opens the dry run, then whether the janitor is on, what it last
-// did and when it runs next, and every run it has made. Clean now is the page's one accent control.
+// did and when it runs next, its policy (with the note on what it removes and never touches), and
+// every run it has made. Clean now is the page's one accent control.
 export function JanitorPage({ envId, limit, onLimitChange }: JanitorPageProps) {
   const t = useT();
   const hintId = useId();
@@ -111,7 +112,13 @@ export function JanitorPage({ envId, limit, onLimitChange }: JanitorPageProps) {
         <StatusCard envId={envId} status={status.data} loading={status.isPending} />
       )}
 
-      {status.data ? <RulesNote firstRunDone={status.data.lastRun !== undefined} /> : null}
+      <PolicyCard
+        envId={envId}
+        envName={envName}
+        swarm={swarm}
+        nodeCount={env?.nodes?.total ?? 1}
+        firstRunDone={status.data ? status.data.lastRun !== undefined : undefined}
+      />
 
       <RunHistoryCard
         envId={envId}

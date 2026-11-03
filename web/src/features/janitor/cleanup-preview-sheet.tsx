@@ -8,6 +8,7 @@ import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } 
 
 import {
   type JanitorItem,
+  type JanitorPolicyFields,
   type JanitorPreview,
   JanitorRequestError,
   lockOfError,
@@ -44,7 +45,9 @@ import { cn } from "@/lib/utils";
 
 const ROW = "h-9 max-md:h-11";
 const CELL = "px-3 py-0";
-const COLUMNS = 5;
+// The columns of a section's table: a tick, the name, the reason, the age and the size. A preview of
+// a policy has nothing to tick, and so no first column.
+const columnsOf = (selectable: boolean) => (selectable ? 5 : 4);
 
 // A section with more rows than this draws only the rows in view; the ticks and the summary always
 // cover every row (UI-SPEC "Long lists").
@@ -128,13 +131,23 @@ interface CleanupPreviewSheetProps {
   onOpenChange: (open: boolean) => void;
   // Called with the operation that holds the environment when Remove is refused.
   onLocked?: (lock: StackLock) => void;
+  // clean (the default) previews the saved policy and its commit removes the ticked items. policy
+  // previews a policy that is being edited and has not been saved: nothing in it can be removed or
+  // ticked, and its commit saves the policy.
+  mode?: "clean" | "policy";
+  // In policy mode, the policy to preview: the fields a save of it would store.
+  policy?: JanitorPolicyFields;
+  // In policy mode, saves the policy. It answers whether it was saved; the sheet closes either way,
+  // because a refusal is worded where the policy is edited.
+  onSavePolicy?: () => Promise<boolean>;
 }
 
 // CleanupPreviewSheet is the dry run and its confirmation (D-14): everything the janitor would
 // remove now, grouped by type and node, every item ticked, with the reason in words. Remove sends
 // exactly the ticked items; the server decides again, from a fresh read, for each of them. The
 // preview is asked for on open and on Refresh preview and never in the background, so the ticks are
-// never reset under a person's hands.
+// never reset under a person's hands. In policy mode it is the preview before a policy is saved
+// (JAN-08): the same list for the edited policy, with nothing to tick and "Save policy" as its commit.
 export function CleanupPreviewSheet({
   envId,
   envName,
@@ -142,14 +155,21 @@ export function CleanupPreviewSheet({
   nodeCount,
   onOpenChange,
   onLocked,
+  mode = "clean",
+  policy,
+  onSavePolicy,
 }: CleanupPreviewSheetProps) {
   const t = useT();
+  const inPolicyMode = mode === "policy";
   const navigate = useNavigate();
   const preview = useJanitorPreview(envId);
   const start = useStartJanitorRun(envId);
   const needs = useNeeds("janitor.run", envId);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // Where focus starts in policy mode: the summary, which says what the policy would do.
+  const summaryRef = useRef<HTMLDivElement>(null);
   const asked = useRef(false);
+  const [savingPolicy, setSavingPolicy] = useState(false);
   // The operation that held the environment when Remove was last refused. It is shown at the top of the
   // sheet and the commit stays off until the preview is asked for again.
   const [lock, setLock] = useState<StackLock | undefined>();
@@ -157,8 +177,8 @@ export function CleanupPreviewSheet({
   useEffect(() => {
     if (asked.current) return;
     asked.current = true;
-    preview.mutate();
-  }, [preview.mutate]);
+    preview.mutate(policy);
+  }, [preview.mutate, policy]);
 
   const data: JanitorPreview | undefined = preview.data;
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -172,8 +192,8 @@ export function CleanupPreviewSheet({
     set: new Set(),
   });
   const ticked = useMemo(
-    () => (ticks.of === data ? ticks.set : new Set(items.map(itemKey))),
-    [ticks, data, items],
+    () => (ticks.of === data && !inPolicyMode ? ticks.set : new Set(items.map(itemKey))),
+    [ticks, data, items, inPolicyMode],
   );
   function toggle(key: string) {
     const next = new Set(ticked);
@@ -220,7 +240,20 @@ export function CleanupPreviewSheet({
   // Asking again is a fresh look: the ticks start over and a lock that was seen is forgotten.
   function ask() {
     setLock(undefined);
-    preview.mutate();
+    preview.mutate(policy);
+  }
+
+  // Saving the policy closes the sheet whether or not it was saved: a refusal is worded on the policy
+  // card, which is what the person sees once the sheet is gone.
+  async function savePolicy() {
+    if (savingPolicy || !onSavePolicy) return;
+    setSavingPolicy(true);
+    try {
+      await onSavePolicy();
+    } finally {
+      setSavingPolicy(false);
+      onOpenChange(false);
+    }
   }
 
   async function remove() {
@@ -262,30 +295,48 @@ export function CleanupPreviewSheet({
         className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl"
         onOpenAutoFocus={(e) => {
           e.preventDefault();
-          cancelRef.current?.focus();
+          (inPolicyMode ? summaryRef : cancelRef).current?.focus();
         }}
       >
         <SheetHeader className="border-b pe-12">
           <SheetTitle className="break-all">
-            {t("janitor.preview.title", { env: envName })}
+            {inPolicyMode
+              ? t("janitorPolicy.sheet.title")
+              : t("janitor.preview.title", { env: envName })}
           </SheetTitle>
-          <SheetDescription>{t("janitor.preview.description")}</SheetDescription>
-          {data && items.length > 0 ? (
-            <PreviewSummary
-              key={data.previewedAt}
-              line={summaryLine({ ...line.counts, estBytes: line.estBytes }, t)}
-              sized={line.estBytes !== null && ticked.size > 0}
-              note={
-                <>
-                  {t("janitor.preview.summary.note", { ticked: ticked.size, total: items.length })}{" "}
-                  {t("janitor.preview.summary.previewed")} <RelativeTime value={data.previewedAt} />
-                  .
-                </>
-              }
-              refreshing={preview.isPending}
-              onRefresh={ask}
-            />
-          ) : null}
+          <SheetDescription>
+            {inPolicyMode ? t("janitorPolicy.sheet.description") : t("janitor.preview.description")}
+          </SheetDescription>
+          <div
+            ref={summaryRef}
+            className="outline-none"
+            {...(inPolicyMode
+              ? {
+                  role: "group",
+                  "aria-label": t("janitorPolicy.sheet.summaryRegion"),
+                  tabIndex: -1,
+                }
+              : {})}
+          >
+            {data && items.length > 0 ? (
+              <PreviewSummary
+                key={data.previewedAt}
+                line={summaryLine({ ...line.counts, estBytes: line.estBytes }, t)}
+                sized={line.estBytes !== null && ticked.size > 0}
+                note={
+                  <>
+                    {inPolicyMode
+                      ? null
+                      : `${t("janitor.preview.summary.note", { ticked: ticked.size, total: items.length })} `}
+                    {t("janitor.preview.summary.previewed")}{" "}
+                    <RelativeTime value={data.previewedAt} />.
+                  </>
+                }
+                refreshing={preview.isPending}
+                onRefresh={ask}
+              />
+            ) : null}
+          </div>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto px-4 py-4 md:px-6">
           {lock || data?.withheldNodes?.length || data?.networksWithheld ? (
@@ -341,6 +392,7 @@ export function CleanupPreviewSheet({
               key={group.type}
               group={group}
               swarm={swarm}
+              selectable={!inPolicyMode}
               ticked={ticked}
               onToggle={toggle}
               onToggleGroup={toggleGroup}
@@ -353,8 +405,19 @@ export function CleanupPreviewSheet({
         <PreviewFooter
           cancelRef={cancelRef}
           onCancel={() => onOpenChange(false)}
+          appliesNext={inPolicyMode}
           commit={
-            data && items.length > 0 ? (
+            inPolicyMode ? (
+              <Button
+                type="button"
+                className="max-md:h-11"
+                disabled={savingPolicy || !data}
+                onClick={() => void savePolicy()}
+              >
+                {savingPolicy ? <Spinner aria-hidden="true" /> : null}
+                {savingPolicy ? t("janitorPolicy.sheet.saving") : t("janitorPolicy.sheet.save")}
+              </Button>
+            ) : data && items.length > 0 ? (
               <NeedsTooltip reason={removeReason}>
                 <Button
                   type="button"
@@ -456,15 +519,20 @@ interface PreviewFooterProps {
   onCancel: () => void;
   // The destructive commit, or nothing when there is nothing to remove.
   commit: ReactNode;
+  // True in policy mode, which says when a saved policy takes effect.
+  appliesNext?: boolean;
 }
 
 // The footer stays in view: what TierPlan does before it removes anything, Cancel (where focus
 // starts) and the commit.
-function PreviewFooter({ cancelRef, onCancel, commit }: PreviewFooterProps) {
+function PreviewFooter({ cancelRef, onCancel, commit, appliesNext }: PreviewFooterProps) {
   const t = useT();
   return (
     <SheetFooter className="sticky bottom-0 mt-0 flex-col gap-3 border-t bg-popover md:px-6">
       <p className="text-xs text-muted-foreground">{t("janitor.preview.footer.note")}</p>
+      {appliesNext ? (
+        <p className="text-xs text-muted-foreground">{t("janitorPolicy.sheet.appliesNext")}</p>
+      ) : null}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button
           ref={cancelRef}
@@ -484,6 +552,8 @@ function PreviewFooter({ cancelRef, onCancel, commit }: PreviewFooterProps) {
 interface TypeSectionProps {
   group: TypeGroupData;
   swarm: boolean;
+  // False in a preview of a policy: nothing can be ticked, so there are no checkboxes.
+  selectable: boolean;
   ticked: ReadonlySet<string>;
   onToggle: (key: string) => void;
   onToggleGroup: (items: readonly JanitorItem[]) => void;
@@ -491,7 +561,14 @@ interface TypeSectionProps {
 
 // A type section is a collapsible card, open to start with: its title says how many there are and
 // its checkbox ticks them all.
-function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSectionProps) {
+function TypeSection({
+  group,
+  swarm,
+  selectable,
+  ticked,
+  onToggle,
+  onToggleGroup,
+}: TypeSectionProps) {
   const t = useT();
   const rows = useMemo(() => rowsOf(group, swarm), [group, swarm]);
   // The scrolling element is state and not a ref: the rows below it ask for it before React has set a
@@ -505,6 +582,7 @@ function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSect
       <NodeGroup
         key={row.key}
         node={row.node}
+        selectable={selectable}
         state={triState(row.node.items, ticked)}
         onToggle={() => onToggleGroup(row.node.items)}
       />
@@ -512,6 +590,7 @@ function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSect
       <PreviewRow
         key={row.key}
         item={row.item}
+        selectable={selectable}
         ticked={ticked.has(row.key)}
         onToggle={() => onToggle(row.key)}
       />
@@ -521,13 +600,15 @@ function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSect
     <Collapsible defaultOpen asChild>
       <section aria-label={title} className="rounded-lg border">
         <div className="flex h-12 items-center gap-1 ps-3">
-          <SelectCheckbox
-            checked={triState(group.items, ticked)}
-            label={t("janitor.preview.selectAll", {
-              group: t(`janitor.preview.groups.${group.type}`),
-            })}
-            onToggle={() => onToggleGroup(group.items)}
-          />
+          {selectable ? (
+            <SelectCheckbox
+              checked={triState(group.items, ticked)}
+              label={t("janitor.preview.selectAll", {
+                group: t(`janitor.preview.groups.${group.type}`),
+              })}
+              onToggle={() => onToggleGroup(group.items)}
+            />
+          ) : null}
           <CollapsibleTrigger className="group flex h-full min-w-0 flex-1 items-center justify-between gap-2 px-3 text-start text-base font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
             <span>{title}</span>
             <ChevronDown
@@ -544,7 +625,7 @@ function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSect
             <table className="w-full caption-bottom text-sm">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-11" />
+                  {selectable ? <TableHead className="w-11" /> : null}
                   <TableHead className="min-w-48">{t("janitor.preview.columns.name")}</TableHead>
                   <TableHead className="min-w-64">{t("janitor.preview.columns.reason")}</TableHead>
                   <TableHead className="w-24">{t("janitor.preview.columns.age")}</TableHead>
@@ -555,7 +636,12 @@ function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSect
               </TableHeader>
               <TableBody>
                 {virtual ? (
-                  <VirtualRows rows={rows} scroller={scroller} renderRow={renderRow} />
+                  <VirtualRows
+                    rows={rows}
+                    scroller={scroller}
+                    renderRow={renderRow}
+                    columns={columnsOf(selectable)}
+                  />
                 ) : (
                   rows.map(renderRow)
                 )}
@@ -572,6 +658,8 @@ interface VirtualRowsProps<T extends { key: string }> {
   rows: readonly T[];
   scroller: HTMLDivElement | null;
   renderRow: (row: T) => ReactNode;
+  // How many columns the table has, for the spacer rows.
+  columns: number;
 }
 
 // VirtualRows draws the rows in view between two spacer rows that hold the height of the rest, so
@@ -580,6 +668,7 @@ function VirtualRows<T extends { key: string }>({
   rows,
   scroller,
   renderRow,
+  columns,
 }: VirtualRowsProps<T>) {
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -597,7 +686,7 @@ function VirtualRows<T extends { key: string }>({
     <>
       {before > 0 ? (
         <tr style={{ height: before }}>
-          <td colSpan={COLUMNS} />
+          <td colSpan={columns} />
         </tr>
       ) : null}
       {inView.map((v) => {
@@ -606,7 +695,7 @@ function VirtualRows<T extends { key: string }>({
       })}
       {after > 0 ? (
         <tr style={{ height: after }}>
-          <td colSpan={COLUMNS} />
+          <td colSpan={columns} />
         </tr>
       ) : null}
     </>
@@ -615,23 +704,26 @@ function VirtualRows<T extends { key: string }>({
 
 interface NodeGroupProps {
   node: NodeGroupData;
+  selectable: boolean;
   state: TriState;
   onToggle: () => void;
 }
 
 // A node's header row inside a type section: its name, how many items it holds and a checkbox for them.
-function NodeGroup({ node, state, onToggle }: NodeGroupProps) {
+function NodeGroup({ node, selectable, state, onToggle }: NodeGroupProps) {
   const t = useT();
   return (
     <TableRow className={cn(ROW, "bg-muted/50")}>
-      <TableCell className={cn(CELL, "w-11")}>
-        <SelectCheckbox
-          checked={state}
-          label={t("janitor.preview.selectAll", { group: node.node })}
-          onToggle={onToggle}
-        />
-      </TableCell>
-      <TableCell colSpan={COLUMNS - 1} className={CELL}>
+      {selectable ? (
+        <TableCell className={cn(CELL, "w-11")}>
+          <SelectCheckbox
+            checked={state}
+            label={t("janitor.preview.selectAll", { group: node.node })}
+            onToggle={onToggle}
+          />
+        </TableCell>
+      ) : null}
+      <TableCell colSpan={columnsOf(selectable) - (selectable ? 1 : 0)} className={CELL}>
         <span className="font-mono text-xs font-semibold">{node.node}</span>{" "}
         <span className="text-xs text-muted-foreground">
           {t("janitor.preview.nodeGroup.items", { count: node.items.length })}
@@ -643,23 +735,26 @@ function NodeGroup({ node, state, onToggle }: NodeGroupProps) {
 
 interface PreviewRowProps {
   item: JanitorItem;
+  selectable: boolean;
   ticked: boolean;
   onToggle: () => void;
 }
 
 // PreviewRow is one thing the janitor would remove: its name (text, never markup), the reason in
 // words and how long it has waited and how much it holds.
-function PreviewRow({ item, ticked, onToggle }: PreviewRowProps) {
+function PreviewRow({ item, selectable, ticked, onToggle }: PreviewRowProps) {
   const t = useT();
   return (
     <TableRow className={ROW}>
-      <TableCell className={cn(CELL, "w-11")}>
-        <SelectCheckbox
-          checked={ticked}
-          label={t("janitor.preview.selectItem", { name: item.name })}
-          onToggle={onToggle}
-        />
-      </TableCell>
+      {selectable ? (
+        <TableCell className={cn(CELL, "w-11")}>
+          <SelectCheckbox
+            checked={ticked}
+            label={t("janitor.preview.selectItem", { name: item.name })}
+            onToggle={onToggle}
+          />
+        </TableCell>
+      ) : null}
       <TableCell className={cn(CELL, "min-w-48")}>
         <TruncatedText mono>{item.name}</TruncatedText>
       </TableCell>
@@ -746,7 +841,7 @@ function NotRemovedList({ envId, items }: { envId: string; items: readonly Janit
             <table className="w-full caption-bottom text-sm">
               <TableBody>
                 {virtual ? (
-                  <VirtualRows rows={rows} scroller={scroller} renderRow={renderRow} />
+                  <VirtualRows rows={rows} scroller={scroller} renderRow={renderRow} columns={3} />
                 ) : (
                   rows.map(renderRow)
                 )}
