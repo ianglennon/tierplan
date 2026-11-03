@@ -45,11 +45,12 @@ type answer struct {
 type fakeHeads struct {
 	mu      sync.Mutex
 	answers map[string]answer
+	byEnv   map[string]answer
 	calls   map[string]int
 }
 
 func newHeads() *fakeHeads {
-	return &fakeHeads{answers: map[string]answer{}, calls: map[string]int{}}
+	return &fakeHeads{answers: map[string]answer{}, byEnv: map[string]answer{}, calls: map[string]int{}}
 }
 
 // set scripts the answer for a tag: host/path:tag.
@@ -57,6 +58,14 @@ func (f *fakeHeads) set(tag string, a answer) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.answers[tag] = a
+}
+
+// setEnv scripts the answer for a tag as one environment asks it, which is how a credential of that
+// environment's own makes the registry answer differently.
+func (f *fakeHeads) setEnv(env, tag string, a answer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byEnv[env+"|"+tag] = a
 }
 
 func (f *fakeHeads) requests() int {
@@ -69,12 +78,15 @@ func (f *fakeHeads) requests() int {
 	return n
 }
 
-func (f *fakeHeads) Digest(_ context.Context, _ string, ref registry.Ref) (string, string, error) {
+func (f *fakeHeads) Digest(_ context.Context, envID string, ref registry.Ref) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k := ref.Repo() + ":" + ref.Tag
 	f.calls[k]++
-	a, ok := f.answers[k]
+	a, ok := f.byEnv[envID+"|"+k]
+	if !ok {
+		a, ok = f.answers[k]
+	}
 	if !ok {
 		return "", "", errors.New("connection refused")
 	}
@@ -261,5 +273,221 @@ func TestCheckEnvThenServiceVerdicts(t *testing.T) {
 	}
 	if v := got["never"]; v.State != updates.StateNotChecked {
 		t.Errorf("never = %+v, want not_checked", v)
+	}
+}
+
+func TestChecksKeyedByCredential(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	r.addEnvironment(t, "env-a")
+	r.addEnvironment(t, "env-b")
+	credA, err := r.reg.Create(ctx, registry.CreateInput{
+		EnvID: "env-a", Name: "in-a", Type: registry.TypeGHCR, Prefix: "acme", Username: "bot", Secret: "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+	}, "admin-1", nil)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	rows := []dockerx.ServiceRow{row("app", "ghcr.io/acme/private:1@"+dg('1'))}
+	const tag = "ghcr.io/acme/private:1"
+	// Environment A signs in and sees the private build; environment B has no credential and sees the
+	// public one.
+	r.heads.setEnv("env-a", tag, answer{digest: dg('1'), credID: credA.ID})
+	r.heads.setEnv("env-b", tag, answer{digest: dg('2'), credID: ""})
+
+	for _, env := range []string{"env-a", "env-b"} {
+		if _, err := r.chk.CheckEnv(ctx, env, workloads(t, rows...)); err != nil {
+			t.Fatalf("CheckEnv %s: %v", env, err)
+		}
+	}
+	if got := stored(t, r, "ghcr.io", "acme/private", "1", credA.ID); got.Digest != dg('1') {
+		t.Errorf("A's row digest = %q, want %q", got.Digest, dg('1'))
+	}
+	if got := stored(t, r, "ghcr.io", "acme/private", "1", ""); got.Digest != dg('2') {
+		t.Errorf("the anonymous row digest = %q, want %q", got.Digest, dg('2'))
+	}
+
+	r.clk.advance(time.Minute)
+	a, err := r.svc.ServiceVerdicts(ctx, "env-a", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := r.svc.ServiceVerdicts(ctx, "env-b", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := a["app"]; v.State != updates.StateUpToDate || v.RemoteDigest != dg('1') {
+		t.Errorf("environment A = %+v, want up_to_date from its own row", v)
+	}
+	if v := b["app"]; v.State != updates.StateUpdateAvailable || v.RemoteDigest != dg('2') {
+		t.Errorf("environment B = %+v, want update_available from the anonymous row, never A's", v)
+	}
+}
+
+func TestReasonOfTable(t *testing.T) {
+	t.Parallel()
+	for code, want := range map[string]updates.Reason{
+		"sign_in_refused":      updates.ReasonAuth,
+		"no_pull_access":       updates.ReasonAuth,
+		"rate_limited":         updates.ReasonRateLimited,
+		"registry_unreachable": updates.ReasonUnreachable,
+		"registry_tls":         updates.ReasonUnreachable,
+		"registry_http":        updates.ReasonUnreachable,
+		"repository_not_found": updates.ReasonNotFound,
+		"tag_not_found":        updates.ReasonNotFound,
+		"check_failed":         updates.ReasonOther,
+		"no_login_asked":       updates.ReasonOther,
+		"":                     updates.ReasonOther,
+		"something_new":        updates.ReasonOther,
+	} {
+		if got := updates.ReasonOf(code); got != want {
+			t.Errorf("ReasonOf(%q) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestRegistryTextNeverStored(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	rows := []dockerx.ServiceRow{row("a", "example.com/private/svc:1@"+dg('a'))}
+	r.heads.set("example.com/private/svc:1", answer{err: unauthorized("denied: token=abc")})
+
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatalf("CheckEnv: %v", err)
+	}
+	if got := stored(t, r, "example.com", "private/svc", "1", ""); got.Error != updates.ReasonAuth {
+		t.Errorf("reason = %q, want auth", got.Error)
+	}
+	var all string
+	if err := r.st.Read.QueryRow(`SELECT host || '|' || repo || '|' || tag || '|' || cred_id || '|' || digest || '|' || platforms || '|' ||
+		is_index || '|' || checked_at || '|' || success_at || '|' || error_code FROM image_checks`).Scan(&all); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"token", "abc", "denied"} {
+		if strings.Contains(all, text) {
+			t.Errorf("the stored row %q holds the registry's text %q", all, text)
+		}
+	}
+	if strings.Contains(r.logs.String(), "token=abc") {
+		t.Errorf("the log holds the registry's text: %s", r.logs.String())
+	}
+}
+
+func TestNoDigestIsUnsupportedNeverUpToDate(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	rows := []dockerx.ServiceRow{row("a", "example.com/odd/svc:1@"+dg('a'))}
+	// A registry that answers a HEAD without a digest, once as the client's error and once as an empty answer.
+	r.heads.set("example.com/odd/svc:1", answer{err: fmt.Errorf("registry: head: %w", registry.ErrNoDigest)})
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored(t, r, "example.com", "odd/svc", "1", ""); got.Error != updates.ReasonUnsupported {
+		t.Errorf("reason = %q, want unsupported", got.Error)
+	}
+	r.heads.set("example.com/odd/svc:1", answer{digest: ""})
+	if _, err := r.chk.CheckEnv(ctx, "env-1", workloads(t, rows...)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.svc.ServiceVerdicts(ctx, "env-1", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got["a"]; v.State != updates.StateCheckFailed || v.Reason != updates.ReasonUnsupported {
+		t.Errorf("verdict = %+v, want check_failed with reason unsupported", v)
+	}
+}
+
+func TestInvalidTagNeverRequested(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	bad := updates.Workload{
+		EnvID: "env-1", Kind: "service", ID: "x", Name: "x",
+		Ref: registry.Ref{Domain: "docker.io", Path: "library/nginx", Tag: "../../etc/passwd"},
+	}
+	res, err := r.chk.CheckEnv(ctx, "env-1", []updates.Workload{bad})
+	if err != nil {
+		t.Fatalf("CheckEnv: %v", err)
+	}
+	if res.Failed != 1 {
+		t.Errorf("result = %+v, want the tag counted as failed", res)
+	}
+	if n := r.heads.requests(); n != 0 {
+		t.Errorf("the registry was asked %d times for a name that is not a tag", n)
+	}
+	if got := stored(t, r, "docker.io", "library/nginx", "../../etc/passwd", ""); got.Error != updates.ReasonNotFound {
+		t.Errorf("reason = %q, want not_found", got.Error)
+	}
+}
+
+func TestServiceWorkloadsSkipsAgentAndJobs(t *testing.T) {
+	t.Parallel()
+	agent := row("agent", "ghcr.io/ianglennon/tierplan-agent:1@"+dg('a'))
+	agent.Agent, agent.Mode = true, "global"
+	job := row("job", "docker.io/library/busybox:1@"+dg('b'))
+	job.Mode = "replicated-job"
+	gjob := row("gjob", "docker.io/library/busybox:1@"+dg('b'))
+	gjob.Mode = "global-job"
+	zero := row("zero", "docker.io/library/nginx:1@"+dg('c'))
+	zero.Desired, zero.Running = 0, 0
+	glob := row("glob", "docker.io/library/redis:7@"+dg('d'))
+	glob.Mode = "global"
+	broken := row("broken", "NOT A REFERENCE")
+	var ids []string
+	for _, w := range updates.ServiceWorkloads([]dockerx.ServiceRow{agent, job, gjob, zero, glob, broken}) {
+		ids = append(ids, w.ID)
+	}
+	if got := strings.Join(ids, ","); got != "zero,glob" {
+		t.Errorf("workloads = %q, want zero,glob: the agent, the jobs and an unreadable image are not workloads, scale 0 is", got)
+	}
+}
+
+func TestServiceWorkloadsWrittenReference(t *testing.T) {
+	t.Parallel()
+	r1 := row("labelled", "docker.io/library/nginx:1.27@"+dg('a'))
+	r1.Labels = map[string]string{"com.docker.stack.image": "nginx:stable", "tierplan.stack.image": "nginx:1.27"}
+	r2 := row("swarm-label", "docker.io/library/nginx:1.27@"+dg('a'))
+	r2.Labels = map[string]string{"com.docker.stack.image": "nginx:stable"}
+	r3 := row("plain", "docker.io/library/nginx:1.27@"+dg('a'))
+	r4 := row("pinned", "docker.io/library/nginx@"+dg('a'))
+	by := map[string]updates.Workload{}
+	for _, w := range updates.ServiceWorkloads([]dockerx.ServiceRow{r1, r2, r3, r4}) {
+		by[w.ID] = w
+	}
+	if w := by["labelled"]; w.Written != "nginx:1.27" || w.Ref.Tag != "1.27" || w.Ref.Digest != "" || w.RunningDigest != dg('a') {
+		t.Errorf("labelled = %+v, want the tierplan label's reference, digest dropped, running digest kept", w)
+	}
+	if w := by["swarm-label"]; w.Written != "nginx:stable" || w.Ref.Tag != "stable" {
+		t.Errorf("swarm-label = %+v, want the stack deploy label's reference", w)
+	}
+	if w := by["plain"]; w.Written != r3.Image || w.Ref.Tag != "1.27" || w.PinnedInFile() {
+		t.Errorf("plain = %+v, want the spec image, a tag to follow and not pinned", w)
+	}
+	if w := by["pinned"]; !w.PinnedInFile() || w.Checkable() {
+		t.Errorf("pinned = %+v, want pinned in the file and never checked", w)
+	}
+}
+
+func TestPinnedServiceIsNeverAsked(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	rows := []dockerx.ServiceRow{row("pinned", "docker.io/library/nginx@"+dg('a'))}
+	res, err := r.chk.CheckEnv(ctx, "env-1", updates.ServiceWorkloads(rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != (updates.CheckResult{}) || r.heads.requests() != 0 {
+		t.Errorf("result = %+v, requests = %d, want nothing asked for a digest-only reference", res, r.heads.requests())
+	}
+	got, err := r.svc.ServiceVerdicts(ctx, "env-1", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got["pinned"]; v.State != updates.StatePinned {
+		t.Errorf("verdict = %+v, want pinned_in_file", v)
 	}
 }
