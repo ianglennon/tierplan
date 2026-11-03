@@ -43,6 +43,10 @@ if (typeof Element.prototype.scrollIntoView === "undefined") {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// jsdom has no scrolling: its window.scrollTo only logs "Not implemented", and the router
+// calls it on every navigation, so this one does nothing quietly.
+window.scrollTo = () => {};
+
 // jsdom has no layout, so a Range cannot measure itself, which CodeMirror does after every
 // change. These report an empty box, which is all it needs to run.
 if (typeof Range !== "undefined" && typeof Range.prototype.getClientRects === "undefined") {
