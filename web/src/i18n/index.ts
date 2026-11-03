@@ -106,6 +106,7 @@ import tags from "./en/tags.json";
 import tasks from "./en/tasks.json";
 import teams from "./en/teams.json";
 import terminal from "./en/terminal.json";
+import updates from "./en/updates.json";
 import usedby from "./en/usedby.json";
 import userpage from "./en/userpage.json";
 import users from "./en/users.json";
@@ -223,6 +224,7 @@ export const resources = {
     tasks,
     teams,
     terminal,
+    updates,
     usedBy: usedby,
     userpage,
     users,

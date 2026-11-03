@@ -77,6 +77,8 @@ import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
+import { CheckNowItem } from "@/features/updates/check-now-item";
+import { UpdateBadge } from "@/features/updates/update-badge";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -213,6 +215,7 @@ function RowActions({
             needs={needs}
           />
         ) : null}
+        <CheckNowItem envId={envId} />
         <DropdownMenuSeparator />
         <RemoveServiceMenuItem
           stack={service.stack}
@@ -256,6 +259,7 @@ const fingerprintOf = (s: ServiceItem) =>
     s.running,
     s.desired,
     s.updateState,
+    s.update?.state,
     s.image,
     (s.ports ?? []).join(","),
     s.updatedAt,
@@ -651,6 +655,13 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       cell: (s) => (
         <ServiceStateCell service={s} pending={pending.has(s.id) ? "scale" : undefined} />
       ),
+    },
+    {
+      id: "updates",
+      header: t("updates.list.column"),
+      className: "w-44 min-w-44",
+      // The server's word for the row; a row it sent no update object for shows a dash, never "Up to date".
+      cell: (s) => (s.update ? <UpdateBadge info={s.update} /> : <span>{missing}</span>),
     },
     {
       id: "mode",

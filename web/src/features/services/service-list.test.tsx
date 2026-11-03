@@ -56,6 +56,7 @@ let items: ServiceItem[];
 let noManager: boolean;
 let me: ReturnType<typeof makeMe>;
 let answerScale: () => Response | Promise<Response>;
+let answerCheck: () => Response | Promise<Response>;
 let client: QueryClient;
 // What the list adds to or replaces in its answer, and a full replacement of the answer.
 let listExtra: Record<string, unknown>;
@@ -119,6 +120,7 @@ beforeEach(() => {
   ];
   me = makeMe({ envs: { [ENV]: "operator" } });
   answerScale = () => scaleResult();
+  answerCheck = () => Response.json({ checked: 3, updates: 1, failed: 0 });
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 1 } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -139,6 +141,7 @@ beforeEach(() => {
         return answerList ? answerList(url) : Response.json(listBody(items, listExtra));
       }
       if (path === `/api/env/${ENV}/services/scale` && req.method === "POST") return answerScale();
+      if (path === `/api/env/${ENV}/updates/check` && req.method === "POST") return answerCheck();
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Swarm", envType: "swarm" }] });
       }
@@ -202,7 +205,7 @@ describe("ServiceList", () => {
   it("shows each service with its mode, replicas, image and last update", async () => {
     mount();
     expect(await screen.findByText("web")).toBeTruthy();
-    for (const header of ["Name", "Mode", "Replicas", "Image", "Updated"]) {
+    for (const header of ["Name", "Updates", "Mode", "Replicas", "Image", "Updated"]) {
       expect(screen.getByRole("columnheader", { name: header })).toBeTruthy();
     }
     const web = screen.getByRole("row", { name: /^Select web/ });
@@ -216,7 +219,8 @@ describe("ServiceList", () => {
     expect(within(agent).getByText("3/3")).toBeTruthy();
     const job = screen.getByRole("row", { name: /^Select backup/ });
     expect(within(job).getByText("Replicated job")).toBeTruthy();
-    expect(within(job).getByText("—", { selector: "span" })).toBeTruthy();
+    // The replicas and the Updates cell each show a dash: the job has no count, and no update object.
+    expect(within(job).getAllByText("—", { selector: "span" })).toHaveLength(2);
     expect(screen.getByText("3 services")).toBeTruthy();
   });
 
@@ -509,7 +513,7 @@ describe("the State column", () => {
     await screen.findByText("web");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
     // The checkbox column has no title.
-    expect(headers.slice(1, 4)).toEqual(["Name", "State", "Mode"]);
+    expect(headers.slice(1, 5)).toEqual(["Name", "State", "Updates", "Mode"]);
     const stateOf = (name: RegExp) => within(screen.getByRole("row", { name })).getByText;
     expect(stateOf(/^Select web/)("Running")).toBeTruthy();
     expect(stateOf(/^Select degraded-svc/)("Degraded")).toBeTruthy();
@@ -542,11 +546,11 @@ describe("the State column", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const row = screen.getByRole("row", { name: /^Select web/ });
     const cells = within(row).getAllByRole("cell");
-    // Select, Name, State, Mode, Replicas
+    // Select, Name, State, Updates, Mode, Replicas
     expect(within(cells[2] as HTMLElement).getByText("Scaling…")).toBeTruthy();
     expect(within(cells[2] as HTMLElement).queryByText("Running")).toBeNull();
-    expect(cells[4]?.textContent).toBe("2/5");
-    expect(within(cells[4] as HTMLElement).queryByText("Scaling…")).toBeNull();
+    expect(cells[5]?.textContent).toBe("2/5");
+    expect(within(cells[5] as HTMLElement).queryByText("Scaling…")).toBeNull();
   });
 });
 
@@ -1472,5 +1476,104 @@ describe("the services list: Live stats (06-33)", () => {
     const s = liveSource();
     cleanup();
     expect(s.closed).toBe(true);
+  });
+});
+
+const update = (extra: Partial<components["schemas"]["UpdateInfoBody"]> = {}) => ({
+  state: "not_checked" as const,
+  reason: "" as const,
+  registry: "registry.example.com",
+  repository: "acme/web",
+  tag: "1.4",
+  runningDigest: `sha256:${"a".repeat(64)}`,
+  remoteDigest: "",
+  changedPlatforms: [],
+  checkedAt: "",
+  successAt: "",
+  note: "" as const,
+  ...extra,
+});
+
+describe("the services list: image updates (12-04)", () => {
+  const withUpdates = () => {
+    items = [
+      svc({
+        update: update({
+          state: "update_available",
+          remoteDigest: `sha256:${"b".repeat(64)}`,
+          checkedAt: new Date().toISOString(),
+        }),
+      }),
+      svc({
+        id: "id-api",
+        name: "api",
+        update: update({
+          state: "check_failed",
+          reason: "auth",
+          checkedAt: new Date().toISOString(),
+        }),
+      }),
+      svc({ id: "id-db", name: "db" }),
+    ];
+  };
+
+  it("says each service's update state in the Updates column, and a dash when the server sent none", async () => {
+    withUpdates();
+    mount();
+    await screen.findByText("web");
+    const web = screen.getByRole("row", { name: /^Select web/ });
+    expect(within(web).getByText("Update available")).toBeTruthy();
+    const api = screen.getByRole("row", { name: /^Select api/ });
+    expect(within(api).getByText("Check failed")).toBeTruthy();
+    // The browser never reads a missing or failed check as up to date.
+    expect(screen.queryByText("Up to date")).toBeNull();
+    const db = screen.getByRole("row", { name: /^Select db/ });
+    expect(within(db).getAllByText("—", { selector: "span" }).length).toBeGreaterThan(0);
+  });
+
+  it("puts the failure reason behind the badge by aria-describedby, in TierPlan's words", async () => {
+    withUpdates();
+    mount();
+    await screen.findByText("web");
+    const api = screen.getByRole("row", { name: /^Select api/ });
+    const badge = within(api).getByText("Check failed").closest("[aria-describedby]");
+    const id = badge?.getAttribute("aria-describedby") ?? "";
+    const text = document.getElementById(id)?.textContent ?? "";
+    expect(text).toContain("registry.example.com refused TierPlan's credentials.");
+    expect(text).toContain("It has never succeeded.");
+  });
+
+  it("asks the registries again from Check now, and says what it found", async () => {
+    withUpdates();
+    mount();
+    await openMenu("web");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Check now" }));
+    await waitFor(() =>
+      expect(
+        sent.some((s) => s.method === "POST" && s.path === `/api/env/${ENV}/updates/check`),
+      ).toBe(true),
+    );
+    expect(await screen.findByText("Checked 3 images. 1 update available.")).toBeTruthy();
+    // The lists are read again, since each carries the update objects.
+    await waitFor(() => expect(listRequests().length).toBeGreaterThan(1));
+  });
+
+  it("shows Check now disabled with the reason to a viewer, and sends nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    await openMenu("web");
+    const item = await screen.findByRole("menuitem", { name: /^Check now/ });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Operator on Swarm").length).toBeGreaterThan(0);
+    fireEvent.click(item);
+    expect(sent.some((s) => s.path.endsWith("/updates/check"))).toBe(false);
+  });
+
+  it("toasts a plain failure when Check now fails", async () => {
+    answerCheck = () => Response.json({ status: 500 }, { status: 500 });
+    mount();
+    await openMenu("web");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Check now" }));
+    expect(await screen.findByText("Couldn't check for updates. Try again.")).toBeTruthy();
   });
 });

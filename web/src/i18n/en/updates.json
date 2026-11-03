@@ -1,0 +1,71 @@
+{
+  "updates": {
+    "list": {
+      "column": "Updates"
+    },
+    "badge": {
+      "update_available": "Update available",
+      "count_one": "{{count, number}} update",
+      "count_other": "{{count, number}} updates",
+      "updating": "Updating…",
+      "busy": "Busy",
+      "queued": "Queued",
+      "up_to_date": "Up to date",
+      "check_stale": "Check stale",
+      "check_failed": "Check failed",
+      "rolled_back": "Update failed, rolled back",
+      "rollback_failed": "Rollback failed",
+      "not_from_registry": "Not from a registry",
+      "pinned_in_file": "Pinned in file",
+      "not_checked": "Not checked yet",
+      "skipped": "Version skipped",
+      "ignored": "Updates ignored"
+    },
+    "detail": {
+      "update_available": "Running {{old}}, {{new}} is available. Checked {{checked}}.",
+      "update_available_noRunning": "{{new}} is available. Checked {{checked}}.",
+      "update_available_stale": "Running {{old}}, {{new}} is available. Checked {{checked}}, may be out of date.",
+      "update_available_noRunning_stale": "{{new}} is available. Checked {{checked}}, may be out of date.",
+      "changedPlatforms": "Changed for {{platforms}}.",
+      "running_index_gone": "The registry no longer has the version this service runs, so TierPlan can't tell what changed.",
+      "updating": "Update in progress. Open the console.",
+      "busy": "Another action holds this service. Update is available again when it finishes.",
+      "queued": "Waiting for the updates before it.",
+      "up_to_date": "Checked {{checked}}.",
+      "check_stale": "Last checked {{checked}}. Checks may be off or failing for this environment.",
+      "check_failed": "{{reason}}",
+      "lastSuccess": "Last successful check {{checked}}.",
+      "neverSucceeded": "It has never succeeded.",
+      "rolled_back": "TierPlan rolled this service back because its update failed. It won't offer {{new}} again until a newer version appears. You can still update by hand.",
+      "rolled_back_noDigest": "TierPlan rolled this service back because its update failed. It won't offer that version again until a newer version appears. You can still update by hand.",
+      "rollback_failed": "TierPlan couldn't restore the previous version. Open the console.",
+      "not_from_registry": "This image has no registry digest, so TierPlan can't check it.",
+      "pinned_in_file": "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+      "not_checked": "No check has run for this image yet. The first check runs on schedule, or choose Check now.",
+      "skipped": "This version was skipped. A newer version will show again.",
+      "skipped_withDigest": "{{new}} was skipped. A newer version will show again.",
+      "ignored": "Updates are ignored for this service."
+    },
+    "reason": {
+      "registryFallback": "The registry",
+      "tagFallback": "this tag",
+      "repositoryFallback": "this image",
+      "auth": "{{registry}} refused TierPlan's credentials. Check them under Registries.",
+      "rate_limited": "{{registry}} is limiting requests. TierPlan will try again later.",
+      "unreachable": "TierPlan couldn't reach {{registry}}.",
+      "not_found": "{{registry}} doesn't have {{tag}} of {{repository}} any more.",
+      "unsupported": "{{registry}} gave an answer TierPlan can't read.",
+      "other": "The check didn't finish. TierPlan will try again at the next check."
+    },
+    "check": {
+      "action": "Check now",
+      "pending": "Checking…",
+      "needs": "{{needs}} on {{environment}}",
+      "checked_one": "Checked {{count, number}} image.",
+      "checked_other": "Checked {{count, number}} images.",
+      "found_one": "{{count, number}} update available.",
+      "found_other": "{{count, number}} updates available.",
+      "failed": "Couldn't check for updates. Try again."
+    }
+  }
+}
