@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -317,9 +319,16 @@ func TestJanitorDefaultsRaiseKeepsAll(t *testing.T) {
 	}
 	total := h.count(t, "janitor_runs")
 	cur := h.readJanitorDefaults(t)
-	for name, f := range map[string]map[string]any{
-		"days up": {"retentionDays": 120}, "runs up": {"retentionRuns": 101}, "both up": {"retentionDays": 3650, "retentionRuns": 1000},
+	// Each step raises from the one before, in this order.
+	for _, step := range []struct {
+		name   string
+		fields map[string]any
+	}{
+		{"days up", map[string]any{"retentionDays": 120}},
+		{"runs up", map[string]any{"retentionRuns": 101}},
+		{"both up", map[string]any{"retentionDays": 3650, "retentionRuns": 1000}},
 	} {
+		name, f := step.name, step.fields
 		rec := h.putJanitorDefaults(t, defaultsJSON(cur, f))
 		if rec.code != http.StatusOK {
 			t.Fatalf("%s: %d %s", name, rec.code, rec.body)
@@ -358,5 +367,228 @@ func TestJanitorStatusReadsStoredRetention(t *testing.T) {
 	}
 	if st.Retention.Days != 45 || st.Retention.Runs != 250 {
 		t.Errorf("status retention = %+v, want 45 days or 250 runs", st.Retention)
+	}
+}
+
+// A value outside what the janitor accepts is refused with a 422 and nothing is saved: not a version, not a
+// run deleted, not an audit row (plan 11-21, D-16).
+func TestJanitorDefaultsValidation(t *testing.T) {
+	t.Parallel()
+	h := newHistoryFix(t)
+	cur := h.readJanitorDefaults(t)
+	t.Run("refused", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			fields map[string]any
+			want   string
+		}{
+			"retention days 6":       {map[string]any{"retentionDays": 6}, ""},
+			"retention days 3651":    {map[string]any{"retentionDays": 3651}, ""},
+			"retention runs 9":       {map[string]any{"retentionRuns": 9}, ""},
+			"retention runs 1001":    {map[string]any{"retentionRuns": 1001}, ""},
+			"keep 21":                {map[string]any{"keepN": 21}, ""},
+			"keep -1":                {map[string]any{"keepN": -1}, ""},
+			"grace 0":                {map[string]any{"graceHours": 0}, ""},
+			"grace 721":              {map[string]any{"graceHours": 721}, ""},
+			"every minute":           {map[string]any{"schedule": "* * * * *"}, "schedule_too_frequent"},
+			"every ten minutes":      {map[string]any{"schedule": "*/10 * * * *", "schedulePreset": "custom"}, "schedule_too_frequent"},
+			"not a schedule":         {map[string]any{"schedule": "nonsense"}, "invalid_schedule"},
+			"six fields":             {map[string]any{"schedule": "0 0 3 * * *"}, "invalid_schedule"},
+			"an empty schedule":      {map[string]any{"schedule": ""}, ""},
+			"a preset nobody knows":  {map[string]any{"schedulePreset": "fortnightly"}, ""},
+			"a bad value beside two": {map[string]any{"keepN": 3, "retentionDays": 30, "graceHours": 900}, ""},
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				rec := h.putJanitorDefaults(t, defaultsJSON(cur, tc.fields))
+				if rec.code != http.StatusUnprocessableEntity {
+					t.Fatalf("PUT: %d %s, want 422", rec.code, rec.body)
+				}
+				if tc.want != "" && rec.ptyp != tc.want {
+					t.Errorf("problem type = %q, want %q", rec.ptyp, tc.want)
+				}
+			})
+		}
+		// A field left out is not a default: every one is required.
+		for _, field := range []string{"enabled", "schedule", "schedulePreset", "keepN", "graceHours", "removeUnusedNetworks", "removeStoppedContainers", "retentionDays", "retentionRuns", "version"} {
+			t.Run("without "+field, func(t *testing.T) {
+				t.Parallel()
+				var body map[string]any
+				if err := json.Unmarshal([]byte(defaultsJSON(cur, nil)), &body); err != nil {
+					t.Fatal(err)
+				}
+				delete(body, field)
+				b, _ := json.Marshal(body)
+				if rec := h.putJanitorDefaults(t, string(b)); rec.code != http.StatusUnprocessableEntity {
+					t.Errorf("PUT without %s: %d %s, want 422", field, rec.code, rec.body)
+				}
+			})
+		}
+	})
+	// The group returns once all its parallel cases have ended.
+	if after := h.readJanitorDefaults(t); after != cur {
+		t.Errorf("defaults = %+v, want %+v: nothing saved", after, cur)
+	}
+	if n := h.count(t, "janitor_runs"); n != 56 {
+		t.Errorf("runs = %d, want all 56: a refused save deletes nothing", n)
+	}
+	if rows := h.defaultsAudits(t); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none", rows)
+	}
+}
+
+// A save made from a stale read is refused 409 settings_changed, names who saved last and writes nothing.
+func TestJanitorDefaultsStaleVersion(t *testing.T) {
+	t.Parallel()
+	h := newHistoryFix(t)
+	cur := h.readJanitorDefaults(t)
+	if rec := h.putJanitorDefaults(t, defaultsJSON(cur, map[string]any{"keepN": 4})); rec.code != http.StatusOK {
+		t.Fatalf("first save: %d %s", rec.code, rec.body)
+	}
+	var name string
+	if err := h.st.Read.QueryRow(`SELECT COALESCE(NULLIF(u.display_name, ''), u.username) FROM janitor_defaults d JOIN users u ON u.id = d.updated_by WHERE d.id = 1`).Scan(&name); err != nil || name == "" {
+		t.Fatalf("who saved last: %q %v", name, err)
+	}
+	// The same read, saved again, is stale; so is a version from the future. A stale save that would also lower the
+	// retention deletes nothing.
+	for _, version := range []int64{cur.Version, cur.Version + 5} {
+		stale := cur
+		stale.Version = version
+		rec := h.putJanitorDefaults(t, defaultsJSON(stale, map[string]any{"keepN": 9, "retentionDays": 30, "retentionRuns": 10}))
+		if rec.code != http.StatusConflict || rec.ptyp != "settings_changed" {
+			t.Fatalf("PUT at version %d: %d %s, want 409 settings_changed", version, rec.code, rec.body)
+		}
+		var p policyProblem
+		if err := json.Unmarshal(rec.body, &p); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.Errors) != 1 || p.Errors[0].Message != name || !strings.Contains(p.Detail, name) {
+			t.Errorf("problem = %+v, want it to name %q", p, name)
+		}
+	}
+	after := h.readJanitorDefaults(t)
+	if after.Version != cur.Version+1 || after.KeepN != 4 || after.RetentionDays != 90 || after.RetentionRuns != 100 {
+		t.Errorf("defaults = %+v, want the first save kept at version %d", after, cur.Version+1)
+	}
+	if n := h.count(t, "janitor_runs"); n != 56 {
+		t.Errorf("runs = %d, want all 56: a stale save deletes nothing", n)
+	}
+	if rows := h.defaultsAudits(t); len(rows) != 1 {
+		t.Errorf("audit rows = %d, want only the first save's", len(rows))
+	}
+}
+
+// A save that changes nothing answers 200, keeps the version and the author and writes no audit row.
+func TestJanitorDefaultsNoOp(t *testing.T) {
+	t.Parallel()
+	f, _ := dashEnv(t, orphanEngine())
+	cur := f.readJanitorDefaults(t)
+	var by0 string
+	var at0 int64
+	if err := f.st.Read.QueryRow(`SELECT updated_by, updated_at FROM janitor_defaults WHERE id = 1`).Scan(&by0, &at0); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.putJanitorDefaults(t, defaultsJSON(cur, nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("the same defaults: %d %s", rec.code, rec.body)
+	}
+	if got := decode[janitorDefaultsAnswer](t, rec); got != cur {
+		t.Errorf("answer = %+v, want what was read: %+v", got, cur)
+	}
+	var by1 string
+	var at1 int64
+	if err := f.st.Read.QueryRow(`SELECT updated_by, updated_at FROM janitor_defaults WHERE id = 1`).Scan(&by1, &at1); err != nil || by1 != by0 || at1 != at0 {
+		t.Errorf("updated_by/at = %q/%d (%v), want %q/%d untouched", by1, at1, err, by0, at0)
+	}
+	// A change, then the same change again at its new version, is a no-op the second time.
+	if rec := f.putJanitorDefaults(t, defaultsJSON(cur, map[string]any{"graceHours": 48})); rec.code != http.StatusOK {
+		t.Fatalf("change: %d %s", rec.code, rec.body)
+	}
+	next := f.readJanitorDefaults(t)
+	if rec := f.putJanitorDefaults(t, defaultsJSON(next, map[string]any{"graceHours": 48})); rec.code != http.StatusOK || decode[janitorDefaultsAnswer](t, rec).Version != next.Version {
+		t.Errorf("the same change again: %d %s, want 200 at version %d", rec.code, rec.body, next.Version)
+	}
+	if rows := f.defaultsAudits(t); len(rows) != 1 || rows[0].Details["fields"] != "graceHours" {
+		t.Errorf("audit rows = %+v, want the one change, naming graceHours", rows)
+	}
+}
+
+// Only an instance admin changes what every environment follows: an Env Admin of every environment and an
+// Operator holding janitor.policy are refused on the save and on the retention preview and nothing changes; a
+// Viewer is refused too; an instance admin saves (plan 11-21, D-21, T-11-54).
+func TestJanitorDefaultsNeedsSettingsWrite(t *testing.T) {
+	t.Parallel()
+	h := newHistoryFix(t)
+	cur := h.readJanitorDefaults(t)
+	lower := defaultsJSON(cur, map[string]any{"retentionDays": 30, "retentionRuns": 10, "removeUnusedNetworks": true})
+	const preview = "/api/settings/janitor/retention-preview?days=30&runs=10"
+	call := func(method, path, body, cookie, csrf string) *httptest.ResponseRecorder {
+		return h.call(t, authReq{method: method, path: path, body: body, cookie: cookie, csrf: csrf})
+	}
+	as := func(user, role string, extra, instanceAdmin bool, envID string) (cookie, csrf string) {
+		h.addUser(t, user, instanceAdmin)
+		if role != "" {
+			h.addEnvRole(t, user, envID, role)
+		}
+		if extra {
+			if _, err := h.st.Write.Exec(`INSERT INTO assignment_extras (assignment_id, permission) VALUES (?, 'janitor.policy')`, "ra-"+user+"-"+envID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return h.signIn(t, user, false)
+	}
+
+	for user, who := range map[string]struct {
+		name  string
+		role  string
+		extra bool
+		env   string
+	}{
+		"allenv":  {"an env admin of every environment", "admin", false, ""},
+		"oneenv":  {"an env admin of one environment", "admin", false, h.a.ID},
+		"opextra": {"an operator with janitor.policy", "operator", true, h.a.ID},
+		"viewer":  {"a viewer", "viewer", false, h.a.ID},
+	} {
+		name := who.name
+		cookie, csrf := as(user, who.role, who.extra, false, who.env)
+		if rec := call(http.MethodPut, "/api/settings/janitor", lower, cookie, csrf); rec.Code != http.StatusForbidden {
+			t.Errorf("%s saving: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+		if rec := call(http.MethodGet, preview, "", cookie, ""); rec.Code != http.StatusForbidden {
+			t.Errorf("%s previewing the retention: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+		if rec := call(http.MethodGet, "/api/settings/janitor", "", cookie, ""); rec.Code != http.StatusForbidden {
+			t.Errorf("%s reading the defaults: %d %s, want 403: reading needs settings.read, which is the instance admin's", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := call(http.MethodGet, "/api/settings/janitor", "", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("reading signed out: %d, want 401", rec.Code)
+	}
+	if after := h.readJanitorDefaults(t); after != cur {
+		t.Fatalf("defaults = %+v after the refusals, want them untouched: %+v", after, cur)
+	}
+	if n := h.count(t, "janitor_runs"); n != 56 {
+		t.Fatalf("runs = %d after the refusals, want all 56", n)
+	}
+	if rows := h.defaultsAudits(t); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v after the refusals, want none", rows)
+	}
+
+	cookie, csrf := as("ivy", "", false, true, "")
+	if rec := call(http.MethodGet, "/api/settings/janitor", "", cookie, ""); rec.Code != http.StatusOK {
+		t.Errorf("an instance admin reading: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := call(http.MethodGet, preview, "", cookie, ""); rec.Code != http.StatusOK {
+		t.Errorf("an instance admin previewing: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := call(http.MethodPut, "/api/settings/janitor", lower, cookie, csrf); rec.Code != http.StatusOK {
+		t.Fatalf("an instance admin saving: %d %s, want 200", rec.Code, rec.Body)
+	}
+	after := h.readJanitorDefaults(t)
+	if after.RetentionDays != 30 || after.RetentionRuns != 10 || !after.RemoveUnusedNetworks {
+		t.Errorf("defaults = %+v, want the instance admin's change", after)
+	}
+	var actor string
+	if err := h.st.Read.QueryRow(`SELECT actor_id FROM audit_log WHERE action = 'janitor.defaults_changed'`).Scan(&actor); err != nil || actor != "id-ivy" {
+		t.Errorf("actor = %q (%v), want the person who saved, id-ivy", actor, err)
 	}
 }
