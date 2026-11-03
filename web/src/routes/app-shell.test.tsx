@@ -175,6 +175,7 @@ describe("Events in the sidebar", () => {
       ["Containers", "/env/e1/containers"],
       ["Networks", "/env/e1/networks"],
       ["Address space", "/env/e1/address-space"],
+      ["Janitor", "/env/e1/janitor"],
       ["Events", "/env/e1/events"],
     ]);
   });
