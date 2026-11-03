@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import type { JanitorItem, JanitorPreview, JanitorRun, JanitorRunItem } from "@/api/janitor";
+import type {
+  JanitorEvidence,
+  JanitorItem,
+  JanitorPreview,
+  JanitorRun,
+  JanitorRunItem,
+} from "@/api/janitor";
 
 // Builders for the janitor's tests: a preview item, a preview, a run item and a run, with the fields
 // a test does not care about filled in.
@@ -78,6 +84,24 @@ export function run(over: Partial<JanitorRun> = {}): JanitorRun {
     startedAt: new Date(Date.now() - 60_000).toISOString(),
     state: "completed",
     trigger: "manual",
+    ...over,
+  };
+}
+
+// The crash evidence of a container the janitor removed.
+export function evidence(over: Partial<JanitorEvidence> = {}): JanitorEvidence {
+  return {
+    error: "",
+    exitCode: 137,
+    finishedAt: "2026-11-03T10:05:00Z",
+    image: "registry.example/web:1.4",
+    imageDigest: "registry.example/web@sha256:abc123",
+    imageId: "sha256:def456",
+    logLines: ["2026-11-03T10:04:58Z starting", "2026-11-03T10:04:59Z out of memory"],
+    logState: "saved",
+    node: "node-1",
+    oomKilled: true,
+    startedAt: "2026-11-03T10:00:00Z",
     ...over,
   };
 }

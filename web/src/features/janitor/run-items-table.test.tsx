@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import type { JanitorRunItem } from "@/api/janitor";
@@ -13,13 +14,14 @@ import {
   runSearchSchema,
 } from "@/features/janitor/run-items-table";
 import "@/i18n";
-import { runItem } from "@/test-janitor";
+import { evidence, runItem } from "@/test-janitor";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
 let client: QueryClient;
+let meEnvs: Record<string, "viewer" | "operator" | "admin">;
 
 // jsdom lays nothing out, so the scrolling area is given a height and the virtualiser can tell how
 // many rows fit (as the preview sheet's tests do).
@@ -31,12 +33,14 @@ function lay(prop: string, value: number) {
 
 beforeEach(() => {
   setCsrfToken(null);
+  meEnvs = { [ENV]: "viewer" };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (url.pathname === "/api/me") return Response.json(makeMe({ envs: meEnvs }));
+      if (url.pathname.endsWith("/evidence")) return Response.json(evidence());
       return Response.json({}, { status: 404 });
     }),
   );
@@ -272,5 +276,99 @@ describe("the search of the address", () => {
     expect(runSearchSchema.parse({ item: 0 })).toEqual({});
     expect(runSearchSchema.parse({ item: 1.5 })).toEqual({});
     expect(runSearchSchema.parse({ item: "7" })).toEqual({ item: 7 });
+  });
+});
+
+describe("the Evidence column", () => {
+  const crashed = () => [
+    runItem({ seq: 1, name: "crashed-1", outcome: "removed", hasEvidence: true }),
+    runItem({ seq: 2, name: "clean-2", outcome: "removed", hasEvidence: false }),
+    runItem({
+      seq: 3,
+      name: "kept-3",
+      outcome: "refused_in_use",
+      code: "in_use",
+      hasEvidence: true,
+    }),
+    runItem({ seq: 4, name: "img-4", type: "image", outcome: "removed", hasEvidence: false }),
+  ];
+  const row = (name: string) => within(table()).getByText(name).closest("tr") as HTMLElement;
+
+  // The page keeps the item in its address; this keeps it in state, as the route does.
+  function Harness({ start, onChange }: { start?: number; onChange?: (seq?: number) => void }) {
+    const [item, setItem] = useState<number | undefined>(start);
+    return (
+      <RunItemsTable
+        envId={ENV}
+        runId="r1"
+        items={crashed()}
+        show="all"
+        item={item}
+        onItemChange={(seq) => {
+          setItem(seq);
+          onChange?.(seq);
+        }}
+      />
+    );
+  }
+  function mountHarness(start?: number, onChange?: (seq?: number) => void) {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <Harness start={start} onChange={onChange} />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("offers View evidence for a removed container that has some, and a dash for the rest", async () => {
+    mountHarness();
+    expect(screen.getByRole("columnheader", { name: "Evidence" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "View evidence for crashed-1" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^View evidence/ })).toHaveLength(1);
+    for (const name of ["clean-2", "kept-3", "img-4"]) {
+      const cells = within(row(name)).getAllByRole("cell");
+      expect(cells.at(-1)?.textContent).toBe("—");
+    }
+  });
+
+  it("offers none to a person who may not read the containers", async () => {
+    meEnvs = {};
+    mountHarness();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^View evidence/ })).toBeNull(),
+    );
+    expect(within(row("crashed-1")).getAllByRole("cell").at(-1)?.textContent).toBe("—");
+  });
+
+  it("opens the sheet for the item and puts it in the address, and closing clears it and gives the button the focus back", async () => {
+    const changes: (number | undefined)[] = [];
+    mountHarness(undefined, (seq) => changes.push(seq));
+    const button = await screen.findByRole("button", { name: "View evidence for crashed-1" });
+    button.focus();
+    fireEvent.click(button);
+    expect(changes).toEqual([1]);
+    const box = await screen.findByRole("dialog", { name: "Crash evidence for crashed-1" });
+    expect(await screen.findByText("Exit code")).toBeTruthy();
+
+    fireEvent.click(within(box).getByRole("button", { name: "Close" }));
+    expect(changes).toEqual([1, undefined]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+
+  it("opens the sheet from an address that names the item", async () => {
+    mountHarness(1);
+    expect(
+      await screen.findByRole("dialog", { name: "Crash evidence for crashed-1" }),
+    ).toBeTruthy();
+  });
+
+  it("opens nothing for an item the run does not have", async () => {
+    mountHarness(99);
+    await screen.findByRole("button", { name: "View evidence for crashed-1" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
