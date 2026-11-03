@@ -225,3 +225,36 @@ describe("PolicyAnchorAndRules", () => {
     ).toBeNull();
   });
 });
+
+describe("PolicyScheduleEdits", () => {
+  async function pickRun(option: string) {
+    fireEvent.keyDown(await screen.findByRole("combobox", { name: "Run" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: option }));
+  }
+
+  it("keeps the button as Save policy for a schedule-only change and saves the preset with its cron", async () => {
+    mount();
+    await pickRun("Weekly");
+    const save = await screen.findByRole("button", { name: "Save policy" });
+    expect(screen.queryByRole("button", { name: "Review changes" })).toBeNull();
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    fireEvent.click(save);
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      version: 3,
+      schedule: "0 3 * * 1",
+      schedulePreset: "weekly",
+      keepN: null,
+    });
+    // A schedule change alone never opens the sheet.
+    expect(previews).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("is no change at all to pick the schedule it already has", async () => {
+    mount();
+    await pickRun("Weekly");
+    await pickRun("Daily");
+    await waitFor(() => expect(screen.queryByText("Unsaved changes")).toBeNull());
+  });
+});
