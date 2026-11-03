@@ -46,7 +46,7 @@ var (
 // Masking is best effort: a log can write a secret in any form, and the people who read what is
 // stored are told so.
 func MaskLogLine(line string, secrets []string) (string, bool) {
-	base := stripControls(line)
+	base := StripControls(line)
 	out := base
 	if r := literalReplacer(secrets); r != nil {
 		out = r.Replace(out)
@@ -80,9 +80,11 @@ func MaskLogLine(line string, secrets []string) (string, bool) {
 	return jobs.Clean(out, nil), masked
 }
 
-// stripControls removes bytes that are not UTF-8, terminal escape sequences and every control
-// character except a tab.
-func stripControls(s string) string {
+// StripControls removes bytes that are not UTF-8, terminal escape sequences and every control
+// character except a tab. MaskLogLine starts with it; a caller that masks a line with values of its
+// own before MaskLogLine must strip the line first too, or an escape written inside a secret hides it
+// from that mask and the stripping then puts it back together.
+func StripControls(s string) string {
 	s = ansi.ReplaceAllString(strings.ToValidUTF8(s, ""), "")
 	return strings.Map(func(r rune) rune {
 		if r != '\t' && unicode.IsControl(r) {

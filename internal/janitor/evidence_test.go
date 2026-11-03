@@ -77,6 +77,22 @@ func TestBuildEvidenceMasksAndCaps(t *testing.T) {
 		}
 	})
 
+	// A stack secret split by a terminal escape or a control character is put back together before the
+	// stack's mask runs (WR-03): the mask must see the line as it will be stored, or the stripping that
+	// follows would reassemble the secret after its only mask had run.
+	t.Run("a split stack secret is still masked", func(t *testing.T) {
+		t.Parallel()
+		src := EvidenceSource{
+			End:   ContainerEnd{ExitCode: 1, Error: "start failed: STACK\x00VAL99"},
+			Lines: []string{"stack value STACK\x1b[0mVAL99 here", "and STACK\x07VAL99 again"},
+			Mask:  func(s string) string { return strings.ReplaceAll(s, "STACKVAL99", "<hidden>") },
+		}
+		ev := BuildEvidence(src)
+		if joined := strings.Join(ev.Lines, "\n") + "\n" + ev.Error; strings.Contains(joined, "STACKVAL99") || strings.Count(joined, "<hidden>") != 3 {
+			t.Fatalf("evidence = %q error %q, want the stack value hidden in every line and the error", ev.Lines, ev.Error)
+		}
+	})
+
 	t.Run("the facts come from the end", func(t *testing.T) {
 		t.Parallel()
 		started := t0.Add(-time.Hour)

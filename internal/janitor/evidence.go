@@ -54,16 +54,13 @@ type Evidence struct {
 }
 
 // BuildEvidence makes the evidence of a crashed container from what its node said. Every line is
-// passed through redact.MaskLogLine with the source's secrets, then the newest lines that fit
-// EvidenceLines and MaxEvidenceBytes are kept, so nothing reaches the record that was not masked
-// and capped (T-11-35).
+// stripped of its control characters, masked with the stack's values and passed through
+// redact.MaskLogLine with the source's secrets, then the newest lines that fit EvidenceLines and
+// MaxEvidenceBytes are kept, so nothing reaches the record that was not masked and capped (T-11-35).
 func BuildEvidence(src EvidenceSource) Evidence {
 	ev := evidenceOf(src.End, src.Node)
 	// The engine's start error is text a remote system wrote, so it is masked like a log line.
-	if src.Mask != nil {
-		ev.Error = src.Mask(ev.Error)
-	}
-	ev.Error, _ = redact.MaskLogLine(ev.Error, src.Secrets)
+	ev.Error, _ = redact.MaskLogLine(maskStack(src, ev.Error), src.Secrets)
 	if src.ImageDigest != "" {
 		ev.ImageDigest = src.ImageDigest
 	}
@@ -77,10 +74,7 @@ func BuildEvidence(src EvidenceSource) Evidence {
 	}
 	masked := make([]string, 0, len(lines))
 	for _, l := range lines {
-		if src.Mask != nil {
-			l = src.Mask(l)
-		}
-		m, _ := redact.MaskLogLine(l, src.Secrets)
+		m, _ := redact.MaskLogLine(maskStack(src, l), src.Secrets)
 		masked = append(masked, m)
 	}
 	// Keep the newest lines that fit: each costs its text and the line break that separates it.
@@ -95,6 +89,16 @@ func BuildEvidence(src EvidenceSource) Evidence {
 		ev.State = EvidenceEmpty
 	}
 	return ev
+}
+
+// maskStack hides the values of the container's TierPlan stack in a line, once the line's control
+// characters and terminal escapes are gone: a secret split by an escape would get past the stack's mask
+// and be put back together by MaskLogLine's own stripping, which knows only src.Secrets (WR-03).
+func maskStack(src EvidenceSource, line string) string {
+	if src.Mask == nil {
+		return line
+	}
+	return src.Mask(redact.StripControls(line))
 }
 
 // evidenceOf is the facts of a container's end, with no log: the evidence of a container past the
