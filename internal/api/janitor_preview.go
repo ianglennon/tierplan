@@ -87,6 +87,7 @@ type JanitorPreviewOutput struct {
 func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 	eng := &janitorEngine{agg: d.Aggregator, clusters: d.Clusters, facts: d.StackFacts, keeps: janitor.KeepStore{St: d.Store}, now: d.now, log: d.log()}
 	WithStackDeclarations(d.JanitorFacts)(eng)
+	gate := newPreviewGate()
 	httpx.Register(r, huma.Operation{
 		OperationID: "previewJanitor", Method: http.MethodPost, Path: "/api/env/{envId}/janitor/preview",
 		Summary: "Preview what the janitor would remove",
@@ -106,6 +107,7 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 			"and none of their objects is listed. The server decides what is removable; the client only shows it. " +
 			"The body is optional. With a candidate policy in it the preview judges by that policy instead of the saved one, so the page can show what a change would remove before it is saved or before the janitor is turned on: " +
 			"the fields are those of the policy save, checked the same way (422 for a value it would refuse), and nothing is saved. " +
+			"One preview of an environment runs at a time, and a preview asked for while the same one (the same candidate, or none) is running gets that one's answer instead of reading every node again. " +
 			"Needs environments.read on the environment.",
 		Tags: []string{"environments"}, MaxBodyBytes: maxJanitorPreviewBody,
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment},
@@ -139,7 +141,9 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 				}
 				candidate = &o
 			}
-			body, err := previewJanitor(ctx, d, eng, d.networks(), env.ID, candidate, candidateNodes)
+			body, err := gate.run(ctx, env.ID, previewInputs(candidate, candidateNodes), func(ctx context.Context) (JanitorPreviewBody, error) {
+				return previewJanitor(ctx, d, eng, d.networks(), env.ID, candidate, candidateNodes)
+			})
 			if err != nil {
 				return nil, err
 			}
