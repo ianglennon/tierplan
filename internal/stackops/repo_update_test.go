@@ -8,7 +8,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // goodRevisions takes n revisions of the stack's draft, each marked good, and returns the last.
@@ -76,5 +79,124 @@ func TestNewUpdateRevisionCopiesContent(t *testing.T) {
 	}
 	if now, _, err := f.repo.LatestGoodRevision(ctx, st.ID); err != nil || now.Seq != 4 {
 		t.Errorf("LatestGoodRevision after a good deploy = %+v, %v, want revision 4", now, err)
+	}
+}
+
+// The update is made from the good revision, never from the draft: an edit not yet deployed neither rides along nor is
+// lost (T-12-112).
+func TestNewUpdateRevisionLeavesDraft(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, first, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada",
+		stacks.WorkingCopy{Files: []stacks.File{compose("services: {a: {image: x}}\n")}, Vars: []stacks.Var{{Name: "K", Value: "deployed"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodRevision(t, f, st.ID, "ada")
+	edited, _, err := f.repo.SaveDraft(ctx, st.ID, first.Version, "bob", stacks.WorkingCopy{
+		Files: []stacks.File{compose("services: {a: {image: y}}\n")}, Vars: []stacks.Var{{Name: "K", Value: "edited"}},
+	})
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+
+	from, ok, err := f.repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil || !ok {
+		t.Fatalf("LatestGoodRevision = %v, %v", ok, err)
+	}
+	up, err := f.repo.NewUpdateRevision(ctx, from, "cyd")
+	if err != nil {
+		t.Fatalf("NewUpdateRevision: %v", err)
+	}
+	read, err := f.repo.Revision(ctx, st.ID, up.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(read.Copy.Compose()) != "services: {a: {image: x}}\n" {
+		t.Errorf("update compose = %q, want the good revision's", read.Copy.Compose())
+	}
+	if len(read.Copy.Vars) != 1 || read.Copy.Vars[0].Value != "deployed" {
+		t.Errorf("update vars = %+v, want the good revision's", read.Copy.Vars)
+	}
+
+	after, err := f.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.IsDraft || after.Version != edited.Version || after.CreatedBy != "bob" || string(after.Copy.Compose()) != "services: {a: {image: y}}\n" ||
+		len(after.Copy.Vars) != 1 || after.Copy.Vars[0].Value != "edited" {
+		t.Errorf("draft after the update = %+v, want the edit at version %d untouched", after, edited.Version)
+	}
+}
+
+// An inline stack has no git record, and the update has none either.
+func TestNewUpdateRevisionInline(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetStandalone, "ada",
+		stacks.WorkingCopy{Files: []stacks.File{compose("services: {a: {image: x}}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := goodRevision(t, f, st.ID, "ada")
+	up, err := f.repo.NewUpdateRevision(ctx, from, "cyd")
+	if err != nil {
+		t.Fatalf("NewUpdateRevision: %v", err)
+	}
+	read, err := f.repo.Revision(ctx, st.ID, up.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(read.Git, stackops.GitRevision{}) || !reflect.DeepEqual(up.Git, stackops.GitRevision{}) {
+		t.Errorf("git = %+v / %+v, want none for an inline stack", read.Git, up.Git)
+	}
+	if read.Origin != stackops.OriginUpdate || read.RestoredFrom != 0 {
+		t.Errorf("update = origin %q, restored_from %d", read.Origin, read.RestoredFrom)
+	}
+}
+
+// The update carries the platforms and subnets its source recorded, and nothing when the source predates the record.
+func TestNewUpdateRevisionOldPlatforms(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada",
+		stacks.WorkingCopy{Files: []stacks.File{compose("services: {a: {image: x}}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := goodRevision(t, f, st.ID, "ada")
+	up, err := f.repo.NewUpdateRevision(ctx, old, "cyd")
+	if err != nil {
+		t.Fatalf("NewUpdateRevision: %v", err)
+	}
+	read, err := f.repo.Revision(ctx, st.ID, up.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(up.Platforms) != 0 || len(read.Platforms) != 0 || len(up.Subnets) != 0 || len(read.Subnets) != 0 {
+		t.Errorf("update of a revision with no record has platforms %v / %v and subnets %v / %v, want none", up.Platforms, read.Platforms, up.Subnets, read.Subnets)
+	}
+
+	// A revision that recorded them hands them on.
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	want := map[string][]swarm.Platform{"web_a": {amd}}
+	recorded := goodRevision(t, f, st.ID, "ada")
+	if err := f.repo.SetPlatforms(ctx, recorded.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	from, err := f.repo.Revision(ctx, st.ID, recorded.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	up2, err := f.repo.NewUpdateRevision(ctx, from, "cyd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read2, err := f.repo.Revision(ctx, st.ID, up2.Seq)
+	if err != nil || !reflect.DeepEqual(read2.Platforms, want) || !reflect.DeepEqual(up2.Platforms, want) {
+		t.Errorf("update platforms = %v / %v, %v, want %v", up2.Platforms, read2.Platforms, err, want)
 	}
 }
