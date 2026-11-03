@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import type { JanitorJobFrame, JanitorJobItemFrame } from "@/api/janitor";
 import { janitorRunQuery, RUN_REFETCH_MS, runPollMs } from "@/api/janitor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import type { RunSearch, RunSearchPatch } from "@/features/janitor/run-items-table";
 import { RunPage } from "@/features/janitor/run-page";
 import "@/i18n";
 import { run, runItem } from "@/test-janitor";
@@ -59,12 +60,18 @@ afterEach(() => {
   client.clear();
 });
 
-function mount() {
+function mount(search?: RunSearch & { onSearchChange?: (patch: RunSearchPatch) => void }) {
+  const { onSearchChange, ...current } = search ?? {};
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <RunPage envId={ENV} runId="r1" />
+          <RunPage
+            envId={ENV}
+            runId="r1"
+            search={search ? current : undefined}
+            onSearchChange={onSearchChange}
+          />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -358,5 +365,187 @@ describe("RunPageLive", () => {
     await screen.findByRole("table", { name: "Items in this run" });
     expect(FakeEventSource.instances).toHaveLength(0);
     expect(announced()).toBe("");
+  });
+});
+
+const counts = (over: Partial<ReturnType<typeof run>["counts"]> = {}) => ({
+  failed: 0,
+  kept: 0,
+  removedContainers: 0,
+  removedImages: 0,
+  removedNetworks: 0,
+  skippedOffline: 0,
+  ...over,
+});
+
+describe("the summary of a run", () => {
+  it("counts what was removed, the size when it is known, what was kept and what failed", async () => {
+    runAnswer = () =>
+      Response.json(
+        run({
+          counts: counts({
+            removedContainers: 14,
+            removedNetworks: 3,
+            removedImages: 2,
+            kept: 1,
+            failed: 4,
+          }),
+          estBytes: 1_200_000_000,
+          items: [runItem()],
+        }),
+      );
+    mount();
+    expect(
+      await screen.findByText(
+        "Removed 14 containers, 3 networks, 2 images, ~1.2 GB. Kept 1. Failed 4.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("leaves out a part that is zero, and names the one that is left in the right number", async () => {
+    runAnswer = () =>
+      Response.json(
+        run({ counts: counts({ removedNetworks: 1 }), estBytes: null, items: [runItem()] }),
+      );
+    mount();
+    expect(await screen.findByText("Removed 1 network. Kept 0. Failed 0.")).toBeTruthy();
+  });
+
+  it("says nothing was removed when nothing was", async () => {
+    runAnswer = () => Response.json(run({ items: [runItem({ outcome: "refused_in_use" })] }));
+    mount();
+    expect(await screen.findByText("Nothing removed. Kept 0. Failed 0.")).toBeTruthy();
+  });
+});
+
+describe("the alert of a run that did not complete", () => {
+  it("is a polite warning for a partly done run, with the counts", async () => {
+    runAnswer = () =>
+      Response.json(
+        run({
+          state: "partial",
+          counts: counts({ removedContainers: 14, failed: 2, kept: 3 }),
+          items: Array.from({ length: 19 }, (_, i) => runItem({ seq: i + 1, name: `t-${i}` })),
+        }),
+      );
+    mount();
+    const alert = await screen.findByText("Partly done", { selector: "[data-slot=alert-title]" });
+    const box = alert.closest("[data-slot=alert]") as HTMLElement;
+    expect(box.getAttribute("role")).toBe("status");
+    expect(box.textContent).toContain(
+      "Removed 14 of 19. 2 failed and 3 were kept. Open an item to see why.",
+    );
+  });
+
+  it("is a polite note with the reason for a skipped run", async () => {
+    runAnswer = () => Response.json(run({ state: "skipped", reason: "deploy_in_progress" }));
+    mount();
+    const title = await screen.findByText("Skipped", { selector: "[data-slot=alert-title]" });
+    const box = title.closest("[data-slot=alert]") as HTMLElement;
+    expect(box.getAttribute("role")).toBe("status");
+    expect(box.textContent).toContain(
+      "A deploy was in progress. TierPlan will try again at the next scheduled run.",
+    );
+  });
+
+  it("is a destructive alert for a run a restart cut short, naming the restart", async () => {
+    runAnswer = () => Response.json(run({ state: "failed", reason: "server_restarted" }));
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The cleanup failed");
+    expect(alert.textContent).toContain(
+      "TierPlan restarted during this run. Nothing more was removed. TierPlan will try again at the next scheduled run.",
+    );
+  });
+
+  it("does not begin its sentence with a stop when the failure has no reason", async () => {
+    runAnswer = () => Response.json(run({ state: "failed", reason: "" }));
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Nothing more was removed. TierPlan will try again at the next scheduled run.",
+    );
+    expect(alert.textContent).not.toContain(". Nothing");
+  });
+});
+
+describe("the filters of a run", () => {
+  const items = () => [
+    runItem({ seq: 1, name: "web.1.abc" }),
+    runItem({ seq: 2, name: "web.2.def", outcome: "error", code: "action_failed" }),
+    runItem({ seq: 3, name: "db.1.ghi", outcome: "skipped_node_offline", code: "node_offline" }),
+    runItem({ seq: 4, name: "db.2.jkl", outcome: "refused_in_use", code: "in_use" }),
+  ];
+  const shown = () => {
+    const table = screen.getByRole("table", { name: "Items in this run" });
+    return within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => within(r).getAllByRole("cell")[1]?.textContent);
+  };
+
+  it("offers All, Removed, Kept and Problems as one choice, and lists the problems on request", async () => {
+    runAnswer = () => Response.json(run({ items: items() }));
+    mount();
+    await screen.findByRole("table", { name: "Items in this run" });
+    const group = screen.getByRole("group", { name: "Show" });
+    expect(
+      within(group)
+        .getAllByRole("radio")
+        .map((r) => r.textContent),
+    ).toEqual(["All", "Removed", "Kept", "Problems"]);
+    expect(within(group).getByRole("radio", { name: "All" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(shown()).toHaveLength(4);
+    fireEvent.click(within(group).getByRole("radio", { name: "Problems" }));
+    expect(shown()).toEqual(["web.2.def", "db.1.ghi"]);
+    expect(
+      within(group).getByRole("radio", { name: "Problems" }).getAttribute("aria-checked"),
+    ).toBe("true");
+    // Choosing the chosen one again is not a choice: it stays.
+    fireEvent.click(within(group).getByRole("radio", { name: "Problems" }));
+    expect(shown()).toHaveLength(2);
+  });
+
+  it("searches by name through the box, which can be cleared", async () => {
+    runAnswer = () => Response.json(run({ items: items() }));
+    mount();
+    await screen.findByRole("table", { name: "Items in this run" });
+    const box = screen.getByRole("searchbox", { name: "Search items" });
+    expect(box.getAttribute("placeholder")).toBe("Search by name");
+    fireEvent.change(box, { target: { value: "db." } });
+    await waitFor(() => expect(shown()).toEqual(["db.1.ghi", "db.2.jkl"]));
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    await waitFor(() => expect(shown()).toHaveLength(4));
+  });
+
+  it("starts from the filter the address names", async () => {
+    runAnswer = () => Response.json(run({ items: items() }));
+    mount({ show: "problems", q: "db" });
+    await screen.findByRole("table", { name: "Items in this run" });
+    expect(shown()).toEqual(["db.1.ghi"]);
+    expect(screen.getByRole("radio", { name: "Problems" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("db");
+  });
+
+  it("reports a choice to the address and takes the default out of it", async () => {
+    runAnswer = () => Response.json(run({ items: items() }));
+    const onSearchChange = vi.fn();
+    mount({ show: "problems", onSearchChange });
+    await screen.findByRole("table", { name: "Items in this run" });
+    fireEvent.click(screen.getByRole("radio", { name: "Kept" }));
+    expect(onSearchChange).toHaveBeenLastCalledWith({ show: "kept" });
+    fireEvent.click(screen.getByRole("radio", { name: "All" }));
+    expect(onSearchChange).toHaveBeenLastCalledWith({ show: undefined });
+  });
+
+  it("shows no filters for a run that found nothing", async () => {
+    runAnswer = () => Response.json(run({ items: [] }));
+    mount();
+    expect(await screen.findByText("This run found nothing to remove.")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Show" })).toBeNull();
   });
 });
