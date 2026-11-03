@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // t0 is the moment every test judges at.
@@ -330,5 +333,105 @@ func TestBuildKeptRowProtects(t *testing.T) {
 	}
 	if it := byRef["c0"]; it.Class != ClassProtected || it.Reason.Code != ReasonKeptLabel {
 		t.Errorf("c0 = %+v, want the keep label's own, more specific reason", it)
+	}
+}
+
+// D-10: the objects a stack excluded from the janitor owns are never removable. Its old one-offs (the only
+// containers of a stack the janitor would otherwise take) are listed protected (stack_excluded), found by its ID or
+// by its name as the compose project, and none of them is inspected; a stack that is not excluded, and a one-off
+// of a project nobody manages, are judged as before.
+func TestPlannerExcludedOneOffs(t *testing.T) {
+	t.Parallel()
+	oneoff := func(id, project string, idx int) Container { return box(id, idx, composed(project, "migrate", true)) }
+	// q1 to q3 carry the stack's ID under a project name it does not own: the ID finds them.
+	byID := func(id string, idx int) Container {
+		return box(id, idx, withStack(composed("renamed", "migrate", true), "stk-shop"))
+	}
+	s := hostOf([]string{"shop", "blog"},
+		oneoff("r1", "shop", 0), oneoff("r2", "shop", 1), oneoff("r3", "shop", 2),
+		byID("q1", 0), byID("q2", 1), byID("q3", 2),
+		oneoff("b1", "blog", 0), oneoff("b2", "blog", 1), oneoff("b3", "blog", 2))
+	s.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Excluded: true}, {ID: "stk-blog", Name: "blog"}}
+	p := DefaultPolicy()
+
+	for _, c := range Candidates(s, p) {
+		if c.ID[0] == 'r' || c.ID[0] == 'q' {
+			t.Errorf("candidate %+v belongs to an excluded stack: nothing of it is inspected", c)
+		}
+	}
+	got := planOf(s, p)
+	if want := []string{"b1"}; !reflect.DeepEqual(refs(got.Items), want) {
+		t.Fatalf("items = %v, want %v: only the stack that is not excluded loses its oldest one-off", refs(got.Items), want)
+	}
+	byRef := map[string]Item{}
+	for _, it := range got.NotRemoved {
+		byRef[it.Ref] = it
+	}
+	for _, id := range []string{"r1", "q1"} {
+		it, ok := byRef[id]
+		if !ok || it.Class != ClassProtected || it.Reason.Code != ReasonStackExcluded || it.Age != 0 {
+			t.Errorf("%s = %+v (listed %v), want protected stack_excluded", id, it, ok)
+		}
+	}
+	if it := byRef["r1"]; it.Reason.Project != "shop" || it.Reason.Service != "migrate" {
+		t.Errorf("r1 reason = %+v, want it to keep naming its project and service", it.Reason)
+	}
+	// The newest two of each group (keep-N) are not the janitor's business, excluded or not.
+	for _, id := range []string{"r2", "r3", "q2", "q3"} {
+		if it, ok := byRef[id]; ok {
+			t.Errorf("%s is listed %+v, want it left out as one of the newest", id, it)
+		}
+	}
+
+	// Including the stack makes the same one-offs removable again.
+	s.StackFacts[0].Excluded = false
+	if got := planOf(s, p); !reflect.DeepEqual(refs(got.Items), []string{"b1", "q1", "r1"}) {
+		t.Fatalf("items = %v, want r1, q1 and b1 removable once the stack is included", refs(got.Items))
+	}
+}
+
+// A person's own keep and a label stay more specific than the stack's exclusion, and a swarm task container is found
+// by the stack namespace the same way.
+func TestPlannerExcludedSwarmTasks(t *testing.T) {
+	t.Parallel()
+	var cs []Container
+	for i := range 5 {
+		c := task(fmt.Sprintf("c%d", i+1), "1", i)
+		c.Labels[stacks.LabelSwarmNamespace] = "shop"
+		cs = append(cs, c)
+	}
+	s := swarmOf(cs...)
+	s.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Excluded: true}}
+	s.Keeps = map[KeepKey]bool{{Kind: KindContainer, NodeID: "n1-id", Ref: "c1"}: true}
+	got := planOf(s, DefaultPolicy())
+	if len(got.Items) != 0 {
+		t.Fatalf("items = %v, want none: the stack is excluded", refs(got.Items))
+	}
+	want := map[string]ReasonCode{"c1": ReasonKeptRow, "c2": ReasonStackExcluded, "c3": ReasonStackExcluded}
+	if len(got.NotRemoved) != len(want) {
+		t.Fatalf("notRemoved = %+v, want %d protected", got.NotRemoved, len(want))
+	}
+	for _, it := range got.NotRemoved {
+		if it.Class != ClassProtected || it.Reason.Code != want[it.Ref] {
+			t.Errorf("%s = %+v, want protected %s", it.Ref, it, want[it.Ref])
+		}
+	}
+}
+
+// D-10: the networks of a stack are owned by it, whether or not it is excluded, so the orphan check never lists them
+// for the janitor; excluding a stack adds nothing to the networks and takes nothing from them.
+func TestPlannerExcludedStackNetworksOwned(t *testing.T) {
+	t.Parallel()
+	rep := &NetworkReport{Complete: true, Rows: []NetworkRow{
+		{ID: "net-own", Name: "shop_default", NodeID: "n1-id", Node: "n1", Scope: "local", Class: netspace.ClassOwned, FormerOwner: "shop", FormerOwnerKind: "stack"},
+		{ID: "net-old", Name: "old_default", NodeID: "n1-id", Node: "n1", Scope: "local", Class: netspace.ClassOrphaned, FormerOwner: "old", FormerOwnerKind: "stack", IdleSince: t0.Add(-48 * time.Hour)},
+	}}
+	for _, excluded := range []bool{false, true} {
+		s := hostOf([]string{"shop"})
+		s.StackFacts = []StackFact{{ID: "stk-shop", Name: "shop", Excluded: excluded}}
+		got := Build(Input{Snapshot: s, Networks: rep}, DefaultPolicy(), t0)
+		if !reflect.DeepEqual(refs(got.Items), []string{"net-old"}) || len(got.NotRemoved) != 0 {
+			t.Errorf("excluded %v: plan = %+v, want only the orphaned network listed and the stack's own never", excluded, got)
+		}
 	}
 }

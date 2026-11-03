@@ -228,6 +228,10 @@ type Input struct {
 // schedule or by Clean now. Its networks are not its own, so they are judged as before. A node's keep-N
 // override replaces the environment's N for the containers on that node, in rule 5.
 //
+// A container or image owned by a stack a person excluded from the janitor (its tierplan.stack.id, or the stack's name as
+// its swarm namespace or compose project, D-10) is listed as protected (stack_excluded) in the same way, and none of
+// a stack's containers is inspected. The stack's networks are owned and never listed.
+//
 // A node whose engine clock differs from the snapshot's read time by more than ClockSkewTolerance
 // has its containers and images left alone (cant_tell, clock_skew), whatever the rules above say.
 //
