@@ -884,7 +884,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		return p.Grace, err
 	})
 	janitorDeps.Runner = &janitor.Runner{
-		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, janitor.KeepStore{St: st}, log, api.WithStackDeclarations(janitorFacts)), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
+		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, janitor.KeepStore{St: st}, log, api.WithStackDeclarations(janitorFacts), api.WithEngineClock(janitorNow)), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
 		Policy: janitorPolicies.Effective, Nodes: janitorPolicies.Nodes, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}

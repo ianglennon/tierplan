@@ -70,6 +70,23 @@ func (q *Queries) CountJanitorRunsToPrune(ctx context.Context, arg CountJanitorR
 	return i, err
 }
 
+const deleteImageDanglingSeen = `-- name: DeleteImageDanglingSeen :exec
+DELETE FROM image_dangling_seen
+WHERE env_id = ? AND node_id = ? AND image_id = ?
+`
+
+type DeleteImageDanglingSeenParams struct {
+	EnvID   string
+	NodeID  string
+	ImageID string
+}
+
+// An image that is gone from its node, or has a name again: its clock stops.
+func (q *Queries) DeleteImageDanglingSeen(ctx context.Context, arg DeleteImageDanglingSeenParams) error {
+	_, err := q.db.ExecContext(ctx, deleteImageDanglingSeen, arg.EnvID, arg.NodeID, arg.ImageID)
+	return err
+}
+
 const deleteJanitorKeep = `-- name: DeleteJanitorKeep :execrows
 DELETE FROM janitor_keeps
 WHERE env_id = ? AND kind = ? AND node_id = ? AND ref = ?
@@ -323,6 +340,30 @@ func (q *Queries) GetJanitorRun(ctx context.Context, arg GetJanitorRunParams) (J
 	return i, err
 }
 
+const insertImageDanglingSeen = `-- name: InsertImageDanglingSeen :exec
+INSERT INTO image_dangling_seen (env_id, node_id, image_id, first_seen_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (env_id, node_id, image_id) DO NOTHING
+`
+
+type InsertImageDanglingSeenParams struct {
+	EnvID       string
+	NodeID      string
+	ImageID     string
+	FirstSeenAt int64
+}
+
+// An image seen without a name for the first time: its clock starts, and one already running is kept.
+func (q *Queries) InsertImageDanglingSeen(ctx context.Context, arg InsertImageDanglingSeenParams) error {
+	_, err := q.db.ExecContext(ctx, insertImageDanglingSeen,
+		arg.EnvID,
+		arg.NodeID,
+		arg.ImageID,
+		arg.FirstSeenAt,
+	)
+	return err
+}
+
 const insertJanitorEnvPolicy = `-- name: InsertJanitorEnvPolicy :execrows
 INSERT INTO janitor_env_policy (env_id, enabled, schedule, schedule_preset, keep_n, grace_hours,
                                 remove_unused_networks, remove_stopped_containers, version, updated_by, updated_at)
@@ -511,6 +552,42 @@ func (q *Queries) InsertJanitorRunItem(ctx context.Context, arg InsertJanitorRun
 		arg.EstBytes,
 	)
 	return err
+}
+
+const listImageDanglingSeen = `-- name: ListImageDanglingSeen :many
+SELECT node_id, image_id, first_seen_at FROM image_dangling_seen
+WHERE env_id = ?
+ORDER BY node_id, image_id
+`
+
+type ListImageDanglingSeenRow struct {
+	NodeID      string
+	ImageID     string
+	FirstSeenAt int64
+}
+
+// When the janitor first saw each image of one environment without a name (D-07).
+func (q *Queries) ListImageDanglingSeen(ctx context.Context, envID string) ([]ListImageDanglingSeenRow, error) {
+	rows, err := q.db.QueryContext(ctx, listImageDanglingSeen, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListImageDanglingSeenRow
+	for rows.Next() {
+		var i ListImageDanglingSeenRow
+		if err := rows.Scan(&i.NodeID, &i.ImageID, &i.FirstSeenAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listJanitorEvidenceSeqs = `-- name: ListJanitorEvidenceSeqs :many

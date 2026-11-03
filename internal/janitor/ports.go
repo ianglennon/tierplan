@@ -63,8 +63,12 @@ type Image struct {
 	// are ignored by the planner, so an untagged image may carry either them or nothing.
 	RepoTags, RepoDigests []string
 	Size                  int64
-	Created               time.Time
-	Labels                map[string]string
+	// Created is when the image was built: zero, or the epoch, when the engine does not say.
+	Created time.Time
+	// DanglingSince is when the janitor first saw the image without a name on this node (DanglingStore),
+	// zero when no clock is kept. The grace period runs from the later of the two.
+	DanglingSince time.Time
+	Labels        map[string]string
 }
 
 // StackFact is one TierPlan stack of the environment and how it holds the janitor back (D-10, D-19). A person can

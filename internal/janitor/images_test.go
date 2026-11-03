@@ -218,6 +218,55 @@ func TestClassifyImageGraceBoundary(t *testing.T) {
 	})
 }
 
+// WR-07: an image's grace period is measured from the later of when it was built and when the janitor
+// first saw it without a name. An image built long ago that has just lost its tag to a newer pull or
+// build is held for the whole grace period, and one whose build time the engine does not give is held
+// rather than read as built in 1970.
+func TestClassifyImageGraceFromDangling(t *testing.T) {
+	t.Parallel()
+	grace := DefaultPolicy().Grace
+	t.Run("built long ago, dangling for an hour", func(t *testing.T) {
+		t.Parallel()
+		img := bareImage("a1", 90*24*time.Hour)
+		img.DanglingSince = t0.Add(-time.Hour)
+		item, listed := ClassifyImage(img, false, false, true, DefaultPolicy(), t0)
+		if !listed || item.Class != ClassGrace || item.Reason.Code != ReasonYoungerThanGrace || item.Reason.Remaining != grace-time.Hour || item.Age != time.Hour {
+			t.Fatalf("item = %+v listed = %v, want grace with %s left and an age of 1 h", item, listed, grace-time.Hour)
+		}
+	})
+	t.Run("dangling for the grace period", func(t *testing.T) {
+		t.Parallel()
+		img := bareImage("a1", 90*24*time.Hour)
+		img.DanglingSince = t0.Add(-grace)
+		if item, _ := ClassifyImage(img, false, false, true, DefaultPolicy(), t0); item.Class != ClassRemovable {
+			t.Fatalf("item = %+v, want removable once dangling for the grace period", item)
+		}
+	})
+	t.Run("built after it was first seen", func(t *testing.T) {
+		t.Parallel()
+		img := bareImage("a1", time.Hour)
+		img.DanglingSince = t0.Add(-72 * time.Hour)
+		if item, _ := ClassifyImage(img, false, false, true, DefaultPolicy(), t0); item.Class != ClassGrace || item.Reason.Remaining != grace-time.Hour {
+			t.Fatalf("item = %+v, want grace measured from the later build time", item)
+		}
+	})
+	for name, created := range map[string]time.Time{"zero": {}, "the epoch": time.Unix(0, 0)} {
+		t.Run("a build time of "+name, func(t *testing.T) {
+			t.Parallel()
+			img := bareImage("a1", 0)
+			img.Created = created
+			item, _ := ClassifyImage(img, false, false, true, DefaultPolicy(), t0)
+			if item.Class != ClassGrace || item.Reason.Code != ReasonYoungerThanGrace || item.Reason.Remaining != grace || item.Age != 0 {
+				t.Fatalf("item = %+v, want grace for the whole period: an unknown build time is not an old one", item)
+			}
+			img.DanglingSince = t0.Add(-2 * grace)
+			if item, _ := ClassifyImage(img, false, false, true, DefaultPolicy(), t0); item.Class != ClassRemovable {
+				t.Fatalf("item = %+v, want removable once dangling for the grace period", item)
+			}
+		})
+	}
+}
+
 func TestClassifyImageEmptyInputs(t *testing.T) {
 	t.Parallel()
 	t.Run("a node with no images contributes nothing", func(t *testing.T) {

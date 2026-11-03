@@ -62,8 +62,8 @@ func shortImageID(id string) string {
 //     because a service scaled to zero would still need it
 //  4. a service spec names it: not listed
 //  5. labelled tierplan.keep=true: protected (kept_label)
-//  6. created less than the grace period ago: grace (younger_than_grace); at exactly the grace
-//     period it is removable
+//  6. built, or first seen without a name, less than the grace period ago, or neither known: grace
+//     (younger_than_grace); at exactly the grace period it is removable
 //  7. otherwise removable (dangling_image), with its age and size
 //
 // usedOnNode and serviceRef are the answers to rules 2 and 4 for this image; servicesRead is true
@@ -81,8 +81,9 @@ func ClassifyImage(img Image, usedOnNode, serviceRef, servicesRead bool, p Polic
 	if item.Size < 0 {
 		item.Size = -1
 	}
-	if !img.Created.IsZero() {
-		item.Age = max(now.Sub(img.Created), 0)
+	since, known := danglingStart(img)
+	if known {
+		item.Age = max(now.Sub(since), 0)
 		item.Reason.Age = item.Age
 	}
 	if !servicesRead {
@@ -96,12 +97,32 @@ func ClassifyImage(img Image, usedOnNode, serviceRef, servicesRead bool, p Polic
 		item.Class, item.Reason.Code = ClassProtected, ReasonKeptLabel
 		return item, true
 	}
-	if remaining := img.Created.Add(p.grace()).Sub(now); remaining > 0 {
+	if !known {
+		// Neither when it was built nor when it lost its name is known: it is held for the whole grace
+		// period, never read as built in 1970.
+		item.Class, item.Reason.Code, item.Reason.Remaining = ClassGrace, ReasonYoungerThanGrace, p.grace()
+		return item, true
+	}
+	if remaining := since.Add(p.grace()).Sub(now); remaining > 0 {
 		item.Class, item.Reason.Code, item.Reason.Remaining = ClassGrace, ReasonYoungerThanGrace, remaining
 		return item, true
 	}
 	item.Class, item.Reason.Code = ClassRemovable, ReasonDanglingImage
 	return item, true
+}
+
+// danglingStart is when an image's grace period starts: the later of when it was built and when the
+// janitor first saw it without a name, of those that are known. A build time is the image's own and says
+// nothing about when it lost its tag: an image superseded by a newer pull or build of the same tag was
+// usually built long ago, and measured from that it would be removed at the next run, with no grace. A
+// build time of zero or the epoch is an engine that did not say. known is false when neither is known.
+func danglingStart(img Image) (since time.Time, known bool) {
+	for _, t := range []time.Time{img.Created, img.DanglingSince} {
+		if t.Unix() > 0 && t.After(since) {
+			since, known = t, true
+		}
+	}
+	return since, known
 }
 
 // ImageNamedBySpec reports whether a swarm service spec names the image: by its ID, or by a

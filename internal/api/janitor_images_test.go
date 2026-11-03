@@ -33,12 +33,28 @@ func janitorImageEngine(images ...dockertest.FakeImage) dockertest.FakeConfig {
 // imageAge is the Created of an image that is ago old at the fixture's clock.
 func imageAge(ago time.Duration) int64 { return janitorNow.Add(-ago).Unix() }
 
+// agedDanglingEnv is dashEnv with the janitor's clock of every image of cfg started 72 hours before the
+// fixture's clock, as if a snapshot had first seen each without a name then, so a dangling image of cfg is
+// past the grace period the first time the test previews.
+func agedDanglingEnv(t *testing.T, cfg dockertest.FakeConfig) (*envFix, envBody) {
+	t.Helper()
+	f, e := dashEnv(t, cfg)
+	for _, img := range cfg.Images {
+		if _, err := f.st.Write.ExecContext(testsupport.Context(t),
+			`INSERT INTO image_dangling_seen (env_id, node_id, image_id, first_seen_at) VALUES (?, ?, ?, ?)`,
+			e.ID, e.ID, img.ID, janitorNow.Add(-72*time.Hour).UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f, e
+}
+
 // The tracer: an untagged, undigested image past the grace period that no container uses is in the
 // preview, and Clean now removes it through the Images page's code, once and without force.
 func TestJanitorRemovesDanglingImage(t *testing.T) {
 	t.Parallel()
 	id := imageIDOf("a")
-	f, e := dashEnv(t, janitorImageEngine(dockertest.FakeImage{ID: id, Size: 4096, Created: imageAge(72 * time.Hour)}))
+	f, e := agedDanglingEnv(t, janitorImageEngine(dockertest.FakeImage{ID: id, Size: 4096, Created: imageAge(72 * time.Hour)}))
 	preview := f.previewJanitor(t, e)
 	if len(preview.Items) != 1 || preview.Summary.Images != 1 {
 		t.Fatalf("preview items = %+v summary = %+v, want the one dangling image", preview.Items, preview.Summary)
@@ -82,7 +98,7 @@ func TestJanitorImageRecheckedOnTheNode(t *testing.T) {
 			changed(&now)
 			cfg := janitorImageEngine(listed)
 			cfg.InspectImages = map[string]dockertest.FakeImage{listed.ID: now}
-			f, e := dashEnv(t, cfg)
+			f, e := agedDanglingEnv(t, cfg)
 			if preview := f.previewJanitor(t, e); len(preview.Items) != 1 || preview.Items[0].Ref != listed.ID {
 				t.Fatalf("preview items = %+v, want the listed image removable", preview.Items)
 			}
@@ -105,7 +121,7 @@ func TestJanitorRemovesDanglingImageWithPlaceholders(t *testing.T) {
 	t.Parallel()
 	img := danglingImage("a")
 	img.RepoTags, img.RepoDigests = []string{"<none>:<none>"}, []string{"<none>@<none>"}
-	f, e := dashEnv(t, janitorImageEngine(img))
+	f, e := agedDanglingEnv(t, janitorImageEngine(img))
 	preview := f.previewJanitor(t, e)
 	if len(preview.Items) != 1 || preview.Items[0].Ref != img.ID || preview.Items[0].Class != "removable" {
 		t.Fatalf("preview items = %+v, want the image removable", preview.Items)
@@ -117,5 +133,27 @@ func TestJanitorRemovesDanglingImageWithPlaceholders(t *testing.T) {
 	}
 	if w := f.fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "DELETE /images/"+img.ID) {
 		t.Fatalf("writes = %v, want one DELETE of the image by its ID and no untag of a placeholder", w)
+	}
+}
+
+// An image's grace period runs from when the janitor first saw it without a name, not from when it was built
+// (WR-07): an image built 90 days ago that has just lost its tag to a newer build is held for the whole grace
+// period on first sight, and is removable once it has been seen dangling for that long.
+func TestJanitorImageGraceFromWhenItLostItsName(t *testing.T) {
+	t.Parallel()
+	img := danglingImage("a")
+	img.Created = imageAge(90 * 24 * time.Hour)
+	f, e := dashEnv(t, janitorImageEngine(img))
+	preview := f.previewJanitor(t, e)
+	it, ok := notRemovedRef(preview, img.ID)
+	if len(preview.Items) != 0 || !ok || it.Class != "grace" || it.Reason.Code != "younger_than_grace" || it.Reason.RemainingSeconds != int64((24*time.Hour).Seconds()) {
+		t.Fatalf("preview items = %+v, image %+v (listed %v), want it held by grace for the whole 24 h on first sight", preview.Items, it, ok)
+	}
+	if _, err := f.st.Write.ExecContext(testsupport.Context(t),
+		`UPDATE image_dangling_seen SET first_seen_at = ? WHERE env_id = ? AND image_id = ?`, janitorNow.Add(-24*time.Hour).UnixNano(), e.ID, img.ID); err != nil {
+		t.Fatal(err)
+	}
+	if after := f.previewJanitor(t, e); len(after.Items) != 1 || after.Items[0].Ref != img.ID || after.Items[0].Class != "removable" {
+		t.Fatalf("preview items = %+v, want the image removable once seen dangling for 24 h", after.Items)
 	}
 }

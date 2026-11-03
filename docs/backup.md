@@ -36,6 +36,8 @@ and they are not an upgrade tool: see [upgrade.md](upgrade.md) for that.
   on its first check;
 - **`stack_git_state`**, the result of the last check of each git stack. It is derived, so every git stack of a restored
   instance reads *unknown* until it is checked again, which happens on its next poll or when you press **Check now**.
+- **`image_dangling_seen`**, when the janitor first saw each image without a name. It is derived from what the engines
+  show, so a restored instance starts every dangling image's grace period again, which can only delay a removal.
 
 **Git secrets restore under the new key.** A git token, an SSH deploy key and a webhook's signing secret are opened with
 the old key and sealed again under the passphrase-derived key when the backup is written, and again under the new

@@ -102,6 +102,11 @@ var Tables = map[string]Class{
 	// environment and holds no secret.
 	"janitor_keeps": Included,
 
+	// When the janitor first saw each image without a name (Phase 11, D-07), which its image grace period is
+	// measured from. It is derived from what the engines show: a restored instance starts every clock again,
+	// which can only delay a removal by one grace period, never bring one forward.
+	"image_dangling_seen": Excluded,
+
 	// The janitor's record (Phase 11): each run and every item it removed or failed to remove, so
 	// what was cleaned up and by whom survives a restore. Both belong to their environment and hold
 	// no secret.

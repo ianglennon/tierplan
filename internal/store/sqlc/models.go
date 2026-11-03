@@ -173,6 +173,13 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type ImageDanglingSeen struct {
+	EnvID       string
+	NodeID      string
+	ImageID     string
+	FirstSeenAt int64
+}
+
 type JanitorDefault struct {
 	ID                      int64
 	Enabled                 int64

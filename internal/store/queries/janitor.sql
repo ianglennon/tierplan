@@ -208,3 +208,20 @@ ON CONFLICT (env_id, kind, node_id, ref) DO NOTHING;
 -- Takes one keep back; zero rows means there was none.
 DELETE FROM janitor_keeps
 WHERE env_id = ? AND kind = ? AND node_id = ? AND ref = ?;
+
+-- name: ListImageDanglingSeen :many
+-- When the janitor first saw each image of one environment without a name (D-07).
+SELECT node_id, image_id, first_seen_at FROM image_dangling_seen
+WHERE env_id = ?
+ORDER BY node_id, image_id;
+
+-- name: InsertImageDanglingSeen :exec
+-- An image seen without a name for the first time: its clock starts, and one already running is kept.
+INSERT INTO image_dangling_seen (env_id, node_id, image_id, first_seen_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (env_id, node_id, image_id) DO NOTHING;
+
+-- name: DeleteImageDanglingSeen :exec
+-- An image that is gone from its node, or has a name again: its clock stops.
+DELETE FROM image_dangling_seen
+WHERE env_id = ? AND node_id = ? AND image_id = ?;

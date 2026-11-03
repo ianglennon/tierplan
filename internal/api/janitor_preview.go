@@ -85,14 +85,16 @@ type JanitorPreviewOutput struct {
 
 // registerJanitorPreview registers the dry run.
 func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
-	eng := &janitorEngine{agg: d.Aggregator, clusters: d.Clusters, facts: d.StackFacts, keeps: janitor.KeepStore{St: d.Store}, log: d.log()}
+	eng := &janitorEngine{agg: d.Aggregator, clusters: d.Clusters, facts: d.StackFacts, keeps: janitor.KeepStore{St: d.Store}, now: d.now, log: d.log()}
 	WithStackDeclarations(d.JanitorFacts)(eng)
 	httpx.Register(r, huma.Operation{
 		OperationID: "previewJanitor", Method: http.MethodPost, Path: "/api/env/{envId}/janitor/preview",
 		Summary: "Preview what the janitor would remove",
 		Description: "Answers which objects the janitor would remove from the environment now, and why it leaves the rest. " +
-			"It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, " +
+			"It reads every node fresh through the agents, judges with the environment's policy, and removes nothing: nothing is audited, " +
 			"and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. " +
+			"The one thing it records is when it first saw each image without a name: a dangling image's grace period runs from the later of that and when the image was built, " +
+			"so an image that has just lost its tag to a newer pull or build is held for the whole grace period however old it is. " +
 			"It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) " +
 			"and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. " +
 			"A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. " +

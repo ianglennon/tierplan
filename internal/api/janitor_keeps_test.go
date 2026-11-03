@@ -173,7 +173,7 @@ func itemOf(items []janitorItem, ref string) (janitorItem, bool) {
 func TestJanitorKeepImageThenUnkeep(t *testing.T) {
 	t.Parallel()
 	id := imageIDOf("a")
-	f, e := dashEnv(t, janitorImageEngine(danglingImage("a")))
+	f, e := agedDanglingEnv(t, janitorImageEngine(danglingImage("a")))
 	if p := f.previewJanitor(t, e); len(p.Items) != 1 || p.Items[0].Ref != id {
 		t.Fatalf("preview items = %+v, want the dangling image", p.Items)
 	}
@@ -522,7 +522,7 @@ func TestJanitorKeptItemsNeverRemoved(t *testing.T) {
 func TestJanitorKeptImageNeverRemoved(t *testing.T) {
 	t.Parallel()
 	id := imageIDOf("a")
-	f, e := dashEnv(t, janitorImageEngine(danglingImage("a")))
+	f, e := agedDanglingEnv(t, janitorImageEngine(danglingImage("a")))
 	preview := f.previewJanitor(t, e)
 	if rec := f.req(t, http.MethodPut, keepsURL(e.ID), keepOne("image", e.ID, id)); rec.code != http.StatusOK {
 		t.Fatalf("keep: %d %s", rec.code, rec.body)

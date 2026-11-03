@@ -49,7 +49,10 @@ type janitorEngine struct {
 	// declared reads what each stack's compose file says about the janitor (x-tierplan: {keep: true}). Nil means
 	// the files are not read, and only a person's exclusion holds a stack back.
 	declared stackDeclarations
-	log      *slog.Logger
+	// now is the clock an image's first sighting without a name is stamped with (janitor.DanglingStore): the
+	// janitor's own, so the time it judges an image's grace by and the time it started it agree.
+	now func() time.Time
+	log *slog.Logger
 }
 
 // stackDeclarations is stackops.JanitorFacts as the engine uses it.
@@ -71,19 +74,30 @@ func WithStackDeclarations(f stackops.JanitorFacts) JanitorEngineOption {
 	}
 }
 
+// WithEngineClock makes the engine stamp the first sighting of an image without a name with now instead of the
+// real time. The server gives it the janitor's clock, which a test can move.
+func WithEngineClock(now func() time.Time) JanitorEngineOption {
+	return func(e *janitorEngine) {
+		if now != nil {
+			e.now = now
+		}
+	}
+}
+
 var _ janitor.Engine = (*janitorEngine)(nil)
 
 // NewJanitorEngine is the janitor's engine over the server's aggregator and cluster reader, for
 // the Runner the server builds. clusters may be nil on a server with no swarm reader; facts are the
 // stacks of the environment (the same ones the Address space check reads), nil when there are none to
 // ask, in which case no compose container is ever removable; keeps are the objects a person kept out of
-// cleanup, read with every snapshot and again just before a removal (a KeepStore with no store has none);
-// log nil means slog.Default(); opts add what the stacks' own files say (WithStackDeclarations).
+// cleanup, read with every snapshot and again just before a removal (a KeepStore with no store has none), and
+// its store also keeps when each image was first seen without a name; log nil means slog.Default(); opts add what
+// the stacks' own files say (WithStackDeclarations) and the clock of that first sighting (WithEngineClock).
 func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, facts envs.StackFacts, keeps janitor.KeepStore, log *slog.Logger, opts ...JanitorEngineOption) janitor.Engine {
 	if log == nil {
 		log = slog.Default()
 	}
-	e := &janitorEngine{agg: agg, clusters: clusters, facts: facts, keeps: keeps, log: log}
+	e := &janitorEngine{agg: agg, clusters: clusters, facts: facts, keeps: keeps, now: time.Now, log: log}
 	for _, o := range opts {
 		o(e)
 	}
@@ -170,6 +184,11 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 	}
 	// Likewise the stacks a person excluded or whose file keeps them out: their objects must never be judged without it.
 	if snap.StackFacts, err = e.stackFacts(ctx, envID); err != nil {
+		return janitor.Snapshot{}, err
+	}
+	// And when each image lost its name, which its grace period runs from: measured from its build time
+	// instead, an image superseded by a newer build of its tag could be removed at once.
+	if err := (janitor.DanglingStore{St: e.keeps.St}).Stamp(ctx, envID, &snap, e.now()); err != nil {
 		return janitor.Snapshot{}, err
 	}
 	snap.NodeTimes = e.readNodeTimes(ctx, envID, agg.Nodes)
