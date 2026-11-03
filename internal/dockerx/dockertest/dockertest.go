@@ -92,6 +92,9 @@ type FakeConfig struct {
 	// SystemTime is Info.SystemTime, the engine's own clock as an RFC 3339 string. Empty leaves it out
 	// of /info, as an engine that does not report its time does.
 	SystemTime string
+	// SystemTimeOffset, when set, replaces SystemTime: /info reports the time the request is served
+	// plus this offset, so a test of clock skew holds however late its request runs.
+	SystemTimeOffset *time.Duration
 	// SecurityOptions is Info.SecurityOptions.
 	SecurityOptions []string
 	// SwarmState is Info.Swarm.LocalNodeState. Default "inactive".
@@ -1025,7 +1028,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			ServerVersion:   cfg.Version,
 			OperatingSystem: cfg.OperatingSystem,
 			OSType:          cfg.OSType,
-			SystemTime:      cfg.SystemTime,
+			SystemTime:      cfg.systemTime(),
 			Architecture:    "x86_64",
 			KernelVersion:   "7.0.0-fake",
 			Driver:          "overlayfs",
@@ -1122,6 +1125,15 @@ func (c FakeConfig) resolveContainer(ref string) (FakeContainer, bool) {
 		}
 	}
 	return hit, n == 1
+}
+
+// systemTime is Info.SystemTime: the offset from the time the request is served when one is set,
+// else SystemTime as given.
+func (c FakeConfig) systemTime() string {
+	if c.SystemTimeOffset != nil {
+		return time.Now().Add(*c.SystemTimeOffset).Format(time.RFC3339Nano)
+	}
+	return c.SystemTime
 }
 
 // swarmInfo is Info.Swarm: the state, the node ID and the cluster ID when one is set.

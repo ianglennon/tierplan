@@ -404,24 +404,28 @@ func TestJanitorPreviewStandaloneStackGone(t *testing.T) {
 // at, which is real time and not the fixture's janitor clock, so the engine's is told against that.
 func TestJanitorPreviewNodeClockSkew(t *testing.T) {
 	t.Parallel()
-	at := func(d time.Duration) string { return time.Now().Add(d).Format(time.RFC3339Nano) }
+	// The engine's clock is an offset from when /info is served, not from when this table is built,
+	// so the subtests hold however long they wait to run.
+	at := func(d time.Duration) *time.Duration { return &d }
 	for name, tc := range map[string]struct {
+		offset     *time.Duration
 		engineTime string
 		wantClass  string
 		wantCode   string
 		wantItems  int
 	}{
-		"ten minutes ahead":   {at(10 * time.Minute), "cant_tell", "clock_skew", 0},
-		"ten minutes behind":  {at(-10 * time.Minute), "cant_tell", "clock_skew", 0},
-		"a minute ahead":      {at(time.Minute), "removable", "stack_gone", 1},
-		"a minute behind":     {at(-time.Minute), "removable", "stack_gone", 1},
-		"no time is reported": {"", "removable", "stack_gone", 1},
-		"a time not a time":   {"yesterday", "removable", "stack_gone", 1},
+		"ten minutes ahead":   {at(10 * time.Minute), "", "cant_tell", "clock_skew", 0},
+		"ten minutes behind":  {at(-10 * time.Minute), "", "cant_tell", "clock_skew", 0},
+		"a minute ahead":      {at(time.Minute), "", "removable", "stack_gone", 1},
+		"a minute behind":     {at(-time.Minute), "", "removable", "stack_gone", 1},
+		"no time is reported": {nil, "", "removable", "stack_gone", 1},
+		"a time not a time":   {nil, "yesterday", "removable", "stack_gone", 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cfg := orphanEngine()
 			cfg.SystemTime = tc.engineTime
+			cfg.SystemTimeOffset = tc.offset
 			cfg.Containers = []dockertest.FakeContainer{standaloneBox("old-web", 72*time.Hour, map[string]string{"tierplan.stack.id": "stk-removed", "com.docker.compose.project": "oldshop", "com.docker.compose.service": "web"})}
 			f, e := dashEnv(t, cfg)
 			got := f.previewJanitor(t, e)
