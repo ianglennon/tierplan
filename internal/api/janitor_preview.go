@@ -15,9 +15,19 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
-// JanitorPreviewInput is the path of the preview route.
+// maxJanitorPreviewBody bounds the body of a preview: one candidate policy of a few short fields.
+const maxJanitorPreviewBody = 64 << 10
+
+// JanitorPreviewRequest is the optional body of the preview route.
+type JanitorPreviewRequest struct {
+	Policy *JanitorPolicyFields `json:"policy,omitempty" doc:"A candidate policy: the settings this environment would set itself if it were saved, exactly as a save would store them. A field that is null or left out follows the instance default, so the preview shows what a save of these fields would remove, whatever the environment has saved now. Omit it to preview the saved policy. Nothing is saved"`
+}
+
+// JanitorPreviewInput is the path and optional body of the preview route: a pointer, so that a request
+// with no body previews the saved policy.
 type JanitorPreviewInput struct {
 	EnvironmentPathInput
+	Body *JanitorPreviewRequest
 }
 
 // JanitorSummaryBody counts what a preview lists.
@@ -89,15 +99,28 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 			"While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, " +
 			"one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes " +
 			"and none of their objects is listed. The server decides what is removable; the client only shows it. " +
+			"The body is optional. With a candidate policy in it the preview judges by that policy instead of the saved one, so the page can show what a change would remove before it is saved or before the janitor is turned on: " +
+			"the fields are those of the policy save, checked the same way (422 for a value it would refuse), and nothing is saved. " +
 			"Needs environments.read on the environment.",
-		Tags: []string{"environments"},
+		Tags: []string{"environments"}, MaxBodyBytes: maxJanitorPreviewBody,
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, _ *JanitorPreviewInput) (*JanitorPreviewOutput, error) {
+		func(ctx context.Context, in *JanitorPreviewInput) (*JanitorPreviewOutput, error) {
 			env := httpx.EnvFrom(ctx)
 			if env == nil || d.Aggregator == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			body, err := previewJanitor(ctx, d, eng, d.networks(), env.ID)
+			var candidate *janitor.Overrides
+			if in.Body != nil && in.Body.Policy != nil {
+				o := in.Body.Policy.overrides()
+				if err := janitor.Validate(o); err != nil {
+					if prob := janitorPolicyValueProblem(err); prob != nil {
+						return nil, prob
+					}
+					return nil, janitorPolicyFailure(d, env.ID, "validate the candidate", err)
+				}
+				candidate = &o
+			}
+			body, err := previewJanitor(ctx, d, eng, d.networks(), env.ID, candidate)
 			if err != nil {
 				return nil, err
 			}
@@ -107,20 +130,17 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 
 // previewJanitor reads the environment, inspects the few containers that need it, judges the
 // networks and builds the plan. The policy is the one the runs follow, read through Runner.Policy, so
-// the preview and a run judge alike. nets may be nil, and then no network is listed. A network check that fails withholds
-// every network, as a node that does not answer does.
-func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets janitor.Networks, envID string) (JanitorPreviewBody, error) {
+// the preview and a run judge alike, unless candidate is given: then it is the policy that saving
+// candidate would leave, the instance defaults with those overrides. nets may be nil, and then no network
+// is listed. A network check that fails withholds every network, as a node that does not answer does.
+func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets janitor.Networks, envID string, candidate *janitor.Overrides) (JanitorPreviewBody, error) {
 	snap, err := eng.Snapshot(ctx, envID)
 	if err != nil {
 		return JanitorPreviewBody{}, snapshotProblem(d.log(), envID, err)
 	}
-	pol := fallbackPolicy()
-	if d.Runner != nil && d.Runner.Policy != nil {
-		p, err := d.Runner.Policy(ctx, envID)
-		if err != nil {
-			return JanitorPreviewBody{}, err
-		}
-		pol = p
+	pol, err := previewPolicy(ctx, d, envID, candidate)
+	if err != nil {
+		return JanitorPreviewBody{}, err
 	}
 	ends := janitor.InspectCandidates(ctx, eng, envID, janitor.Candidates(snap, pol))
 	in := janitor.Input{Snapshot: snap, Ends: ends}
@@ -135,6 +155,26 @@ func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets
 	now := d.now()
 	plan := janitor.Build(in, pol, now)
 	return previewBody(plan, now), nil
+}
+
+// previewPolicy is the policy a preview judges by: the candidate over the instance defaults when there is
+// one, else the policy the runs follow.
+func previewPolicy(ctx context.Context, d JanitorDeps, envID string, candidate *janitor.Overrides) (janitor.Policy, error) {
+	if candidate != nil {
+		def := fallbackPolicy()
+		if d.Policies.St != nil {
+			p, _, _, err := d.Policies.Defaults(ctx)
+			if err != nil {
+				return janitor.Policy{}, err
+			}
+			def = p
+		}
+		return janitor.Effective(def, *candidate), nil
+	}
+	if d.Runner != nil && d.Runner.Policy != nil {
+		return d.Runner.Policy(ctx, envID)
+	}
+	return fallbackPolicy(), nil
 }
 
 // previewBody is the wire form of a plan.

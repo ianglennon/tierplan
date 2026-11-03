@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -463,5 +464,129 @@ func TestJanitorPreviewFollowsStoredPolicy(t *testing.T) {
 	}
 	if it := after.Items[0]; it.Class != "removable" || it.Reason.Code != "stopped_standalone" || it.Ref != "scratch" {
 		t.Errorf("item = %+v, want a removable stopped_standalone container", it)
+	}
+}
+
+// previewWith posts a preview with the body given, as the signed-in admin.
+func (s *swarmFix) previewWith(t *testing.T, body string) (*envRec, janitorPreview) {
+	t.Helper()
+	rec := s.req(t, http.MethodPost, "/api/env/"+s.env.ID+"/janitor/preview", body)
+	var got janitorPreview
+	if rec.code == http.StatusOK {
+		got = decode[janitorPreview](t, rec)
+	}
+	return rec, got
+}
+
+// storedPolicyRows counts the environment's rows in the policy table.
+func (s *swarmFix) storedPolicyRows(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := s.st.Read.QueryRow(`SELECT COUNT(*) FROM janitor_env_policy WHERE env_id = ?`, s.env.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A candidate policy is judged instead of the saved one and nothing is saved (plan 11-19, D-14, JAN-08):
+// five exited containers of one slot, the default keeps two so three are removable; a candidate that keeps
+// none lists all five.
+func TestJanitorPreviewCandidatePolicy(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	rec, saved := s.previewJanitor(t)
+	if rec.code != http.StatusOK || len(saved.Items) != 3 {
+		t.Fatalf("saved policy preview: %d %s, want the 3 oldest", rec.code, rec.body)
+	}
+
+	rec, cand := s.previewWith(t, `{"policy":{"keepN":0}}`)
+	if rec.code != http.StatusOK {
+		t.Fatalf("candidate preview: %d %s", rec.code, rec.body)
+	}
+	if len(cand.Items) != 5 || cand.Summary.Containers != 5 {
+		t.Fatalf("candidate items = %d summary %+v, want all five exited containers", len(cand.Items), cand.Summary)
+	}
+	for i, it := range cand.Items {
+		if it.Reason.Code != "task_beyond_keep" || it.Class != "removable" || it.Reason.Rank != i+1 {
+			t.Errorf("item %d = %+v, want removable task_beyond_keep rank %d", i, it, i+1)
+		}
+	}
+	if n := s.storedPolicyRows(t); n != 0 {
+		t.Errorf("policy rows = %d after a candidate preview, want none: nothing is saved", n)
+	}
+	if _, again := s.previewJanitor(t); len(again.Items) != 3 {
+		t.Errorf("preview of the saved policy after a candidate = %d items, want 3 as before", len(again.Items))
+	}
+	if rows := s.audits(t, "janitor.policy_changed"); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none: a preview only reads", rows)
+	}
+
+	// A candidate is what a save of it would leave: the fields it leaves out follow the default, not the saved value.
+	if rec := s.req(t, http.MethodPut, "/api/env/"+s.env.ID+"/janitor/policy", policyJSON(0, map[string]any{"keepN": 1})); rec.code != http.StatusOK {
+		t.Fatalf("save keep 1: %d %s", rec.code, rec.body)
+	}
+	if _, now := s.previewJanitor(t); len(now.Items) != 4 {
+		t.Fatalf("saved keep 1 preview = %d items, want 4", len(now.Items))
+	}
+	if _, empty := s.previewWith(t, `{"policy":{}}`); len(empty.Items) != 3 {
+		t.Errorf("empty candidate = %d items, want the default keep 2 and so 3", len(empty.Items))
+	}
+	for name, a := range map[string]*agentConn{"mgr-1": s.m1, "mgr-2": s.m2, "wrk-1": s.w} {
+		if w := a.fake.Writes(); len(w) != 0 {
+			t.Errorf("%s served writes %v: a preview only reads", name, w)
+		}
+	}
+}
+
+// A candidate with a value a save would refuse is refused the same way, and answers nothing.
+func TestJanitorPreviewCandidateInvalid(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	for name, tc := range map[string]struct{ body, want string }{
+		"keep above 20":    {`{"policy":{"keepN":21}}`, ""},
+		"grace 0":          {`{"policy":{"graceHours":0}}`, ""},
+		"every minute":     {`{"policy":{"schedule":"* * * * *"}}`, "schedule_too_frequent"},
+		"not a schedule":   {`{"policy":{"schedule":"nonsense"}}`, "invalid_schedule"},
+		"preset no cron":   {`{"policy":{"schedulePreset":"daily"}}`, "invalid_schedule"},
+		"one bad of three": {`{"policy":{"keepN":0,"removeStoppedContainers":true,"graceHours":721}}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec, _ := s.previewWith(t, tc.body)
+			if rec.code != http.StatusUnprocessableEntity {
+				t.Fatalf("preview: %d %s, want 422", rec.code, rec.body)
+			}
+			if tc.want != "" && rec.ptyp != tc.want {
+				t.Errorf("problem type = %q, want %q", rec.ptyp, tc.want)
+			}
+		})
+	}
+}
+
+// With no body, or a body with no policy, the preview judges by the saved policy as it always did; a
+// viewer may preview a candidate, since nothing is written.
+func TestJanitorPreviewNoBodyUsesSaved(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	if rec := s.req(t, http.MethodPut, "/api/env/"+s.env.ID+"/janitor/policy", policyJSON(0, map[string]any{"keepN": 3})); rec.code != http.StatusOK {
+		t.Fatalf("save keep 3: %d %s", rec.code, rec.body)
+	}
+	for name, body := range map[string]string{"no body": "", "an empty object": `{}`, "a null policy": `{"policy":null}`} {
+		rec, got := s.previewWith(t, body)
+		if rec.code != http.StatusOK || len(got.Items) != 2 {
+			t.Errorf("%s: %d %s, want 200 and the 2 oldest by the saved keep 3", name, rec.code, rec.body)
+		}
+	}
+
+	s.addUser(t, "vera", false)
+	s.addEnvRole(t, "vera", s.env.ID, "viewer")
+	cookie, csrf := s.signIn(t, "vera", false)
+	rec := s.call(t, authReq{method: http.MethodPost, path: "/api/env/" + s.env.ID + "/janitor/preview", body: `{"policy":{"keepN":0}}`, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a viewer previewing a candidate: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var got janitorPreview
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Items) != 5 {
+		t.Errorf("a viewer's candidate preview = %d items (%v), want all five", len(got.Items), err)
 	}
 }

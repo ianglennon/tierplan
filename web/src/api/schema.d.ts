@@ -1483,7 +1483,7 @@ export interface paths {
         put?: never;
         /**
          * Preview what the janitor would remove
-         * @description Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. Containers that are not swarm tasks are judged too: the leftovers of a TierPlan stack that no longer exists (stack_gone) and the old one-offs of docker compose run beyond the newest the policy keeps (compose_oneoff) are removable once stopped for the grace period, while a lone stopped container of a compose project TierPlan does not manage (lone_compose_container) and a stopped docker run container (opt_in_off_containers) are only reported until the environment opts in to removing stopped containers. A container of a compose project that still has another container is never listed. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. Needs environments.read on the environment.
+         * @description Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. Containers that are not swarm tasks are judged too: the leftovers of a TierPlan stack that no longer exists (stack_gone) and the old one-offs of docker compose run beyond the newest the policy keeps (compose_oneoff) are removable once stopped for the grace period, while a lone stopped container of a compose project TierPlan does not manage (lone_compose_container) and a stopped docker run container (opt_in_off_containers) are only reported until the environment opts in to removing stopped containers. A container of a compose project that still has another container is never listed. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. The body is optional. With a candidate policy in it the preview judges by that policy instead of the saved one, so the page can show what a change would remove before it is saved or before the janitor is turned on: the fields are those of the policy save, checked the same way (422 for a value it would refuse), and nothing is saved. Needs environments.read on the environment.
          */
         post: operations["previewJanitor"];
         delete?: never;
@@ -8076,6 +8076,31 @@ export interface components {
              */
             version: number;
         };
+        JanitorPolicyFields: {
+            /** @description Whether the schedule runs the janitor. Null follows the instance default */
+            enabled?: boolean | null;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720. Null follows the instance default
+             */
+            graceHours?: number | null;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20. Null follows the instance default
+             */
+            keepN?: number | null;
+            /** @description Whether stopped containers no stack or project ever owned are removed too. Null follows the instance default */
+            removeStoppedContainers?: boolean | null;
+            /** @description Whether networks no stack ever owned are removed too. Null follows the instance default */
+            removeUnusedNetworks?: boolean | null;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes. Null follows the instance default */
+            schedule?: string | null;
+            /**
+             * @description The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule
+             * @enum {string|null}
+             */
+            schedulePreset?: "hourly" | "every_6h" | "daily" | "weekly" | "custom" | null;
+        };
         JanitorPolicyRequest: {
             /** @description Whether the schedule runs the janitor. Null follows the instance default */
             enabled?: boolean | null;
@@ -8148,6 +8173,10 @@ export interface components {
             summary: components["schemas"]["JanitorSummaryBody"];
             /** @description The nodes that did not report. None of their objects is listed, and nothing is judged that depends on them */
             withheldNodes: string[] | null;
+        };
+        JanitorPreviewRequest: {
+            /** @description A candidate policy: the settings this environment would set itself if it were saved, exactly as a save would store them. A field that is null or left out follows the instance default, so the preview shows what a save of these fields would remove, whatever the environment has saved now. Omit it to preview the saved policy. Nothing is saved */
+            policy?: components["schemas"]["JanitorPolicyFields"];
         };
         JanitorReasonBody: {
             /**
@@ -16976,7 +17005,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["JanitorPreviewRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
