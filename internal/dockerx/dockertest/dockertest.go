@@ -188,6 +188,10 @@ type FakeConfig struct {
 	// cannot be removed (500), or as an agent does when its policy refuses (403 with the agent_policy_denied
 	// marker). The write is recorded whatever the answer.
 	RefuseRemove map[string]FakeRefusal
+	// RefuseCreate makes the create of the container of that name answer the status and message given, as
+	// an engine does for a bad configuration (400), or an agent for a refusal by its policy (403 with the
+	// agent_policy_denied marker). The write is recorded whatever the answer.
+	RefuseCreate map[string]FakeRefusal
 	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
 	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
 	RemoveErrors map[string]string
@@ -624,6 +628,8 @@ type Fake struct {
 	// writes is every write served, in order (fake_writes.go).
 	states map[string]fakeState
 	writes []string
+	// ctr is what container creates and renames left (fake_writes.go).
+	ctr fakeContainerWrites
 	// inflight is how many container writes are being served now, and maxInflight
 	// the most there have been at once (fake_writes.go).
 	inflight, maxInflight int
@@ -922,7 +928,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withSwarm(f.swarmState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
+	return f.cfg.withContainerWrites(&f.ctr).withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withSwarm(f.swarmState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

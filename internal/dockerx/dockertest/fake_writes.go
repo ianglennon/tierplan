@@ -4,11 +4,16 @@
 package dockertest
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 // fakeHandler answers one family of requests for the fake daemon. p is the path
@@ -230,6 +235,229 @@ func (c FakeConfig) withStates(states map[string]fakeState) FakeConfig {
 			fc.State, fc.Status = s.state, s.status
 		}
 		cs = append(cs, fc)
+	}
+	c.Containers = cs
+	return c
+}
+
+// FakeContainerCreate is one container create the fake accepted, as the daemon decoded it.
+type FakeContainerCreate struct {
+	// ID is the ID the fake gave the new container and Name the name it has, the one asked for or
+	// the one the fake made up.
+	ID, Name         string
+	Config           *container.Config
+	HostConfig       *container.HostConfig
+	NetworkingConfig *network.NetworkingConfig
+}
+
+// FakeRename is one container rename the fake accepted: the container, the name it had and the
+// name it was given, without a leading slash.
+type FakeRename struct{ ID, From, To string }
+
+// fakeContainerWrites is what creates and renames left: the containers made through the fake,
+// the creates and renames themselves, and the current name of every container that was renamed,
+// by ID. All of it is guarded by Fake.mu.
+type fakeContainerWrites struct {
+	created []FakeContainer
+	creates []FakeContainerCreate
+	renames []FakeRename
+	names   map[string]string
+}
+
+var _ = registerFakeHandler((*Fake).serveContainerCreate)
+var _ = registerFakeHandler((*Fake).serveContainerRename)
+
+// containerRename matches POST /containers/{id}/rename.
+var containerRename = regexp.MustCompile(`^/containers/([^/]+)/rename$`)
+
+// nameTaken reports whether a container of cfg already has name, with or without the slash.
+func (c FakeConfig) nameTaken(name string) (FakeContainer, bool) {
+	name = strings.TrimPrefix(name, "/")
+	for _, fc := range c.Containers {
+		for _, n := range fc.Names {
+			if strings.TrimPrefix(n, "/") == name {
+				return fc, true
+			}
+		}
+	}
+	return FakeContainer{}, false
+}
+
+// serveContainerCreate answers POST /containers/create. The container is made in the created
+// state under the name asked for (or one the fake makes up), with the labels, command,
+// environment and networks of the body, and joins every list and inspect from then on. A name
+// in use is the 409 a real daemon gives, an endpoint on a network the daemon does not have the 404.
+// The body is kept for ContainerCreates and the write is recorded whatever the answer.
+func (f *Fake) serveContainerCreate(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodPost || p != "/containers/create" {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.WriteError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.WriteError})
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	name := r.URL.Query().Get("name")
+	if refusal, refused := cfg.RefuseCreate[name]; refused {
+		writeJSON(w, refusal.Status, map[string]string{"message": refusal.Message})
+		return true
+	}
+	var req container.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
+		return true
+	}
+	if req.Config == nil || req.Config.Image == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Config.Image is required"})
+		return true
+	}
+	if other, taken := cfg.nameTaken(name); name != "" && taken {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "Conflict. The container name \"/" + strings.TrimPrefix(name, "/") + "\" is already in use by container \"" + other.ID + "\". You have to remove (or rename) that container to be able to reuse that name."})
+		return true
+	}
+	nets := map[string]FakeEndpoint{}
+	if req.NetworkingConfig != nil {
+		for netName, es := range req.NetworkingConfig.EndpointsConfig {
+			fn, ok := cfg.resolveNetwork(netName)
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + netName + " not found"})
+				return true
+			}
+			ep := FakeEndpoint{NetworkID: fn.ID, IPv4: "10.99.0.2"}
+			if es != nil {
+				ep.Aliases = slices.Clone(es.Aliases)
+				if es.IPAMConfig != nil && es.IPAMConfig.IPv4Address.IsValid() {
+					ep.IPv4 = es.IPAMConfig.IPv4Address.String()
+				}
+				if es.IPAMConfig != nil && es.IPAMConfig.IPv6Address.IsValid() {
+					ep.IPv6 = es.IPAMConfig.IPv6Address.String()
+				}
+				if len(es.MacAddress) > 0 {
+					ep.MAC = es.MacAddress.String()
+				}
+			}
+			nets[fn.Name] = ep
+		}
+	}
+	f.mu.Lock()
+	n := len(f.ctr.created) + 1
+	id := fmt.Sprintf("%064x", 0xfa4ec0de00000000+uint64(n))
+	if name == "" {
+		name = fmt.Sprintf("fake_container_%d", n)
+	}
+	fc := FakeContainer{
+		ID: id, Names: []string{"/" + strings.TrimPrefix(name, "/")}, Image: req.Config.Image,
+		State: "created", Status: "Created", Created: time.Now().Unix(),
+		Labels: req.Config.Labels, Networks: nets,
+		StopTimeout: req.Config.StopTimeout, StopSignal: req.Config.StopSignal,
+		Inspect: FakeInspect{
+			Env: req.Config.Env, Cmd: req.Config.Cmd, Entrypoint: req.Config.Entrypoint,
+			WorkingDir: req.Config.WorkingDir, User: req.Config.User, Tty: req.Config.Tty,
+		},
+	}
+	if req.Config.Env == nil {
+		fc.Inspect.Env = []string{}
+	}
+	if req.HostConfig != nil {
+		fc.Inspect.MemoryBytes, fc.Inspect.NanoCPUs = req.HostConfig.Memory, req.HostConfig.NanoCPUs
+	}
+	f.ctr.created = append(f.ctr.created, fc)
+	f.ctr.creates = append(f.ctr.creates, FakeContainerCreate{
+		ID: id, Name: strings.TrimPrefix(name, "/"), Config: req.Config, HostConfig: req.HostConfig, NetworkingConfig: req.NetworkingConfig,
+	})
+	f.mu.Unlock()
+	writeJSON(w, http.StatusCreated, container.CreateResponse{ID: id})
+	return true
+}
+
+// serveContainerRename answers POST /containers/{id}/rename?name=. An unknown container is the
+// 404 and a name another container has the 409 a real daemon gives. The rename shows in every
+// list and inspect from then on, and the write is recorded whatever the answer.
+func (f *Fake) serveContainerRename(w http.ResponseWriter, r *http.Request, p string, cfg FakeConfig) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	m := containerRename.FindStringSubmatch(p)
+	if m == nil {
+		return false
+	}
+	f.recordWrite(r)
+	defer f.beginWrite(cfg.WriteDelay)()
+	if cfg.DropWrites && dropConnection(w) {
+		return true
+	}
+	if cfg.WriteError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": cfg.WriteError})
+		return true
+	}
+	if cfg.PolicyDeny {
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
+		return true
+	}
+	fc, known := cfg.resolveContainer(m[1])
+	if !known {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + m[1]})
+		return true
+	}
+	to := strings.TrimPrefix(r.URL.Query().Get("name"), "/")
+	if to == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Neither old nor new names may be empty"})
+		return true
+	}
+	if other, taken := cfg.nameTaken(to); taken && other.ID != fc.ID {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "Conflict. The container name \"/" + to + "\" is already in use by container \"" + other.ID + "\". You have to remove (or rename) that container to be able to reuse that name."})
+		return true
+	}
+	from := strings.TrimPrefix(firstOf(fc.Names, fc.ID), "/")
+	f.mu.Lock()
+	if f.ctr.names == nil {
+		f.ctr.names = map[string]string{}
+	}
+	f.ctr.names[fc.ID] = to
+	f.ctr.renames = append(f.ctr.renames, FakeRename{ID: fc.ID, From: from, To: to})
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	return true
+}
+
+// ContainerCreates returns every container create the daemon accepted, in order, as the daemon
+// decoded it.
+func (f *Fake) ContainerCreates() []FakeContainerCreate {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.ctr.creates)
+}
+
+// ContainerRenames returns every container rename the daemon accepted, in order.
+func (f *Fake) ContainerRenames() []FakeRename {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.ctr.renames)
+}
+
+// withContainerWrites returns c with the containers made through the daemon listed after its
+// own and every renamed container under its new name. The slice is copied, so the Fake's own
+// configuration is not touched.
+func (c FakeConfig) withContainerWrites(w *fakeContainerWrites) FakeConfig {
+	if len(w.created) == 0 && len(w.names) == 0 {
+		return c
+	}
+	cs := make([]FakeContainer, 0, len(c.Containers)+len(w.created))
+	cs = append(cs, c.Containers...)
+	cs = append(cs, w.created...)
+	for i, fc := range cs {
+		if to, ok := w.names[fc.ID]; ok {
+			fc.Names = []string{"/" + to}
+			cs[i] = fc
+		}
 	}
 	c.Containers = cs
 	return c
