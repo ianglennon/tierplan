@@ -417,7 +417,8 @@ func sharedJanitor(t *testing.T, f *swarmFix) {
 	if got, _ := taskHistory(); got != 7 {
 		t.Errorf("task history limit read back = %d, want 7", got)
 	}
-	// The manager's own engine agrees, and nothing else about the swarm changed with it.
+	// The manager's own engine agrees. That nothing else about the swarm changes is the agent's
+	// guarantee, proved by its proxy and fuzz tests, not by this test.
 	if out := strings.TrimSpace(sh(t, mgr, "docker info --format '{{.Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit}}'")); out != "7" {
 		t.Errorf("the manager's engine reports a task history limit of %q, want 7", out)
 	}
