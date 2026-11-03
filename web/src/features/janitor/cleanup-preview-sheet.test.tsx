@@ -656,3 +656,137 @@ describe("KeepFromPreview", () => {
     expect(keepRequests[0]).toEqual({ targets: [{ kind: "network", ref: "old_default" }] });
   });
 });
+
+describe("Keep and what already keeps an item", () => {
+  // A Not removed list with one row of each kind: ones the janitor leaves for a reason a person can
+  // act on with Keep, and ones that are already kept.
+  function notRemoved() {
+    return preview({
+      items: [],
+      notRemoved: [
+        previewItem({
+          name: "labelled.1.aaa",
+          ref: "k1",
+          class: "protected",
+          reason: { code: "kept_label" },
+        }),
+        previewItem({
+          name: "shop.1.bbb",
+          ref: "k2",
+          class: "protected",
+          reason: { code: "stack_excluded", stack: "shop" },
+        }),
+        previewItem({
+          name: "kept.1.ccc",
+          ref: "k3",
+          class: "protected",
+          reason: { code: "stack_declared_keep", stack: "decl" },
+        }),
+        previewItem({
+          name: "mine.1.ddd",
+          ref: "k4",
+          class: "protected",
+          reason: { code: "kept_row" },
+        }),
+        previewItem({
+          name: "young.1.eee",
+          ref: "k5",
+          class: "grace",
+          reason: { code: "younger_than_grace", remainingSeconds: 7_200 },
+        }),
+      ],
+    });
+  }
+
+  it("offers Keep on a Not removed row, and none on a row the label, a stack or a person already keeps", async () => {
+    previews = [notRemoved()];
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: /^Not removed \(5\)/ }));
+    await screen.findByText("young.1.eee");
+
+    for (const name of ["labelled.1.aaa", "shop.1.bbb", "kept.1.ccc", "mine.1.ddd"]) {
+      expect(screen.queryByRole("button", { name: `Keep ${name}` })).toBeNull();
+      const row = screen.getByText(name).closest("tr") as HTMLElement;
+      expect(within(row).getByText("Kept")).toBeTruthy();
+    }
+    // The reason is in the row, in words, instead of a button.
+    expect(screen.getByText("Protected: labelled tierplan.keep=true.")).toBeTruthy();
+    expect(screen.getByText("Protected: stack shop is excluded from the janitor.")).toBeTruthy();
+    expect(
+      screen.getByText("Protected: stack decl sets tierplan.keep=true in its compose file."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep young.1.eee" }));
+    await waitFor(() => expect(keepRequests).toHaveLength(1));
+    expect(keepRequests[0]).toEqual({ targets: [{ kind: "container", nodeId: "n1", ref: "k5" }] });
+    // It stays in the list, now as kept, and no longer offers Keep.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Keep young.1.eee" })).toBeNull(),
+    );
+    const row = screen.getByText("young.1.eee").closest("tr") as HTMLElement;
+    expect(within(row).getByText("Protected: you chose Keep on it.")).toBeTruthy();
+    expect(within(row).getByText("Kept")).toBeTruthy();
+  });
+
+  it("says Keep couldn't and leaves the row where it was", async () => {
+    previews = [mixed()];
+    keepAnswer = () => Response.json({ type: "x", title: "x", status: 500 }, { status: 500 });
+    mount();
+    await screen.findByRole("button", { name: "Remove 5 items" });
+    fireEvent.click(screen.getByRole("button", { name: "Keep web.2.bbb" }));
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith("Couldn't keep web.2.bbb. Try again."),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", { name: "Select web.2.bbb" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove 5 items" })).toBeTruthy();
+    // The button is usable again.
+    expect(screen.getByRole("button", { name: "Keep web.2.bbb" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
+  it("disables Keep for a user below Env Admin, with what it takes, and sends nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    previews = [mixed()];
+    mount();
+    await screen.findByRole("button", { name: "Remove 5 items" });
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).toBe("success"));
+    const keep = screen.getByRole("button", { name: "Keep web.1.aaa" });
+    expect(keep.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(keep.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Needs Admin on Prod",
+    );
+    fireEvent.click(keep);
+    expect(keepRequests).toEqual([]);
+  });
+
+  it("still offers Keep in a preview of a policy, where it is the only action", async () => {
+    previews = [mixed()];
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <CleanupPreviewSheet
+              mode="policy"
+              envId={ENV}
+              envName="Prod"
+              swarm
+              nodeCount={2}
+              policy={{} as JanitorPolicyFields}
+              onSavePolicy={async () => true}
+              onOpenChange={() => {}}
+            />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("web.1.aaa");
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Keep web.1.aaa" }));
+    await waitFor(() => expect(keepRequests).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByText("web.1.aaa")).toBeNull());
+    expect(visibleLine()).toBe("Would remove 2 containers, 1 network, 1 image, ~500 MB");
+  });
+});

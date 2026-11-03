@@ -189,6 +189,94 @@ describe("Kept items", () => {
   });
 });
 
+describe("Stop keeping where it can't or won't work", () => {
+  it("explains an item of an excluded stack with the stack's name, and does nothing", async () => {
+    keeps = [kept(), kept({ name: "other.1.zzz", ref: "c9" })];
+    mount(
+      <KeptItemsList
+        envId={ENV}
+        envName="Prod"
+        heldByStack={(item) => (item.ref === "c1" ? "shop" : undefined)}
+      />,
+    );
+    await open(2);
+    const held = await screen.findByRole("button", { name: "Stop keeping web.1.abc" });
+    expect(held.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(held.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Kept because stack shop is excluded from the janitor. Change that on the stack's Overview.",
+    );
+    fireEvent.click(held);
+    expect(sent.some((s) => s.method === "DELETE")).toBe(false);
+    // The other item is an ordinary keep.
+    expect(
+      screen
+        .getByRole("button", { name: "Stop keeping other.1.zzz" })
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+  });
+
+  it("says it couldn't, and keeps the item, when the server fails", async () => {
+    keeps = [kept()];
+    deleteAnswer = () => Response.json({ type: "x", title: "x", status: 500 }, { status: 500 });
+    mount(<KeptItemsList envId={ENV} envName="Prod" />);
+    await open(1);
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).toBe("success"));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop keeping web.1.abc" }));
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith("Couldn't stop keeping web.1.abc. Try again."),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop keeping web.1.abc" })).toBeTruthy();
+  });
+
+  it("says so, without an error, when nobody was keeping it any more", async () => {
+    keeps = [kept()];
+    deleteAnswer = () =>
+      Response.json({ type: "keep_not_found", title: "x", status: 404 }, { status: 404 });
+    mount(<KeptItemsList envId={ENV} envName="Prod" />);
+    await open(1);
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).toBe("success"));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop keeping web.1.abc" }));
+
+    await waitFor(() =>
+      expect(toasts.info).toHaveBeenCalledWith("web.1.abc isn't being kept any more."),
+    );
+    expect(toasts.error).not.toHaveBeenCalled();
+  });
+
+  it("gives the label's reason when the label was added after the list was read", async () => {
+    keeps = [kept()];
+    deleteAnswer = () =>
+      Response.json({ type: "kept_by_label", title: "x", status: 409 }, { status: 409 });
+    mount(<KeptItemsList envId={ENV} envName="Prod" />);
+    await open(1);
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).toBe("success"));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop keeping web.1.abc" }));
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "Kept by the tierplan.keep label on the object. Remove the label from your compose file to stop keeping it.",
+      ),
+    );
+  });
+
+  it("is disabled for a user below Env Admin, with what it takes", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    keeps = [kept()];
+    mount(<KeptItemsList envId={ENV} envName="Prod" />);
+    await open(1);
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).toBe("success"));
+    const stop = await screen.findByRole("button", { name: "Stop keeping web.1.abc" });
+    expect(stop.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(stop.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Needs Admin on Prod",
+    );
+    fireEvent.click(stop);
+    expect(sent.some((s) => s.method === "DELETE")).toBe(false);
+  });
+});
+
 // The page's own arrangement: the list, and the sheet that closes when it is cancelled.
 function WithSheet() {
   const [shown, setShown] = useState(true);
