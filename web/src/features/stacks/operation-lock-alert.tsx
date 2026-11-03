@@ -21,6 +21,8 @@ interface OperationLockAlertProps {
 // to the stack when the job is not known yet. The stack's name is text.
 export function OperationLockAlert({ lock, envId, envName }: OperationLockAlertProps) {
   const t = useT();
+  if (lock.kind === "janitor")
+    return <JanitorLockAlert lock={lock} envId={envId} envName={envName} />;
   const link = lock.jobId ? (
     <Link
       to="/env/$envId/stacks/$stackId/deploys/$jobId"
@@ -48,6 +50,32 @@ export function OperationLockAlert({ lock, envId, envName }: OperationLockAlertP
           {t("stackConverge.lock.after")}
         </span>
         {link}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+// The janitor's hold names no stack: it says the janitor is cleaning the environment, and Open it goes
+// to the run (when the run is known), whose page shows what it has done so far.
+function JanitorLockAlert({ lock, envId, envName }: OperationLockAlertProps) {
+  const t = useT();
+  return (
+    <Alert variant="warning" data-slot="operation-lock">
+      <Lock aria-hidden="true" />
+      <AlertDescription className="flex flex-wrap items-center gap-x-3 gap-y-1 text-status-warning-text">
+        <span className="break-words">
+          {t("janitor.lock.cleaning", { env: envName })} <RelativeTime value={lock.startedAt} />
+          {t("stackConverge.lock.after")}
+        </span>
+        {lock.runId ? (
+          <Link
+            to="/env/$envId/janitor/runs/$runId"
+            params={{ envId, runId: lock.runId }}
+            className="rounded-sm text-accent-ink underline underline-offset-3"
+          >
+            {t("janitor.lock.openIt")}
+          </Link>
+        ) : null}
       </AlertDescription>
     </Alert>
   );

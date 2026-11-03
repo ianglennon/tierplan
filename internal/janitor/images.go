@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package janitor
+
+import (
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/ianglennon/tierplan/internal/stacks"
+)
+
+// The engine's placeholders for an image that has no name. They are the same words the Images page
+// reads as "no name", and a name that is one of them is not a name.
+const (
+	noneTag    = "<none>"
+	noneTagTag = "<none>:<none>"
+	noneDigest = "<none>@<none>"
+)
+
+// hasRealName reports whether any of names is a name and not an empty string or a placeholder.
+func hasRealName(names []string, placeholders ...string) bool {
+	return slices.ContainsFunc(names, func(n string) bool {
+		return n != "" && !slices.Contains(placeholders, n)
+	})
+}
+
+// IsDangling reports whether an image with these tags and digest references has no name, in the
+// strict sense the janitor removes (D-07): no real tag and no digest reference, the engine's
+// placeholders <none>, <none>:<none> and <none>@<none> being no name. The planner and the remover's
+// check just before a removal both ask it, so the two never disagree on an image.
+func IsDangling(tags, digests []string) bool {
+	return !hasRealName(tags, noneTag, noneTagTag) && !hasRealName(digests, noneDigest)
+}
+
+// IsPlaceholder reports whether name is one of the engine's words for no name, which is not a name an
+// engine can be asked to untag.
+func IsPlaceholder(name string) bool {
+	return name == "" || name == noneTag || name == noneTagTag || name == noneDigest
+}
+
+// shortImageID is how an image is named in the plan: its ID without sha256:, twelve characters.
+func shortImageID(id string) string {
+	id = strings.TrimPrefix(id, "sha256:")
+	return id[:min(len(id), 12)]
+}
+
+// ClassifyImage says what the janitor makes of one image on one node at now. It removes dangling
+// images in Docker's strict sense and nothing more (D-07, JAN-05): an image with no tag and no
+// digest reference, that no container on its node uses in any state, that no swarm service spec
+// names, and that is old enough. The engine's own dangling filter is never the decision: an image
+// pulled by digest carries a digest and no tag, and a service scaled to zero still needs it.
+//
+// listed is false when the image is simply not the janitor's business. The first rule that matches
+// wins:
+//
+//  1. a real tag or any digest: not listed (a tagged image is somebody's; a digest-pulled one is
+//     what a swarm service runs)
+//  2. a container on this node, in any state, was made from it: not listed
+//  3. a swarm whose service specs were not read (servicesRead false): cant_tell (services_unread),
+//     because a service scaled to zero would still need it
+//  4. a service spec names it: not listed
+//  5. labelled tierplan.keep=true: protected (kept_label)
+//  6. built, or first seen without a name, less than the grace period ago, or neither known: grace
+//     (younger_than_grace); at exactly the grace period it is removable
+//  7. otherwise removable (dangling_image), with its age and size
+//
+// usedOnNode and serviceRef are the answers to rules 2 and 4 for this image; servicesRead is true
+// for an environment that is not a swarm.
+func ClassifyImage(img Image, usedOnNode, serviceRef, servicesRead bool, p Policy, now time.Time) (Item, bool) {
+	if !IsDangling(img.RepoTags, img.RepoDigests) {
+		return Item{}, false
+	}
+	if usedOnNode {
+		return Item{}, false
+	}
+	item := Item{
+		Type: KindImage, NodeID: img.NodeID, Node: img.Node, Ref: img.ID, Name: shortImageID(img.ID), Size: img.Size,
+	}
+	if item.Size < 0 {
+		item.Size = -1
+	}
+	since, known := danglingStart(img)
+	if known {
+		item.Age = max(now.Sub(since), 0)
+		item.Reason.Age = item.Age
+	}
+	if !servicesRead {
+		item.Class, item.Reason.Code = ClassCantTell, ReasonServicesUnread
+		return item, true
+	}
+	if serviceRef {
+		return Item{}, false
+	}
+	if img.Labels[stacks.LabelKeep] == "true" {
+		item.Class, item.Reason.Code = ClassProtected, ReasonKeptLabel
+		return item, true
+	}
+	if !known {
+		// Neither when it was built nor when it lost its name is known: it is held for the whole grace
+		// period, never read as built in 1970.
+		item.Class, item.Reason.Code, item.Reason.Remaining = ClassGrace, ReasonYoungerThanGrace, p.grace()
+		return item, true
+	}
+	if remaining := since.Add(p.grace()).Sub(now); remaining > 0 {
+		item.Class, item.Reason.Code, item.Reason.Remaining = ClassGrace, ReasonYoungerThanGrace, remaining
+		return item, true
+	}
+	item.Class, item.Reason.Code = ClassRemovable, ReasonDanglingImage
+	return item, true
+}
+
+// danglingStart is when an image's grace period starts: the later of when it was built and when the
+// janitor first saw it without a name, of those that are known. A build time is the image's own and says
+// nothing about when it lost its tag: an image superseded by a newer pull or build of the same tag was
+// usually built long ago, and measured from that it would be removed at the next run, with no grace. A
+// build time of zero or the epoch is an engine that did not say. known is false when neither is known.
+func danglingStart(img Image) (since time.Time, known bool) {
+	for _, t := range []time.Time{img.Created, img.DanglingSince} {
+		if t.Unix() > 0 && t.After(since) {
+			since, known = t, true
+		}
+	}
+	return since, known
+}
+
+// ImageNamedBySpec reports whether a swarm service spec names the image: by its ID, or by a
+// repository@digest whose digest is the image's ID (the containerd image store makes an image's ID
+// the digest of its index). A spec that names a tag the image no longer has does not name it: a
+// swarm would pull that tag again.
+func ImageNamedBySpec(specs []string, id string) bool {
+	return slices.ContainsFunc(specs, func(spec string) bool {
+		return spec == id || strings.HasSuffix(spec, "@"+id) || spec == strings.TrimPrefix(id, "sha256:")
+	})
+}
+
+// addImages adds the images of the snapshot to the plan. A container on a node counts against an
+// image of that node only: the same image ID on two nodes is two items, judged per node.
+func addImages(plan *Plan, s Snapshot, p Policy, now time.Time) {
+	used := make(map[[2]string]bool, len(s.Containers))
+	for _, c := range s.Containers {
+		if c.ImageID != "" {
+			used[[2]string{c.NodeID, c.ImageID}] = true
+		}
+	}
+	servicesRead := !s.Swarm || s.ServicesRead
+	for _, img := range s.Images {
+		item, listed := ClassifyImage(img, used[[2]string{img.NodeID, img.ID}], ImageNamedBySpec(s.ServiceImages, img.ID), servicesRead, p, now)
+		switch {
+		case !listed:
+		case item.Class == ClassRemovable:
+			plan.Items = append(plan.Items, item)
+		default:
+			plan.NotRemoved = append(plan.NotRemoved, item)
+		}
+	}
+}

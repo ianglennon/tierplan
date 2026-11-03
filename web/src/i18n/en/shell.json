@@ -24,6 +24,7 @@
       "volumes": "Volumes",
       "networks": "Networks",
       "addressSpace": "Address space",
+      "janitor": "Janitor",
       "events": "Events",
       "swarm": "Swarm",
       "services": "Services",

@@ -188,6 +188,11 @@ func settingsConflict(ctx context.Context, d AddressSpaceDeps, row sqlc.GetAddre
 	if row.AddressSettingsBy != "" {
 		who = keeperName(ctx, d, map[string]string{}, row.AddressSettingsBy)
 	}
+	return settingsChanged(who)
+}
+
+// settingsChanged is the 409 settings_changed answer, naming who saved last when that is known.
+func settingsChanged(who string) error {
 	detail := "These settings were changed by someone else. Reload them and try again."
 	if who != "" {
 		detail = "These settings were changed by " + who + ". Reload them and try again."

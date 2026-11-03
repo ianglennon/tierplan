@@ -14,6 +14,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	// The time zone database is embedded so that TZ works where the image has none (distroless): the
+	// janitor reads its schedules in the server's time zone.
+	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
 

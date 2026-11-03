@@ -12,6 +12,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { janitorDefaults } from "@/test-janitor";
 import { makeMe } from "@/test-me";
 
 // Settings > General and About (plan 26, D-03, D-04, D-60, D-61, PLAT-05).
@@ -139,6 +140,9 @@ beforeEach(() => {
       // So does the Stack history card (plan 08-06).
       if (path === "/api/settings/stack-history")
         return Response.json({ kept: 20, min: 5, max: 200, pruned: 0 });
+      // And the Janitor defaults card (plan 11-24). Left unanswered, its own load-failure alert can
+      // render before the form's and be the alert a test finds.
+      if (path === "/api/settings/janitor") return Response.json(janitorDefaults());
       if (path === "/api/version") {
         return Response.json({
           commit: SHA,

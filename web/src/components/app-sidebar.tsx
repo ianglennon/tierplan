@@ -5,6 +5,7 @@ import { Link, useParams, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
   Boxes,
+  BrushCleaning,
   Container,
   FileCog,
   Gauge,
@@ -71,6 +72,10 @@ const RESOURCE_ITEMS = [
   { key: "networks", perm: "networks.read", to: "/env/$envId/networks", icon: Network },
   // Address space (Phase 10, D-01): below Networks, on swarm and standalone environments alike.
   { key: "addressSpace", perm: "networks.read", to: "/env/$envId/address-space", icon: Gauge },
+  // Janitor (Phase 11, D-13): directly below Address space and above Events, on swarm and standalone
+  // environments alike. The page reads and previews with environments.read; the buttons that act
+  // are disabled with a reason for a user below Env Admin, and the server enforces them.
+  { key: "janitor", perm: "environments.read", to: "/env/$envId/janitor", icon: BrushCleaning },
   // The events stream already needs environments.read, so no new permission (D-51).
   { key: "events", perm: "environments.read", to: "/env/$envId/events", icon: Activity },
 ] as const;

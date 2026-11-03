@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -104,6 +105,58 @@ func (c *Client) ContainerDetail(ctx context.Context, id string) (ContainerDetai
 		return ContainerDetail{}, nil, fmt.Errorf("inspect container on %s: %w", c.t.Describe(), err)
 	}
 	return detailOf(res.Container), res.Raw, nil
+}
+
+// ContainerEnd is how a container ended and what it holds on disk: the few facts the janitor
+// judges a stopped container by, which a list does not carry. Times are UTC and zero when the
+// engine reports none (it sends 0001-01-01 for a container that never started or never finished).
+type ContainerEnd struct {
+	StartedAt, FinishedAt time.Time
+	ExitCode              int
+	// Error is the engine's last start error, empty when there is none.
+	Error     string
+	OOMKilled bool
+	// Image is the image reference the container was created with, ImageID the image it ran.
+	Image, ImageID string
+	// SizeRw is the size in bytes of the container's writable layer, -1 when the engine sends
+	// none.
+	SizeRw int64
+}
+
+// ContainerEnd inspects one container with the size asked for, which costs the engine a walk of
+// the writable layer, so the caller asks only for the few containers it may remove.
+func (c *Client) ContainerEnd(ctx context.Context, id string) (ContainerEnd, error) {
+	res, err := c.cur().ContainerInspect(ctx, id, client.ContainerInspectOptions{Size: true})
+	if err != nil {
+		return ContainerEnd{}, fmt.Errorf("inspect container on %s: %w", c.t.Describe(), err)
+	}
+	return endOf(res.Container), nil
+}
+
+// endOf maps the engine's inspect document to a ContainerEnd.
+func endOf(in container.InspectResponse) ContainerEnd {
+	e := ContainerEnd{ImageID: in.Image, SizeRw: -1}
+	if in.SizeRw != nil {
+		e.SizeRw = *in.SizeRw
+	}
+	if cfg := in.Config; cfg != nil {
+		e.Image = cfg.Image
+	}
+	if s := in.State; s != nil {
+		e.ExitCode, e.Error, e.OOMKilled = s.ExitCode, s.Error, s.OOMKilled
+		e.StartedAt, e.FinishedAt = engineTime(s.StartedAt), engineTime(s.FinishedAt)
+	}
+	return e
+}
+
+// engineTime parses a time the engine sends in RFC 3339, UTC. The zero time (year 1), an empty
+// string and anything that does not parse are the zero time.
+func engineTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil || t.Year() <= 1 {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // detailOf maps the engine's inspect document. Every slice and map in the result is

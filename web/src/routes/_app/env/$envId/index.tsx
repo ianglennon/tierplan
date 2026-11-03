@@ -18,12 +18,13 @@ import { AddressSpaceCard } from "@/features/address-space/address-space-card";
 import { EngineCard } from "@/features/dashboard/engine-card";
 import { EventsFeed } from "@/features/dashboard/events-feed";
 import { NodesBanner } from "@/features/environments/nodes-banner";
+import { JanitorCard } from "@/features/janitor/janitor-card";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // Dashboard is the environment's home (D-55): header, the worker notice on a
-// swarm worker, the count tiles, the engine and address space cards and the events feed. It reads
+// swarm worker, the count tiles, the engine, address space and janitor cards and the events feed. It reads
 // the same ["env", envId, "summary"] query as the layout, so there is one request; the
 // layout has already turned offline, unsupported, missing and forbidden
 // environments into full-page states, so what reaches here is data, a load in
@@ -234,6 +235,7 @@ function Dashboard() {
             loading={environments.isPending}
             error={environments.isError}
           />
+          <JanitorCard envId={envId} />
         </div>
         <EventsFeed envId={envId} showNode={swarm} />
       </div>

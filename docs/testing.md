@@ -106,6 +106,17 @@ Run them on their own with `go test -tags=swarm ./internal/agents/ -run 'TestSwa
 
 **The Engine 24 run.** `TIERPLAN_TEST_ENGINE=24` starts the swarm on Docker Engine 24 instead of the default 29. Run `TIERPLAN_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/AddressSpacePools' -count=1 -timeout 60m` to see what an older engine gives: the pool figures are still computed, and an overlay's address counts read *Not measured*, because only Engine 29 reports them. Run `TIERPLAN_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/SubnetOverlap$' -count=1 -timeout 60m` as well: the override rule and the read-back hold on both ends. All of these runs belong to the phase gate.
 
+### The janitor case
+
+Phase 11 adds `TestSwarmShared/Janitor` to the same swarm. A service of two replicas whose task exits at once and restarts after two seconds leaves exited task containers on the nodes, a second one carries the container label `tierplan.keep=true`, and an overlay labelled with a stack that does not exist is an orphan. With the janitor's clock and the address-space reader's clock 48 hours on (`sharedCaseOptions`), the case checks that:
+
+- the containers carry the swarm labels the planner groups by (`com.docker.swarm.service.id`, `service.name`, `task.id` and `task.name`), and that the preview lists exactly the containers beyond the newest two of each slot, as the engines themselves hold them, on the node each is on;
+- the labelled service's containers are protected, and the orphan overlay is removable;
+- Clean now removes exactly those and nothing else, and the network is saved (`network.inspect_saved`) before it is removed (`network.removed`, source janitor);
+- the task history limit reads as Docker's 5 through a manager's agent, is set to 7 through the agent's swarm update route, reads back as 7 and is put back, because the shared swarm's reset does not restore the cluster spec.
+
+Run it with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/Janitor$' -count=1 -timeout 60m`, and again with `TIERPLAN_TEST_ENGINE=24`: the labels and the spec round trip hold on both.
+
 Two integration-tagged tests prove the standalone half on real engines (`make test-int` runs them with the rest):
 
 - `TestSmallSubnetHashStableOnARealEngine` (`internal/stackops`) deploys a standalone stack with small subnets on at `/26`, then deploys it again with the setting off, with a service changed and rolled back, and checks the network keeps its ID and subnet: the Compose engine stamps a hash of the whole network on it, so sending a different subnet would recreate it under its running containers. A stack deployed before the setting was turned on also keeps its network when it is deployed again with the setting on.

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { type JanitorJobSummary, janitorJobsKey } from "@/api/janitor";
 import { PULLS_POLL_RUNNING_MS, type PullSummary } from "@/api/pulls";
 import { type StackJobSummary, stackJobsKey } from "@/api/stacks";
 import { Toaster } from "@/components/ui/sonner";
@@ -17,6 +18,7 @@ import { JobsIndicator } from "@/features/jobs/jobs-indicator";
 import { followStackOperation } from "@/features/stacks/follow-operation";
 import "@/i18n";
 import { keyExists } from "@/i18n/use-t";
+import { janitorJob, run } from "@/test-janitor";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 import { waitUnderFakeClock } from "@/test-settle";
@@ -67,6 +69,9 @@ const stackJob = (over: Partial<StackJobRow> = {}): StackJobRow => ({
 let pulls: PullSummary[];
 let stackJobs: StackJobRow[];
 let stackJobsStatus: number | "never";
+let janitorJobs: JanitorJobSummary[];
+let janitorJobsStatus: number;
+let janitorRun: ReturnType<typeof run>;
 let listStatus: number;
 let client: QueryClient;
 let calls: string[];
@@ -76,6 +81,9 @@ beforeEach(() => {
   pulls = [];
   stackJobs = [];
   stackJobsStatus = 200;
+  janitorJobs = [];
+  janitorJobsStatus = 200;
+  janitorRun = run({ state: "completed" });
   listStatus = 200;
   calls = [];
   cancelAnswer = (id) => Response.json({ id, state: "cancelled", items: [] });
@@ -100,6 +108,18 @@ beforeEach(() => {
               { status: stackJobsStatus },
             );
       }
+      if (path === "/api/janitor-jobs") {
+        return janitorJobsStatus === 200
+          ? Response.json({ jobs: janitorJobs })
+          : Response.json(
+              { type: "", title: "x", status: janitorJobsStatus, detail: "d" },
+              { status: janitorJobsStatus },
+            );
+      }
+      if (path === "/api/environments") {
+        return Response.json({ items: [{ id: "e1", name: "Home lab", envType: "swarm" }] });
+      }
+      if (path === "/api/env/e1/janitor/runs/r1") return Response.json(janitorRun);
       if (path === "/api/pulls") {
         return listStatus === 200
           ? Response.json({ pulls })
@@ -524,6 +544,139 @@ describe("JobsIndicator stack jobs", () => {
     const { container } = mount();
     await waitFor(() => expect(calls).toContain("GET /api/stack-jobs"));
     expect(container.querySelector("button")).toBeNull();
+  });
+});
+
+describe("JobsIndicator clean-ups", () => {
+  const open = async (name: string | RegExp = "Jobs, 1 in progress") =>
+    fireEvent.click(await screen.findByRole("button", { name }));
+
+  it("lists a running scheduled clean-up as Cleaning {environment} with how far it has got, by TierPlan, and no Cancel", async () => {
+    janitorJobs = [janitorJob({ trigger: "schedule", by: "TierPlan", done: 3, total: 8 })];
+    mount();
+    await open();
+    const row = within(await screen.findByRole("list")).getAllByRole("listitem")[0] as HTMLElement;
+    expect(await within(row).findByText("Cleaning Home lab")).toBeTruthy();
+    expect(within(row).getByText("Removing 3 of 8")).toBeTruthy();
+    expect(within(row).getByText("by TierPlan")).toBeTruthy();
+    expect(row.querySelector(".lucide-brush-cleaning")).not.toBeNull();
+    // Removals are individual and idempotent: there is nothing to cancel.
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
+  });
+
+  it("names the person who chose Clean now, and counts the clean-up as running", async () => {
+    janitorJobs = [janitorJob({ trigger: "manual", by: "Ada" })];
+    mount();
+    await open("Jobs, 1 in progress");
+    expect(await screen.findByText("by Ada")).toBeTruthy();
+  });
+
+  it("says a clean-up is waiting to start until the run has a plan", async () => {
+    janitorJobs = [janitorJob({ done: 0, total: 0 })];
+    mount();
+    await open();
+    expect(await screen.findByText("Waiting to start")).toBeTruthy();
+  });
+
+  it("opens the run from Open, and following it closes the list", async () => {
+    janitorJobs = [janitorJob({ runId: "r1" })];
+    mount();
+    await open();
+    const link = await screen.findByRole("link", { name: "Open the cleanup of Home lab" });
+    expect(link.textContent).toBe("Open");
+    expect(link.getAttribute("href")).toBe("/env/e1/janitor/runs/r1");
+    fireEvent.click(link);
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "Open the cleanup of Home lab" })).toBeNull(),
+    );
+    expect(screen.getByTestId("where").textContent).toBe("/env/e1/janitor/runs/r1");
+  });
+
+  it.each([
+    ["completed", "Cleaned"],
+    ["partial", "Partly cleaned"],
+    ["failed", "Failed"],
+    ["skipped", "Skipped"],
+  ] as const)("words a clean-up that ended from the run record: %s is %s", async (state, words) => {
+    janitorRun = run({ state });
+    janitorJobs = [janitorJob({ state: "done", done: 8, total: 8 })];
+    mount();
+    // None is running, so the button has no count.
+    await open("Jobs");
+    expect(await screen.findByText(words)).toBeTruthy();
+  });
+
+  it("does not call a clean-up failed because the job counts an item kept in use as failed", async () => {
+    // The run record says completed; the hub's state for the same job is failed.
+    janitorRun = run({ state: "completed" });
+    janitorJobs = [janitorJob({ state: "failed", done: 8, total: 8 })];
+    mount();
+    await open("Jobs");
+    expect(await screen.findByText("Cleaned")).toBeTruthy();
+    expect(screen.queryByText("Failed")).toBeNull();
+  });
+
+  it("says only Finished until the run record is read", async () => {
+    janitorJobs = [janitorJob({ state: "done", done: 8, total: 8 })];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/api/janitor-jobs") return Response.json({ jobs: janitorJobs });
+        if (path === "/api/me") return Response.json(makeMe({ envs: { e1: "operator" } }));
+        if (path === "/api/env/e1/janitor/runs/r1") return new Promise<Response>(() => {});
+        return Response.json({}, { status: 404 });
+      }),
+    );
+    mount();
+    await open("Jobs");
+    expect(await screen.findByText("Finished")).toBeTruthy();
+  });
+
+  it("lists a clean-up beside a deploy, running first, and counts both", async () => {
+    stackJobs = [stackJob({ startedAt: "2026-10-11T10:01:00Z" })];
+    janitorJobs = [janitorJob({ startedAt: "2026-10-11T10:03:00Z" })];
+    mount();
+    await open("Jobs, 2 in progress");
+    const rows = within(await screen.findByRole("list")).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(await within(rows[0] as HTMLElement).findByText("Cleaning Home lab")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText("web")).toBeTruthy();
+  });
+
+  it("shows an error row with Retry when the clean-ups cannot be loaded, beside the jobs that could", async () => {
+    stackJobs = [stackJob()];
+    janitorJobsStatus = 500;
+    mount();
+    await open();
+    expect(await screen.findByText("Couldn't load the cleanups.")).toBeTruthy();
+    janitorJobsStatus = 200;
+    janitorJobs = [janitorJob()];
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Cleaning Home lab")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load the cleanups.")).toBeNull();
+  });
+
+  it("keeps the last list when a poll fails and shows no error", async () => {
+    janitorJobs = [janitorJob()];
+    mount();
+    await open();
+    await screen.findByText("Cleaning Home lab");
+    janitorJobsStatus = 500;
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: janitorJobsKey });
+    });
+    expect(screen.queryByText("Couldn't load the cleanups.")).toBeNull();
+    expect(screen.getByText("Cleaning Home lab")).toBeTruthy();
+  });
+
+  it("truncates a long environment name and gives it in full in a tooltip", async () => {
+    janitorJobs = [janitorJob()];
+    mount();
+    await open();
+    const name = await screen.findByText("Cleaning Home lab");
+    expect(name.className).toContain("truncate");
   });
 });
 

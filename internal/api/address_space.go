@@ -67,9 +67,10 @@ type AddressSpaceBody struct {
 	NetworksTotal     int                 `json:"networksTotal" minimum:"0" doc:"How many networks the map holds, whatever the cap"`
 	NetworksTruncated bool                `json:"networksTruncated" doc:"True when networksTotal is more than the rows returned"`
 
-	Orphans         []OrphanRowBody      `json:"orphans" doc:"The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time TierPlan saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name"`
+	Orphans         []OrphanRowBody      `json:"orphans" doc:"The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for the environment's grace (graceHours), counted from the later of its creation and the last time TierPlan saw it in use; at exactly the grace it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name"`
 	Kept            []KeptRowBody        `json:"kept" doc:"The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the tierplan.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name"`
 	OrphansWithheld *OrphansWithheldBody `json:"orphansWithheld,omitempty" doc:"Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld"`
+	GraceHours      int                  `json:"graceHours" minimum:"1" doc:"The grace the orphan list was judged by, in whole hours: how long a network must have been idle before it is listed. It is the environment's janitor grace (the instance default of 24 hours until the environment or the instance changes it), so this page and the janitor never disagree about whether a network is old enough"`
 }
 
 // OrphanRowBody is one network the orphan check lists.
@@ -215,7 +216,7 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 			known := loadStackIDs(ctx, d.Store, env.ID, d.Log)
 			body.Networks, body.NetworksTotal, body.NetworksTruncated = mapRows(agg.Networks, use, known, space.Overlays)
 			body.NotReporting = unionNames(body.NotReporting, agg.NotReporting)
-			body.Orphans, body.OrphansWithheld = orphanBody(ctx, d, env.ID)
+			body.Orphans, body.OrphansWithheld, body.GraceHours = orphanBody(ctx, d, env.ID)
 			body.Kept = keptBody(ctx, d, env.ID)
 			return &AddressSpaceOutput{CacheControl: "no-store", Body: body}, nil
 		})
@@ -224,13 +225,14 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 	registerAddressSettings(r, d)
 }
 
-// orphanBody is the orphan part of the page. A check that fails leaves the list empty and says
-// no manager answered, and never fails the page: the pools and the map are worth showing without it.
-func orphanBody(ctx context.Context, d AddressSpaceDeps, envID string) ([]OrphanRowBody, *OrphansWithheldBody) {
+// orphanBody is the orphan part of the page and the grace its list was judged by, in hours. A check
+// that fails leaves the list empty and says no manager answered, and never fails the page: the pools
+// and the map are worth showing without it.
+func orphanBody(ctx context.Context, d AddressSpaceDeps, envID string) ([]OrphanRowBody, *OrphansWithheldBody, int) {
 	rep, err := d.AddressSpaces.Orphans(ctx, envID)
 	if err != nil {
 		d.Log.Warn("could not check for orphaned networks", "environment", envID, "error", err)
-		return []OrphanRowBody{}, &OrphansWithheldBody{Nodes: []string{}, Stacks: []string{}, ManagerMissing: true}
+		return []OrphanRowBody{}, &OrphansWithheldBody{Nodes: []string{}, Stacks: []string{}, ManagerMissing: true}, graceHoursOf(0)
 	}
 	rows := make([]OrphanRowBody, 0, len(rep.Rows))
 	for _, r := range rep.Rows {
@@ -244,12 +246,22 @@ func orphanBody(ctx context.Context, d AddressSpaceDeps, envID string) ([]Orphan
 			FormerOwnerKind: r.FormerOwnerKind, IdleSince: r.IdleSince.UTC().Format(time.RFC3339), IdleSinceSource: src,
 		})
 	}
+	grace := graceHoursOf(rep.Grace)
 	if len(rep.WithheldNodes) == 0 && len(rep.WithheldStacks) == 0 && !rep.ManagerMissing {
-		return rows, nil
+		return rows, nil, grace
 	}
 	return rows, &OrphansWithheldBody{
 		Nodes: append([]string{}, rep.WithheldNodes...), Stacks: append([]string{}, rep.WithheldStacks...), ManagerMissing: rep.ManagerMissing,
+	}, grace
+}
+
+// graceHoursOf is a grace in whole hours, rounded up, and the default of 24 for none. The setting is
+// whole hours, so rounding never changes a real value.
+func graceHoursOf(g time.Duration) int {
+	if g <= 0 {
+		g = netspace.GracePeriod
 	}
+	return int((g + time.Hour - 1) / time.Hour)
 }
 
 // scopeName is the wire name of a network scope: swarm for a cluster-wide network, local for every other.

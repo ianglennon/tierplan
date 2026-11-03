@@ -75,6 +75,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"secrets.reveal":         x,
 		"volumes.delete":         x,
 		"janitor.policy":         x,
+		"janitor.run":            e(rbac.RoleAdmin),
 		"shells.manage":          e(rbac.RoleAdmin),
 		"registries.instance":    g(true),
 		"registries.manage":      e(rbac.RoleAdmin),
@@ -387,6 +388,35 @@ func TestExtrasAreAdminAlwaysOperatorWhenCarriedViewerNever(t *testing.T) {
 	} {
 		if got := allowed(f, user(c.who), c.perm, "env-a"); got != c.want {
 			t.Errorf("%s %s = %v, want %v", c.who, c.perm, got, c.want)
+		}
+	}
+}
+
+func TestJanitorRunIsAnEnvironmentAdminPermissionAnExtraCannotGrant(t *testing.T) {
+	f := newFx(t)
+	f.addUser(t, "u-admin")
+	f.assign(t, "user", "u-admin", "admin", "env-a")
+	f.addUser(t, "u-op")
+	f.assign(t, "user", "u-op", "operator", "env-a", "janitor.run") // not an extra, so carrying it grants nothing
+	f.addUser(t, "u-viewer")
+	f.assign(t, "user", "u-viewer", "viewer", "env-a", "janitor.run")
+
+	p := perms(t)[rbac.PermJanitorRun]
+	if p.Extra || p.Dangerous || p.Scope != rbac.ScopeEnvironment || p.MinRole != rbac.RoleAdmin {
+		t.Fatalf("janitor.run = %+v, want an environment-scoped Admin permission that is neither an extra nor dangerous", p)
+	}
+	for _, c := range []struct {
+		who  string
+		env  string
+		want bool
+	}{
+		{"u-admin", "env-a", true},
+		{"u-admin", "env-b", false},
+		{"u-op", "env-a", false},
+		{"u-viewer", "env-a", false},
+	} {
+		if got := allowed(f, user(c.who), rbac.PermJanitorRun, c.env); got != c.want {
+			t.Errorf("%s janitor.run on %s = %v, want %v", c.who, c.env, got, c.want)
 		}
 	}
 }

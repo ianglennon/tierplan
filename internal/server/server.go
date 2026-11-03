@@ -35,6 +35,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
@@ -177,6 +178,7 @@ type RouterDeps struct {
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
 	AddressSpace  api.AddressSpaceDeps
+	Janitor       api.JanitorDeps
 	Services      api.ServicesDeps
 	RestartLoop   api.RestartLoopDeps
 	Secrets       api.SecretsDeps
@@ -233,6 +235,8 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
 	api.RegisterAddressSpace(r, d.AddressSpace)
+	api.RegisterJanitor(r, d.Janitor)
+	api.RegisterJanitorTaskHistory(r, d.Janitor)
 	api.RegisterServices(r, d.Services)
 	api.RegisterRestartLoop(r, d.RestartLoop)
 	api.RegisterSecrets(r, d.Secrets)
@@ -267,6 +271,8 @@ type buildOptions struct {
 	selfContainerID string
 	refusalClock    func() time.Time
 	addressClock    func() time.Time
+	janitorClock    stackops.Clock
+	noJanitorSched  bool
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
@@ -283,6 +289,22 @@ func WithRefusalClock(now func() time.Time) Option {
 // sessions, tokens and every other clock keep real time. A nil clock keeps time.Now.
 func WithAddressSpaceClock(now func() time.Time) Option {
 	return func(o *buildOptions) { o.addressClock = now }
+}
+
+// WithJanitorClock replaces the clock a janitor run judges the age of what it removes by. It exists
+// for tests that need containers to be past the grace period at once instead of waiting for it. It
+// is a Go option only, like WithAddressSpaceClock: a production build calls Build without it and
+// always reads the real time. A nil clock keeps the wall clock.
+func WithJanitorClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.janitorClock = c }
+}
+
+// WithoutJanitorScheduler keeps the janitor's scheduler from running, so that no environment is cleaned
+// by itself at 03:00. It exists for tests, which must not depend on the time of day they run at. It is
+// a Go option only: a production build calls Build without it and every environment's janitor runs on
+// its schedule.
+func WithoutJanitorScheduler() Option {
+	return func(o *buildOptions) { o.noJanitorSched = true }
 }
 
 // WithSelfContainerID supplies the ID of the container TierPlan runs in. The
@@ -533,6 +555,34 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 	aud := audit.NewWriter(st, vlt, log, nil)
 
+	// The janitor's runs are in memory as well as on record: one still waiting or running belongs to a
+	// process that is gone. Before anything can start a run, each is ended as failed with the reason
+	// server_restarted and audited, so none reads "running" for ever, and then the run history is pruned to
+	// the retention, before the scheduler starts (D-16, RESEARCH F12).
+	janitorRuns := &janitor.SQLStore{St: st}
+	sweepAt := time.Now()
+	if bo.janitorClock != nil {
+		sweepAt = bo.janitorClock.Now()
+	}
+	swept, err := janitorRuns.MarkInterruptedRuns(ctx, sweepAt)
+	if err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{fmt.Errorf("mark interrupted janitor runs: %w", err)}
+	}
+	if len(swept) > 0 {
+		log.Warn("janitor runs that were working when the server stopped were marked failed", "count", len(swept))
+		janitor.AuditInterrupted(ctx, aud, log, swept)
+	}
+	// The retention is the one the instance defaults store (D-16), so a limit saved on the settings page
+	// holds across a restart. One that cannot be read prunes nothing rather than guessing.
+	if keep, rerr := (janitor.PolicyStore{St: st}).Retention(ctx); rerr != nil {
+		log.Warn("could not read the janitor run history retention, so the history was not pruned", "error", rerr)
+	} else if pruned, perr := janitorRuns.PruneAll(ctx, keep, sweepAt); perr != nil {
+		log.Warn("could not prune the janitor run history beyond the retention", "error", perr)
+	} else if pruned > 0 {
+		log.Info("pruned janitor runs beyond the retention", "count", pruned, "days", keep.Days, "runs", keep.Runs)
+	}
+
 	// While no user exists every start mints a fresh setup token, writes it to
 	// the data directory and logs it (D-01). There is no setting that skips or
 	// prefills it (D-79).
@@ -775,7 +825,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The orphan check asks the stacks which networks they declare external and whether one holds an operation, so a
 	// network a stack uses or is deploying is never listed (NET-04). It opens the stacks with the vault, as every
 	// other reader of a stack does.
-	addressSpaces.WithStackFacts(stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks})
+	netFacts := stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks}
+	addressSpaces.WithStackFacts(netFacts)
+	// The janitor reads what each stack's own file says (x-tierplan: {keep: true}) with the same loader and deadline.
+	janitorFacts := stackops.JanitorFacts{Repo: stackops.Repo{Store: st, Vault: vlt}}
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
 		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,
@@ -804,6 +857,56 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The deploys a git stack makes by itself (auto-deploy) go through the very code the Deploy button does, on the same
 	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
 	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
+	// The janitor's Clean now: a run takes the lock the stack operations share and is a job in the same hub.
+	// The policy is the stored one: the instance defaults with each environment's overrides over them.
+	// Networks are judged by the orphan check the Address space page lists with and removed by the code its delete route
+	// calls, so the janitor has one way to judge a network and one way to remove it.
+	// A preview judges ages by the same clock a run does, so a test that moves the janitor's clock
+	// sees the preview and the run agree. Production builds have none and read the real time.
+	janitorNow := time.Now
+	if bo.janitorClock != nil {
+		janitorNow = bo.janitorClock.Now
+	}
+	addressSpaceDeps := api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log}
+	janitorDeps := api.JanitorDeps{
+		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
+		AddressSpaces: addressSpaces, StackFacts: netFacts, JanitorFacts: janitorFacts, Clock: bo.janitorClock, Now: janitorNow, Log: log,
+	}
+	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
+	janitorDeps.Runs = janitorRuns
+	janitorPolicies := janitor.PolicyStore{St: st}
+	janitorDeps.Policies = janitorPolicies
+	// One grace per environment, for everything (D-20): the Address space orphan list judges by the grace the
+	// janitor's policy gives the environment, the instance default of 24 hours until someone sets it. It is set
+	// before the reader serves its first request.
+	addressSpaces.WithGrace(func(ctx context.Context, envID string) (time.Duration, error) {
+		p, err := janitorPolicies.Effective(ctx, envID)
+		return p.Grace, err
+	})
+	janitorDeps.Runner = &janitor.Runner{
+		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, janitor.KeepStore{St: st}, log, api.WithStackDeclarations(janitorFacts), api.WithEngineClock(janitorNow)), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
+		Policy: janitorPolicies.Effective, Nodes: janitorPolicies.Nodes, Retention: janitorPolicies.Retention, Store: janitorRuns, Audit: aud, Log: log,
+		Networks: api.NewJanitorNetworks(addressSpaceDeps),
+	}
+	// The scheduler cleans each enabled environment at its slot, as the system, through the Runner Clean now uses. It
+	// reads a policy through the Runner and starts after the sweep of interrupted runs above (RESEARCH F11).
+	janitorSched := &janitor.Scheduler{
+		Envs: func(ctx context.Context) ([]string, error) {
+			rows, err := st.RQ.ListEnvironments(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(rows))
+			for _, row := range rows {
+				if row.Enabled != 0 {
+					ids = append(ids, row.ID)
+				}
+			}
+			return ids, nil
+		},
+		Runner: janitorDeps.Runner, Clock: bo.janitorClock, Loc: time.Local, Log: log,
+	}
+	janitorDeps.Scheduler = janitorSched
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
@@ -869,7 +972,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
-		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log},
+		AddressSpace:  addressSpaceDeps,
+		Janitor:       janitorDeps,
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
@@ -967,6 +1071,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// and service events, so the overview, the health and the last-seen times of networks stay current
 	// when nobody has the page open (D-09).
 	srv.background.Go(func() { addressSpaces.Run(bg) })
+	// Every environment's janitor runs at its slot, daily at 03:00 server time by default (JAN-01).
+	if !bo.noJanitorSched {
+		srv.background.Go(func() { janitorSched.Run(bg) })
+	}
 	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
 	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
 	// The mirrors of those repositories are a cache: the ones whose repository is gone, that nothing has used for

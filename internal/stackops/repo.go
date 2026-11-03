@@ -82,6 +82,8 @@ type Stack struct {
 	CreatedBy       string
 	CreatedAt       time.Time
 	Stopped         bool
+	// JanitorExcluded is true while a person has excluded the stack from the janitor (D-10).
+	JanitorExcluded bool
 	// Discovered is true for a stack found on the engine by its labels that TierPlan does not hold (D-07). It
 	// is never stored: DiscoveredStack makes one, and Ownership reads it.
 	Discovered bool
@@ -144,7 +146,7 @@ func stackOf(row sqlc.Stack) Stack {
 		ID: row.ID, EnvID: row.EnvID, Name: row.Name, Target: stacks.Target(row.Target),
 		Source:    stacks.Source{Kind: stacks.SourceKind(row.SourceKind), Ref: row.SourceRef},
 		CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(), Stopped: row.Stopped != 0,
-		Adoption: adoptionOf(row),
+		JanitorExcluded: row.JanitorExcluded != 0, Adoption: adoptionOf(row),
 	}
 }
 

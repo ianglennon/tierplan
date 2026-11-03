@@ -28,7 +28,9 @@ type bodyEnv struct {
 	policy  Policy
 	lookup  networkLookup
 	volumes volumeLookup
-	ctx     context.Context
+	// swarm reads the swarm spec of the agent's own engine, for a swarm update. Nil refuses it.
+	swarm swarmLookup
+	ctx   context.Context
 }
 
 // maxBody caps a request body of every kind but a service spec. Every such body is
@@ -151,6 +153,8 @@ func validateBody(kind BodyKind, r io.Reader, env bodyEnv) ([]byte, error) {
 		clean, err = validateConfigCreate(raw)
 	case BodyContainerCreate:
 		clean, err = validateContainerCreate(raw, env)
+	case BodySwarmUpdate:
+		clean, err = validateSwarmUpdate(raw, env)
 	default:
 		return nil, refuse("a route with no body kind has no validator")
 	}

@@ -122,8 +122,6 @@ function fillAdmin() {
 
 beforeEach(() => {
   calls = [];
-  // jsdom has no scrolling; the router asks for it on every navigation.
-  vi.stubGlobal("scrollTo", vi.fn());
 });
 
 afterEach(() => {

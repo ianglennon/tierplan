@@ -24,13 +24,15 @@ import (
 	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 const (
-	// sourceOrphanCleanup is the source detail of what the orphan list removes (Phase 11's
-	// janitor records its own).
+	// sourceOrphanCleanup is the source detail of what the orphan list removes; sourceJanitor is
+	// the one of what the janitor removes through the same code.
 	sourceOrphanCleanup = "orphan_cleanup"
+	sourceJanitor       = "janitor"
 	// problemInspectTooLarge: the network's masked inspect document is over what the audit log
 	// stores whole, so the delete is refused (D-12).
 	problemInspectTooLarge = "inspect_too_large"
@@ -195,7 +197,7 @@ func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept b
 			continue
 		}
 		if n.Scope == dockerx.ScopeSwarm {
-			return "", n.Labels["tierplan.keep"] == "true", nil
+			return "", n.Labels[stacks.LabelKeep] == "true", nil
 		}
 		if nodeID == "" || n.NodeID == nodeID {
 			local = append(local, n)
@@ -203,9 +205,9 @@ func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept b
 	}
 	switch {
 	case nodeID != "":
-		return nodeID, len(local) > 0 && local[0].Labels["tierplan.keep"] == "true", nil
+		return nodeID, len(local) > 0 && local[0].Labels[stacks.LabelKeep] == "true", nil
 	case len(local) == 1:
-		return local[0].NodeID, local[0].Labels["tierplan.keep"] == "true", nil
+		return local[0].NodeID, local[0].Labels[stacks.LabelKeep] == "true", nil
 	case len(local) > 1:
 		return "", false, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
 			"More than one node has a network named "+name+". Say which one (nodeId).")
@@ -367,28 +369,22 @@ func keptBody(ctx context.Context, d AddressSpaceDeps, envID string) []KeptRowBo
 // keeperName is the display name of the user who kept a network: the display name, else the
 // username, else empty when the user is not known.
 func keeperName(ctx context.Context, d AddressSpaceDeps, cache map[string]string, userID string) string {
-	if name, ok := cache[userID]; ok {
-		return name
-	}
-	name := ""
-	if d.Store != nil {
-		if u, err := d.Store.RQ.GetUserByID(ctx, userID); err == nil {
-			name = u.DisplayName
-			if name == "" {
-				name = u.Username
-			}
-		}
-	}
-	cache[userID] = name
-	return name
+	return userDisplayName(ctx, d.Store, cache, userID)
 }
 
-// deleteOrphan removes one orphaned or unused network. It judges the network again from a fresh
-// read just before it acts and removes it only if it is still orphaned or unused (D-12). The
-// network's whole masked inspect document is in the audit log before the remove is sent, and a
-// document that cannot be stored whole refuses the delete. The remove is sent once.
+// deleteOrphan removes one orphaned or unused network for the orphan list's route.
 func deleteOrphan(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, envID string, in *OrphanDeleteInput) (OrphanDeleteBody, error) {
-	row, class, err := d.AddressSpaces.Recheck(ctx, envID, in.NetworkID, in.NodeID)
+	return removeOrphanNetwork(ctx, d, p, envID, in.UserAgent, sourceOrphanCleanup, in.NetworkID, in.NodeID)
+}
+
+// removeOrphanNetwork removes one orphaned or unused network, and is the only code that does: the
+// orphan list's route and the janitor both call it, source saying which. It judges the network again
+// from a fresh read just before it acts and removes it only if it is still orphaned or unused
+// (D-12). The network's whole masked inspect document is in the audit log before the remove is
+// sent, and a document that cannot be stored whole refuses the delete. The remove is sent once.
+// Its errors are problems (httpx.Problem) and its audit rows are written as they happen, by p.
+func removeOrphanNetwork(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, envID, userAgent, source, networkID, nodeID string) (OrphanDeleteBody, error) {
+	row, class, err := d.AddressSpaces.Recheck(ctx, envID, networkID, nodeID)
 	switch {
 	case errors.Is(err, envs.ErrNetworkGone):
 		return OrphanDeleteBody{}, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, "This network does not exist. It may have been removed.")
@@ -398,7 +394,7 @@ func deleteOrphan(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, en
 	case err != nil:
 		return OrphanDeleteBody{}, snapshotProblem(d.Log, envID, err)
 	}
-	o := orphanAttempt{d: d, p: p, envID: envID, userAgent: in.UserAgent, row: row}
+	o := orphanAttempt{d: d, p: p, envID: envID, userAgent: userAgent, source: source, row: row}
 	if row.Scope != dockerx.ScopeSwarm {
 		o.node = row.NodeID
 	}
@@ -475,7 +471,9 @@ type orphanAttempt struct {
 	p         *rbac.Principal
 	envID     string
 	userAgent string
-	row       envs.OrphanRow
+	// source is what asked for the removal: sourceOrphanCleanup or sourceJanitor.
+	source string
+	row    envs.OrphanRow
 	// node is the node a local network is on, empty for a swarm-wide one.
 	node string
 }
@@ -484,7 +482,7 @@ type orphanAttempt struct {
 // reason is the code. reason is orphan or unused for a removal.
 func (o orphanAttempt) record(ctx context.Context, action, code, reason string) {
 	details := map[string]string{
-		"name": o.row.Name, "driver": o.row.Driver, "scope": o.row.Scope, "code": code, "source": sourceOrphanCleanup,
+		"name": o.row.Name, "driver": o.row.Driver, "scope": o.row.Scope, "code": code, "source": o.source,
 	}
 	if o.node != "" {
 		details["node"] = o.node
@@ -529,7 +527,7 @@ func (o orphanAttempt) readInspect(ctx context.Context) ([]byte, error) {
 // saveInspect writes the network.inspect_saved entry. The remove follows only when it returns nil.
 func (o orphanAttempt) saveInspect(ctx context.Context, doc string, masked bool) error {
 	details := map[string]string{
-		"name": o.row.Name, "source": sourceOrphanCleanup, "inspect": doc, "masked": strconv.FormatBool(masked),
+		"name": o.row.Name, "source": o.source, "inspect": doc, "masked": strconv.FormatBool(masked),
 	}
 	if o.node != "" {
 		details["node"] = o.node

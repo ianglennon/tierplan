@@ -34,6 +34,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
@@ -102,6 +103,8 @@ type authFixture struct {
 	// scheduler is told when a test saves the backup schedule.
 	scheduler interface{ Notify() }
 	acctVault *vault.Vault
+	// janitorPolicy, when set, is the policy of every environment's janitor (plan 11-15); nil means the stored policy.
+	janitorPolicy func() janitor.Policy
 	// proxy feeds the proxy items of GET /api/warnings (plan 02-25); nil means none.
 	proxy *httpx.ProxyObserver
 	// refusals feeds the refusal_burst items of GET /api/warnings (plan 03-10); nil means none.
@@ -277,6 +280,14 @@ type authFixture struct {
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
 	f := &authFixture{st: storetest.New(t), clk: &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, logs: &syncBuffer{}, unknown: agents.NewUnknownAgents()}
+	// The fixture lets go of its router when the test ends. Go's testing package keeps a
+	// finished parallel test, with the closures its cleanups leave behind, until the whole
+	// binary ends, and those closures reach this fixture: the broker, the tunnel hub and the
+	// agent updater hold the environment service, whose cluster reader holds the address
+	// reader, whose grace reads f.janitorPolicy. Every test's router, with all of its OpenAPI
+	// schemas, then lived to the end of the run (TestFinishedFixtureLetsGoOfItsRouter). This
+	// cleanup is registered before anything that uses the router, so it runs after them all.
+	t.Cleanup(func() { f.h = nil })
 	log := slog.New(slog.NewJSONHandler(f.logs, nil))
 	v, err := vault.LoadOrCreate(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), t.TempDir(), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -401,6 +412,44 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
 			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
 		})
+		if f.stackLocks == nil {
+			f.stackLocks = stackops.NewLocks()
+		}
+		if f.jobHub == nil {
+			f.jobHub = jobs.New(jobs.Options{})
+			t.Cleanup(f.jobHub.Close)
+		}
+		// The clock of a janitor run is the fixture's, so containers dated against it are past grace.
+		janitorClock := nowClock(f.clk.now)
+		janitorRuns := &janitor.SQLStore{St: f.st}
+		janitorPolicies := janitor.PolicyStore{St: f.st}
+		// As on a real server, the orphan list judges by the grace the janitor's policy gives the environment.
+		addressSpaces.WithGrace(func(ctx context.Context, envID string) (time.Duration, error) {
+			if f.janitorPolicy != nil {
+				return f.janitorPolicy().Grace, nil
+			}
+			p, err := janitorPolicies.Effective(ctx, envID)
+			return p.Grace, err
+		})
+		// The janitor asks the stack records which stacks and projects still exist, as the server does.
+		janitorFacts := stackops.NetFacts{Repo: stackops.Repo{Store: f.st, Vault: f.v}, Locks: f.stackLocks}
+		janitorDeps := api.JanitorDeps{
+			Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Jobs: f.jobHub,
+			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, Policies: janitorPolicies, AddressSpaces: addressSpaces, StackFacts: janitorFacts,
+			JanitorFacts: stackops.JanitorFacts{Repo: stackops.Repo{Store: f.st, Vault: f.v}},
+			Runner: &janitor.Runner{
+				Engine: api.NewJanitorEngine(f.agg, addrClusters, janitorFacts, janitor.KeepStore{St: f.st}, log, api.WithStackDeclarations(stackops.JanitorFacts{Repo: stackops.Repo{Store: f.st, Vault: f.v}}), api.WithEngineClock(f.clk.now)), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log, Retention: janitorPolicies.Retention, Nodes: janitorPolicies.Nodes,
+				Policy: func(ctx context.Context, envID string) (janitor.Policy, error) {
+					if f.janitorPolicy != nil {
+						return f.janitorPolicy(), nil
+					}
+					return janitorPolicies.Effective(ctx, envID)
+				},
+				Networks: api.NewJanitorNetworks(api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Now: f.clk.now, Log: log}),
+			},
+		}
+		api.RegisterJanitor(r, janitorDeps)
+		api.RegisterJanitorTaskHistory(r, janitorDeps)
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),

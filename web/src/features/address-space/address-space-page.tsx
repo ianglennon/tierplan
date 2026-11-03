@@ -172,6 +172,7 @@ export function AddressSpacePage({
             orphans={data.orphans ?? []}
             withheld={data.orphansWithheld}
             swarm={data.envType === "swarm"}
+            graceHours={data.graceHours}
           />
           <KeptList
             envId={envId}

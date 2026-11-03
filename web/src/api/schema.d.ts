@@ -1428,6 +1428,230 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the state of an environment's janitor
+         * @description Answers whether the janitor runs by itself on this environment, its schedule and the time zone it is read in, when the next run starts, the newest run that ended, the run that is waiting or working now, and how long the run history is kept. The schedule runs every environment at its slot, daily at 03:00 server time by default, moved later by a start offset of up to 10 minutes that depends on the environment and never changes. A run missed while the server was stopped is not made up. Needs environments.read on the environment.
+         */
+        get: operations["getJanitorStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/keeps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List what is kept out of cleanup
+         * @description Every keep of the environment, whether or not its object exists now, and every container, image and network that carries the tierplan.keep=true label (keptBy label). An object that has both is one item. Needs environments.read on the environment.
+         */
+        get: operations["listJanitorKeeps"];
+        /**
+         * Keep containers, images and networks out of cleanup
+         * @description Stores a keep for each target (1 to 100) in one transaction: the janitor never removes a kept container, image or network, by a schedule or by Clean now. Each target is checked against a fresh read of the environment; 404 not_found when one is not there. An object that is kept already changes and records nothing. Each new keep is audited as janitor.kept. 422 node_required when a container, an image or a local network is on more than one node and no nodeId is given. The keeps are the table the Address space page keeps networks in, so a network kept here is kept there. Needs janitor.run (Env Admin) on the environment.
+         */
+        put: operations["keepJanitorItems"];
+        post?: never;
+        /**
+         * Stop keeping a container, image or network out of cleanup
+         * @description Removes the keep of one object (kind, nodeId and ref in the query), audited as janitor.unkept. 404 keep_not_found when it is not kept by a person. 409 kept_by_label when it is kept by the tierplan.keep=true label on it, which only its owner can remove. 422 node_required when the same ref is kept on more than one node and no nodeId is given. Needs janitor.run (Env Admin) on the environment.
+         */
+        delete: operations["unkeepJanitorItem"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/nodes/{nodeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change one swarm node's janitor settings
+         * @description Replaces the settings this swarm node sets itself: enabled (false leaves everything on the node alone, in scheduled runs and in Clean now) and keepN (0 to 20, how many of the newest exited task containers of a service slot are kept when they are on this node). Each is a value, or null to follow the environment again. Everything else follows the environment. The node is named by its swarm node ID, so its settings stay with it when its agent is enrolled again. 409 not_swarm for a standalone host, 404 node_not_found when the swarm has no such node. A save that changes nothing answers 200 and writes nothing. Use the janitor preview with candidate nodes to see what a change would remove before it is saved. Needs janitor.policy (an Operator with that extra, or an Env Admin) on the environment. A change is audited as janitor.node_policy_changed, naming the node and the fields that changed.
+         */
+        put: operations["setJanitorNodePolicy"];
+        post?: never;
+        /**
+         * Make a swarm node follow its environment's janitor settings
+         * @description Removes what this swarm node set itself, so it follows the environment again. A node that already followed it answers 200 and nothing is written or audited. 409 not_swarm for a standalone host, 404 node_not_found when the swarm has no such node and none of its settings is stored. Needs janitor.policy on the environment. A reset is audited as janitor.node_policy_changed, naming the node and the fields it had set.
+         */
+        delete: operations["resetJanitorNodePolicy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read an environment's janitor policy
+         * @description Answers, for each setting (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), the value that applies and whether this environment set it or follows the instance default, the instance defaults, the version a save must send back and the server's time zone the schedule is read in. Needs environments.read on the environment.
+         */
+        get: operations["getJanitorPolicy"];
+        /**
+         * Change an environment's janitor policy
+         * @description Replaces the settings this environment sets itself: every field is a value, or null to follow the instance default again. keepN is 0 to 20, graceHours 1 to 720, and the schedule a five-field cron expression that fires no more often than every 15 minutes (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the policy: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the janitor off stops its scheduled runs at once; Clean now still works. Use the janitor preview with the candidate policy to see what the change would remove before it is saved. Needs janitor.policy (an Operator with that extra, or an Env Admin) on the environment. A change is audited as janitor.policy_changed, naming the fields that changed.
+         */
+        put: operations["setJanitorPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview what the janitor would remove
+         * @description Answers which objects the janitor would remove from the environment now, and why it leaves the rest. It reads every node fresh through the agents, judges with the environment's policy, and removes nothing: nothing is audited, and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. The one thing it records is when it first saw each image without a name: a dangling image's grace period runs from the later of that and when the image was built, so an image that has just lost its tag to a newer pull or build is held for the whole grace period however old it is. It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. Containers that are not swarm tasks are judged too: the leftovers of a TierPlan stack that no longer exists (stack_gone) and the old one-offs of docker compose run beyond the newest the policy keeps (compose_oneoff) are removable once stopped for the grace period, while a lone stopped container of a compose project TierPlan does not manage (lone_compose_container) and a stopped docker run container (opt_in_off_containers) are only reported until the environment opts in to removing stopped containers. A container of a compose project that still has another container is never listed. On a swarm, a node whose janitor is switched off (its own setting) has its containers and images listed under notRemoved as protected, with the reason node_disabled; while the environment has node settings, a node no agent has reported a swarm node ID for yet is listed the same way with the reason node_unmapped. A node's own keep-N replaces the environment's for the containers on it. A node whose engine clock differs from the server's by more than five minutes has its containers and images listed under notRemoved as clock_skew. While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes and none of their objects is listed. The server decides what is removable; the client only shows it. The body is optional. With a candidate policy in it the preview judges by that policy instead of the saved one, so the page can show what a change would remove before it is saved or before the janitor is turned on: the fields are those of the policy save, checked the same way (422 for a value it would refuse), and nothing is saved. One preview of an environment runs at a time, and a preview asked for while the same one (the same candidate, or none) is running gets that one's answer instead of reading every node again. Needs environments.read on the environment.
+         */
+        post: operations["previewJanitor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the janitor runs of an environment
+         * @description The environment's history of clean-ups, newest first: a person's Clean now and the schedule's runs, each with what started it and who, its state and reason, what it counted, the bytes it freed that were known and how long it took, and no items; read one run for those. limit is 25 by default and 25 to 100 at most. A run is kept while it started within the retention days (90 by default) or is among the newest retention runs (100) of the environment, whichever keeps more. A run that was working when the server restarted reads failed with the reason server_restarted. Needs environments.read on the environment.
+         */
+        get: operations["listJanitorRuns"];
+        put?: never;
+        /**
+         * Clean the environment now
+         * @description Removes the items ticked in a preview, and answers 202 with the run and its job at once; the clean-up goes on if the browser closes. The run takes the environment's operation lock, the one a deploy takes, and only while it removes. While a stack operation holds it this answers 409 operation_locked and starts nothing. With the lock held it plans again from a fresh read of every node and removes the ticked items that are removable now, each once and never more: an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone and the run records it. An item the engine refuses because something uses it is kept, recorded as such and not tried again; one that fails is recorded with a code and not tried again either. A container is removed through the agent of its node, without force and without its volumes. Networks are removed after the containers, each judged again from a fresh read made then and removed by the very code the Address space page's delete uses: the network's whole inspect is saved in the audit log first, one remove is sent, and the audit rows carry the source janitor and the person who started the run. A network the engine says is in use is kept; one that is no longer orphaned or unused is left alone; while a node is not reporting no network is removed. The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.
+         */
+        post: operations["startJanitorRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one janitor run
+         * @description Answers one run of the janitor in this environment: what started it and who, its state, when it began and ended, what it counted, and every item it attempted with why it was selected and how the attempt ended. A run is on record before it removes anything, so a run that is still working answers with state running and the items so far. A run of another environment, or one that does not exist, is 404 janitor_run_not_found. Needs environments.read on the environment.
+         */
+        get: operations["getJanitorRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/runs/{runId}/items/{seq}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the crash evidence of a container a janitor run removed
+         * @description Before the janitor removes a container that exited with a code other than 0, it saves why the container stopped (its exit code, error, whether it was killed for memory, when it started and stopped, its image and the node) and the last 200 lines of its log. This answers that evidence for one item of a run. The log lines are masked on a best effort and capped at 32 KiB, and the answer says when the log could not be read or was not kept. An item that has no evidence, a run that does not exist or one of another environment is 404 janitor_evidence_not_found. The evidence is the container's log, so it needs containers.read on the environment, as reading the container's logs does.
+         */
+        get: operations["getJanitorEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/schedule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview a janitor schedule
+         * @description Checks a cron expression and answers the next three times it would run in the server's time zone, with this environment's start offset, so the page shows what a schedule does before it is saved. An expression is valid when the janitor can read it as five fields and no two of its next ten firings are less than 15 minutes apart. An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.
+         */
+        post: operations["previewJanitorSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/janitor/task-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The swarm's task history limit
+         * @description How many finished tasks per slot the swarm keeps (its TaskHistoryRetentionLimit), read live from a manager, with -1 as the manager reports it: the swarm keeps every task. dockerDefault is 5. 409 not_swarm for a standalone host; 503 no_manager when no manager of the swarm answers. Needs environments.read (Viewer) on the environment.
+         */
+        get: operations["getTaskHistoryLimit"];
+        /**
+         * Set the swarm's task history limit
+         * @description Sets how many finished tasks per slot the swarm keeps, a whole number from 0 to 1000; anything else is 422 and nothing is sent. TierPlan reads the swarm's settings and version from a manager, changes only that one setting and sends one update with that version through a manager. It never rotates a join token or the unlock key. Setting the limit the swarm already has answers 200 with changed false and sends and records nothing. A real change is audited as swarm.task_history_limit_changed with the limit it replaced (from) and the one it set (to). The update is never retried: if the swarm changed between the read and the update the answer is 409 swarm_changed and the person tries again. 409 not_swarm for a standalone host; 409 host_read_only when the host's agent is read-only; 503 no_manager when no manager answers; 502 agent_policy_denied when the manager's agent refuses the change by its own policy, which is what an agent older than this server does. Needs janitor.run (Env Admin) on the environment.
+         */
+        put: operations["setTaskHistoryLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -2784,6 +3008,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/janitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Exclude a stack from the janitor, or include it again
+         * @description Sets whether the janitor leaves everything the stack owns alone (excluded true): its containers, matched by the stack's tierplan.stack.id, its swarm namespace or its compose project, are listed as protected (stack_excluded) in what a cleanup would not remove and are never removed, by a schedule or by Clean now, until the stack is included again. The answer also says whether the stack's compose file declares itself kept (declared): that is read from its current definition, stays true whatever this switch says, and keeps the stack's objects protected (stack_declared_keep). The change applies at once and is audited as stack.janitor_excluded or stack.janitor_included; the same value twice writes nothing and records nothing. A stack ID of another environment is 404 stack_not_found, as one that does not exist. Needs janitor.policy (Operator with the extra permission).
+         */
+        put: operations["setStackJanitorExclusion"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/removal-preview": {
         parameters: {
             query?: never;
@@ -3641,6 +3885,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/janitor-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The clean-ups you can follow
+         * @description The janitor runs that are working or ended in the last 10 minutes, newest first, for the header's Jobs list. A run on an environment where you may read (environments.read) is listed, whoever started it, a scheduled one too; a run on any other environment is left out, as if it did not exist. A job that has left the server's history is not listed, and its stream answers 404 janitor_job_not_found; the run is still read from its environment's history.
+         */
+        get: operations["listJanitorJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/local-host": {
         parameters: {
             query?: never;
@@ -4116,6 +4380,50 @@ export interface paths {
          * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http for a host that is not this machine answers 422 insecure_agent_url unless TIERPLAN_AGENT_ALLOW_INSECURE is on, because agents refuse such an address; a loopback or https agent URL, clearing it, and an http public URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
+        trace?: never;
+    };
+    "/api/settings/janitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the instance-wide janitor defaults
+         * @description The settings every environment's janitor follows until the environment sets the field itself (on or off, schedule, how many exited task containers to keep, the grace period and the two opt-ins), how long the run history is kept (retentionDays and retentionRuns), the version a save must send back, the server's time zone and how many environments follow at least one default. Needs settings.read.
+         */
+        get: operations["getJanitorDefaults"];
+        /**
+         * Change the instance-wide janitor defaults
+         * @description Replaces every default and the run-history retention. A change reaches every environment that follows the field and none that sets it itself; nothing is written to an environment. keepN is 0 to 20, graceHours 1 to 720, retentionDays 7 to 3650, retentionRuns 10 to 1000, and the schedule a five-field cron expression that fires no more often than every 15 minutes (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the defaults: a save made against any other version is 409 settings_changed and names who saved last. Lowering the retention deletes the run records it no longer keeps, in every environment, in the same transaction as the new value; the answer's removedRuns says how many, and a run that is waiting or running is never deleted. Use the retention preview to count them first. A save that changes nothing answers 200 and writes nothing. Needs settings.write: an instance admin, not an environment admin or an operator with janitor.policy. A change is audited as janitor.defaults_changed, naming the fields and how many runs were removed.
+         */
+        put: operations["setJanitorDefaults"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/janitor/retention-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count the runs a lower retention would delete
+         * @description Answers how many run records across how many environments saving a retention of days and runs would delete now, by the rule saving applies: a run stays while it is recent enough or among the newest runs of its environment, and a run that is waiting or running is never counted. A retention that does not lower the stored one deletes nothing and answers 0. It only reads. Needs settings.write, as the change it previews does.
+         */
+        get: operations["previewJanitorRetention"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/settings/shells": {
@@ -5063,6 +5371,11 @@ export interface components {
              * @enum {string}
              */
             envType: "swarm" | "standalone";
+            /**
+             * Format: int64
+             * @description The grace the orphan list was judged by, in whole hours: how long a network must have been idle before it is listed. It is the environment's janitor grace (the instance default of 24 hours until the environment or the instance changes it), so this page and the janitor never disagree about whether a network is old enough
+             */
+            graceHours: number;
             /** @description The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none */
             ingress?: components["schemas"]["OverlayUsageBody"];
             /** @description The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the tierplan.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name */
@@ -5085,7 +5398,7 @@ export interface components {
             notMeasured?: "no_manager";
             /** @description The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered */
             notReporting: string[] | null;
-            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time TierPlan saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
+            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for the environment's grace (graceHours), counted from the later of its creation and the last time TierPlan saw it in use; at exactly the grace it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
             orphans: components["schemas"]["OrphanRowBody"][] | null;
             /** @description Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld */
             orphansWithheld?: components["schemas"]["OrphansWithheldBody"];
@@ -7728,6 +8041,713 @@ export interface components {
             /** @description The registry user name; 422 username_required */
             username?: string;
         };
+        JanitorActiveBody: {
+            /** @description The job that does the removing; empty while the run has none yet */
+            jobId: string;
+            /** @description The ID of the run */
+            runId: string;
+            /**
+             * @description waiting: a scheduled run is waiting for a deploy or another operation to free the environment. running: it holds the environment and is working
+             * @enum {string}
+             */
+            state: "waiting" | "running";
+        };
+        JanitorBoolField: {
+            /** @description True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it */
+            overridden: boolean;
+            /** @description The value that applies: the environment's own when it set one, else the instance default */
+            value: boolean;
+        };
+        JanitorDefaultsBody: {
+            /** @description Whether the schedule runs the janitor on an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many environments follow at least one of these defaults, because they set nothing themselves or leave a field to the default
+             */
+            followingEnvironments: number;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720
+             */
+            graceHours: number;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20
+             */
+            keepN: number;
+            /** @description Whether stopped containers no stack or project ever owned are removed too */
+            removeStoppedContainers: boolean;
+            /** @description Whether networks no stack ever owned are removed too */
+            removeUnusedNetworks: boolean;
+            /**
+             * Format: int64
+             * @description How many run records the save removed because it lowered the retention; 0 for a read and for a save that kept every run
+             */
+            removedRuns: number;
+            /**
+             * Format: int64
+             * @description How many days a run stays in the history, 7 to 3650. A run is kept while it is that recent or among the newest retentionRuns runs of its environment, whichever keeps more
+             */
+            retentionDays: number;
+            /**
+             * Format: int64
+             * @description How many of the newest runs of each environment stay in the history, 10 to 1000
+             */
+            retentionRuns: number;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes, read in the server's time zone */
+            schedule: string;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times the defaults were saved, starting at 1. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorDefaultsRequest: {
+            /** @description Whether the schedule runs the janitor on an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720
+             */
+            graceHours: number;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20
+             */
+            keepN: number;
+            /** @description Whether stopped containers no stack or project ever owned are removed too */
+            removeStoppedContainers: boolean;
+            /** @description Whether networks no stack ever owned are removed too */
+            removeUnusedNetworks: boolean;
+            /**
+             * Format: int64
+             * @description How many days a run stays in the history, 7 to 3650. A run is kept while it is that recent or among the newest retentionRuns runs of its environment, whichever keeps more
+             */
+            retentionDays: number;
+            /**
+             * Format: int64
+             * @description How many of the newest runs of each environment stay in the history, 10 to 1000
+             */
+            retentionRuns: number;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes, read in the server's time zone */
+            schedule: string;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /**
+             * Format: int64
+             * @description The version read with the defaults; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorEvidenceBody: {
+            /** @description The engine's last start error, empty for none */
+            error: string;
+            /**
+             * Format: int64
+             * @description The container's exit code, which is not 0
+             */
+            exitCode: number;
+            /**
+             * Format: date-time
+             * @description When the container last stopped; null when the engine reported none
+             */
+            finishedAt: string | null;
+            /** @description The image reference the container was created with */
+            image: string;
+            /** @description The repo@sha256 name of that image on the node, empty when it has none */
+            imageDigest: string;
+            /** @description The ID of the image the container ran */
+            imageId: string;
+            /** @description The last lines of the container's log, oldest first, with the engine's timestamp in front, masked and cut at 2048 characters a line; at most 200 lines and 32 KiB. Draw them as text */
+            logLines: string[] | null;
+            /**
+             * @description saved: the lines are here. empty: the container wrote no log. unavailable: its log driver cannot be read back. cap_reached: the run already holds the most evidence it may, so no log was kept
+             * @enum {string}
+             */
+            logState: "saved" | "empty" | "unavailable" | "cap_reached";
+            /** @description The name of the node the container ran on */
+            node: string;
+            /** @description True when the container was killed for running out of memory */
+            oomKilled: boolean;
+            /**
+             * Format: date-time
+             * @description When the container last started; null when the engine reported none
+             */
+            startedAt: string | null;
+        };
+        JanitorIntField: {
+            /** @description True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it */
+            overridden: boolean;
+            /**
+             * Format: int64
+             * @description The value that applies: the environment's own when it set one, else the instance default
+             */
+            value: number;
+        };
+        JanitorItemBody: {
+            /**
+             * Format: int64
+             * @description How long the object has been stopped or idle, 0 when not known
+             */
+            ageSeconds: number;
+            /**
+             * @description removable: the janitor would remove it now. reported: worth a look, not removed by the policy. protected: kept by a label or a person. grace: stopped or idle for less than the grace period. cant_tell: TierPlan cannot be sure, so it leaves it
+             * @enum {string}
+             */
+            class: "removable" | "reported" | "protected" | "grace" | "cant_tell";
+            name: string;
+            /** @description The node's name */
+            node: string;
+            /** @description The ID of the node the object is on */
+            nodeId: string;
+            reason: components["schemas"]["JanitorReasonBody"];
+            /** @description The engine's ID of the object */
+            ref: string;
+            /**
+             * Format: int64
+             * @description The bytes removing the object frees, null when not known
+             */
+            sizeBytes: number | null;
+            /** @enum {string} */
+            type: "container" | "image" | "network";
+        };
+        JanitorItemRef: {
+            /** @description The ID of the node the object is on, as the preview lists it. Empty for an object that belongs to the whole swarm */
+            nodeId: string;
+            /** @description The engine's ID of the object, as the preview lists it */
+            ref: string;
+            /**
+             * @description The type of the object, as the preview lists it
+             * @enum {string}
+             */
+            type: "container" | "image" | "network";
+        };
+        JanitorJobListBody: {
+            /** @description The clean-ups running or ended in the last 10 minutes on the environments the caller may read, newest first */
+            jobs: components["schemas"]["JanitorJobSummary"][] | null;
+        };
+        JanitorJobSummary: {
+            /** @description Who started it, as a name: the person for Clean now, TierPlan for a scheduled run */
+            by: string;
+            /**
+             * Format: int64
+             * @description How many removals have ended
+             */
+            done: number;
+            /** @description The environment the clean-up runs on */
+            envId: string;
+            /** @description The job ID: follow it at /api/env/{envId}/janitor/runs/{runId}/stream */
+            jobId: string;
+            /** @description The run this job is: open it at /env/{envId}/janitor/runs/{runId} */
+            runId: string;
+            /**
+             * Format: date-time
+             * @description When the job started
+             */
+            startedAt: string;
+            /**
+             * @description Where the job is. It counts the job's items, so it can read failed or partial for a run whose record says completed, because an item the engine kept in use ends failed in the job. Read the run for how it ended
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /**
+             * Format: int64
+             * @description How many removals the run planned, 0 until the plan is known
+             */
+            total: number;
+            /**
+             * @description schedule for a run the schedule started, manual for Clean now
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
+        };
+        JanitorKeepBody: {
+            /**
+             * Format: int64
+             * @description How many objects are newly kept. One that was kept already changes and records nothing and is not counted
+             */
+            kept: number;
+        };
+        JanitorKeepRequest: {
+            /** @description The containers, images and networks to keep, 1 to 100 */
+            targets: components["schemas"]["JanitorKeepTarget"][] | null;
+        };
+        JanitorKeepTarget: {
+            /**
+             * @description What is kept
+             * @enum {string}
+             */
+            kind: "network" | "container" | "image";
+            /** @description The node the container or image is on: the nodeId of its row. For a local network, the node it is on; left out for a swarm-wide network, and when only one node has it */
+            nodeId?: string;
+            /** @description The container's ID, the image's ID, or the network's name (a keep follows the name, so it holds for a network of that name made again) */
+            ref: string;
+        };
+        JanitorKeptBody: {
+            /** @description Every keep of the environment and every container, image and network that carries the keep label, by kind, name and node */
+            items: components["schemas"]["JanitorKeptItem"][] | null;
+        };
+        JanitorKeptItem: {
+            /**
+             * Format: date-time
+             * @description When it was kept; absent when kept by label alone
+             */
+            keptAt?: string;
+            /**
+             * @description label: it carries the tierplan.keep=true label, which only its owner can remove. user: a person kept it
+             * @enum {string}
+             */
+            keptBy: "label" | "user";
+            /** @description The display name of the person who kept it; empty when kept by label or when that person is not known */
+            keptByName: string;
+            /** @enum {string} */
+            kind: "network" | "container" | "image";
+            /** @description What to call it: the container's name, the image's first tag or short ID, the network's name */
+            name: string;
+            /** @description The name of the node the object is on, Cluster for a swarm-wide network, empty for a keep whose object is gone and whose node is not known */
+            node: string;
+            /** @description The node the keep is for: the node's ID for a container, an image or a local network, empty for a swarm-wide network. A container or an image is kept by its ID on any node, so after an agent is enrolled again this can be a node ID the environment no longer has; node then names the node the object is on now */
+            nodeId: string;
+            /** @description True when the object exists now. A keep outlives its object, and a network of the same name made again is still kept */
+            present: boolean;
+            /** @description The container's ID, the image's ID, or the network's name */
+            ref: string;
+        };
+        JanitorNodeBody: {
+            /** @description Whether the janitor cleans this node. Off leaves everything on the node alone, in scheduled runs and in Clean now. Not overridden means it follows the environment */
+            enabled: components["schemas"]["JanitorBoolField"];
+            /** @description How many of the newest exited task containers of a service slot (of a global service on this node) are kept when they are on this node. Not overridden means it follows the environment */
+            keepN: components["schemas"]["JanitorIntField"];
+            /** @description The node's host name */
+            name: string;
+            /** @description The swarm node ID, which the node's settings are stored under and which stays the same when its agent is enrolled again */
+            nodeId: string;
+            /** @description True when an agent on the node is connected now. A node that is not reporting is never cleaned by a run, whatever its settings say */
+            reporting: boolean;
+        };
+        JanitorNodeRequest: {
+            /** @description Whether the janitor cleans this node. False leaves everything on it alone. Null follows the environment */
+            enabled?: boolean | null;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of a service slot are kept when they are on this node, 0 to 20. Null follows the environment
+             */
+            keepN?: number | null;
+        };
+        JanitorPolicyBody: {
+            /** @description The instance defaults every field that is not overridden follows */
+            defaults: components["schemas"]["JanitorPolicyValues"];
+            enabled: components["schemas"]["JanitorBoolField"];
+            graceHours: components["schemas"]["JanitorIntField"];
+            keepN: components["schemas"]["JanitorIntField"];
+            /** @description The nodes of a swarm, by name, each with the two settings a node can set itself (whether the janitor cleans it and how many exited task containers it keeps) and whether it sets them. Empty for a standalone host, and while the swarm's nodes cannot be read */
+            nodes: components["schemas"]["JanitorNodeBody"][] | null;
+            removeStoppedContainers: components["schemas"]["JanitorBoolField"];
+            removeUnusedNetworks: components["schemas"]["JanitorBoolField"];
+            schedule: components["schemas"]["JanitorScheduleField"];
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times this environment's policy was saved, 0 while it has never been. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorPolicyFields: {
+            /** @description Whether the schedule runs the janitor. Null follows the instance default */
+            enabled?: boolean | null;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720. Null follows the instance default
+             */
+            graceHours?: number | null;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20. Null follows the instance default
+             */
+            keepN?: number | null;
+            /** @description Whether stopped containers no stack or project ever owned are removed too. Null follows the instance default */
+            removeStoppedContainers?: boolean | null;
+            /** @description Whether networks no stack ever owned are removed too. Null follows the instance default */
+            removeUnusedNetworks?: boolean | null;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes. Null follows the instance default */
+            schedule?: string | null;
+            /**
+             * @description The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule
+             * @enum {string|null}
+             */
+            schedulePreset?: "hourly" | "every_6h" | "daily" | "weekly" | "custom" | null;
+        };
+        JanitorPolicyRequest: {
+            /** @description Whether the schedule runs the janitor. Null follows the instance default */
+            enabled?: boolean | null;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed, 1 to 720. Null follows the instance default
+             */
+            graceHours?: number | null;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept, 0 to 20. Null follows the instance default
+             */
+            keepN?: number | null;
+            /** @description Whether stopped containers no stack or project ever owned are removed too. Null follows the instance default */
+            removeStoppedContainers?: boolean | null;
+            /** @description Whether networks no stack ever owned are removed too. Null follows the instance default */
+            removeUnusedNetworks?: boolean | null;
+            /** @description A five-field cron expression that fires no more often than every 15 minutes. Null follows the instance default */
+            schedule?: string | null;
+            /**
+             * @description The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule
+             * @enum {string|null}
+             */
+            schedulePreset?: "hourly" | "every_6h" | "daily" | "weekly" | "custom" | null;
+            /**
+             * Format: int64
+             * @description The version read with the policy; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        JanitorPolicyValues: {
+            /** @description Whether the schedule runs the janitor */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many hours an object must have been stopped or idle before it can be removed
+             */
+            graceHours: number;
+            /**
+             * Format: int64
+             * @description How many of the newest exited task containers of each service slot are kept
+             */
+            keepN: number;
+            /** @description Whether stopped containers no stack or project ever owned are removed too */
+            removeStoppedContainers: boolean;
+            /** @description Whether networks no stack ever owned are removed too */
+            removeUnusedNetworks: boolean;
+            /** @description The five-field cron expression */
+            schedule: string;
+            /** @enum {string} */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+        };
+        JanitorPreviewBody: {
+            /** @description What the janitor would remove now, ordered by type (container, network, image), then node, name and ID */
+            items: components["schemas"]["JanitorItemBody"][] | null;
+            /** @description True when no network was judged because a node that could hold an attachment did not report */
+            networksWithheld: boolean;
+            /**
+             * Format: int64
+             * @description How many nodes reported and were checked
+             */
+            nodesChecked: number;
+            /** @description What the janitor looked at and left, with the class and reason, in the same order */
+            notRemoved: components["schemas"]["JanitorItemBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the preview was made
+             */
+            previewedAt: string;
+            summary: components["schemas"]["JanitorSummaryBody"];
+            /** @description The nodes that did not report. None of their objects is listed, and nothing is judged that depends on them */
+            withheldNodes: string[] | null;
+        };
+        JanitorPreviewRequest: {
+            /** @description Candidate settings of swarm nodes, by swarm node ID, each exactly as saving that node would store it. A node named here is judged by these settings instead of the ones it has saved (a field that is null or left out follows the environment); a node not named keeps its saved settings. Use it to preview switching a node on or lowering its keep-N before saving. Nothing is saved */
+            nodes?: {
+                [key: string]: components["schemas"]["JanitorNodeRequest"];
+            };
+            /** @description A candidate policy: the settings this environment would set itself if it were saved, exactly as a save would store them. A field that is null or left out follows the instance default, so the preview shows what a save of these fields would remove, whatever the environment has saved now. Omit it to preview the saved policy. Nothing is saved */
+            policy?: components["schemas"]["JanitorPolicyFields"];
+        };
+        JanitorReasonBody: {
+            /**
+             * Format: int64
+             * @description How long the object has been stopped or idle
+             */
+            ageSeconds?: number;
+            /**
+             * @description A stable word the SPA maps to its own copy
+             * @enum {string}
+             */
+            code: "task_beyond_keep" | "task_service_gone" | "stack_gone" | "compose_project_gone" | "compose_oneoff" | "stopped_standalone" | "dangling_image" | "network_orphaned" | "network_unused" | "opt_in_off_containers" | "opt_in_off_networks" | "lone_compose_container" | "kept_label" | "kept_row" | "stack_excluded" | "stack_declared_keep" | "younger_than_grace" | "node_not_reporting" | "networks_withheld" | "stack_unknown" | "inspect_capped" | "clock_skew" | "task_labels_missing" | "services_unread" | "node_disabled" | "node_unmapped";
+            /** @description The node a global service's group is on */
+            node?: string;
+            /** @description The compose project the object is labelled with */
+            project?: string;
+            /**
+             * Format: int64
+             * @description The container's place among the exited containers of its group, 1 for the oldest
+             */
+            rank?: number;
+            /**
+             * Format: int64
+             * @description How much of the grace period is left, for an item held back by grace
+             */
+            remainingSeconds?: number;
+            /** @description The swarm service of a task container */
+            service?: string;
+            /** @description The replica slot of a replicated service's task container. Empty for a global service */
+            slot?: string;
+            /** @description The swarm stack the object is labelled with */
+            stack?: string;
+        };
+        JanitorRetentionBody: {
+            /**
+             * Format: int64
+             * @description A run is kept while it started within this many days
+             */
+            days: number;
+            /**
+             * Format: int64
+             * @description A run is also kept while it is among this many newest runs of the environment, whichever of the two keeps more
+             */
+            runs: number;
+        };
+        JanitorRetentionPreviewBody: {
+            /**
+             * Format: int64
+             * @description How many environments those runs belong to
+             */
+            environments: number;
+            /**
+             * Format: int64
+             * @description How many run records saving this retention would delete now, across all environments
+             */
+            runs: number;
+        };
+        JanitorRunBody: {
+            /** @description Who started it: the user's ID, or the name of the system for a scheduled run */
+            actor: string;
+            /** @description The display name of the person who started it; for a scheduled run, the name of the system */
+            actorName: string;
+            counts: components["schemas"]["JanitorRunCountsBody"];
+            /**
+             * Format: int64
+             * @description The bytes the removals freed that were known. Null when no size was known, which is not zero
+             */
+            estBytes: number | null;
+            /**
+             * Format: date-time
+             * @description When the run ended; null while it is working
+             */
+            finishedAt: string | null;
+            /** @description The ID of this run */
+            id: string;
+            /** @description Every item the run attempted, in the order it attempted them */
+            items: components["schemas"]["JanitorRunItemBody"][] | null;
+            /** @description The job that did the removing; empty until it exists */
+            jobId: string;
+            /**
+             * @description Why a run did not complete; empty when it did
+             * @enum {string}
+             */
+            reason: "" | "deploy_in_progress" | "server_restarted" | "no_node_reporting" | "failed";
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * @description completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "completed" | "partial" | "skipped" | "failed";
+            /**
+             * @description schedule for a run the schedule started, manual for Clean now
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
+        };
+        JanitorRunCountsBody: {
+            /**
+             * Format: int64
+             * @description Items whose removal errored
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description Selected items the run left alone: in use, kept by a label or no longer stale
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @description Containers the run removed
+             */
+            removedContainers: number;
+            /**
+             * Format: int64
+             * @description Images the run removed
+             */
+            removedImages: number;
+            /**
+             * Format: int64
+             * @description Networks the run removed
+             */
+            removedNetworks: number;
+            /**
+             * Format: int64
+             * @description Items not sent because their node was not connected
+             */
+            skippedOffline: number;
+        };
+        JanitorRunItemBody: {
+            /** @description A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, evidence_unsaved, agent_policy_denied, host_read_only, node_unreachable or action_failed */
+            code: string;
+            /** @description True when the run saved the crash evidence of this container before removing it; read it from the item's evidence route */
+            hasEvidence: boolean;
+            name: string;
+            /** @description The node's name */
+            node: string;
+            /** @description The ID of the node the object was on */
+            nodeId: string;
+            /**
+             * @description How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed, or evidence_unsaved when a crashed container's evidence could not be saved and so the container was kept
+             * @enum {string}
+             */
+            outcome: "removed" | "refused_in_use" | "skipped_protected" | "skipped_node_offline" | "error";
+            /** @description Why the run selected it. For a ticked item the fresh plan did not list, the reason the planner gave for leaving it, and an empty code when the planner did not look at it */
+            reason: components["schemas"]["JanitorReasonBody"];
+            /** @description The engine's ID of the object */
+            ref: string;
+            /**
+             * Format: int64
+             * @description 1 for the first item the run attempted, counting up
+             */
+            seq: number;
+            /**
+             * Format: int64
+             * @description The bytes removing the object frees, null when not known
+             */
+            sizeBytes: number | null;
+            /** @enum {string} */
+            type: "container" | "image" | "network";
+        };
+        JanitorRunListBody: {
+            /** @description The runs, newest first by the time they started and then by ID, at most limit of them, without their items */
+            runs: components["schemas"]["JanitorRunSummaryBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many runs the environment has on record, which is at least the number listed. Old runs are pruned: a run is kept while it started within 90 days or is among the newest 100
+             */
+            total: number;
+        };
+        JanitorRunRequest: {
+            /** @description The items ticked in the preview, 1 to 5000. Only those that are still removable when the run has taken the environment's lock are removed */
+            items: components["schemas"]["JanitorItemRef"][] | null;
+        };
+        JanitorRunStartedBody: {
+            /** @description The job that does the removing: follow it in the jobs list, one item for each removal */
+            jobId: string;
+            /** @description The ID of this run */
+            runId: string;
+        };
+        JanitorRunSummaryBody: {
+            /** @description Who started it: the user's ID, or the name of the system for a scheduled run */
+            actor: string;
+            /** @description The display name of the person who started it; TierPlan for a scheduled run */
+            actorName: string;
+            counts: components["schemas"]["JanitorRunCountsBody"];
+            /**
+             * Format: int64
+             * @description How long the run took, from when it started to when it ended; null while it is waiting or working
+             */
+            durationSeconds: number | null;
+            /**
+             * Format: int64
+             * @description The bytes the removals freed that were known. Null when no size was known, which is not zero
+             */
+            estBytes: number | null;
+            /**
+             * Format: date-time
+             * @description When the run ended; null while it is waiting or working
+             */
+            finishedAt: string | null;
+            /** @description The ID of this run */
+            id: string;
+            /** @description The job that did the removing; empty until it exists */
+            jobId: string;
+            /**
+             * @description Why a run did not complete; empty when it did
+             * @enum {string}
+             */
+            reason: "" | "deploy_in_progress" | "server_restarted" | "no_node_reporting" | "failed";
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * @description completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "completed" | "partial" | "skipped" | "failed";
+            /**
+             * @description schedule for a run the schedule started, manual for Clean now
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
+        };
+        JanitorScheduleField: {
+            /** @description True when this environment set the schedule itself. False means it follows the instance default */
+            overridden: boolean;
+            /**
+             * @description The preset the expression came from; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The five-field cron expression that applies, read in the server's time zone */
+            value: string;
+        };
+        JanitorStatusBody: {
+            /** @description The run that is waiting or working. Absent when there is none */
+            active?: components["schemas"]["JanitorActiveBody"];
+            /** @description Whether the schedule runs the janitor on this environment */
+            enabled: boolean;
+            /** @description The newest run that has ended, whatever started it. Absent when there is none */
+            lastRun?: components["schemas"]["JanitorRunSummaryBody"];
+            /**
+             * Format: date-time
+             * @description When the next scheduled run starts, in the server's time zone, including this environment's start offset of up to 10 minutes. Null when the janitor is off or the schedule cannot be used
+             */
+            nextRunAt: string | null;
+            retention: components["schemas"]["JanitorRetentionBody"];
+            /** @description The cron expression, read in the server's time zone */
+            schedule: string;
+            /**
+             * @description The preset the expression came from; custom for one written by hand
+             * @enum {string}
+             */
+            schedulePreset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+        };
+        JanitorSummaryBody: {
+            /**
+             * Format: int64
+             * @description How many containers the janitor would remove
+             */
+            containers: number;
+            /**
+             * Format: int64
+             * @description The space the removable items hold, the sum of the sizes that are known. Null when no size is known, which is not zero: the estimate is unavailable
+             */
+            estBytes: number | null;
+            /**
+             * Format: int64
+             * @description How many images the janitor would remove
+             */
+            images: number;
+            /**
+             * Format: int64
+             * @description How many networks the janitor would remove
+             */
+            networks: number;
+        };
         KeepBody: {
             /**
              * Format: int64
@@ -9446,6 +10466,23 @@ export interface components {
             /** @description The display names of the nodes that run its tasks of this image, in name order */
             nodes: string[] | null;
         };
+        SchedulePreviewBody: {
+            /** @description The next three runs in the server's time zone, with this environment's start offset; empty when the expression is not valid */
+            nextRuns: string[] | null;
+            /**
+             * @description Why it is not accepted: invalid when it is not a five-field cron expression the janitor can use, too_frequent when two of its next ten firings are less than 15 minutes apart. Empty when valid
+             * @enum {string}
+             */
+            problem: "" | "invalid" | "too_frequent";
+            /** @description The server's time zone the expression is read in */
+            timezone: string;
+            /** @description Whether the janitor accepts the expression */
+            valid: boolean;
+        };
+        SchedulePreviewRequest: {
+            /** @description A five-field cron expression, such as 0 3 * * * */
+            schedule: string;
+        };
         ScheduleRunBody: {
             /**
              * Format: date-time
@@ -10613,6 +11650,8 @@ export interface components {
             hasDraft: boolean;
             /** @description The stack ID */
             id: string;
+            /** @description Whether the stack is excluded from the janitor: excluded is set by PUT .../stacks/{stackId}/janitor, declared is read from the stack's compose file (x-tierplan: {keep: true}) */
+            janitor: components["schemas"]["StackJanitorBody"];
             /** @description When the newest successful deploy ended, RFC 3339 UTC; empty when there is none */
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
@@ -11292,6 +12331,16 @@ export interface components {
             /** @description Set on an unmanaged stack only: what was found about it */
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
+        StackJanitorBody: {
+            /** @description True when the stack's own compose file says x-tierplan: {keep: true} at the top level. That keeps everything the stack owns out of every cleanup too, and only the file can undo it: the switch does not */
+            declared: boolean;
+            /** @description True when the switch excludes the stack from the janitor: everything it owns is left alone by every cleanup until it is included again */
+            excluded: boolean;
+        };
+        StackJanitorRequest: {
+            /** @description True to exclude the stack from the janitor, false to include it again */
+            excluded: boolean;
+        };
         StackJobBody: {
             /** @description Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys */
             commit?: string;
@@ -11471,10 +12520,12 @@ export interface components {
             /** @description The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting */
             jobId: string;
             /**
-             * @description What the operation is
+             * @description What the operation is. janitor is the janitor cleaning the environment: it names no stack, so stackId and stackName are empty and runId names the run
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt";
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt" | "janitor";
+            /** @description Left out unless the kind is janitor: the janitor run that holds the lock, which GET .../janitor/runs/{runId} reads */
+            runId?: string;
             /** @description The stack the running operation is on */
             stackId: string;
             /** @description Its name */
@@ -12531,6 +13582,43 @@ export interface components {
             name: string;
             /** @description The platforms of the tag, with the same limit as the digest */
             platforms?: components["schemas"]["PlatformBody"][] | null;
+        };
+        TaskHistoryBody: {
+            /**
+             * Format: int64
+             * @description The limit Docker uses when none was set
+             */
+            dockerDefault: number;
+            /** @description True when the limit is negative, so the swarm never removes a finished task */
+            keepsAll: boolean;
+            /**
+             * Format: int64
+             * @description How many finished tasks per slot (per node for a global service) the swarm keeps, as the manager reports it. -1 means it keeps every task and removes none; Docker's default when none was set is 5
+             */
+            limit: number;
+        };
+        TaskHistoryChangeBody: {
+            /** @description True when this request changed the limit. False when the swarm already had the limit asked for: nothing was sent to it and nothing was audited */
+            changed: boolean;
+            /**
+             * Format: int64
+             * @description The limit Docker uses when none was set
+             */
+            dockerDefault: number;
+            /** @description True when the limit is negative, so the swarm never removes a finished task */
+            keepsAll: boolean;
+            /**
+             * Format: int64
+             * @description How many finished tasks per slot (per node for a global service) the swarm keeps, as the manager reports it. -1 means it keeps every task and removes none; Docker's default when none was set is 5
+             */
+            limit: number;
+        };
+        TaskHistoryRequest: {
+            /**
+             * Format: int64
+             * @description How many finished tasks per slot the swarm keeps, a whole number from 0 to 1000. Anything else is 422
+             */
+            limit: number;
         };
         TaskItem: {
             /** @description The task's container ID on its node; empty until it has one */
@@ -16120,6 +17208,579 @@ export interface operations {
             };
         };
     };
+    getJanitorStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listJanitorKeeps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorKeptBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    keepJanitorItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorKeepRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorKeepBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unkeepJanitorItem: {
+        parameters: {
+            query: {
+                /** @description What is kept */
+                kind: "network" | "container" | "image";
+                /** @description The node the keep is for: the nodeId of its row. Left out for a swarm-wide network, and when only one node has the object */
+                nodeId?: string;
+                /** @description The container's ID, the image's ID, or the network's name */
+                ref: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setJanitorNodePolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the nodeId of a node of the policy answer */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorNodeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorNodeBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resetJanitorNodePolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm node ID: the nodeId of a node of the policy answer */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorNodeBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorPolicyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setJanitorPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorPolicyBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewJanitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["JanitorPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listJanitorRuns: {
+        parameters: {
+            query?: {
+                /** @description How many runs to answer, 25 to 100. The newest come first */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRunListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    startJanitorRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRunStartedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The ID of the run, as Clean now or the schedule gave it */
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRunBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The ID of the run, as Clean now or the schedule gave it */
+                runId: string;
+                /** @description The item's sequence number in the run, as the run lists it */
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorEvidenceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewJanitorSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SchedulePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getTaskHistoryLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskHistoryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setTaskHistoryLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskHistoryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskHistoryChangeBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listNetworks: {
         parameters: {
             query?: {
@@ -19043,6 +20704,45 @@ export interface operations {
             };
         };
     };
+    setStackJanitorExclusion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackJanitorRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackJanitorBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     removalPreview: {
         parameters: {
             query?: never;
@@ -20844,6 +22544,36 @@ export interface operations {
             };
         };
     };
+    listJanitorJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorJobListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getLocalHost: {
         parameters: {
             query?: never;
@@ -21744,6 +23474,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setJanitorDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorDefaultsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewJanitorRetention: {
+        parameters: {
+            query: {
+                /** @description The days to count for, 7 to 3650 */
+                days: number;
+                /** @description The runs per environment to count for, 10 to 1000 */
+                runs: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRetentionPreviewBody"];
                 };
             };
             /** @description Error */

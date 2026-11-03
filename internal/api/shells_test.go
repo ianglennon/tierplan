@@ -63,7 +63,12 @@ func newShellFixOn(t *testing.T, cfg dockertest.FakeConfig, tune func(*envFix)) 
 	// A write goes only to a node the monitor has seen online.
 	awaitOnline(t, f.mon, e.ID)
 	srv := httptest.NewServer(f.h)
-	t.Cleanup(srv.Close)
+	// Close waits for every handler, then the server lets go of the router: this cleanup
+	// stays reachable after the test ends (see newAuthFixture).
+	t.Cleanup(func() {
+		srv.Close()
+		srv.Config.Handler = nil
+	})
 	return &shellFix{envFix: f, env: e, srv: srv}
 }
 

@@ -480,7 +480,7 @@ func NormalizeComposeService(svc types.ServiceConfig, img ImageDefaults, rc Runn
 
 	// Labels: the SDK's and TierPlan's own labels, and the image's, are not the file's.
 	for k, v := range svc.Labels {
-		if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "tierplan.") {
+		if strings.HasPrefix(k, "com.docker.compose.") || IsOwnershipLabel(k) {
 			continue
 		}
 		if iv, ok := img.Labels[k]; ok && iv == v {

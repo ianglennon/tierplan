@@ -335,3 +335,31 @@ func TestRoundTripWithPlatforms(t *testing.T) {
 		}
 	}
 }
+
+// TestRebuildSwarmKeepsKeepLabel: adopting a service that carries tierplan.keep=true writes the label into the rebuilt
+// file, on the service and on its containers, because it is the user's opt-out from the janitor (JAN-07). TierPlan's own
+// labels are still left out.
+func TestRebuildSwarmKeepsKeepLabel(t *testing.T) {
+	t.Parallel()
+	svc := coreService()
+	svc.Spec.Labels[stacks.LabelKeep] = "true"
+	svc.Spec.TaskTemplate.ContainerSpec.Labels[stacks.LabelKeep] = "true"
+
+	res, err := rebuild.Swarm(rebuild.SwarmInput{Namespace: "shop", Services: []rebuild.SwarmService{svc}})
+	if err != nil {
+		t.Fatalf("Swarm: %v", err)
+	}
+
+	got := res.Project.Services["web"]
+	if got.Labels[stacks.LabelKeep] != "true" {
+		t.Errorf("service labels = %v, want tierplan.keep=true kept", got.Labels)
+	}
+	if got.Deploy == nil || got.Deploy.Labels[stacks.LabelKeep] != "true" {
+		t.Errorf("deploy = %+v, want tierplan.keep=true kept on the service's own labels", got.Deploy)
+	}
+	for _, labels := range []types.Labels{got.Labels, got.Deploy.Labels} {
+		if _, ok := labels[stacks.LabelStackID]; ok {
+			t.Errorf("labels = %v, want tierplan.stack.id dropped", labels)
+		}
+	}
+}

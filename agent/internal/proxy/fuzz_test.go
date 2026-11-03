@@ -135,6 +135,8 @@ var oracle = []oracleEntry{
 	oEntry("GET", `nodes/`+oID, nil),
 	// A node remove takes no key at all: force is never sent.
 	oEntry("DELETE", `nodes/`+oID, nil),
+	// A swarm update: the version and a spec body, and no key that rotates a token or the unlock key.
+	{method: "POST", path: rx(oVer + `swarm/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	// A node update: a version and a node spec body.
 	{method: "POST", path: rx(oVer + `nodes/` + oID + `/update$`), body: true, keys: map[string]*regexp.Regexp{"version": rx(`^[0-9]{1,20}$`)}},
 	{method: "POST", path: rx(oVer + `services/create$`), body: true},
@@ -249,6 +251,15 @@ func FuzzAllowed(f *testing.F) {
 		{"POST", "/services/web/update", "version=12", true, true, false},
 		{"POST", "/services/create", "", true, false, false},
 		{"DELETE", "/services/web", "", false, false, false},
+		{"POST", "/swarm/update", "version=1", true, false, false},
+		{"POST", "/v1.56/swarm/update", "version=12", true, false, false},
+		{"POST", "/swarm/update", "version=1&rotateWorkerToken=true", true, false, false},
+		{"POST", "/swarm/update", "version=1&rotateManagerUnlockKey=1", true, false, false},
+		{"POST", "/swarm/update", "", true, false, false},
+		{"POST", "/swarm/update", "version=1", false, false, false},
+		{"POST", "/swarm/update", "version=1", true, false, true},
+		{"GET", "/swarm", "", false, false, false},
+		{"GET", "/swarm/unlockkey", "", false, false, false},
 		{"GET", "/secrets", "", false, false, false},
 		{"GET", "/secrets", "filters=%7B%7D", false, false, false},
 		{"HEAD", "/v1.56/secrets", "", false, false, true},

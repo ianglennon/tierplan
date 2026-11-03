@@ -5,6 +5,7 @@ package envs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -438,4 +439,235 @@ func TestRecheckIsFresh(t *testing.T) {
 	}
 	as.ForgetOrphans(envID)
 	wantRows(t, orphans(t, as, envID))
+}
+
+// Judge (plan 11-08, JAN-04): every network of the environment, whatever its class, from a fresh read.
+
+func judgeLines(rep JudgeReport) []string {
+	out := []string{}
+	for _, r := range rep.Rows {
+		line := fmt.Sprintf("%s@%s=%s", r.Name, r.Node, r.Class)
+		if r.KeptByLabel {
+			line += "+label"
+		}
+		if r.KeptByRow {
+			line += "+row"
+		}
+		out = append(out, line)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestJudgeReportsEveryClass(t *testing.T) {
+	r, envID, as := standaloneOrphans(t, func(now time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "k1", Name: "kept_label", Driver: "bridge", Scope: "local", Labels: map[string]string{"tierplan.keep": "true"}}),
+			oldNet(dockertest.FakeNetwork{ID: "k2", Name: "kept_row", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "o1", Name: "shop_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}}),
+			oldNet(dockertest.FakeNetwork{ID: "u1", Name: "loose", Driver: "bridge", Scope: "local"}),
+			{ID: "g1", Name: "new", Driver: "bridge", Scope: "local", Created: now.Add(-time.Hour)},
+		}
+	})
+	agg, _, err := r.agg.Snapshot(testsupport.Context(t), envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Q.InsertNetworkKeep(testsupport.Context(t), sqlc.InsertNetworkKeepParams{
+		EnvID: envID, NodeID: agg.Networks[0].NodeID, Name: "kept_row", KeptBy: "u1", KeptAt: orphanEpoch.UnixNano(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := as.Judge(testsupport.Context(t), envID)
+	if err != nil {
+		t.Fatalf("Judge: %v", err)
+	}
+	want := []string{
+		"bridge@edge-1=excluded", "kept_label@edge-1=kept+label", "kept_row@edge-1=kept+row", "loose@edge-1=unused",
+		"new@edge-1=grace", "shop_default@edge-1=orphaned",
+	}
+	if got := judgeLines(rep); !slices.Equal(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+	if !rep.Complete || len(rep.WithheldNodes) != 0 || len(rep.WithheldStacks) != 0 || rep.ManagerMissing {
+		t.Errorf("report = %+v, want a complete check with nothing withheld", rep)
+	}
+	for _, row := range rep.Rows {
+		if row.Name == "shop_default" && (row.FormerOwner != "shop" || row.FormerOwnerKind != "project" || row.IdleSince.IsZero()) {
+			t.Errorf("orphaned row = %+v, want the former project shop and when it went idle", row.OrphanRow)
+		}
+	}
+	// Judging is not listing: it neither reads nor fills the report Orphans keeps.
+	e := as.entry(envID)
+	e.omu.Lock()
+	cached := e.haveOrphans
+	e.omu.Unlock()
+	if cached {
+		t.Error("Judge filled the cache of the orphan list")
+	}
+}
+
+func TestJudgeWithheldWhileANodeIsOut(t *testing.T) {
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i != 4 {
+			c.Networks = []dockertest.FakeNetwork{
+				oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"}),
+				oldNet(dockertest.FakeNetwork{ID: "br", Name: "bridge", Driver: "bridge", Scope: "local"}),
+			}
+		}
+	})
+	f.kick(t, f.w)
+	if err := f.c.Refresh(testsupport.Context(t), f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := as.Judge(testsupport.Context(t), f.env.ID)
+	if err != nil {
+		t.Fatalf("Judge: %v", err)
+	}
+	if rep.Complete || !slices.Equal(rep.WithheldNodes, []string{"wrk-1"}) {
+		t.Fatalf("report = %+v, want the check incomplete and wrk-1 named", rep)
+	}
+	if got := judgeLines(rep); !slices.Contains(got, "loose@Cluster=cant_tell") || slices.Contains(got, "loose@Cluster=unused") {
+		t.Errorf("rows = %v, want the swarm network held back as cant_tell", got)
+	}
+}
+
+func TestJudgeManagerMissing(t *testing.T) {
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i != 4 {
+			c.Networks = []dockertest.FakeNetwork{oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"})}
+		}
+	})
+	for _, m := range f.m {
+		m.fake.LoseQuorum()
+	}
+	rep, err := as.Judge(testsupport.Context(t), f.env.ID)
+	if err != nil {
+		t.Fatalf("Judge: %v", err)
+	}
+	if rep.Complete || !rep.ManagerMissing || len(rep.WithheldNodes) != 0 {
+		t.Errorf("report = %+v, want a missing manager and no node named", rep)
+	}
+}
+
+// An environment's grace (plan 11-25, D-20, JAN-04): the orphan check judges by the grace its source
+// gives, so the Address space list and the janitor change together. No source, or a source that
+// fails, is the 24 hours of Phase 10.
+
+// graceSource makes a GraceSource that answers g and err, and counts the calls it gets.
+func graceSource(g time.Duration, err error, calls *int) GraceSource {
+	return func(context.Context, string) (time.Duration, error) {
+		if calls != nil {
+			*calls++
+		}
+		return g, err
+	}
+}
+
+// graceNets are an engine's bridge and two networks that have been idle 30 hours and 20 hours.
+func graceNets(now time.Time) []dockertest.FakeNetwork {
+	return []dockertest.FakeNetwork{
+		{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Created: now.Add(-72 * time.Hour)},
+		{ID: "n30", Name: "idle30", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}, Created: now.Add(-30 * time.Hour)},
+		{ID: "n20", Name: "idle20", Driver: "bridge", Scope: "local", Subnets: []string{"172.31.0.0/24"}, Created: now.Add(-20 * time.Hour)},
+	}
+}
+
+func TestOrphansDefaultGraceWhenUnset(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, graceNets)
+	rep := orphans(t, as, envID)
+	wantRows(t, rep, "idle30@edge-1=unused")
+	if rep.Grace != netspace.GracePeriod {
+		t.Errorf("grace = %v, want the default of 24h when no source is set", rep.Grace)
+	}
+
+	// A source that answers nothing usable is the default too.
+	for _, g := range []time.Duration{0, -time.Hour} {
+		as.WithGrace(graceSource(g, nil, nil))
+		forgetReport(as, envID)
+		rep = orphans(t, as, envID)
+		wantRows(t, rep, "idle30@edge-1=unused")
+		if rep.Grace != netspace.GracePeriod {
+			t.Errorf("grace = %v for a source answering %v, want 24h", rep.Grace, g)
+		}
+	}
+}
+
+func TestOrphansGraceSourceError(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, graceNets)
+	var calls int
+	as.WithGrace(graceSource(720*time.Hour, errors.New("the policy store is down"), &calls))
+	rep := orphans(t, as, envID)
+	wantRows(t, rep, "idle30@edge-1=unused")
+	if rep.Grace != netspace.GracePeriod || !rep.Complete {
+		t.Errorf("report = %+v, want the check to answer, complete, with the 24h default", rep)
+	}
+	if calls != 1 {
+		t.Errorf("source called %d times for one check, want once", calls)
+	}
+	// Judge answers too, and says which grace it used.
+	j, err := as.Judge(testsupport.Context(t), envID)
+	if err != nil || j.Grace != netspace.GracePeriod || len(j.Rows) == 0 {
+		t.Errorf("Judge = %+v, %v, want an answer judged by 24h", j, err)
+	}
+}
+
+func TestOrphansEnvironmentGraceMovesTheList(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, graceNets)
+	grace := 48 * time.Hour
+	var calls int
+	as.WithGrace(func(context.Context, string) (time.Duration, error) { calls++; return grace, nil })
+
+	rep := orphans(t, as, envID)
+	wantRows(t, rep)
+	if rep.Grace != 48*time.Hour {
+		t.Errorf("grace = %v, want 48h", rep.Grace)
+	}
+	// The report is kept for the TTL; the change shows once it is dropped.
+	grace = 12 * time.Hour
+	wantRows(t, orphans(t, as, envID))
+	as.ForgetOrphans(envID)
+	rep = orphans(t, as, envID)
+	wantRows(t, rep, "idle20@edge-1=unused", "idle30@edge-1=unused")
+	if rep.Grace != 12*time.Hour {
+		t.Errorf("grace = %v, want 12h after the change", rep.Grace)
+	}
+}
+
+func TestRecheckUsesGrace(t *testing.T) {
+	ctx := testsupport.Context(t)
+	_, envID, as := standaloneOrphans(t, graceNets)
+	grace := 48 * time.Hour
+	as.WithGrace(func(context.Context, string) (time.Duration, error) { return grace, nil })
+
+	// A network the list held back for its grace is held back by the re-check too.
+	wantRows(t, orphans(t, as, envID))
+	_, class, err := as.Recheck(ctx, envID, "n30", "")
+	if err != nil || class != netspace.ClassGrace {
+		t.Fatalf("Recheck with a 48h grace = %q, %v, want grace", class, err)
+	}
+	// The grace is read again by every re-check, so a change shows without waiting for the list.
+	grace = 24 * time.Hour
+	_, class, err = as.Recheck(ctx, envID, "n30", "")
+	if err != nil || class != netspace.ClassUnused {
+		t.Fatalf("Recheck with a 24h grace = %q, %v, want unused", class, err)
+	}
+	_, class, err = as.Recheck(ctx, envID, "n20", "")
+	if err != nil || class != netspace.ClassGrace {
+		t.Fatalf("Recheck of the 20h network with a 24h grace = %q, %v, want grace", class, err)
+	}
+}
+
+// At exactly the grace a network is listed, as in Phase 10; a nanosecond short of it, it is not.
+func TestGraceBoundaryListed(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, func(now time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Created: now.Add(-72 * time.Hour)},
+			{ID: "exact", Name: "exact", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}, Created: now.Add(-48 * time.Hour)},
+			{ID: "short", Name: "short", Driver: "bridge", Scope: "local", Subnets: []string{"172.31.0.0/24"}, Created: now.Add(-48*time.Hour + time.Nanosecond)},
+		}
+	})
+	as.WithGrace(graceSource(48*time.Hour, nil, nil))
+	wantRows(t, orphans(t, as, envID), "exact@edge-1=unused")
 }

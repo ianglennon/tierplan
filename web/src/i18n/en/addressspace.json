@@ -130,12 +130,18 @@
     },
     "orphans": {
       "title": "Orphaned and unused networks",
-      "caption": "TierPlan lists a network here when nothing has used it for 24 hours. It looks at every service, every task and every node before it decides.",
+      "caption_one": "TierPlan lists a network here when nothing has used it for {{count, number}} hour. It looks at every service, every task and every node before it decides.",
+      "caption_other": "TierPlan lists a network here when nothing has used it for {{count, number}} hours. It looks at every service, every task and every node before it decides.",
+      "janitor": {
+        "note": "The janitor removes orphaned networks on its schedule.",
+        "link": "Open janitor"
+      },
       "tableLabel": "Orphaned and unused networks",
       "loading": "Loading orphaned and unused networks",
       "empty": {
         "title": "No orphaned or unused networks",
-        "body": "TierPlan lists a network here when nothing has used it for 24 hours."
+        "body_one": "TierPlan lists a network here when nothing has used it for {{count, number}} hour.",
+        "body_other": "TierPlan lists a network here when nothing has used it for {{count, number}} hours."
       },
       "groups": {
         "orphaned": {
@@ -168,7 +174,8 @@
       },
       "onNode": "on {{node}}",
       "idle": {
-        "seen": "The last time TierPlan saw this network in use. TierPlan waits 24 hours after that, or after the network was created, before it lists it.",
+        "seen_one": "The last time TierPlan saw this network in use. TierPlan waits {{count, number}} hour after that, or after the network was created, before it lists it.",
+        "seen_other": "The last time TierPlan saw this network in use. TierPlan waits {{count, number}} hours after that, or after the network was created, before it lists it.",
         "created": "TierPlan hasn't seen this network in use. This is when it was created.",
         "about": "About idle since"
       },

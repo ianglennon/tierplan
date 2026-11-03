@@ -21,21 +21,26 @@ UPDATE stacks SET adoption = json_remove(adoption, '$.pending') WHERE id = ?;
 
 -- name: GetStack :one
 -- A stack is always looked up by its environment and ID, so an ID of another environment is not found.
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption, janitor_excluded
 FROM stacks WHERE env_id = ? AND id = ?;
 
 -- name: ListStacksByEnv :many
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption, janitor_excluded
 FROM stacks WHERE env_id = ? ORDER BY name;
 
 -- name: GetStackByName :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption, janitor_excluded
 FROM stacks WHERE env_id = ? AND name = ?;
 
 -- name: SetStackStopped :execrows
 -- A person stopped the stack (1) or it was started or deployed again (0). The stack is looked up by its ID alone: the
 -- caller read it by environment and ID first.
 UPDATE stacks SET stopped = ? WHERE id = ?;
+
+-- name: SetStackJanitorExcluded :execrows
+-- A person excluded the stack from the janitor (1) or included it again (0). The caller read the stack by environment and
+-- ID first, and writes nothing when the value is the one already stored.
+UPDATE stacks SET janitor_excluded = ? WHERE id = ?;
 
 -- name: DeleteStack :execrows
 -- Removing a stack deletes its definition: the snapshots, their files and variables, and its operations go with it

@@ -314,7 +314,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	if h, ok := d.Locks.Held(env.ID); ok {
 		rv.Problems = append(rv.Problems, stacks.Problem{
 			Severity: stacks.SeverityError, Code: problemOperationLocked,
-			Message: "Another stack operation is running on " + env.Name + ": " + h.StackName + ", started " + rfc3339(h.Started) + ".",
+			Message: holderSentence(env.Name, h) + ", started " + rfc3339(h.Started) + ".",
 		})
 	}
 	// The running service's settings, and what was changed outside the stack, are withheld from a caller who may not

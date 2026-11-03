@@ -116,6 +116,7 @@ type addressSpace struct {
 	NotMeasured       string           `json:"notMeasured"`
 	Pools             []addressPool    `json:"pools"`
 	NotReporting      []string         `json:"notReporting"`
+	GraceHours        int              `json:"graceHours"`
 }
 
 func TestAddressSpaceRoute(t *testing.T) {

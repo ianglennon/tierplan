@@ -8,11 +8,20 @@ import (
 	"time"
 )
 
+// HolderKindJanitor is the Kind of the Holder of a janitor run (Phase 11). Such a holder names no
+// stack, so its StackID and StackName are empty and its RunID names the run; a message that names
+// the holder says the janitor is cleaning the environment.
+const HolderKindJanitor = "janitor"
+
 // Holder is who holds an environment's operation lock: the stack, the job that runs the operation,
 // what it is (deploy, update, rollback, start, stop or remove), who started it and when.
+//
+// A janitor run (Kind HolderKindJanitor) names no stack: it names the run it is, in RunID.
 type Holder struct {
 	StackID, StackName, JobID, Kind, By string
-	Started                             time.Time
+	// RunID is the janitor run that holds the lock, empty for every other Kind.
+	RunID   string
+	Started time.Time
 }
 
 // OperationLock lets one stack operation at a time run on an environment (STK-09, T-07-87). A

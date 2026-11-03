@@ -252,6 +252,8 @@ func (f *exportFixture) seedExcluded(t *testing.T) {
 	f.exec(t, `INSERT INTO stacks (id, env_id, name, target, source_kind, created_by, created_at)
 		VALUES ('stack-1', 'env-1', 'web', 'standalone', 'inline', 'u1', 1)`)
 	f.exec(t, `INSERT INTO stack_git_state (stack_id) VALUES ('stack-1')`)
+	// When the janitor first saw an image without a name is derived: a restored instance starts the clock again.
+	f.exec(t, `INSERT INTO image_dangling_seen (env_id, node_id, image_id, first_seen_at) VALUES ('env-1', 'env-1', 'sha256:a', 1)`)
 }
 
 func (f *exportFixture) liveCount(t *testing.T, table string) int {

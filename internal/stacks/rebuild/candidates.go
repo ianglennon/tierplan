@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
+
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // VolumeInfo is a volume of the host as the engine inspects it: what the file needs to write it.
@@ -22,11 +24,11 @@ type VolumeInfo struct {
 func engineName(project, key string) string { return project + "_" + key }
 
 // userObjectLabels are the labels a person put on a network or a volume: not the SDK's own
-// (com.docker.compose.*), TierPlan's, or the engine's mark of an anonymous volume.
+// (com.docker.compose.*), TierPlan's (not the user's tierplan.keep), or the engine's mark of an anonymous volume.
 func userObjectLabels(in map[string]string) types.Labels {
 	var out types.Labels
 	for k, v := range in {
-		if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "tierplan.") || k == "com.docker.volume.anonymous" {
+		if strings.HasPrefix(k, "com.docker.compose.") || stacks.IsOwnershipLabel(k) || k == "com.docker.volume.anonymous" {
 			continue
 		}
 		if out == nil {

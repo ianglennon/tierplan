@@ -299,6 +299,8 @@ type StackDetail struct {
 	CreatedBy string `json:"createdBy" doc:"Who created the stack"`
 	CreatedAt string `json:"createdAt" doc:"When it was created, RFC 3339 UTC"`
 	Stopped   bool   `json:"stopped" doc:"True while the stack is stopped"`
+	// Janitor says whether the stack is excluded from the janitor.
+	Janitor StackJanitorBody `json:"janitor" doc:"Whether the stack is excluded from the janitor: excluded is set by PUT .../stacks/{stackId}/janitor, declared is read from the stack's compose file (x-tierplan: {keep: true})"`
 	// DraftSavedAt and DraftSavedBy say who last saved the draft that holds changes not yet deployed.
 	DraftSavedAt string `json:"draftSavedAt" doc:"When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft"`
 	DraftSavedBy string `json:"draftSavedBy" doc:"Who saved it, as a name; empty when there is no such draft"`
@@ -325,7 +327,8 @@ type StackLockBody struct {
 	StackID   string `json:"stackId" doc:"The stack the running operation is on"`
 	StackName string `json:"stackName" doc:"Its name"`
 	JobID     string `json:"jobId" doc:"The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting"`
-	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt" doc:"What the operation is"`
+	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt,janitor" doc:"What the operation is. janitor is the janitor cleaning the environment: it names no stack, so stackId and stackName are empty and runId names the run"`
+	RunID     string `json:"runId,omitempty" doc:"Left out unless the kind is janitor: the janitor run that holds the lock, which GET .../janitor/runs/{runId} reads"`
 	StartedAt string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
 	StartedBy string `json:"startedBy" doc:"Who started it, as a name"`
 }
@@ -620,7 +623,14 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	detail := StackDetail{
 		StackItem: stackItemOf(newStackReads(ctx, d, st.EnvID), st, latest, hasLatest, like, hasLike, g, hasG, draft.Pending),
 		EnvID:     st.EnvID, SourceRef: st.Source.Ref, CreatedBy: st.CreatedBy, CreatedAt: rfc3339(st.CreatedAt), Stopped: st.Stopped,
+		Janitor: StackJanitorBody{Excluded: st.JanitorExcluded},
 	}
+	// A stack that declares itself kept (x-tierplan: {keep: true}) says so from its current definition.
+	decl, err := (stackops.JanitorFacts{Repo: repo}).ExclusionOf(ctx, st)
+	if err != nil {
+		return StackDetail{}, err
+	}
+	detail.Janitor.Declared = decl.Declared
 	if draft.Pending {
 		detail.DraftSavedAt, detail.DraftSavedBy = rfc3339(draft.At), draft.By
 	}
@@ -662,7 +672,7 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 // lockBody is the holder of an environment's operation lock as the answers show it.
 func lockBody(h stackops.Holder) *StackLockBody {
 	return &StackLockBody{
-		StackID: h.StackID, StackName: h.StackName, JobID: h.JobID, Kind: h.Kind,
+		StackID: h.StackID, StackName: h.StackName, JobID: h.JobID, Kind: h.Kind, RunID: h.RunID,
 		StartedAt: rfc3339(h.Started), StartedBy: h.By,
 	}
 }

@@ -4,6 +4,7 @@
 package rebuild_test
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
 )
 
@@ -159,5 +161,36 @@ func TestCandidatesWriteTheNameOnlyWhenItIsNotTheProjects(t *testing.T) {
 	}
 	if y := yamlOf(t, vols[0]); strings.Contains(y, "name") {
 		t.Errorf("a volume named as the project names it is written with a name:\n%s", y)
+	}
+}
+
+// TestCandidatesKeepKeepLabel: a network or volume that carries tierplan.keep=true keeps the label when it is rebuilt
+// as a declaration, so adopting the stack does not drop the user's opt-out (JAN-07). The bookkeeping labels of TierPlan
+// and the SDK are still left out.
+func TestCandidatesKeepKeepLabel(t *testing.T) {
+	t.Parallel()
+	labels := map[string]string{
+		"com.docker.compose.project": "shop", "tierplan.stack.id": "x", stacks.LabelKeep: "true", "team": "web",
+	}
+	want := types.Labels{stacks.LabelKeep: "true", "team": "web"}
+
+	nets := rebuild.NetworkCandidates(rebuild.NetworkInfo{ID: "n1", Name: "shop_back", Driver: "bridge", Labels: labels}, "shop", "back")
+	if len(nets) == 0 {
+		t.Fatal("no network candidates")
+	}
+	for i, c := range nets {
+		if !maps.Equal(c.Labels, want) {
+			t.Errorf("network candidate %d labels = %v, want %v", i, c.Labels, want)
+		}
+	}
+
+	vol := rebuild.VolumeCandidates(rebuild.VolumeInfo{Name: "shop_data", Driver: "local", Labels: labels}, "shop", "data")
+	if len(vol) == 0 {
+		t.Fatal("no volume candidates")
+	}
+	for i, c := range vol {
+		if !maps.Equal(c.Labels, want) {
+			t.Errorf("volume candidate %d labels = %v, want %v", i, c.Labels, want)
+		}
 	}
 }

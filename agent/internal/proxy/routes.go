@@ -42,6 +42,10 @@ const (
 	// BodyArchive is PUT /containers/{id}/archive. Unlike every other kind it is not JSON: the
 	// body is a tar of one regular file, judged by validateArchive and forwarded as received.
 	BodyArchive
+	// BodySwarmUpdate is POST /swarm/update. It is judged against the swarm spec the agent's own
+	// engine reports: the body must equal that spec in every field but the task history retention
+	// limit, and what is forwarded is that spec with the one field replaced (swarmupdate.go).
+	BodySwarmUpdate
 )
 
 // route is one thing the agent forwards: a method, an anchored path, the query
@@ -159,7 +163,7 @@ var serviceLogKeys = map[string]*regexp.Regexp{
 // read-only flag, so no entry can reach a write on a read-only host (D-35).
 //
 // GET /swarm is deliberately absent: its answer carries the swarm join tokens,
-// which are credentials to add nodes. The cluster ID is read from /info on a
+// which are credentials to add nodes. The cluster ID and the swarm spec are read from /info on a
 // manager instead. A container create is forwarded through a closed-shape body validator and
 // the container host policy (containerpolicy.go), because the Compose SDK that deploys a
 // standalone stack creates containers. A write into a container's filesystem (archive) is forwarded
@@ -195,6 +199,18 @@ var routes = []route{
 	{
 		name: "node update", method: http.MethodPost, path: pathOf(`nodes/` + idShape + `/update`),
 		query: map[string]*regexp.Regexp{"version": versionValue}, body: BodyNodeSpec,
+	},
+
+	// The one change to a swarm the agent forwards: the task history retention limit. The only key
+	// is the object version just read. rotateWorkerToken, rotateManagerToken and
+	// rotateManagerUnlockKey are absent on purpose, so a server cannot rotate a join token or the
+	// unlock key through an agent, and the body validator refuses a spec that differs from the
+	// engine's own in anything but the limit (swarmupdate.go). Nothing else under /swarm is
+	// forwarded: GET /swarm stays absent because its answer holds the join tokens.
+	{
+		name: "swarm update", method: http.MethodPost, path: pathOf(`swarm/update`),
+		query: map[string]*regexp.Regexp{"version": versionValue}, required: []string{"version"},
+		body: BodySwarmUpdate,
 	},
 
 	// One service: the inspect (matched after the list, so GET /services is never

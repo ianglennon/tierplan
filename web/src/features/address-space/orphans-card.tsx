@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { Link } from "@tanstack/react-router";
 import { Ellipsis, Info, Pin, Trash2 } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
 
@@ -58,6 +59,9 @@ export function groupOrphans(rows: readonly OrphanRow[]): OrphanGroups {
 }
 
 // The key of one row: a local network is judged per node, so the node is part of it.
+// The grace an environment has until it sets its own (the janitor's default, and the orphan check's).
+export const DEFAULT_GRACE_HOURS = 24;
+
 export const orphanKey = (r: Pick<OrphanRow, "networkId" | "nodeId">) =>
   `${r.networkId}|${r.nodeId}`;
 
@@ -71,6 +75,9 @@ interface OrphansCardProps {
   // Present when the check could not judge every network.
   withheld?: OrphansWithheld | undefined;
   swarm: boolean;
+  // How many hours a network must have been idle before it is listed: the environment's janitor
+  // grace, as the address space answers it. 24 until the page has read it.
+  graceHours?: number;
 }
 
 // Who a Can't tell yet row is waiting for: the nodes that did not report.
@@ -79,9 +86,9 @@ function waitingFor(withheld: OrphansWithheld | undefined): string[] {
 }
 
 // IdleSinceCell is how long a network has been idle, with the words that say what idle means.
-function IdleSinceCell({ row }: { row: OrphanRow }) {
+function IdleSinceCell({ row, graceHours }: { row: OrphanRow; graceHours: number }) {
   const t = useT();
-  const words = t(`addressSpace.orphans.idle.${row.idleSinceSource}`);
+  const words = t(`addressSpace.orphans.idle.${row.idleSinceSource}`, { count: graceHours });
   return (
     <span className="flex items-center gap-1">
       <RelativeTime value={row.idleSince} />
@@ -128,10 +135,17 @@ const keepTargetOf = (r: OrphanRow): KeepTarget => ({
   ...(r.scope === "local" ? { nodeId: r.nodeId } : {}),
 });
 
-// OrphansCard is "Orphaned and unused networks": what the server found that nothing has used for 24
-// hours, in three groups, with Keep and Delete… per row and in bulk (NET-04). It only renders: the
+// OrphansCard is "Orphaned and unused networks": what the server found that nothing has used for the
+// environment's grace (24 hours unless the janitor policy says otherwise), in three groups, with Keep and Delete… per row and in bulk (NET-04). It only renders: the
 // server decided every class, and decides again before it deletes.
-export function OrphansCard({ envId, envName, orphans, withheld, swarm }: OrphansCardProps) {
+export function OrphansCard({
+  envId,
+  envName,
+  orphans,
+  withheld,
+  swarm,
+  graceHours = DEFAULT_GRACE_HOURS,
+}: OrphansCardProps) {
   const t = useT();
   const manage = useNeeds("networks.manage", envId);
   const keepNeeds = useNeeds("networks.keep", envId);
@@ -237,14 +251,28 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
             onClear={selection.clear}
           />
         ) : (
-          <CardDescription>{t("addressSpace.orphans.caption")}</CardDescription>
+          <CardDescription>
+            {t("addressSpace.orphans.caption", { count: graceHours })}
+          </CardDescription>
         )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <p className="text-sm text-muted-foreground">
+          {t("addressSpace.orphans.janitor.note")}{" "}
+          <Link
+            to="/env/$envId/janitor"
+            params={{ envId }}
+            className="rounded-sm text-accent-ink underline underline-offset-3"
+          >
+            {t("addressSpace.orphans.janitor.link")}
+          </Link>
+        </p>
         {empty ? (
           <div className="flex flex-col gap-1 rounded-xl border p-6 text-center">
             <h3 className="text-base font-semibold">{t("addressSpace.orphans.empty.title")}</h3>
-            <p className="text-sm text-muted-foreground">{t("addressSpace.orphans.empty.body")}</p>
+            <p className="text-sm text-muted-foreground">
+              {t("addressSpace.orphans.empty.body", { count: graceHours })}
+            </p>
           </div>
         ) : (
           <div className="relative max-h-[70svh] overflow-x-auto overflow-y-auto rounded-xl ring-1 ring-foreground/10">
@@ -340,6 +368,7 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
                             key={orphanKey(row)}
                             row={row}
                             swarm={swarm}
+                            graceHours={graceHours}
                             checked={selection.isSelected(orphanKey(row))}
                             onToggle={(shift) => selection.toggle(orphanKey(row), { shift })}
                             waitingReason={waitingReason}
@@ -382,6 +411,7 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
 interface OrphanTableRowProps {
   row: OrphanRow;
   swarm: boolean;
+  graceHours: number;
   checked: boolean;
   onToggle: (shift: boolean) => void;
   // Why a Can't tell yet row cannot be chosen.
@@ -396,6 +426,7 @@ interface OrphanTableRowProps {
 function OrphanTableRow({
   row,
   swarm,
+  graceHours,
   checked,
   onToggle,
   waitingReason,
@@ -441,7 +472,7 @@ function OrphanTableRow({
       </TableCell>
       <TableCell className={cn(CELL, "min-w-36")}>{former}</TableCell>
       <TableCell className={cn(CELL, "w-40 min-w-40")}>
-        <IdleSinceCell row={row} />
+        <IdleSinceCell row={row} graceHours={graceHours} />
       </TableCell>
       <TableCell className={cn(CELL, "w-12 text-end")}>
         <DropdownMenu>

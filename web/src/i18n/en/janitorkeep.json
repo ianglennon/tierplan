@@ -1,0 +1,49 @@
+{
+  "janitorKeep": {
+    "row": {
+      "keep": "Keep",
+      "keepLabel": "Keep {{name}}",
+      "actions": "Actions",
+      "kept": "Keeping {{name}}. The janitor won't list it again.",
+      "failed": "Couldn't keep {{name}}. Try again."
+    },
+    "list": {
+      "trigger": "Kept items ({{count, number}})",
+      "caption": "The janitor never removes these. Networks you kept also appear on Address space.",
+      "tableLabel": "Kept items",
+      "columns": {
+        "type": "Type",
+        "name": "Name",
+        "node": "Node",
+        "keptBy": "Kept by",
+        "keptSince": "Kept since",
+        "actions": "Actions"
+      },
+      "by": {
+        "label": "A label on the object",
+        "user": "{{user}} in TierPlan",
+        "unknown": "Someone in TierPlan"
+      },
+      "absent": "Not there now",
+      "stop": "Stop keeping",
+      "stopLabel": "Stop keeping {{name}}",
+      "done": "No longer keeping {{name}}.",
+      "failed": "Couldn't stop keeping {{name}}. Try again.",
+      "notKept": "{{name}} isn't being kept any more.",
+      "labelReason": "Kept by the tierplan.keep label on the object. Remove the label from your compose file to stop keeping it.",
+      "stackReason": "Kept because stack {{stack}} is excluded from the janitor. Change that on the stack's Overview."
+    },
+    "stack": {
+      "title": "Janitor",
+      "switch": "Exclude this stack from the janitor",
+      "helper": "The janitor then leaves everything this stack owns alone: its containers, networks and images. Turn this on for a stack whose old containers you want to keep.",
+      "badge": "Excluded",
+      "saving": "Saving",
+      "declared": "This stack's compose file sets tierplan.keep=true, so the janitor already skips it.",
+      "declaredReason": "This stack's compose file sets tierplan.keep=true, so the janitor already skips it. Remove the label to change this.",
+      "excluded": "{{name}} is excluded from the janitor.",
+      "included": "{{name}} is included in the janitor again.",
+      "failed": "Couldn't change the janitor setting for {{name}}."
+    }
+  }
+}

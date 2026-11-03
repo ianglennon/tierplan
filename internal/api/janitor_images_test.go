@@ -1,0 +1,159 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+)
+
+// The janitor's images (plan 11-10, JAN-05, D-07). A fake daemon behind the real monitor and
+// aggregator; the janitor judges images by its strict dangling rule and removes them by the Images
+// page's own code.
+
+// imageIDOf is a full image ID built from one hex digit.
+func imageIDOf(digit string) string { return "sha256:" + strings.Repeat(digit, 64) }
+
+// janitorImageEngine is a standalone host holding the given images and nothing else.
+func janitorImageEngine(images ...dockertest.FakeImage) dockertest.FakeConfig {
+	cfg := orphanEngine()
+	cfg.Images = images
+	return cfg
+}
+
+// imageAge is the Created of an image that is ago old at the fixture's clock.
+func imageAge(ago time.Duration) int64 { return janitorNow.Add(-ago).Unix() }
+
+// agedDanglingEnv is dashEnv with the janitor's clock of every image of cfg started 72 hours before the
+// fixture's clock, as if a snapshot had first seen each without a name then, so a dangling image of cfg is
+// past the grace period the first time the test previews.
+func agedDanglingEnv(t *testing.T, cfg dockertest.FakeConfig) (*envFix, envBody) {
+	t.Helper()
+	f, e := dashEnv(t, cfg)
+	for _, img := range cfg.Images {
+		if _, err := f.st.Write.ExecContext(testsupport.Context(t),
+			`INSERT INTO image_dangling_seen (env_id, node_id, image_id, first_seen_at) VALUES (?, ?, ?, ?)`,
+			e.ID, e.ID, img.ID, janitorNow.Add(-72*time.Hour).UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f, e
+}
+
+// The tracer: an untagged, undigested image past the grace period that no container uses is in the
+// preview, and Clean now removes it through the Images page's code, once and without force.
+func TestJanitorRemovesDanglingImage(t *testing.T) {
+	t.Parallel()
+	id := imageIDOf("a")
+	f, e := agedDanglingEnv(t, janitorImageEngine(dockertest.FakeImage{ID: id, Size: 4096, Created: imageAge(72 * time.Hour)}))
+	preview := f.previewJanitor(t, e)
+	if len(preview.Items) != 1 || preview.Summary.Images != 1 {
+		t.Fatalf("preview items = %+v summary = %+v, want the one dangling image", preview.Items, preview.Summary)
+	}
+	it := preview.Items[0]
+	if it.Type != "image" || it.Ref != id || it.Class != "removable" || it.Reason.Code != "dangling_image" || it.SizeBytes == nil || *it.SizeBytes != 4096 {
+		t.Fatalf("item = %+v, want the image removable dangling_image holding 4096 bytes", it)
+	}
+	if preview.Summary.EstBytes == nil || *preview.Summary.EstBytes != 4096 {
+		t.Errorf("estimate = %v, want 4096", preview.Summary.EstBytes)
+	}
+
+	job, _ := f.cleanNow(t, e, it)
+	if job.State != jobs.JobDone || len(job.Items) != 1 || job.Items[0].State != jobs.ItemDone || job.Items[0].Kind != "image" {
+		t.Fatalf("job = %s items %+v, want a done job with one done image", job.State, job.Items)
+	}
+	deletes := f.fake.Writes()
+	if len(deletes) != 1 || !strings.HasPrefix(deletes[0], "DELETE /images/"+id) || strings.Contains(deletes[0], "force") {
+		t.Fatalf("writes = %v, want exactly one DELETE of the image, with no force", deletes)
+	}
+	if after := f.previewJanitor(t, e); len(after.Items) != 0 {
+		t.Errorf("preview after = %+v, want the image gone", after.Items)
+	}
+}
+
+// The janitor's strict rule is checked on the image as the node has it inside the write call, not
+// on the list read a moment before (WR-01, Pitfall 7): an image listed as dangling that has gained a
+// tag, a real digest or a tierplan.keep label by the time it is inspected is refused as no longer
+// stale, and no delete reaches the engine.
+func TestJanitorImageRecheckedOnTheNode(t *testing.T) {
+	t.Parallel()
+	for name, changed := range map[string]func(*dockertest.FakeImage){
+		"tagged":   func(fi *dockertest.FakeImage) { fi.RepoTags = []string{"app:2"} },
+		"digested": func(fi *dockertest.FakeImage) { fi.RepoDigests = []string{"app@" + imageIDOf("b")} },
+		"kept":     func(fi *dockertest.FakeImage) { fi.Labels = map[string]string{"tierplan.keep": "true"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			listed := danglingImage("a")
+			now := listed
+			changed(&now)
+			cfg := janitorImageEngine(listed)
+			cfg.InspectImages = map[string]dockertest.FakeImage{listed.ID: now}
+			f, e := agedDanglingEnv(t, cfg)
+			if preview := f.previewJanitor(t, e); len(preview.Items) != 1 || preview.Items[0].Ref != listed.ID {
+				t.Fatalf("preview items = %+v, want the listed image removable", preview.Items)
+			}
+			eng := api.NewJanitorEngine(f.agg, f.clusters, nil, janitor.KeepStore{St: f.st}, nil)
+			if err := eng.RemoveImage(testsupport.Context(t), e.ID, e.ID, listed.ID); !errors.Is(err, janitor.ErrNoLongerStale) {
+				t.Fatalf("RemoveImage of an image that is no longer dangling = %v, want ErrNoLongerStale", err)
+			}
+			if w := f.fake.Writes(); len(w) != 0 {
+				t.Fatalf("writes = %v, want none: an image that is no longer dangling is never sent to the engine", w)
+			}
+		})
+	}
+}
+
+// An engine that lists a dangling image with the placeholders <none>:<none> and <none>@<none> lists
+// it as having no name, and the remover reads the placeholders the way the planner does (WR-02): the
+// image the preview lists as removable is removed, by its ID alone, and never refused as not
+// dangling run after run.
+func TestJanitorRemovesDanglingImageWithPlaceholders(t *testing.T) {
+	t.Parallel()
+	img := danglingImage("a")
+	img.RepoTags, img.RepoDigests = []string{"<none>:<none>"}, []string{"<none>@<none>"}
+	f, e := agedDanglingEnv(t, janitorImageEngine(img))
+	preview := f.previewJanitor(t, e)
+	if len(preview.Items) != 1 || preview.Items[0].Ref != img.ID || preview.Items[0].Class != "removable" {
+		t.Fatalf("preview items = %+v, want the image removable", preview.Items)
+	}
+	job, started := f.cleanNow(t, e, preview.Items[0])
+	if job.State != jobs.JobDone || len(job.Items) != 1 || job.Items[0].State != jobs.ItemDone {
+		run := f.runRecord(t, e, started.RunID)
+		t.Fatalf("job = %s items %+v run items %v, want the image removed", job.State, job.Items, runItems(run))
+	}
+	if w := f.fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0], "DELETE /images/"+img.ID) {
+		t.Fatalf("writes = %v, want one DELETE of the image by its ID and no untag of a placeholder", w)
+	}
+}
+
+// An image's grace period runs from when the janitor first saw it without a name, not from when it was built
+// (WR-07): an image built 90 days ago that has just lost its tag to a newer build is held for the whole grace
+// period on first sight, and is removable once it has been seen dangling for that long.
+func TestJanitorImageGraceFromWhenItLostItsName(t *testing.T) {
+	t.Parallel()
+	img := danglingImage("a")
+	img.Created = imageAge(90 * 24 * time.Hour)
+	f, e := dashEnv(t, janitorImageEngine(img))
+	preview := f.previewJanitor(t, e)
+	it, ok := notRemovedRef(preview, img.ID)
+	if len(preview.Items) != 0 || !ok || it.Class != "grace" || it.Reason.Code != "younger_than_grace" || it.Reason.RemainingSeconds != int64((24*time.Hour).Seconds()) {
+		t.Fatalf("preview items = %+v, image %+v (listed %v), want it held by grace for the whole 24 h on first sight", preview.Items, it, ok)
+	}
+	if _, err := f.st.Write.ExecContext(testsupport.Context(t),
+		`UPDATE image_dangling_seen SET first_seen_at = ? WHERE env_id = ? AND image_id = ?`, janitorNow.Add(-24*time.Hour).UnixNano(), e.ID, img.ID); err != nil {
+		t.Fatal(err)
+	}
+	if after := f.previewJanitor(t, e); len(after.Items) != 1 || after.Items[0].Ref != img.ID || after.Items[0].Class != "removable" {
+		t.Fatalf("preview items = %+v, want the image removable once seen dangling for 24 h", after.Items)
+	}
+}

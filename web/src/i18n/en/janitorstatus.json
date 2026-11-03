@@ -1,0 +1,110 @@
+{
+  "janitorStatus": {
+    "schedule": {
+      "hourly": "Hourly",
+      "every6h": "Every 6 hours",
+      "daily": "Daily at {{time}}",
+      "weekly": "Weekly on {{day}} at {{time}}",
+      "custom": "On the schedule {{cron}}",
+      "line": "{{summary}}, server time ({{timezone}})."
+    },
+    "status": {
+      "heading": "Janitor status",
+      "loading": "Loading the janitor status",
+      "state": {
+        "caption": "State",
+        "on": "On",
+        "off": "Off",
+        "running": "Running now",
+        "waiting": "Waiting for a deploy",
+        "offDetail": "Nothing is removed until you turn it on."
+      },
+      "last": {
+        "caption": "Last run",
+        "never": "Hasn't run yet",
+        "nothing": "Nothing needed removing.",
+        "open": "Open run, {{outcome}}"
+      },
+      "next": {
+        "caption": "Next run",
+        "none": "—",
+        "offDetail": "Turn the janitor on to schedule runs.",
+        "unusable": "This schedule can't be used, so no run is scheduled.",
+        "spread": "The start is spread out a little per environment so many environments don't run at once."
+      }
+    },
+    "history": {
+      "title": "Run history",
+      "caption": "Every run, with what it removed and why. Kept for {{days, number}} days or the last {{runs, number}} runs, whichever keeps more.",
+      "tableCaption": "Run history",
+      "loading": "Loading the run history",
+      "columns": {
+        "started": "Started",
+        "trigger": "Trigger",
+        "outcome": "Outcome",
+        "removed": "Removed",
+        "space": "Space freed",
+        "duration": "Duration"
+      },
+      "openRun": "Open run from {{time}}",
+      "trigger": {
+        "schedule": "Scheduled",
+        "manual": "Clean now",
+        "by": "by {{name}}"
+      },
+      "removedNone": "Nothing removed",
+      "neverStarted": "Didn't start",
+      "none": "—",
+      "runs_one": "{{count, number}} run",
+      "runs_other": "{{count, number}} runs",
+      "showMore": "Show 25 more",
+      "empty": {
+        "title": "No runs yet",
+        "body": "The first scheduled run is {{when}}. To see what it would remove right now, choose Clean now.",
+        "bodyOff": "The janitor is off, so no run is scheduled. To see what it would remove right now, choose Clean now.",
+        "bodyNoStatus": "To see what it would remove right now, choose Clean now."
+      }
+    },
+    "rules": {
+      "trigger": "What the janitor removes and never touches",
+      "removes": {
+        "heading": "Removes, on its own",
+        "tasks": "Exited task containers beyond the newest {{keep, number}} per service slot.",
+        "standalone": "On a standalone host: exited containers of a compose project that no longer exists, and exited one-off compose run containers.",
+        "images": "Dangling images: untagged, used by no container on that node, and older than {{grace}}.",
+        "networks": "Orphaned networks: the stack that created them no longer exists."
+      },
+      "reports": {
+        "heading": "Only reports, until you opt in",
+        "networks": "Unused networks.",
+        "containers": "Containers someone stopped by hand."
+      },
+      "never": {
+        "heading": "Never touches",
+        "volumes": "Volumes of any kind.",
+        "running": "Running, paused, restarting or created containers.",
+        "cache": "Build cache.",
+        "kept": "Anything labelled tierplan.keep=true, anything you chose Keep on, and everything a stack that is excluded from the janitor owns.",
+        "deploy": "Anything while a deploy is running in this environment."
+      },
+      "labelBefore": "To protect something, add the label ",
+      "labelAfter": " to it in your compose file. To protect something that already exists and can't be relabelled, choose Keep on it in a preview."
+    },
+    "card": {
+      "title": "Janitor",
+      "loading": "Loading the janitor",
+      "error": "Couldn't read the janitor.",
+      "on": "On, {{summary}}",
+      "off": "Off",
+      "running": "Running now",
+      "waiting": "Waiting for a deploy",
+      "never": "Hasn't run yet",
+      "firstRun": "First run {{when}}.",
+      "failedItems_one": "{{count, number}} item failed in the last run.",
+      "failedItems_other": "{{count, number}} items failed in the last run.",
+      "offline_one": "{{count, number}} item was skipped: its node wasn't reporting.",
+      "offline_other": "{{count, number}} items were skipped: their node wasn't reporting.",
+      "open": "Open janitor"
+    }
+  }
+}

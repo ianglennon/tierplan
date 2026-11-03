@@ -199,6 +199,78 @@ func TestKeepNetworks(t *testing.T) {
 	}
 }
 
+// janitorKeeps reads the janitor_keeps rows of one environment straight from the table, so a test
+// sees where a keep is stored and not what the API says about it.
+func (f *envFix) janitorKeeps(t *testing.T, envID string) []keepRow {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT kind, node_id, ref, name, kept_by FROM janitor_keeps WHERE env_id = ? ORDER BY ref`, envID)
+	if err != nil {
+		t.Fatalf("read janitor_keeps: %v", err)
+	}
+	defer rows.Close()
+	var out []keepRow
+	for rows.Next() {
+		var r keepRow
+		if err := rows.Scan(&r.Kind, &r.NodeID, &r.Ref, &r.Name, &r.KeptBy); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+type keepRow struct{ Kind, NodeID, Ref, Name, KeptBy string }
+
+// TestKeepNetworkLandsInJanitorKeeps: a network kept on the Address space page is one
+// janitor_keeps row of kind network whose ref is the network's name, the kept list shows it, and
+// stopping the keep removes the row (D-12, one table for every keep).
+func TestKeepNetworkLandsInJanitorKeeps(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, orphanEngine(idleNet("a1", "alpha"), idleNet("b1", "beta")))
+	if got := f.janitorKeeps(t, e.ID); len(got) != 0 {
+		t.Fatalf("janitor_keeps before any keep = %+v", got)
+	}
+
+	if rec := f.keep(t, e, `{"targets":[{"name":"alpha"}]}`); rec.code != http.StatusOK {
+		t.Fatalf("keep: %d %s", rec.code, rec.body)
+	}
+	rows := f.janitorKeeps(t, e.ID)
+	if len(rows) != 1 {
+		t.Fatalf("janitor_keeps = %+v, want one row", rows)
+	}
+	if r := rows[0]; r.Kind != "network" || r.Ref != "alpha" || r.Name != "alpha" || r.KeptBy == "" {
+		t.Fatalf("janitor_keeps row = %+v, want kind network with the network's name as ref", r)
+	}
+	s := f.space(t, e)
+	if len(s.Kept) != 1 || s.Kept[0].Name != "alpha" {
+		t.Fatalf("kept list = %+v, want alpha", s.Kept)
+	}
+	if got := orphanNames(s); !slices.Equal(got, []string{"beta"}) {
+		t.Fatalf("orphans = %v, want only beta", got)
+	}
+
+	// A second keep of the same network keeps the first row.
+	if rec := f.keep(t, e, `{"targets":[{"name":"alpha"}]}`); rec.code != http.StatusOK {
+		t.Fatalf("second keep: %d %s", rec.code, rec.body)
+	}
+	if got := f.janitorKeeps(t, e.ID); len(got) != 1 || got[0] != rows[0] {
+		t.Fatalf("janitor_keeps after a second keep = %+v, want the first row unchanged", got)
+	}
+
+	if rec := f.unkeep(t, e, "alpha", ""); rec.code != http.StatusNoContent {
+		t.Fatalf("unkeep: %d %s", rec.code, rec.body)
+	}
+	if got := f.janitorKeeps(t, e.ID); len(got) != 0 {
+		t.Fatalf("janitor_keeps after the unkeep = %+v, want none", got)
+	}
+	if s := f.space(t, e); len(s.Kept) != 0 {
+		t.Fatalf("kept list after the unkeep = %+v", s.Kept)
+	}
+}
+
 func TestUnkeepNetwork(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, orphanEngine(idleNet("a1", "alpha")))
@@ -534,5 +606,42 @@ func TestDeleteOrphanNeedsEnvAdmin(t *testing.T) {
 	}
 	if len(f.fake.Writes()) != 0 || len(f.networkAudits(t)) != 0 {
 		t.Fatalf("a refused request wrote %v or audited %d rows", f.fake.Writes(), len(f.networkAudits(t)))
+	}
+}
+
+// The refactor that lets the janitor remove a network by the same code changed nothing for the
+// Address space page: the route answers as before and every audit row still says orphan_cleanup.
+func TestDeleteOrphanSourceUnchanged(t *testing.T) {
+	t.Parallel()
+	cfg := orphanEngine(idleNet("idle1", "idle"), idleNet("idle2", "busy"))
+	f, e := dashEnv(t, cfg)
+	if got := orphanNames(f.space(t, e)); !slices.Equal(got, []string{"busy", "idle"}) {
+		t.Fatalf("orphans = %v", got)
+	}
+	rec := f.delOrphan(t, e, "idle1", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if got := decode[orphanDeleteBody](t, rec); got.Outcome != "deleted" || got.Reason != "" || got.Name != "idle" {
+		t.Fatalf("body = %+v, want deleted idle", got)
+	}
+	// Something attached to the other after the list was read: kept, with the same body as ever.
+	cfg.Containers = []dockertest.FakeContainer{{ID: "c1", Names: []string{"/late"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"busy": {NetworkID: "idle2"}}}}
+	f.fake.Reconfigure(cfg)
+	wantKept(t, f.delOrphan(t, e, "idle2", ""), "in_use_again", "busy")
+
+	rows := f.networkAudits(t)
+	var actions []string
+	for _, r := range rows {
+		actions = append(actions, r.Action+" "+r.Result)
+		if r.Details["source"] != "orphan_cleanup" {
+			t.Errorf("%s of %s has source %q, want orphan_cleanup", r.Action, r.Details["name"], r.Details["source"])
+		}
+	}
+	want := []string{
+		audit.ActionNetworkInspectSaved + " success", audit.ActionNetworkRemoved + " success", audit.ActionNetworkRemoved + " failure",
+	}
+	if !slices.Equal(actions, want) {
+		t.Fatalf("audit = %v, want %v", actions, want)
 	}
 }

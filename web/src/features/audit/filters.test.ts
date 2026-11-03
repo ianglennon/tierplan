@@ -136,6 +136,153 @@ describe("actionLabel (networks)", () => {
   });
 });
 
+// real is a small stand-in for i18next that reads the same audit.json the screen does: it walks the dotted key,
+// picks _one or _other from a count, and fills {{name}} style variables. Echo cannot check wording.
+function real(key: string, options: Record<string, unknown> = {}): string {
+  const node = (path: string): unknown =>
+    path.split(".").reduce<unknown>((acc, part) => (acc as Record<string, unknown>)?.[part], audit);
+  let value = node(key);
+  if (value === undefined && typeof options.count === "number") {
+    value = node(`${key}_${options.count === 1 ? "one" : "other"}`);
+  }
+  if (typeof value !== "string") return `missing:${key}`;
+  return value.replace(/\{\{(\w+)\}\}/g, (_m, name: string) => String(options[name] ?? ""));
+}
+
+const PHASE_11_ACTIONS = [
+  "janitor.cleaned",
+  "janitor.policy_changed",
+  "janitor.node_policy_changed",
+  "janitor.defaults_changed",
+  "janitor.kept",
+  "janitor.unkept",
+  "stack.janitor_excluded",
+  "stack.janitor_included",
+  "swarm.task_history_limit_changed",
+] as const;
+
+describe("actionLabel (janitor)", () => {
+  it("knows all nine Phase 11 actions, and without details each reads its base label", () => {
+    expect(PHASE_11_ACTIONS).toHaveLength(9);
+    const base: Record<string, string> = {
+      "janitor.cleaned": "Cleaned up the environment",
+      "janitor.policy_changed": "Changed the janitor policy",
+      "janitor.node_policy_changed": "Changed a node's janitor setting",
+      "janitor.defaults_changed": "Changed the janitor defaults",
+      "janitor.kept": "Kept an item out of cleanup",
+      "janitor.unkept": "Stopped keeping an item out of cleanup",
+      "stack.janitor_excluded": "Excluded a stack from the janitor",
+      "stack.janitor_included": "Included a stack in the janitor again",
+      "swarm.task_history_limit_changed": "Changed the swarm task history limit",
+    };
+    for (const key of PHASE_11_ACTIONS) {
+      expect(KNOWN_ACTIONS, key).toContain(key);
+      expect(actionLabel(key, real), key).toBe(base[key]);
+      expect(actionLabel(key, real, {}), key).toBe(base[key]);
+    }
+  });
+
+  it("names the stack a janitor exclusion was about", () => {
+    expect(actionLabel("stack.janitor_excluded", real, { name: "web" })).toBe(
+      "Excluded stack web from the janitor",
+    );
+    expect(actionLabel("stack.janitor_included", real, { name: "web" })).toBe(
+      "Included stack web in the janitor again",
+    );
+  });
+
+  it("names the kind and the name of an item kept or no longer kept", () => {
+    expect(actionLabel("janitor.kept", real, { kind: "container", name: "web.1" })).toBe(
+      "Kept container web.1",
+    );
+    expect(actionLabel("janitor.kept", real, { kind: "image", name: "nginx:1.27" })).toBe(
+      "Kept image nginx:1.27",
+    );
+    expect(actionLabel("janitor.kept", real, { kind: "network", name: "backend" })).toBe(
+      "Kept network backend",
+    );
+    expect(actionLabel("janitor.unkept", real, { kind: "container", name: "web.1" })).toBe(
+      "Stopped keeping container web.1",
+    );
+    expect(actionLabel("janitor.unkept", real, { kind: "image", name: "nginx:1.27" })).toBe(
+      "Stopped keeping image nginx:1.27",
+    );
+    expect(actionLabel("janitor.unkept", real, { kind: "network", name: "backend" })).toBe(
+      "Stopped keeping network backend",
+    );
+  });
+
+  it("falls back to the base label for a kept item whose kind or name it cannot use", () => {
+    expect(actionLabel("janitor.kept", real, { kind: "volume", name: "data" })).toBe(
+      "Kept an item out of cleanup",
+    );
+    expect(actionLabel("janitor.kept", real, { kind: "image" })).toBe(
+      "Kept an item out of cleanup",
+    );
+    expect(actionLabel("janitor.unkept", real, { name: "web.1" })).toBe(
+      "Stopped keeping an item out of cleanup",
+    );
+  });
+
+  it("names the node whose janitor setting changed", () => {
+    expect(actionLabel("janitor.node_policy_changed", real, { node: "worker-2" })).toBe(
+      "Changed a node's janitor setting (worker-2)",
+    );
+  });
+
+  it("states the task history limit that was set", () => {
+    expect(actionLabel("swarm.task_history_limit_changed", real, { to: "10" })).toBe(
+      "Set the task history limit to 10",
+    );
+  });
+
+  it("says what a run removed, leaving out what it removed none of", () => {
+    expect(
+      actionLabel("janitor.cleaned", real, {
+        removed_containers: "3",
+        removed_images: "0",
+        removed_networks: "1",
+      }),
+    ).toBe("Cleaned up the environment (removed 3 containers, 1 network)");
+    expect(
+      actionLabel("janitor.cleaned", real, {
+        removed_containers: "1",
+        removed_images: "2",
+        removed_networks: "0",
+      }),
+    ).toBe("Cleaned up the environment (removed 1 container, 2 images)");
+    expect(actionLabel("janitor.cleaned", real, { removed_images: "1" })).toBe(
+      "Cleaned up the environment (removed 1 image)",
+    );
+  });
+
+  it("reads the base label when a run removed nothing or its counts are not numbers", () => {
+    expect(
+      actionLabel("janitor.cleaned", real, {
+        removed_containers: "0",
+        removed_images: "0",
+        removed_networks: "0",
+      }),
+    ).toBe("Cleaned up the environment");
+    expect(actionLabel("janitor.cleaned", real, { removed_containers: "many" })).toBe(
+      "Cleaned up the environment",
+    );
+    expect(actionLabel("janitor.cleaned", real, { outcome: "completed" })).toBe(
+      "Cleaned up the environment",
+    );
+  });
+
+  it("is an environment event except the instance-wide defaults", () => {
+    for (const key of PHASE_11_ACTIONS) {
+      if (key === "janitor.defaults_changed") {
+        expect(ENV_SCOPED_ACTIONS, key).not.toContain(key);
+      } else {
+        expect(ENV_SCOPED_ACTIONS, key).toContain(key);
+      }
+    }
+  });
+});
+
 describe("actionLabel for small stack subnets", () => {
   it("words turning them on with the size, and turning them off", () => {
     const key = "environment.small_subnets_changed";

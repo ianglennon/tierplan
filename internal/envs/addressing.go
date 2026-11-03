@@ -190,6 +190,10 @@ type AddressSpaces struct {
 	// facts are what TierPlan's own stacks say about a network (WithStackFacts); nil until set.
 	facts StackFacts
 
+	// grace is where the orphan check reads an environment's grace (WithGrace); nil until set, and
+	// netspace.GracePeriod then applies to every environment.
+	grace GraceSource
+
 	// routes reads the routes of a standalone host (WithHostRoutes); nil until set, and no route
 	// is then counted.
 	routes *HostRoutes

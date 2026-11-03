@@ -173,12 +173,111 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
-type NetworkKeep struct {
+type ImageDanglingSeen struct {
+	EnvID       string
+	NodeID      string
+	ImageID     string
+	FirstSeenAt int64
+}
+
+type JanitorDefault struct {
+	ID                      int64
+	Enabled                 int64
+	Schedule                string
+	SchedulePreset          string
+	KeepN                   int64
+	GraceHours              int64
+	RemoveUnusedNetworks    int64
+	RemoveStoppedContainers int64
+	RetentionDays           int64
+	RetentionRuns           int64
+	Version                 int64
+	UpdatedBy               string
+	UpdatedAt               int64
+}
+
+type JanitorEnvPolicy struct {
+	EnvID                   string
+	Enabled                 sql.NullInt64
+	Schedule                sql.NullString
+	SchedulePreset          sql.NullString
+	KeepN                   sql.NullInt64
+	GraceHours              sql.NullInt64
+	RemoveUnusedNetworks    sql.NullInt64
+	RemoveStoppedContainers sql.NullInt64
+	Version                 int64
+	UpdatedBy               string
+	UpdatedAt               int64
+}
+
+type JanitorEvidence struct {
+	RunID       string
+	Seq         int64
+	ExitCode    int64
+	Error       string
+	OomKilled   int64
+	StartedAt   int64
+	FinishedAt  int64
+	Image       string
+	ImageID     string
+	ImageDigest string
+	Node        string
+	LogText     string
+	LogLines    int64
+	LogState    string
+}
+
+type JanitorKeep struct {
 	EnvID  string
+	Kind   string
 	NodeID string
+	Ref    string
 	Name   string
 	KeptBy string
 	KeptAt int64
+}
+
+type JanitorNodePolicy struct {
+	EnvID     string
+	NodeID    string
+	Enabled   sql.NullInt64
+	KeepN     sql.NullInt64
+	UpdatedBy string
+	UpdatedAt int64
+}
+
+type JanitorRun struct {
+	ID                string
+	EnvID             string
+	Trigger           string
+	Actor             string
+	State             string
+	Reason            string
+	JobID             string
+	StartedAt         int64
+	FinishedAt        int64
+	RemovedContainers int64
+	RemovedImages     int64
+	RemovedNetworks   int64
+	Kept              int64
+	Failed            int64
+	SkippedOffline    int64
+	EstBytes          int64
+}
+
+type JanitorRunItem struct {
+	RunID        string
+	Seq          int64
+	Type         string
+	NodeID       string
+	NodeName     string
+	Ref          string
+	Name         string
+	Reason       string
+	ReasonDetail string
+	Outcome      string
+	Code         string
+	EstBytes     int64
 }
 
 type NetworkSeen struct {
@@ -269,16 +368,17 @@ type Setting struct {
 }
 
 type Stack struct {
-	ID         string
-	EnvID      string
-	Name       string
-	Target     string
-	SourceKind string
-	SourceRef  string
-	CreatedBy  string
-	CreatedAt  int64
-	Stopped    int64
-	Adoption   string
+	ID              string
+	EnvID           string
+	Name            string
+	Target          string
+	SourceKind      string
+	SourceRef       string
+	CreatedBy       string
+	CreatedAt       int64
+	Stopped         int64
+	Adoption        string
+	JanitorExcluded int64
 }
 
 type StackDeploy struct {

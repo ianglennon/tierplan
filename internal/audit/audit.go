@@ -245,6 +245,27 @@ const (
 	// source for review. The entry names the stack, the new repository, ref kind, ref, folder and commit and the ones it
 	// replaces; the next good deploy of the draft makes it the stack's source.
 	ActionGitSourceChanged = "git.source_changed"
+	// One summary row per finished janitor run, scheduled or started by a person, with what it removed, kept, failed and
+	// skipped (D-16). The environment is the target; the actor is the person, or the system principal for a scheduled run.
+	ActionJanitorCleaned = "janitor.cleaned"
+	// An Admin changed an environment's janitor policy: the entry names the fields that changed and the policy's new
+	// version (D-15).
+	ActionJanitorPolicyChanged = "janitor.policy_changed"
+	// An Admin changed the janitor setting of one swarm node: the entry names the node and the fields (D-15).
+	ActionJanitorNodePolicyChanged = "janitor.node_policy_changed"
+	// An instance admin changed the janitor defaults every environment inherits: the entry names the fields, how many
+	// run records the change removed and the defaults' new version (D-15).
+	ActionJanitorDefaultsChanged = "janitor.defaults_changed"
+	// An Admin kept a container, an image or a network out of cleanup, or took it back: the entry names the kind, the
+	// name, the node when the item is local to one, and the bulk operation when there was one (D-13).
+	ActionJanitorKept   = "janitor.kept"
+	ActionJanitorUnkept = "janitor.unkept"
+	// An Admin excluded a stack from the janitor, or included it again: the entry names the stack (D-13).
+	ActionStackJanitorExcluded = "stack.janitor_excluded"
+	ActionStackJanitorIncluded = "stack.janitor_included"
+	// An Admin set the swarm task history limit through the agent: the entry names the value it replaced and the one it
+	// set (D-21).
+	ActionSwarmTaskHistoryChanged = "swarm.task_history_limit_changed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

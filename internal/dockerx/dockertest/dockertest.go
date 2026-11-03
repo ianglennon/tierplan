@@ -62,6 +62,12 @@ type Component struct {
 	Version string
 }
 
+// FakeRefusal is the answer of a request the fake daemon refuses: the HTTP status and the message.
+type FakeRefusal struct {
+	Status  int
+	Message string
+}
+
 // FakeConfig describes the engine a FakeDaemon pretends to be. Zero values
 // become the defaults noted on each field.
 type FakeConfig struct {
@@ -83,6 +89,12 @@ type FakeConfig struct {
 	Hostname string
 	// OperatingSystem is Info.OperatingSystem. Default "Ubuntu 26.04 LTS".
 	OperatingSystem string
+	// SystemTime is Info.SystemTime, the engine's own clock as an RFC 3339 string. Empty leaves it out
+	// of /info, as an engine that does not report its time does.
+	SystemTime string
+	// SystemTimeOffset, when set, replaces SystemTime: /info reports the time the request is served
+	// plus this offset, so a test of clock skew holds however late its request runs.
+	SystemTimeOffset *time.Duration
 	// SecurityOptions is Info.SecurityOptions.
 	SecurityOptions []string
 	// SwarmState is Info.Swarm.LocalNodeState. Default "inactive".
@@ -128,6 +140,10 @@ type FakeConfig struct {
 	Images     []FakeImage
 	Volumes    []FakeVolume
 	Networks   []FakeNetwork
+	// InspectImages, keyed by image ID, is what GET /images/{id}/json answers for an image of Images
+	// instead of its list entry: an image that gained a name or a label after it was listed, so a test
+	// can show what a caller that trusts the list would miss.
+	InspectImages map[string]FakeImage
 	// Secrets are the swarm secrets /secrets lists, none with a value (fake_secrets.go).
 	Secrets []FakeSecret
 	// Configs are the swarm configs /configs lists, each with its content, as a real manager
@@ -167,6 +183,11 @@ type FakeConfig struct {
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string
+	// RefuseRemove makes the DELETE of the container with that ID, or name, answer the status and message
+	// given, as an engine does when a container came into use after it was listed (409), is gone (404) or
+	// cannot be removed (500), or as an agent does when its policy refuses (403 with the agent_policy_denied
+	// marker). The write is recorded whatever the answer.
+	RefuseRemove map[string]FakeRefusal
 	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
 	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
 	RemoveErrors map[string]string
@@ -239,6 +260,23 @@ type FakeConfig struct {
 	// HistoryLimit is Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit /info
 	// reports; zero leaves the field unset, as a cluster that never set it does.
 	HistoryLimit int
+	// SwarmVersion is the swarm's object version /info reports (Swarm.Cluster.Version.Index),
+	// which POST /swarm/update must be sent against; zero reports 1. An accepted update raises
+	// it by one (fake_swarm_update.go).
+	SwarmVersion uint64
+	// SwarmSpec is the rest of the swarm spec /info reports; its task history limit is the one
+	// HistoryLimit gives (fake_swarm_update.go).
+	SwarmSpec swarm.Spec
+	// SwarmUpdateDeny makes only POST /swarm/update answer 403 agent_policy_denied, as an agent
+	// older than the route does, while /info answers.
+	SwarmUpdateDeny bool
+	// SwarmChangedUnderUpdate makes the swarm look changed by somebody else the moment a swarm
+	// update arrives, after the client read the version: its version goes up by one just before
+	// the update is judged, so the update is the engine's "update out of sequence".
+	SwarmChangedUnderUpdate bool
+	// swarmLimit is the limit an accepted swarm update left, which may be zero; nil leaves
+	// HistoryLimit in charge.
+	swarmLimit *int64
 	// QuorumLost makes /nodes, /services, /tasks and /swarm answer the 500 a
 	// manager gives when the swarm has no leader. Node-local calls keep working,
 	// and so does /_ping, as on a real manager (RESEARCH Pitfall 11).
@@ -648,6 +686,10 @@ type Fake struct {
 	// nodeUpdates the updates themselves (fake_nodes.go).
 	nodeState   map[string]fakeNodeState
 	nodeUpdates []FakeNodeUpdate
+	// swarmState is what the swarm updates the fake accepted left the swarm with, and
+	// swarmUpdates the updates themselves (fake_swarm_update.go).
+	swarmState   *fakeSwarmState
+	swarmUpdates []FakeSwarmUpdate
 	// nodeGone are the IDs of the nodes removed through the fake.
 	nodeGone map[string]bool
 	// svcGone are the IDs of the services removed through the fake.
@@ -880,7 +922,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withSwarm(f.swarmState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -990,6 +1032,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			ServerVersion:   cfg.Version,
 			OperatingSystem: cfg.OperatingSystem,
 			OSType:          cfg.OSType,
+			SystemTime:      cfg.systemTime(),
 			Architecture:    "x86_64",
 			KernelVersion:   "7.0.0-fake",
 			Driver:          "overlayfs",
@@ -1088,6 +1131,15 @@ func (c FakeConfig) resolveContainer(ref string) (FakeContainer, bool) {
 	return hit, n == 1
 }
 
+// systemTime is Info.SystemTime: the offset from the time the request is served when one is set,
+// else SystemTime as given.
+func (c FakeConfig) systemTime() string {
+	if c.SystemTimeOffset != nil {
+		return time.Now().Add(*c.SystemTimeOffset).Format(time.RFC3339Nano)
+	}
+	return c.SystemTime
+}
+
 // swarmInfo is Info.Swarm: the state, the node ID and the cluster ID when one is set.
 func (c FakeConfig) swarmInfo() swarm.Info {
 	info := swarm.Info{
@@ -1095,11 +1147,12 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
 		ControlAvailable: c.SwarmControl,
 	}
-	if c.SwarmClusterID != "" || c.HistoryLimit != 0 || len(c.SwarmDefaultAddrPool) != 0 || c.SwarmSubnetSize != 0 {
-		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID}
+	limit, limitSet := c.reportedLimit()
+	if c.SwarmClusterID != "" || limitSet || c.SwarmVersion != 0 || len(c.SwarmDefaultAddrPool) != 0 || c.SwarmSubnetSize != 0 {
+		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID, Spec: c.SwarmSpec}
+		info.Cluster.Version.Index = max(c.SwarmVersion, 1)
 	}
-	if c.HistoryLimit != 0 {
-		limit := int64(c.HistoryLimit)
+	if limitSet {
 		info.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit = &limit
 	}
 	if info.Cluster != nil {
@@ -1109,6 +1162,15 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		info.Cluster.SubnetSize = c.SwarmSubnetSize
 	}
 	return info
+}
+
+// reportedLimit is the task history limit /info reports and whether it reports one: the one an
+// accepted swarm update left (which may be zero), else HistoryLimit when it is not zero.
+func (c FakeConfig) reportedLimit() (int64, bool) {
+	if c.swarmLimit != nil {
+		return *c.swarmLimit, true
+	}
+	return int64(c.HistoryLimit), c.HistoryLimit != 0
 }
 
 // addressPools is Info.DefaultAddressPools: nil unless the daemon is configured with some, so

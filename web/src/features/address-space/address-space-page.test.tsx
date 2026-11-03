@@ -54,6 +54,7 @@ const overlay = (name: string, extra: Partial<OverlayUsage> = {}): OverlayUsage 
 
 const space = (extra: Partial<AddressSpace> = {}): AddressSpace => ({
   envType: "swarm",
+  graceHours: 24,
   measured: true,
   networks: [],
   networksTotal: 0,
@@ -462,5 +463,22 @@ describe("the Address space page", () => {
     expect(card).toBeTruthy();
     expect(document.getElementById("orphans")?.contains(card)).toBe(true);
     expect(screen.getByRole("button", { name: "Kept networks (1)" })).toBeTruthy();
+  });
+
+  it("words the Orphans card with the environment's grace, and points at the janitor", async () => {
+    body = space({ graceHours: 48 });
+    mount();
+    // The caption and the empty state both say it.
+    expect(
+      (
+        await screen.findAllByText(
+          /^TierPlan lists a network here when nothing has used it for 48 hours\./,
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/24 hours/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Open janitor" }).getAttribute("href")).toMatch(
+      /\/janitor$/,
+    );
   });
 });

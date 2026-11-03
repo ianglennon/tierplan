@@ -14,6 +14,7 @@ import {
 
 import { addressSpaceKey } from "@/api/address-space";
 import { api } from "@/api/client";
+import { janitorOverviewKey } from "@/api/janitor";
 import { listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
 import { apiUrl } from "@/lib/base-path";
@@ -102,6 +103,8 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // the placement view extends, since a node going down or being drained moves tasks. A row of
 // TierPlan's own has no list and refreshes the summary only. A network, container or service event
 // also refreshes the Address space page, since networks, tasks and their addresses move its meters.
+// A container, image, network or service event also refreshes the janitor's status and run history
+// (their keys share one prefix): what the janitor removed, and what it will find, move with them.
 //
 // An event about an object of a stack (touchesStack: it carries the stack's swarm namespace or
 // Compose project label) also refreshes the stacks list and every stack page under it, the
@@ -118,6 +121,7 @@ export function invalidationKeys(type: EventType, envId: string, stack = false):
         [...listKey(envId, "networks")],
         [...listKey(envId, "images")],
         [...addressSpaceKey(envId)],
+        [...janitorOverviewKey(envId)],
         ...stacks,
       ];
     case "network":
@@ -126,12 +130,13 @@ export function invalidationKeys(type: EventType, envId: string, stack = false):
         [...listKey(envId, "networks")],
         [...listKey(envId, "containers")],
         [...addressSpaceKey(envId)],
+        [...janitorOverviewKey(envId)],
         ...stacks,
       ];
     case "volume":
       return [summary, [...listKey(envId, "volumes")], ...stacks];
     case "image":
-      return [summary, [...listKey(envId, "images")]];
+      return [summary, [...listKey(envId, "images")], [...janitorOverviewKey(envId)]];
     case "service":
       return [
         summary,
@@ -139,6 +144,7 @@ export function invalidationKeys(type: EventType, envId: string, stack = false):
         [...listKey(envId, "secrets")],
         [...listKey(envId, "configs")],
         [...addressSpaceKey(envId)],
+        [...janitorOverviewKey(envId)],
         ...stacks,
       ];
     case "secret":

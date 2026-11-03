@@ -82,6 +82,7 @@ function mount(width: number, path = "/") {
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/address-space" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/janitor" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/placement" }),
     ]),
@@ -319,6 +320,7 @@ describe("the Address space item", () => {
       "Volumes",
       "Networks",
       "Address space",
+      "Janitor",
       "Events",
     ]);
   });
@@ -340,6 +342,34 @@ describe("the Address space item", () => {
     expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
     await settled(client);
     expect(screen.queryByRole("link", { name: "Address space" })).toBeNull();
+  });
+});
+
+describe("the Janitor item", () => {
+  it("sits directly below Address space and above Events, on a swarm", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Janitor" });
+    expect(link.getAttribute("href")).toBe("/env/e1/janitor");
+    const names = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(names.indexOf("Janitor")).toBe(names.indexOf("Address space") + 1);
+    expect(names.indexOf("Events")).toBe(names.indexOf("Janitor") + 1);
+  });
+
+  it("is there on a standalone environment too", async () => {
+    envType = "standalone";
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Janitor" })).toBeTruthy();
+  });
+
+  it("is left out for a user without environments.read", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    await settled(client);
+    expect(screen.queryByRole("link", { name: "Janitor" })).toBeNull();
   });
 });
 

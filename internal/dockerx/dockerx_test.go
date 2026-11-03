@@ -427,6 +427,8 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ID and an argv and sets only the TTY, size, user, working directory and command.
 // ContainerRemove (Phase 4) removes one container by ID with two booleans, force and
 // anonymous volumes; it never sets links and takes no path.
+// ContainerEnd (Phase 11, JAN-02) is a read: one inspect by ID with the size asked for, reduced to when and how the
+// container ended and the size of its writable layer; the janitor judges a stopped container by it.
 // ContainerDetail (Phase 4, RES-01) is a read: one inspect by ID, typed.
 // NetworkCreate (Phase 4, RES-06) takes a typed spec of a name, one of four drivers and
 // its addressing; it cannot express an ingress, config-only or config-from network.
@@ -526,7 +528,13 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // NetworkCreateAllocated (Phase 10, G-10-8) is NetworkCreate followed, for a swarm network, by reads of the same network by the
 // ID the create returned until the swarm has allocated it; a network never allocated is removed once, by that ID. It is
 // never retried.
-var allowedMethods = []string{"AddressPools", "Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerDetail", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkCreateAllocated", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServicesWithLabel", "Snapshot", "StartExec", "SwarmNetworkNames", "TaskHistoryLimit", "TaskLogs", "TaskNetworkRefs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
+// SwarmSettings (Phase 11, JAN-03) is a read on a manager: one engine info call, from which the swarm's version and spec
+// are taken, join tokens never; it takes no options. SetTaskHistoryLimit (Phase 11, JAN-03) changes one setting of the
+// swarm, the task history retention limit, with one swarm update against the version SwarmSettings read; it sets no rotate
+// flag, sends no key but the version, and is never retried.
+// SystemTime (Phase 11, JAN-02) is a read: one engine info call, from which the time the engine says it is is taken; it takes
+// no options. The janitor compares it with the server's to refuse to judge ages on a node whose clock is wrong.
+var allowedMethods = []string{"AddressPools", "Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerDetail", "ContainerEnd", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkCreateAllocated", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServicesWithLabel", "SetTaskHistoryLimit", "Snapshot", "StartExec", "SwarmNetworkNames", "SwarmSettings", "SystemTime", "TaskHistoryLimit", "TaskLogs", "TaskNetworkRefs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
@@ -803,8 +811,9 @@ func TestSnapshotRowsCannotCarryEnvironmentVariablesLabelsOrMounts(t *testing.T)
 	// list sends only the owner. A VolumeRow keeps its labels (plan 04-17) for the stack and
 	// project columns and the search; the list sends only those two and a flag, and
 	// the option values of a volume (which can hold a share password) are never on a row.
+	// An ImageRow keeps its labels (plan 11-10) for the janitor's tierplan.keep check; no list sends them.
 	banned := regexp.MustCompile(`(?i)^(labels?|env|environment|mounts?|binds?|command|cmd|entrypoint|options|attachments|containers)$`)
-	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true, "VolumeRow.Labels": true}
+	internal := map[string]bool{"ContainerRow.Labels": true, "ContainerRow.Mounts": true, "NetworkRow.Labels": true, "VolumeRow.Labels": true, "ImageRow.Labels": true}
 	for _, v := range []any{dockerx.ContainerRow{}, dockerx.ImageRow{}, dockerx.VolumeRow{}, dockerx.NetworkRow{}} {
 		typ := reflect.TypeOf(v)
 		for i := range typ.NumField() {

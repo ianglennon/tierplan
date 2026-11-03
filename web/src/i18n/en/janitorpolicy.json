@@ -1,0 +1,104 @@
+{
+  "janitorPolicy": {
+    "title": "Policy",
+    "caption": "What this environment's janitor does. Fields marked Default follow Settings, General; change a field here to override it for this environment.",
+    "loading": "Loading the janitor policy",
+    "loadFailed": {
+      "title": "Couldn't load the janitor policy.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading policy"
+    },
+    "state": {
+      "default": "Default",
+      "overridden": "Overridden",
+      "defaultTooltip": "Set in Settings, General. Change it there to change every environment that follows it.",
+      "reset": "Reset to default",
+      "resetField": "Reset {{field}} to default"
+    },
+    "rows": {
+      "enabled": {
+        "label": "Janitor",
+        "switch": "Run the janitor on this environment",
+        "helper": "On by default. Turning it off stops scheduled runs; you can still choose Clean now."
+      },
+      "keep": {
+        "label": "Exited task containers to keep",
+        "labelStandalone": "Exited containers to keep",
+        "helper": "Per service slot, and per node for a global service. The newest few stay so you can still read why a task stopped. Default {{default}}.",
+        "error": "Use a whole number from 0 to 20."
+      },
+      "grace": {
+        "label": "Grace period",
+        "suffix": "hours",
+        "helper": "How long something must have been stale before TierPlan removes it. The same period applies to containers, images and networks. Default {{default}}.",
+        "error": "Use a whole number of hours from 1 to 720."
+      },
+      "networks": {
+        "label": "Also remove unused networks",
+        "helper": "Networks that no stack created and nothing uses. Off by default: without this they are only reported."
+      },
+      "containers": {
+        "label": "Also remove stopped standalone containers",
+        "helper": "Containers started with docker run that someone stopped, once they are past the grace period. Off by default: without this they are only reported."
+      }
+    },
+    "schedule": {
+      "label": "Schedule",
+      "run": "Run",
+      "at": "At",
+      "on": "On",
+      "cron": "Cron expression",
+      "cronPlaceholder": "0 3 * * *",
+      "helper": "Server time ({{timezone}}). The exact start is spread out a little per environment so many environments don't run at once.",
+      "presets": {
+        "hourly": "Hourly",
+        "every_6h": "Every 6 hours",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "custom": "Custom (cron)"
+      },
+      "weekdays": {
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday",
+        "0": "Sunday"
+      },
+      "checking": "Checking the schedule…",
+      "nextRuns": "Next runs: {{times}}.",
+      "invalid": "Enter a cron expression like 0 3 * * * (minute hour day month weekday).",
+      "tooFrequent": "Runs can be at most once every 15 minutes.",
+      "timeMissing": "Pick a time of day."
+    },
+    "footer": {
+      "unsaved": "Unsaved changes",
+      "review": "Review changes",
+      "save": "Save policy",
+      "saving": "Saving…",
+      "saved": "Saved the janitor policy.",
+      "saveFailed": "Couldn't save the janitor policy.",
+      "retry": "Try again."
+    },
+    "conflict": {
+      "message": "{{user}} changed this policy while you were editing. Reload to see it.",
+      "messageAnon": "This policy was changed while you were editing. Reload to see it.",
+      "reload": "Reload"
+    },
+    "guard": {
+      "title": "Discard your policy changes?",
+      "body": "You haven't saved them.",
+      "keep": "Keep editing",
+      "discard": "Discard"
+    },
+    "sheet": {
+      "title": "What this policy would remove",
+      "description": "Here is what the janitor would remove with the policy you've edited. Nothing is removed by saving.",
+      "summaryRegion": "What the policy would remove",
+      "appliesNext": "Saving applies from the next run.",
+      "save": "Save policy",
+      "saving": "Saving…"
+    }
+  }
+}
