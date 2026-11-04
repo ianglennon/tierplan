@@ -154,6 +154,24 @@ func (s RunStore) Running(ctx context.Context, envID string) ([]Run, error) {
 	return out, nil
 }
 
+// Unfinished returns the runs of every environment that are queued or running and have not ended, oldest first. After a restart
+// each of them belongs to a process that is gone (startup recovery, plan 12-24).
+func (s RunStore) Unfinished(ctx context.Context) ([]Run, error) {
+	rows, err := s.Q.UnfinishedImageUpdateRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the image update runs that did not end: %w", err)
+	}
+	out := make([]Run, 0, len(rows))
+	for _, r := range rows {
+		run, err := runFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, nil
+}
+
 // RevisionSeqs returns, for one stack, the sequence numbers of the revisions that image updates made, as a set. History
 // labels those revisions "Image update"; a revision of the older Update images deploy is not among them.
 func (s RunStore) RevisionSeqs(ctx context.Context, stackID string) (map[int64]bool, error) {

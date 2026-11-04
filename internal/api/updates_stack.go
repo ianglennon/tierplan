@@ -472,6 +472,9 @@ func updateFailureReason(code string) string {
 		return updates.ReasonRejected
 	case stackops.CodeServiceChanged:
 		return updates.ReasonServiceChanged
+	case updates.ReasonServerRestarted:
+		// Not a deploy's code: startup recovery (RecoverStackUpdate) rolls back an update a restart interrupted.
+		return updates.ReasonServerRestarted
 	}
 	return updates.ReasonEngine
 }
@@ -533,6 +536,10 @@ func rollbackFailedUpdate(ctx context.Context, rb stackRollback, r *jobs.Reporte
 		e := stackEnd{state: updates.RunRolledBack, reason: cause, cause: cause, revision: rb.failed.Seq, back: rollbackSeq}
 		if rollbackErr != nil || !rolled.OK() {
 			e.state, e.reason = updates.RunRollbackFailed, updates.ReasonRestoreFailed
+			if cause == updates.ReasonServerRestarted {
+				// A rollback after a restart keeps the restart as its reason whether or not it worked.
+				e.reason = cause
+			}
 		}
 		wctx, stop := doneActionAuditContext(ctx)
 		defer stop()

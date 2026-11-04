@@ -501,19 +501,7 @@ type endFunc func(st RunState, reason, cause string)
 // execute is the job of an update: it does the work of the kind, ends the run, writes the audit entry and frees the lock
 // before the job's last step ends, so whoever sees the job finished can start the next operation at once.
 func (a *Applier) execute(ctx context.Context, r *jobs.Reporter, req Request, run Run, t target, release func()) {
-	var once sync.Once
-	end := func(st RunState, reason, cause string) {
-		once.Do(func() {
-			wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
-			defer cancel()
-			if _, err := a.Runs.Finish(wctx, run.ID, st, reason, 0, 0); err != nil {
-				a.log().Error("an image update run could not be finished on record", "run", run.ID, "error", err)
-			}
-			a.rememberFailure(wctx, run, t, st, cause)
-			a.auditEnd(wctx, req, t, st, reason, cause)
-			release()
-		})
-	}
+	end := a.newEnd(ctx, req, run, t, release)
 	// Whatever ends the function without ending the run (a panic included) ends it failed, and frees the lock.
 	defer end(RunFailed, ReasonInterrupted, ReasonInterrupted)
 
@@ -526,6 +514,24 @@ func (a *Applier) execute(ctx context.Context, r *jobs.Reporter, req Request, ru
 		return
 	}
 	a.updateService(ctx, r, t, end)
+}
+
+// newEnd is the one place the run of a plain workload's update ends: the run on record, the memory of the digest, the audit entries
+// and the environment's lock. It does all of it once, whatever calls it.
+func (a *Applier) newEnd(ctx context.Context, req Request, run Run, t target, release func()) endFunc {
+	var once sync.Once
+	return func(st RunState, reason, cause string) {
+		once.Do(func() {
+			wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+			defer cancel()
+			if _, err := a.Runs.Finish(wctx, run.ID, st, reason, 0, 0); err != nil {
+				a.log().Error("an image update run could not be finished on record", "run", run.ID, "error", err)
+			}
+			a.rememberFailure(wctx, run, t, st, cause)
+			a.auditEnd(wctx, req, t, st, reason, cause)
+			release()
+		})
+	}
 }
 
 // auditEnd writes the audit entries of an update that ended. The detail keys are TierPlan's own words and digests, never

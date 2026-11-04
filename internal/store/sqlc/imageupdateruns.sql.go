@@ -242,3 +242,53 @@ func (q *Queries) SetImageUpdateRunState(ctx context.Context, arg SetImageUpdate
 	}
 	return result.RowsAffected()
 }
+
+const unfinishedImageUpdateRuns = `-- name: UnfinishedImageUpdateRuns :many
+SELECT id, env_id, bulk_id, kind, workload, workload_id, stack_id, items, state, reason, actor, job_id, revision_seq, rollback_seq, old_container, started_at, finished_at
+FROM image_update_runs
+WHERE state IN ('queued', 'running') AND finished_at = 0
+ORDER BY started_at, id
+`
+
+// The runs of every environment that are queued or running and have not ended, oldest first. After a restart none of them
+// is still going: a run in this list belongs to a process that is gone, and startup recovery finds each of them here.
+func (q *Queries) UnfinishedImageUpdateRuns(ctx context.Context) ([]ImageUpdateRun, error) {
+	rows, err := q.db.QueryContext(ctx, unfinishedImageUpdateRuns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ImageUpdateRun
+	for rows.Next() {
+		var i ImageUpdateRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.BulkID,
+			&i.Kind,
+			&i.Workload,
+			&i.WorkloadID,
+			&i.StackID,
+			&i.Items,
+			&i.State,
+			&i.Reason,
+			&i.Actor,
+			&i.JobID,
+			&i.RevisionSeq,
+			&i.RollbackSeq,
+			&i.OldContainer,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

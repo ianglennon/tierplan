@@ -31,6 +31,14 @@ FROM image_update_runs
 WHERE env_id = ? AND state IN ('queued', 'running')
 ORDER BY started_at, id;
 
+-- name: UnfinishedImageUpdateRuns :many
+-- The runs of every environment that are queued or running and have not ended, oldest first. After a restart none of them
+-- is still going: a run in this list belongs to a process that is gone, and startup recovery finds each of them here.
+SELECT id, env_id, bulk_id, kind, workload, workload_id, stack_id, items, state, reason, actor, job_id, revision_seq, rollback_seq, old_container, started_at, finished_at
+FROM image_update_runs
+WHERE state IN ('queued', 'running') AND finished_at = 0
+ORDER BY started_at, id;
+
 -- name: GetImageUpdateRun :one
 SELECT id, env_id, bulk_id, kind, workload, workload_id, stack_id, items, state, reason, actor, job_id, revision_seq, rollback_seq, old_container, started_at, finished_at
 FROM image_update_runs

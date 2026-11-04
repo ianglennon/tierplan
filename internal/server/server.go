@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -963,8 +964,24 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Resolver: resolver, Audit: aud, ConvergeTimeout: cfg.StackConvergeTimeout,
 		ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: st, Vault: vlt}), SelfContainerID: selfID, Failures: updateFailures, Log: log,
 	}
+	// An image update a restart interrupted is found again on startup and rolled back like any failed update (IMG-07, D-12). It starts
+	// once the stack operations are marked interrupted and the environments are being watched.
+	updateRecovery := &updates.Recovery{
+		Runs: updateApplier.Runs, Applier: updateApplier, Log: log,
+		ActorOf: func(ctx context.Context, key string) audit.Actor {
+			if strings.HasPrefix(key, "system:") {
+				return audit.Actor{Type: audit.ActorSystem, ID: key, Name: key}
+			}
+			name := key
+			if u, uerr := st.RQ.GetUserByID(ctx, key); uerr == nil && u.Username != "" {
+				name = u.Username
+			}
+			return audit.Actor{Type: audit.ActorUser, ID: key, Name: name}
+		},
+	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
+	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -1159,6 +1176,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, fmt.Errorf("start environment monitors: %w", err)
 	}
+	// The environments are being watched, so what a restart left half done can be put back (an offline one is tried again later).
+	srv.background.Go(func() { updateRecovery.Run(bg) })
 	return srv, nil
 }
 
