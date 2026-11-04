@@ -102,9 +102,9 @@ Phase 10 adds four cases to `sharedSwarmCases`, so they share the one swarm and 
 - `TestSwarmShared/OrphanMatrix` judges real networks on the swarm with the reader's clock a day and an hour on, so none is held back by the grace period (`sharedCaseOptions` gives the case its own server options). The list must hold a labelled overlay whose stack is gone and an unlabelled unused one, and must not hold the ones that look idle and are not: an overlay a service scaled to zero names, an overlay only a service's previous spec names, and an attachable overlay a standalone container on the worker uses. Deleting the orphan saves its inspect to the audit log first; deleting the previous-spec overlay is refused as in use again and nothing reaches the engine.
 - `TestSwarmShared/SubnetOverlap` holds the rule of UAT gap G-10-8 against a real swarm: an overlay over an overlay is refused `subnet_overlap_swarm` with `createAnyway` on the network route and on service create with a staged network, with nothing left on any manager; a worker bridge over the overlay is created anyway and a second bridge on the same subnet is `subnet_refused`; `dockerx.NetworkCreateAllocated` reports an overlapping overlay not allocated and removed and a free one allocated; and a stack whose network overlaps the overlay fails its networks step with `network_not_allocated` and leaves no network or service. It uses subnets of `10.231.0.0/16` to `10.234.0.0/16` and runs on Engine 29 and Engine 24.
 
-Run them on their own with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/(HostRoutes|AddressSpacePools|OrphanMatrix|SubnetOverlap)' -count=1 -timeout 60m`.
+Run them on their own with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/(HostRoutes|AddressSpacePools|OrphanMatrix|SubnetOverlap)' -count=1 -timeout 80m`.
 
-**The Engine 24 run.** `TIERPLAN_TEST_ENGINE=24` starts the swarm on Docker Engine 24 instead of the default 29. Run `TIERPLAN_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/AddressSpacePools' -count=1 -timeout 60m` to see what an older engine gives: the pool figures are still computed, and an overlay's address counts read *Not measured*, because only Engine 29 reports them. Run `TIERPLAN_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/SubnetOverlap$' -count=1 -timeout 60m` as well: the override rule and the read-back hold on both ends. All of these runs belong to the phase gate.
+**The Engine 24 run.** `TIERPLAN_TEST_ENGINE=24` starts the swarm on Docker Engine 24 instead of the default 29. Run `TIERPLAN_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/AddressSpacePools' -count=1 -timeout 80m` to see what an older engine gives: the pool figures are still computed, and an overlay's address counts read *Not measured*, because only Engine 29 reports them. Run `TIERPLAN_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/SubnetOverlap$' -count=1 -timeout 80m` as well: the override rule and the read-back hold on both ends. All of these runs belong to the phase gate.
 
 ### The janitor case
 
@@ -115,7 +115,7 @@ Phase 11 adds `TestSwarmShared/Janitor` to the same swarm. A service of two repl
 - Clean now removes exactly those and nothing else, and the network is saved (`network.inspect_saved`) before it is removed (`network.removed`, source janitor);
 - the task history limit reads as Docker's 5 through a manager's agent, is set to 7 through the agent's swarm update route, reads back as 7 and is put back, because the shared swarm's reset does not restore the cluster spec.
 
-Run it with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/Janitor$' -count=1 -timeout 60m`, and again with `TIERPLAN_TEST_ENGINE=24`: the labels and the spec round trip hold on both.
+Run it with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/Janitor$' -count=1 -timeout 80m`, and again with `TIERPLAN_TEST_ENGINE=24`: the labels and the spec round trip hold on both.
 
 Two integration-tagged tests prove the standalone half on real engines (`make test-int` runs them with the rest):
 

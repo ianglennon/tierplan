@@ -340,16 +340,15 @@ jobs:
   # starts its own swarm of dind nodes (3 managers and a worker) on a network of
   # its own, so the in-process TierPlan is reachable from them, and loads the agent
   # image built here. A leg runs the swarm-tagged internal/agents suite only
-  # (make test-swarm, shuffled); go test allows 60 minutes and the job 70, so a
+  # (make test-swarm, shuffled); go test allows 80 minutes and the job 90, so a
   # hang ends in Go's goroutine dump and not in a silent kill (D-22).
   swarm:
     # Each leg runs four dind nodes (6-8 GB), so the two legs go to different VMs.
     runs-on: [self-hosted, linux, x64, "${{ matrix.vm }}"]
-    # 60 and 70 since CI run 39125458463: the suite (then every test with a swarm of its
-    # own) took 2321 s on Engine 24 on bp-a and reached the old 40-minute go test limit with
-    # no test hung. Twenty tests now share one swarm (TestSwarmShared, docs/testing.md), which
-    # took the suite from 2201 s to 1670 s on the dev host; lower these once CI shows the leg.
-    timeout-minutes: 70
+    # 80 and 90 since Phase 12: the suite takes about 55 minutes on the dev host, too close
+    # to the old 60-minute go test limit. It was 60 and 70 since CI run 39125458463, when the
+    # suite took 2321 s on Engine 24 on bp-a and reached the 40-minute limit with no test hung.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

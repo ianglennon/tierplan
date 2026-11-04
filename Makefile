@@ -157,15 +157,14 @@ test-int: agent-image
 # of 3 managers and 1 worker, for the engine TIERPLAN_TEST_ENGINE names (default
 # 29). Needs Docker it can reach, with buildx for the agent image. Only the
 # swarm-tagged package (internal/agents) runs, derived like test-int's list. One
-# engine took about 17 minutes on a developer machine when every internal package
-# ran (RESEARCH's estimate, until 06.1-25 measures the scoped run), so
-# the 40 minute timeout (CI allows 50 for the job, D-22) is a margin, not a target.
+# engine takes about 55 minutes on the dev host, so the 80 minute timeout (CI allows
+# 90 for the job, D-22) is a margin, not a target.
 test-swarm: agent-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh swarm)"; \
 	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
 	echo "test-swarm: $$pkgs"; \
 	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/swarm.json; \
-	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/swarm.json -- -tags=swarm -race -count=1 -shuffle=on -timeout 60m $$pkgs
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/swarm.json -- -tags=swarm -race -count=1 -shuffle=on -timeout 80m $$pkgs
 
 smoke:
 	scripts/smoke.sh
