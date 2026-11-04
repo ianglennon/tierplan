@@ -11,6 +11,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
 
@@ -485,5 +486,111 @@ func TestJudgeNotCheckedCarriesNextCheck(t *testing.T) {
 	ok := &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}
 	if v := updates.Judge(updates.JudgeInput{Workload: serving("linux/amd64"), Check: ok, Now: t0, StaleAfter: time.Hour, NextCheckAt: next}); !v.NextCheckAt.IsZero() {
 		t.Errorf("a checked workload = %+v, want no next check", v)
+	}
+}
+
+// Skips and ignores in the verdict (plan 12-13, IMG-08, D-15, D-16).
+
+// held is a service on acme/app:2 running dg('1'), with the labels given.
+func held(labels map[string]string) updates.Workload {
+	w := serving("linux/amd64")
+	w.EnvID, w.Name, w.Labels = "env-a", "web", labels
+	return w
+}
+
+// judgedWith matches ignores to the workload as the service does and judges it against the check.
+func judgedWith(w updates.Workload, igs updates.Ignores, chk *updates.Check) updates.Verdict {
+	remote := ""
+	if chk != nil {
+		remote = chk.Digest
+	}
+	return updates.Judge(updates.JudgeInput{Workload: w, Check: chk, Now: t0, StaleAfter: time.Hour, Ignore: igs.Match(w, remote)})
+}
+
+func TestJudgeIgnorePrecedence(t *testing.T) {
+	t.Parallel()
+	moved := &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}
+	failedAfter := &updates.Check{Digest: dg('9'), Error: updates.ReasonRateLimited, CheckedAt: t0, SuccessAt: t0.Add(-time.Minute)}
+	skip := func(d string) updates.Ignore {
+		return updates.Ignore{EnvID: "env-a", Mode: updates.ModeSkip, Scope: updates.ScopeWorkload, Kind: "service", Name: "web", Digest: d, SetBy: "ann", SetAt: t0}
+	}
+	image := updates.Ignore{EnvID: "env-a", Mode: updates.ModeIgnore, Scope: updates.ScopeImage, Host: "docker.io", Repo: "acme/app", Tag: "2", SetBy: "bob", SetAt: t0}
+	workload := updates.Ignore{EnvID: "env-a", Mode: updates.ModeIgnore, Scope: updates.ScopeWorkload, Kind: "service", Name: "web", SetBy: "bob", SetAt: t0}
+	label := map[string]string{stacks.LabelUpdates: "ignore"}
+
+	for _, tc := range []struct {
+		name  string
+		w     updates.Workload
+		igs   updates.Ignores
+		chk   *updates.Check
+		state updates.State
+		scope string
+	}{
+		{name: "nothing set", w: held(nil), chk: moved, state: updates.StateUpdateAvailable},
+		{name: "a skip of the offered digest wins over update_available", w: held(nil), igs: updates.Ignores{skip(dg('9'))}, chk: moved, state: updates.StateSkipped, scope: updates.ScopeWorkload},
+		{name: "a skip of another digest lifts at once", w: held(nil), igs: updates.Ignores{skip(dg('8'))}, chk: moved, state: updates.StateUpdateAvailable},
+		{name: "a skip wins over check_failed while the stored digest is the skipped one", w: held(nil), igs: updates.Ignores{skip(dg('9'))}, chk: failedAfter, state: updates.StateSkipped, scope: updates.ScopeWorkload},
+		{name: "a skip does not turn an up to date workload into skipped", w: held(nil), igs: updates.Ignores{skip(dg('1'))}, chk: &updates.Check{Digest: dg('1'), CheckedAt: t0, SuccessAt: t0}, state: updates.StateUpToDate},
+		{name: "an ignore of the image", w: held(nil), igs: updates.Ignores{image}, chk: moved, state: updates.StateIgnored, scope: updates.ScopeImage},
+		{name: "an ignore of the workload", w: held(nil), igs: updates.Ignores{workload}, chk: moved, state: updates.StateIgnored, scope: updates.ScopeWorkload},
+		{name: "ignored wins over skipped", w: held(nil), igs: updates.Ignores{skip(dg('9')), image}, chk: moved, state: updates.StateIgnored, scope: updates.ScopeImage},
+		{name: "an ignore reads ignored before any check", w: held(nil), igs: updates.Ignores{workload}, state: updates.StateIgnored, scope: updates.ScopeWorkload},
+		{name: "the label wins over a stored skip", w: held(label), igs: updates.Ignores{skip(dg('9'))}, chk: moved, state: updates.StateIgnored, scope: updates.ScopeLabel},
+		{name: "the label alone", w: held(label), chk: moved, state: updates.StateIgnored, scope: updates.ScopeLabel},
+		{name: "any other value of the label hides nothing", w: held(map[string]string{stacks.LabelUpdates: "true"}), chk: moved, state: updates.StateUpdateAvailable},
+	} {
+		v := judgedWith(tc.w, tc.igs, tc.chk)
+		if v.State != tc.state {
+			t.Errorf("%s: state = %s, want %s", tc.name, v.State, tc.state)
+			continue
+		}
+		if tc.scope == "" {
+			if v.Ignore != nil {
+				t.Errorf("%s: ignore = %+v, want none", tc.name, v.Ignore)
+			}
+			continue
+		}
+		if v.Ignore == nil || v.Ignore.Scope != tc.scope {
+			t.Errorf("%s: ignore = %+v, want scope %s", tc.name, v.Ignore, tc.scope)
+		}
+		if v.Reason != "" || v.Note != "" {
+			t.Errorf("%s: reason %q note %q, want neither on a held verdict", tc.name, v.Reason, v.Note)
+		}
+	}
+
+	// The skip answers who and what it passed over.
+	v := judgedWith(held(nil), updates.Ignores{skip(dg('9'))}, moved)
+	if v.RemoteDigest != dg('9') || v.RunningDigest != dg('1') || v.Ignore.SetBy != "ann" || v.Ignore.Digest != dg('9') {
+		t.Errorf("skipped verdict = %+v, want both digests and who skipped", v)
+	}
+
+	// A workload with nothing to follow stays what it is: there is nothing to hide.
+	pinned := held(nil)
+	pinned.Ref = registry.Ref{Domain: "docker.io", Path: "acme/app", Digest: dg('1')}
+	if v := judgedWith(pinned, updates.Ignores{workload}, nil); v.State != updates.StatePinned {
+		t.Errorf("pinned workload with an ignore = %s, want pinned_in_file", v.State)
+	}
+}
+
+func TestIgnoredNeverCounted(t *testing.T) {
+	t.Parallel()
+	moved := &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}
+	igs := updates.Ignores{
+		{EnvID: "env-a", Mode: updates.ModeSkip, Scope: updates.ScopeWorkload, Kind: "service", Name: "web", Digest: dg('9')},
+		{EnvID: "env-a", Mode: updates.ModeIgnore, Scope: updates.ScopeWorkload, Kind: "service", Name: "api"},
+	}
+	named := func(name string) updates.Workload { w := held(nil); w.Name, w.ID = name, name; return w }
+	web, api, db := judgedWith(named("web"), igs, moved), judgedWith(named("api"), igs, moved), judgedWith(named("db"), igs, moved)
+	if web.State != updates.StateSkipped || api.State != updates.StateIgnored || db.State != updates.StateUpdateAvailable {
+		t.Fatalf("states = %s %s %s, want skipped ignored update_available", web.State, api.State, db.State)
+	}
+	if got := updates.Aggregate([]updates.Verdict{web, api}); got.Count != 0 || got.State != updates.StateIgnored {
+		t.Errorf("stack of a skipped and an ignored workload = %+v, want ignored and no count", got)
+	}
+	if got := updates.Aggregate([]updates.Verdict{web}); got.Count != 0 || got.State != updates.StateSkipped {
+		t.Errorf("stack of a skipped workload = %+v, want skipped and no count", got)
+	}
+	if got := updates.Aggregate([]updates.Verdict{web, api, db}); got.Count != 1 || got.State != updates.StateUpdateAvailable {
+		t.Errorf("stack with one real update = %+v, want it counted alone", got)
 	}
 }
