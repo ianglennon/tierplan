@@ -4,12 +4,15 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
 )
@@ -355,5 +358,93 @@ func TestEnvWarningsRestartLoopContainerIsShownToAViewerOfTheEnvironmentAndToNob
 	cookie, csrf = f.signIn(t, "bell-nobody", false)
 	if got := f.containerLoopWarnings(t, cookie, csrf); len(got) != 0 {
 		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
+	}
+}
+
+// Failed image updates in the bell (plan 12-44, IMG-07, D-14, T-12-73). The environment is a swarm manager whose services
+// run digest 'a' of a scripted registry that says 'b' now; a failure is remembered by hand, as the applier does.
+
+type updateWarning struct {
+	ID        string `json:"id"`
+	Severity  string `json:"severity"`
+	EnvID     string `json:"envId"`
+	EnvName   string `json:"envName"`
+	Service   string `json:"service"`
+	ServiceID string `json:"serviceId"`
+	Container string `json:"container"`
+	Digest    string `json:"digest"`
+	Reason    string `json:"reason"`
+	Count     int    `json:"count"`
+	Since     string `json:"since"`
+}
+
+// bellUpdateEnv is a checked environment whose services are named, each running digest 'a' while the registry says 'b'.
+func bellUpdateEnv(t *testing.T, names ...string) (*envFix, envBody, *updates.FailureStore) {
+	t.Helper()
+	answers := map[string]headAnswer{}
+	var services []dockertest.FakeService
+	for _, n := range names {
+		answers["team/"+n] = headAnswer{digest: updDigest('b')}
+		services = append(services, updatedService(n, 'a'))
+	}
+	f, e := updatesEnv(t, newScriptedHeads(answers), services...)
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	return f, e, &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+}
+
+// remember files a failed update of a service of the environment.
+func remember(t *testing.T, fs *updates.FailureStore, envID, kind, name, digest, reason string, rollbackFailed bool) {
+	t.Helper()
+	err := fs.Record(context.Background(), updates.Failure{
+		EnvID: envID, Kind: kind, Workload: name, Digest: digest, Reason: reason, RunID: "run-" + name, RollbackFailed: rollbackFailed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// updateItems are the failed-update items the bell shows a caller.
+func (f *envFix) updateItems(t *testing.T, cookie, csrf string) []updateWarning {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []updateWarning `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []updateWarning
+	for _, w := range body.Items {
+		if strings.HasPrefix(w.ID, "update_") {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestBellShowsRolledBackUpdate(t *testing.T) {
+	t.Parallel()
+	f, e, fs := bellUpdateEnv(t, "web")
+	if got := f.updateItems(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Fatalf("before any failure: %+v, want none", got)
+	}
+	remember(t, fs, e.ID, "service", "web", updDigest('b'), updates.ReasonUnhealthy, false)
+
+	got := f.updateItems(t, f.cookie, f.csrf)
+	if len(got) != 1 {
+		t.Fatalf("update items = %+v, want one, for web", got)
+	}
+	w := got[0]
+	if w.ID != "update_rolled_back" || w.Severity != "warning" || w.EnvID != e.ID || w.EnvName != e.Name || w.Service != "web" ||
+		w.ServiceID != "svc-web" || w.Digest != strings.Repeat("b", 12) || w.Reason != updates.ReasonUnhealthy {
+		t.Errorf("item = %+v", w)
+	}
+	if _, err := time.Parse(time.RFC3339, w.Since); err != nil {
+		t.Errorf("since = %q: %v", w.Since, err)
 	}
 }

@@ -392,16 +392,6 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	gitsync.RegisterOwnedKinds()
 	f.gitSync = gitDeps.Sync
-	if f.envSvc != nil {
-		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
-			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Now: f.envWarningsNow, Log: log,
-			Agents: api.AgentsDeps{
-				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
-				AgentAllowInsecure: f.agentAllowInsecure,
-				Updater:            f.updater, ServerVersion: f.serverVersion,
-			},
-		})
-	}
 	var updateSvc *updates.Service
 	if f.updateHeads != nil {
 		var store updates.Store = updates.SQLStore{Q: f.st.Q, W: f.st.Write}
@@ -418,6 +408,16 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if f.updateInspect != nil {
 			updateSvc.ImageTexts.Inspect = f.updateInspect
 		}
+	}
+	if f.envSvc != nil {
+		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
+			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, Log: log,
+			Agents: api.AgentsDeps{
+				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+				AgentAllowInsecure: f.agentAllowInsecure,
+				Updater:            f.updater, ServerVersion: f.serverVersion,
+			},
+		})
 	}
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Updates: updateSvc, Log: log})

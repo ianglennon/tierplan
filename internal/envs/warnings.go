@@ -32,6 +32,10 @@ const (
 	WarnGitAutoDeploySkipped  = "git_autodeploy_skipped"
 	WarnGitAutoDeployReverted = "git_autodeploy_reverted"
 	WarnGitAutoDeployPaused   = "git_autodeploy_paused"
+	// The next two are told of an image update that failed (Phase 12, IMG-07, D-14): one that failed and was put back, and one
+	// whose rollback failed too so the workload may be partly updated. They go while the tag still points at the digest that failed.
+	WarnUpdateRolledBack     = "update_rolled_back"
+	WarnUpdateRollbackFailed = "update_rollback_failed"
 )
 
 // maxWarnError is the longest latest-error text a restart-loop warning carries, in characters.
@@ -68,6 +72,9 @@ type EnvWarning struct {
 	// of Count), the revision it made or that a roll back went to, and who owns the paused automation.
 	Commit, Example, Owner string
 	Revision               int64
+	// For a failed image update: the short digest that failed. The workload is Service or Container (with its ID); Reason is why
+	// the update failed; Count, on a collapsed item, is how many updates it stands for.
+	Digest string
 }
 
 // AgentState is what the warnings need to know of one agent.
