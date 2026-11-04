@@ -41,14 +41,21 @@ export function RevisionLink({
   );
 }
 
-// RevisionKindCell is how a revision came to be (UI-SPEC "History tab"): Deploy, Update images, Roll back
-// with the revision it copied as a link, or Adopted with the namespace or project it was taken over from.
+// RevisionKindCell is how a revision came to be (UI-SPEC "History tab"): Deploy, Update images (the deploy
+// of that name) or Image update (a one-click update), Roll back with the revision it copied as a link, or
+// Adopted with the namespace or project it was taken over from.
 // The names are Docker's text, drawn as text.
 export function RevisionKindCell({ item, envId, stackId }: RevisionKindCellProps) {
   const t = useT();
   return (
     <span className="flex flex-col">
-      <span>{t(`stackHistory.kind.${item.origin}`)}</span>
+      <span>
+        {t(
+          item.origin === "update" && item.imageUpdate
+            ? "stackHistory.kind.imageUpdate"
+            : `stackHistory.kind.${item.origin}`,
+        )}
+      </span>
       {item.origin === "rollback" && item.restoredFrom > 0 ? (
         <span className="text-xs text-muted-foreground">
           {t("stackHistory.kind.ofPrefix")}{" "}

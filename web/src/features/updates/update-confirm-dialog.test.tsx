@@ -4,6 +4,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
@@ -100,7 +101,7 @@ function Where() {
   return <output data-testid="where">{pathname}</output>;
 }
 
-function mount() {
+function mount(props: Partial<ComponentProps<typeof UpdateConfirmDialog>> = {}) {
   return render(
     <QueryClientProvider client={client}>
       <TestRouter>
@@ -110,6 +111,7 @@ function mount() {
             envName="Prod"
             workload={{ kind: "service", name: "web" }}
             onClose={onClose}
+            {...props}
           />
           <Toaster />
           <Where />
@@ -376,5 +378,150 @@ describe("UpdateConfirmDialog: the commit", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(runs()).toEqual([]);
+  });
+});
+
+describe("UpdateConfirmDialog: the stack scope", () => {
+  const stackItems = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      item({ name: `shop_s${i}`, image: `acme/s${i}:1`, stack: "shop" }),
+    );
+  const stackPreview = (n: number, extra: Partial<UpdatePreview> = {}) =>
+    preview({ items: stackItems(n), warnings: [], ...extra });
+  const stackProps = { workload: { kind: "stack" as const, name: "shop" } };
+  const stackCommit = (name: string) => screen.findByRole("button", { name });
+  const rowsShown = (n: number) =>
+    waitFor(() => expect(document.querySelectorAll("[data-slot=update-row]").length).toBe(n));
+
+  it("asks the preview for kind stack and sends kind stack", async () => {
+    answerPreview = () => Response.json(stackPreview(2));
+    answerRun = () => Response.json({ jobId: "j2", stackId: "s9" });
+    mount(stackProps);
+    await rowsShown(2);
+    expect(sent.find((s) => s.path.endsWith("/updates/preview"))).toBeTruthy();
+    fireEvent.click(await stackCommit("Update 2 services"));
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).toEqual({
+      kind: "stack",
+      name: "shop",
+      expect: { shop_s0: B, shop_s1: B },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s9/deploys/j2"),
+    );
+  });
+
+  it("reads Update 1 service for one and Update 12 services for twelve", async () => {
+    answerPreview = () => Response.json(stackPreview(1));
+    mount(stackProps);
+    await rowsShown(1);
+    expect(await stackCommit("Update 1 service")).toBeTruthy();
+    cleanup();
+    answerPreview = () => Response.json(stackPreview(12));
+    mount(stackProps);
+    await rowsShown(12);
+    expect(await stackCommit("Update 12 services")).toBeTruthy();
+  });
+
+  it("names how many are left out, in the singular and the plural", async () => {
+    answerPreview = () =>
+      Response.json(stackPreview(1, { leftOut: [{ name: "shop_db", state: "skipped" }] }));
+    mount(stackProps);
+    expect(await screen.findByText("1 is skipped or ignored and won't change.")).toBeTruthy();
+    cleanup();
+    answerPreview = () =>
+      Response.json(
+        stackPreview(1, {
+          leftOut: [
+            { name: "shop_db", state: "skipped" },
+            { name: "shop_cache", state: "ignored" },
+            { name: "shop_q", state: "ignored" },
+          ],
+        }),
+      );
+    mount(stackProps);
+    expect(await screen.findByText("3 are skipped or ignored and won't change.")).toBeTruthy();
+  });
+
+  it("offers Review everything first only when the host gives it, and it calls it", async () => {
+    answerPreview = () => Response.json(stackPreview(1));
+    const onReview = vi.fn<() => void>();
+    mount({ ...stackProps, onReview });
+    fireEvent.click(await screen.findByRole("button", { name: "Review everything first" }));
+    expect(onReview).toHaveBeenCalledTimes(1);
+    expect(runs()).toEqual([]);
+    cleanup();
+    mount(stackProps);
+    await rowsShown(1);
+    expect(screen.queryByRole("button", { name: "Review everything first" })).toBeNull();
+    cleanup();
+    mount({ onReview });
+    await rowsShown(1);
+    expect(screen.queryByRole("button", { name: "Review everything first" })).toBeNull();
+  });
+
+  it("sends a service of a managed stack to the stack's console and says it is a revision of the stack", async () => {
+    answerRun = () => Response.json({ jobId: "j5", stackId: "s1" });
+    mount({ managedStack: "shop" });
+    expect(
+      screen.getByText(
+        "TierPlan pulls the new image and updates the service in place. This is saved as a new revision of shop, so you can roll back from History.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(await commit());
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/deploys/j5"),
+    );
+  });
+
+  it("answers a stack that must be adopted first with the adopt link, and no commit", async () => {
+    answerPreview = () =>
+      Response.json(stackPreview(0, { items: [], offered: false, refusal: "adopt_first" }));
+    mount(stackProps);
+    const link = await screen.findByRole("link", { name: "Adopt stack…" });
+    expect(link.getAttribute("href")).toBe("/env/e1/unmanaged-stacks/shop/adopt");
+    expect(
+      screen.getByText(
+        "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Update/ })).toBeNull();
+  });
+
+  it("shows the adopt link too when the press is refused 409 adopt_first", async () => {
+    answerPreview = () => Response.json(stackPreview(1));
+    answerRun = () =>
+      Response.json(
+        { type: "adopt_first", title: "Conflict", status: 409, detail: "adopt it" },
+        { status: 409 },
+      );
+    mount(stackProps);
+    await rowsShown(1);
+    fireEvent.click(await stackCommit("Update 1 service"));
+    expect(await screen.findByRole("link", { name: "Adopt stack…" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Update 1/ })).toBeNull();
+  });
+
+  it("says Nothing to update and drops the commit when the press is refused 409 nothing_to_update", async () => {
+    answerPreview = () => Response.json(stackPreview(1));
+    answerRun = () =>
+      Response.json(
+        { type: "nothing_to_update", title: "Conflict", status: 409, detail: "none" },
+        { status: 409 },
+      );
+    mount(stackProps);
+    await rowsShown(1);
+    fireEvent.click(await stackCommit("Update 1 service"));
+    expect(await screen.findByText("Nothing to update")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Update 1/ })).toBeNull();
+    expect(runs()).toHaveLength(1);
+  });
+
+  it("draws a service name with markup as text", async () => {
+    answerPreview = () =>
+      Response.json(stackPreview(1, { items: [item({ name: "<img src=x onerror=alert(1)>" })] }));
+    mount(stackProps);
+    expect(await screen.findByText("<img src=x onerror=alert(1)>")).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
   });
 });
