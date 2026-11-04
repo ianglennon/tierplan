@@ -343,7 +343,7 @@ describe("SubnetPicker", () => {
     const list = screen.getAllByRole("listitem")[0] as HTMLElement;
     expect(list.closest("[aria-live=polite]")).toBeTruthy();
     expect(subnetInput().getAttribute("aria-invalid")).toBe("true");
-    expect(onBlocking).toHaveBeenLastCalledWith("overridable");
+    await waitFor(() => expect(onBlocking).toHaveBeenLastCalledWith("overridable"));
     expect(screen.queryByText("No overlaps found.")).toBeNull();
   });
 
@@ -365,7 +365,7 @@ describe("SubnetPicker", () => {
     typeSubnet("192.168.4.0/24");
     await screen.findByText(/Overlaps a route on node-1: 192\.168\.4\.0\/24 on eth0/);
     expect(subnetInput().getAttribute("aria-invalid")).toBe("false");
-    expect(onBlocking).toHaveBeenLastCalledWith("none");
+    await waitFor(() => expect(onBlocking).toHaveBeenLastCalledWith("none"));
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
@@ -411,7 +411,7 @@ describe("SubnetPicker", () => {
       "A swarm can't give two of its networks overlapping subnets, so this one can't be created anyway. Choose another subnet.",
     );
     expect(screen.queryByRole("checkbox")).toBeNull();
-    expect(onBlocking).toHaveBeenLastCalledWith("final");
+    await waitFor(() => expect(onBlocking).toHaveBeenLastCalledWith("final"));
     expect(subnetInput().getAttribute("aria-invalid")).toBe("true");
     expect((subnetInput().getAttribute("aria-describedby") ?? "").split(" ")).toContain(note.id);
   });
@@ -519,7 +519,7 @@ describe("SubnetPicker", () => {
       "Couldn't check this subnet. You can still create the network.",
     );
     expect(line.closest("[role=status]")).toBeTruthy();
-    expect(onBlocking).toHaveBeenLastCalledWith("none");
+    await waitFor(() => expect(onBlocking).toHaveBeenLastCalledWith("none"));
     expect(subnetInput().disabled).toBe(false);
   });
 
