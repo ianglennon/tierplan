@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -16,6 +17,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -99,6 +101,33 @@ type UpdateInfoBody struct {
 	Task             bool              `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
 }
 
+// UpdateHolderBody is who holds an environment's operation lock, as the Busy badge and the confirm name them.
+type UpdateHolderBody struct {
+	Kind     string `json:"kind" enum:"git_deploy,deploy,rollback,janitor,update" doc:"What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)"`
+	By       string `json:"by" doc:"Who started it, as a name; for an automatic deploy a system name"`
+	Started  string `json:"started" format:"date-time" doc:"When it started"`
+	Workload string `json:"workload,omitempty" doc:"Left out unless set: for an image update, the service, container or stack being updated"`
+	Stack    string `json:"stack,omitempty" doc:"Left out unless set: the stack a stack operation is on"`
+}
+
+// holderBodyOf turns the holder of an operation lock into its kind and who: a janitor run, a roll back, an image update (a
+// plain one, or a stack's Update images), an automatic deploy from git (a deploy a system principal of git started) or any other
+// stack operation.
+func holderBodyOf(h stackops.Holder) UpdateHolderBody {
+	kind := "deploy"
+	switch {
+	case h.Kind == stackops.HolderKindJanitor:
+		kind = "janitor"
+	case h.Kind == deployModeRollback, h.Kind == deployModeRestore:
+		kind = "rollback"
+	case h.Kind == stackops.HolderKindImageUpdate, h.Kind == deployModeUpdate:
+		kind = "update"
+	case h.Kind == deployModeDeploy && (strings.HasPrefix(h.By, "system:git") || strings.HasPrefix(h.By, "system:webhook")):
+		kind = "git_deploy"
+	}
+	return UpdateHolderBody{Kind: kind, By: h.By, Started: rfc3339(h.Started), Workload: h.Workload, Stack: h.StackName}
+}
+
 // updateInfoOf turns a verdict into its answer. w is the workload the verdict is for, which names the
 // image that is followed.
 func updateInfoOf(v updates.Verdict, w updates.Workload) *UpdateInfoBody {
@@ -170,6 +199,7 @@ func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
 	registerUpdatePolicy(r, d)
 	registerUpdateIgnores(r, d)
 	registerUpdateRun(r, d)
+	registerImageUpdatePreview(r, d)
 }
 
 // checkEnvironmentUpdates checks the images of an environment's services now and counts what it found.

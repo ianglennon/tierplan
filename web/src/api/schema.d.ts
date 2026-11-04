@@ -3532,6 +3532,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/updates/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What updating a service would change
+         * @description The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, a service of a managed stack, nothing newer, no check yet, a failed check, a pinned or local image) or when the environment is offline. lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["previewImageUpdate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/updates/run": {
         parameters: {
             query?: never;
@@ -14213,6 +14233,24 @@ export interface components {
             /** @description What is known about the workload's image now. Absent for an ignore of an image, which covers many workloads */
             update?: components["schemas"]["UpdateInfoBody"];
         };
+        UpdateHolderBody: {
+            /** @description Who started it, as a name; for an automatic deploy a system name */
+            by: string;
+            /**
+             * @description What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)
+             * @enum {string}
+             */
+            kind: "git_deploy" | "deploy" | "rollback" | "janitor" | "update";
+            /** @description Left out unless set: the stack a stack operation is on */
+            stack?: string;
+            /**
+             * Format: date-time
+             * @description When it started
+             */
+            started: string;
+            /** @description Left out unless set: for an image update, the service, container or stack being updated */
+            workload?: string;
+        };
         UpdateIgnoreBody: {
             /** @description For a skip, the version it passes over; empty for an ignore */
             digest: string;
@@ -14343,6 +14381,42 @@ export interface components {
              */
             updatedAt: string;
         };
+        UpdatePreviewBody: {
+            /** @description The workloads the update would change, one for a service; empty when offered is false */
+            items: components["schemas"]["UpdatePreviewItem"][] | null;
+            /** @description Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked */
+            lock?: components["schemas"]["UpdateHolderBody"];
+            /** @description True when an update would be offered for this service */
+            offered: boolean;
+            /**
+             * @description Why no update is offered; empty when one is
+             * @enum {string}
+             */
+            refusal: "" | "agent" | "job_mode" | "managed_by_stack" | "nothing_to_update" | "not_checked" | "check_failed" | "pinned_in_file" | "not_from_registry" | "offline";
+            /** @description Pre-flight warnings, worked out on the server; empty when offered is false */
+            warnings: components["schemas"]["UpdateWarningBody"][] | null;
+        };
+        UpdatePreviewItem: {
+            /** @description The platforms it runs on whose image changed; empty when none is named */
+            changedPlatforms: string[] | null;
+            /** @description The digest it runs */
+            fromDigest: string;
+            /** @description The image it follows, without a digest (repository:tag) */
+            image: string;
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            kind: "service";
+            /** @description The service's name */
+            name: string;
+            /** @description The platforms it runs on, for a multi-platform image; empty when none is known */
+            platforms: string[] | null;
+            /** @description The stack it belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The digest the stored check found the tag at */
+            toDigest: string;
+        };
         UpdateRunBody: {
             /** @description The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream */
             jobId: string;
@@ -14437,6 +14511,15 @@ export interface components {
              * @description The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change
              */
             updatedAt: string;
+        };
+        UpdateWarningBody: {
+            /**
+             * @description downtime (the only replica stops before its replacement starts), container_downtime (a container is recreated), no_healthcheck (neither the service nor its image defines a health check), host_ports (a port is published in host mode), volumes (the service mounts a volume), previous_failure (an update to this version failed before)
+             * @enum {string}
+             */
+            code: "downtime" | "container_downtime" | "no_healthcheck" | "host_ports" | "volumes" | "previous_failure";
+            /** @description The service the warning is about */
+            workload: string;
         };
         UserAccessBody: {
             /** @description The environments the user can reach, sorted by name */
@@ -22197,6 +22280,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdateCheckStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewImageUpdate: {
+        parameters: {
+            query?: {
+                /** @description service for a swarm service. Containers and stacks follow in later versions */
+                kind?: "service";
+                /** @description The service's name */
+                name?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatePreviewBody"];
                 };
             };
             /** @description Error */

@@ -21847,6 +21847,45 @@
         },
         "type": "object"
       },
+      "UpdateHolderBody": {
+        "additionalProperties": false,
+        "properties": {
+          "by": {
+            "description": "Who started it, as a name; for an automatic deploy a system name",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)",
+            "enum": [
+              "git_deploy",
+              "deploy",
+              "rollback",
+              "janitor",
+              "update"
+            ],
+            "type": "string"
+          },
+          "stack": {
+            "description": "Left out unless set: the stack a stack operation is on",
+            "type": "string"
+          },
+          "started": {
+            "description": "When it started",
+            "format": "date-time",
+            "type": "string"
+          },
+          "workload": {
+            "description": "Left out unless set: for an image update, the service, container or stack being updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "by",
+          "started"
+        ],
+        "type": "object"
+      },
       "UpdateIgnoreBody": {
         "additionalProperties": false,
         "properties": {
@@ -22162,6 +22201,125 @@
         ],
         "type": "object"
       },
+      "UpdatePreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The workloads the update would change, one for a service; empty when offered is false",
+            "items": {
+              "$ref": "#/components/schemas/UpdatePreviewItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lock": {
+            "$ref": "#/components/schemas/UpdateHolderBody",
+            "description": "Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked"
+          },
+          "offered": {
+            "description": "True when an update would be offered for this service",
+            "type": "boolean"
+          },
+          "refusal": {
+            "description": "Why no update is offered; empty when one is",
+            "enum": [
+              "",
+              "agent",
+              "job_mode",
+              "managed_by_stack",
+              "nothing_to_update",
+              "not_checked",
+              "check_failed",
+              "pinned_in_file",
+              "not_from_registry",
+              "offline"
+            ],
+            "type": "string"
+          },
+          "warnings": {
+            "description": "Pre-flight warnings, worked out on the server; empty when offered is false",
+            "items": {
+              "$ref": "#/components/schemas/UpdateWarningBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "warnings",
+          "offered",
+          "refusal"
+        ],
+        "type": "object"
+      },
+      "UpdatePreviewItem": {
+        "additionalProperties": false,
+        "properties": {
+          "changedPlatforms": {
+            "description": "The platforms it runs on whose image changed; empty when none is named",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "fromDigest": {
+            "description": "The digest it runs",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image it follows, without a digest (repository:tag)",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What it is",
+            "enum": [
+              "service"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's name",
+            "type": "string"
+          },
+          "platforms": {
+            "description": "The platforms it runs on, for a multi-platform image; empty when none is known",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "stack": {
+            "description": "The stack it belongs to; empty for a service made on its own",
+            "type": "string"
+          },
+          "toDigest": {
+            "description": "The digest the stored check found the tag at",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "stack",
+          "image",
+          "fromDigest",
+          "toDigest",
+          "platforms",
+          "changedPlatforms"
+        ],
+        "type": "object"
+      },
       "UpdateRunBody": {
         "additionalProperties": false,
         "properties": {
@@ -22388,6 +22546,32 @@
         },
         "required": [
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "UpdateWarningBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "downtime (the only replica stops before its replacement starts), container_downtime (a container is recreated), no_healthcheck (neither the service nor its image defines a health check), host_ports (a port is published in host mode), volumes (the service mounts a volume), previous_failure (an update to this version failed before)",
+            "enum": [
+              "downtime",
+              "container_downtime",
+              "no_healthcheck",
+              "host_ports",
+              "volumes",
+              "previous_failure"
+            ],
+            "type": "string"
+          },
+          "workload": {
+            "description": "The service the warning is about",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workload",
+          "code"
         ],
         "type": "object"
       },
@@ -36300,6 +36484,82 @@
           }
         },
         "summary": "Change when an environment is checked for image updates",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/updates/preview": {
+      "get": {
+        "description": "The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, a service of a managed stack, nothing newer, no check yet, a failed check, a pinned or local image) or when the environment is offline. lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.",
+        "operationId": "previewImageUpdate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "service for a swarm service. Containers and stacks follow in later versions",
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "schema": {
+              "description": "service for a swarm service. Containers and stacks follow in later versions",
+              "enum": [
+                "service"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The service's name",
+            "explode": false,
+            "in": "query",
+            "name": "name",
+            "schema": {
+              "description": "The service's name",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What updating a service would change",
         "tags": [
           "environments"
         ]

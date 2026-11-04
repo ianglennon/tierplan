@@ -1,0 +1,121 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/updates"
+)
+
+// What the compact confirm shows before an update runs (plan 12-16, D-05, IMG-06): the digests that would change and the things
+// worth knowing first. It reads the check that is stored, never the registry.
+
+// UpdatePreviewInput is the path and query of the preview route.
+type UpdatePreviewInput struct {
+	EnvironmentPathInput
+	Kind string `query:"kind" enum:"service" doc:"service for a swarm service. Containers and stacks follow in later versions"`
+	Name string `query:"name" minLength:"1" maxLength:"255" doc:"The service's name"`
+}
+
+// UpdatePreviewItem is one workload the update would change.
+type UpdatePreviewItem struct {
+	Kind             string   `json:"kind" enum:"service" doc:"What it is"`
+	Name             string   `json:"name" doc:"The service's name"`
+	Stack            string   `json:"stack" doc:"The stack it belongs to; empty for a service made on its own"`
+	Image            string   `json:"image" doc:"The image it follows, without a digest (repository:tag)"`
+	FromDigest       string   `json:"fromDigest" doc:"The digest it runs"`
+	ToDigest         string   `json:"toDigest" doc:"The digest the stored check found the tag at"`
+	Platforms        []string `json:"platforms" doc:"The platforms it runs on, for a multi-platform image; empty when none is known"`
+	ChangedPlatforms []string `json:"changedPlatforms" doc:"The platforms it runs on whose image changed; empty when none is named"`
+}
+
+// UpdateWarningBody is one thing to know before the update runs.
+type UpdateWarningBody struct {
+	Workload string `json:"workload" doc:"The service the warning is about"`
+	Code     string `json:"code" enum:"downtime,container_downtime,no_healthcheck,host_ports,volumes,previous_failure" doc:"downtime (the only replica stops before its replacement starts), container_downtime (a container is recreated), no_healthcheck (neither the service nor its image defines a health check), host_ports (a port is published in host mode), volumes (the service mounts a volume), previous_failure (an update to this version failed before)"`
+}
+
+// UpdatePreviewBody is what the confirm shows.
+type UpdatePreviewBody struct {
+	Items    []UpdatePreviewItem `json:"items" doc:"The workloads the update would change, one for a service; empty when offered is false"`
+	Warnings []UpdateWarningBody `json:"warnings" doc:"Pre-flight warnings, worked out on the server; empty when offered is false"`
+	Lock     *UpdateHolderBody   `json:"lock,omitempty" doc:"Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked"`
+	Offered  bool                `json:"offered" doc:"True when an update would be offered for this service"`
+	Refusal  string              `json:"refusal" enum:",agent,job_mode,managed_by_stack,nothing_to_update,not_checked,check_failed,pinned_in_file,not_from_registry,offline" doc:"Why no update is offered; empty when one is"`
+}
+
+// UpdatePreviewOutput wraps UpdatePreviewBody for huma.
+type UpdatePreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         UpdatePreviewBody
+}
+
+func registerImageUpdatePreview(r *httpx.Router, d UpdatesDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewImageUpdate", Method: http.MethodGet, Path: "/api/env/{envId}/updates/preview",
+		Summary: "What updating a service would change",
+		Description: "The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). " +
+			"Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. " +
+			"offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, a service of a managed stack, nothing newer, no check yet, a failed check, a pinned or local image) or when the environment is offline. " +
+			"lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *UpdatePreviewInput) (*UpdatePreviewOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := previewImageUpdate(ctx, d, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			return &UpdatePreviewOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// previewImageUpdate describes the update of a service.
+func previewImageUpdate(ctx context.Context, d UpdatesDeps, envID string, in *UpdatePreviewInput) (UpdatePreviewBody, error) {
+	if d.Applier == nil {
+		return UpdatePreviewBody{}, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
+	}
+	p, err := d.Applier.Preview(ctx, envID, in.Kind, in.Name)
+	if err != nil {
+		var down envs.ErrNotOnline
+		switch {
+		case errors.Is(err, updates.ErrWorkloadGone):
+			return UpdatePreviewBody{}, workloadGone("service")
+		case errors.Is(err, updates.ErrUnsupportedKind):
+			return UpdatePreviewBody{}, httpx.Problem(http.StatusUnprocessableEntity, "", "That kind of workload can't be updated yet.")
+		case errors.As(envs.ClassifyDockerError(err), &down):
+			return UpdatePreviewBody{Items: []UpdatePreviewItem{}, Warnings: []UpdateWarningBody{}, Refusal: "offline"}, nil
+		}
+		return UpdatePreviewBody{}, snapshotProblem(d.log(), envID, err)
+	}
+	b := UpdatePreviewBody{
+		Items: make([]UpdatePreviewItem, 0, len(p.Items)), Warnings: make([]UpdateWarningBody, 0, len(p.Warnings)),
+		Offered: p.Offered, Refusal: p.Refusal,
+	}
+	for _, it := range p.Items {
+		b.Items = append(b.Items, UpdatePreviewItem{
+			Kind: it.Kind, Name: it.Name, Stack: it.Stack, Image: it.Image, FromDigest: it.FromDigest, ToDigest: it.ToDigest,
+			Platforms: nonNil(it.Platforms), ChangedPlatforms: nonNil(it.ChangedPlatforms),
+		})
+	}
+	for _, w := range p.Warnings {
+		b.Warnings = append(b.Warnings, UpdateWarningBody{Workload: w.Workload, Code: w.Code})
+	}
+	if p.Lock != nil {
+		h := holderBodyOf(*p.Lock)
+		b.Lock = &h
+	}
+	return b, nil
+}
