@@ -341,7 +341,8 @@ describe("dashboard", () => {
     const labels = tiles.getAllByText(/./, { selector: "span.text-xs.font-semibold" });
     expect(labels[labels.length - 1]?.textContent).toBe("Updates available");
     expect(el.getAttribute("href")).toContain("tab=updates");
-    expect(el.getAttribute("href")).toContain("env=e1");
+    // The route takes the environments as a list.
+    expect(decodeURIComponent(el.getAttribute("href") ?? "")).toContain('env=["e1"]');
   });
 
   it("leaves the Updates available tile out for a person who may not read containers", async () => {

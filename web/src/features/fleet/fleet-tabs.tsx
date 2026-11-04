@@ -5,12 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { environmentsQuery } from "@/api/environments";
-import { useFleetSummary } from "@/api/fleet";
+import { type FleetShowValue, useFleetSummary } from "@/api/fleet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EnvFilter } from "@/features/fleet/env-filter";
 import { FleetCoverageAlert } from "@/features/fleet/fleet-coverage-alert";
 import { FleetFailingTable } from "@/features/fleet/fleet-failing-table";
 import { FLEET_TABS, type FleetTab } from "@/features/fleet/fleet-search";
+import { FleetUpdatesTab } from "@/features/fleet/fleet-updates-tab";
 import { useT } from "@/i18n/use-t";
 
 interface FleetTabsProps {
@@ -19,6 +20,9 @@ interface FleetTabsProps {
   env: readonly string[];
   onTabChange: (tab: FleetTab) => void;
   onEnvChange: (ids: string[]) => void;
+  // The Updates tab's Show chip: the URL's, with "updates" as the default.
+  show: FleetShowValue;
+  onShowChange: (show: FleetShowValue) => void;
   // The Environments tab's body: today's overview table, unchanged.
   environmentsBody: ReactNode;
 }
@@ -31,6 +35,8 @@ export function FleetTabs({
   env,
   onTabChange,
   onEnvChange,
+  show,
+  onShowChange,
   environmentsBody,
 }: FleetTabsProps) {
   const t = useT();
@@ -61,7 +67,12 @@ export function FleetTabs({
         <FleetFailingTable env={env} onEnvChange={onEnvChange} />
       </TabsContent>
       <TabsContent value="updates" className="flex flex-col gap-4">
-        <FleetSummaryTab env={env} onEnvChange={onEnvChange} />
+        <FleetUpdatesTab
+          env={env}
+          show={show}
+          onEnvChange={onEnvChange}
+          onShowChange={onShowChange}
+        />
       </TabsContent>
       <TabsContent value="pools" className="flex flex-col gap-4">
         <FleetSummaryTab env={env} onEnvChange={onEnvChange} />
@@ -71,7 +82,7 @@ export function FleetTabs({
 }
 
 // The Updates and Address pools tabs open with what every fleet tab opens with: the environments
-// the view leaves out, and the environment filter. Their tables are the next plan's (12-29).
+// the view leaves out, and the environment filter. Its table is the next task's.
 function FleetSummaryTab({
   env,
   onEnvChange,

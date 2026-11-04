@@ -95,6 +95,157 @@
       "loading": "Loading failing services",
       "count_one": "{{count}} failing service or container",
       "count_other": "{{count}} failing services and containers"
+    },
+    "updates": {
+      "caption": "Image updates",
+      "loading": "Loading image updates",
+      "columns": {
+        "workload": "Workload",
+        "image": "Image",
+        "change": "Change",
+        "status": "Status",
+        "checked": "Checked",
+        "actions": "Actions"
+      },
+      "show": {
+        "label": "Show",
+        "updates": "Updates",
+        "problems": "Problems",
+        "ignored": "Skipped and ignored",
+        "all": "All",
+        "counted": "{{label}} ({{count, number}})"
+      },
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "lastChecked_one": "Last checked <time/> across {{count, number}} environment.",
+      "lastChecked_other": "Last checked <time/> across {{count, number}} environments.",
+      "neverChecked": "Not checked yet.",
+      "never": "Never",
+      "in": "in {{stack}}",
+      "kind": {
+        "service": "Service",
+        "container": "Container"
+      },
+      "noChange": "—",
+      "morePlatforms": "+{{count}}",
+      "group": {
+        "updates_one": "{{count, number}} update",
+        "updates_other": "{{count, number}} updates",
+        "items_one": "{{count, number}} workload",
+        "items_other": "{{count, number}} workloads",
+        "checked": "{{what}}, checked <time/>",
+        "neverChecked": "{{what}}, not checked yet",
+        "checkNow": "Check {{environment}} now",
+        "failed": {
+          "auth": "a registry refused TierPlan's credentials",
+          "rate_limited": "a registry is limiting requests",
+          "unreachable": "a registry could not be reached",
+          "not_found": "a registry no longer has a tag",
+          "unsupported": "a registry gave an answer TierPlan can't read",
+          "other": "a check did not finish"
+        },
+        "failedLabel": "The last check failed: {{reason}}."
+      },
+      "check": {
+        "wait": "Checked a moment ago. Wait a moment before checking again.",
+        "skipped_one": "Not checked: {{names}}.",
+        "skipped_other": "Not checked: {{names}}.",
+        "skippedName": "{{name}} ({{reason}})",
+        "skippedReason": {
+          "no_permission": "you can't check it",
+          "offline": "offline"
+        }
+      },
+      "error": {
+        "heading": "Couldn't load this view.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading"
+      },
+      "empty": {
+        "clean": {
+          "heading": "Everything is up to date",
+          "body": "TierPlan checked {{workloads}} in {{environments}}, the last check {{when}}.",
+          "bodyInterval": "TierPlan checked {{workloads}} in {{environments}}, the last check {{when}}. Checks run every {{interval}}.",
+          "workloads_one": "{{count, number}} workload",
+          "workloads_other": "{{count, number}} workloads",
+          "environments_one": "{{count, number}} environment",
+          "environments_other": "{{count, number}} environments"
+        },
+        "partial": {
+          "heading": "No updates found in the environments that reported",
+          "body": "Everything that reported is up to date. The environments listed above did not report."
+        },
+        "failed": {
+          "heading_one": "No updates found, but {{count, number}} check failed",
+          "heading_other": "No updates found, but {{count, number}} checks failed",
+          "body": "TierPlan can't tell for those workloads. Open Problems to see why and try again.",
+          "action": "Show problems"
+        },
+        "never": {
+          "heading": "No updates found yet",
+          "bodyAt_one": "{{count, number}} workload hasn't been checked. The first check runs {{when}}, or choose Check now.",
+          "bodyAt_other": "{{count, number}} workloads haven't been checked. The first check runs {{when}}, or choose Check now.",
+          "body_one": "{{count, number}} workload hasn't been checked. Choose Check now.",
+          "body_other": "{{count, number}} workloads haven't been checked. Choose Check now."
+        },
+        "nothing": {
+          "heading": "Nothing to check yet",
+          "body": "No environment is reporting.",
+          "bodyNone": "No workload in these environments follows a tag, so there is nothing to check."
+        },
+        "skipped": {
+          "heading": "No updates to show",
+          "body_one": "{{count, number}} update is skipped or ignored. Open Skipped and ignored to review it.",
+          "body_other": "{{count, number}} updates are skipped or ignored. Open Skipped and ignored to review them.",
+          "action": "Show skipped and ignored"
+        },
+        "problems": {
+          "heading": "No problems to show",
+          "body": "No check has failed and no update has been rolled back.",
+          "headingPartial": "No problems in the environments that reported",
+          "bodyPartial": "No check has failed in the environments that reported. The environments listed above did not report."
+        },
+        "ignored": {
+          "heading": "Nothing is skipped or ignored",
+          "body": "No update has been skipped and no image or workload is ignored.",
+          "headingPartial": "Nothing is skipped or ignored in the environments that reported",
+          "bodyPartial": "Nothing is skipped or ignored where TierPlan could read. The environments listed above did not report."
+        }
+      }
+    },
+    "pools": {
+      "caption": "Address pools near full",
+      "loading": "Loading address pools",
+      "columns": {
+        "env": "Environment",
+        "name": "Network or pool",
+        "subnet": "Subnet",
+        "used": "Addresses used",
+        "state": "State"
+      },
+      "usedOf": "{{used, number}} / {{capacity, number}}",
+      "state": {
+        "getting_full": "Getting full",
+        "almost_full": "Almost full"
+      },
+      "kind": {
+        "pool": "Address pool",
+        "ingress": "Routing mesh network",
+        "overlay": "Overlay network"
+      },
+      "count_one": "{{count, number}} pool or network at 70% or more",
+      "count_other": "{{count, number}} pools and networks at 70% or more",
+      "empty": {
+        "heading": "No pool is getting full",
+        "body": "Every overlay network and address pool is under 70% used.",
+        "headingPartial": "No pool is getting full in the environments that reported",
+        "bodyPartial": "Every overlay network and address pool that reported is under 70% used. The environments listed above did not report."
+      },
+      "error": {
+        "heading": "Couldn't load this view.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading"
+      }
     }
   }
 }

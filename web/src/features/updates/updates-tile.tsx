@@ -25,9 +25,8 @@ export function UpdatesTile({ envId, value, loading }: UpdatesTileProps) {
       value={value}
       subline={unread ? t("updates.tile.error") : t("updates.tile.subline")}
       to="/environments"
-      // The link is /environments?tab=updates&env={id}. The environments route does not take a tab yet (the Updates tab arrives with the Overview
-      // tabs); until then it drops the key and opens its default view, so the link is safe now.
-      search={{ tab: "updates", env: envId } as never}
+      // The Updates tab of the Overview, narrowed to this environment.
+      search={{ tab: "updates", env: [envId] }}
       loading={loading}
     />
   );

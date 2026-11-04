@@ -25,7 +25,7 @@ import {
 import { shortDigest } from "@/features/tags/platform-chips";
 import { useT } from "@/i18n/use-t";
 import { apiUrl } from "@/lib/base-path";
-import { toastError, toastSuccess, toastSuccessWithAction } from "@/lib/toast";
+import { toastError, toastInfo, toastSuccess, toastSuccessWithAction } from "@/lib/toast";
 
 export type UpdateInfo = components["schemas"]["UpdateInfoBody"];
 export type UpdateState = UpdateInfo["state"];
@@ -94,7 +94,13 @@ export function useCheckUpdates(envId: string) {
         `${t("updates.check.checked", { count: result.checked })} ${t("updates.check.found", { count: result.updates })}`,
       );
     },
-    onError: () => {
+    onError: (error) => {
+      // The server allows one check of an environment per few seconds: a second press is a wait,
+      // not a failure.
+      if (error.status === 429 || error.type === "too_many_requests") {
+        toastInfo(t("updates.check.wait"));
+        return;
+      }
       toastError(t("updates.check.failed"));
     },
     onSettled: () => {

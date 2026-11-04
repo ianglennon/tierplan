@@ -61,6 +61,7 @@ let list: () => Response | Promise<Response>;
 let sent: string[];
 let fleetSummary: () => Response | Promise<Response>;
 let fleetFailing: (query: URLSearchParams) => Response | Promise<Response>;
+let fleetUpdates: (query: URLSearchParams) => Response | Promise<Response>;
 
 // The Overview's tiles and tabs read the fleet; most tests here are about the table, so by default
 // the fleet is whole and nothing is failing.
@@ -73,12 +74,31 @@ const SUMMARY = {
   readAt: "2026-10-03T10:00:00Z",
 };
 
+// The Updates tab reads its own list; a test that opens it gets a fleet with nothing to update.
+const EMPTY_UPDATES = {
+  counts: { updates: 0, problems: 0, ignored: 0, all: 0 },
+  coverage: {
+    checkable: 0,
+    checked: 0,
+    environments: 0,
+    failed: 0,
+    neverChecked: 0,
+    skipped: 0,
+    firstCheckAt: "",
+    lastCheckedAt: "",
+  },
+  groups: [],
+  notIncluded: [],
+  readAt: SUMMARY.readAt,
+};
+
 beforeEach(() => {
   me = ADMIN;
   sent = [];
   list = () => Response.json({ items: [ONLINE, OFFLINE] });
   fleetSummary = () => Response.json(SUMMARY);
   fleetFailing = () => Response.json({ items: [], notIncluded: [], readAt: SUMMARY.readAt });
+  fleetUpdates = () => Response.json(EMPTY_UPDATES);
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -110,6 +130,7 @@ beforeEach(() => {
       if (path === "/api/environments") return list();
       if (path === "/api/fleet/summary") return fleetSummary();
       if (path === "/api/fleet/failing") return fleetFailing(new URL(req.url).searchParams);
+      if (path === "/api/fleet/updates") return fleetUpdates(new URL(req.url).searchParams);
       return Response.json({}, { status: 404 });
     }),
   );
@@ -549,6 +570,21 @@ describe("the fleet tiles and tabs (D-17)", () => {
     const bogus = renderAt("/environments?tab=bogus&env=nope");
     await screen.findByRole("table");
     expect(search(bogus)).toEqual({ tab: "environments" });
+  });
+
+  it("puts the Updates tab's Show chip in the address and leaves the default out", async () => {
+    const asked: string[] = [];
+    fleetUpdates = (query) => {
+      asked.push(query.get("show") ?? "");
+      return Response.json(EMPTY_UPDATES);
+    };
+    const r = renderAt("/environments?tab=updates");
+    fireEvent.click(await screen.findByRole("radio", { name: /^Problems/ }));
+    await waitFor(() => expect(search(r)).toEqual({ tab: "updates", show: "problems" }));
+    await waitFor(() => expect(asked).toContain("problems"));
+    fireEvent.click(screen.getByRole("radio", { name: /^Updates/ }));
+    await waitFor(() => expect(search(r)).toEqual({ tab: "updates" }));
+    expect(asked[0]).toBe("updates");
   });
 
   it("keeps the sort only on the Environments tab", async () => {

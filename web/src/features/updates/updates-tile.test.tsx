@@ -41,7 +41,8 @@ describe("UpdatesTile", () => {
     const href = link.getAttribute("href") ?? "";
     expect(href).toContain("/environments");
     expect(href).toContain("tab=updates");
-    expect(href).toContain("env=e1");
+    // The route takes the environments as a list.
+    expect(decodeURIComponent(href)).toContain('env=["e1"]');
   });
 
   it("shows a real zero as 0", async () => {

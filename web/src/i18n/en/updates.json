@@ -84,7 +84,8 @@
       "checked_other": "Checked {{count, number}} images.",
       "found_one": "{{count, number}} update available.",
       "found_other": "{{count, number}} updates available.",
-      "failed": "Couldn't check for updates. Try again."
+      "failed": "Couldn't check for updates. Try again.",
+      "wait": "Checked a moment ago. Wait a moment before checking again."
     },
     "stack": {
       "action": {

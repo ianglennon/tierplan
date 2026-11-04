@@ -7,7 +7,7 @@ import { Server, Waypoints } from "lucide-react";
 import { type MouseEvent, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
-import { useFleetSummary } from "@/api/fleet";
+import { type FleetShowValue, useFleetSummary } from "@/api/fleet";
 import { NoPermission } from "@/components/full-page-state";
 import { LiveChip } from "@/components/live-chip";
 import { NoAccessState } from "@/components/no-access-state";
@@ -48,7 +48,7 @@ function EnvironmentsPage() {
   const t = useT();
   useDocumentTitle(t("overview.tabTitle"));
   const navigate = Route.useNavigate();
-  const { tab, env, sort, dir } = Route.useSearch();
+  const { tab, env, show, sort, dir } = Route.useSearch();
   const { data: me } = useMe();
   const allowed = useAnyEnvironmentPermission("environments.read");
   const canCreate = usePermission("environments.create");
@@ -95,6 +95,11 @@ function EnvironmentsPage() {
   // belong to the new tab; the filter changes the same way (D-17).
   const goTab = (next: FleetTab) =>
     void navigate({ search: (prev) => ({ tab: next, env: prev.env }), replace: true });
+  const goShow = (next: FleetShowValue) =>
+    void navigate({
+      search: (prev) => ({ ...prev, show: next === "updates" ? undefined : next }),
+      replace: true,
+    });
   const goEnv = (ids: string[]) =>
     void navigate({
       search: (prev) => ({ ...prev, env: ids.length > 0 ? ids : undefined }),
@@ -169,6 +174,8 @@ function EnvironmentsPage() {
             env={env ?? []}
             onTabChange={goTab}
             onEnvChange={goEnv}
+            show={show ?? "updates"}
+            onShowChange={goShow}
             environmentsBody={
               <>
                 {failed ? (
