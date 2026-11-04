@@ -13,8 +13,8 @@ import { resetBasePathForTests } from "@/lib/base-path";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { janitorDefaults } from "@/test-janitor";
-import { updateCheckDefaults } from "@/test-update-checks";
 import { makeMe } from "@/test-me";
+import { updateCheckDefaults } from "@/test-update-checks";
 
 // Settings > General and About (plan 26, D-03, D-04, D-60, D-61, PLAT-05).
 
