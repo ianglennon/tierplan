@@ -13,6 +13,7 @@ import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { EnvPalette } from "@/features/environments/env-palette";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { JobsIndicator } from "@/features/jobs/jobs-indicator";
+import { SearchPaletteProvider } from "@/features/search/palette-context";
 import { useAccessRefetch } from "@/hooks/use-access-refetch";
 import { useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -81,20 +82,22 @@ function AppLayout() {
       {/* One health stream for the whole signed-in app (D-36): the overview,
           the switcher and the bell all read what it keeps current. */}
       <EnvHealthStreamProvider>
-        <SidebarProvider
-          open={open}
-          onOpenChange={(next) => {
-            setOpen(next);
-            setSidebarOpen(next);
-          }}
-        >
-          <AppSidebar />
-          <ShellBody />
-          {/* Cmd/Ctrl+K from any signed-in page (D-35). A code editor added
+        <SearchPaletteProvider>
+          <SidebarProvider
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next);
+              setSidebarOpen(next);
+            }}
+          >
+            <AppSidebar />
+            <ShellBody />
+            {/* Cmd/Ctrl+K from any signed-in page (D-35). A code editor added
               later must set data-code-editor on its root, or the shortcut
               will open this over the editor's own use of the key. */}
-          <EnvPalette />
-        </SidebarProvider>
+            <EnvPalette />
+          </SidebarProvider>
+        </SearchPaletteProvider>
       </EnvHealthStreamProvider>
     </TooltipProvider>
   );

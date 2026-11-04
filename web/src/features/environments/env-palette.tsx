@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { useLocation } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 
+import { clampQuery, SEARCH_MAX, searchable, useSearch } from "@/api/search";
 import {
   choiceFilter,
   EnvCommandItems,
   useEnvChoices,
   useSelectedEnvironment,
 } from "@/components/env-switcher";
-import { Command, CommandDialog, CommandInput } from "@/components/ui/command";
+import { Command, CommandDialog, CommandInput, CommandList } from "@/components/ui/command";
+import { useSearchPalette } from "@/features/search/palette-context";
+import {
+  SearchError,
+  SearchHits,
+  SearchStatus,
+  type SearchTarget,
+} from "@/features/search/search-hits";
+import { searchTiming, useDebounced } from "@/features/search/use-debounced";
 import { useT } from "@/i18n/use-t";
 import { isMacPlatform } from "@/lib/env-nav";
 
@@ -50,22 +59,23 @@ function isOtherTextTarget(el: Element | null): boolean {
   return false;
 }
 
-// EnvPalette is the Cmd+K (Mac) or Ctrl+K palette (D-35): the same list as the
-// sidebar switcher in a dialog, from any signed-in page. It is mounted once in
-// the signed-in layout. The shortcut calls preventDefault so the browser's own
-// binding (the address bar search in several browsers) does not fire, and does
-// nothing at all while a text field or code editor has focus, so it never takes
-// a keystroke from someone typing. Closing returns focus to where it was.
+// EnvPalette is the Cmd+K (Mac) or Ctrl+K palette (D-35, D-18), from any signed-in page. It is
+// mounted once in the signed-in layout, and the header's SearchTrigger opens the same one.
+//
+// With nothing typed, or a single character, it is the sidebar switcher in a dialog: the same
+// environment list. From 2 characters it searches the fleet: the server's answer in groups, with
+// "Search all results" first and selected. The shortcut calls preventDefault so the browser's own
+// binding (the address bar search in several browsers) does not fire, and does nothing at all
+// while a text field or code editor has focus, so it never takes a keystroke from someone
+// typing. Closing returns focus to where it was.
 export function EnvPalette() {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const { open, setOpen, returnTo } = useSearchPalette();
   const [query, setQuery] = useState("");
   const { items } = useEnvChoices();
   const selected = useSelectedEnvironment(items);
   const pathname = useLocation({ select: (l) => l.pathname });
-  // What had focus when the palette opened. A dialog with no trigger button
-  // cannot return focus on its own.
-  const returnTo = useRef<Element | null>(null);
 
   // Whatever closes it, it opens empty next time.
   useEffect(() => {
@@ -86,16 +96,37 @@ export function EnvPalette() {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [returnTo, setOpen]);
+
+  const typed = query.trim();
+  const searching = searchable(typed);
+  // The server is asked once the typing pauses, and only while the palette is open.
+  const settled = useDebounced(typed, searchTiming.debounceMs);
+  const search = useSearch(open ? settled : "", "palette");
+  const waiting = searching && (settled !== typed || search.isFetching);
+  const failed = searching && search.isError && !waiting;
+  const results = search.data?.counts.all ?? 0;
+  const body = searching ? search.data : undefined;
+  // What the live region says, read after the typing has paused for a moment.
+  const status = useDebounced(
+    waiting ? "searching" : body && !failed ? "done" : "idle",
+    searchTiming.announceMs,
+  );
+  const partial = (body?.notSearched ?? []).map((n) => n.envName);
+
+  const go = (target: SearchTarget) => {
+    setOpen(false);
+    void navigate({ to: target.to, params: target.params, search: target.search });
+  };
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      title={t("switcher.palette.title")}
-      description={t("switcher.palette.description")}
-      // 512px on a wide screen, the full width under 768px.
-      className="max-w-full sm:max-w-full md:max-w-lg"
+      title={t("search.palette.title")}
+      description={t("search.palette.description")}
+      // 640px on a wide screen, the full width under 768px.
+      className="max-w-full sm:max-w-full md:max-w-[640px]"
       onCloseAutoFocus={(event) => {
         event.preventDefault();
         const back = returnTo.current;
@@ -106,7 +137,9 @@ export function EnvPalette() {
       <Command
         {...{ [PALETTE_ATTR]: "" }}
         filter={choiceFilter}
-        label={t("switcher.palette.placeholder")}
+        // The server's answer is already the right list: cmdk must not filter it again.
+        shouldFilter={!searching}
+        label={t("search.palette.title")}
         loop
         // Ctrl+K is cmdk's "previous item" binding, and Ctrl+N, J and P are the
         // others. None of them is wanted next to this shortcut.
@@ -114,15 +147,33 @@ export function EnvPalette() {
       >
         <CommandInput
           value={query}
-          onValueChange={setQuery}
-          placeholder={t("switcher.palette.placeholder")}
+          onValueChange={(v) => setQuery(clampQuery(v))}
+          maxLength={SEARCH_MAX}
+          placeholder={t("search.palette.placeholder")}
         />
-        <EnvCommandItems
-          query={query}
-          selectedId={selected?.id}
-          pathname={pathname}
-          onChosen={() => setOpen(false)}
-        />
+        {searching ? (
+          <CommandList className="max-h-[400px]" aria-busy={waiting || undefined}>
+            <SearchHits typed={typed} answered={settled} body={body} busy={waiting} onOpen={go} />
+            {failed ? <SearchError onRetry={() => void search.refetch()} /> : null}
+            <SearchStatus
+              state={status === "searching" ? "searching" : status === "done" ? "done" : "idle"}
+              environments={items.length}
+              results={results}
+            />
+          </CommandList>
+        ) : (
+          <EnvCommandItems
+            query={query}
+            selectedId={selected?.id}
+            pathname={pathname}
+            onChosen={() => setOpen(false)}
+          />
+        )}
+        <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+          {searching && partial.length > 0
+            ? t("search.palette.partial", { names: partial.join(", ") })
+            : t("search.palette.hint")}
+        </div>
       </Command>
     </CommandDialog>
   );
