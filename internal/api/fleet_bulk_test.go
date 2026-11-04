@@ -19,7 +19,6 @@ import (
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/updates"
-	"github.com/ianglennon/tierplan/proto/testsupport"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
 
@@ -441,7 +440,10 @@ func heldJob(t *testing.T) (f *envFix, e envBody, ans bulkAnswer, release func()
 		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
 	}
 	ans = decode[bulkAnswer](t, rec)
-	testsupport.WaitFor(t, "web to read updating", func() bool { return f.heldOf(t, e, "web").State == "updating" })
+	// The pull reaches the engine only after web's run has begun, and it is held there.
+	awaitFake(t, f.fake, "web's pull to reach the engine", func() bool {
+		return slices.ContainsFunc(f.fake.Writes(), func(w string) bool { return strings.HasPrefix(w, "POST /images/create") })
+	})
 	return f, e, ans, release
 }
 

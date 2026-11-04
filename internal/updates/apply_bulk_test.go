@@ -6,6 +6,8 @@ package updates_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -226,18 +228,13 @@ func TestBulkQueuesRunsBeforeTheirTurn(t *testing.T) {
 			close(hold)
 		}
 	})
-	testsupport.WaitFor(t, "web to be running", func() bool {
-		runs, err := r.runs.Running(context.Background(), r.envID)
-		if err != nil {
-			return false
-		}
-		for _, run := range runs {
-			if run.Workload == "web" && run.State == updates.RunRunning {
-				return true
-			}
-		}
-		return false
+	// The pull reaches the engine only after web's run has begun, and it is held there.
+	err = r.fake.Await(testsupport.Context(t), func() bool {
+		return slices.ContainsFunc(r.fake.Writes(), func(w string) bool { return strings.HasPrefix(w, "POST /images/create") })
 	})
+	if err != nil {
+		t.Fatalf("waiting for web's pull to reach the engine: %v", err)
+	}
 	runs, err := r.runs.Running(context.Background(), r.envID)
 	if err != nil {
 		t.Fatal(err)
