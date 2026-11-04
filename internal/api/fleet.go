@@ -19,6 +19,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -145,6 +146,48 @@ type FleetFailingOutput struct {
 // FleetFailingInput is the query of GET /api/fleet/failing.
 type FleetFailingInput struct {
 	Env []string `query:"env,explode" maxItems:"100" doc:"Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read"`
+}
+
+// FleetEnvironmentsTile is the Environments tile.
+type FleetEnvironmentsTile struct {
+	Total         int `json:"total" minimum:"0" doc:"The environments the caller may read"`
+	NeedAttention int `json:"needAttention" minimum:"0" doc:"How many of them are not online, did not answer, or answered for only some of their nodes"`
+}
+
+// FleetFailingTile is the Failing services tile.
+type FleetFailingTile struct {
+	Count        *int `json:"count" nullable:"true" minimum:"0" doc:"Failing services and containers in the environments that were read. Null when it is not known: nothing failed in what was read but an environment was not read"`
+	Environments *int `json:"environments" nullable:"true" minimum:"0" doc:"How many environments have any. Null when count is"`
+}
+
+// FleetUpdatesTile is the Updates available tile.
+type FleetUpdatesTile struct {
+	Count         *int   `json:"count" nullable:"true" minimum:"0" doc:"Workloads with an update available in the environments that were read. Null when it could not be read, or when it is 0 but an environment was not read"`
+	ChecksFailed  *int   `json:"checksFailed" nullable:"true" minimum:"0" doc:"Workloads whose last check failed. Null when it could not be read"`
+	LastCheckedAt string `json:"lastCheckedAt" format:"date-time" doc:"The newest time any workload was checked, whatever came of it; empty when none was"`
+	AllChecked    bool   `json:"allChecked" doc:"True only when every environment was read, no check failed and nothing is waiting for its first check"`
+}
+
+// FleetPoolsTile is the Pools near full tile.
+type FleetPoolsTile struct {
+	NearFull   *int `json:"nearFull" nullable:"true" minimum:"0" doc:"Pools and overlay networks at 70% or more used (the almost full ones included). Null when it could not be read, or when it is 0 but an environment was not read"`
+	AlmostFull *int `json:"almostFull" nullable:"true" minimum:"0" doc:"Those at 90% or more. Null when nearFull is"`
+}
+
+// FleetSummaryBody is the answer of GET /api/fleet/summary.
+type FleetSummaryBody struct {
+	Environments FleetEnvironmentsTile  `json:"environments"`
+	Failing      FleetFailingTile       `json:"failing"`
+	Updates      FleetUpdatesTile       `json:"updates"`
+	Pools        FleetPoolsTile         `json:"pools"`
+	NotIncluded  []FleetNotIncludedBody `json:"notIncluded" doc:"The environments the caller may read that could not be read, or only in part"`
+	ReadAt       string                 `json:"readAt" format:"date-time" doc:"When the answer was put together"`
+}
+
+// FleetSummaryOutput wraps FleetSummaryBody for huma.
+type FleetSummaryOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         FleetSummaryBody
 }
 
 // fleetResult is what the read of one environment gave.
@@ -345,6 +388,72 @@ func fleetItems(results []fleetResult[fleetEnv]) []FleetFailingItem {
 	return items
 }
 
+// fleetSummary adds up the tiles of the results.
+func fleetSummary(results []fleetResult[fleetEnv], notIncluded []FleetNotIncludedBody) FleetSummaryBody {
+	b := FleetSummaryBody{NotIncluded: notIncluded}
+	b.Environments.Total = len(results)
+	var (
+		failing, failingEnvs     int
+		available, failed, unset int
+		nearFull, almostFull     int
+		tallyUnread, poolsUnread bool
+		checkedAt                time.Time
+	)
+	for _, r := range results {
+		if r.Err != nil || r.Nodes > 0 || r.Val.Health.State != envs.StateOnline {
+			b.Environments.NeedAttention++
+		}
+		if r.Err != nil {
+			continue
+		}
+		n := len(r.Val.Services) + len(r.Val.Containers)
+		failing += n
+		if n > 0 {
+			failingEnvs++
+		}
+		if r.Val.TallyErr != nil {
+			tallyUnread = true
+		} else {
+			t := r.Val.Tally
+			available += t.Available
+			failed += t.Failed
+			unset += t.NotChecked
+			if t.CheckedAt.After(checkedAt) {
+				checkedAt = t.CheckedAt
+			}
+		}
+		if r.Val.MetersErr != nil {
+			poolsUnread = true
+		}
+		for _, m := range r.Val.Meters {
+			if m.Percent >= netspace.ThresholdWarn {
+				nearFull++
+			}
+			if m.Percent >= netspace.ThresholdFull {
+				almostFull++
+			}
+		}
+	}
+	whole := len(notIncluded) == 0
+	// A tile that counts to 0 over part of the fleet does not know it is 0.
+	count := func(n int, unread bool) *int {
+		if unread || n == 0 && !whole {
+			return nil
+		}
+		return &n
+	}
+	b.Failing = FleetFailingTile{Count: count(failing, false), Environments: count(failingEnvs, false)}
+	b.Updates = FleetUpdatesTile{
+		Count: count(available, tallyUnread), LastCheckedAt: rfc3339(checkedAt),
+		AllChecked: !tallyUnread && whole && failed == 0 && unset == 0,
+	}
+	if !tallyUnread {
+		b.Updates.ChecksFailed = &failed
+	}
+	b.Pools = FleetPoolsTile{NearFull: count(nearFull, poolsUnread), AlmostFull: count(almostFull, poolsUnread)}
+	return b
+}
+
 // RegisterFleet registers the cross-environment views of the Overview (ENV-10, D-17): what is
 // failing across the fleet, and the four counts of its tiles. Each answers for the environments
 // the caller may read and nothing else; a caller with no environment gets empty lists and zeros.
@@ -381,5 +490,30 @@ func RegisterFleet(r *httpx.Router, d FleetDeps) {
 		return &FleetFailingOutput{CacheControl: "no-store", Body: FleetFailingBody{
 			Items: fleetItems(results), NotIncluded: fleetNotIncluded(results), ReadAt: rfc3339(d.now()),
 		}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getFleetSummary",
+		Method:      http.MethodGet,
+		Path:        "/api/fleet/summary",
+		Summary:     "The four counts of the Overview's tiles",
+		Description: "Environments (total and how many need attention), failing services and containers, image updates available (with how many checks failed and when the last one was made) " +
+			"and address pools at 70% or more used, over the environments the caller holds environments.read on. A count that could not be read is null, never 0: " +
+			"so is a 0 that is only the count of the environments that were read while others were not (see notIncluded). An environment the caller may not read is not counted and not named.",
+		Tags: []string{"fleet"},
+	}, rbac.SelfService, func(ctx context.Context, _ *struct{}) (*FleetSummaryOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		results, err := fleetFanOut(ctx, d, p, nil, func(ctx context.Context, env envs.Environment) (fleetEnv, int, error) {
+			return readFleetEnv(ctx, d, env, true)
+		})
+		if err != nil {
+			return nil, fail("read the fleet", err)
+		}
+		body := fleetSummary(results, fleetNotIncluded(results))
+		body.ReadAt = rfc3339(d.now())
+		return &FleetSummaryOutput{CacheControl: "no-store", Body: body}, nil
 	})
 }

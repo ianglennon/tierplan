@@ -3872,6 +3872,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The four counts of the Overview's tiles
+         * @description Environments (total and how many need attention), failing services and containers, image updates available (with how many checks failed and when the last one was made) and address pools at 70% or more used, over the environments the caller holds environments.read on. A count that could not be read is null, never 0: so is a 0 that is only the count of the environments that were read while others were not (see notIncluded). An environment the caller may not read is not counted and not named.
+         */
+        get: operations["getFleetSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/git/credentials": {
         parameters: {
             query?: never;
@@ -7445,6 +7465,18 @@ export interface components {
             /** @description Its name */
             envName: string;
         };
+        FleetEnvironmentsTile: {
+            /**
+             * Format: int64
+             * @description How many of them are not online, did not answer, or answered for only some of their nodes
+             */
+            needAttention: number;
+            /**
+             * Format: int64
+             * @description The environments the caller may read
+             */
+            total: number;
+        };
         FleetFailingBody: {
             /** @description Every failing service and container of the environments that were read, newest first, then by environment name, then by name */
             items: components["schemas"]["FleetFailingItem"][] | null;
@@ -7496,6 +7528,18 @@ export interface components {
             /** @description A service: '{running} of {desired} running'. A container: restarting, exited or unhealthy */
             state: string;
         };
+        FleetFailingTile: {
+            /**
+             * Format: int64
+             * @description Failing services and containers in the environments that were read. Null when it is not known: nothing failed in what was read but an environment was not read
+             */
+            count: number | null;
+            /**
+             * Format: int64
+             * @description How many environments have any. Null when count is
+             */
+            environments: number | null;
+        };
         FleetNotIncludedBody: {
             /** @description The environment's ID */
             envId: string;
@@ -7511,6 +7555,50 @@ export interface components {
              * @enum {string}
              */
             reason: "offline" | "not_reporting" | "waiting_first_agent" | "nodes_not_reporting";
+        };
+        FleetPoolsTile: {
+            /**
+             * Format: int64
+             * @description Those at 90% or more. Null when nearFull is
+             */
+            almostFull: number | null;
+            /**
+             * Format: int64
+             * @description Pools and overlay networks at 70% or more used (the almost full ones included). Null when it could not be read, or when it is 0 but an environment was not read
+             */
+            nearFull: number | null;
+        };
+        FleetSummaryBody: {
+            environments: components["schemas"]["FleetEnvironmentsTile"];
+            failing: components["schemas"]["FleetFailingTile"];
+            /** @description The environments the caller may read that could not be read, or only in part */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            pools: components["schemas"]["FleetPoolsTile"];
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
+            updates: components["schemas"]["FleetUpdatesTile"];
+        };
+        FleetUpdatesTile: {
+            /** @description True only when every environment was read, no check failed and nothing is waiting for its first check */
+            allChecked: boolean;
+            /**
+             * Format: int64
+             * @description Workloads whose last check failed. Null when it could not be read
+             */
+            checksFailed: number | null;
+            /**
+             * Format: int64
+             * @description Workloads with an update available in the environments that were read. Null when it could not be read, or when it is 0 but an environment was not read
+             */
+            count: number | null;
+            /**
+             * Format: date-time
+             * @description The newest time any workload was checked, whatever came of it; empty when none was
+             */
+            lastCheckedAt: string;
         };
         GeneratedComposeBody: {
             /**
@@ -23212,6 +23300,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetFailingBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getFleetSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetSummaryBody"];
                 };
             };
             /** @description Error */

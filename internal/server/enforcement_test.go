@@ -472,6 +472,59 @@ func TestEnvironmentListsShowOnlyWhatEachArchetypeCanSee(t *testing.T) {
 			if !slices.Equal(append([]string{}, recent.IDs...), ids) {
 				t.Errorf("recent environments = %v, want %v", recent.IDs, ids)
 			}
+
+			// The fleet views read across environments, so they narrow the same way: the
+			// environments here have no agent, so each one the account may read is named as
+			// waiting for its first agent, and none it may not read is named or counted.
+			var failing struct {
+				Items       []json.RawMessage `json:"items"`
+				NotIncluded []struct {
+					EnvID  string `json:"envId"`
+					Reason string `json:"reason"`
+				} `json:"notIncluded"`
+			}
+			rr = e.send(a, http.MethodGet, "/api/fleet/failing")
+			if rr.Code != http.StatusOK {
+				t.Fatalf("GET /api/fleet/failing = %d %s", rr.Code, rr.Body)
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &failing); err != nil {
+				t.Fatal(err)
+			}
+			named := make([]string, 0, len(failing.NotIncluded))
+			for _, n := range failing.NotIncluded {
+				named = append(named, n.EnvID)
+				if n.Reason != "waiting_first_agent" {
+					t.Errorf("fleet failing names %s as %q, want waiting_first_agent", n.EnvID, n.Reason)
+				}
+			}
+			slices.Sort(named)
+			if !slices.Equal(named, ids) || len(failing.Items) != 0 {
+				t.Errorf("fleet failing names %v with %d items, want %v and none", named, len(failing.Items), ids)
+			}
+
+			var summary struct {
+				Environments struct {
+					Total int `json:"total"`
+				} `json:"environments"`
+				NotIncluded []struct {
+					EnvID string `json:"envId"`
+				} `json:"notIncluded"`
+			}
+			rr = e.send(a, http.MethodGet, "/api/fleet/summary")
+			if rr.Code != http.StatusOK {
+				t.Fatalf("GET /api/fleet/summary = %d %s", rr.Code, rr.Body)
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &summary); err != nil {
+				t.Fatal(err)
+			}
+			named = named[:0]
+			for _, n := range summary.NotIncluded {
+				named = append(named, n.EnvID)
+			}
+			slices.Sort(named)
+			if summary.Environments.Total != len(ids) || !slices.Equal(named, ids) {
+				t.Errorf("fleet summary counts %d environments and names %v, want %d and %v", summary.Environments.Total, named, len(ids), ids)
+			}
 		})
 	}
 }

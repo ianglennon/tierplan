@@ -5065,6 +5065,28 @@
         ],
         "type": "object"
       },
+      "FleetEnvironmentsTile": {
+        "additionalProperties": false,
+        "properties": {
+          "needAttention": {
+            "description": "How many of them are not online, did not answer, or answered for only some of their nodes",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "description": "The environments the caller may read",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "needAttention"
+        ],
+        "type": "object"
+      },
       "FleetFailingBody": {
         "additionalProperties": false,
         "properties": {
@@ -5189,6 +5211,34 @@
         ],
         "type": "object"
       },
+      "FleetFailingTile": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Failing services and containers in the environments that were read. Null when it is not known: nothing failed in what was read but an environment was not read",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "environments": {
+            "description": "How many environments have any. Null when count is",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "count",
+          "environments"
+        ],
+        "type": "object"
+      },
       "FleetNotIncludedBody": {
         "additionalProperties": false,
         "properties": {
@@ -5222,6 +5272,114 @@
           "envName",
           "reason",
           "nodes"
+        ],
+        "type": "object"
+      },
+      "FleetPoolsTile": {
+        "additionalProperties": false,
+        "properties": {
+          "almostFull": {
+            "description": "Those at 90% or more. Null when nearFull is",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nearFull": {
+            "description": "Pools and overlay networks at 70% or more used (the almost full ones included). Null when it could not be read, or when it is 0 but an environment was not read",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "nearFull",
+          "almostFull"
+        ],
+        "type": "object"
+      },
+      "FleetSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "environments": {
+            "$ref": "#/components/schemas/FleetEnvironmentsTile"
+          },
+          "failing": {
+            "$ref": "#/components/schemas/FleetFailingTile"
+          },
+          "notIncluded": {
+            "description": "The environments the caller may read that could not be read, or only in part",
+            "items": {
+              "$ref": "#/components/schemas/FleetNotIncludedBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "pools": {
+            "$ref": "#/components/schemas/FleetPoolsTile"
+          },
+          "readAt": {
+            "description": "When the answer was put together",
+            "format": "date-time",
+            "type": "string"
+          },
+          "updates": {
+            "$ref": "#/components/schemas/FleetUpdatesTile"
+          }
+        },
+        "required": [
+          "environments",
+          "failing",
+          "updates",
+          "pools",
+          "notIncluded",
+          "readAt"
+        ],
+        "type": "object"
+      },
+      "FleetUpdatesTile": {
+        "additionalProperties": false,
+        "properties": {
+          "allChecked": {
+            "description": "True only when every environment was read, no check failed and nothing is waiting for its first check",
+            "type": "boolean"
+          },
+          "checksFailed": {
+            "description": "Workloads whose last check failed. Null when it could not be read",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "Workloads with an update available in the environments that were read. Null when it could not be read, or when it is 0 but an environment was not read",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastCheckedAt": {
+            "description": "The newest time any workload was checked, whatever came of it; empty when none was",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "checksFailed",
+          "lastCheckedAt",
+          "allChecked"
         ],
         "type": "object"
       },
@@ -38046,6 +38204,45 @@
           }
         },
         "summary": "List what is failing across the environments the caller may read",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/summary": {
+      "get": {
+        "description": "Environments (total and how many need attention), failing services and containers, image updates available (with how many checks failed and when the last one was made) and address pools at 70% or more used, over the environments the caller holds environments.read on. A count that could not be read is null, never 0: so is a 0 that is only the count of the environments that were read while others were not (see notIncluded). An environment the caller may not read is not counted and not named.",
+        "operationId": "getFleetSummary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetSummaryBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The four counts of the Overview's tiles",
         "tags": [
           "fleet"
         ]
