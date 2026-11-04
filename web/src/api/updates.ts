@@ -304,6 +304,10 @@ export interface UpdateWorkload {
   name: string;
 }
 
+// What an update is of: a service or a container, or every service of a stack TierPlan manages that has
+// an update on offer (kind stack, named by the stack's name).
+export type UpdateTarget = UpdateWorkload | { kind: "stack"; name: string };
+
 // What an ignore covers, as the person chose it. text is how the toasts name it: the image
 // ("nginx:1.27") for an image, the workload's name for one workload.
 export type IgnoreTarget =
@@ -563,14 +567,14 @@ function updateFailure(method: string, res: { error?: unknown; response: Respons
 
 // imageUpdatePreviewKey is the key of what an update of one service would change. It starts with
 // "env" and the environment, so every list's invalidation reaches it.
-export function imageUpdatePreviewKey(envId: string, workload: UpdateWorkload) {
+export function imageUpdatePreviewKey(envId: string, workload: UpdateTarget) {
   return ["env", envId, "updates", "preview", workload.kind, workload.name] as const;
 }
 
 // imageUpdatePreviewQuery is what the confirm shows: the digest change, the pre-flight warnings and
 // the lock. It asks no registry (the server reads the stored check), so it is cheap to read again, and
 // it is never kept: a confirm shows what is true when it opens.
-export function imageUpdatePreviewQuery(envId: string, workload: UpdateWorkload) {
+export function imageUpdatePreviewQuery(envId: string, workload: UpdateTarget) {
   return queryOptions({
     queryKey: imageUpdatePreviewKey(envId, workload),
     queryFn: async (): Promise<UpdatePreview> => {
@@ -579,7 +583,10 @@ export function imageUpdatePreviewQuery(envId: string, workload: UpdateWorkload)
           params: {
             path: { envId },
             query: {
-              kind: workload.kind === "service" ? "service" : undefined,
+              kind:
+                workload.kind === "service" || workload.kind === "stack"
+                  ? workload.kind
+                  : undefined,
               name: workload.name,
             },
           },
@@ -597,12 +604,12 @@ export function imageUpdatePreviewQuery(envId: string, workload: UpdateWorkload)
 }
 
 // useUpdatePreview reads the preview while the confirm is open.
-export function useUpdatePreview(envId: string, workload: UpdateWorkload, enabled = true) {
+export function useUpdatePreview(envId: string, workload: UpdateTarget, enabled = true) {
   return useQuery({ ...imageUpdatePreviewQuery(envId, workload), enabled });
 }
 
 export interface RunUpdateVariables {
-  workload: UpdateWorkload;
+  workload: UpdateTarget;
   // For each service, the digest the confirm showed. The server compares it with the registry's.
   expect: Record<string, string>;
 }
@@ -626,7 +633,11 @@ export function useRunUpdate(envId: string) {
       try {
         const res = await api.POST("/api/env/{envId}/updates/run", {
           params: { path: { envId } },
-          body: { kind: "service", name: workload.name, expect },
+          body: {
+            kind: workload.kind === "stack" ? "stack" : "service",
+            name: workload.name,
+            expect,
+          },
         });
         if (!res.data) throw updateFailure("POST", res);
         return res.data;

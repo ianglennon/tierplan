@@ -244,9 +244,7 @@ function RowActions({
               chose.current = true;
             }}
             onIgnore={() => setIgnoring(true)}
-            onUpdate={
-              service.tierplanStackId || service.agent ? undefined : () => setUpdating(true)
-            }
+            onUpdate={service.agent ? undefined : () => setUpdating(true)}
           />
           <DropdownMenuSeparator />
           <RemoveServiceMenuItem
@@ -276,6 +274,7 @@ function RowActions({
           envId={envId}
           envName={envName}
           workload={{ kind: "service", name: service.name }}
+          managedStack={service.tierplanStackId ? service.stack : undefined}
           onClose={() => setUpdating(false)}
           onClosed={() => button.current?.focus()}
         />

@@ -85,15 +85,11 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
   const [removing, setRemoving] = useState(false);
   const [updating, setUpdating] = useState(false);
   // Update opens the compact confirm of an image update (D-05). It is on the header only while the
-  // service has an update on offer, and not for a service a stack owns or TierPlan's own agent: those
-  // are updated another way.
+  // service has an update on offer, and not for TierPlan's own agent, which is updated another way. A
+  // service of a stack TierPlan manages is updated as a new revision of its stack.
   const gate = useUpdateGate(envId, detail.update);
   const envName = useEnvName(envId);
-  const canUpdate =
-    detail.update?.state === "update_available" &&
-    gate.shown &&
-    !detail.tierplanStackId &&
-    !detail.agent;
+  const canUpdate = detail.update?.state === "update_available" && gate.shown && !detail.agent;
   const host = useRef<HTMLDivElement>(null);
   const editBlocked = !needs.allowed || detail.stack !== "";
   const editReason =
@@ -202,6 +198,7 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           envId={envId}
           envName={envName}
           workload={{ kind: "service", name: detail.name }}
+          managedStack={detail.tierplanStackId ? detail.stack : undefined}
           onClose={() => setUpdating(false)}
         />
       ) : null}

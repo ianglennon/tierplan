@@ -445,12 +445,20 @@ describe("the header actions", () => {
     expect(await screen.findByRole("dialog", { name: "Update api" })).toBeTruthy();
   });
 
-  it("shows no Update for a version that is current, or for a service a stack owns", async () => {
-    for (const extra of [
-      { update: updateInfo({ state: "up_to_date" }) },
-      { update: updateInfo(), tierplanStackId: "s1", stack: "shop" },
-      { update: undefined },
-    ]) {
+  it("offers Update for a service of a stack TierPlan manages, and the confirm says it is a revision of the stack", async () => {
+    answerWith(serviceDetail({ update: updateInfo(), tierplanStackId: "s1", stack: "shop" }));
+    renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+    expect(await screen.findByRole("dialog", { name: "Update api" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "TierPlan pulls the new image and updates the service in place. This is saved as a new revision of shop, so you can roll back from History.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows no Update for a version that is current, or when nothing was checked", async () => {
+    for (const extra of [{ update: updateInfo({ state: "up_to_date" }) }, { update: undefined }]) {
       answerWith(serviceDetail(extra));
       renderAt();
       await screen.findByRole("button", { name: "Force update…" });

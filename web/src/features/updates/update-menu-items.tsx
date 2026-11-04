@@ -52,9 +52,10 @@ interface UpdateMenuItemsProps {
   // Opens the ignore dialog. The dialog belongs to the row, not to this item: a menu's content is
   // gone as soon as an item is chosen.
   onIgnore: () => void;
-  // Opens the update confirm. Absent where the row cannot be updated here (a stack's service, a
-  // container, TierPlan's own agent), and then no Update… is shown. Like the ignore dialog, the
-  // confirm belongs to the row.
+  // Opens the update confirm. Absent where the row cannot be updated here (a container, TierPlan's own
+  // agent), and then no Update… is shown. A service of a stack TierPlan manages is updated as a new
+  // revision of its stack, and the confirm takes the person to the stack's console. Like the ignore
+  // dialog, the confirm belongs to the row.
   onUpdate?: () => void;
   // Called as an item that opens something is chosen, so a row menu can keep focus where it was.
   onChosen?: () => void;

@@ -11,8 +11,8 @@ import {
   type UpdatePreview,
   type UpdatePreviewItem,
   type UpdateRequestError,
+  type UpdateTarget,
   type UpdateWarning,
-  type UpdateWorkload,
   useRunUpdate,
   useUpdatePreview,
 } from "@/api/updates";
@@ -41,8 +41,15 @@ const WARNINGS_SHOWN = 3;
 interface UpdateConfirmDialogProps {
   envId: string;
   envName: string;
-  // The service the confirm is for. Containers and stacks follow in later versions.
-  workload: UpdateWorkload;
+  // What the confirm is for: a service, or every service of a stack TierPlan manages that has an update
+  // on offer (kind stack, named by the stack's name). Containers follow in a later version.
+  workload: UpdateTarget;
+  // The name of the stack TierPlan manages that a service belongs to. Set, the confirm says the update is
+  // saved as a new revision of it (a stack's own confirm says so without it).
+  managedStack?: string;
+  // Opens the full review of the stack's images (Pull & redeploy with latest, D-16). Offered by a stack's
+  // confirm as "Review everything first", which closes this one.
+  onReview?: () => void;
   // Called when the dialog is to go: Cancel, Escape, or the update has started.
   onClose: () => void;
   // Called when it has closed and focus is to go back to what opened it.
@@ -260,6 +267,8 @@ export function UpdateConfirmDialog({
   envId,
   envName,
   workload,
+  managedStack,
+  onReview,
   onClose,
   onClosed,
 }: UpdateConfirmDialogProps) {
@@ -271,15 +280,24 @@ export function UpdateConfirmDialog({
   const [moved, setMoved] = useState<{ names: string[]; at: number } | null>(null);
   const [failure, setFailure] = useState<UpdateRequestError | null>(null);
   const [locked, setLocked] = useState<LockView | null>(null);
+  // The stack had nothing to update by the time of the press: the commit goes and the rows are stale.
+  const [nothing, setNothing] = useState(false);
+  const stackScope = workload.kind === "stack";
+  const stackName = stackScope ? workload.name : managedStack;
 
   const data = preview.data;
   const items = data?.items ?? [];
+  const leftOut = data?.leftOut ?? [];
   const loading = preview.isPending;
   const loadFailed = preview.isError && !data;
   const refused = data !== undefined && !data.offered;
+  const adoptFirst =
+    (data !== undefined && !data.offered && data.refusal === "adopt_first") ||
+    failure?.type === "adopt_first";
   const lock = lockOfPreview(data?.lock) ?? locked ?? undefined;
   const pending = run.isPending;
-  const blocked = loading || loadFailed || refused || lock !== undefined || items.length === 0;
+  const blocked =
+    loading || loadFailed || refused || nothing || lock !== undefined || items.length === 0;
 
   // One request for each press: the mutation's own pending state arrives a render late, so a second press
   // in the same breath would send a second request (T-12-47).
@@ -291,6 +309,7 @@ export function UpdateConfirmDialog({
     setMoved(null);
     setFailure(null);
     setLocked(null);
+    setNothing(false);
     const expect: Record<string, string> = {};
     for (const item of items) expect[item.name] = item.toDigest;
     run.mutate(
@@ -299,9 +318,18 @@ export function UpdateConfirmDialog({
         onSettled: () => {
           sending.current = false;
         },
-        onSuccess: ({ jobId }) => {
+        onSuccess: ({ jobId, stackId }) => {
           onClose();
-          void navigate({ to: "/env/$envId/update-jobs/$jobId", params: { envId, jobId } });
+          // An update of a stack, or of a service a managed stack owns, is a deploy of the stack: it is
+          // followed in the stack's own console. Any other is followed in the update console.
+          if (stackId) {
+            void navigate({
+              to: "/env/$envId/stacks/$stackId/deploys/$jobId",
+              params: { envId, stackId, jobId },
+            });
+          } else {
+            void navigate({ to: "/env/$envId/update-jobs/$jobId", params: { envId, jobId } });
+          }
         },
         onError: (err) => {
           if (err.type === "update_moved") {
@@ -309,6 +337,8 @@ export function UpdateConfirmDialog({
             setMoved({ names: names.length > 0 ? names : [workload.name], at: Date.now() });
           } else if (err.type === "operation_locked") {
             setLocked(lockOfRefusal(err));
+          } else if (stackScope && err.type === "nothing_to_update") {
+            setNothing(true);
           } else {
             setFailure(err);
           }
@@ -338,9 +368,15 @@ export function UpdateConfirmDialog({
       >
         <DialogHeader>
           <DialogTitle ref={title} tabIndex={-1} className="break-all outline-none">
-            {t("updates.confirm.title", { name: workload.name })}
+            {t(stackScope ? "updates.confirm.titleStack" : "updates.confirm.title", {
+              name: workload.name,
+            })}
           </DialogTitle>
-          <DialogDescription>{t("updates.confirm.description")}</DialogDescription>
+          <DialogDescription className="break-words">
+            {stackName
+              ? t("updates.confirm.descriptionManaged", { stack: stackName })
+              : t("updates.confirm.description")}
+          </DialogDescription>
         </DialogHeader>
 
         {lock ? <LockAlert lock={lock} envId={envId} envName={envName} /> : null}
@@ -376,11 +412,35 @@ export function UpdateConfirmDialog({
           </Alert>
         ) : null}
 
-        {refused && data ? (
+        {adoptFirst ? (
+          <Alert role="status" data-slot="adopt-first">
+            <TriangleAlert aria-hidden="true" />
+            <AlertTitle>{t("updates.confirm.adoptFirst.title")}</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="break-words">{t("updates.confirm.refusal.adopt_first")}</span>
+              <Link
+                to="/env/$envId/unmanaged-stacks/$name/adopt"
+                params={{ envId, name: workload.name }}
+                className="rounded-sm text-accent-ink underline underline-offset-3"
+              >
+                {t("updates.confirm.adoptFirst.link")}
+              </Link>
+            </AlertDescription>
+          </Alert>
+        ) : refused && data ? (
           <Alert role="status">
             <AlertTitle>{t("updates.confirm.refusal.title")}</AlertTitle>
             <AlertDescription className="break-words">
               {t(refusalKey(data.refusal), { name: workload.name, environment: envName })}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {nothing ? (
+          <Alert role="status">
+            <AlertTitle>{t("updates.confirm.refusal.title")}</AlertTitle>
+            <AlertDescription className="break-words">
+              {t("updates.confirm.refusal.stack_nothing", { name: workload.name })}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -396,9 +456,19 @@ export function UpdateConfirmDialog({
           </ul>
         ) : null}
 
-        {data && !refused ? <PreflightList warnings={data.warnings ?? []} /> : null}
+        {stackScope && leftOut.length > 0 && !refused && !nothing ? (
+          <p
+            data-slot="update-left-out"
+            className="text-sm break-words text-muted-foreground"
+            title={leftOut.map((l) => l.name).join(", ")}
+          >
+            {t("updates.confirm.leftOut", { count: leftOut.length })}
+          </p>
+        ) : null}
 
-        {failure ? (
+        {data && !refused && !nothing ? <PreflightList warnings={data.warnings ?? []} /> : null}
+
+        {failure && !adoptFirst ? (
           <Alert variant="destructive" role="alert">
             <CircleX aria-hidden="true" />
             <AlertDescription className="break-words">
@@ -411,6 +481,17 @@ export function UpdateConfirmDialog({
         <p className="text-sm break-words text-muted-foreground">{t("updates.confirm.note")}</p>
 
         <DialogFooter>
+          {stackScope && onReview ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="max-md:h-11 sm:mr-auto"
+              disabled={pending}
+              onClick={onReview}
+            >
+              {t("updates.confirm.review")}
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
@@ -420,22 +501,26 @@ export function UpdateConfirmDialog({
           >
             {t("updates.confirm.cancel")}
           </Button>
-          <Button
-            type="button"
-            className="max-md:h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-            aria-disabled={blocked || pending ? true : undefined}
-            aria-busy={pending ? true : undefined}
-            onClick={submit}
-          >
-            {pending ? (
-              <>
-                <Spinner aria-hidden="true" />
-                {t("updates.confirm.checking")}
-              </>
-            ) : (
-              t("updates.confirm.commit", { name: workload.name })
-            )}
-          </Button>
+          {adoptFirst || nothing ? null : (
+            <Button
+              type="button"
+              className="max-md:h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              aria-disabled={blocked || pending ? true : undefined}
+              aria-busy={pending ? true : undefined}
+              onClick={submit}
+            >
+              {pending ? (
+                <>
+                  <Spinner aria-hidden="true" />
+                  {t("updates.confirm.checking")}
+                </>
+              ) : stackScope ? (
+                t("updates.confirm.commitStack", { count: items.length })
+              ) : (
+                t("updates.confirm.commit", { name: workload.name })
+              )}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

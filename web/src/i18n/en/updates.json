@@ -80,6 +80,11 @@
       "failed": "Couldn't check for updates. Try again."
     },
     "stack": {
+      "action": {
+        "update": "Update stack ({{count, number}})",
+        "adopt": "Adopt to update…",
+        "adoptTooltip": "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to."
+      },
       "noneTooltip": "No service of this stack can be checked: {{reasons}}.",
       "noneTooltipBare": "No service of this stack can be checked.",
       "detail": {
@@ -210,7 +215,9 @@
         "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
         "not_checked": "TierPlan has no check result for this image yet. Choose Check now first.",
         "check_failed": "The last check failed: {{reason}} Choose Check now to try again.",
-        "offline": "{{environment}} isn't reporting, so TierPlan can't update it."
+        "offline": "{{environment}} isn't reporting, so TierPlan can't update it.",
+        "adopt_first": "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to.",
+        "stack_nothing": "Every service of {{name}} already runs the newest version, or its update is skipped or ignored."
       }
     },
     "skip": {
@@ -252,7 +259,16 @@
     },
     "confirm": {
       "title": "Update {{name}}",
+      "titleStack": "Update stack {{name}}",
       "description": "TierPlan changes only the image of this service and keeps its other settings.",
+      "descriptionManaged": "TierPlan pulls the new image and updates the service in place. This is saved as a new revision of {{stack}}, so you can roll back from History.",
+      "leftOut_one": "{{count, number}} is skipped or ignored and won't change.",
+      "leftOut_other": "{{count, number}} are skipped or ignored and won't change.",
+      "review": "Review everything first",
+      "adoptFirst": {
+        "title": "Adopt this stack first",
+        "link": "Adopt stack…"
+      },
       "rowsLabel": "What will change",
       "loading": "Loading what will change",
       "loadFailed": "Couldn't load what this update changes.",
@@ -273,6 +289,8 @@
       "note": "If the update fails, TierPlan puts the previous version back on its own and records both in the audit log.",
       "cancel": "Cancel",
       "commit": "Update {{name}}",
+      "commitStack_one": "Update {{count, number}} service",
+      "commitStack_other": "Update {{count, number}} services",
       "checking": "Checking…",
       "moved": {
         "title": "A newer version appeared",
