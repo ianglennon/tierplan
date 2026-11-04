@@ -16,6 +16,8 @@ interface VirtualRowsProps<T> {
   scroller: HTMLDivElement | null;
   // The columns the table spans, for the two spacer rows.
   columns: number;
+  // How tall a row is, in px. 36 unless the table's rows are taller (search results are 44).
+  rowHeight?: number;
   rowKey: (row: T) => string;
   renderRow: (row: T) => ReactNode;
 }
@@ -26,13 +28,14 @@ export function VirtualRows<T>({
   rows,
   scroller,
   columns,
+  rowHeight = ROW_PX,
   rowKey,
   renderRow,
 }: VirtualRowsProps<T>) {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller,
-    estimateSize: () => ROW_PX,
+    estimateSize: () => rowHeight,
     overscan: OVERSCAN,
     getItemKey: (index) => {
       const row = rows[index];

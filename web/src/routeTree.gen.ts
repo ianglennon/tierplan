@@ -19,6 +19,7 @@ import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
 import { Route as AppGitRouteImport } from './routes/_app/git'
 import { Route as AppRegistriesRouteImport } from './routes/_app/registries'
+import { Route as AppSearchRouteImport } from './routes/_app/search'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppStacksRouteImport } from './routes/_app/stacks'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
@@ -167,6 +168,11 @@ const AppGitRoute = AppGitRouteImport.update({
 const AppRegistriesRoute = AppRegistriesRouteImport.update({
   id: '/registries',
   path: '/registries',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSearchRoute = AppSearchRouteImport.update({
+  id: '/search',
+  path: '/search',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
@@ -749,6 +755,7 @@ export interface FileRoutesByFullPath {
   '/environments': typeof AppEnvironmentsRoute
   '/git': typeof AppGitRoute
   '/registries': typeof AppRegistriesRoute
+  '/search': typeof AppSearchRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/stacks': typeof AppStacksRoute
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
@@ -859,6 +866,7 @@ export interface FileRoutesByTo {
   '/environments': typeof AppEnvironmentsRoute
   '/git': typeof AppGitRoute
   '/registries': typeof AppRegistriesRoute
+  '/search': typeof AppSearchRoute
   '/stacks': typeof AppStacksRoute
   '/': typeof AppIndexRoute
   '/git/credentials': typeof AppGitCredentialsRoute
@@ -958,6 +966,7 @@ export interface FileRoutesById {
   '/_app/environments': typeof AppEnvironmentsRoute
   '/_app/git': typeof AppGitRoute
   '/_app/registries': typeof AppRegistriesRoute
+  '/_app/search': typeof AppSearchRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/stacks': typeof AppStacksRoute
   '/_app/': typeof AppIndexRoute
@@ -1072,6 +1081,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/git'
     | '/registries'
+    | '/search'
     | '/settings'
     | '/stacks'
     | '/env/$envId'
@@ -1182,6 +1192,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/git'
     | '/registries'
+    | '/search'
     | '/stacks'
     | '/'
     | '/git/credentials'
@@ -1280,6 +1291,7 @@ export interface FileRouteTypes {
     | '/_app/environments'
     | '/_app/git'
     | '/_app/registries'
+    | '/_app/search'
     | '/_app/settings'
     | '/_app/stacks'
     | '/_app/'
@@ -1465,6 +1477,13 @@ declare module '@tanstack/react-router' {
       path: '/registries'
       fullPath: '/registries'
       preLoaderRoute: typeof AppRegistriesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/search': {
+      id: '/_app/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof AppSearchRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings': {
@@ -2555,6 +2574,7 @@ interface AppRouteChildren {
   AppEnvironmentsRoute: typeof AppEnvironmentsRoute
   AppGitRoute: typeof AppGitRoute
   AppRegistriesRoute: typeof AppRegistriesRoute
+  AppSearchRoute: typeof AppSearchRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppStacksRoute: typeof AppStacksRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -2568,6 +2588,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppEnvironmentsRoute: AppEnvironmentsRoute,
   AppGitRoute: AppGitRoute,
   AppRegistriesRoute: AppRegistriesRoute,
+  AppSearchRoute: AppSearchRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppStacksRoute: AppStacksRoute,
   AppIndexRoute: AppIndexRoute,

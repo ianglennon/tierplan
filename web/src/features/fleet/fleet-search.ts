@@ -27,7 +27,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The server refuses more than this many (T-12-79), so the address does not carry more.
 export const MAX_ENV_FILTER = 100;
 
-function envIds(value: unknown): string[] | undefined {
+export function envIds(value: unknown): string[] | undefined {
   const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
   const ids: string[] = [];
   for (const v of raw) {

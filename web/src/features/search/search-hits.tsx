@@ -70,7 +70,10 @@ export function hitTarget(hit: SearchResult): SearchTarget {
   }
 }
 
-const ICONS: Record<SearchType, ComponentType<{ className?: string; "aria-hidden"?: boolean }>> = {
+export const ICONS: Record<
+  SearchType,
+  ComponentType<{ className?: string; "aria-hidden"?: boolean }>
+> = {
   stack: Boxes,
   service: Layers,
   container: Container,
@@ -78,10 +81,10 @@ const ICONS: Record<SearchType, ComponentType<{ className?: string; "aria-hidden
   network: Network,
 };
 
-const hitKey = (h: SearchResult) => `${h.type}|${h.envId}|${h.nodeId}|${h.id || h.name}`;
+export const hitKey = (h: SearchResult) => `${h.type}|${h.envId}|${h.nodeId}|${h.id || h.name}`;
 
 // detail is the muted second line of a hit. Only the name is highlighted (UI-SPEC decision 16).
-function useDetail() {
+export function useDetail() {
   const t = useT();
   return (h: SearchResult): string => {
     switch (h.type) {
