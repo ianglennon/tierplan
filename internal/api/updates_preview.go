@@ -45,6 +45,8 @@ type UpdatePreviewItem struct {
 // UpdateWarningBody is one thing to know before the update runs.
 type UpdateWarningBody struct {
 	Workload string `json:"workload" doc:"The service the warning is about"`
+	Reason   string `json:"reason,omitempty" doc:"Left out unless set: for previous_failure, why the earlier update failed (for example timeout, unhealthy, didnt_start, or pull_failed when the image could not be pulled, in which case nothing was changed and nothing was rolled back)"`
+	At       string `json:"at,omitempty" doc:"Left out unless set: for previous_failure, when the earlier update failed, RFC 3339 UTC"`
 	Code     string `json:"code" enum:"downtime,container_downtime,no_healthcheck,host_ports,volumes,previous_failure" doc:"downtime (the only replica stops before its replacement starts), container_downtime (a container is recreated), no_healthcheck (neither the service nor its image defines a health check), host_ports (a port is published in host mode), volumes (the service mounts a volume), previous_failure (an update to this version failed before)"`
 }
 
@@ -75,6 +77,7 @@ func registerImageUpdatePreview(r *httpx.Router, d UpdatesDeps) {
 		OperationID: "previewImageUpdate", Method: http.MethodGet, Path: "/api/env/{envId}/updates/preview",
 		Summary: "What updating a service would change",
 		Description: "The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). " +
+			"When an update to this version failed before, the preview is still offered and carries the warning previous_failure with the reason and when it failed; running it then needs force (Update anyway). " +
 			"Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. " +
 			"A service of a stack TierPlan manages, and kind stack, are described as the update of the stack: the services it would change and, in leftOut, those it leaves out because they are skipped or ignored. " +
 			"offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, nothing newer, a stack that must be adopted first (adopt_first), no check yet, a failed check, a pinned or local image) or when the environment is offline. " +
@@ -150,7 +153,7 @@ func previewImageUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, e
 		})
 	}
 	for _, w := range pv.Warnings {
-		b.Warnings = append(b.Warnings, UpdateWarningBody{Workload: w.Workload, Code: w.Code})
+		b.Warnings = append(b.Warnings, UpdateWarningBody{Workload: w.Workload, Code: w.Code, Reason: w.Reason, At: rfc3339(w.At)})
 	}
 	if pv.Lock != nil {
 		h := holderBodyOf(*pv.Lock)

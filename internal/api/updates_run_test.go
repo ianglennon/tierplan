@@ -706,3 +706,126 @@ func TestManagedStackContainerUpdatesThroughItsStack(t *testing.T) {
 		t.Errorf("run = %+v, want a done stack run", run)
 	}
 }
+
+// Update anyway (plan 12-45, IMG-07, D-14). A version whose update failed before is not offered again by itself; a person can ask for
+// it again with force, for one workload, and only then does it run.
+
+// failureStoreOf is the memory of failed updates the test server judges by.
+func (f *envFix) failureStoreOf() *updates.FailureStore {
+	return &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+}
+
+// runUpdateAs asks for the update of a workload of a kind, with or without force.
+func (f *envFix) runUpdateAs(t *testing.T, e envBody, kind, name string, expect map[string]string, force bool) *envRec {
+	t.Helper()
+	body := map[string]any{"kind": kind, "name": name}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	if force {
+		body["force"] = true
+	}
+	raw, _ := json.Marshal(body)
+	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/updates/run", string(raw))
+}
+
+// The tracer of Update anyway: a service whose update was rolled back is refused without force, with nothing changed, and runs with it;
+// the forced update that works forgets the failure. A version whose pull failed (nothing was changed, nothing rolled back) is retried
+// the same way, and the refusal says so in those words.
+func TestUpdateAnywayNeedsForce(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{updates.ReasonUnhealthy, updates.ReasonPullFailed} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+			f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+			if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+				t.Fatalf("check now: %d %s", rec.code, rec.body)
+			}
+			fs := f.failureStoreOf()
+			remember(t, fs, e.ID, "service", "web", updDigest('b'), reason, false)
+
+			rec := f.runUpdateAs(t, e, "service", "web", map[string]string{"web": updDigest('b')}, false)
+			if rec.code != http.StatusConflict || rec.ptyp != "previously_failed" {
+				t.Fatalf("update without force = %d %s %s, want 409 previously_failed", rec.code, rec.ptyp, rec.body)
+			}
+			p := decode[updateProblem](t, rec)
+			if len(p.Errors) != 1 || p.Errors[0].Location != "reason" || p.Errors[0].Message != reason {
+				t.Errorf("errors = %+v, want the reason %s", p.Errors, reason)
+			}
+			if strings.Contains(strings.ToLower(p.Detail), "rolled back") {
+				t.Errorf("detail = %q, want no claim that anything was rolled back", p.Detail)
+			}
+			if reason == updates.ReasonPullFailed && (!strings.Contains(p.Detail, "could not be pulled") || !strings.Contains(p.Detail, "nothing was changed")) {
+				t.Errorf("detail = %q, want it to say the image could not be pulled and nothing was changed", p.Detail)
+			}
+			f.noRunsNoWrites(t, e)
+			if all, err := fs.ForEnv(context.Background(), e.ID); err != nil || len(all) != 1 {
+				t.Fatalf("failures = %+v %v, want the failure still remembered after a refusal", all, err)
+			}
+
+			rec = f.runUpdateAs(t, e, "service", "web", map[string]string{"web": updDigest('b')}, true)
+			if rec.code != http.StatusOK {
+				t.Fatalf("update with force = %d %s, want 200", rec.code, rec.body)
+			}
+			job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID)
+			if job.State != jobs.JobDone {
+				t.Fatalf("job = %s %+v, want done", job.State, job.Items)
+			}
+			if run := f.runOf(t, job); run.State != updates.RunDone {
+				t.Errorf("run = %s %q, want done", run.State, run.Reason)
+			}
+			sent := f.fake.ServiceUpdates()
+			if len(sent) != 1 || sent[0].Spec.TaskTemplate.ContainerSpec.Image != "registry.test/team/web:1@"+updDigest('b') {
+				t.Errorf("service updates = %d, want one, to the digest that failed", len(sent))
+			}
+			if all, err := fs.ForEnv(context.Background(), e.ID); err != nil || len(all) != 0 {
+				t.Errorf("failures = %+v %v, want the failure forgotten after the forced update worked", all, err)
+			}
+		})
+	}
+}
+
+// A forced run needs the same permission as any update (T-12-75): a Viewer's is refused and changes nothing, an Operator's runs and is
+// audited as an update by the operator.
+func TestForceNeedsOperator(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	remember(t, f.failureStoreOf(), e.ID, "service", "web", updDigest('b'), updates.ReasonUnhealthy, false)
+	f.addUser(t, "vera", false)
+	f.addEnvRole(t, "vera", e.ID, "viewer")
+	f.addUser(t, "olive", false)
+	f.addEnvRole(t, "olive", e.ID, "operator")
+
+	path := "/api/env/" + e.ID + "/updates/run"
+	body := `{"kind":"service","name":"web","force":true}`
+	cookie, csrf := f.signIn(t, "vera", false)
+	if rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's forced update = %d %s, want 403", rec.Code, rec.Body)
+	}
+	f.noRunsNoWrites(t, e)
+	if all, err := f.failureStoreOf().ForEnv(context.Background(), e.ID); err != nil || len(all) != 1 {
+		t.Errorf("failures = %+v %v, want the failure still remembered", all, err)
+	}
+
+	cookie, csrf = f.signIn(t, "olive", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an operator's forced update = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var ans updateRunAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil {
+		t.Fatal(err)
+	}
+	if job := f.awaitUpdate(t, ans.JobID); job.State != jobs.JobDone {
+		t.Fatalf("job = %s, want done", job.State)
+	}
+	// The operator's forced run is audited like any update, under the operator.
+	if rows := f.auditRows(t, "image.updated"); len(rows) != 1 {
+		t.Errorf("image.updated rows = %+v, want one", rows)
+	}
+}

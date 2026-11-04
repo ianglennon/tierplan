@@ -43,6 +43,8 @@ type stackUpdateRun struct {
 	// Stack is the stack's name when the request names a stack, empty for a service of a stack (then StackID is known).
 	Stack, StackID string
 	Services       []string
+	// Force is the person's choice to try again a version of the one service that failed before. A run of a whole stack never sets it.
+	Force bool
 }
 
 // runStackUpdate starts the update of a stack, or of one service of one, for the route: it checks the permission to deploy
@@ -76,7 +78,7 @@ func runStackUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *
 	case err != nil:
 		return UpdateRunBody{}, stackLookupProblem(d.Stacks, env.ID, err)
 	}
-	out, err := updateStackImages(ctx, d.Stacks, d.Applier, p, env, st, run.Services, in.Body.Expect, p.AuditActor(), "", in.UserAgent)
+	out, err := updateStackImages(ctx, d.Stacks, d.Applier, p, env, st, run.Services, in.Body.Expect, run.Force, p.AuditActor(), "", in.UserAgent)
 	if err != nil {
 		return UpdateRunBody{}, plainProblem(err)
 	}
@@ -113,13 +115,14 @@ func managedStackByName(ctx context.Context, repo stackops.Repo, envID, name str
 // updateStackImages updates services of a stack TierPlan manages to the digests the registry has now, as a revision of the
 // stack. services limits it to those services (by the name the stack's pins use); none means every service with an update
 // available, leaving out the skipped and ignored ones. expect is what the confirm showed, refused with 409 update_moved when
-// the registry says otherwise. The digests deployed are the ones the server read, never one from the request.
+// the registry says otherwise. force is a person's choice to try again a version of the one service named in services that failed
+// before; it means nothing for any other request. The digests deployed are the ones the server read, never one from the request.
 //
 // It is modelled on rollbackStack: the stack's operation lock is taken before anything is stored, the revision is a copy of the
 // newest good one (Repo.NewUpdateRevision, so it reads as an update and never as a roll back), and the deploy is the stack's own
 // job through launchStackDeploy, in the stack's console. The images are the revision's own, but for the chosen services, whose
 // pins carry the new digest and which the deploy checks like a reviewed deploy does (ReviewedPins).
-func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p *rbac.Principal, env *httpx.Env, st stackops.Stack, services []string, expect map[string]string, actor audit.Actor, bulk, userAgent string) (*StackDeployOutput, error) {
+func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p *rbac.Principal, env *httpx.Env, st stackops.Stack, services []string, expect map[string]string, force bool, actor audit.Actor, bulk, userAgent string) (*StackDeployOutput, error) {
 	if d.Jobs == nil || ap == nil || ap.Runs == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
 	}
@@ -132,7 +135,7 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 	if h, held := d.Locks.Held(env.ID); held {
 		return nil, operationLocked(env.Name, h)
 	}
-	plan, err := ap.PlanStack(ctx, updates.StackRequest{EnvID: env.ID, Stack: st.Name, Services: services, Expect: expect, Recheck: true})
+	plan, err := ap.PlanStack(ctx, updates.StackRequest{EnvID: env.ID, Stack: st.Name, Services: services, Expect: expect, Recheck: true, Force: force})
 	if err != nil {
 		return nil, updateRunProblem(asUpdates, env, err)
 	}

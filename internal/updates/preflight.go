@@ -4,6 +4,8 @@
 package updates
 
 import (
+	"time"
+
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
@@ -26,13 +28,26 @@ const (
 	WarnHostPorts = "host_ports"
 	// WarnVolumes: the service mounts a volume, which the new version will see in the state the old one left it.
 	WarnVolumes = "volumes"
-	// WarnPreviousFailure: an update of this workload to this digest failed before (plan 12-24).
+	// WarnPreviousFailure: an update of this workload to this digest failed before (plans 12-24, 12-45).
 	WarnPreviousFailure = "previous_failure"
 )
 
-// Warning is one thing to know before an update runs: which workload and a code.
+// Warning is one thing to know before an update runs: which workload and a code. A previous_failure warning also carries Reason, why
+// the update failed (pull_failed when the image could not be pulled, in which case nothing was changed and nothing was rolled back),
+// and At, when.
 type Warning struct {
 	Workload, Code string
+	Reason         string
+	At             time.Time
+}
+
+// failureWarnings is the previous_failure warning of the workload name when f is the failed update the person is about to retry,
+// and none otherwise.
+func failureWarnings(name string, f *Failure) []Warning {
+	if f == nil {
+		return nil
+	}
+	return []Warning{{Workload: name, Code: WarnPreviousFailure, Reason: f.Reason, At: f.FailedAt}}
 }
 
 // ServiceWarnings are the warnings of updating the service name with that spec. imageHasHealthcheck says whether the image

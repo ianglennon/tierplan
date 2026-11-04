@@ -36,6 +36,11 @@ type StackRequest struct {
 	// Recheck asks the registries again for the images of the stack's services, bypassing the stored checks, as a click does.
 	// A preview leaves it off and reads the stored checks.
 	Recheck bool
+	// Force is a person's explicit request to try again a version of one service that failed before (D-14): with exactly one service
+	// named in Services, that service is a target although it reads rolled_back or rollback_failed. It means nothing for a request
+	// that names no service or several, so an update of a whole stack never retries a failure. Without it, such a service is left out
+	// of a stack's update, and a request for it alone is refused with *PreviouslyFailedError.
+	Force bool
 }
 
 // StackTarget is a service of a stack whose image an update would change.
@@ -61,6 +66,8 @@ type StackTarget struct {
 	ChangedPlatforms []string
 	// ServiceID is the swarm service's ID, empty on a standalone host.
 	ServiceID string
+	// Failure is the earlier failed update this target retries, nil for a target that has none. It is only set for a forced one.
+	Failure *Failure
 }
 
 // StackLeftOut is a service of a stack that an update leaves out, and why: it is skipped or ignored.
@@ -116,15 +123,24 @@ func (a *Applier) PlanStack(ctx context.Context, req StackRequest) (StackPlan, e
 		members = kept
 	}
 
+	// A forced retry is one person's choice of one service (D-14); a request for more than one never forces.
+	force := req.Force && len(req.Services) == 1 && len(members) == 1
 	var plan StackPlan
 	var moved []MovedItem
 	for _, m := range members {
 		v, w := m.sv.Verdict, m.sv.Workload
+		var retried *Failure
 		switch v.State {
 		case StateSkipped, StateIgnored:
 			plan.LeftOut = append(plan.LeftOut, StackLeftOut{Name: m.key, State: v.State})
 			continue
 		case StateUpdateAvailable:
+		case StateRolledBack, StateRollbackFailed:
+			// The version failed before: only a person's forced request for this one service tries it again.
+			if !force {
+				continue
+			}
+			retried = v.Failure
 		default:
 			continue
 		}
@@ -152,6 +168,7 @@ func (a *Applier) PlanStack(ctx context.Context, req StackRequest) (StackPlan, e
 		if t.Swarm {
 			t.ServiceID = w.ID
 		}
+		t.Failure = retried
 		t.Platforms = a.checkedPlatforms(ctx, req.EnvID, w, remote)
 		plan.Targets = append(plan.Targets, t)
 	}
@@ -179,6 +196,8 @@ func singleServiceRefusal(sv ServiceVerdict) error {
 		return &CheckFailedError{Reason: v.Reason}
 	case v.State == StateNotChecked:
 		return &NotUpdatableError{Code: NotUpdatableNotChecked}
+	case v.State == StateRolledBack || v.State == StateRollbackFailed:
+		return &PreviouslyFailedError{Failure: v.Failure}
 	}
 	return ErrNothingToUpdate
 }
@@ -330,7 +349,8 @@ func (a *Applier) PreviewStack(ctx context.Context, envID, stack string, service
 	if h, held := a.Locks.Held(envID); held {
 		p.Lock = &h
 	}
-	plan, err := a.PlanStack(ctx, StackRequest{EnvID: envID, Stack: stack, Services: services})
+	// The preview of one service describes the update a person's "Update anyway" would make of a version that failed before.
+	plan, err := a.PlanStack(ctx, StackRequest{EnvID: envID, Stack: stack, Services: services, Force: len(services) == 1})
 	switch {
 	case errors.Is(err, ErrNothingToUpdate):
 		p.LeftOut, p.Refusal = plan.LeftOut, RefusalNothingToUpdate
@@ -350,6 +370,7 @@ func (a *Applier) PreviewStack(ctx context.Context, envID, stack string, service
 	}
 	p.Offered, p.LeftOut = true, plan.LeftOut
 	for _, t := range plan.Targets {
+		p.Warnings = append(p.Warnings, failureWarnings(t.Key, t.Failure)...)
 		p.Items = append(p.Items, PreviewItem{
 			Kind: "service", Name: t.Key, Stack: stack, Image: t.Image, FromDigest: t.From, ToDigest: t.To,
 			Platforms: append([]string{}, t.RunsOn...), ChangedPlatforms: append([]string{}, t.ChangedPlatforms...),

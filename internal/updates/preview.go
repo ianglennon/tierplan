@@ -121,7 +121,7 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 		FromDigest: v.RunningDigest, ToDigest: v.RemoteDigest,
 		Platforms: append([]string{}, w.Platforms...), ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
 	}}
-	p.Warnings = a.serviceWarnings(ctx, envID, row)
+	p.Warnings = append(failureWarnings(row.Name, v.Failure), a.serviceWarnings(ctx, envID, row)...)
 	return p, nil
 }
 
@@ -189,7 +189,7 @@ func (a *Applier) previewContainer(ctx context.Context, envID, name string) (Pre
 		FromDigest: v.RunningDigest, ToDigest: v.RemoteDigest,
 		Platforms: append([]string{}, w.Platforms...), ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
 	}}
-	p.Warnings = a.containerWarnings(ctx, envID, w)
+	p.Warnings = append(failureWarnings(strings.TrimPrefix(w.Name, "/"), v.Failure), a.containerWarnings(ctx, envID, w)...)
 	return p, nil
 }
 

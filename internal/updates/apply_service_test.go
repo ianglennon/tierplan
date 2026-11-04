@@ -104,6 +104,7 @@ type applyRig struct {
 	heads   *fakeHeads
 	clock   *waitClock
 	hub     *jobs.Hub
+	cluster *envs.Clusters
 	locks   *stackops.Locks
 	runs    updates.RunStore
 	applier *updates.Applier
@@ -170,7 +171,7 @@ func newApplyRigOn(t *testing.T, host string, fake *dockertest.Fake) *applyRig {
 	failures := &updates.FailureStore{Q: st.Q, W: st.Write}
 	usvc.Failures, usvc.UpdateRuns = failures, &runs
 	return &applyRig{
-		fake: fake, envID: env.ID, st: st, reg: rs, heads: heads, clock: clk, hub: hub, locks: locks, runs: runs, failures: failures,
+		fake: fake, envID: env.ID, st: st, reg: rs, heads: heads, clock: clk, hub: hub, cluster: clusters, locks: locks, runs: runs, failures: failures,
 		applier: &updates.Applier{
 			Service: usvc, Runs: &runs, Locks: locks, Jobs: hub, Aggregator: agg, Resolver: registry.NewResolver(rs), Audit: aud,
 			Clock: clk, ConvergeTimeout: 30 * time.Second, Failures: failures, Log: log,
@@ -1049,5 +1050,90 @@ func TestSuccessClearsFailure(t *testing.T) {
 	}
 	if _, ok := r.failureOf(t, "api"); !ok {
 		t.Errorf("the failure of another workload was forgotten")
+	}
+}
+
+// A person can try a version that failed before, on purpose and one workload at a time: without force the update is refused with
+// nothing changed, with force it runs to the digest that failed, and when it works the failure is forgotten and the badge reads up to
+// date (plan 12-45, IMG-07, D-14). The version whose pull failed is remembered the same way, so a registry glitch is recoverable.
+func TestUpdateAnywayClearsFailure(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{updates.ReasonUnhealthy, updates.ReasonPullFailed} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			r := newApplyRig(t, nil, swarmService("web", 'a'), swarmService("api", 'a'))
+			for _, n := range []string{"web", "api"} {
+				if err := r.failures.Record(context.Background(), updates.Failure{
+					EnvID: r.envID, Kind: "service", Workload: n, Digest: dg('b'), Reason: reason, RunID: "old-run", FailedAt: t0,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				r.offer(n, dg('b'))
+			}
+
+			// Without force the failed version is refused, with the failure at hand, and nothing is written or recorded.
+			_, err := r.applier.Start(testsupport.Context(t), r.request("web", dg('b')))
+			var prev *updates.PreviouslyFailedError
+			if !errors.Is(err, updates.ErrPreviouslyFailed) || !errors.As(err, &prev) || prev.Failure == nil || prev.Failure.Reason != reason {
+				t.Fatalf("Start without force = %v, want ErrPreviouslyFailed with the reason %s", err, reason)
+			}
+			if n := len(r.fake.ServiceUpdates()); n != 0 {
+				t.Fatalf("service updates = %d, want none for a refused update", n)
+			}
+			if v := r.verdictOf(t, "web"); v.State != updates.StateRolledBack {
+				t.Fatalf("verdict = %s, want rolled_back for the digest that failed", v.State)
+			}
+			if _, held := r.locks.Held(r.envID); held {
+				t.Fatalf("the refused update still holds the lock")
+			}
+
+			// With force it runs to the digest the registry has, ends done, forgets the failure and reads up to date.
+			req := r.request("web", dg('b'))
+			req.Force = true
+			job := r.run(t, req)
+			run := r.runRow(t, job)
+			if run.State != updates.RunDone {
+				t.Fatalf("run = %s %q, want done", run.State, run.Reason)
+			}
+			sent := r.fake.ServiceUpdates()
+			if len(sent) != 1 || sent[0].Spec.TaskTemplate.ContainerSpec.Image != "registry.test/team/web:1@"+dg('b') {
+				t.Fatalf("service updates = %d, want one to the digest that failed", len(sent))
+			}
+			if f, ok := r.failureOf(t, "web"); ok {
+				t.Errorf("failure = %+v, want it forgotten after the forced update worked", f)
+			}
+			// A server reads the cluster again when the engine's events say something changed; the rig has no events.
+			if err := r.cluster.Refresh(testsupport.Context(t), r.envID); err != nil {
+				t.Fatalf("read the cluster again: %v", err)
+			}
+			if v := r.verdictOf(t, "web"); v.State != updates.StateUpToDate {
+				t.Errorf("verdict = %s running %s remote %s, want up_to_date", v.State, v.RunningDigest, v.RemoteDigest)
+			}
+			if _, ok := r.failureOf(t, "api"); !ok {
+				t.Errorf("the failure of another workload was forgotten")
+			}
+			if rows := r.audits(t, "image.updated"); len(rows) != 1 || rows[0]["workload"] != "web" {
+				t.Errorf("image.updated rows = %+v, want one for web", rows)
+			}
+		})
+	}
+}
+
+// Force means nothing for a workload that has no failed update: it is an ordinary run, and a failure of another digest does not make
+// force retry anything (plan 12-45).
+func TestForceIgnoredWithoutAFailure(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('c'))
+	// What failed was an older version; the registry has moved on, so this is an ordinary update.
+	if err := r.failures.Record(context.Background(), updates.Failure{
+		EnvID: r.envID, Kind: "service", Workload: "web", Digest: dg('b'), Reason: updates.ReasonTimeout, RunID: "old-run", FailedAt: t0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := r.request("web", dg('c'))
+	req.Force = true
+	if run := r.runRow(t, r.run(t, req)); run.State != updates.RunDone {
+		t.Fatalf("run = %s %q, want done", run.State, run.Reason)
 	}
 }

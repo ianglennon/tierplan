@@ -121,7 +121,19 @@ var (
 	ErrWorkloadGone = errors.New("updates: no such workload")
 	// ErrUnsupportedKind means the kind of workload cannot be updated by this applier.
 	ErrUnsupportedKind = errors.New("updates: this kind of workload cannot be updated")
+	// ErrPreviouslyFailed means an update to the version the registry has now failed before and a person did not ask for it again
+	// (Request.Force). Nothing was changed. It matches a *PreviouslyFailedError, which says why and when it failed.
+	ErrPreviouslyFailed = errors.New("updates: an update to this version failed before")
 )
+
+// PreviouslyFailedError is ErrPreviouslyFailed with the failure it stands for, which is nil when the failure is not at hand. Failure.Reason
+// is pull_failed when the image could not be pulled and nothing was changed, and then nothing was rolled back either.
+type PreviouslyFailedError struct{ Failure *Failure }
+
+func (e *PreviouslyFailedError) Error() string { return ErrPreviouslyFailed.Error() }
+
+// Is makes errors.Is(err, ErrPreviouslyFailed) true.
+func (e *PreviouslyFailedError) Is(target error) bool { return target == ErrPreviouslyFailed }
 
 // NotUpdatableError means the workload is one this path does not update, with the reason as a code.
 type NotUpdatableError struct{ Code string }
@@ -174,6 +186,11 @@ type Request struct {
 	Owner string
 	// BulkID ties the updates of one bulk run together; empty for a single update.
 	BulkID string
+	// Force is a person's explicit request ("Update anyway", D-14) to try again a version that failed before: the workload reads
+	// rolled_back (or rollback_failed) for the digest the registry has now. Without it such a workload is refused with
+	// ErrPreviouslyFailed, and with it a workload in any other state is updated as usual. Nothing but a person's request sets it:
+	// not a schedule, not a bulk update, not an automatic path.
+	Force bool
 }
 
 // Applier updates workloads to the newer image their check found.
@@ -428,6 +445,11 @@ func (a *Applier) recheck(ctx context.Context, req Request, sub subject) (target
 		return target{}, &NotUpdatableError{Code: NotUpdatablePinned}
 	case StateNotFromRegistry:
 		return target{}, &NotUpdatableError{Code: NotUpdatableNoSource}
+	case StateRolledBack, StateRollbackFailed:
+		// The version the registry has now failed before. Only a person's explicit request tries it again (D-14).
+		if !req.Force {
+			return target{}, &PreviouslyFailedError{Failure: v.Failure}
+		}
 	case StateUpToDate, StateCheckStale:
 		return target{}, ErrNothingToUpdate
 	}
