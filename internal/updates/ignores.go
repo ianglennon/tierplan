@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
@@ -113,12 +114,18 @@ func (s IgnoreStore) Remove(ctx context.Context, envID string, key Ignore) (bool
 // Ignores are the skips and ignores of one environment, as List returns them.
 type Ignores []Ignore
 
-// Match answers the one rule that applies to a workload of this environment, nil when none does: an
-// ignore of the workload (its kind and name), else an ignore of its image (host, repo and tag of w.Ref),
+// labelIgnoreValue is the one value of tierplan.updates that hides updates.
+const labelIgnoreValue = "ignore"
+
+// Match answers the one rule that applies to a workload of this environment, nil when none does: the
+// tierplan.updates=ignore label on the workload, else an ignore of the workload (its kind and name), else an ignore of its image (host, repo and tag of w.Ref),
 // else a skip of the workload whose digest equals remoteDigest. A skip stops applying as soon as the
 // remote digest is another one. Rows of other environments are never in the list, and a row whose
 // scope fields do not match the workload exactly never applies to it.
 func (ig Ignores) Match(w Workload, remoteDigest string) *Ignore {
+	if w.Labels[stacks.LabelUpdates] == labelIgnoreValue {
+		return &Ignore{EnvID: w.EnvID, Mode: ModeIgnore, Scope: ScopeLabel, Kind: w.Kind, Name: w.Name, ByLabel: true}
+	}
 	var image, skip *Ignore
 	for i := range ig {
 		r := &ig[i]
