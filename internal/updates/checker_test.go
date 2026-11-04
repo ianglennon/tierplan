@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -53,6 +55,11 @@ type fakeHeads struct {
 	// scripted names one image. indexCalls counts the reads by digest, which a registry may count as pulls.
 	indexes    map[string]indexAnswer
 	indexCalls map[string]int
+	// gate, when set, holds every Digest until it is closed, after sending on entered; credCalls counts
+	// the credential lookups, which come before the request.
+	gate      chan struct{}
+	entered   chan struct{}
+	credCalls int
 }
 
 // indexAnswer is what the fake registry says a digest names.
@@ -106,6 +113,12 @@ func (f *fakeHeads) setEnv(env, tag string, a answer) {
 	f.byEnv[env+"|"+tag] = a
 }
 
+func (f *fakeHeads) credLookups() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.credCalls
+}
+
 func (f *fakeHeads) requests() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -118,12 +131,18 @@ func (f *fakeHeads) requests() int {
 
 func (f *fakeHeads) Digest(_ context.Context, envID string, ref registry.Ref) (string, string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	k := ref.Repo() + ":" + ref.Tag
 	f.calls[k]++
 	a, ok := f.byEnv[envID+"|"+k]
 	if !ok {
 		a, ok = f.answers[k]
+	}
+	gate, entered := f.gate, f.entered
+	f.mu.Unlock()
+	if gate != nil {
+		// The registry is slow to answer: the test says when.
+		entered <- struct{}{}
+		<-gate
 	}
 	if !ok {
 		return "", "", errors.New("connection refused")
@@ -135,6 +154,7 @@ func (f *fakeHeads) Digest(_ context.Context, envID string, ref registry.Ref) (s
 func (f *fakeHeads) CredentialID(_ context.Context, envID string, ref registry.Ref) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.credCalls++
 	k := ref.Repo() + ":" + ref.Tag
 	a, ok := f.byEnv[envID+"|"+k]
 	if !ok {
@@ -780,5 +800,322 @@ func TestRunningIndexGoneAndServiceWithNoTask(t *testing.T) {
 	}
 	if n := r.heads.gets() - gets; n != 1 {
 		t.Errorf("the verdicts cost %d reads by digest, want 1: the gone index once, none for the service with no task", n)
+	}
+}
+
+// --- Fleet checks: credential isolation, repeats, races and the pace of asking (plan 12-05) ---
+
+// fleet runs CheckFleet over the environments with one service each running the same image.
+func fleet(t *testing.T, r *rig, force bool, image string, envs ...string) map[string]updates.CheckResult {
+	t.Helper()
+	ws := map[string][]updates.Workload{}
+	for _, env := range envs {
+		w := workloads(t, row("app", image))
+		w[0].EnvID = env
+		ws[env] = w
+	}
+	res, err := r.chk.CheckFleet(testsupport.Context(t), envs, ws, force)
+	if err != nil {
+		t.Fatalf("CheckFleet: %v", err)
+	}
+	return res
+}
+
+func TestEnvironmentCredentialsNeverShareARow(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	r.addEnvironment(t, "env-a")
+	r.addEnvironment(t, "env-b")
+	credA, err := r.reg.Create(ctx, registry.CreateInput{
+		EnvID: "env-a", Name: "in-a", Type: registry.TypeGHCR, Prefix: "acme", Username: "bot", Secret: "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+	}, "admin-1", nil)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	const tag = "ghcr.io/acme/private:1"
+	image := tag + "@" + dg('1')
+	// A's credential reads the private build. B has none and the registry refuses it.
+	r.heads.setEnv("env-a", tag, answer{digest: dg('1'), credID: credA.ID})
+	r.heads.setEnv("env-b", tag, answer{err: unauthorized("denied"), credID: ""})
+
+	fleet(t, r, false, image, "env-a", "env-b")
+	if n := r.heads.requests(); n != 2 {
+		t.Errorf("two credentials made %d requests, want one each", n)
+	}
+	a := stored(t, r, "ghcr.io", "acme/private", "1", credA.ID)
+	b := stored(t, r, "ghcr.io", "acme/private", "1", "")
+	if a.Digest != dg('1') || a.Error != "" {
+		t.Errorf("A's row = %+v, want its own success", a)
+	}
+	if b.Digest != "" || b.Error != updates.ReasonAuth {
+		t.Errorf("B's row = %+v, want an auth failure and no digest: A's digest must never be readable through B's key", b)
+	}
+
+	// B keeps failing: A's row does not change with it.
+	r.clk.advance(time.Hour)
+	fleet(t, r, false, image, "env-a", "env-b")
+	if again := stored(t, r, "ghcr.io", "acme/private", "1", credA.ID); again.Digest != dg('1') || again.Error != "" {
+		t.Errorf("A's row after B failed again = %+v, want a success", again)
+	}
+
+	// The verdicts agree: B never sees A's digest.
+	rows := []dockerx.ServiceRow{row("app", image)}
+	vb, err := r.svc.ServiceVerdicts(ctx, "env-b", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := vb["app"]; v.State != updates.StateCheckFailed || v.RemoteDigest != "" {
+		t.Errorf("environment B = %+v, want check_failed and no remote digest", v)
+	}
+	va, err := r.svc.ServiceVerdicts(ctx, "env-a", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := va["app"]; v.State != updates.StateUpToDate || v.RemoteDigest != dg('1') {
+		t.Errorf("environment A = %+v, want up_to_date from its own row", v)
+	}
+}
+
+func TestCheckTwiceIsIdempotent(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	const tag = "docker.io/library/nginx:1.27"
+	platforms := map[string]string{"linux/amd64": dg('a'), "linux/arm64": dg('b')}
+	r.heads.set(tag, answer{digest: dg('9')})
+	r.heads.setIndex(dg('9'), platforms)
+	rows := []dockerx.ServiceRow{row("app", tag+"@"+dg('9'))}
+
+	fleet(t, r, true, tag+"@"+dg('9'), "env-1")
+	first := stored(t, r, "docker.io", "library/nginx", "1.27", "")
+	vFirst, err := r.svc.ServiceVerdicts(ctx, "env-1", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headsBefore, getsBefore := r.heads.requests(), r.heads.gets()
+	if headsBefore != 1 || getsBefore != 1 {
+		t.Fatalf("the first check made %d HEAD and %d GET, want 1 and 1", headsBefore, getsBefore)
+	}
+
+	r.clk.advance(time.Minute)
+	fleet(t, r, true, tag+"@"+dg('9'), "env-1")
+	second := stored(t, r, "docker.io", "library/nginx", "1.27", "")
+	if second.Digest != first.Digest || second.Index != first.Index || !maps.Equal(second.Platforms, first.Platforms) || second.Error != "" {
+		t.Errorf("the second check changed the row: %+v then %+v", first, second)
+	}
+	if !second.CheckedAt.After(first.CheckedAt) {
+		t.Errorf("the second check did not run: checked at %v then %v", first.CheckedAt, second.CheckedAt)
+	}
+	if h, g := r.heads.requests()-headsBefore, r.heads.gets()-getsBefore; h != 1 || g != 0 {
+		t.Errorf("the second check made %d HEAD and %d GET, want 1 and 0", h, g)
+	}
+	vSecond, err := r.svc.ServiceVerdicts(ctx, "env-1", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := vFirst["app"], vSecond["app"]; a.State != b.State || a.RemoteDigest != b.RemoteDigest || !slices.Equal(a.ChangedPlatforms, b.ChangedPlatforms) {
+		t.Errorf("the badge changed: %+v then %+v", a, b)
+	}
+}
+
+// countingStore counts the checks written.
+type countingStore struct {
+	updates.Store
+	mu    sync.Mutex
+	saves int
+}
+
+func (s *countingStore) SaveSuccess(ctx context.Context, c updates.Check) error {
+	s.mu.Lock()
+	s.saves++
+	s.mu.Unlock()
+	return s.Store.SaveSuccess(ctx, c)
+}
+
+func TestConcurrentChecksShareOneRequest(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	store := &countingStore{Store: r.sql}
+	r.chk.Store = store
+	const tag = "docker.io/library/nginx:1.27"
+	image := tag + "@" + dg('9')
+	r.heads.set(tag, answer{digest: dg('9')})
+	r.heads.gate, r.heads.entered = make(chan struct{}), make(chan struct{}, 8)
+
+	// A scheduled check is on its way to the registry, which has not answered.
+	var wg sync.WaitGroup
+	results := make([]map[string]updates.CheckResult, 2)
+	run := func(i int, force bool) {
+		defer wg.Done()
+		w := workloads(t, row("app", image))
+		res, err := r.chk.CheckFleet(ctx, []string{"env-1"}, map[string][]updates.Workload{"env-1": w}, force)
+		if err != nil {
+			t.Errorf("CheckFleet %d: %v", i, err)
+		}
+		results[i] = res
+	}
+	wg.Add(1)
+	go run(0, false)
+	<-r.heads.entered
+
+	// A person presses Check now. Once it has looked up its credential it is past the point of no return:
+	// the registry is asked once, whichever of the two meets the other first.
+	wg.Add(1)
+	go run(1, true)
+	for r.heads.credLookups() < 2 && ctx.Err() == nil {
+		runtime.Gosched()
+	}
+	close(r.heads.gate)
+	wg.Wait()
+
+	if n := r.heads.requests(); n != 1 {
+		t.Errorf("the two checks sent %d requests, want 1", n)
+	}
+	store.mu.Lock()
+	saves := store.saves
+	store.mu.Unlock()
+	if saves != 1 {
+		t.Errorf("the key was written %d times, want once", saves)
+	}
+	if got := stored(t, r, "docker.io", "library/nginx", "1.27", ""); got.Digest != dg('9') || got.Error != "" {
+		t.Errorf("stored row = %+v, want one whole success", got)
+	}
+	if results[0]["env-1"] != results[1]["env-1"] || results[0]["env-1"].Checked != 1 {
+		t.Errorf("results differ: %+v and %+v", results[0], results[1])
+	}
+}
+
+func TestMissingDigestHeaderIsUnsupported(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	const tag = "example.com/odd/svc:1"
+	image := tag + "@" + dg('a')
+	r.heads.set(tag, answer{digest: dg('a')})
+	fleet(t, r, true, image, "env-1")
+
+	// The registry stops sending Docker-Content-Digest on HEAD: once as the client's error, once as an
+	// answer with no digest in it. Neither is "up to date", and the last good digest is kept.
+	for _, a := range []answer{
+		{err: fmt.Errorf("registry: head: %w", registry.ErrNoDigest)},
+		{digest: ""},
+	} {
+		r.clk.advance(time.Minute)
+		r.heads.set(tag, a)
+		fleet(t, r, true, image, "env-1")
+		got := stored(t, r, "example.com", "odd/svc", "1", "")
+		if got.Error != updates.ReasonUnsupported || got.Digest != dg('a') {
+			t.Errorf("row = %+v, want unsupported with the last good digest kept", got)
+		}
+		v, err := r.svc.ServiceVerdicts(ctx, "env-1", []dockerx.ServiceRow{row("app", image)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := v["app"]; s.State != updates.StateCheckFailed || s.Reason != updates.ReasonUnsupported {
+			t.Errorf("verdict = %+v, want check_failed with reason unsupported, never up_to_date", s)
+		}
+	}
+}
+
+// credLog records what the checker tells the Registries page.
+type credLog struct {
+	mu       sync.Mutex
+	failures map[string][]string
+	clears   map[string]int
+}
+
+func newCredLog() *credLog {
+	return &credLog{failures: map[string][]string{}, clears: map[string]int{}}
+}
+
+func (c *credLog) RecordFailure(_ context.Context, id, code string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failures[id] = append(c.failures[id], code)
+	return nil
+}
+
+func (c *credLog) ClearFailure(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clears[id]++
+	return nil
+}
+
+func TestCredentialFailureRecordedOncePerRun(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	log := newCredLog()
+	r.chk.Creds = log
+	// Credential x is refused for two repositories of one registry; credential y works for one; one image
+	// is read anonymously and fails, which blames no credential.
+	for _, tag := range []string{"ghcr.io/acme/one:1", "ghcr.io/acme/two:1"} {
+		r.heads.set(tag, answer{err: unauthorized("denied"), credID: "cred-x"})
+	}
+	r.heads.set("example.com/other/svc:1", answer{digest: dg('c'), credID: "cred-y"})
+	r.heads.set("example.com/anon/svc:1", answer{err: unauthorized("denied")})
+	ws := []updates.Workload{}
+	for _, img := range []string{"ghcr.io/acme/one:1@" + dg('1'), "ghcr.io/acme/two:1@" + dg('2'), "example.com/other/svc:1@" + dg('c'), "example.com/anon/svc:1@" + dg('d')} {
+		w := workloads(t, row(strings.NewReplacer("/", "-", ":", "-", "@", "-", ".", "-").Replace(img), img))
+		ws = append(ws, w...)
+	}
+	if _, err := r.chk.CheckFleet(testsupport.Context(t), []string{"env-1"}, map[string][]updates.Workload{"env-1": ws}, true); err != nil {
+		t.Fatalf("CheckFleet: %v", err)
+	}
+	if got := log.failures["cred-x"]; len(got) != 1 || got[0] != registry.CodeSignInRefused {
+		t.Errorf("credential x recorded %v, want one %q however many images it failed for", got, registry.CodeSignInRefused)
+	}
+	if log.clears["cred-x"] != 0 {
+		t.Errorf("credential x was cleared %d times in the run that refused it", log.clears["cred-x"])
+	}
+	if log.clears["cred-y"] != 1 || len(log.failures["cred-y"]) != 0 {
+		t.Errorf("credential y: %d clears, %v failures; want one clear and no failure", log.clears["cred-y"], log.failures["cred-y"])
+	}
+	if len(log.failures[""]) != 0 || log.clears[""] != 0 || len(log.failures) != 1 {
+		t.Errorf("the anonymous call was recorded: failures %v, clears %v", log.failures, log.clears)
+	}
+
+	// Next run credential x works: it is cleared once, and not recorded again.
+	r.clk.advance(time.Hour)
+	for _, tag := range []string{"ghcr.io/acme/one:1", "ghcr.io/acme/two:1"} {
+		r.heads.set(tag, answer{digest: dg('1'), credID: "cred-x"})
+	}
+	if _, err := r.chk.CheckFleet(testsupport.Context(t), []string{"env-1"}, map[string][]updates.Workload{"env-1": ws}, true); err != nil {
+		t.Fatalf("CheckFleet: %v", err)
+	}
+	if log.clears["cred-x"] != 1 || len(log.failures["cred-x"]) != 1 {
+		t.Errorf("after it worked, credential x: %d clears and %d failures, want 1 and 1", log.clears["cred-x"], len(log.failures["cred-x"]))
+	}
+}
+
+func TestMinRecheck(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	const tag = "docker.io/library/nginx:1.27"
+	image := tag + "@" + dg('a')
+	r.heads.set(tag, answer{digest: dg('a')})
+
+	fleet(t, r, false, image, "env-1")
+	if n := r.heads.requests(); n != 1 {
+		t.Fatalf("first run made %d requests, want 1", n)
+	}
+	r.clk.advance(5 * time.Minute)
+	res := fleet(t, r, false, image, "env-1")
+	if n := r.heads.requests(); n != 1 {
+		t.Errorf("a scheduled run 5 minutes after a good check made %d requests in all, want 1", n)
+	}
+	if res["env-1"].Checked != 1 || res["env-1"].Failed != 0 {
+		t.Errorf("a skipped key still counts as checked, not failed: %+v", res["env-1"])
+	}
+	fleet(t, r, true, image, "env-1")
+	if n := r.heads.requests(); n != 2 {
+		t.Errorf("a forced check 5 minutes after a good check made %d requests in all, want 2", n)
+	}
+	r.clk.advance(updates.MinRecheck)
+	fleet(t, r, false, image, "env-1")
+	if n := r.heads.requests(); n != 3 {
+		t.Errorf("a scheduled run %v after a good check made %d requests in all, want 3", updates.MinRecheck, n)
 	}
 }
