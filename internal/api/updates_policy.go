@@ -125,6 +125,8 @@ func registerUpdatePolicy(r *httpx.Router, d UpdatesDeps) {
 			}
 			return &UpdateCheckStatusOutput{CacheControl: "no-store", Body: body}, nil
 		})
+	registerUpdatePreview(r, d)
+	registerUpdateDefaults(r, d)
 }
 
 // updatePresetName is the preset the page shows, custom for any word it does not know.
@@ -271,6 +273,242 @@ func setUpdateCheckPolicy(ctx context.Context, d UpdatesDeps, p *rbac.Principal,
 // nobody did or that person is gone.
 func lastUpdatePolicyAuthor(ctx context.Context, d UpdatesDeps, q *sqlc.Queries, envID string) string {
 	row, err := q.GetImageUpdateEnvPolicy(ctx, envID)
+	if err != nil || row.UpdatedBy == "" {
+		return ""
+	}
+	return keeperName(ctx, AddressSpaceDeps{Store: d.Store}, map[string]string{}, row.UpdatedBy)
+}
+
+// UpdateSchedulePreviewRequest is the body of POST /api/env/{envId}/updates/schedule-preview.
+type UpdateSchedulePreviewRequest struct {
+	Schedule string `json:"schedule" maxLength:"100" doc:"A five-field cron expression, such as 0 3 * * *"`
+}
+
+// UpdateSchedulePreviewInput is the request of the schedule preview.
+type UpdateSchedulePreviewInput struct {
+	EnvironmentPathInput
+	Body UpdateSchedulePreviewRequest
+}
+
+// UpdateSchedulePreviewBody is what a schedule would do.
+type UpdateSchedulePreviewBody struct {
+	Valid    bool        `json:"valid" doc:"Whether update checks accept the expression"`
+	Problem  string      `json:"problem" enum:",invalid,too_frequent" doc:"Why it is not accepted: invalid when it is not a five-field cron expression update checks can use, too_frequent when two of its next ten firings are less than an hour apart. Empty when valid"`
+	NextRuns []time.Time `json:"nextRuns" doc:"The next three checks in the server's time zone, with this environment's start offset; empty when the expression is not valid"`
+	Timezone string      `json:"timezone" doc:"The server's time zone the expression is read in"`
+}
+
+// UpdateSchedulePreviewOutput wraps UpdateSchedulePreviewBody for huma.
+type UpdateSchedulePreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         UpdateSchedulePreviewBody
+}
+
+// registerUpdatePreview registers the schedule preview.
+func registerUpdatePreview(r *httpx.Router, d UpdatesDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewUpdateCheckSchedule", Method: http.MethodPost, Path: "/api/env/{envId}/updates/schedule-preview",
+		Summary: "Preview an update check schedule",
+		Description: "Checks a cron expression and answers the next three times it would check this environment in the server's time zone, with this environment's start offset, " +
+			"so the page shows what a schedule does before it is saved. An expression is valid when it is five fields and no two of its next ten firings are less than an hour apart. " +
+			"An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.",
+		Tags: []string{"environments"}, MaxBodyBytes: maxSchedulePreviewBody,
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *UpdateSchedulePreviewInput) (*UpdateSchedulePreviewOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			now, loc := d.now(), d.location()
+			body := UpdateSchedulePreviewBody{NextRuns: []time.Time{}, Timezone: schedule.ZoneName(loc, now)}
+			runs, err := schedule.NextRuns(in.Body.Schedule, env.ID, now, loc, schedulePreviewRuns, updates.MinInterval)
+			switch {
+			case errors.Is(err, schedule.ErrTooFrequent):
+				body.Problem = "too_frequent"
+			case err != nil:
+				body.Problem = "invalid"
+			default:
+				body.Valid = true
+				for _, at := range runs {
+					body.NextRuns = append(body.NextRuns, at.In(loc))
+				}
+			}
+			return &UpdateSchedulePreviewOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// UpdateCheckDefaultsFields are the instance defaults. Every field is required: the defaults are what an
+// environment follows, so none of them can be left to follow anything.
+type UpdateCheckDefaultsFields struct {
+	Enabled  bool   `json:"enabled" doc:"Whether the schedule checks an environment that does not set this itself"`
+	Schedule string `json:"schedule" minLength:"1" maxLength:"100" doc:"A five-field cron expression that fires no more often than every hour, read in the server's time zone"`
+	Preset   string `json:"preset" enum:"hourly,every_6h,daily,weekly,custom" doc:"The preset the schedule came from, shown on the page; custom for one written by hand"`
+}
+
+// policy is the defaults as the policy store takes them.
+func (f UpdateCheckDefaultsFields) policy() updates.Policy {
+	return updates.Policy{Enabled: f.Enabled, Schedule: f.Schedule, Preset: f.Preset}
+}
+
+func updateCheckDefaultsFields(p updates.Policy) UpdateCheckDefaultsFields {
+	return UpdateCheckDefaultsFields{Enabled: p.Enabled, Schedule: p.Schedule, Preset: updatePresetName(p.Preset)}
+}
+
+// UpdateCheckDefaultsBody is the update check defaults of the instance, the version a save must send back and
+// how many environments follow at least one of them.
+type UpdateCheckDefaultsBody struct {
+	UpdateCheckDefaultsFields
+	Version   int64  `json:"version" minimum:"1" doc:"How many times the defaults were saved, starting at 1. Send it back with a save: a save made against any other version is 409 settings_changed"`
+	Timezone  string `json:"timezone" doc:"The server's time zone, which the schedule is read in"`
+	Followers int    `json:"followers" minimum:"0" doc:"How many environments follow at least one of these defaults, because they set nothing themselves or leave a field to the default"`
+}
+
+// UpdateCheckDefaultsOutput wraps UpdateCheckDefaultsBody for huma.
+type UpdateCheckDefaultsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         UpdateCheckDefaultsBody
+}
+
+// UpdateCheckDefaultsRequest is the body of PUT /api/settings/update-checks: the version read and every default.
+type UpdateCheckDefaultsRequest struct {
+	UpdateCheckDefaultsFields
+	Version int64 `json:"version" minimum:"1" doc:"The version read with the defaults; a save against another version is 409 settings_changed"`
+}
+
+// UpdateCheckDefaultsInput is the body of the defaults save.
+type UpdateCheckDefaultsInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      UpdateCheckDefaultsRequest
+}
+
+// registerUpdateDefaults registers the instance defaults.
+func registerUpdateDefaults(r *httpx.Router, d UpdatesDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "getUpdateCheckDefaults", Method: http.MethodGet, Path: "/api/settings/update-checks",
+		Summary: "Read the instance-wide update check defaults",
+		Description: "The settings every environment's update checks follow until the environment sets the field itself (on or off, and the schedule, every 6 hours unless changed), " +
+			"the version a save must send back, the server's time zone and how many environments follow at least one default. Needs settings.read.",
+		Tags: []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal},
+		func(ctx context.Context, _ *struct{}) (*UpdateCheckDefaultsOutput, error) {
+			if d.Policies == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := updateCheckDefaultsBody(ctx, d)
+			if err != nil {
+				return nil, updateDefaultsFailure(d, "read the defaults", err)
+			}
+			return &UpdateCheckDefaultsOutput{CacheControl: "no-store", Body: body}, nil
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "setUpdateCheckDefaults", Method: http.MethodPut, Path: "/api/settings/update-checks",
+		Summary: "Change the instance-wide update check defaults",
+		Description: "Replaces every default. A change reaches every environment that follows the field and none that sets it itself; nothing is written to an environment. " +
+			"The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). " +
+			"version is the one read with the defaults: a save made against any other version is 409 settings_changed and names who saved last. " +
+			"A save that changes nothing answers 200 and writes nothing. " +
+			"Needs settings.write: an instance admin, not an environment admin. A change is audited as updates.defaults_changed, naming the fields.",
+		Tags: []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal},
+		func(ctx context.Context, in *UpdateCheckDefaultsInput) (*UpdateCheckDefaultsOutput, error) {
+			p := httpx.PrincipalFrom(ctx)
+			if p == nil || d.Store == nil || d.Audit == nil || d.Policies == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			body, err := setUpdateCheckDefaults(ctx, d, p, in)
+			if err != nil {
+				return nil, err
+			}
+			return &UpdateCheckDefaultsOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// updateCheckDefaultsBody reads the defaults and the number of environments that follow them.
+func updateCheckDefaultsBody(ctx context.Context, d UpdatesDeps) (UpdateCheckDefaultsBody, error) {
+	pol, version, err := d.Policies.Defaults(ctx)
+	if err != nil {
+		return UpdateCheckDefaultsBody{}, err
+	}
+	followers, err := d.Policies.Followers(ctx)
+	if err != nil {
+		return UpdateCheckDefaultsBody{}, err
+	}
+	return UpdateCheckDefaultsBody{
+		UpdateCheckDefaultsFields: updateCheckDefaultsFields(pol), Version: version,
+		Timezone: schedule.ZoneName(d.location(), d.now()), Followers: followers,
+	}, nil
+}
+
+// updateDefaultsFailure logs a failed read or write of the defaults and answers it as an internal error.
+func updateDefaultsFailure(d UpdatesDeps, what string, err error) error {
+	d.log().Error("update check defaults request failed", "step", what, "error", err)
+	return huma.Error500InternalServerError("internal error")
+}
+
+// changedUpdateDefaultsFields names, in a fixed order, the fields whose value differs between two sets of defaults.
+func changedUpdateDefaultsFields(old, now UpdateCheckDefaultsFields) []string {
+	var out []string
+	if old.Enabled != now.Enabled {
+		out = append(out, "enabled")
+	}
+	if old.Schedule != now.Schedule || old.Preset != now.Preset {
+		out = append(out, "schedule")
+	}
+	return out
+}
+
+// setUpdateCheckDefaults saves the defaults. The old defaults are read, the new ones written and the audit row
+// recorded in one transaction. A save that changes nothing writes nothing.
+func setUpdateCheckDefaults(ctx context.Context, d UpdatesDeps, p *rbac.Principal, in *UpdateCheckDefaultsInput) (UpdateCheckDefaultsBody, error) {
+	pol := in.Body.policy()
+	tx, err := d.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return UpdateCheckDefaultsBody{}, updateDefaultsFailure(d, "begin", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := d.Store.Q.WithTx(tx)
+	oldPol, _, err := d.Policies.DefaultsOn(ctx, q)
+	if err != nil {
+		return UpdateCheckDefaultsBody{}, updateDefaultsFailure(d, "read the defaults", err)
+	}
+	changed, err := d.Policies.SetDefaults(ctx, q, pol, in.Body.Version, p.ID, d.now())
+	switch {
+	case errors.Is(err, updates.ErrVersionChanged):
+		return UpdateCheckDefaultsBody{}, settingsChanged(lastUpdateDefaultsAuthor(ctx, d, q))
+	case err != nil:
+		if prob := updatePolicyValueProblem(err); prob != nil {
+			return UpdateCheckDefaultsBody{}, prob
+		}
+		return UpdateCheckDefaultsBody{}, updateDefaultsFailure(d, "save the defaults", err)
+	}
+	if changed {
+		fields := changedUpdateDefaultsFields(updateCheckDefaultsFields(oldPol), in.Body.UpdateCheckDefaultsFields)
+		if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionUpdatesDefaultsChanged, TargetType: targetSettings, TargetID: targetSettings,
+			Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+			Details: map[string]string{
+				"fields":  strings.Join(fields, ","),
+				"version": strconv.FormatInt(in.Body.Version+1, 10),
+			},
+		}); err != nil {
+			return UpdateCheckDefaultsBody{}, updateDefaultsFailure(d, "audit", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return UpdateCheckDefaultsBody{}, updateDefaultsFailure(d, "commit", err)
+	}
+	body, err := updateCheckDefaultsBody(ctx, d)
+	if err != nil {
+		return UpdateCheckDefaultsBody{}, updateDefaultsFailure(d, "read the defaults", err)
+	}
+	return body, nil
+}
+
+// lastUpdateDefaultsAuthor is the display name of whoever saved the defaults last, empty when nobody did or
+// that person is gone.
+func lastUpdateDefaultsAuthor(ctx context.Context, d UpdatesDeps, q *sqlc.Queries) string {
+	row, err := q.GetImageUpdateDefaults(ctx)
 	if err != nil || row.UpdatedBy == "" {
 		return ""
 	}

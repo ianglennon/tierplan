@@ -3488,6 +3488,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/updates/schedule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview an update check schedule
+         * @description Checks a cron expression and answers the next three times it would check this environment in the server's time zone, with this environment's start offset, so the page shows what a schedule does before it is saved. An expression is valid when it is five fields and no two of its next ten firings are less than an hour apart. An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.
+         */
+        post: operations["previewUpdateCheckSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/volumes": {
         parameters: {
             query?: never;
@@ -4547,6 +4567,30 @@ export interface paths {
          */
         get: operations["previewStackHistoryPrune"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/update-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the instance-wide update check defaults
+         * @description The settings every environment's update checks follow until the environment sets the field itself (on or off, and the schedule, every 6 hours unless changed), the version a save must send back, the server's time zone and how many environments follow at least one default. Needs settings.read.
+         */
+        get: operations["getUpdateCheckDefaults"];
+        /**
+         * Change the instance-wide update check defaults
+         * @description Replaces every default. A change reaches every environment that follows the field and none that sets it itself; nothing is written to an environment. The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the defaults: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs settings.write: an instance admin, not an environment admin. A change is audited as updates.defaults_changed, naming the fields.
+         */
+        put: operations["setUpdateCheckDefaults"];
         post?: never;
         delete?: never;
         options?: never;
@@ -13984,6 +14028,45 @@ export interface components {
             /** @description The value that applies: the environment's own when it set one, else the instance default */
             value: boolean;
         };
+        UpdateCheckDefaultsBody: {
+            /** @description Whether the schedule checks an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many environments follow at least one of these defaults, because they set nothing themselves or leave a field to the default
+             */
+            followers: number;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description A five-field cron expression that fires no more often than every hour, read in the server's time zone */
+            schedule: string;
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times the defaults were saved, starting at 1. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        UpdateCheckDefaultsRequest: {
+            /** @description Whether the schedule checks an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description A five-field cron expression that fires no more often than every hour, read in the server's time zone */
+            schedule: string;
+            /**
+             * Format: int64
+             * @description The version read with the defaults; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
         UpdateCheckPolicyRequest: {
             /** @description Whether the schedule checks this environment. Null follows the instance default */
             enabled?: boolean | null;
@@ -14089,6 +14172,23 @@ export interface components {
              * @description The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change
              */
             updatedAt: string;
+        };
+        UpdateSchedulePreviewBody: {
+            /** @description The next three checks in the server's time zone, with this environment's start offset; empty when the expression is not valid */
+            nextRuns: string[] | null;
+            /**
+             * @description Why it is not accepted: invalid when it is not a five-field cron expression update checks can use, too_frequent when two of its next ten firings are less than an hour apart. Empty when valid
+             * @enum {string}
+             */
+            problem: "" | "invalid" | "too_frequent";
+            /** @description The server's time zone the expression is read in */
+            timezone: string;
+            /** @description Whether update checks accept the expression */
+            valid: boolean;
+        };
+        UpdateSchedulePreviewRequest: {
+            /** @description A five-field cron expression, such as 0 3 * * * */
+            schedule: string;
         };
         UpdateSettingsInputBody: {
             /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless TIERPLAN_AGENT_ALLOW_INSECURE is on */
@@ -21803,6 +21903,43 @@ export interface operations {
             };
         };
     };
+    previewUpdateCheckSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSchedulePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSchedulePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listVolumes: {
         parameters: {
             query?: {
@@ -24050,6 +24187,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackHistoryPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getUpdateCheckDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setUpdateCheckDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCheckDefaultsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckDefaultsBody"];
                 };
             };
             /** @description Error */
