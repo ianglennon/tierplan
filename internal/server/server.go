@@ -276,6 +276,7 @@ type buildOptions struct {
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
 	noJanitorSched  bool
+	noUpdateSched   bool
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
@@ -308,6 +309,13 @@ func WithJanitorClock(c stackops.Clock) Option {
 // its schedule.
 func WithoutJanitorScheduler() Option {
 	return func(o *buildOptions) { o.noJanitorSched = true }
+}
+
+// WithoutUpdateScheduler keeps the scheduler of the image update checks from running, so that no environment is
+// checked against a registry by itself at 06:00. It exists for tests, which must not depend on the time of day they
+// run at nor reach a real registry. It is a Go option only: a production build calls Build without it.
+func WithoutUpdateScheduler() Option {
+	return func(o *buildOptions) { o.noUpdateSched = true }
 }
 
 // WithSelfContainerID supplies the ID of the container TierPlan runs in. The
@@ -920,6 +928,26 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Runner: janitorDeps.Runner, Clock: bo.janitorClock, Loc: time.Local, Log: log,
 	}
 	janitorDeps.Scheduler = janitorSched
+	// Every environment is checked for image updates at its slot, every 6 hours by default, as the system, through the
+	// one fleet-deduplicated checker. The scheduler's schedule also sets how old a check may be before it reads stale.
+	updatePolicies := &updates.PolicyStore{Q: st.Q, W: st.Write}
+	updateSched := &updates.Scheduler{
+		Envs: func(ctx context.Context) ([]string, error) {
+			rows, err := st.RQ.ListEnvironments(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(rows))
+			for _, row := range rows {
+				if row.Enabled != 0 {
+					ids = append(ids, row.ID)
+				}
+			}
+			return ids, nil
+		},
+		Policy: updatePolicies, Service: updateService, Loc: time.Local, Log: log,
+	}
+	updateService.StaleAfter = updateSched.StaleAfter
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
@@ -1088,6 +1116,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Every environment's janitor runs at its slot, daily at 03:00 server time by default (JAN-01).
 	if !bo.noJanitorSched {
 		srv.background.Go(func() { janitorSched.Run(bg) })
+	}
+	// Every environment's images are checked for updates every 6 hours by default, server time (IMG-04).
+	if !bo.noUpdateSched {
+		srv.background.Go(func() { updateSched.Run(bg) })
 	}
 	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
 	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })

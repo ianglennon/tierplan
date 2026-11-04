@@ -313,18 +313,22 @@ func (s *Service) runPlatforms(ctx context.Context, envID string, w Workload, ch
 	return r.platforms, r.gone
 }
 
-// CheckNow asks the registries about the images of the environment's services and containers now and
-// stores the answers. A container and a service of one image are one request.
-func (s *Service) CheckNow(ctx context.Context, envID string) (CheckResult, error) {
+// Workloads are the workloads of the environment's services and containers, with the environment set: what
+// a check asks the registries about. An environment whose swarm cannot be read is an error; one whose
+// containers cannot be read is an error unless it is a swarm, which the services still answer for.
+func (s *Service) Workloads(ctx context.Context, envID string) ([]Workload, error) {
 	var ws []Workload
-	swarm, err := s.Clusters.IsSwarm(ctx, envID)
-	if err != nil {
-		return CheckResult{}, err
+	swarm := false
+	if s.Clusters != nil {
+		var err error
+		if swarm, err = s.Clusters.IsSwarm(ctx, envID); err != nil {
+			return nil, err
+		}
 	}
 	if swarm {
 		st, err := s.Clusters.State(ctx, envID)
 		if err != nil {
-			return CheckResult{}, err
+			return nil, err
 		}
 		ws = ServiceWorkloads(st.Read.Services)
 	}
@@ -334,11 +338,21 @@ func (s *Service) CheckNow(ctx context.Context, envID string) (CheckResult, erro
 		case err == nil:
 			ws = append(ws, ContainerWorkloads(agg, s.textFunc(ctx, envID, agg))...)
 		case !swarm:
-			return CheckResult{}, err
+			return nil, err
 		}
 	}
 	for i := range ws {
 		ws[i].EnvID = envID
+	}
+	return ws, nil
+}
+
+// CheckNow asks the registries about the images of the environment's services and containers now and
+// stores the answers. A container and a service of one image are one request.
+func (s *Service) CheckNow(ctx context.Context, envID string) (CheckResult, error) {
+	ws, err := s.Workloads(ctx, envID)
+	if err != nil {
+		return CheckResult{}, err
 	}
 	return s.Checker.CheckEnv(ctx, envID, ws)
 }

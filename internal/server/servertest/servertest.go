@@ -120,6 +120,8 @@ func Start(t testing.TB, o Options) *Server {
 	if !o.JanitorSchedule {
 		s.opts = append(s.opts, server.WithoutJanitorScheduler())
 	}
+	// Nor does the scheduler of the image update checks run: it would ask a registry at 06:00.
+	s.opts = append(s.opts, server.WithoutUpdateScheduler())
 	// The port has to be known before Build (it is in the public URL), so one is
 	// picked by binding and releasing it. The window is small; a taken port makes
 	// Run fail and the next try picks another.

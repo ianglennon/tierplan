@@ -130,6 +130,12 @@ var Tables = map[string]Class{
 	// holds no credential and no registry text.
 	"image_checks": Included,
 
+	// When each environment is checked for image updates (Phase 12, D-01): the instance defaults (one
+	// seeded row, every 6 hours) and each environment's overrides. A NULL field follows the default, so
+	// nothing here is a copy of a default. No secret.
+	"image_update_defaults":   Included,
+	"image_update_env_policy": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

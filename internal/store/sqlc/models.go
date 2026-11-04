@@ -193,6 +193,26 @@ type ImageDanglingSeen struct {
 	FirstSeenAt int64
 }
 
+type ImageUpdateDefault struct {
+	ID             int64
+	Enabled        int64
+	Schedule       string
+	SchedulePreset string
+	Version        int64
+	UpdatedBy      string
+	UpdatedAt      int64
+}
+
+type ImageUpdateEnvPolicy struct {
+	EnvID          string
+	Enabled        sql.NullInt64
+	Schedule       sql.NullString
+	SchedulePreset sql.NullString
+	Version        int64
+	UpdatedBy      string
+	UpdatedAt      int64
+}
+
 type JanitorDefault struct {
 	ID                      int64
 	Enabled                 int64
