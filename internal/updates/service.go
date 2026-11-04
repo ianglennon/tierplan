@@ -356,6 +356,51 @@ func (s *Service) Workloads(ctx context.Context, envID string) ([]Workload, erro
 	return ws, nil
 }
 
+// LastChecked is when the newest check of an image the environment runs was made, whatever came of it, and
+// the zero time when none of them was checked yet. It reads the stored checks of the keys its workloads
+// are judged by, so it asks no registry.
+func (s *Service) LastChecked(ctx context.Context, envID string) (time.Time, error) {
+	if s.Store == nil || s.Resolver == nil {
+		return time.Time{}, errors.New("updates: the service has no store or resolver to read checks with")
+	}
+	ws, err := s.Workloads(ctx, envID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	creds := map[hostRepo]string{}
+	seen := map[Key]bool{}
+	var keys []Key
+	for _, w := range ws {
+		if !w.Checkable() {
+			continue
+		}
+		hr := hostRepo{w.Ref.Domain, w.Ref.Path}
+		id, ok := creds[hr]
+		if !ok {
+			if id, err = s.Resolver.CredentialFor(ctx, envID, w.Ref); err != nil {
+				return time.Time{}, fmt.Errorf("choose the registry credential for %s: %w", w.Ref.Repo(), err)
+			}
+			creds[hr] = id
+		}
+		k := Key{Host: hr.host, Repo: hr.repo, Tag: w.Ref.Tag, CredID: id}
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	stored, err := s.Store.Checks(ctx, keys)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var newest time.Time
+	for _, c := range stored {
+		if c.CheckedAt.After(newest) {
+			newest = c.CheckedAt
+		}
+	}
+	return newest, nil
+}
+
 // CheckNow asks the registries about the images of the environment's services and containers now and
 // stores the answers. A container and a service of one image are one request.
 func (s *Service) CheckNow(ctx context.Context, envID string) (CheckResult, error) {

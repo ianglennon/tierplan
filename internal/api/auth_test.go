@@ -479,7 +479,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Updates: updateSvc, Log: log,
 		})
-		api.RegisterUpdates(r, api.UpdatesDeps{Updates: updateSvc, Checker: checker, Log: log})
+		// Schedules are read in UTC so that a test's expected time does not depend on the zone of the machine.
+		api.RegisterUpdates(r, api.UpdatesDeps{
+			Updates: updateSvc, Checker: checker, Store: f.st, Audit: f.aud, Policies: &updates.PolicyStore{Q: f.st.Q, W: f.st.Write},
+			Scheduler: &updates.Scheduler{Loc: time.UTC}, Now: f.clk.now, Log: log,
+		})
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
 		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})

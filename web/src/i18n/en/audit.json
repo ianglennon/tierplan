@@ -292,6 +292,10 @@
         "removed": "Config deleted",
         "rotated": "Config rotated"
       },
+      "updates": {
+        "policy_changed": "Changed the update check schedule",
+        "defaults_changed": "Changed the update check defaults"
+      },
       "janitor": {
         "cleaned": "Cleaned up the environment",
         "policy_changed": "Changed the janitor policy",

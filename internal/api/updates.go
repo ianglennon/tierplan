@@ -12,9 +12,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
 
@@ -32,8 +34,23 @@ type UpdatesDeps struct {
 	// and Check now answers 503.
 	Updates *updates.Service
 	Checker *rbac.Checker
+	// Store, Audit and Policies are what the schedule routes save through (plan 12-11): the policy store
+	// writes on the transaction the audit row is recorded in. Nil means those routes answer 500.
+	Store    *store.Store
+	Audit    *audit.Writer
+	Policies *updates.PolicyStore
+	// Scheduler gives the time zone the schedules are read in. Nil means the server's local zone.
+	Scheduler UpdateScheduler
+	// Now is the clock; it defaults to time.Now.
+	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+// UpdateScheduler is what the routes ask of the update check scheduler. *updates.Scheduler is one.
+type UpdateScheduler interface {
+	// Location is the time zone the schedules are read in.
+	Location() *time.Location
 }
 
 func (d UpdatesDeps) log() *slog.Logger {
@@ -41,6 +58,21 @@ func (d UpdatesDeps) log() *slog.Logger {
 		return d.Log
 	}
 	return slog.Default()
+}
+
+func (d UpdatesDeps) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
+}
+
+// location is the time zone schedules are read in: the scheduler's, else the server's local zone.
+func (d UpdatesDeps) location() *time.Location {
+	if d.Scheduler != nil {
+		return d.Scheduler.Location()
+	}
+	return time.Local
 }
 
 // UpdateInfoBody is what the page says about the image of one workload (D-03). It carries TierPlan's
@@ -128,6 +160,7 @@ func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
 			}
 			return &CheckUpdatesOutput{CacheControl: "no-store", Body: body}, nil
 		})
+	registerUpdatePolicy(r, d)
 }
 
 // checkEnvironmentUpdates checks the images of an environment's services now and counts what it found.

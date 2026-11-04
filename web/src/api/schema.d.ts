@@ -3428,6 +3428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read how an environment is checked for image updates
+         * @description Answers whether the environment is checked by itself, its schedule and the time zone it is read in (each with the value that applies and whether this environment set it or follows the instance default), when an image of it was last checked, when the next scheduled check starts, and the version a save must send back. The default is every 6 hours; each environment starts at its own offset of up to 10 minutes that never changes. A check missed while the server was stopped is not made up. Needs environments.read on the environment.
+         */
+        get: operations["getUpdateCheckStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/updates/check": {
         parameters: {
             query?: never;
@@ -3442,6 +3462,26 @@ export interface paths {
          * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.
          */
         post: operations["checkEnvironmentUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change when an environment is checked for image updates
+         * @description Replaces the settings this environment sets itself: enabled and the schedule, each a value, or null to follow the instance default again. The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the status: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the checks off stops the scheduled ones at once; Check now still works. Needs updates.manage (an Env Admin) on the environment. A change is audited as updates.policy_changed, naming the fields that changed; scheduled checks and Check now are not audited.
+         */
+        put: operations["setUpdateCheckPolicy"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13938,6 +13978,60 @@ export interface components {
              */
             started: number;
         };
+        UpdateCheckBoolField: {
+            /** @description True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it */
+            overridden: boolean;
+            /** @description The value that applies: the environment's own when it set one, else the instance default */
+            value: boolean;
+        };
+        UpdateCheckPolicyRequest: {
+            /** @description Whether the schedule checks this environment. Null follows the instance default */
+            enabled?: boolean | null;
+            /**
+             * @description The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule
+             * @enum {string|null}
+             */
+            preset?: "hourly" | "every_6h" | "daily" | "weekly" | "custom" | null;
+            /** @description A five-field cron expression that fires no more often than every hour. Null follows the instance default */
+            schedule?: string | null;
+            /**
+             * Format: int64
+             * @description The version read with the status; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        UpdateCheckScheduleField: {
+            /** @description True when this environment set the schedule itself. False means it follows the instance default */
+            overridden: boolean;
+            /**
+             * @description The preset the expression came from; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The five-field cron expression that applies, read in the server's time zone */
+            value: string;
+        };
+        UpdateCheckStatusBody: {
+            enabled: components["schemas"]["UpdateCheckBoolField"];
+            /**
+             * Format: date-time
+             * @description When an image of this environment was last checked, by the schedule or by Check now, whatever came of it; empty when none was or when it cannot be read now
+             */
+            lastCheckedAt: string;
+            /**
+             * Format: date-time
+             * @description When the next scheduled check starts, in the server's time zone, including this environment's start offset of up to 10 minutes. Null when scheduled checks are off or the schedule cannot be used
+             */
+            nextCheckAt: string | null;
+            schedule: components["schemas"]["UpdateCheckScheduleField"];
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times this environment's schedule was saved, 0 while it has never been. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
         UpdateEnvironmentInputBody: {
             /** @description Switch automatic agent updates on or off for an agent environment */
             autoUpdate?: boolean;
@@ -21606,6 +21700,39 @@ export interface operations {
             };
         };
     };
+    getUpdateCheckStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     checkEnvironmentUpdates: {
         parameters: {
             query?: never;
@@ -21626,6 +21753,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckUpdatesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setUpdateCheckPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCheckPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckStatusBody"];
                 };
             };
             /** @description Error */

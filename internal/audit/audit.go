@@ -266,6 +266,12 @@ const (
 	// An Admin set the swarm task history limit through the agent: the entry names the value it replaced and the one it
 	// set (D-21).
 	ActionSwarmTaskHistoryChanged = "swarm.task_history_limit_changed"
+	// An Admin changed an environment's image update check schedule: the entry names the fields that changed and the
+	// policy's new version (D-01). Scheduled checks and Check now are not audited.
+	ActionUpdatesPolicyChanged = "updates.policy_changed"
+	// An instance admin changed the update check defaults every environment inherits: the entry names the fields and the
+	// defaults' new version (D-01).
+	ActionUpdatesDefaultsChanged = "updates.defaults_changed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

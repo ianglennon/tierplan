@@ -948,6 +948,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Policy: updatePolicies, Service: updateService, Loc: time.Local, Log: log,
 	}
 	updateService.StaleAfter = updateSched.StaleAfter
+	updateService.NextCheck = updateSched.Next
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
@@ -1016,7 +1017,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Updates: updateService, Log: log},
-		Updates:       api.UpdatesDeps{Updates: updateService, Checker: checker, Log: log},
+		Updates:       api.UpdatesDeps{Updates: updateService, Checker: checker, Store: st, Audit: aud, Policies: updatePolicies, Scheduler: updateSched, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},

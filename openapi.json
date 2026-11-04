@@ -21597,6 +21597,141 @@
         ],
         "type": "object"
       },
+      "UpdateCheckBoolField": {
+        "additionalProperties": false,
+        "properties": {
+          "overridden": {
+            "description": "True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value that applies: the environment's own when it set one, else the instance default",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value",
+          "overridden"
+        ],
+        "type": "object"
+      },
+      "UpdateCheckPolicyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether the schedule checks this environment. Null follows the instance default",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "preset": {
+            "description": "The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedule": {
+            "description": "A five-field cron expression that fires no more often than every hour. Null follows the instance default",
+            "maxLength": 100,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version read with the status; a save against another version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "type": "object"
+      },
+      "UpdateCheckScheduleField": {
+        "additionalProperties": false,
+        "properties": {
+          "overridden": {
+            "description": "True when this environment set the schedule itself. False means it follows the instance default",
+            "type": "boolean"
+          },
+          "preset": {
+            "description": "The preset the expression came from; custom for one written by hand",
+            "enum": [
+              "hourly",
+              "every_6h",
+              "daily",
+              "weekly",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "description": "The five-field cron expression that applies, read in the server's time zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "preset",
+          "overridden"
+        ],
+        "type": "object"
+      },
+      "UpdateCheckStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "$ref": "#/components/schemas/UpdateCheckBoolField"
+          },
+          "lastCheckedAt": {
+            "description": "When an image of this environment was last checked, by the schedule or by Check now, whatever came of it; empty when none was or when it cannot be read now",
+            "format": "date-time",
+            "type": "string"
+          },
+          "nextCheckAt": {
+            "description": "When the next scheduled check starts, in the server's time zone, including this environment's start offset of up to 10 minutes. Null when scheduled checks are off or the schedule cannot be used",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/UpdateCheckScheduleField"
+          },
+          "timezone": {
+            "description": "The server's time zone, which the schedule is read in",
+            "type": "string"
+          },
+          "version": {
+            "description": "How many times this environment's schedule was saved, 0 while it has never been. Send it back with a save: a save made against any other version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "schedule",
+          "timezone",
+          "lastCheckedAt",
+          "nextCheckAt",
+          "version"
+        ],
+        "type": "object"
+      },
       "UpdateEnvironmentInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -35426,6 +35561,57 @@
         ]
       }
     },
+    "/api/env/{envId}/updates": {
+      "get": {
+        "description": "Answers whether the environment is checked by itself, its schedule and the time zone it is read in (each with the value that applies and whether this environment set it or follows the instance default), when an image of it was last checked, when the next scheduled check starts, and the version a save must send back. The default is every 6 hours; each environment starts at its own offset of up to 10 minutes that never changes. A check missed while the server was stopped is not made up. Needs environments.read on the environment.",
+        "operationId": "getUpdateCheckStatus",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateCheckStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read how an environment is checked for image updates",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/updates/check": {
       "post": {
         "description": "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.",
@@ -35472,6 +35658,67 @@
           }
         },
         "summary": "Check the environment's images for updates now",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/updates/policy": {
+      "put": {
+        "description": "Replaces the settings this environment sets itself: enabled and the schedule, each a value, or null to follow the instance default again. The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the status: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the checks off stops the scheduled ones at once; Check now still works. Needs updates.manage (an Env Admin) on the environment. A change is audited as updates.policy_changed, naming the fields that changed; scheduled checks and Check now are not audited.",
+        "operationId": "setUpdateCheckPolicy",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCheckPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateCheckStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change when an environment is checked for image updates",
         "tags": [
           "environments"
         ]

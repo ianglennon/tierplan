@@ -440,6 +440,48 @@ func TestEveryPhase11ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 	}
 }
 
+// phase12DetailKeys maps every Phase 12 action to the detail keys the plans that record it must use. A change of an
+// environment's image update check schedule names the fields that changed and the policy's new version; a change of the
+// instance defaults names the fields and the defaults' new version (plan 12-11, D-01). Scheduled checks and Check now
+// are not audited.
+var phase12DetailKeys = map[string][]string{
+	audit.ActionUpdatesPolicyChanged:   {"fields", "version"},
+	audit.ActionUpdatesDefaultsChanged: {"fields", "version"},
+}
+
+func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase12DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if len(phase12DetailKeys) != 2 {
+		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records", len(phase12DetailKeys))
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase12DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"updates.policy_changed":   audit.ActionUpdatesPolicyChanged,
+		"updates.defaults_changed": audit.ActionUpdatesDefaultsChanged,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 // phase9DetailKeys maps every Phase 9 action to the detail keys the plans that record it must use, for the same
 // reason as phase3DetailKeys. A credential row names what was stored and never the token or the private key, nor
 // any part of it: the name, the layer (instance or environment), the type (https or ssh) and the username; an

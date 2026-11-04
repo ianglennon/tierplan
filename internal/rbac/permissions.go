@@ -61,6 +61,7 @@ const (
 	PermJanitorPolicy         Perm = "janitor.policy"
 	PermJanitorRun            Perm = "janitor.run"
 	PermUpdatesCheck          Perm = "updates.check"
+	PermUpdatesManage         Perm = "updates.manage"
 	PermShellsManage          Perm = "shells.manage"
 	PermRegistriesInstance    Perm = "registries.instance"
 	PermRegistriesManage      Perm = "registries.manage"
@@ -128,6 +129,7 @@ var defaultRegistry = Registry{
 	{Name: PermJanitorPolicy, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Change cleanup policy"},
 	{Name: PermJanitorRun, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Clean an environment now, keep items out of cleanup and set the swarm task history limit"},
 	{Name: PermUpdatesCheck, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Check an environment's images for updates now"},
+	{Name: PermUpdatesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Change an environment's image update checks, and skip or ignore its image updates"},
 	{Name: PermShellsManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and end other people's shells"},
 	{Name: PermRegistriesInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage registry credentials that apply to every environment"},
 	{Name: PermRegistriesManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's registry credentials"},

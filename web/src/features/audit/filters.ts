@@ -180,6 +180,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "stack.janitor_excluded",
   "stack.janitor_included",
   "swarm.task_history_limit_changed",
+  "updates.policy_changed",
+  "updates.defaults_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -211,9 +213,10 @@ const ENV_SCOPED_PREFIXES = [
   "git.",
   "janitor.",
   "swarm.",
+  "updates.",
 ];
-// The janitor's defaults are the one janitor change that belongs to the instance, not to an environment.
-const INSTANCE_LEVEL_ACTIONS = ["janitor.defaults_changed"];
+// The janitor's and the update checks' defaults are the changes that belong to the instance, not to an environment.
+const INSTANCE_LEVEL_ACTIONS = ["janitor.defaults_changed", "updates.defaults_changed"];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) =>
     key === "permission.denied" ||
