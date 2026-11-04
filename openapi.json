@@ -16426,6 +16426,10 @@
           "unmanaged": {
             "$ref": "#/components/schemas/StackUnmanagedBody",
             "description": "Set on an unmanaged stack only: what was found about it"
+          },
+          "update": {
+            "$ref": "#/components/schemas/StackUpdateBody",
+            "description": "Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date"
           }
         },
         "required": [
@@ -17891,6 +17895,10 @@
           "unmanaged": {
             "$ref": "#/components/schemas/StackUnmanagedBody",
             "description": "Set on an unmanaged stack only: what was found about it"
+          },
+          "update": {
+            "$ref": "#/components/schemas/StackUpdateBody",
+            "description": "Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date"
           }
         },
         "required": [
@@ -19922,6 +19930,10 @@
             ],
             "type": "string"
           },
+          "update": {
+            "$ref": "#/components/schemas/UpdateInfoBody",
+            "description": "Left out when the service has no image that is judged (update checks not available, or none judged yet): what is known about the service's image. A standalone service carries the state of its containers, which run one image"
+          },
           "updateState": {
             "description": "The state of a swarm service's last update or rollback; empty when it has none and on a standalone host",
             "type": "string"
@@ -20108,6 +20120,56 @@
           "owner",
           "adoptable",
           "reason"
+        ],
+        "type": "object"
+      },
+      "StackUpdateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "How many workloads have an update available; set when state is update_available, 0 otherwise",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notCheckable": {
+            "description": "Why some workloads of the stack are not part of the state: pinned_in_file (the file names a digest, not a tag) or not_from_registry (the image has no registry to ask). With state none these are the reasons nothing can be checked",
+            "items": {
+              "enum": [
+                "pinned_in_file",
+                "not_from_registry"
+              ],
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "The first that applies of: updating, busy, queued, update_available, rollback_failed, rolled_back, check_failed, not_checked, ignored or skipped (when every other checkable workload is one), check_stale, up_to_date. up_to_date only when every checkable workload is up to date. none when no workload of the stack can be checked (see notCheckable): never read as up to date",
+            "enum": [
+              "update_available",
+              "updating",
+              "busy",
+              "queued",
+              "up_to_date",
+              "check_stale",
+              "check_failed",
+              "rolled_back",
+              "rollback_failed",
+              "not_checked",
+              "skipped",
+              "ignored",
+              "none"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "count",
+          "notCheckable"
         ],
         "type": "object"
       },
@@ -21494,6 +21556,10 @@
               "standalone"
             ],
             "type": "string"
+          },
+          "update": {
+            "$ref": "#/components/schemas/StackUpdateBody",
+            "description": "Left out when update checks are not available or no service is judged: the states of the stack's services rolled up, as on the stack lists"
           }
         },
         "required": [

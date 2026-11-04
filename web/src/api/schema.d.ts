@@ -11750,6 +11750,8 @@ export interface components {
             target: "swarm" | "standalone";
             /** @description Set on an unmanaged stack only: what was found about it */
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
+            /** @description Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date */
+            update?: components["schemas"]["StackUpdateBody"];
         };
         StackDiffHunkBody: {
             /** @description The hunk's lines in order */
@@ -12378,6 +12380,8 @@ export interface components {
             target: "swarm" | "standalone";
             /** @description Set on an unmanaged stack only: what was found about it */
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
+            /** @description Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date */
+            update?: components["schemas"]["StackUpdateBody"];
         };
         StackJanitorBody: {
             /** @description True when the stack's own compose file says x-tierplan: {keep: true} at the top level. That keeps everything the stack owns out of every cleanup too, and only the file can undo it: the switch does not */
@@ -13208,6 +13212,8 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "degraded" | "not_running" | "stopped";
+            /** @description Left out when the service has no image that is judged (update checks not available, or none judged yet): what is known about the service's image. A standalone service carries the state of its containers, which run one image */
+            update?: components["schemas"]["UpdateInfoBody"];
             /** @description The state of a swarm service's last update or rollback; empty when it has none and on a standalone host */
             updateState: string;
         };
@@ -13283,6 +13289,20 @@ export interface components {
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */
             reason: string;
+        };
+        StackUpdateBody: {
+            /**
+             * Format: int64
+             * @description How many workloads have an update available; set when state is update_available, 0 otherwise
+             */
+            count: number;
+            /** @description Why some workloads of the stack are not part of the state: pinned_in_file (the file names a digest, not a tag) or not_from_registry (the image has no registry to ask). With state none these are the reasons nothing can be checked */
+            notCheckable: ("pinned_in_file" | "not_from_registry")[] | null;
+            /**
+             * @description The first that applies of: updating, busy, queued, update_available, rollback_failed, rolled_back, check_failed, not_checked, ignored or skipped (when every other checkable workload is one), check_stale, up_to_date. up_to_date only when every checkable workload is up to date. none when no workload of the stack can be checked (see notCheckable): never read as up to date
+             * @enum {string}
+             */
+            state: "update_available" | "updating" | "busy" | "queued" | "up_to_date" | "check_stale" | "check_failed" | "rolled_back" | "rollback_failed" | "not_checked" | "skipped" | "ignored" | "none";
         };
         StackVariableBody: {
             /** @description The default written in the compose file, when hasDefault is true */
@@ -13906,6 +13926,8 @@ export interface components {
              * @enum {string}
              */
             target: "swarm" | "standalone";
+            /** @description Left out when update checks are not available or no service is judged: the states of the stack's services rolled up, as on the stack lists */
+            update?: components["schemas"]["StackUpdateBody"];
         };
         UpdateAgentsBody: {
             /**

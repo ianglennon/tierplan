@@ -511,7 +511,9 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 	found, target, ok := d.discover(ctx, reads, list, selfHost)
 	out.target, out.discoveryFailed = string(target), !ok
 	for _, u := range found {
-		out.rows = append(out.rows, unmanagedRow(u, envID, envName))
+		row := unmanagedRow(u, envID, envName)
+		row.item.Update = reads.stackUpdate(u.Name)
+		out.rows = append(out.rows, row)
 	}
 	return out, nil
 }

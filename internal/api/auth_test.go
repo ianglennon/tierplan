@@ -508,6 +508,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
+			Updates:   updateSvc,
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,

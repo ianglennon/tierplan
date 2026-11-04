@@ -13,6 +13,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/updates"
 )
 
 // StackContainerBody is one container of a standalone service.
@@ -38,6 +39,7 @@ type StackServiceBody struct {
 	PinState    string               `json:"pinState" enum:"pinned,new,local" doc:"pinned: the reference carries a digest. new: it has none and the next deploy resolves it. local: the engine runs an image ID, an image from no registry"`
 	Ports       []string             `json:"ports" doc:"The published ports as published->target/protocol, with (host) after one published in host mode"`
 	Containers  []StackContainerBody `json:"containers" doc:"The containers of a standalone service, by name; empty on a swarm"`
+	Update      *UpdateInfoBody      `json:"update,omitempty" doc:"Left out when the service has no image that is judged (update checks not available, or none judged yet): what is known about the service's image. A standalone service carries the state of its containers, which run one image"`
 }
 
 // StackServicesBody is the services a stack runs now.
@@ -77,13 +79,14 @@ func listStackServices(ctx context.Context, d StacksDeps, in *StackPathInput) (*
 	if err != nil {
 		return nil, snapshotProblem(d.Log, in.EnvID, err)
 	}
-	body := StackServicesBody{Items: stackServiceBodies(rows)}
+	body := StackServicesBody{Items: stackServiceBodies(rows, newStackReads(ctx, d, in.EnvID).updates().services[st.Name])}
 	return &StackServicesOutput{CacheControl: "no-store", Body: body}, nil
 }
 
 // stackServiceBodies draws the services of a stack as the answers carry them. Only names, states, images and
-// ports leave: never an environment value, a command or a log option of a service (D-47).
-func stackServiceBodies(rows []stackops.ServiceRow) []StackServiceBody {
+// ports leave: never an environment value, a command or a log option of a service (D-47). judged are the
+// verdicts of the stack's services, by swarm service ID or, on a standalone host, by service name.
+func stackServiceBodies(rows []stackops.ServiceRow, judged map[string]updates.ServiceVerdict) []StackServiceBody {
 	out := make([]StackServiceBody, 0, len(rows))
 	for _, r := range rows {
 		item := StackServiceBody{
@@ -93,6 +96,13 @@ func stackServiceBodies(rows []stackops.ServiceRow) []StackServiceBody {
 		}
 		for _, c := range r.Containers {
 			item.Containers = append(item.Containers, StackContainerBody{ID: c.ID, Name: c.Name, State: c.State, Health: c.Health})
+		}
+		key := r.ID
+		if key == "" {
+			key = r.Short
+		}
+		if v, ok := judged[key]; ok {
+			item.Update = updateInfoOf(v.Verdict, v.Workload)
 		}
 		out = append(out, item)
 	}

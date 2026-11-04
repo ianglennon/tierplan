@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // defaultStaleAfter is how old the last successful check may be before an unchanged digest reads
@@ -183,6 +185,92 @@ func (s *Service) Count(ctx context.Context, envID string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// ServiceVerdict is the verdict of one service of a stack with the workload it is for, which names the image
+// that is followed.
+type ServiceVerdict struct {
+	Verdict  Verdict
+	Workload Workload
+}
+
+// StackVerdicts judges the images of every stack of the environment and rolls each up (UI-SPEC "Stack
+// aggregate"). The first answer is the aggregate by stack name: the swarm namespace or the Compose project. The
+// second is the verdict of each service of each stack, keyed by stack name and then by swarm service ID (a
+// swarm) or Compose service name (a standalone host): a standalone service's containers run one image, so its
+// verdict is that of the one among them that needs a look most, and a service counts once however many
+// containers it has. A task container is its service's and counts there. The stack aggregate is the roll-up of
+// the services' verdicts, so a workload that cannot be checked only explains a stack that has nothing else.
+func (s *Service) StackVerdicts(ctx context.Context, envID string) (map[string]StackVerdict, map[string]map[string]ServiceVerdict, error) {
+	if s.Aggregator == nil {
+		return nil, nil, errors.New("updates: no aggregator to read the containers with")
+	}
+	agg, _, err := s.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, nil, err
+	}
+	perService := map[string]map[string]ServiceVerdict{}
+	put := func(stack, service string, v ServiceVerdict) {
+		if perService[stack] == nil {
+			perService[stack] = map[string]ServiceVerdict{}
+		}
+		perService[stack][service] = v
+	}
+	if agg.Counts.Services != nil && s.Clusters != nil {
+		st, err := s.Clusters.State(ctx, envID)
+		if err != nil && st.FetchedAt.IsZero() {
+			return nil, nil, err
+		}
+		ws := s.withPlatforms(ctx, envID, ServiceWorkloads(st.Read.Services))
+		verdicts, err := s.judge(ctx, envID, ws)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, w := range ws {
+			if v, ok := verdicts[w.ID]; ok && w.Stack != "" {
+				w.EnvID = envID
+				put(w.Stack, w.ID, ServiceVerdict{Verdict: v, Workload: w})
+			}
+		}
+	}
+	j, err := s.ContainerJudgements(ctx, envID, agg)
+	if err != nil {
+		return nil, nil, err
+	}
+	ids := make([]string, 0, len(j.Workloads))
+	for id := range j.Workloads {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	type stackService struct{ stack, service string }
+	group := map[stackService][]ServiceVerdict{}
+	for _, id := range ids {
+		w := j.Workloads[id]
+		service := w.Labels[stacks.LabelComposeService]
+		if w.Task || w.Stack == "" || service == "" {
+			continue
+		}
+		k := stackService{w.Stack, service}
+		group[k] = append(group[k], ServiceVerdict{Verdict: j.Verdicts[id], Workload: w})
+	}
+	for k, vs := range group {
+		best := vs[0]
+		for _, v := range vs[1:] {
+			if rankOf(v.Verdict.State) < rankOf(best.Verdict.State) {
+				best = v
+			}
+		}
+		put(k.stack, k.service, best)
+	}
+	out := make(map[string]StackVerdict, len(perService))
+	for stack, services := range perService {
+		vs := make([]Verdict, 0, len(services))
+		for _, v := range services {
+			vs = append(vs, v.Verdict)
+		}
+		out[stack] = Aggregate(vs)
+	}
+	return out, perService, nil
 }
 
 // withPlatforms fills the platforms of the workloads from the nodes their tasks run on. An environment

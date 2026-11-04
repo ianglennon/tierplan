@@ -28,6 +28,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/internal/vault"
 )
 
@@ -198,6 +199,9 @@ type StacksDeps struct {
 	// StopProject and StartProject, when set, replace the Compose SDK's stop and start of a standalone stack
 	// (stackops.Deps). Tests use them for the same reason as Up.
 	StopProject, StartProject func(ctx context.Context, c *dockerx.Client, p *types.Project) error
+	// Updates judges the images of the stacks' workloads. Nil means update checks are not wired and no stack or
+	// service of a stack carries an update object.
+	Updates *updates.Service
 	// DownProject, when set, replaces the Compose SDK's down in the removal of a standalone stack
 	// (stackops.Deps.DownProject), for the same reason.
 	DownProject func(ctx context.Context, c *dockerx.Client, project string) error
@@ -249,6 +253,8 @@ type StackItem struct {
 	Git *StackGitSummary `json:"git,omitempty" doc:"Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers"`
 	// Unmanaged is set on a stack found on the engine that TierPlan did not make (D-07).
 	Unmanaged *StackUnmanagedBody `json:"unmanaged,omitempty" doc:"Set on an unmanaged stack only: what was found about it"`
+	// Update is the roll-up of the images of the stack's services.
+	Update *StackUpdateBody `json:"update,omitempty" doc:"Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date"`
 }
 
 // StackUnmanagedBody is what the lists say about a stack TierPlan found on the engine and does not manage.
@@ -485,6 +491,42 @@ type stackReads struct {
 	d     StacksDeps
 	envID string
 	held  map[bool]heldRead
+	// upd is what the update checks say about the stacks of the environment, read once.
+	upd     stackUpdates
+	updRead bool
+}
+
+// stackUpdates are the roll-ups of the stacks of one environment and the verdict of each of their services.
+type stackUpdates struct {
+	stacks   map[string]updates.StackVerdict
+	services map[string]map[string]updates.ServiceVerdict
+}
+
+// updates reads the update state of the environment's stacks once. A read that fails is logged and leaves
+// every stack without one: a list never fails for it.
+func (r *stackReads) updates() stackUpdates {
+	if r.updRead {
+		return r.upd
+	}
+	r.updRead = true
+	if r.d.Updates == nil {
+		return r.upd
+	}
+	agg, per, err := r.d.Updates.StackVerdicts(r.ctx, r.envID)
+	if err != nil {
+		r.d.Log.Warn("could not judge the images of the stacks", "environment", r.envID, "error", err)
+		return r.upd
+	}
+	r.upd = stackUpdates{stacks: agg, services: per}
+	return r.upd
+}
+
+// stackUpdate is the roll-up of one stack's images, nil when it has none.
+func (r *stackReads) stackUpdate(name string) *StackUpdateBody {
+	if v, ok := r.updates().stacks[name]; ok {
+		return stackUpdateOf(v)
+	}
+	return nil
 }
 
 type heldRead struct {
@@ -554,6 +596,10 @@ func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops
 	}
 	if hasLast {
 		item.LastDeployedAt, item.LastDeployedBy, item.LastDeployedTrigger = rfc3339(last.EndedAt), last.StartedBy, last.Trigger
+	}
+	// A stack that has had no operation has nothing deployed to judge, unless it was adopted.
+	if hasLatest || hasLast || adopted {
+		item.Update = reads.stackUpdate(st.Name)
 	}
 	return item, in.Services
 }
