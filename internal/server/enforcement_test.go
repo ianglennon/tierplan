@@ -525,6 +525,50 @@ func TestEnvironmentListsShowOnlyWhatEachArchetypeCanSee(t *testing.T) {
 			if summary.Environments.Total != len(ids) || !slices.Equal(named, ids) {
 				t.Errorf("fleet summary counts %d environments and names %v, want %d and %v", summary.Environments.Total, named, len(ids), ids)
 			}
+
+			// The search reads the same way: each environment the account may read is named as not searched
+			// (none has an agent), and one it may not read is neither named nor searched when asked for by ID.
+			var search struct {
+				Results     []json.RawMessage `json:"results"`
+				NotSearched []struct {
+					EnvID  string `json:"envId"`
+					Reason string `json:"reason"`
+				} `json:"notSearched"`
+			}
+			rr = e.send(a, http.MethodGet, "/api/search?q=web")
+			if rr.Code != http.StatusOK {
+				t.Fatalf("GET /api/search = %d %s", rr.Code, rr.Body)
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &search); err != nil {
+				t.Fatal(err)
+			}
+			named = named[:0]
+			for _, n := range search.NotSearched {
+				named = append(named, n.EnvID)
+				if n.Reason != "waiting_first_agent" {
+					t.Errorf("search names %s as %q, want waiting_first_agent", n.EnvID, n.Reason)
+				}
+			}
+			slices.Sort(named)
+			if !slices.Equal(named, ids) || len(search.Results) != 0 {
+				t.Errorf("search names %v with %d results, want %v and none", named, len(search.Results), ids)
+			}
+			for _, other := range []string{envA, envB} {
+				if slices.Contains(ids, other) {
+					continue
+				}
+				search.NotSearched = nil
+				rr = e.send(a, http.MethodGet, "/api/search?q=web&env="+other)
+				if rr.Code != http.StatusOK {
+					t.Fatalf("GET /api/search?env=%s = %d %s", other, rr.Code, rr.Body)
+				}
+				if err := json.Unmarshal(rr.Body.Bytes(), &search); err != nil {
+					t.Fatal(err)
+				}
+				if len(search.NotSearched) != 0 || len(search.Results) != 0 {
+					t.Errorf("search of %s, which this account may not read, names %+v with %d results, want nothing", other, search.NotSearched, len(search.Results))
+				}
+			}
 		})
 	}
 }
