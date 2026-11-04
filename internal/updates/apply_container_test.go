@@ -226,6 +226,7 @@ func withHealthcheck(c dockertest.FakeContainer, hc *container.HealthConfig) doc
 // check fails reads unhealthy, one still starting when time is up reads timeout.
 func TestContainerUnhealthyRestoresOld(t *testing.T) {
 	t.Parallel()
+	// wall-clock: a field of the image's health check, which the fake engine stores and never runs.
 	hc := &container.HealthConfig{Test: []string{"CMD", "true"}, Interval: time.Second, Timeout: time.Second, Retries: 1}
 	for health, reason := range map[string]string{"unhealthy": updates.ReasonUnhealthy, "starting": updates.ReasonTimeout} {
 		t.Run(health, func(t *testing.T) {
