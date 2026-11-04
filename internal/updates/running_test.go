@@ -184,15 +184,16 @@ func TestContainerdBuildReadsFromTheRegistryAnswer(t *testing.T) {
 		// Both are on the containerd store: the ID is the digest, and the only repo digest is that ID.
 		img(dg('a'), "docker.io/acme/pushed@"+dg('a')),
 		img(dg('b'), "docker.io/acme/unpushed@"+dg('b')),
-		img(dg('c'), "docker.io/acme/slow@"+dg('c')),
+		img(dg('c'), "ghcr.io/acme/slow@"+dg('c')),
 	},
 		ctr("pushed", "acme/pushed:1", dg('a'), nil),
 		ctr("unpushed", "acme/unpushed:1", dg('b'), nil),
-		ctr("slow", "acme/slow:1", dg('c'), nil),
+		ctr("slow", "ghcr.io/acme/slow:1", dg('c'), nil),
 	)
 	r.heads.set("docker.io/acme/pushed:1", answer{digest: dg('a')})
 	r.heads.set("docker.io/acme/unpushed:1", answer{err: fmt.Errorf("manifest unknown: %w", errs.ErrNotFound)})
-	r.heads.set("docker.io/acme/slow:1", answer{err: fmt.Errorf("too many requests: %w", errs.ErrHTTPRateLimit)})
+	// On another registry, so the breaker its refusal opens is not the one the other two meet.
+	r.heads.set("ghcr.io/acme/slow:1", answer{err: fmt.Errorf("too many requests: %w", errs.ErrHTTPRateLimit)})
 	ws := updates.ContainerWorkloads(agg, nil)
 	for i := range ws {
 		ws[i].EnvID = "env-1"
