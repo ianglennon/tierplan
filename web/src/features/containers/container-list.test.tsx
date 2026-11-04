@@ -1462,3 +1462,70 @@ describe("container list: image updates (12-08)", () => {
     expect(await screen.findByRole("menuitem", { name: "Check now" })).toBeTruthy();
   });
 });
+
+describe("container list: the Updates available filter (12-08)", () => {
+  it("sets updates=available in the search when pressed, asks the server for it, and removes it when pressed again", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    answer = (url) =>
+      Response.json(body(ROWS.slice(0, 1), { total: url.searchParams.get("updates") ? 1 : 4 }));
+    const toggle = screen.getByRole("button", { name: "Updates available" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(changes).toEqual([{ updates: "available" }]);
+    await waitFor(() => expect(urls).toContain(`/api/env/${ENV}/containers?updates=available`));
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Updates available" }));
+    expect(changes[1]).toEqual({ updates: undefined });
+    expect(changes[1]).toHaveProperty("updates", undefined);
+  });
+
+  it("starts pressed when the URL says updates=available, and combines with a status chip", async () => {
+    mount({ updates: "available", status: "running" });
+    await screen.findByText("shop-web");
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    await waitFor(() =>
+      expect(urls).toContain(`/api/env/${ENV}/containers?status=running&updates=available`),
+    );
+  });
+
+  it("counts as a filter: Clear filters shows, and resets it", async () => {
+    mount({ updates: "available" });
+    await screen.findByText("shop-web");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(changes[0]).toHaveProperty("updates", undefined);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull());
+  });
+
+  it("drops an unknown updates value from the URL search", () => {
+    expect(containerSearchSchema.parse({ updates: "available" }).updates).toBe("available");
+    expect(containerSearchSchema.parse({ updates: "all" }).updates).toBeUndefined();
+    expect(containerSearchSchema.parse({ updates: "" }).updates).toBeUndefined();
+    expect(containerSearchSchema.parse({ updates: 1 }).updates).toBeUndefined();
+  });
+
+  it("renders a container name and its registry's words containing markup as text", async () => {
+    answer = () =>
+      Response.json(
+        body([
+          row("<img src=x onerror=alert(1)>", {
+            image: "<img src=z>",
+            update: updateInfo({
+              state: "check_failed",
+              reason: "other",
+              registry: "<b>evil</b>.example.com",
+              checkedAt: new Date().toISOString(),
+            }),
+          }),
+        ]),
+      );
+    mount({ group: "none" });
+    await screen.findByText("<img src=x onerror=alert(1)>");
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("b")).toBeNull();
+  });
+});

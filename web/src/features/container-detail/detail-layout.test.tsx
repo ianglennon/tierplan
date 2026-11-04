@@ -251,6 +251,66 @@ describe("the page frame", () => {
   });
 });
 
+describe("the header shows the container's update state (12-08)", () => {
+  const info = (extra: Record<string, unknown> = {}) => ({
+    state: "update_available" as const,
+    reason: "" as const,
+    registry: "registry.example.com",
+    repository: "acme/web",
+    tag: "1.4",
+    runningDigest: `sha256:${"a".repeat(64)}`,
+    remoteDigest: `sha256:${"b".repeat(64)}`,
+    changedPlatforms: [],
+    checkedAt: new Date().toISOString(),
+    successAt: "",
+    note: "" as const,
+    task: false,
+    ...extra,
+  });
+
+  it("puts the badge of the update object beside the name", async () => {
+    answer = () => Response.json(detail({ update: info() }));
+    renderAt();
+    const heading = await screen.findByRole("heading", { name: "web" });
+    const header = heading.parentElement as HTMLElement;
+    expect(within(header).getByText("Update available")).toBeTruthy();
+  });
+
+  it("shows no badge, and never Up to date, when there is no update object", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.queryByText("Up to date")).toBeNull();
+    expect(screen.queryByText("Not checked yet")).toBeNull();
+  });
+
+  it("shows a task container's badge as the same state word", async () => {
+    answer = () => Response.json(detail({ service: "web-svc", update: info({ task: true }) }));
+    renderAt();
+    await screen.findByRole("heading", { name: "web" });
+    expect(screen.getAllByText("Update available").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders markup in the name and in the registry's words as text", async () => {
+    answer = () =>
+      Response.json(
+        detail({
+          name: "<img src=x onerror=alert(1)>",
+          update: info({
+            state: "check_failed",
+            reason: "other",
+            registry: "<b>evil</b>.example.com",
+            repository: "<img src=y>",
+          }),
+        }),
+      );
+    renderAt();
+    await screen.findByRole("heading", { name: "<img src=x onerror=alert(1)>" });
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("b")).toBeNull();
+  });
+});
+
 describe("the header line and the swarm task banner", () => {
   it("names the stack, the project or the service as plain text", async () => {
     answer = () => Response.json(detail({ stack: "blog", project: "shop", service: "blog_web" }));
