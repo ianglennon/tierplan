@@ -12,6 +12,7 @@ import {
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
+import { imageUpdateJobsKey } from "@/api/updates";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 
@@ -28,6 +29,9 @@ export type FleetPools = components["schemas"]["FleetPoolsBody"];
 export type FleetPoolItem = components["schemas"]["FleetPoolItem"];
 export type FleetCheckResult = components["schemas"]["FleetCheckBody"];
 export type FleetCheckSkipped = components["schemas"]["FleetCheckSkipped"];
+export type FleetBulkRunResult = components["schemas"]["FleetBulkRunBody"];
+export type FleetBulkSkipResult = components["schemas"]["FleetBulkSkipBody"];
+export type FleetBulkRefused = components["schemas"]["FleetBulkRefused"];
 
 // Which items the Updates tab lists (the Show chips). "updates" is the default and is left out of
 // the address.
@@ -109,8 +113,15 @@ export function fleetPoolsQuery(env: readonly string[]) {
 }
 
 // useFleetUpdates is the Updates tab.
-export function useFleetUpdates(env: readonly string[], show: FleetShowValue) {
-  return useQuery(fleetUpdatesQuery(env, show));
+// While a bulk update is under way the tab reads again every few seconds, so its rows go from Queued
+// to Updating… to their end without waiting for the minute.
+export const FLEET_BUSY_REFETCH_MS = 3_000;
+
+export function useFleetUpdates(env: readonly string[], show: FleetShowValue, busy = false) {
+  return useQuery({
+    ...fleetUpdatesQuery(env, show),
+    refetchInterval: busy ? FLEET_BUSY_REFETCH_MS : FLEET_REFETCH_MS,
+  });
 }
 
 // useFleetPools is the Address pools tab.
@@ -191,6 +202,185 @@ export function useFleetCheck() {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: FLEET_KEY });
+    },
+  });
+}
+
+// The most workloads one bulk request takes (the server answers 422 past it).
+export const FLEET_BULK_MAX = 500;
+
+// A workload ticked on the Updates tab, with the environment it is in.
+export interface FleetSelected {
+  envId: string;
+  envName: string;
+  type: FleetUpdateGroup["type"];
+  item: FleetUpdateItem;
+}
+
+// FleetBulkError is a bulk request the server refused or never answered. status is 0 when it could not
+// be reached; type is the problem type it named.
+export class FleetBulkError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST fleet bulk update failed (${status})`);
+    this.name = "FleetBulkError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// The bulk jobs this browser started, by job ID: the Jobs indicator tells the person, once, how each
+// one ended. A job somebody else started, or one from before the page was opened, is not news here.
+export interface FollowedBulkJob {
+  envId: string;
+  envName: string;
+}
+
+const followedBulk = new Map<string, FollowedBulkJob>();
+
+export function followBulkJob(jobId: string, job: FollowedBulkJob): void {
+  followedBulk.set(jobId, job);
+}
+
+// takeFollowedBulkJob answers the job once and forgets it, so one job is told once.
+export function takeFollowedBulkJob(jobId: string): FollowedBulkJob | undefined {
+  const job = followedBulk.get(jobId);
+  followedBulk.delete(jobId);
+  return job;
+}
+
+// How many names a toast spells out before it says "and {n} more".
+const NAMES_SHOWN = 3;
+
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+// refusedNames words the workloads a bulk answer did not take, with why, for a toast. The names are
+// text.
+function refusedNames(t: Translate, refused: readonly FleetBulkRefused[]): string {
+  const shown = refused.slice(0, NAMES_SHOWN).map((r) =>
+    t("fleet.bulk.refusedName", {
+      name: r.name,
+      reason: t(`fleet.bulk.reason.${r.reason}`),
+    }),
+  );
+  const rest = refused.length - shown.length;
+  if (rest > 0) shown.push(t("fleet.bulk.more", { count: rest }));
+  return shown.join(", ");
+}
+
+async function bulkFailure(res: { error?: unknown; response: Response }): Promise<FleetBulkError> {
+  const problem = readProblem(res.error, res.response);
+  return new FleetBulkError(problem.status, problem.type);
+}
+
+// useRunFleetUpdates is "Update {n} selected": the server judges every item for the caller, takes the
+// environment's lock, and starts one job for each environment that has something to update. What it
+// names as not taken is what it knows at once; an item whose newer version moved, whose check failed
+// or that failed before is found at its turn, inside the job, so the toast says each one is checked
+// again and some may be skipped. Never retried (the click-time check is the server's). The toasts and
+// the follow-up are part of the mutation, since the dialog is gone before the answer.
+export function useRunFleetUpdates() {
+  const t = useT();
+  const queryClient = useQueryClient();
+  return useMutation<FleetBulkRunResult, FleetBulkError, readonly FleetSelected[]>({
+    retry: false,
+    mutationFn: async (selected) => {
+      try {
+        const res = await api.POST("/api/fleet/updates/run", {
+          body: {
+            items: selected.map((s) => ({
+              envId: s.envId,
+              kind: s.item.kind,
+              name: s.item.name,
+              expect: s.item.toDigest ? { [s.item.name]: s.item.toDigest } : {},
+            })),
+          },
+        });
+        if (!res.data) throw await bulkFailure(res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof FleetBulkError ? e : new FleetBulkError(0);
+      }
+    },
+    onSuccess: (result, selected) => {
+      const jobs = result.jobs ?? [];
+      const refused = result.skipped ?? [];
+      const names = new Map<string, string>();
+      for (const s of selected) names.set(s.envId, s.envName);
+      for (const job of jobs) {
+        followBulkJob(job.jobId, { envId: job.envId, envName: names.get(job.envId) ?? "" });
+      }
+      const taken = Math.max(selected.length - refused.length, 0);
+      const notTaken =
+        refused.length > 0
+          ? t("fleet.bulk.notStarted", {
+              count: refused.length,
+              names: refusedNames(t, refused),
+            })
+          : "";
+      if (jobs.length === 0) {
+        toastError(`${t("fleet.bulk.noneStarted")} ${notTaken}`.trim());
+        return;
+      }
+      toastInfo(`${t("fleet.bulk.started", { count: taken })} ${notTaken}`.trim());
+    },
+    onError: (error) => {
+      toastError(error.status === 403 ? t("fleet.bulk.forbidden") : t("fleet.bulk.failed"));
+    },
+    onSettled: (_result, _error, selected) => {
+      void queryClient.invalidateQueries({ queryKey: FLEET_KEY });
+      void queryClient.invalidateQueries({ queryKey: imageUpdateJobsKey });
+      for (const envId of new Set(selected.map((s) => s.envId))) {
+        void queryClient.invalidateQueries({ queryKey: ["env", envId] });
+      }
+    },
+  });
+}
+
+// useSkipFleetUpdates is "Skip selected versions": each ticked workload's offered version is hidden
+// until the tag moves again, on every environment the caller may manage updates on. The server names
+// what it refused. Never retried.
+export function useSkipFleetUpdates() {
+  const t = useT();
+  const queryClient = useQueryClient();
+  return useMutation<FleetBulkSkipResult, FleetBulkError, readonly FleetSelected[]>({
+    retry: false,
+    mutationFn: async (selected) => {
+      try {
+        const res = await api.POST("/api/fleet/updates/skip", {
+          body: {
+            items: selected.map((s) => ({ envId: s.envId, kind: s.item.kind, name: s.item.name })),
+          },
+        });
+        if (!res.data) throw await bulkFailure(res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof FleetBulkError ? e : new FleetBulkError(0);
+      }
+    },
+    onSuccess: (result) => {
+      const refused = result.refused ?? [];
+      const notSkipped =
+        refused.length > 0
+          ? t("fleet.bulk.notSkipped", { count: refused.length, names: refusedNames(t, refused) })
+          : "";
+      if (result.skipped === 0) {
+        toastError(`${t("fleet.bulk.noneSkipped")} ${notSkipped}`.trim());
+        return;
+      }
+      const done = t("fleet.bulk.skipped", { count: result.skipped });
+      if (refused.length > 0) toastInfo(`${done} ${notSkipped}`);
+      else toastSuccess(done);
+    },
+    onError: () => {
+      toastError(t("fleet.bulk.skipFailed"));
+    },
+    onSettled: (_result, _error, selected) => {
+      void queryClient.invalidateQueries({ queryKey: FLEET_KEY });
+      for (const envId of new Set(selected.map((s) => s.envId))) {
+        void queryClient.invalidateQueries({ queryKey: ["env", envId] });
+      }
     },
   });
 }

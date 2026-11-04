@@ -3,10 +3,18 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
+import { useMemo } from "react";
 import { Trans } from "react-i18next";
 
 import { environmentsQuery } from "@/api/environments";
-import { type FleetShowValue, useFleetCheck, useFleetChecking, useFleetUpdates } from "@/api/fleet";
+import {
+  type FleetSelected,
+  type FleetShowValue,
+  useFleetCheck,
+  useFleetChecking,
+  useFleetUpdates,
+} from "@/api/fleet";
+import { useImageUpdateJobs } from "@/api/updates";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,10 +22,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EnvFilter } from "@/features/fleet/env-filter";
+import { FleetBulkBar } from "@/features/fleet/fleet-bulk-bar";
 import { FleetCoverageAlert } from "@/features/fleet/fleet-coverage-alert";
 import { FleetEmptyUpdates } from "@/features/fleet/fleet-empty-updates";
 import { FLEET_SHOWS } from "@/features/fleet/fleet-search";
-import { UpdatesTable } from "@/features/fleet/updates-table";
+import { itemKey, UpdatesTable } from "@/features/fleet/updates-table";
+import { useChosenKeys } from "@/features/resources/selection";
 import { useT } from "@/i18n/use-t";
 
 interface FleetUpdatesTabProps {
@@ -34,15 +44,46 @@ interface FleetUpdatesTabProps {
 // not see, and its empty states claim "up to date" only when every check that counts succeeded.
 export function FleetUpdatesTab({ env, show, onEnvChange, onShowChange }: FleetUpdatesTabProps) {
   const t = useT();
-  const query = useFleetUpdates(env, show);
+  // While an update is running the tab reads again every few seconds, so its rows go from Queued to
+  // Updating… to their end as they happen.
+  const updateJobs = useImageUpdateJobs();
+  const busy = updateJobs.data?.some((j) => j.state === "running") ?? false;
+  const query = useFleetUpdates(env, show, busy);
   const environments = useQuery(environmentsQuery);
   const check = useFleetCheck();
   const checking = useFleetChecking();
+  // The rows ticked for a bulk update, as keys. The table works out which rows can be ticked; the bar
+  // reads the workloads they stand for.
+  const chosen = useChosenKeys<string>();
 
   const data = query.data;
   const failed = query.isError && !data;
   const loading = !data && !failed;
   const groups = data?.groups ?? [];
+
+  // The ticked workloads, from the rows as they are now: one that has since stopped being updatable is
+  // not among them, and the request is built from these, not from the rows on screen.
+  const selected = useMemo(() => {
+    const out: FleetSelected[] = [];
+    for (const group of groups) {
+      for (const item of group.items ?? []) {
+        if (item.selectable && chosen[0].has(itemKey(group.envId, item))) {
+          out.push({ envId: group.envId, envName: group.envName, type: group.type, item });
+        }
+      }
+    }
+    return out;
+  }, [groups, chosen]);
+  // The environments that did not report: nothing in them can be updated now.
+  const notReporting = useMemo(
+    () =>
+      new Set(
+        (data?.notIncluded ?? [])
+          .filter((n) => n.reason !== "nodes_not_reporting")
+          .map((n) => n.envId),
+      ),
+    [data?.notIncluded],
+  );
 
   const label = (value: FleetShowValue) => {
     const word = t(`fleet.updates.show.${value}`);
@@ -78,20 +119,29 @@ export function FleetUpdatesTab({ env, show, onEnvChange, onShowChange }: FleetU
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
-        <Button
-          variant="outline"
-          size="sm"
-          className="ms-auto max-md:h-11"
-          aria-busy={checking || undefined}
-          onClick={() => {
-            if (checking) return;
-            check.mutate(env);
-          }}
-        >
-          {checking ? <Spinner aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
-          {checking ? t("fleet.updates.checking") : t("fleet.updates.checkNow")}
-        </Button>
+        {selected.length > 0 ? null : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ms-auto max-md:h-11"
+            aria-busy={checking || undefined}
+            onClick={() => {
+              if (checking) return;
+              check.mutate(env);
+            }}
+          >
+            {checking ? <Spinner aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+            {checking ? t("fleet.updates.checking") : t("fleet.updates.checkNow")}
+          </Button>
+        )}
       </div>
+      {selected.length > 0 ? (
+        <FleetBulkBar
+          items={selected}
+          notReporting={notReporting}
+          onClear={() => chosen[1](new Set())}
+        />
+      ) : null}
       {data ? (
         <p className="text-xs text-muted-foreground">
           {data.coverage.lastCheckedAt ? (
@@ -131,7 +181,9 @@ export function FleetUpdatesTab({ env, show, onEnvChange, onShowChange }: FleetU
           ))}
         </div>
       ) : null}
-      {data && groups.length > 0 ? <UpdatesTable groups={groups} show={show} /> : null}
+      {data && groups.length > 0 ? (
+        <UpdatesTable groups={groups} show={show} chosen={chosen} />
+      ) : null}
       {data && groups.length === 0 ? (
         <FleetEmptyUpdates
           coverage={data.coverage}

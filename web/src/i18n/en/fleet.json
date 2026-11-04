@@ -105,7 +105,8 @@
         "change": "Change",
         "status": "Status",
         "checked": "Checked",
-        "actions": "Actions"
+        "actions": "Actions",
+        "select": "Select"
       },
       "show": {
         "label": "Show",
@@ -213,6 +214,11 @@
           "headingPartial": "Nothing is skipped or ignored in the environments that reported",
           "bodyPartial": "Nothing is skipped or ignored where TierPlan could read. The environments listed above did not report."
         }
+      },
+      "select": {
+        "all": "Select all updates",
+        "group": "Select all in {{environment}}",
+        "row": "Select {{name}}"
       }
     },
     "pools": {
@@ -247,6 +253,36 @@
         "heading": "Couldn't load this view.",
         "body": "Check the connection and try again.",
         "retry": "Retry loading"
+      }
+    },
+    "bulk": {
+      "update_one": "Update {{count, number}} selected",
+      "update_other": "Update {{count, number}} selected",
+      "skip": "Skip selected versions",
+      "tooMany": "You can act on at most {{max, number}} at a time. Clear some ticks and try again.",
+      "started_one": "Started {{count, number}} update. TierPlan checks each one again at its turn, so one may be skipped.",
+      "started_other": "Started {{count, number}} updates. TierPlan checks each one again at its turn, so some may be skipped.",
+      "noneStarted": "Nothing was started.",
+      "notStarted_one": "{{count, number}} wasn't started: {{names}}.",
+      "notStarted_other": "{{count, number}} weren't started: {{names}}.",
+      "skipped_one": "Skipped {{count, number}} version. A newer version will show again.",
+      "skipped_other": "Skipped {{count, number}} versions. A newer version will show again.",
+      "noneSkipped": "No version was skipped.",
+      "notSkipped_one": "{{count, number}} wasn't skipped: {{names}}.",
+      "notSkipped_other": "{{count, number}} weren't skipped: {{names}}.",
+      "refusedName": "{{name}} ({{reason}})",
+      "more": "and {{count, number}} more",
+      "failed": "Couldn't start the updates. Nothing was changed. Check the connection and try again.",
+      "forbidden": "You can't start these updates. Nothing was changed.",
+      "skipFailed": "Couldn't skip these versions. Check the connection and try again.",
+      "reason": {
+        "no_permission": "you can't do this there",
+        "not_selectable": "no update is on offer",
+        "offline": "its environment isn't reporting",
+        "locked": "another operation is running there",
+        "moved": "a newer version appeared",
+        "not_updatable": "it can't be updated this way",
+        "too_many_jobs": "you have too many jobs running"
       }
     }
   }

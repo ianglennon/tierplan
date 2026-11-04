@@ -31,7 +31,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FLEET_VIRTUALISE_OVER, VirtualRows } from "@/features/fleet/virtual-rows";
 import { useGroupCollapse } from "@/features/resources/group-header-row";
-import { TruncatedText } from "@/features/resources/resource-table";
+import { SelectCheckbox, TruncatedText } from "@/features/resources/resource-table";
+import {
+  type GroupSelection,
+  type Selection,
+  type SelectionState,
+  useSelection,
+} from "@/features/resources/selection";
 import { DigestChip } from "@/features/stacks/digest-chip";
 import { IgnoreUpdatesDialog } from "@/features/updates/ignore-updates-dialog";
 import { UpdateBadge } from "@/features/updates/update-badge";
@@ -44,21 +50,30 @@ import { cn } from "@/lib/utils";
 // A row is 36px (44px under 768px for touch).
 const ROW = "h-9 max-md:h-11";
 const CELL = "px-3 py-0";
-// Workload, Image, Change, Status, Checked and the row menu. The bulk selection adds a column in
-// front of them.
-const COLUMNS = 6;
+// The tick, Workload, Image, Change, Status, Checked and the row menu.
+const COLUMNS = 7;
 const PLATFORMS_SHOWN = 3;
 
 type TableRowKind =
   | { kind: "group"; key: string; group: FleetUpdateGroup }
   | { kind: "item"; key: string; group: FleetUpdateGroup; item: FleetUpdateItem };
 
-const itemKey = (envId: string, item: FleetUpdateItem) => `${envId}|${item.kind}|${item.id}`;
+// itemKey is what a tick is keyed by: a workload's ID is only unique in its environment and kind.
+export const itemKey = (envId: string, item: FleetUpdateItem) => `${envId}|${item.kind}|${item.id}`;
+
+// checkedOf is a checkbox's state from a selection's. Radix draws an indeterminate box with
+// aria-checked="mixed", which is how a group that is partly ticked is announced.
+function checkedOf(state: GroupSelection): boolean | "indeterminate" {
+  return state === "checked" ? true : state === "mixed" ? "indeterminate" : false;
+}
 
 interface UpdatesTableProps {
   groups: readonly FleetUpdateGroup[];
   // The Show value the groups were asked for: it words the count in a group's caption.
   show: FleetShowValue;
+  // Which rows are ticked. The tab holds it, so the bulk bar can read it; the table works out which
+  // rows may be ticked (the ones the server says can be updated now) and keeps only those.
+  chosen: SelectionState<string>;
 }
 
 // UpdatesTable is the Updates tab's table (D-17): one group of rows for each environment that has
@@ -66,10 +81,32 @@ interface UpdatesTableProps {
 // was checked, and a row for each workload with its image, the change on offer, its update state, when it
 // was last checked successfully and its menu. A group folds away and starts open. Past 100 rows only
 // the rows in view are drawn. Every name, image and digest is placed as text.
-export function UpdatesTable({ groups, show }: UpdatesTableProps) {
+export function UpdatesTable({ groups, show, chosen }: UpdatesTableProps) {
   const t = useT();
   const collapse = useGroupCollapse();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+
+  // Every row that can be ticked, found or not on screen: a tick is a key in a set, so the 2,000th row
+  // is ticked as easily as the first and a virtualised list draws only the rows in view.
+  const selectable = useMemo(() => {
+    const out = new Set<string>();
+    for (const group of groups) {
+      for (const item of group.items ?? [])
+        if (item.selectable) out.add(itemKey(group.envId, item));
+    }
+    return out;
+  }, [groups]);
+  // The order the rows show in, folded groups left out: what a Shift range and Select all follow.
+  const orderedKeys = useMemo(() => {
+    const out: string[] = [];
+    for (const group of groups) {
+      if (collapse.collapsed.has(group.envId)) continue;
+      for (const item of group.items ?? []) out.push(itemKey(group.envId, item));
+    }
+    return out;
+  }, [groups, collapse.collapsed]);
+  const isEligible = useCallback((key: string) => selectable.has(key), [selectable]);
+  const selection = useSelection({ orderedKeys, isEligible }, chosen);
 
   const total = useMemo(() => groups.reduce((n, g) => n + (g.items?.length ?? 0), 0), [groups]);
   const rows = useMemo<TableRowKind[]>(() => {
@@ -94,11 +131,18 @@ export function UpdatesTable({ groups, show }: UpdatesTableProps) {
           show={show}
           expanded={!collapse.collapsed.has(row.group.envId)}
           onToggle={() => collapse.toggle(row.group.envId)}
+          selection={selection}
         />
       ) : (
-        <UpdateRow key={row.key} group={row.group} item={row.item} />
+        <UpdateRow
+          key={row.key}
+          group={row.group}
+          item={row.item}
+          selection={selection}
+          selectable={selectable.has(row.key)}
+        />
       ),
-    [show, collapse],
+    [show, collapse, selection, selectable],
   );
 
   return (
@@ -113,6 +157,15 @@ export function UpdatesTable({ groups, show }: UpdatesTableProps) {
         <caption className="sr-only">{t("fleet.updates.caption")}</caption>
         <TableHeader className={virtual ? "sticky top-0 z-10 bg-background" : undefined}>
           <TableRow className="h-12 hover:bg-transparent">
+            <TableHead scope="col" className="w-11 p-0 ps-3">
+              <span className="sr-only">{t("fleet.updates.columns.select")}</span>
+              <SelectCheckbox
+                checked={checkedOf(selection.allState)}
+                label={t("fleet.updates.select.all")}
+                disabled={selection.eligibleCount === 0}
+                onToggle={() => selection.selectAll()}
+              />
+            </TableHead>
             <TableHead scope="col" className="min-w-56">
               {t("fleet.updates.columns.workload")}
             </TableHead>
@@ -156,13 +209,20 @@ interface GroupHeaderProps {
   show: FleetShowValue;
   expanded: boolean;
   onToggle: () => void;
+  selection: Selection<string>;
 }
 
 // GroupHeader is the band that opens an environment's rows: a fold button, the environment (a link),
 // its type, "{n} updates, checked {time}", the reason when its checks failed and a button that checks
 // that environment again.
-function GroupHeader({ group, show, expanded, onToggle }: GroupHeaderProps) {
+function GroupHeader({ group, show, expanded, onToggle, selection }: GroupHeaderProps) {
   const t = useT();
+  const keys = useMemo(
+    () => (group.items ?? []).map((item) => itemKey(group.envId, item)),
+    [group],
+  );
+  // A group with nothing that can be updated has no tick to offer.
+  const ticks = (group.items ?? []).some((item) => item.selectable);
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const count = group.items?.length ?? 0;
   const what = t(show === "updates" ? "fleet.updates.group.updates" : "fleet.updates.group.items", {
@@ -176,6 +236,15 @@ function GroupHeader({ group, show, expanded, onToggle }: GroupHeaderProps) {
         className="h-9 px-1 py-0 text-start whitespace-normal max-md:h-11"
       >
         <div className="flex min-w-0 items-center gap-2">
+          {ticks ? (
+            <span className="ps-2">
+              <SelectCheckbox
+                checked={checkedOf(selection.groupState(keys))}
+                label={t("fleet.updates.select.group", { environment: group.envName })}
+                onToggle={() => selection.selectGroup(keys)}
+              />
+            </span>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
@@ -259,13 +328,30 @@ function GroupCheckButton({ envId, envName }: { envId: string; envName: string }
   );
 }
 
-function UpdateRow({ group, item }: { group: FleetUpdateGroup; item: FleetUpdateItem }) {
+interface UpdateRowProps {
+  group: FleetUpdateGroup;
+  item: FleetUpdateItem;
+  selection: Selection<string>;
+  selectable: boolean;
+}
+
+function UpdateRow({ group, item, selection, selectable }: UpdateRowProps) {
   const t = useT();
+  const key = itemKey(group.envId, item);
   const className =
     "block max-w-60 truncate rounded-sm font-mono text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
   const KindIcon = item.kind === "service" ? Layers : Container;
   return (
-    <TableRow className={ROW}>
+    <TableRow className={ROW} data-state={selection.isSelected(key) ? "selected" : undefined}>
+      <TableCell className={cn(CELL, "w-11 ps-3")}>
+        {selectable ? (
+          <SelectCheckbox
+            checked={selection.isSelected(key)}
+            label={t("fleet.updates.select.row", { name: item.name })}
+            onToggle={(shift) => selection.toggle(key, { shift })}
+          />
+        ) : null}
+      </TableCell>
       <TableCell className={cn(CELL, "min-w-56")}>
         <div className="flex min-w-0 items-center gap-2">
           <KindIcon

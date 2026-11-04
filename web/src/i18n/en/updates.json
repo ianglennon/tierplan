@@ -339,7 +339,25 @@
       },
       "descriptionContainer": "TierPlan recreates {{name}} with the same settings and the new image. It keeps the old container until the new one is running, then removes it.",
       "anywayTitle": "Update {{name}} anyway",
-      "commitAnyway": "Update {{name}} anyway"
+      "commitAnyway": "Update {{name}} anyway",
+      "fleet": {
+        "title_one": "Update {{count, number}} item",
+        "title_other": "Update {{count, number}} items",
+        "description": "One update runs at a time in each environment. If one fails, only that one is rolled back.",
+        "groupCount_one": "{{count, number}} item",
+        "groupCount_other": "{{count, number}} items",
+        "rowsLabel": "What will change in {{environment}}",
+        "showAll": "Show all {{count, number}}",
+        "fewer": "Show fewer",
+        "skipped": {
+          "offline": "Skipped: {{environment}} isn't reporting.",
+          "no_permission": "Skipped: you can't update anything in {{environment}}."
+        },
+        "tooMany": "You can update at most {{max, number}} at a time. Clear some ticks and try again.",
+        "checked": "Each item is checked again when its turn comes. One that has a newer version by then, or whose update failed before, is skipped and nothing is changed.",
+        "commit_one": "Update {{count, number}} item",
+        "commit_other": "Update {{count, number}} items"
+      }
     },
     "console": {
       "title": "Update of {{name}}",

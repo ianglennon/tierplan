@@ -3,8 +3,9 @@
 
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, CircleX, Lock, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { FLEET_BULK_MAX, type FleetSelected, useRunFleetUpdates } from "@/api/fleet";
 import {
   type MovedService,
   type UpdateHolder,
@@ -17,6 +18,7 @@ import {
   useUpdatePreview,
 } from "@/api/updates";
 import { RelativeTime, useNow } from "@/components/relative-time";
+import { TypeBadge } from "@/components/type-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,7 +63,7 @@ interface UpdateConfirmDialogProps {
 
 // What holds the environment, as the confirm words it: from the preview, or from the 409 that refused
 // the commit.
-interface LockView {
+export interface LockView {
   kind: UpdateHolder["kind"] | "unknown";
   stack?: string;
   workload?: string;
@@ -573,6 +575,238 @@ export function UpdateConfirmDialog({
               )}
             </Button>
           )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Why an environment of a bulk update cannot run, as the fleet confirm words it: it isn't reporting,
+// the caller may not update there, or another operation holds it (the lock Alert).
+export type FleetUnavailable =
+  | { kind: "offline" }
+  | { kind: "no_permission" }
+  | { kind: "locked"; lock: LockView };
+
+// How many rows an environment shows before the rest fold behind "Show all".
+const FLEET_ROWS_SHOWN = 5;
+
+interface FleetGroup {
+  envId: string;
+  envName: string;
+  type: FleetSelected["type"];
+  items: FleetSelected[];
+}
+
+// groupByEnvironment groups the ticked workloads by environment, by name.
+function groupByEnvironment(items: readonly FleetSelected[]): FleetGroup[] {
+  const groups = new Map<string, FleetGroup>();
+  for (const s of items) {
+    const g = groups.get(s.envId);
+    if (g) g.items.push(s);
+    else groups.set(s.envId, { envId: s.envId, envName: s.envName, type: s.type, items: [s] });
+  }
+  return [...groups.values()].sort((a, b) => a.envName.localeCompare(b.envName));
+}
+
+function FleetGroupRows({ group }: { group: FleetGroup }) {
+  const t = useT();
+  const [all, setAll] = useState(false);
+  const shown = all ? group.items : group.items.slice(0, FLEET_ROWS_SHOWN);
+  const rest = group.items.length - FLEET_ROWS_SHOWN;
+  return (
+    <>
+      <ul
+        aria-label={t("updates.confirm.fleet.rowsLabel", { environment: group.envName })}
+        className="flex min-w-0 flex-col [&>li:not(:last-child)]:border-b"
+      >
+        {shown.map(({ item }) => (
+          <UpdateRow
+            key={`${item.kind}|${item.id}`}
+            item={{
+              kind: item.kind,
+              name: item.name,
+              image: item.image,
+              fromDigest: item.fromDigest,
+              toDigest: item.toDigest,
+              changedPlatforms: item.changedPlatforms,
+              platforms: [],
+              stack: item.stack,
+            }}
+          />
+        ))}
+      </ul>
+      {rest > 0 ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="self-start max-md:h-11"
+          aria-expanded={all}
+          onClick={() => setAll((v) => !v)}
+        >
+          {all
+            ? t("updates.confirm.fleet.fewer")
+            : t("updates.confirm.fleet.showAll", { count: group.items.length })}
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
+interface FleetUpdateConfirmDialogProps {
+  // The ticked workloads, in every environment they are in.
+  items: readonly FleetSelected[];
+  // The environments that cannot run an update now. Their workloads are listed with why and left out
+  // of the count and of the request.
+  unavailable: ReadonlyMap<string, FleetUnavailable>;
+  // Called when the dialog is to go: Cancel, Escape, or the updates have started.
+  onClose: () => void;
+  // Called when the updates have started, so the tab can clear its ticks.
+  onStarted: () => void;
+  // Called when it has closed and focus is to go back to what opened it.
+  onClosed?: () => void;
+}
+
+// FleetUpdateConfirmDialog is the confirm of "Update {n} selected" (D-11, UI-SPEC "Update confirm"): the
+// ticked workloads grouped by environment, what each will change, and the one accent button. One
+// update runs at a time in each environment and a failure rolls back only itself. An environment that
+// cannot run says why and is left out of the count. Each workload is checked again when its turn
+// comes, so the dialog does not promise that all of them will update. Nothing is changed until the
+// button is pressed. Names, images and digests are text.
+export function FleetUpdateConfirmDialog({
+  items,
+  unavailable,
+  onClose,
+  onStarted,
+  onClosed,
+}: FleetUpdateConfirmDialogProps) {
+  const t = useT();
+  const title = useRef<HTMLHeadingElement>(null);
+  const run = useRunFleetUpdates();
+  const groups = useMemo(() => groupByEnvironment(items), [items]);
+  const runnable = useMemo(
+    () => items.filter((s) => !unavailable.has(s.envId)),
+    [items, unavailable],
+  );
+  const count = runnable.length;
+  const tooMany = count > FLEET_BULK_MAX;
+  const pending = run.isPending;
+  const blocked = count === 0 || tooMany;
+  // One request for each press (T-12-47).
+  const sending = useRef(false);
+
+  function submit() {
+    if (sending.current || pending || blocked) return;
+    sending.current = true;
+    run.mutate(runnable, {
+      onSettled: () => {
+        sending.current = false;
+      },
+      onSuccess: () => {
+        onStarted();
+        onClose();
+      },
+    });
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next && !pending) onClose();
+      }}
+    >
+      <DialogContent
+        className="max-h-[90svh] overflow-y-auto sm:max-w-xl"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          title.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onClosed?.();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle ref={title} tabIndex={-1} className="outline-none">
+            {t("updates.confirm.fleet.title", { count })}
+          </DialogTitle>
+          <DialogDescription className="break-words">
+            {t("updates.confirm.fleet.description")}
+          </DialogDescription>
+        </DialogHeader>
+
+        {tooMany ? (
+          <Alert variant="warning" role="status" data-slot="fleet-too-many">
+            <TriangleAlert aria-hidden="true" />
+            <AlertDescription className="text-status-warning-text break-words">
+              {t("updates.confirm.fleet.tooMany", { max: FLEET_BULK_MAX })}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {groups.map((g) => {
+          const off = unavailable.get(g.envId);
+          return (
+            <section
+              key={g.envId}
+              data-slot="fleet-group"
+              aria-label={g.envName}
+              className="flex min-w-0 flex-col gap-2"
+            >
+              <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-semibold">
+                <span className="min-w-0 break-all">{g.envName}</span>
+                <TypeBadge envType={g.type} />
+                <span className="text-xs font-normal text-muted-foreground tabular-nums">
+                  {t("updates.confirm.fleet.groupCount", { count: g.items.length })}
+                </span>
+              </h3>
+              {off?.kind === "locked" ? (
+                <LockAlert lock={off.lock} envId={g.envId} envName={g.envName} />
+              ) : off ? (
+                <p className="text-sm break-words text-muted-foreground" data-slot="fleet-skipped">
+                  {t(`updates.confirm.fleet.skipped.${off.kind}`, { environment: g.envName })}
+                </p>
+              ) : (
+                <FleetGroupRows group={g} />
+              )}
+            </section>
+          );
+        })}
+
+        <Separator />
+        <p className="text-sm break-words text-muted-foreground">
+          {t("updates.confirm.fleet.checked")}
+        </p>
+        <p className="text-sm break-words text-muted-foreground">{t("updates.confirm.note")}</p>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className="max-md:h-11"
+            disabled={pending}
+            onClick={onClose}
+          >
+            {t("updates.confirm.cancel")}
+          </Button>
+          <Button
+            type="button"
+            className="max-md:h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            aria-disabled={blocked || pending ? true : undefined}
+            aria-busy={pending ? true : undefined}
+            onClick={submit}
+          >
+            {pending ? (
+              <>
+                <Spinner aria-hidden="true" />
+                {t("updates.confirm.checking")}
+              </>
+            ) : (
+              t("updates.confirm.fleet.commit", { count })
+            )}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

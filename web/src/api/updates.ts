@@ -714,7 +714,13 @@ function imageUpdateJobKey(envId: string, jobId: string) {
 // How often a view of a running update asks for it while its stream is not live.
 const UPDATE_JOB_REFETCH_MS = 1000;
 
-function imageUpdateJobQuery(envId: string, jobId: string) {
+// isBulkJob says whether a job in the list is the one job of a bulk update in an environment. Its summary
+// names the bulk update it belongs to; an ordinary update's does not.
+export function isBulkJob(job: ImageUpdateJobSummary): boolean {
+  return Boolean(job.bulk) || (job.kind as string) === "bulk";
+}
+
+export function imageUpdateJobQuery(envId: string, jobId: string) {
   return queryOptions({
     queryKey: imageUpdateJobKey(envId, jobId),
     queryFn: async (): Promise<UpdateJob> => {
