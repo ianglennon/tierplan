@@ -72,6 +72,25 @@
       "found_one": "{{count, number}} update available.",
       "found_other": "{{count, number}} updates available.",
       "failed": "Couldn't check for updates. Try again."
+    },
+    "stack": {
+      "noneTooltip": "No service of this stack can be checked: {{reasons}}.",
+      "noneTooltipBare": "No service of this stack can be checked.",
+      "detail": {
+        "update_available_one": "{{count, number}} service of this stack has an update available.",
+        "update_available_other": "{{count, number}} services of this stack have an update available.",
+        "updating": "A service of this stack is being updated. Open the console.",
+        "busy": "Another action holds a service of this stack. Update is available again when it finishes.",
+        "queued": "An update of this stack is waiting for the updates before it.",
+        "up_to_date": "Every service of this stack that can be checked is up to date.",
+        "check_stale": "A service of this stack was last checked a while ago. Checks may be off or failing for this environment.",
+        "check_failed": "The check failed for a service of this stack. Open the stack to see which.",
+        "rolled_back": "TierPlan rolled a service of this stack back because its update failed.",
+        "rollback_failed": "TierPlan couldn't restore the previous version of a service of this stack. Open the console.",
+        "not_checked": "No check has run for a service of this stack yet. The first check runs on schedule, or choose Check now.",
+        "skipped": "The new version of each service that can be checked was skipped. A newer version will show again.",
+        "ignored": "Updates are ignored for the services of this stack that can be checked."
+      }
     }
   }
 }

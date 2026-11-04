@@ -45,6 +45,7 @@ import {
   StoppedAlertWithStart,
 } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { StackUpdateCell } from "@/features/stacks/stack-update-cell";
 import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -380,6 +381,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
                   total={data.servicesTotal}
                   failedService={data.lastOperation?.failedService}
                 />
+                {data.update ? <StackUpdateCell update={data.update} /> : null}
                 <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
                 {data.git ? (
                   <GitSourceBadge git={data.git} />
@@ -562,6 +564,7 @@ function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutPr
                   running={data.servicesRunning}
                   total={data.servicesTotal}
                 />
+                {data.update ? <StackUpdateCell update={data.update} /> : null}
                 <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
                 <UnmanagedBadge orphan={data.orphan} />
                 {data.portainer ? (

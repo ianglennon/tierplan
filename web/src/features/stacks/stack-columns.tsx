@@ -32,6 +32,7 @@ import {
   useStackStart,
 } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { StackUpdateCell } from "@/features/stacks/stack-update-cell";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { UpdateImagesDialog } from "@/features/stacks/update-images-dialog";
@@ -325,7 +326,7 @@ interface StackColumnsOptions {
 
 // stackColumns are the columns of the stack lists (UI-SPEC "Stack lists"): Name (a link, with a Draft
 // badge while the draft holds changes that are not deployed), Environment on the global list, State,
-// Services, Source, Last deployed and the row menu. Every word of a stack's or an environment's name
+// Updates, Services, Source, Last deployed and the row menu. Every word of a stack's or an environment's name
 // renders as text.
 export function stackColumns(
   t: ReturnType<typeof useT>,
@@ -391,6 +392,13 @@ export function stackColumns(
           <StackStateCell state={s.state} running={s.servicesRunning} total={s.servicesTotal} />
         );
       },
+    },
+    {
+      id: "updates",
+      header: t("updates.list.column"),
+      className: "w-36 min-w-36",
+      // The server's roll-up of the stack's services; a row it sent none for shows a dash, never "Up to date".
+      cell: (s) => <StackUpdateCell update={s.update} />,
     },
     {
       id: "services",

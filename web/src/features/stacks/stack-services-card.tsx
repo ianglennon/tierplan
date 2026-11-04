@@ -28,6 +28,7 @@ import { SettingsCard } from "@/features/environments/settings-card";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
 import { DigestChip } from "@/features/stacks/digest-chip";
+import { UpdateBadge } from "@/features/updates/update-badge";
 import { useT } from "@/i18n/use-t";
 
 interface StackServicesCardProps {
@@ -173,6 +174,13 @@ function ServiceRows({ envId, row, swarm, open, onToggle }: RowProps) {
             <RollupStateCell state={row.state} />
           )}
         </TableCell>
+        <TableCell className="whitespace-nowrap">
+          {row.update ? (
+            <UpdateBadge info={row.update} />
+          ) : (
+            <span className="text-muted-foreground">{DASH}</span>
+          )}
+        </TableCell>
         <TableCell className="whitespace-nowrap tabular-nums">
           {row.running}/{row.desired}
         </TableCell>
@@ -201,6 +209,7 @@ function ServiceRows({ envId, row, swarm, open, onToggle }: RowProps) {
                   health={c.health as ContainerRow["health"]}
                 />
               </TableCell>
+              <TableCell aria-hidden="true" />
               <TableCell aria-hidden="true">{DASH}</TableCell>
               <TableCell aria-hidden="true" />
               <TableCell aria-hidden="true" />
@@ -239,6 +248,7 @@ export function StackServicesTable({ envId, rows, swarm }: ServicesTableProps) {
         <TableRow>
           <TableHead scope="col">{t("stackOverview.services.columns.service")}</TableHead>
           <TableHead scope="col">{t("stackOverview.services.columns.state")}</TableHead>
+          <TableHead scope="col">{t("updates.list.column")}</TableHead>
           <TableHead scope="col">
             {t(
               swarm

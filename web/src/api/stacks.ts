@@ -16,6 +16,7 @@ export type StackDraftSaveInput = components["schemas"]["StackDraftSaveRequest"]
 export type StackDraftSaved = components["schemas"]["StackDraftSaveBody"];
 export type StackCreateInput = components["schemas"]["StackCreateRequest"];
 export type StackState = StackItem["state"];
+export type StackUpdate = components["schemas"]["StackUpdateBody"];
 export type StackCheck = components["schemas"]["StackCheckBody"];
 export type StackProblem = components["schemas"]["StackProblemBody"];
 export type StackCheckInput = components["schemas"]["StackCheckRequest"];

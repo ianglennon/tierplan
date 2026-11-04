@@ -738,9 +738,54 @@ describe("StackList: columns and pending rows", () => {
     const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
     expect(screen.getByRole("columnheader", { name: "Services" })).toBeTruthy();
     expect(within(row("alpha")).getByText("1/3")).toBeTruthy();
-    expect(within(row("beta")).getByText("—")).toBeTruthy();
+    // Services and Updates both read a dash for a stack that is not deployed and has no roll-up.
+    expect(within(row("beta")).getAllByText("—")).toHaveLength(2);
     expect(within(row("beta")).getByText("Not deployed")).toBeTruthy();
     expect(within(row("beta")).getByText("Never")).toBeTruthy();
+  });
+
+  it("shows the update roll-up of each stack in its Updates cell: a count, a dash with its reason, and no Up to date for a stack nothing can check", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a",
+          name: "alpha",
+          update: { state: "update_available", count: 2, notCheckable: null },
+        }),
+        stack({
+          id: "b",
+          name: "beta",
+          update: { state: "none", count: 0, notCheckable: ["pinned_in_file"] },
+        }),
+        stack({
+          id: "c",
+          name: "gamma",
+          update: { state: "up_to_date", count: 0, notCheckable: null },
+        }),
+        // A name with markup in it is text, and so is the reason beside it.
+        stack({
+          id: "d",
+          name: "<script>x</script>",
+          update: { state: "none", count: 0, notCheckable: ["not_from_registry"] },
+        }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "alpha" });
+    const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+    expect(screen.getByRole("columnheader", { name: "Updates" })).toBeTruthy();
+    expect(within(row("alpha")).getByText("2 updates")).toBeTruthy();
+    expect(
+      within(row("beta")).getByText("No service of this stack can be checked: Pinned in file."),
+    ).toBeTruthy();
+    expect(within(row("beta")).queryByText("Up to date")).toBeNull();
+    expect(within(row("gamma")).getByText("Up to date")).toBeTruthy();
+    expect(
+      within(row("<script>x</script>")).getByText(
+        "No service of this stack can be checked: Not from a registry.",
+      ),
+    ).toBeTruthy();
+    expect(document.querySelector("script")).toBeNull();
   });
 
   it("labels a stack with an operation under way and turns its menu off", async () => {
@@ -792,8 +837,8 @@ describe("StackList unmanaged stacks", () => {
     expect(within(row).getByText("Unmanaged")).toBeTruthy();
     expect(within(row).getByText("Degraded")).toBeTruthy();
     expect(within(row).getByText("1/3")).toBeTruthy();
-    // Source is a dash without a Portainer marker and Last deployed is a dash: two cells say so.
-    expect(within(row).getAllByText("\u2014")).toHaveLength(2);
+    // Updates (no roll-up sent), Source (no Portainer marker) and Last deployed are dashes: three cells say so.
+    expect(within(row).getAllByText("\u2014")).toHaveLength(3);
     // The name links to the stack's read-only page, built from the name.
     expect(within(row).getByRole("link", { name: "legacy" }).getAttribute("href")).toBe(
       "/env/e1/unmanaged-stacks/legacy",
@@ -1059,7 +1104,7 @@ describe("StackList: flags on unmanaged stacks", () => {
     };
     mount();
     await screen.findByText("viaportainer");
-    const source = (name: string) => within(rowOfName(name)).getAllByRole("cell")[3] as HTMLElement;
+    const source = (name: string) => within(rowOfName(name)).getAllByRole("cell")[4] as HTMLElement;
     expect(within(source("viaportainer")).getByText("Portainer")).toBeTruthy();
     expect(within(source("plain")).queryByText("Portainer")).toBeNull();
     expect(source("plain").textContent).toBe("—");

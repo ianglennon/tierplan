@@ -145,7 +145,7 @@ describe("StackOverview services card on a swarm", () => {
     const headers = within(table)
       .getAllByRole("columnheader")
       .map((h) => h.textContent);
-    expect(headers).toEqual(["Service", "State", "Replicas", "Image", "Ports"]);
+    expect(headers).toEqual(["Service", "State", "Updates", "Replicas", "Image", "Ports"]);
     const link = within(table).getByRole("link", { name: "web" });
     expect(link.getAttribute("href")).toBe("/env/e1/services/svc-1");
     expect(within(table).getByText("2/3")).toBeTruthy();
@@ -168,6 +168,40 @@ describe("StackOverview services card on a swarm", () => {
     expect(within(table).getByText("Degraded")).toBeTruthy();
     expect(within(table).getByText("Running")).toBeTruthy();
     expect(within(table).getByText("Not running")).toBeTruthy();
+  });
+
+  it("marks which services have an update, and shows a dash for a service the server sent no update object for", async () => {
+    services = {
+      items: [
+        swarmService({
+          id: "a",
+          name: "tracer_a",
+          short: "a",
+          update: {
+            state: "update_available",
+            reason: "",
+            registry: "docker.io",
+            repository: "library/nginx",
+            tag: "1.27",
+            runningDigest: `sha256:${"a".repeat(64)}`,
+            remoteDigest: `sha256:${"b".repeat(64)}`,
+            changedPlatforms: [],
+            checkedAt: new Date().toISOString(),
+            successAt: "",
+            note: "",
+            task: false,
+          },
+        }),
+        swarmService({ id: "b", name: "tracer_b", short: "b" }),
+      ],
+    };
+    mount();
+
+    const table = await screen.findByRole("table");
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1] as HTMLElement).getByText("Update available")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).queryByText(/update|Up to date/i)).toBeNull();
+    expect(within(rows[2] as HTMLElement).getByText("—")).toBeTruthy();
   });
 
   it("marks an image with no digest New and an image from no registry with the warning in words", async () => {

@@ -223,7 +223,8 @@ describe("GlobalStackList", () => {
     const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
     await screen.findByRole("link", { name: "alpha" });
     expect(within(row("alpha")).getByText("1/3")).toBeTruthy();
-    expect(within(row("beta")).getByText("—")).toBeTruthy();
+    // Updates and Services both read a dash for a stack that is not deployed and has no roll-up.
+    expect(within(row("beta")).getAllByText("—")).toHaveLength(2);
     expect(within(row("beta")).getByText("Never")).toBeTruthy();
   });
 

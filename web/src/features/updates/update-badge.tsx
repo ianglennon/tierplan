@@ -114,6 +114,9 @@ interface UpdateBadgeProps {
   info: UpdateInfo;
   // How many workloads of a stack have an update. Only an "Update available" state shows it.
   count?: number;
+  // The words for the Tooltip when the caller has better ones than the image's own: the roll-up of a stack
+  // is about its services, not about one image.
+  detail?: string;
   className?: string;
 }
 
@@ -122,7 +125,7 @@ interface UpdateBadgeProps {
 // and, as visually hidden text referenced by aria-describedby, for a keyboard or touch reader, so
 // nothing is hover-only. The icon is decorative. It is a static span: nothing here opens. Every
 // value is drawn as a text node.
-export function UpdateBadge({ info, count, className }: UpdateBadgeProps) {
+export function UpdateBadge({ info, count, detail: detailOverride, className }: UpdateBadgeProps) {
   const t = useT();
   const descriptionId = useId();
   const now = useNow();
@@ -131,7 +134,7 @@ export function UpdateBadge({ info, count, className }: UpdateBadgeProps) {
     info.state === "update_available" && count !== undefined
       ? t("updates.badge.count", { count })
       : t(`updates.badge.${info.state}`);
-  const detail = detailText(t, info, new Date(now));
+  const detail = detailOverride ?? detailText(t, info, new Date(now));
 
   const trigger =
     info.state === "up_to_date" ? (
