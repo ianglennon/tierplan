@@ -368,7 +368,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	})
 	if f.fleet != nil && f.envSvc != nil {
 		fleetDeps := *f.fleet
-		fleetDeps.Envs, fleetDeps.Checker = f.envSvc, checker
+		fleetDeps.Envs = f.envSvc
+		if fleetDeps.Checker == nil {
+			// A test may bring a checker of its own, to hold the permissions apart in a way the default roles do not.
+			fleetDeps.Checker = checker
+		}
 		api.RegisterFleet(r, fleetDeps)
 	}
 	agentSvc := f.agentSvc

@@ -95,6 +95,8 @@ type FleetDeps struct {
 	Store *store.Store
 	// EnvTimeout is how long one environment may take; zero means five seconds.
 	EnvTimeout time.Duration
+	// SearchTimeout is how long the search may take to read one environment; zero means three seconds.
+	SearchTimeout time.Duration
 	// Now stamps the answer. Nil means time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -113,6 +115,13 @@ func (d FleetDeps) timeout() time.Duration {
 		return d.EnvTimeout
 	}
 	return fleetEnvTimeout
+}
+
+func (d FleetDeps) searchTimeout() time.Duration {
+	if d.SearchTimeout > 0 {
+		return d.SearchTimeout
+	}
+	return searchEnvTimeout
 }
 
 // FleetNotIncludedBody names an environment a fleet view could not read, or could read only in part.
@@ -253,13 +262,19 @@ func fleetFanOut[T any](ctx context.Context, d FleetDeps, p *rbac.Principal, env
 
 // fleetReadEach is fleetFanOut over environments already judged readable.
 func fleetReadEach[T any](ctx context.Context, d FleetDeps, list []envs.Environment, read func(ctx context.Context, env envs.Environment) (T, int, error)) []fleetResult[T] {
+	return fleetReadEachWithin(ctx, d, list, d.timeout(), read)
+}
+
+// fleetReadEachWithin is fleetReadEach with a deadline of its own for each environment, for a view that is
+// allowed less time than the others (the search, D-18).
+func fleetReadEachWithin[T any](ctx context.Context, d FleetDeps, list []envs.Environment, timeout time.Duration, read func(ctx context.Context, env envs.Environment) (T, int, error)) []fleetResult[T] {
 	results := make([]fleetResult[T], len(list))
 	var g errgroup.Group
 	g.SetLimit(fleetParallel)
 	for i, env := range list {
 		results[i].Env = env
 		g.Go(func() error {
-			rctx, cancel := context.WithTimeout(ctx, d.timeout())
+			rctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			val, nodes, err := read(rctx, env)
 			if err == nil {
@@ -541,4 +556,5 @@ func RegisterFleet(r *httpx.Router, d FleetDeps) {
 
 	registerFleetUpdates(r, d, fail)
 	registerFleetPools(r, d, fail)
+	registerSearch(r, d, fail)
 }

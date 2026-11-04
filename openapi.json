@@ -14575,6 +14575,186 @@
         ],
         "type": "object"
       },
+      "SearchBody": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/SearchCounts",
+            "description": "How many things matched, by type. A type that was not searched, because type named another, counts 0"
+          },
+          "notSearched": {
+            "description": "The environments the caller may read that could not be searched, or only in part. Environments the caller may not read are never named",
+            "items": {
+              "$ref": "#/components/schemas/FleetNotIncludedBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "results": {
+            "description": "The best matches first: the name is the query, the name starts with it, the name holds it, then an image or stack that holds it. Equal matches go by environment name, then name",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "searchedAt": {
+            "description": "When the search was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "True when there are more matches than results holds",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "counts",
+          "truncated",
+          "notSearched",
+          "searchedAt"
+        ],
+        "type": "object"
+      },
+      "SearchCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "description": "The sum of the others",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "container": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "image": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "service": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stack": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stack",
+          "service",
+          "container",
+          "image",
+          "network",
+          "all"
+        ],
+        "type": "object"
+      },
+      "SearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "driver": {
+            "description": "A network: its driver; empty for the other types",
+            "type": "string"
+          },
+          "envId": {
+            "description": "The environment it is in",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The name of that environment",
+            "type": "string"
+          },
+          "id": {
+            "description": "Its ID. Empty for a stack TierPlan does not manage, which is known by its name",
+            "type": "string"
+          },
+          "image": {
+            "description": "A service or container: its image as written; empty for the other types",
+            "type": "string"
+          },
+          "managed": {
+            "description": "A stack: true when TierPlan manages it. False for everything else",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Its name. An image: the tag that matched, or its short ID when it has none",
+            "type": "string"
+          },
+          "node": {
+            "description": "A container, image or network: the node it was read from; empty for the other types",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of that node, for the link to the thing; empty when there is no node",
+            "type": "string"
+          },
+          "services": {
+            "description": "A stack: how many services (swarm) or containers (standalone host) it has; 0 for the other types",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "size": {
+            "description": "An image: its size in bytes; 0 for the other types",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stack": {
+            "description": "A service or container: the stack or Compose project it belongs to; empty when it has none",
+            "type": "string"
+          },
+          "subnet": {
+            "description": "A network: its first subnet; empty when it has none or for the other types",
+            "type": "string"
+          },
+          "type": {
+            "description": "What it is",
+            "enum": [
+              "stack",
+              "service",
+              "container",
+              "image",
+              "network"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "envId",
+          "envName",
+          "id",
+          "name",
+          "managed",
+          "stack",
+          "image",
+          "node",
+          "nodeId",
+          "driver",
+          "subnet",
+          "size",
+          "services"
+        ],
+        "type": "object"
+      },
       "SecretCreateBody": {
         "additionalProperties": false,
         "properties": {
@@ -41304,6 +41484,111 @@
         "summary": "Change an instance registry credential",
         "tags": [
           "registries"
+        ]
+      }
+    },
+    "/api/search": {
+      "get": {
+        "description": "Finds what matches q by name, by image or stack, and for containers and images by four or more hexadecimal characters of the ID, ignoring case. A type is searched in an environment only where the caller holds that type's read permission (stacks.read, services.read, containers.read, images.read, networks.read); nothing else is returned, counted or named, and an environment the caller may not read is never named. Environments that could not be searched, or only in part, are named in notSearched with their reason. The search is live: it reads the same short-lived snapshots as the environment pages, at most 8 environments at once and each for at most 3 seconds.",
+        "operationId": "searchFleet",
+        "parameters": [
+          {
+            "description": "What to look for: a name, an image, a stack, or four or more hexadecimal characters of a container or image ID. Trimmed, then 2 to 100 characters. Case does not matter",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "What to look for: a name, an image, a stack, or four or more hexadecimal characters of a container or image ID. Trimmed, then 2 to 100 characters. Case does not matter",
+              "maxLength": 100,
+              "minLength": 2,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this kind of thing; all searches every kind",
+            "explode": false,
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "default": "all",
+              "description": "Only this kind of thing; all searches every kind",
+              "enum": [
+                "all",
+                "stack",
+                "service",
+                "container",
+                "image",
+                "network"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+            "explode": true,
+            "in": "query",
+            "name": "env",
+            "schema": {
+              "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "page answers with at most 200 rows. palette answers with at most 5 rows of each type. The counts are the full totals either way",
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": "page",
+              "description": "page answers with at most 200 rows. palette answers with at most 5 rows of each type. The counts are the full totals either way",
+              "enum": [
+                "page",
+                "palette"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Search stacks, services, containers, images and networks across the environments the caller may read",
+        "tags": [
+          "fleet"
         ]
       }
     },

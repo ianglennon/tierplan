@@ -4686,6 +4686,26 @@ export interface paths {
         patch: operations["updateInstanceCredential"];
         trace?: never;
     };
+    "/api/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search stacks, services, containers, images and networks across the environments the caller may read
+         * @description Finds what matches q by name, by image or stack, and for containers and images by four or more hexadecimal characters of the ID, ignoring case. A type is searched in an environment only where the caller holds that type's read permission (stacks.read, services.read, containers.read, images.read, networks.read); nothing else is returned, counted or named, and an environment the caller may not read is never named. Environments that could not be searched, or only in part, are named in notSearched with their reason. The search is live: it reads the same short-lived snapshots as the environment pages, at most 8 environments at once and each for at most 3 seconds.
+         */
+        get: operations["searchFleet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -11356,6 +11376,77 @@ export interface components {
              * @description The size of that file in bytes
              */
             size?: number;
+        };
+        SearchBody: {
+            /** @description How many things matched, by type. A type that was not searched, because type named another, counts 0 */
+            counts: components["schemas"]["SearchCounts"];
+            /** @description The environments the caller may read that could not be searched, or only in part. Environments the caller may not read are never named */
+            notSearched: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /** @description The best matches first: the name is the query, the name starts with it, the name holds it, then an image or stack that holds it. Equal matches go by environment name, then name */
+            results: components["schemas"]["SearchResult"][] | null;
+            /**
+             * Format: date-time
+             * @description When the search was made
+             */
+            searchedAt: string;
+            /** @description True when there are more matches than results holds */
+            truncated: boolean;
+        };
+        SearchCounts: {
+            /**
+             * Format: int64
+             * @description The sum of the others
+             */
+            all: number;
+            /** Format: int64 */
+            container: number;
+            /** Format: int64 */
+            image: number;
+            /** Format: int64 */
+            network: number;
+            /** Format: int64 */
+            service: number;
+            /** Format: int64 */
+            stack: number;
+        };
+        SearchResult: {
+            /** @description A network: its driver; empty for the other types */
+            driver: string;
+            /** @description The environment it is in */
+            envId: string;
+            /** @description The name of that environment */
+            envName: string;
+            /** @description Its ID. Empty for a stack TierPlan does not manage, which is known by its name */
+            id: string;
+            /** @description A service or container: its image as written; empty for the other types */
+            image: string;
+            /** @description A stack: true when TierPlan manages it. False for everything else */
+            managed: boolean;
+            /** @description Its name. An image: the tag that matched, or its short ID when it has none */
+            name: string;
+            /** @description A container, image or network: the node it was read from; empty for the other types */
+            node: string;
+            /** @description The ID of that node, for the link to the thing; empty when there is no node */
+            nodeId: string;
+            /**
+             * Format: int64
+             * @description A stack: how many services (swarm) or containers (standalone host) it has; 0 for the other types
+             */
+            services: number;
+            /**
+             * Format: int64
+             * @description An image: its size in bytes; 0 for the other types
+             */
+            size: number;
+            /** @description A service or container: the stack or Compose project it belongs to; empty when it has none */
+            stack: string;
+            /** @description A network: its first subnet; empty when it has none or for the other types */
+            subnet: string;
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            type: "stack" | "service" | "container" | "image" | "network";
         };
         SecretCreateBody: {
             /** @description The ID of the secret the swarm made */
@@ -25297,6 +25388,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    searchFleet: {
+        parameters: {
+            query: {
+                /** @description What to look for: a name, an image, a stack, or four or more hexadecimal characters of a container or image ID. Trimmed, then 2 to 100 characters. Case does not matter */
+                q: string;
+                /** @description Only this kind of thing; all searches every kind */
+                type?: "all" | "stack" | "service" | "container" | "image" | "network";
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+                /** @description page answers with at most 200 rows. palette answers with at most 5 rows of each type. The counts are the full totals either way */
+                limit?: "page" | "palette";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchBody"];
                 };
             };
             /** @description Error */
