@@ -122,7 +122,12 @@ func newApplyRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 		tune(&cfg)
 	}
 	fake := dockertest.NewFake(t, cfg)
+	return newApplyRigOn(t, "unix://"+fake.SocketPath(), fake)
+}
 
+// newApplyRigOn builds the rig over the engine at host, a local socket: the fake's, or a real engine's. fake is nil for a real one.
+func newApplyRigOn(t *testing.T, host string, fake *dockertest.Fake) *applyRig {
+	t.Helper()
 	st := storetest.New(t)
 	v, err := vault.New(bytes.Repeat([]byte{7}, 32), "test")
 	if err != nil {
@@ -132,7 +137,7 @@ func newApplyRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...do
 	aud := audit.NewWriter(st, v, log, nil)
 	mon := envs.NewMonitor(log, nil, nil)
 	t.Cleanup(mon.StopAll)
-	svc := envs.NewService(st, aud, mon, "unix://"+fake.SocketPath(), "0123456789ab", time.Now)
+	svc := envs.NewService(st, aud, mon, host, "0123456789ab", time.Now)
 	snaps := envs.NewSnapshots(mon, 5*time.Second, time.Now)
 	agg := envs.NewAggregator(svc, snaps, nil, time.Now)
 	t.Cleanup(agg.Close)

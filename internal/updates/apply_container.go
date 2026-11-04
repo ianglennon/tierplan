@@ -561,9 +561,12 @@ func (a *Applier) waitUp(ctx context.Context, t target, id string, hc *container
 		default:
 			failures = 0
 			switch {
-			case d.Dead || d.Status == "exited" || d.Status == "removing" || d.Restarting:
+			case d.Dead || d.Status == "exited" || d.Status == "removing" || d.Restarting || d.RestartCount > 0:
+				// A replacement that has had to be restarted already crashed, whatever its restart policy made of it.
 				return ReasonDidntStart
-			case d.Running && !d.Paused:
+			case !d.Running:
+				upSince = time.Time{}
+			case !d.Paused:
 				switch d.Health {
 				case "unhealthy":
 					return ReasonUnhealthy
