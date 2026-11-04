@@ -55,12 +55,18 @@ func newShop(t *testing.T, services ...string) *shopFix {
 // newShopWith is newShop with the fixture tuned before the server is built.
 func newShopWith(t *testing.T, tune func(*envFix), services ...string) *shopFix {
 	t.Helper()
+	return newShopCfg(t, nil, tune, services...)
+}
+
+// newShopCfg is newShopWith with the fake daemon's configuration tuned too.
+func newShopCfg(t *testing.T, tuneEngine func(*dockertest.FakeConfig), tune func(*envFix), services ...string) *shopFix {
+	t.Helper()
 	answers := map[string]headAnswer{}
 	for _, s := range services {
 		answers["team/"+s] = headAnswer{digest: updDigest('a')}
 	}
 	heads := newScriptedHeads(answers)
-	f, e := stackEnvTuned(t, func(f *envFix) { f.updateHeads = heads; tune(f) })
+	f, e := stackEnvCfg(t, tuneEngine, func(f *envFix) { f.updateHeads = heads; tune(f) })
 	for _, s := range services {
 		f.fake.SetDistributionDigest("registry.test/team/"+s+":1", updDigest('a'))
 	}
