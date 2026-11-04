@@ -616,6 +616,7 @@ describe("container list: columns and cells", () => {
       "",
       "Name",
       "State",
+      "Updates",
       "Image",
       "Ports",
       "Created",
@@ -632,6 +633,7 @@ describe("container list: columns and cells", () => {
       "Name",
       "Node",
       "State",
+      "Updates",
       "Image",
       "Ports",
       "Created",
@@ -691,7 +693,7 @@ describe("container list: columns and cells", () => {
     mount({ group: "none" });
     await screen.findByText("many");
     const portsOf = (name: string) =>
-      within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell")[4];
+      within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell")[5];
     expect(portsOf("many")?.textContent).toBe("80/tcp, 443/tcp+2");
     expect(within(portsOf("many") as HTMLElement).getByText("+2")).toBeTruthy();
     expect(portsOf("two")?.textContent).toBe("80/tcp, 443/tcp");
@@ -1394,5 +1396,69 @@ describe("container list: restart loops", () => {
     const hushed = (await screen.findByRole("row", { name: /hushed/ })) as HTMLElement;
     expect(within(hushed).getByText("Muted")).toBeTruthy();
     expect(within(hushed).queryByText("Restart loop")).toBeNull();
+  });
+});
+
+const updateInfo = (extra: Partial<NonNullable<ContainerRow["update"]>> = {}) => ({
+  state: "not_checked" as const,
+  reason: "" as const,
+  registry: "registry.example.com",
+  repository: "acme/web",
+  tag: "1.4",
+  runningDigest: `sha256:${"a".repeat(64)}`,
+  remoteDigest: "",
+  changedPlatforms: [],
+  checkedAt: "",
+  successAt: "",
+  note: "" as const,
+  task: false,
+  ...extra,
+});
+
+describe("container list: image updates (12-08)", () => {
+  beforeEach(() => {
+    answer = () =>
+      Response.json(
+        body([
+          row("web", {
+            update: updateInfo({
+              state: "update_available",
+              remoteDigest: `sha256:${"b".repeat(64)}`,
+              checkedAt: new Date().toISOString(),
+            }),
+          }),
+          row("task-1", {
+            service: "web-svc",
+            update: updateInfo({ state: "update_available", task: true }),
+          }),
+          row("db"),
+        ]),
+      );
+  });
+
+  it("says each container's update state after State, and a dash when the server sent none", async () => {
+    mount();
+    await screen.findByText("web");
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.indexOf("Updates")).toBe(heads.indexOf("State") + 1);
+    const web = screen.getByRole("row", { name: /^Select web/ });
+    expect(within(web).getByText("Update available")).toBeTruthy();
+    // A task container reads the same state word as any container.
+    const task = screen.getByRole("row", { name: /^Select task-1/ });
+    expect(within(task).getByText("Update available")).toBeTruthy();
+    const db = screen.getByRole("row", { name: /^Select db/ });
+    expect(within(db).queryByText("Update available")).toBeNull();
+    expect(within(db).queryByText("Up to date")).toBeNull();
+  });
+
+  it("offers Check now in the row menu", async () => {
+    mount();
+    await screen.findByText("web");
+    const web = screen.getByRole("row", { name: /^Select web/ });
+    fireEvent.pointerDown(within(web).getByRole("button", { name: /^Actions for web/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Check now" })).toBeTruthy();
   });
 });

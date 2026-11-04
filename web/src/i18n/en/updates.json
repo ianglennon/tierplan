@@ -1,7 +1,13 @@
 {
   "updates": {
     "list": {
-      "column": "Updates"
+      "column": "Updates",
+      "filter": "Updates available"
+    },
+    "tile": {
+      "label": "Updates available",
+      "subline": "In this environment",
+      "error": "Couldn't read this."
     },
     "badge": {
       "update_available": "Update available",

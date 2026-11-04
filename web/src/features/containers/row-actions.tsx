@@ -28,6 +28,7 @@ import type { BulkReport } from "@/features/containers/bulk-result-dialog";
 import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { pendingFingerprint, pendingKey, usePendingApi } from "@/features/containers/pending";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
+import { CheckNowItem } from "@/features/updates/check-now-item";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
@@ -250,6 +251,7 @@ export function ContainerRowActions({
               needs={needs}
             />
           ) : null}
+          <CheckNowItem envId={envId} />
           {(canKill || canRemove) &&
           (canStart || canStop || canRestart || canPause || canUnpause) ? (
             <DropdownMenuSeparator />

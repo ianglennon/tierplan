@@ -400,33 +400,33 @@ describe("Restart, Pause and Unpause", () => {
     mount(row({ state: "running" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Pause", "Kill…", "Remove…"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Pause", "Check now", "Kill…", "Remove…"]);
   });
 
   it("offers Start and Restart on an exited row", async () => {
     mount(row({ state: "exited" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Start", "Restart", "Remove…"]);
+    expect(itemNames()).toEqual(["Start", "Restart", "Check now", "Remove…"]);
   });
 
   it("offers Stop, Restart and Unpause on a paused row", async () => {
     mount(row({ state: "paused" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Unpause" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause", "Kill…", "Remove…"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause", "Check now", "Kill…", "Remove…"]);
   });
 
   it("offers Stop and Restart on a restarting row, and only Start on a created one", async () => {
     mount(row({ state: "restarting" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Kill…", "Remove…"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Check now", "Kill…", "Remove…"]);
     cleanup();
     mount(row({ state: "created" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Start" });
-    expect(itemNames()).toEqual(["Start", "Remove…"]);
+    expect(itemNames()).toEqual(["Start", "Check now", "Remove…"]);
   });
 
   it.each([

@@ -20,6 +20,7 @@ import { EventsFeed } from "@/features/dashboard/events-feed";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { JanitorCard } from "@/features/janitor/janitor-card";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
+import { UpdatesTile } from "@/features/updates/updates-tile";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -218,6 +219,7 @@ function Dashboard() {
             />
           </>
         ) : null}
+        <UpdatesTile envId={envId} value={data?.imageUpdates} loading={loading} />
       </section>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_2fr]">

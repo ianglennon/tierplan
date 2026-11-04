@@ -84,6 +84,7 @@ import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
+import { UpdateBadge } from "@/features/updates/update-badge";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo } from "@/lib/toast";
@@ -186,7 +187,7 @@ const statId = (c: ContainerRow) => `${c.nodeId}|${c.id}`;
 // the health check, the image and the ports. A change in any of them marks the
 // row (D-05).
 const fingerprintOf = (c: ContainerRow) =>
-  [c.state, c.status, c.health, c.image, (c.ports ?? []).join(",")].join("|");
+  [c.state, c.status, c.health, c.image, (c.ports ?? []).join(","), c.update?.state].join("|");
 
 // PortsCell shows the first two published ports and "+n" for the rest, whose
 // tooltip lists them all. A container with none shows a dash. The services list uses it too.
@@ -503,6 +504,13 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
             pending={pending.get(rowKeyOf(c))?.verb}
           />
         ),
+    },
+    {
+      id: "updates",
+      header: t("updates.list.column"),
+      className: "w-44 min-w-44",
+      // The server's word for the row; a row it sent no update object for shows a dash, never "Up to date".
+      cell: (c) => (c.update ? <UpdateBadge info={c.update} /> : <span>{missing}</span>),
     },
     {
       id: "image",

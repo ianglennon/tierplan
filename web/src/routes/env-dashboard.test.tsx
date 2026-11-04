@@ -327,6 +327,34 @@ describe("dashboard", () => {
     expect(screen.queryByText("TierPlan (this instance)")).toBeNull();
   });
 
+  it("ends the tiles with Updates available, from the summary's imageUpdates, linking to the Updates tab", async () => {
+    summary = () => Response.json({ ...SUMMARY, imageUpdates: 3 });
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Updates available")).getByText("3")).toBeTruthy());
+    const el = tile("Updates available");
+    expect(el.textContent).toContain("In this environment");
+    const tiles = within(screen.getByRole("region", { name: "Dashboard" }));
+    const labels = tiles.getAllByText(/./, { selector: "span.text-xs.font-semibold" });
+    expect(labels[labels.length - 1]?.textContent).toBe("Updates available");
+    expect(el.getAttribute("href")).toContain("tab=updates");
+    expect(el.getAttribute("href")).toContain("env=e1");
+  });
+
+  it("shows a real zero as 0 on the Updates available tile", async () => {
+    summary = () => Response.json({ ...SUMMARY, imageUpdates: 0 });
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Updates available")).getByText("0")).toBeTruthy());
+  });
+
+  it("shows a dash and says it could not be read when imageUpdates is absent, never 0", async () => {
+    renderAt("/env/e1");
+    await waitFor(() => expect(within(tile("Containers")).getByText("7")).toBeTruthy());
+    const el = tile("Updates available");
+    expect(within(el).getByText("—")).toBeTruthy();
+    expect(within(el).getByText("Couldn't read this.")).toBeTruthy();
+    expect(within(el).queryByText("0")).toBeNull();
+  });
+
   it("renders a dash for what Docker does not report and lets values wrap", async () => {
     summary = () =>
       Response.json({
