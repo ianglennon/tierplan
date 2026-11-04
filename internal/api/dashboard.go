@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/updates"
 )
 
 // Stable problem types of the environment data routes. The SPA maps each to a
@@ -69,6 +70,9 @@ type DashboardDeps struct {
 	// column of the networks list and the dashboard's address tile. Nil means the feature is
 	// off: nothing is read and no pool is shown.
 	AddressSpaces *envs.AddressSpaces
+	// Updates judges the image of each container and counts the updates that wait. Nil means update
+	// checks are not wired: no container carries an update object and the summary carries no count.
+	Updates *updates.Service
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -143,6 +147,7 @@ type EnvironmentSummaryBody struct {
 	SelfContainerID string                 `json:"selfContainerId,omitempty" doc:"The ID of TierPlan's own container, when it can tell (D-27)"`
 	FetchedAt       string                 `json:"fetchedAt" format:"date-time" doc:"When the counts were read from Docker; they are cached for a few seconds"`
 	RestartLoops    *RestartLoopCountsBody `json:"restartLoops,omitempty" doc:"Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum"`
+	ImageUpdates    *int                   `json:"imageUpdates,omitempty" doc:"How many swarm services and containers have an update available (a task container counts as its service; skipped and ignored updates are not counted), from the stored image checks. Only for a caller who may read containers, and services on a swarm manager. Absent when it could not be read, so the dashboard says so instead of showing 0"`
 }
 
 // RestartLoopCountsBody counts the services in a restart loop (RES-13, D-15).
@@ -181,6 +186,8 @@ type ContainerItem struct {
 	// RestartLoop is present while the container keeps dying and is restarted by its policy.
 	// A task container of a swarm service never has one: the service does.
 	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
+	// Update is the state of the container's image; absent when update checks are not wired.
+	Update *UpdateInfoBody `json:"update,omitempty" doc:"The image update state of the container, judged from the digest of the image it runs on its own node and the stored check of the tag it was created from. Absent when update checks are not wired"`
 }
 
 // VolumeItem is one row of the volumes list.
@@ -283,8 +290,9 @@ type NetworkListOutput struct {
 // ContainerListInput is the containers list: the node filter and the search.
 type ContainerListInput struct {
 	NodeFilterInput
-	Q      string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap"`
-	Status string `query:"status" maxLength:"64" doc:"Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status"`
+	Q       string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap"`
+	Status  string `query:"status" maxLength:"64" doc:"Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status"`
+	Updates string `query:"updates" enum:",available" doc:"available: only containers whose image has an update available. Applied before the 500-row cap"`
 }
 
 // NetworkListInput is the networks list: the node filter and the search.
@@ -453,6 +461,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			if c.Services != nil {
 				loops = restartLoopCounts(ctx, d, env.ID)
 			}
+			imageUpdates := imageUpdateCount(ctx, d, env.ID, c.Services != nil)
 			return &EnvironmentSummaryOutput{CacheControl: "no-store", Body: EnvironmentSummaryBody{
 				Environment: SummaryEnvironmentBody{
 					ID: env.ID, Name: env.Name, Type: p.Type,
@@ -472,13 +481,14 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				SelfContainerID: d.SelfContainerID,
 				FetchedAt:       rfc3339(agg.FetchedAt),
 				RestartLoops:    loops,
+				ImageUpdates:    imageUpdates,
 			}}, nil
 		})
 
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
 		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
-			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes)."),
+			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap)."),
 		need(rbac.PermContainersRead),
 		func(ctx context.Context, in *ContainerListInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
@@ -495,6 +505,12 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			}
 			onNode := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
 			rows := filterContainers(onNode, in.Q, statuses)
+			judged := containerUpdates(ctx, d.Updates, d.Log, in.EnvID, agg)
+			if in.Updates == "available" {
+				rows = slices.DeleteFunc(slices.Clone(rows), func(c envs.ContainerRow) bool {
+					return judged.Verdicts[c.ID].State != updates.StateUpdateAvailable
+				})
+			}
 			loops, _ := containerLoopsOf(d.Clusters, in.EnvID)
 			known := loadStackIDs(ctx, d.Store, in.EnvID, d.Log)
 			items, total, truncated := capRows(rows, func(c envs.ContainerRow) ContainerItem {
@@ -509,6 +525,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), ReadOnly: readOnly[c.NodeID],
 					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 					TierPlanStackID: known.confirmedFor(containerStack(c.Labels), c.Labels),
+					Update:          updateOfContainer(judged, c.ID),
 				}
 			})
 			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{
@@ -687,6 +704,29 @@ func notOnlineProblem(e envs.ErrNotOnline) error {
 func shortImageID(id string) string {
 	id = strings.TrimPrefix(id, "sha256:")
 	return id[:min(len(id), 12)]
+}
+
+// imageUpdateCount counts the updates that wait in an environment: the services of a swarm manager and the
+// containers that are not tasks. It is nil, and the tile says so, when update checks are not wired, the
+// caller may not read what it counts (containers, and services on a swarm manager), or the count could not
+// be read: never a 0 that is not known.
+func imageUpdateCount(ctx context.Context, d DashboardDeps, envID string, swarm bool) *int {
+	p := httpx.PrincipalFrom(ctx)
+	if d.Updates == nil || d.Checker == nil || p == nil {
+		return nil
+	}
+	may := func(perm rbac.Perm) bool {
+		return d.Checker.Check(ctx, p, rbac.Requirement{Perm: perm, Scope: rbac.ScopeEnvironment}, envID).Allowed
+	}
+	if !may(rbac.PermContainersRead) || swarm && !may(rbac.PermServicesRead) {
+		return nil
+	}
+	n, err := d.Updates.Count(ctx, envID)
+	if err != nil {
+		d.Log.Warn("could not count the image updates of an environment", "environment", envID, "error", err)
+		return nil
+	}
+	return &n
 }
 
 // restartLoopCounts counts the restart loops of a swarm from the cluster reader's last read, for

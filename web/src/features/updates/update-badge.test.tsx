@@ -23,6 +23,7 @@ const info = (extra: Partial<UpdateInfo> = {}): UpdateInfo => ({
   checkedAt: new Date().toISOString(),
   successAt: "",
   note: "",
+  task: false,
   ...extra,
 });
 

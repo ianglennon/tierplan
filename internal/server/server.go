@@ -857,6 +857,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	updateService := &updates.Service{
 		Store: updates.SQLStore{Q: st.Q, W: st.Write}, Resolver: resolver, Clusters: clusters, Aggregator: aggregator, Runs: runIndex,
 		Checker: &updates.Checker{Heads: updates.NewHeads(resolver, registryClients), Store: updates.SQLStore{Q: st.Q, W: st.Write}, Runs: runIndex, Creds: resolver, Log: log},
+		// A container whose list row shows an image ID is named by an inspect, at most 50 new ones a read (RESEARCH Pitfall 7).
+		ImageTexts: &updates.ImageTextCache{Inspect: updates.InspectImageTexts(aggregator)},
 	}
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,
@@ -981,7 +983,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
 		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,
@@ -999,7 +1001,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Git:           gitDeps,
 		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
-		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
+		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Updates: updateService, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
 		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},

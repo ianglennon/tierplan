@@ -102,6 +102,7 @@ type updateInfo struct {
 	CheckedAt        string   `json:"checkedAt"`
 	SuccessAt        string   `json:"successAt"`
 	Note             string   `json:"note"`
+	Task             bool     `json:"task"`
 }
 
 type updatedItem struct {
@@ -309,5 +310,232 @@ func TestVerdictFailureNeverFailsList(t *testing.T) {
 	}
 	if n := strings.Count(f.logs.String(), "could not judge the images of the services"); n != 1 {
 		t.Errorf("log lines about the failed verdicts = %d, want 1:\n%s", n, f.logs.String())
+	}
+}
+
+// The containers list, the container detail and the dashboard count (plan 12-06, IMG-05, D-20): a
+// standalone host whose fake daemon holds the containers and their images; the registry is the scripted
+// Heads and Check now is the real route.
+
+type containerRow struct {
+	ID     string      `json:"id"`
+	Name   string      `json:"name"`
+	Update *updateInfo `json:"update"`
+}
+
+type containerRows struct {
+	Items []containerRow `json:"items"`
+	Total int            `json:"total"`
+}
+
+func (c containerRows) of(t *testing.T, name string) *updateInfo {
+	t.Helper()
+	for _, it := range c.Items {
+		if it.Name == name {
+			return it.Update
+		}
+	}
+	t.Fatalf("no container %q in %+v", name, c)
+	return nil
+}
+
+func (c containerRows) has(name string) bool {
+	for _, it := range c.Items {
+		if it.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// updImage is an image ID made of one repeated character.
+func updImage(c byte) string { return "sha256:" + strings.Repeat(string(c), 64) }
+
+// hostWithContainers is a standalone host running these containers, with the cluster reader a real server
+// has, whose registry answers as heads does.
+func hostWithContainers(t *testing.T, heads *scriptedHeads, inspect func(ids []string) map[string]string, containers []dockertest.FakeContainer, images []dockertest.FakeImage) (*envFix, envBody) {
+	t.Helper()
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "host-1", Version: "29.1.0", Containers: containers, Images: images})
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.updateHeads = heads
+	if inspect != nil {
+		f.updateInspect = func(_ context.Context, _ string, ids []string) (map[string]string, error) { return inspect(ids), nil }
+	}
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	return f, e
+}
+
+func appContainer(name, image, imageID string, labels map[string]string) dockertest.FakeContainer {
+	return dockertest.FakeContainer{
+		ID: "id-" + name, Names: []string{"/" + name}, Image: image, ImageID: imageID, State: "running", Status: "Up 1 hour", Labels: labels,
+	}
+}
+
+func TestContainersCarryUpdateState(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{
+		"team/app":   {digest: updDigest('b')},
+		"team/other": {digest: updDigest('c')},
+	})
+	var inspected [][]string
+	var mu sync.Mutex
+	f, e := hostWithContainers(t, heads,
+		func(ids []string) map[string]string {
+			mu.Lock()
+			defer mu.Unlock()
+			inspected = append(inspected, ids)
+			return map[string]string{"id-moved": "registry.test/team/other:2"}
+		},
+		[]dockertest.FakeContainer{
+			// Running a digest the tag has left.
+			appContainer("old", "registry.test/team/app:1", updImage('1'), nil),
+			// The tag moved to another image since: the list shows the image ID, the inspect the name.
+			appContainer("moved", updImage('2'), updImage('2'), nil),
+			// A build nobody pushed, on the classic image store (no repo digest).
+			appContainer("built", "local/build:1", updImage('3'), nil),
+		},
+		[]dockertest.FakeImage{
+			{ID: updImage('1'), RepoTags: []string{"registry.test/team/app:1"}, RepoDigests: []string{"registry.test/team/app@" + updDigest('a')}},
+			{ID: updImage('2'), RepoDigests: []string{"registry.test/team/other@" + updDigest('c')}},
+			{ID: updImage('3'), RepoTags: []string{"local/build:1"}},
+		})
+
+	before := decode[containerRows](t, f.get(t, e, "containers"))
+	if u := before.of(t, "old"); u == nil || u.State != "not_checked" {
+		t.Errorf("old before any check = %+v, want not_checked", u)
+	}
+	if u := before.of(t, "built"); u == nil || u.State != "not_from_registry" {
+		t.Errorf("built = %+v, want not_from_registry without any check", u)
+	}
+
+	rec := f.checkNow(t, e)
+	if rec.code != http.StatusOK {
+		t.Fatalf("check now on a standalone host: %d %s", rec.code, rec.body)
+	}
+	if got := decode[updateCheckAnswer](t, rec); got != (updateCheckAnswer{Checked: 2, Updates: 1}) {
+		t.Errorf("check now = %+v, want 2 checked and 1 update", got)
+	}
+	if n := heads.requests(); n != 2 {
+		t.Errorf("%d registry requests, want 2: the local build is never asked about", n)
+	}
+
+	list := decode[containerRows](t, f.get(t, e, "containers"))
+	old := list.of(t, "old")
+	if old == nil || old.State != "update_available" || old.RunningDigest != updDigest('a') || old.RemoteDigest != updDigest('b') ||
+		old.Registry != "registry.test" || old.Repository != "team/app" || old.Tag != "1" {
+		t.Errorf("old = %+v, want update_available, judged from the repo digest and not the image ID", old)
+	}
+	if u := list.of(t, "moved"); u == nil || u.State != "up_to_date" || u.Repository != "team/other" || u.Tag != "2" {
+		t.Errorf("moved = %+v, want up_to_date for team/other:2, named by the inspect", u)
+	}
+	if u := list.of(t, "built"); u == nil || u.State != "not_from_registry" {
+		t.Errorf("built = %+v, want not_from_registry", u)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, ids := range inspected {
+		if len(ids) != 1 || ids[0] != "id-moved" {
+			t.Errorf("inspected %v, want only the container whose list row shows an image ID", ids)
+		}
+	}
+
+	// The detail carries the same object.
+	var detail struct {
+		Update *updateInfo `json:"update"`
+	}
+	d := f.get(t, e, "containers/id-old")
+	if d.code != http.StatusOK {
+		t.Fatalf("detail: %d %s", d.code, d.body)
+	}
+	detail = decode[struct {
+		Update *updateInfo `json:"update"`
+	}](t, d)
+	if detail.Update == nil || detail.Update.State != "update_available" || detail.Update.RemoteDigest != updDigest('b') {
+		t.Errorf("detail update = %+v, want update_available", detail.Update)
+	}
+}
+
+func TestSummaryCountsImageUpdates(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := hostWithContainers(t, heads, nil,
+		[]dockertest.FakeContainer{
+			appContainer("old-1", "registry.test/team/app:1", updImage('1'), nil),
+			appContainer("old-2", "registry.test/team/app:1", updImage('1'), nil),
+			// A task container of a swarm service is its service's to count.
+			appContainer("task", "registry.test/team/app:1", updImage('1'), map[string]string{"com.docker.swarm.service.id": "svc-1"}),
+			appContainer("current", "registry.test/team/app:1", updImage('2'), nil),
+		},
+		[]dockertest.FakeImage{
+			{ID: updImage('1'), RepoDigests: []string{"registry.test/team/app@" + updDigest('a')}},
+			{ID: updImage('2'), RepoDigests: []string{"registry.test/team/app@" + updDigest('b')}},
+		})
+
+	type summary struct {
+		ImageUpdates *int `json:"imageUpdates"`
+	}
+	if got := decode[summary](t, f.get(t, e, "summary")); got.ImageUpdates == nil || *got.ImageUpdates != 0 {
+		t.Errorf("before any check imageUpdates = %v, want 0 (known, and nothing is known to wait)", got.ImageUpdates)
+	}
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	got := decode[summary](t, f.get(t, e, "summary"))
+	if got.ImageUpdates == nil || *got.ImageUpdates != 2 {
+		t.Errorf("imageUpdates = %v, want 2: the two plain containers behind, not the task and not the current one", got.ImageUpdates)
+	}
+}
+
+func TestSummaryImageUpdatesAbsentWithoutUpdateChecks(t *testing.T) {
+	t.Parallel()
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "host-1", Version: "29.1.0"})
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	rec := f.get(t, e, "summary")
+	if strings.Contains(string(rec.body), "imageUpdates") {
+		t.Errorf("summary = %s, want no imageUpdates when update checks are not wired", rec.body)
+	}
+}
+
+func TestContainersUpdatesFilter(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := hostWithContainers(t, heads, nil,
+		[]dockertest.FakeContainer{
+			appContainer("old", "registry.test/team/app:1", updImage('1'), nil),
+			appContainer("task", "registry.test/team/app:1", updImage('1'), map[string]string{"com.docker.swarm.service.id": "svc-1"}),
+			appContainer("current", "registry.test/team/app:1", updImage('2'), nil),
+			appContainer("built", "local/build:1", updImage('3'), nil),
+		},
+		[]dockertest.FakeImage{
+			{ID: updImage('1'), RepoDigests: []string{"registry.test/team/app@" + updDigest('a')}},
+			{ID: updImage('2'), RepoDigests: []string{"registry.test/team/app@" + updDigest('b')}},
+			{ID: updImage('3')},
+		})
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+
+	all := decode[containerRows](t, f.get(t, e, "containers"))
+	if all.Total != 4 {
+		t.Fatalf("unfiltered total = %d, want 4", all.Total)
+	}
+	only := decode[containerRows](t, f.get(t, e, "containers?updates=available"))
+	if only.Total != 2 || len(only.Items) != 2 || !only.has("old") || !only.has("task") {
+		t.Errorf("updates=available = %+v, want the two containers behind and total 2", only)
+	}
+	if u := only.of(t, "task"); u == nil || !u.Task {
+		t.Errorf("task = %+v, want task true", u)
+	}
+	// It combines with the search, and the search narrows it further.
+	one := decode[containerRows](t, f.get(t, e, "containers?updates=available&q=old"))
+	if one.Total != 1 || !one.has("old") {
+		t.Errorf("updates=available&q=old = %+v, want only old", one)
+	}
+	if rec := f.get(t, e, "containers?updates=nonsense"); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("updates=nonsense = %d, want 422", rec.code)
 	}
 }

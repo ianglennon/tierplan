@@ -30,7 +30,10 @@ type Service struct {
 	Checker    *Checker
 	// Runs remembers the platforms of the indexes workloads run. Nil means each is read when needed.
 	Runs *RunIndex
-	Now  func() time.Time
+	// ImageTexts remembers the image a container was created with when its list row shows an image ID.
+	// Nil means such a container reads not_checked.
+	ImageTexts *ImageTextCache
+	Now        func() time.Time
 	// StaleAfter is how old a successful check may be before an unchanged digest reads check_stale, per
 	// environment. Nil means 24 hours.
 	StaleAfter func(envID string) time.Duration
@@ -63,7 +66,11 @@ func (s *Service) staleAfter(envID string) time.Duration {
 // platforms of the index a service runs come from memory, else from one read of that index by digest
 // from its registry, at most one for each distinct running digest. Nothing else is sent to a registry.
 func (s *Service) ServiceVerdicts(ctx context.Context, envID string, rows []dockerx.ServiceRow) (map[string]Verdict, error) {
-	ws := s.withPlatforms(ctx, envID, ServiceWorkloads(rows))
+	return s.judge(ctx, envID, s.withPlatforms(ctx, envID, ServiceWorkloads(rows)))
+}
+
+// judge matches the stored checks to the workloads and judges each, keyed by workload ID.
+func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[string]Verdict, error) {
 	creds := map[hostRepo]string{}
 	keyOf := make([]Key, len(ws))
 	var keys []Key
@@ -103,6 +110,79 @@ func (s *Service) ServiceVerdicts(ctx context.Context, envID string, rows []dock
 		out[w.ID] = Judge(in)
 	}
 	return out, nil
+}
+
+// ContainerJudgement is what is known about the image of each container of an environment: its verdict
+// and the workload the verdict is for, keyed by container ID.
+type ContainerJudgement struct {
+	Verdicts  map[string]Verdict
+	Workloads map[string]Workload
+}
+
+// ContainerVerdicts judges the image of every container of agg (not the TierPlan agent's), by the check
+// stored for the tag it was created from, under the credential the environment resolves for it. It reads
+// the digest a container runs from the repo digests of its image on its own node, never from the image
+// ID (D-02, RESEARCH Pitfall 1). A container whose list row shows an image ID is named by a bounded
+// inspect, or reads not_checked (RESEARCH Pitfall 7). Nothing is sent to a registry but, as for a
+// service, the read of an index a workload still runs.
+func (s *Service) ContainerVerdicts(ctx context.Context, envID string, agg envs.Aggregate) (map[string]Verdict, error) {
+	j, err := s.ContainerJudgements(ctx, envID, agg)
+	return j.Verdicts, err
+}
+
+// ContainerJudgements is ContainerVerdicts with the workload each verdict is for, which names the image
+// that is followed.
+func (s *Service) ContainerJudgements(ctx context.Context, envID string, agg envs.Aggregate) (ContainerJudgement, error) {
+	ws := ContainerWorkloads(agg, s.textFunc(ctx, envID, agg))
+	verdicts, err := s.judge(ctx, envID, ws)
+	if err != nil {
+		return ContainerJudgement{}, err
+	}
+	byID := make(map[string]Workload, len(ws))
+	for _, w := range ws {
+		w.EnvID = envID
+		byID[w.ID] = w
+	}
+	return ContainerJudgement{Verdicts: verdicts, Workloads: byID}, nil
+}
+
+// Count is how many things in the environment have an update available: its swarm services, and its
+// containers that are not task containers (a task's update is its service's). It counts verdicts, so a
+// rebuild of a platform nobody runs, a skipped version or an ignored image is not counted (IMG-05).
+func (s *Service) Count(ctx context.Context, envID string) (int, error) {
+	if s.Aggregator == nil {
+		return 0, errors.New("updates: no aggregator to read the containers with")
+	}
+	agg, _, err := s.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	if agg.Counts.Services != nil && s.Clusters != nil {
+		st, err := s.Clusters.State(ctx, envID)
+		if err != nil && st.FetchedAt.IsZero() {
+			return 0, err
+		}
+		verdicts, err := s.ServiceVerdicts(ctx, envID, st.Read.Services)
+		if err != nil {
+			return 0, err
+		}
+		for _, v := range verdicts {
+			if v.State == StateUpdateAvailable {
+				n++
+			}
+		}
+	}
+	j, err := s.ContainerJudgements(ctx, envID, agg)
+	if err != nil {
+		return 0, err
+	}
+	for id, v := range j.Verdicts {
+		if v.State == StateUpdateAvailable && !j.Workloads[id].Task {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // withPlatforms fills the platforms of the workloads from the nodes their tasks run on. An environment
@@ -145,14 +225,30 @@ func (s *Service) runPlatforms(ctx context.Context, envID string, w Workload, ch
 	return r.platforms, r.gone
 }
 
-// CheckNow asks the registries about the images of the environment's services now and stores the
-// answers.
+// CheckNow asks the registries about the images of the environment's services and containers now and
+// stores the answers. A container and a service of one image are one request.
 func (s *Service) CheckNow(ctx context.Context, envID string) (CheckResult, error) {
-	st, err := s.Clusters.State(ctx, envID)
+	var ws []Workload
+	swarm, err := s.Clusters.IsSwarm(ctx, envID)
 	if err != nil {
 		return CheckResult{}, err
 	}
-	ws := ServiceWorkloads(st.Read.Services)
+	if swarm {
+		st, err := s.Clusters.State(ctx, envID)
+		if err != nil {
+			return CheckResult{}, err
+		}
+		ws = ServiceWorkloads(st.Read.Services)
+	}
+	if s.Aggregator != nil {
+		agg, _, err := s.Aggregator.Snapshot(ctx, envID)
+		switch {
+		case err == nil:
+			ws = append(ws, ContainerWorkloads(agg, s.textFunc(ctx, envID, agg))...)
+		case !swarm:
+			return CheckResult{}, err
+		}
+	}
 	for i := range ws {
 		ws[i].EnvID = envID
 	}

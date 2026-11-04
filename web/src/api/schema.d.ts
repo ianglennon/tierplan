@@ -789,7 +789,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -3439,7 +3439,7 @@ export interface paths {
         put?: never;
         /**
          * Check the environment's images for updates now
-         * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services have an update available (judged for the platforms each service runs on) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. 409 not_a_swarm for a standalone host. The services list carries the outcome for each service. Needs updates.check (Operator) on the environment.
+         * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.
          */
         post: operations["checkEnvironmentUpdates"];
         delete?: never;
@@ -6167,6 +6167,8 @@ export interface components {
             stopTimeout?: number;
             /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
             tierplanStackId: string;
+            /** @description The image update state of the container, as in the containers list. Absent when update checks are not wired or the container is not in the last read of its environment */
+            update?: components["schemas"]["UpdateInfoBody"];
             user?: string;
             workingDir?: string;
         };
@@ -6224,6 +6226,8 @@ export interface components {
             status: string;
             /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
             tierplanStackId: string;
+            /** @description The image update state of the container, judged from the digest of the image it runs on its own node and the stored check of the tag it was created from. Absent when update checks are not wired */
+            update?: components["schemas"]["UpdateInfoBody"];
         };
         ContainerListBody: {
             /** @description At most 500 rows */
@@ -7112,6 +7116,11 @@ export interface components {
              * @description When the counts were read from Docker; they are cached for a few seconds
              */
             fetchedAt: string;
+            /**
+             * Format: int64
+             * @description How many swarm services and containers have an update available (a task container counts as its service; skipped and ignored updates are not counted), from the stored image checks. Only for a caller who may read containers, and services on a swarm manager. Absent when it could not be read, so the dashboard says so instead of showing 0
+             */
+            imageUpdates?: number;
             /** @description True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24) */
             isWorker: boolean;
             /** @description Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster */
@@ -13949,6 +13958,8 @@ export interface components {
             successAt: string;
             /** @description The tag that is followed; empty for an image named by digest alone */
             tag: string;
+            /** @description True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own */
+            task: boolean;
         };
         UpdateMyProfileInputBody: {
             /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
@@ -15839,6 +15850,8 @@ export interface operations {
                 q?: string;
                 /** @description Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status */
                 status?: string;
+                /** @description available: only containers whose image has an update available. Applied before the 500-row cap */
+                updates?: "" | "available";
             };
             header?: never;
             path: {

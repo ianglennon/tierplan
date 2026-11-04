@@ -12,6 +12,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/updates"
@@ -56,6 +57,7 @@ type UpdateInfoBody struct {
 	CheckedAt        string   `json:"checkedAt" format:"date-time" doc:"When the tag was last checked, whatever came of it; empty when it never was"`
 	SuccessAt        string   `json:"successAt" format:"date-time" doc:"When a check of the tag last succeeded; empty when none did"`
 	Note             string   `json:"note" enum:",running_index_gone,may_be_stale" doc:"A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states"`
+	Task             bool     `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
 }
 
 // updateInfoOf turns a verdict into its answer. w is the workload the verdict is for, which names the
@@ -66,7 +68,7 @@ func updateInfoOf(v updates.Verdict, w updates.Workload) *UpdateInfoBody {
 		RunningDigest: v.RunningDigest, RemoteDigest: v.RemoteDigest,
 		ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
 		CheckedAt:        rfc3339(v.CheckedAt), SuccessAt: rfc3339(v.SuccessAt),
-		Note: v.Note,
+		Note: v.Note, Task: w.Task,
 	}
 	if w.Checkable() {
 		b.Registry, b.Repository, b.Tag = w.Ref.Domain, w.Ref.Path, w.Ref.Tag
@@ -93,9 +95,9 @@ func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
 		OperationID: "checkEnvironmentUpdates", Method: http.MethodPost, Path: "/api/env/{envId}/updates/check",
 		Summary: "Check the environment's images for updates now",
 		Description: "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. " +
-			"Answers within 60 seconds with how many images were asked about, how many of the environment's services have an update available (judged for the platforms each service runs on) and how many images could not be checked; " +
-			"a check that takes longer is 504 check_timed_out, and what it had learned stays stored. 409 not_a_swarm for a standalone host. " +
-			"The services list carries the outcome for each service. Needs updates.check (Operator) on the environment.",
+			"Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; " +
+			"a check that takes longer is 504 check_timed_out, and what it had learned stays stored. " +
+			"The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermUpdatesCheck, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *EnvironmentPathInput) (*CheckUpdatesOutput, error) {
@@ -117,13 +119,6 @@ func checkEnvironmentUpdates(ctx context.Context, d UpdatesDeps, envID string) (
 	if u == nil || u.Clusters == nil || u.Checker == nil {
 		return CheckUpdatesBody{}, httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available on this server.")
 	}
-	swarm, err := u.Clusters.IsSwarm(ctx, envID)
-	if err != nil {
-		return CheckUpdatesBody{}, snapshotProblem(d.log(), envID, err)
-	}
-	if !swarm {
-		return CheckUpdatesBody{}, httpx.Problem(http.StatusConflict, problemNotASwarm, "This environment is a standalone Docker host, not a swarm.")
-	}
 	cctx, cancel := context.WithTimeout(ctx, checkNowTimeout)
 	defer cancel()
 	res, err := u.CheckNow(cctx, envID)
@@ -136,29 +131,40 @@ func checkEnvironmentUpdates(ctx context.Context, d UpdatesDeps, envID string) (
 	default:
 		return CheckUpdatesBody{}, snapshotProblem(d.log(), envID, err)
 	}
-	// CheckResult.Updates counts services whose running digest differs from the tag's, which a rebuild of a
+	// CheckResult.Updates counts workloads whose running digest differs from the tag's, which a rebuild of a
 	// platform nobody runs also does. The count shown is the one the verdicts give.
 	return CheckUpdatesBody{Checked: res.Checked, Updates: countUpdates(cctx, d, envID), Failed: res.Failed}, nil
 }
 
-// countUpdates counts the services of an environment whose verdict is update_available. A verdict that
-// cannot be read is logged and counts none: the list says what each service is.
+// countUpdates counts the services and containers of an environment whose verdict is update_available. A
+// verdict that cannot be read is logged and counts none: the lists say what each one is.
 func countUpdates(ctx context.Context, d UpdatesDeps, envID string) int {
-	st, err := d.Updates.Clusters.State(ctx, envID)
-	if err != nil && st.FetchedAt.IsZero() {
-		d.log().Warn("could not read the services to count their updates", "environment", envID, "error", err)
-		return 0
-	}
-	verdicts, err := d.Updates.ServiceVerdicts(ctx, envID, st.Read.Services)
+	n, err := d.Updates.Count(ctx, envID)
 	if err != nil {
 		d.log().Warn("could not judge the images to count their updates", "environment", envID, "error", err)
 		return 0
 	}
-	n := 0
-	for _, v := range verdicts {
-		if v.State == updates.StateUpdateAvailable {
-			n++
-		}
-	}
 	return n
+}
+
+// containerUpdates judges the images of the containers of agg, keyed by container ID, with the workload each
+// verdict is for. A failure to read the verdicts is logged and answers none: a list never fails for it.
+func containerUpdates(ctx context.Context, u *updates.Service, log *slog.Logger, envID string, agg envs.Aggregate) updates.ContainerJudgement {
+	if u == nil {
+		return updates.ContainerJudgement{}
+	}
+	j, err := u.ContainerJudgements(ctx, envID, agg)
+	if err != nil {
+		log.Warn("could not judge the images of the containers", "environment", envID, "error", err)
+		return updates.ContainerJudgement{}
+	}
+	return j
+}
+
+// updateOfContainer is the update object of one container, nil when it has none.
+func updateOfContainer(j updates.ContainerJudgement, id string) *UpdateInfoBody {
+	if v, ok := j.Verdicts[id]; ok {
+		return updateInfoOf(v, j.Workloads[id])
+	}
+	return nil
 }

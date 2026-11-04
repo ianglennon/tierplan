@@ -1491,6 +1491,7 @@ const update = (extra: Partial<components["schemas"]["UpdateInfoBody"]> = {}) =>
   checkedAt: "",
   successAt: "",
   note: "" as const,
+  task: false,
   ...extra,
 });
 

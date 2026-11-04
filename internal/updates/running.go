@@ -5,6 +5,7 @@ package updates
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
@@ -35,14 +36,33 @@ type Workload struct {
 	// judgement fills them in.
 	Platforms, NodeIDs []string
 	Labels             map[string]string
+	// Task is true for a task container of a swarm service: its update is the service's.
+	Task bool
+	// ImageID is the ID of the image a container runs and RepoDigests the repo@digest names that image has
+	// on the node, empty for a service.
+	ImageID     string
+	RepoDigests []string
+	// LocalStore says, for a container, what its image tells about where it came from: LocalClassic when
+	// the image has no repo digest at all (a local build on the classic image store), LocalContainerd when
+	// its only digest is its own ID (a pulled image, or a local build, on the containerd store, which the
+	// image alone cannot tell apart), empty otherwise.
+	LocalStore string
 }
+
+// The LocalStore values.
+const (
+	LocalClassic    = "classic"
+	LocalContainerd = "containerd"
+)
 
 // PinnedInFile reports whether the workload's reference is a digest with no tag, which can never
 // update because there is nothing to follow.
 func (w Workload) PinnedInFile() bool { return w.Ref.Tag == "" && w.Ref.Digest != "" }
 
-// Checkable reports whether the registry can be asked about the workload: it has a tag to follow.
-func (w Workload) Checkable() bool { return w.Ref.Tag != "" }
+// Checkable reports whether the registry can be asked about the workload: it has a tag to follow, and
+// it is not an image the classic image store holds with no repo digest, which was built here and never
+// pushed or pulled (D-03).
+func (w Workload) Checkable() bool { return w.Ref.Tag != "" && w.LocalStore != LocalClassic }
 
 // ServiceWorkloads turns the services of a swarm read into workloads. The TierPlan agent service and
 // the services of the job modes are not workloads: the agent updates through its own mechanism, and a
@@ -142,4 +162,152 @@ func WithPlatforms(ws []Workload, agg envs.Aggregate) []Workload {
 // taskIsLive reports whether a container in this state is a task that runs or is starting.
 func taskIsLive(state string) bool {
 	return state == "running" || state == "restarting" || state == "created"
+}
+
+// labelAgent marks a TierPlan agent's container, which updates through its own mechanism (RESEARCH
+// Pitfall 14) and is not a workload.
+const labelAgent = "tierplan.agent"
+
+// isImageID reports whether s is an image ID, which Docker shows in a container's list row, instead of
+// the name the container was created with, once the tag has moved to another image (RESEARCH Pitfall 7).
+// The name is then only in an inspect.
+func isImageID(s string) bool {
+	if rest, ok := strings.CutPrefix(s, "sha256:"); ok {
+		return rest != ""
+	}
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// needsImageText reports whether the reference of c is only to be had from an inspect: no label says
+// what was written, and the list shows an image ID.
+func needsImageText(c envs.ContainerRow) bool {
+	return c.Labels[stacks.LabelStackImage] == "" && isImageID(c.Image) && !isAgent(c)
+}
+
+func isAgent(c envs.ContainerRow) bool { return c.Labels[labelAgent] == "true" }
+
+// ImageTextWanted lists the IDs of the containers of agg whose reference is only to be had from an
+// inspect, in the order of the aggregate.
+func ImageTextWanted(agg envs.Aggregate) []string {
+	var ids []string
+	for _, c := range agg.Containers {
+		if needsImageText(c) {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids
+}
+
+// ContainerWorkloads turns the containers of an aggregate into workloads, each with its own node's view
+// of its image (D-02, RESEARCH Pitfall 1). The TierPlan agent's containers are not workloads.
+//
+// The reference of a container is the label tierplan.stack.image when a stack wrote one, else the image
+// text of the list row, else, when that is an image ID, text(container ID) from an inspect. A container
+// whose reference is not known is still a workload, with no reference, and reads not_checked.
+//
+// The digest a container runs is the digest of the repo digest its image has, on its own node, for the
+// repository the reference names. It is never the image ID: on the classic store that is a config digest
+// no registry knows. A reference written with a digest and a tag keeps the digest it names when the image
+// has no repo digest for it (a swarm task container is created that way).
+func ContainerWorkloads(agg envs.Aggregate, text func(containerID string) (string, bool)) []Workload {
+	arch := make(map[string]string, len(agg.Nodes))
+	for _, n := range agg.Nodes {
+		arch[n.ID] = n.Arch
+	}
+	type nodeImage struct{ node, id string }
+	images := make(map[nodeImage]envs.ImageRow, len(agg.Images))
+	for _, im := range agg.Images {
+		images[nodeImage{im.NodeID, im.ID}] = im
+	}
+	var out []Workload
+	for _, c := range agg.Containers {
+		if isAgent(c) {
+			continue
+		}
+		w := Workload{
+			Kind: "container", ID: c.ID, Name: c.Name, Labels: c.Labels, ImageID: c.ImageID,
+			NodeIDs: []string{c.NodeID}, Task: c.Labels[labelSwarmServiceID] != "",
+			Stack: cmpOr(c.Labels[stacks.LabelSwarmNamespace], c.Labels[stacks.LabelComposeProject]),
+		}
+		if a := arch[c.NodeID]; a != "" {
+			w.Platforms = []string{"linux/" + a}
+		}
+		im, haveImage := images[nodeImage{c.NodeID, c.ImageID}]
+		if haveImage {
+			w.RepoDigests = im.RepoDigests
+			w.LocalStore = localStoreOf(im.ImageRow)
+		}
+		written := c.Labels[stacks.LabelStackImage]
+		if written == "" {
+			written = c.Image
+			if isImageID(written) {
+				written = ""
+				if text != nil {
+					if t, ok := text(c.ID); ok {
+						written = t
+					}
+				}
+			}
+		}
+		spec, err := registry.ParseRef(written)
+		if written == "" || err != nil {
+			out = append(out, w)
+			continue
+		}
+		ref := spec
+		if ref.Tag != "" && ref.Digest != "" {
+			// The digest is what the container runs, not what to ask about: ask for the tag.
+			if bare, err := registry.ParseRef(ref.Repo() + ":" + ref.Tag); err == nil {
+				ref = bare
+			}
+		}
+		w.Written, w.Ref = written, ref
+		w.RunningDigest = runningDigest(im.RepoDigests, spec)
+		out = append(out, w)
+	}
+	return out
+}
+
+// cmpOr is the first of a and b that is not empty.
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// localStoreOf says whether an image is one that was never pulled: the classic store lists no repo digest
+// for it, the containerd store lists its own ID as its only digest. The second is also what a pulled
+// multi-platform image looks like, so it is only a hint, which a failed anonymous check turns into an
+// answer (D-20).
+func localStoreOf(im dockerx.ImageRow) string {
+	if len(im.RepoDigests) == 0 {
+		return LocalClassic
+	}
+	for _, d := range im.RepoDigests {
+		if !strings.HasSuffix(d, "@"+im.ID) {
+			return ""
+		}
+	}
+	return LocalContainerd
+}
+
+// runningDigest is the digest of the repo digest, among those an image has, that is for the repository
+// spec names; failing that, the digest spec itself names; failing that, none.
+func runningDigest(repoDigests []string, spec registry.Ref) string {
+	for _, d := range repoDigests {
+		r, err := registry.ParseRef(d)
+		if err == nil && r.Digest != "" && r.Repo() == spec.Repo() {
+			return r.Digest
+		}
+	}
+	return spec.Digest
 }

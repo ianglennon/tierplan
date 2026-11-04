@@ -102,9 +102,14 @@ type Verdict struct {
 // applies answers:
 //
 //  1. The reference as the user wrote it has a digest and no tag: pinned_in_file; it can never update.
+//     A container image the classic store holds with no repo digest is a local build: not_from_registry,
+//     with no check (D-03).
 //  2. No check is stored: not_checked.
 //  3. The last check failed (it is newer than the last success): check_failed with its reason. It is
-//     never up to date, whatever an earlier check found.
+//     never up to date, whatever an earlier check found. The one exception is a container image on the
+//     containerd store whose only digest is its own ID, anonymously asked and answered not_found or auth:
+//     that is what a build that was never pushed does, so it is not_from_registry (D-20). A check made
+//     with a credential, or failed for any other reason, is never read that way.
 //  4. The workload runs no digest the registry could be compared with: not_from_registry.
 //  5. The tag points at another digest than the one the workload runs: update_available, unless both
 //     are multi-platform indexes and none of the platforms the workload runs on changed (D-02), which
@@ -119,11 +124,19 @@ func Judge(in JudgeInput) Verdict {
 		v.State = StatePinned
 		return v
 	}
+	if w.LocalStore == LocalClassic {
+		v.State = StateNotFromRegistry
+		return v
+	}
 	if c == nil {
 		return v
 	}
 	v.CheckedAt, v.SuccessAt = c.CheckedAt, c.SuccessAt
 	if c.Error != "" && c.CheckedAt.After(c.SuccessAt) {
+		if w.LocalStore == LocalContainerd && c.CredID == "" && (c.Error == ReasonNotFound || c.Error == ReasonAuth) {
+			v.State = StateNotFromRegistry
+			return v
+		}
 		v.State, v.Reason = StateCheckFailed, c.Error
 		return v
 	}

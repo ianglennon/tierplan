@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/redact"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/updates"
 )
 
 // Result values and codes of one target of a container action. A code is a stable
@@ -102,6 +104,9 @@ type ContainersDeps struct {
 	Clusters *envs.Clusters
 	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
 	Store *store.Store
+	// Updates judges the image of a container. Nil means update checks are not wired and the detail
+	// carries no update object.
+	Updates *updates.Service
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -264,6 +269,8 @@ type ContainerDetailBody struct {
 
 	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
 	Muted       bool                      `json:"muted" doc:"True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name"`
+
+	Update *UpdateInfoBody `json:"update,omitempty" doc:"The image update state of the container, as in the containers list. Absent when update checks are not wired or the container is not in the last read of its environment"`
 }
 
 // ContainerDetailOutput wraps ContainerDetailBody for huma.
@@ -335,6 +342,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 				body.RestartLoop = containerRestartLoopBody(l)
 			}
 			body.Muted = muted[key]
+			body.Update = detailUpdate(ctx, d, env.ID, detail.ID)
 			return &ContainerDetailOutput{CacheControl: "no-store", Body: body}, nil
 		})
 
@@ -993,4 +1001,20 @@ func clipDetail(s string) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:maxActionDetail], "")
+}
+
+// detailUpdate is the update object of one container, judged from the aggregate of its environment so that
+// its image, its node and its labels are read as the list reads them; only that container is judged, so the
+// detail of one container never inspects the others. It is nil when update checks are not wired, the
+// environment cannot be read, or the container is not in the read.
+func detailUpdate(ctx context.Context, d ContainersDeps, envID, containerID string) *UpdateInfoBody {
+	if d.Updates == nil || d.Aggregator == nil {
+		return nil
+	}
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return nil
+	}
+	agg.Containers = slices.DeleteFunc(slices.Clone(agg.Containers), func(c envs.ContainerRow) bool { return c.ID != containerID })
+	return updateOfContainer(containerUpdates(ctx, d.Updates, d.Log, envID, agg), containerID)
 }

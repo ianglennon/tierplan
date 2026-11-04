@@ -139,6 +139,9 @@ type authFixture struct {
 	// are built with no update checks. updateStore replaces the SQLite store the checks are kept in.
 	updateHeads updates.Heads
 	updateStore updates.Store
+	// updateInspect replaces how the image text of a container whose list row shows an image ID is read
+	// (plan 12-06).
+	updateInspect func(ctx context.Context, envID string, ids []string) (map[string]string, error)
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18); agg is the aggregator over it that the routes read
 	// through (plan 02-11).
@@ -394,8 +397,24 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			},
 		})
 	}
+	var updateSvc *updates.Service
+	if f.updateHeads != nil {
+		var store updates.Store = updates.SQLStore{Q: f.st.Q, W: f.st.Write}
+		if f.updateStore != nil {
+			store = f.updateStore
+		}
+		runs := updates.NewRunIndex()
+		updateSvc = &updates.Service{
+			Store: store, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Clusters: f.clusters, Aggregator: f.agg, Runs: runs,
+			Checker: &updates.Checker{Heads: f.updateHeads, Store: store, Runs: runs, Now: f.clk.now, Log: log}, Now: f.clk.now,
+			ImageTexts: &updates.ImageTextCache{Inspect: updates.InspectImageTexts(f.agg), Now: f.clk.now},
+		}
+		if f.updateInspect != nil {
+			updateSvc.ImageTexts.Inspect = f.updateInspect
+		}
+	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Log: log})
+		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Updates: updateSvc, Log: log})
 		// The address reader of a real server. A fixture of one standalone engine has no cluster
 		// reader; the reader needs one to tell a swarm from a host, so it gets a bare one.
 		addrClusters := f.clusters
@@ -413,7 +432,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			routeSrc = src
 		}
 		hostRoutes := envs.NewHostRoutes(f.envSvc, routeSrc, envs.HostRoutesOptions{Now: f.clk.now, LocalRouteFile: f.hostRouteFile, Log: log})
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, AddressSpaces: addressSpaces, Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, AddressSpaces: addressSpaces, Updates: updateSvc, Log: log})
 		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
 			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
 		})
@@ -456,18 +475,6 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterJanitor(r, janitorDeps)
 		api.RegisterJanitorTaskHistory(r, janitorDeps)
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
-		var updateSvc *updates.Service
-		if f.updateHeads != nil {
-			var store updates.Store = updates.SQLStore{Q: f.st.Q, W: f.st.Write}
-			if f.updateStore != nil {
-				store = f.updateStore
-			}
-			runs := updates.NewRunIndex()
-			updateSvc = &updates.Service{
-				Store: store, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Clusters: f.clusters, Aggregator: f.agg, Runs: runs,
-				Checker: &updates.Checker{Heads: f.updateHeads, Store: store, Runs: runs, Now: f.clk.now, Log: log}, Now: f.clk.now,
-			}
-		}
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Updates: updateSvc, Log: log,
