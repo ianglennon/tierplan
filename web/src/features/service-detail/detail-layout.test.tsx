@@ -123,6 +123,36 @@ describe("the page frame", () => {
     expect(document.title).toBe("api · Lab");
   });
 
+  it("shows the service's update badge in the header beside its name, and none when the server sent no update object", async () => {
+    answerWith(
+      serviceDetail({
+        update: {
+          state: "update_available",
+          reason: "",
+          registry: "registry.example.com",
+          repository: "shop/api",
+          tag: "1.4",
+          runningDigest: DIGEST,
+          remoteDigest: `sha256:${"b".repeat(64)}`,
+          changedPlatforms: [],
+          checkedAt: new Date().toISOString(),
+          successAt: "",
+          note: "",
+          task: false,
+        },
+      }),
+    );
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).getByText("Update available")).toBeTruthy();
+  });
+
+  it("shows no update badge in the header without an update object", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).queryByText(/Update available|Up to date|Check failed/)).toBeNull();
+  });
+
   it("shows the Restart loop badge in the header beside the state, and the alert under it, only for a service in a loop", async () => {
     answerWith(
       serviceDetail({

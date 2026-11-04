@@ -688,3 +688,25 @@ describe("GlobalStackList: Managed and Unmanaged", () => {
     ).toBeTruthy();
   });
 });
+
+describe("GlobalStackList: the Updates available filter (12-10)", () => {
+  it("puts updates=available in the search and asks the server for it", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Updates available" }));
+    expect(onChange).toHaveBeenLastCalledWith({ updates: "available" });
+    await waitFor(() =>
+      expect(requests.some((r) => searchOf(r).get("updates") === "available")).toBe(true),
+    );
+  });
+
+  it("counts as a filter: Clear filters shows and resets it", async () => {
+    const { onChange } = mount({ updates: "available" });
+    await screen.findByRole("link", { name: "alpha" });
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ updates: undefined }));
+  });
+});

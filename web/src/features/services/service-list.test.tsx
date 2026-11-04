@@ -1578,3 +1578,45 @@ describe("the services list: image updates (12-04)", () => {
     expect(await screen.findByText("Couldn't check for updates. Try again.")).toBeTruthy();
   });
 });
+
+describe("service list: the Updates available filter (12-10)", () => {
+  it("sets updates=available in the search when pressed, and takes it out when pressed again", async () => {
+    mount();
+    await screen.findByText("web");
+    const toggle = screen.getByRole("button", { name: "Updates available" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(changes).toEqual([{ updates: "available" }]);
+    cleanup();
+    changes = [];
+    mount({ updates: "available" });
+    await screen.findByText("web");
+    const pressed = screen.getByRole("button", { name: "Updates available" });
+    expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(pressed);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toHaveProperty("updates", undefined);
+  });
+
+  it("asks the server for updates=available, with the chips and the search, before its cap", async () => {
+    mount({ updates: "available", status: "degraded" });
+    await screen.findByText("web");
+    await waitFor(() => expect(listRequests()).toContain("?status=degraded&updates=available"));
+  });
+
+  it("counts as a filter: Clear filters shows, and resets it", async () => {
+    mount({ updates: "available" });
+    await screen.findByText("web");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toHaveProperty("updates", undefined);
+  });
+
+  it("says no services match these filters when the toggle alone leaves nothing", async () => {
+    answerList = () => Response.json(listBody([], { unfilteredTotal: 3, total: 0 }));
+    mount({ updates: "available" });
+    expect(
+      await screen.findByRole("heading", { name: "No services match these filters." }),
+    ).toBeTruthy();
+  });
+});

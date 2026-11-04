@@ -26,6 +26,8 @@ export function servicesKey(envId: string) {
 export interface ServiceFilters {
   q?: string;
   status?: string;
+  // available: only services whose image has an update available.
+  updates?: "available";
 }
 
 // ServicesLoadError is a services list the server refused or could not answer. The status and
@@ -60,6 +62,7 @@ export function servicesQuery(envId: string, filters: ServiceFilters = {}) {
   const set: ServiceFilters = {};
   if (filters.q) set.q = filters.q;
   if (filters.status) set.status = filters.status;
+  if (filters.updates) set.updates = filters.updates;
   const filtered = Object.keys(set).length > 0;
   return queryOptions({
     queryKey: filtered ? ([...servicesKey(envId), set] as const) : servicesKey(envId),

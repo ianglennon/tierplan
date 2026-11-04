@@ -128,6 +128,8 @@ export interface StackFilters {
   kind?: "managed" | "unmanaged";
   sort?: "name" | "state" | "lastDeployed";
   dir?: "asc" | "desc";
+  // available: only stacks with a service whose image has an update available.
+  updates?: "available";
 }
 
 // The filters that are set, so an unfiltered read keeps the bare key and a filtered one extends it.

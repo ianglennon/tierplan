@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { MAX_QUERY, type SortDir } from "@/features/containers/list-search";
+import { MAX_QUERY, type SortDir, UPDATES_VALUES } from "@/features/containers/list-search";
 import { z } from "@/lib/zod-config";
 
 // The status chips, in the order they show and in the order a comma list is written, so the
@@ -48,6 +48,8 @@ export const serviceSearchSchema = z.object({
   group: z.enum(SERVICE_GROUP_VALUES).optional().catch(undefined),
   sort: z.enum(SERVICE_SORT_VALUES).optional().catch(undefined),
   dir: z.enum(["asc", "desc"]).optional().catch(undefined),
+  // The Updates available toggle: updates=available, or nothing. Anything else is dropped (T-12-24).
+  updates: z.enum(UPDATES_VALUES).optional().catch(undefined),
   // The live-stats switch: stats=1 adds the CPU, Memory and Network columns.
   stats: z.literal(1).optional().catch(undefined),
 });

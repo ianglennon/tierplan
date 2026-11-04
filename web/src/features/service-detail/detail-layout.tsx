@@ -32,6 +32,7 @@ import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RolloutProgress } from "@/features/services/rollout-progress";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
 import { DigestChip } from "@/features/stacks/digest-chip";
+import { UpdateBadge } from "@/features/updates/update-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -123,6 +124,7 @@ function Header({ envId, data }: { envId: string; data: ServiceDetail }) {
               updateState: data.updateStatus,
             }}
           />
+          {data.update ? <UpdateBadge info={data.update} /> : null}
           <Badge variant="outline" className="shrink-0">
             {t(modeKey)}
           </Badge>

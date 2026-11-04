@@ -10,7 +10,12 @@ import { setCsrfToken } from "@/api/client";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import { STACK_GIT_POLL_MS } from "@/api/stack-git";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { StackListSearch, StackListSearchPatch } from "@/features/stacks/list-search";
+import {
+  globalStackSearchSchema,
+  type StackListSearch,
+  type StackListSearchPatch,
+  stackListSearchSchema,
+} from "@/features/stacks/list-search";
 import { StackList } from "@/features/stacks/stack-list";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -1417,5 +1422,44 @@ describe("StackList git stacks", () => {
     await waitFor(() =>
       expect((requests.at(-1) as URL).searchParams.get("status")).toBe("behind,sync-error"),
     );
+  });
+});
+
+describe("StackList: the Updates available filter (12-10)", () => {
+  it("puts updates=available in the search when pressed, asks the server for it, and takes it out again", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    const toggle = screen.getByRole("button", { name: "Updates available" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenLastCalledWith({ updates: "available" });
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get("updates")).toBe("available"));
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Updates available" }));
+    expect(onChange).toHaveBeenLastCalledWith({ updates: undefined });
+    await waitFor(() => expect(requests.at(-1)?.searchParams.has("updates")).toBe(false));
+  });
+
+  it("starts pressed when the URL says updates=available, and counts as a filter for Clear filters", async () => {
+    const { onChange } = mount({ search: { updates: "available" } });
+    await screen.findByRole("link", { name: "web" });
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ updates: undefined, q: undefined, status: undefined }),
+    );
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull());
+  });
+
+  it("drops an unknown updates value from the search", () => {
+    expect(stackListSearchSchema.parse({ updates: "available" }).updates).toBe("available");
+    expect(stackListSearchSchema.parse({ updates: "all" }).updates).toBeUndefined();
+    expect(stackListSearchSchema.parse({ updates: "" }).updates).toBeUndefined();
+    expect(globalStackSearchSchema.parse({ updates: "available" }).updates).toBe("available");
+    expect(globalStackSearchSchema.parse({ updates: 1 }).updates).toBeUndefined();
   });
 });

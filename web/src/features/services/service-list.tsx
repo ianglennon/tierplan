@@ -29,6 +29,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
@@ -282,7 +283,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const canCreate = usePermission("services.manage", envId);
   const createNeeds = useNeeds("services.manage", envId);
   const query = useQuery({
-    ...servicesQuery(envId, { q: search.q, status: search.status }),
+    ...servicesQuery(envId, { q: search.q, status: search.status, updates: search.updates }),
     enabled: allowed,
   });
   const data = query.data;
@@ -401,7 +402,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
     // Rows of the previous filters, kept on screen while the new ones load, are not an
     // earlier answer to this question.
     ready: data !== undefined && !query.isPlaceholderData,
-    resetKey: [envId, search.q, search.status].join("\u0000"),
+    resetKey: [envId, search.q, search.status, search.updates].join("\u0000"),
   });
 
   const shownRows = useMemo(() => frozen.rows.map((r) => r.row), [frozen.rows]);
@@ -496,8 +497,9 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const headed = groups.filter((g) => g.header).map((g) => g.key);
   const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
 
-  const filtered = Boolean(search.q || search.status);
-  const clearFilters = () => onSearchChange({ q: undefined, status: undefined });
+  const filtered = Boolean(search.q || search.status || search.updates);
+  const clearFilters = () =>
+    onSearchChange({ q: undefined, status: undefined, updates: undefined });
 
   function onSort(key: string) {
     const next = key as ServiceSortKey;
@@ -520,7 +522,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   // Search alone gets its own empty state; a chip makes it a filter match, since the filter
   // may be the cause (UI-SPEC "Core elements"). With neither set, someone who can create a
   // service is told how; everyone else gets the table's plain "nothing to show".
-  const searchOnly = Boolean(search.q) && !search.status;
+  const searchOnly = Boolean(search.q) && !search.status && !search.updates;
   const empty = filtered ? (
     <Empty className="min-h-[30svh] border">
       <EmptyHeader>
@@ -797,35 +799,46 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
           </Button>
         ) : null}
       </div>
-      <ToggleGroup
-        type="multiple"
-        // The chips are toggle buttons in a labelled group, not a toolbar.
-        role="group"
-        variant="outline"
-        size="sm"
-        spacing={2}
-        aria-label={t("services.list.status.label")}
-        value={statuses}
-        onValueChange={(v) =>
-          onSearchChange({ status: serviceStatusParam(v as ServiceStatusValue[]) })
-        }
-        className={STATUS_CHIP_ROW}
-      >
-        {SERVICE_STATUS_VALUES.map((v) => {
-          const label = t(`services.list.status.${v}`);
-          return (
-            <ToggleGroupItem
-              key={v}
-              value={v}
-              className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
-            >
-              {data
-                ? t("services.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
-                : label}
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
+      <div className="flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="multiple"
+          // The chips are toggle buttons in a labelled group, not a toolbar.
+          role="group"
+          variant="outline"
+          size="sm"
+          spacing={2}
+          aria-label={t("services.list.status.label")}
+          value={statuses}
+          onValueChange={(v) =>
+            onSearchChange({ status: serviceStatusParam(v as ServiceStatusValue[]) })
+          }
+          className={STATUS_CHIP_ROW}
+        >
+          {SERVICE_STATUS_VALUES.map((v) => {
+            const label = t(`services.list.status.${v}`);
+            return (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+              >
+                {data
+                  ? t("services.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
+                  : label}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+        <Toggle
+          variant="outline"
+          size="sm"
+          className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+          pressed={search.updates === "available"}
+          onPressedChange={(on) => onSearchChange({ updates: on ? "available" : undefined })}
+        >
+          {t("updates.list.filter")}
+        </Toggle>
+      </div>
     </div>
   );
 

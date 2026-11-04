@@ -12,6 +12,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SearchBox } from "@/features/containers/container-list";
 import {
@@ -66,6 +67,9 @@ interface StackFilterBarProps {
   filtered: boolean;
   onSearch: (q: string | undefined) => void;
   onStatus: (status: string | undefined) => void;
+  // The Updates available toggle: updates=available in the URL, or absent.
+  updates: "available" | undefined;
+  onUpdates: (updates: "available" | undefined) => void;
   onClear: () => void;
   // The class of the chip row: STATUS_CHIP_ROW, so the chips wrap at every width (the services list's).
   chipRowClassName: string;
@@ -75,7 +79,7 @@ interface StackFilterBarProps {
 
 // StackFilterBar is the toolbar both stack lists share (UI-SPEC "Stack lists"): row 1 the search (250 ms
 // after the last key, replacing the history entry), the Show group, the list's own controls and Clear filters
-// while a filter is on; row 2 the status chips with their counts, wrapping at every width. The chips filter
+// while a filter is on; row 2 the status chips with their counts, wrapping at every width, and the Updates available toggle. The chips filter
 // the stacks TierPlan manages only.
 export function StackFilterBar({
   q,
@@ -87,6 +91,8 @@ export function StackFilterBar({
   filtered,
   onSearch,
   onStatus,
+  updates,
+  onUpdates,
   onClear,
   chipRowClassName,
   children,
@@ -110,31 +116,44 @@ export function StackFilterBar({
           </Button>
         ) : null}
       </div>
-      <ToggleGroup
-        type="multiple"
-        // The chips are toggle buttons in a labelled group, not a toolbar.
-        role="group"
-        variant="outline"
-        size="sm"
-        spacing={2}
-        aria-label={t("stackLists.status.label")}
-        value={stackStatusList(status)}
-        onValueChange={(v) => onStatus(stackStatusParam(v as StackStatusValue[]))}
-        className={chipRowClassName}
-      >
-        {STACK_STATUS_VALUES.map((v) => {
-          const label = t(`stackLists.status.${v}`);
-          return (
-            <ToggleGroupItem
-              key={v}
-              value={v}
-              className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
-            >
-              {counts ? t("stackLists.status.chip", { label, count: counts[COUNT_KEY[v]] }) : label}
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
+      <div className="flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="multiple"
+          // The chips are toggle buttons in a labelled group, not a toolbar.
+          role="group"
+          variant="outline"
+          size="sm"
+          spacing={2}
+          aria-label={t("stackLists.status.label")}
+          value={stackStatusList(status)}
+          onValueChange={(v) => onStatus(stackStatusParam(v as StackStatusValue[]))}
+          className={chipRowClassName}
+        >
+          {STACK_STATUS_VALUES.map((v) => {
+            const label = t(`stackLists.status.${v}`);
+            return (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+              >
+                {counts
+                  ? t("stackLists.status.chip", { label, count: counts[COUNT_KEY[v]] })
+                  : label}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+        <Toggle
+          variant="outline"
+          size="sm"
+          className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+          pressed={updates === "available"}
+          onPressedChange={(on) => onUpdates(on ? "available" : undefined)}
+        >
+          {t("updates.list.filter")}
+        </Toggle>
+      </div>
     </div>
   );
 }
