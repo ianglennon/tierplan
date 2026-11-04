@@ -287,7 +287,16 @@ describe("containers list", () => {
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
     // The last column is the row menu; its header is for assistive technology only.
-    expect(headers).toEqual(["", "Name", "State", "Updates", "Image", "Ports", "Created", "Actions"]);
+    expect(headers).toEqual([
+      "",
+      "Name",
+      "State",
+      "Updates",
+      "Image",
+      "Ports",
+      "Created",
+      "Actions",
+    ]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
     // The rows sort by name: db, old-job, then tierplan (TierPlan's own container).
@@ -672,7 +681,17 @@ describe("swarm lists", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["", "Name", "Node", "State", "Updates", "Image", "Ports", "Created", "Actions"]);
+    expect(headers).toEqual([
+      "",
+      "Name",
+      "Node",
+      "State",
+      "Updates",
+      "Image",
+      "Ports",
+      "Created",
+      "Actions",
+    ]);
     const rows = screen.getAllByRole("row").slice(1);
     // The page sorts by name, whatever order the server sent.
     expect(cellsOf(rows[0] as HTMLElement).slice(1, 3)).toEqual(["db", "n3"]);
