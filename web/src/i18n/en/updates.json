@@ -215,7 +215,8 @@
         "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
         "not_checked": "TierPlan has no check result for this image yet. Choose Check now first.",
         "check_failed": "The last check failed: {{reason}} Choose Check now to try again.",
-        "offline": "{{environment}} isn't reporting, so TierPlan can't update it."
+        "offline": "{{environment}} isn't reporting, so TierPlan can't update it.",
+        "task_container": "Update the service {{name}} instead. Its tasks are replaced for you."
       }
     },
     "skip": {
@@ -315,14 +316,17 @@
         "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
         "offline": "{{environment}} isn't reporting, so TierPlan can't update it.",
         "adopt_first": "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to.",
-        "stack_nothing": "Every service of {{name}} already runs the newest version, or its update is skipped or ignored."
+        "stack_nothing": "Every service of {{name}} already runs the newest version, or its update is skipped or ignored.",
+        "compose_unmanaged": "{{name}} belongs to a Compose project TierPlan doesn't manage. Adopt the project first so an update has a revision to roll back to.",
+        "task_container": "{{name}} is a task of a service. Update the service instead; its tasks are replaced for you."
       },
       "failed": {
         "title": "Couldn't start the update.",
         "body": "Nothing was changed. Check the connection and try again.",
         "check_failed": "Couldn't reach the registry to check the newest version. Nothing was changed. Check that the registry is up and try again.",
         "permission": "You can't update {{name}} in {{environment}}. Nothing was changed."
-      }
+      },
+      "descriptionContainer": "TierPlan recreates {{name}} with the same settings and the new image. It keeps the old container until the new one is running, then removes it."
     },
     "console": {
       "title": "Update of {{name}}",
@@ -346,7 +350,11 @@
         "update": "Update the service",
         "wait": "Wait for the new tasks",
         "health": "Wait for a healthy check",
-        "done": "Done"
+        "done": "Done",
+        "create": "Create the new container",
+        "swap": "Stop and rename the old container",
+        "start": "Start the new container",
+        "remove_old": "Remove the old container"
       },
       "success": {
         "title": "Updated",
@@ -384,7 +392,13 @@
         "failed": "Failed",
         "cancelled": "Cancelled"
       },
-      "documentTitle": "Update"
+      "documentTitle": "Update",
+      "healthWait": {
+        "text": "Waiting for {{name}} to be healthy. Up to {{window}} left.",
+        "valueText": "Waiting for {{name}} to be healthy, {{window}} left",
+        "announce": "Waiting for {{name}} to be healthy, {{window}} left",
+        "label": "Time left to become healthy"
+      }
     }
   }
 }

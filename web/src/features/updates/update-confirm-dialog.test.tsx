@@ -56,6 +56,8 @@ interface Sent {
 }
 
 let sent: Sent[];
+// The query string of each preview read, for the tests that check which kind was asked for.
+let previewQueries: string[];
 let client: QueryClient;
 let answerPreview: () => Response | Promise<Response>;
 let answerRun: () => Response | Promise<Response>;
@@ -63,6 +65,7 @@ let onClose: Mock<() => void>;
 
 beforeEach(() => {
   sent = [];
+  previewQueries = [];
   onClose = vi.fn<() => void>();
   answerPreview = () => Response.json(preview());
   answerRun = () => Response.json({ jobId: "j1" });
@@ -81,7 +84,10 @@ beforeEach(() => {
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
-      if (path === `/api/env/${ENV}/updates/preview`) return answerPreview();
+      if (path === `/api/env/${ENV}/updates/preview`) {
+        previewQueries.push(new URL(req.url).search);
+        return answerPreview();
+      }
       if (path === `/api/env/${ENV}/updates/run` && req.method === "POST") return answerRun();
       return Response.json({}, { status: 404 });
     }),
@@ -523,5 +529,81 @@ describe("UpdateConfirmDialog: the stack scope", () => {
     mount(stackProps);
     expect(await screen.findByText("<img src=x onerror=alert(1)>")).toBeTruthy();
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+describe("UpdateConfirmDialog: the container scope", () => {
+  const containerProps = { workload: { kind: "container" as const, name: "cache" } };
+  const containerItem = item({ kind: "container", name: "cache", image: "redis:7" });
+  const containerPreview = (extra: Partial<UpdatePreview> = {}) =>
+    preview({
+      items: [containerItem],
+      // The server lists the downtime beside the others; the confirm puts it first.
+      warnings: [
+        { code: "no_healthcheck", workload: "cache" },
+        { code: "container_downtime", workload: "cache" },
+      ],
+      ...extra,
+    });
+  const rowShown = () =>
+    waitFor(() => expect(document.querySelector("[data-slot=update-row]")).toBeTruthy());
+
+  it("describes the recreate, warns of the downtime first and commits as Update {name}", async () => {
+    answerPreview = () => Response.json(containerPreview());
+    mount(containerProps);
+    expect(await screen.findByRole("heading", { name: "Update cache" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "TierPlan recreates cache with the same settings and the new image. It keeps the old container until the new one is running, then removes it.",
+      ),
+    ).toBeTruthy();
+    await rowShown();
+    const warnings = document.querySelectorAll("section li");
+    expect(warnings[0]?.textContent).toBe(
+      "A container can't be replaced without stopping it, so cache will be down for a short time.",
+    );
+    expect(warnings[1]?.textContent).toMatch(/cache's image has no health check/);
+    expect(await screen.findByRole("button", { name: "Update cache" })).toBeTruthy();
+    expect(previewQueries[0]).toContain("kind=container");
+    expect(previewQueries[0]).toContain("name=cache");
+  });
+
+  it("posts kind container with the digest shown, and opens the update console", async () => {
+    answerPreview = () => Response.json(containerPreview());
+    mount(containerProps);
+    await rowShown();
+    fireEvent.click(await screen.findByRole("button", { name: "Update cache" }));
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).toEqual({ kind: "container", name: "cache", expect: { cache: B } });
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe(`/env/${ENV}/update-jobs/j1`),
+    );
+  });
+
+  it("lands on the stack's deploy console for a container of a stack TierPlan manages", async () => {
+    answerPreview = () => Response.json(containerPreview({ warnings: [] }));
+    answerRun = () => Response.json({ jobId: "j7", stackId: "s3" });
+    mount({ ...containerProps, managedStack: "shop" });
+    await rowShown();
+    expect(
+      screen.getByText(
+        /This is saved as a new revision of shop, so you can roll back from History/,
+      ),
+    ).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Update cache" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s3/deploys/j7"),
+    );
+  });
+
+  it("says a task container is updated through its service when the server refuses", async () => {
+    answerPreview = () =>
+      Response.json(containerPreview({ items: [], offered: false, refusal: "task_container" }));
+    mount(containerProps);
+    expect(
+      await screen.findByText(
+        "cache is a task of a service. Update the service instead; its tasks are replaced for you.",
+      ),
+    ).toBeTruthy();
   });
 });

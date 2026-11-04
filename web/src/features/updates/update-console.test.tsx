@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
-import { UpdateConsole } from "@/features/updates/update-console";
+import { HealthWait, UpdateConsole } from "@/features/updates/update-console";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -65,6 +65,8 @@ const wait = (state: Item["state"] = "waiting", over: Partial<Item> = {}): Item 
 });
 
 let state: "running" | "done" | "failed" | "cancelled";
+let kind: "service" | "container";
+let workload: string;
 let items: Item[];
 let status: number;
 let client: QueryClient;
@@ -73,8 +75,8 @@ function jobBody() {
   return {
     id: "j1",
     runId: "r1",
-    kind: "service",
-    workload: "web",
+    kind,
+    workload,
     fromDigest: A,
     toDigest: B,
     startedBy: "ada",
@@ -88,6 +90,8 @@ function jobBody() {
 
 beforeEach(() => {
   state = "running";
+  kind = "service";
+  workload = "web";
   items = [check, pull, update(), wait(), { id: "health", label: "x", state: "waiting" }];
   status = 200;
   FakeEventSource.reset();
@@ -239,5 +243,140 @@ describe("UpdateConsole: a job that is gone", () => {
     mount();
     expect(await screen.findByText("This update is no longer listed")).toBeTruthy();
     await waitFor(() => expect(screen.getByRole("link", { name: "Open services" })).toBeTruthy());
+  });
+});
+
+describe("UpdateConsole: a container update", () => {
+  const step = (id: string, label: string, state: Item["state"]): Item => ({ id, label, state });
+
+  beforeEach(() => {
+    kind = "container";
+    workload = "cache";
+  });
+
+  it("lists the steps of a recreate, in the console's words, with the old container's removal last", async () => {
+    items = [
+      step("check", "x", "done"),
+      step("pull", "x", "done"),
+      step("create", "x", "done"),
+      step("swap", "x", "done"),
+      step("start", "x", "done"),
+      step("health", "x", "running"),
+      step("remove_old", "x", "waiting"),
+    ];
+    mount();
+    expect(await screen.findByRole("heading", { name: "Update of cache" })).toBeTruthy();
+    const steps = screen.getByRole("list", { name: "Steps of the deploy" });
+    const labels = Array.from(steps.querySelectorAll("li")).map((li) => li.textContent ?? "");
+    const order = [
+      "Check the new version",
+      "Pull the image",
+      "Create the new container",
+      "Stop and rename the old container",
+      "Start the new container",
+      "Wait for a healthy check",
+      "Remove the old container",
+      "Done",
+    ];
+    let from = 0;
+    for (const label of order) {
+      const at = labels.findIndex((text, i) => i >= from && text.includes(label));
+      expect(at, label).toBeGreaterThanOrEqual(from);
+      from = at + 1;
+    }
+  });
+
+  it("says how long the new container may still take to be healthy, with a progress bar", async () => {
+    items = [
+      step("check", "x", "done"),
+      step("pull", "x", "done"),
+      step("create", "x", "done"),
+      step("swap", "x", "done"),
+      step("start", "x", "done"),
+      step("health", "x", "running"),
+      step("remove_old", "x", "waiting"),
+    ];
+    mount();
+    expect(
+      await screen.findByText("Waiting for cache to be healthy. Up to 5 minutes left."),
+    ).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Time left to become healthy" })).toBeTruthy();
+  });
+
+  it("shows no health wait for a container without a health check, nor once the update ended", async () => {
+    state = "done";
+    items = [
+      step("check", "x", "done"),
+      step("pull", "x", "done"),
+      step("create", "x", "done"),
+      step("swap", "x", "done"),
+      step("start", "x", "done"),
+      step("remove_old", "x", "done"),
+    ];
+    mount();
+    expect(
+      await screen.findByText("Updated", { selector: "[data-slot=alert-title]" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/to be healthy/)).toBeNull();
+    expect(screen.queryByText("Wait for a healthy check")).toBeNull();
+    // The link goes to the containers, not the services.
+    expect(screen.getByRole("link", { name: "Open cache" }).getAttribute("href")).toContain(
+      "/env/e1/containers",
+    );
+  });
+});
+
+describe("HealthWait", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const bar = () => screen.getByRole("progressbar");
+  const polite = () =>
+    Array.from(document.querySelectorAll("[aria-live=polite] p")).map((p) => p.textContent);
+  const tick = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  it("counts down in the line, but the bar and the polite region change once per quarter", async () => {
+    render(<HealthWait name="web" windowSeconds={80} />);
+    expect(screen.getByText("Waiting for web to be healthy. Up to 1 minute left.")).toBeTruthy();
+    expect(bar().getAttribute("aria-valuetext")).toBe(
+      "Waiting for web to be healthy, 1 minute left",
+    );
+
+    // Part-way through the first quarter the line has moved on, and nothing was spoken.
+    await tick(10_000);
+    expect(screen.getByText("Waiting for web to be healthy. Up to 1 minute left.")).toBeTruthy();
+    await tick(10_000);
+    expect(polite()).toEqual(["Waiting for web to be healthy, 1 minute left"]);
+    await tick(10_000);
+    expect(screen.getByText("Waiting for web to be healthy. Up to 50 seconds left.")).toBeTruthy();
+    // The bar still reads what it read when the quarter began.
+    expect(bar().getAttribute("aria-valuetext")).toBe(
+      "Waiting for web to be healthy, 1 minute left",
+    );
+    expect(polite()).toHaveLength(1);
+
+    await tick(10_000);
+    expect(bar().getAttribute("aria-valuetext")).toBe(
+      "Waiting for web to be healthy, 40 seconds left",
+    );
+    expect(polite()).toEqual([
+      "Waiting for web to be healthy, 1 minute left",
+      "Waiting for web to be healthy, 40 seconds left",
+    ]);
+  });
+
+  it("stops at zero and never speaks more than four times", async () => {
+    render(<HealthWait name="web" windowSeconds={80} />);
+    for (let i = 0; i < 6; i++) await tick(20_000);
+    expect(screen.getByText("Waiting for web to be healthy. Up to 0 seconds left.")).toBeTruthy();
+    expect(polite()).toHaveLength(4);
+    expect(bar().getAttribute("aria-valuenow")).toBe("100");
   });
 });

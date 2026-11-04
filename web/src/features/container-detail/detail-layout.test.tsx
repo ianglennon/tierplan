@@ -76,6 +76,8 @@ let me: ReturnType<typeof makeMe>;
 let answer: () => Response | Promise<Response>;
 let actionAnswer: () => Response | Promise<Response>;
 let inspectAnswer: () => Response | Promise<Response>;
+let previewAnswer: () => Response | Promise<Response>;
+let runAnswer: () => Response | Promise<Response>;
 let envType: "swarm" | "standalone";
 const defaults = queryClient.getDefaultOptions();
 
@@ -87,6 +89,8 @@ beforeEach(() => {
     Response.json({ results: [{ nodeId: "n1", id: "web-id", name: "web", result: "done" }] });
   inspectAnswer = () =>
     Response.json({ masked: true, inspect: { Id: "web-id", Config: { Env: ["MODE=<hidden>"] } } });
+  previewAnswer = () => Response.json({}, { status: 404 });
+  runAnswer = () => Response.json({ jobId: "j1" });
   envType = "standalone";
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   detailRetry.attempts = 0;
@@ -165,6 +169,10 @@ beforeEach(() => {
             muted: req.method === "PUT",
             changed: true,
           });
+        case `/api/env/${ENV}/updates/preview`:
+          return previewAnswer();
+        case `/api/env/${ENV}/updates/run`:
+          return runAnswer();
         case `/api/env/${ENV}/containers/actions`:
         case `/api/env/${ENV}/containers/remove`:
           return actionAnswer();
@@ -437,6 +445,115 @@ describe("the header actions follow the state", () => {
     fireEvent.click(stop);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(posts()).toEqual([]);
+  });
+});
+
+describe("the Update button (12-21)", () => {
+  const A = `sha256:${"a".repeat(64)}`;
+  const B = `sha256:${"b".repeat(64)}`;
+  const info = (extra: Record<string, unknown> = {}) => ({
+    state: "update_available" as const,
+    reason: "" as const,
+    registry: "docker.io",
+    repository: "library/nginx",
+    tag: "1.27",
+    runningDigest: A,
+    remoteDigest: B,
+    changedPlatforms: [],
+    checkedAt: new Date().toISOString(),
+    successAt: "",
+    note: "" as const,
+    task: false,
+    ...extra,
+  });
+  const previewOf = () =>
+    Response.json({
+      items: [
+        {
+          kind: "container",
+          name: "web",
+          image: "nginx:1.27",
+          stack: "",
+          fromDigest: A,
+          toDigest: B,
+          platforms: [],
+          changedPlatforms: [],
+        },
+      ],
+      warnings: [{ code: "container_downtime", workload: "web" }],
+      leftOut: [],
+      offered: true,
+      refusal: "",
+    });
+
+  it("opens the recreate confirm from the header and follows the update to its console", async () => {
+    answer = () => Response.json(detail({ update: info() }));
+    previewAnswer = previewOf;
+    const router = renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      await screen.findByText(/TierPlan recreates web with the same settings and the new image/),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "A container can't be replaced without stopping it, so web will be down for a short time.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Update web" }));
+    await waitFor(() =>
+      expect(posts().find((p) => p.path.endsWith("/updates/run"))?.body).toEqual({
+        kind: "container",
+        name: "web",
+        expect: { web: B },
+      }),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/env/${ENV}/update-jobs/j1`));
+  });
+
+  it("is not on the header when the container is up to date or has no update object", async () => {
+    answer = () => Response.json(detail({ update: info({ state: "up_to_date" }) }));
+    renderAt();
+    await screen.findByRole("button", { name: "Stop" });
+    expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+    cleanup();
+    answer = () => Response.json(detail());
+    renderAt();
+    await screen.findByRole("button", { name: "Stop" });
+    expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+  });
+
+  it("is unavailable to a Viewer, with the reason, and opens nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    answer = () => Response.json(detail({ update: info() }));
+    renderAt();
+    const button = await screen.findByRole("button", { name: "Update" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("reads Adopt to update… for a container of a Compose project TierPlan does not manage", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    answer = () =>
+      Response.json(detail({ project: "shop", update: info({ refusal: "compose_unmanaged" }) }));
+    renderAt();
+    const link = await screen.findByRole("link", { name: "Adopt to update…" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/unmanaged-stacks/shop/adopt`);
+    expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+  });
+
+  it("makes Update unavailable for a swarm task container and names the service", async () => {
+    answer = () =>
+      Response.json(detail({ service: "web", update: info({ refusal: "task_container" }) }));
+    renderAt();
+    const button = await screen.findByRole("button", { name: "Update" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain(
+      "Update the service web instead. Its tasks are replaced for you.",
+    );
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 

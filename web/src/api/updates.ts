@@ -583,10 +583,7 @@ export function imageUpdatePreviewQuery(envId: string, workload: UpdateTarget) {
           params: {
             path: { envId },
             query: {
-              kind:
-                workload.kind === "service" || workload.kind === "stack"
-                  ? workload.kind
-                  : undefined,
+              kind: workload.kind,
               name: workload.name,
             },
           },
@@ -634,7 +631,7 @@ export function useRunUpdate(envId: string) {
         const res = await api.POST("/api/env/{envId}/updates/run", {
           params: { path: { envId } },
           body: {
-            kind: workload.kind === "stack" ? "stack" : "service",
+            kind: workload.kind,
             name: workload.name,
             expect,
           },

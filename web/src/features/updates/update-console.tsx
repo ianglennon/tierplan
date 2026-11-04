@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/empty";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { durationText } from "@/features/janitor/preview-summary";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { Elapsed } from "@/features/stack-deploy/deploy-console";
 import { DeployOutput } from "@/features/stack-deploy/deploy-output";
@@ -37,8 +38,25 @@ interface UpdateConsoleProps {
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
-// The steps of an update of a plain service, by the id the server gives them.
-const STEP_IDS = ["check", "pull", "update", "wait", "health"] as const;
+// The steps of an update of a plain service or container, by the id the server gives them. A container
+// is recreated: the new one is created first, the old one is stopped and renamed, the new one starts,
+// is waited for (its health when it has a check), and only then is the old one removed.
+const STEP_IDS = [
+  "check",
+  "pull",
+  "update",
+  "wait",
+  "health",
+  "create",
+  "swap",
+  "start",
+  "remove_old",
+] as const;
+
+// How long a replacement container is waited for when the job does not say: the server's default
+// window (five minutes). A health check that needs longer extends it on the server, and the job item
+// then carries the real window in seconds.
+const DEFAULT_HEALTH_WINDOW_SECONDS = 300;
 
 // stepsOf are the items of the job as the step list shows them: each step in the words of the
 // console (the server's English is only a fallback), the pull naming how many nodes it ran on, and a
@@ -77,6 +95,7 @@ export function consoleStepsOf(t: Translate, job: UpdateJobView): StackJobItem[]
 // asked for, working while they come up (with their count), done once they run and healthy, failed
 // when a step did.
 export function rowOf(job: UpdateJobView): StackJobItem {
+  if (job.kind === "container") return containerRowOf(job);
   const items = job.items ?? [];
   const wait = items.find((i) => i.id === "wait");
   const health = items.find((i) => i.id === "health");
@@ -101,6 +120,95 @@ export function rowOf(job: UpdateJobView): StackJobItem {
     total: wait?.total ?? 0,
     unit: wait?.unit ?? "",
   };
+}
+
+// containerRowOf is the container being replaced as one row: working once it is pulled and the new one
+// is being made, done when the update has finished well, failed when a step did.
+function containerRowOf(job: UpdateJobView): StackJobItem {
+  const items = job.items ?? [];
+  const failed = items.some((i) => i.state === "failed");
+  const started = items.some((i) => i.id !== "check" && i.state !== "waiting");
+  let state: StackJobItem["state"] = "waiting";
+  if (failed) state = "failed";
+  else if (job.state === "cancelled") state = "cancelled";
+  else if (job.state === "done") state = "done";
+  else if (started) state = "running";
+  return {
+    id: `container:${job.workload}`,
+    kind: "service",
+    label: job.workload,
+    state,
+    code: "",
+    current: 0,
+    detail: "",
+    message: "",
+    parent: "",
+    result: {},
+    total: 0,
+    unit: "",
+  };
+}
+
+// healthWindowOf is how long the job says the new container may take to become healthy, in seconds:
+// the item's total when it counts seconds, else the server's default.
+function healthWindowOf(item: StackJobItem): number {
+  return item.unit === "seconds" && item.total > 0 ? item.total : DEFAULT_HEALTH_WINDOW_SECONDS;
+}
+
+// healthQuarter is how far through the window the wait is, in whole quarters (0 to 4).
+export function healthQuarter(windowSeconds: number, elapsedSeconds: number): number {
+  if (windowSeconds <= 0) return 4;
+  return Math.min(4, Math.floor((Math.max(0, elapsedSeconds) * 4) / windowSeconds));
+}
+
+// HealthWait is the wait for a new container to be healthy: the bar of the time used, and the line
+// that says how long is left. The line counts down every second, but is not announced. The bar's
+// spoken text, and the polite region, change only as each quarter of the window is reached, so a
+// reader hears four things at most, never a countdown (UI-SPEC accessibility contract). The server
+// ends the wait itself; this only shows how long it may still take.
+export function HealthWait({ name, windowSeconds }: { name: string; windowSeconds: number }) {
+  const t = useT();
+  const started = useRef(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  const [spoken, setSpoken] = useState<string[]>([]);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - started.current) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const quarter = healthQuarter(windowSeconds, elapsed);
+  const left = Math.max(0, windowSeconds - elapsed);
+  // What the bar says is what was left when its quarter began, so it holds still between quarters.
+  const atQuarter = Math.ceil((windowSeconds * (4 - quarter)) / 4);
+  const valueText = t("updates.console.healthWait.valueText", {
+    name,
+    window: durationText(atQuarter, t),
+  });
+  const last = useRef(0);
+  useEffect(() => {
+    if (quarter <= last.current) return;
+    last.current = quarter;
+    setSpoken((s) => [...s, valueText].slice(-4));
+  }, [quarter, valueText]);
+  return (
+    <div className="flex flex-col gap-1.5" data-slot="update-health-wait">
+      <Progress
+        value={Math.min(100, Math.round((Math.max(0, elapsed) / windowSeconds) * 100))}
+        aria-label={t("updates.console.healthWait.label")}
+        aria-valuetext={valueText}
+      />
+      <p aria-live="off" className="text-sm text-muted-foreground">
+        {t("updates.console.healthWait.text", { name, window: durationText(left, t) })}
+      </p>
+      <div aria-live="polite" className="sr-only">
+        {spoken.map((message, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a message is only ever added at the end
+          <p key={i}>{message}</p>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // UpdateProgress is the one bar of the console: how many steps have ended well, with the count beside
@@ -152,14 +260,21 @@ function failedItem(job: UpdateJobView): StackJobItem | undefined {
   return (job.items ?? []).find((i) => i.state === "failed");
 }
 
-// OpenService goes to the services of the environment, filtered to the one updated.
-function OpenService({ envId, name }: { envId: string; name: string }) {
+// OpenService goes to the services (or containers) of the environment, filtered to the one updated.
+function OpenService({ envId, job }: { envId: string; job: UpdateJobView }) {
   const t = useT();
+  const name = job.workload;
   return (
     <Button asChild variant="outline" size="sm" className="max-md:h-11">
-      <Link to="/env/$envId/services" params={{ envId }} search={{ q: name }}>
-        {t("updates.console.openService", { name })}
-      </Link>
+      {job.kind === "container" ? (
+        <Link to="/env/$envId/containers" params={{ envId }} search={{ q: name }}>
+          {t("updates.console.openService", { name })}
+        </Link>
+      ) : (
+        <Link to="/env/$envId/services" params={{ envId }} search={{ q: name }}>
+          {t("updates.console.openService", { name })}
+        </Link>
+      )}
     </Button>
   );
 }
@@ -181,7 +296,7 @@ function Result({ envId, job }: { envId: string; job: UpdateJobView }) {
               ? t("updates.console.success.body", { name, digest: shortDigest(job.toDigest) })
               : t("updates.console.success.bodyNoDigest", { name })}
           </span>
-          <OpenService envId={envId} name={name} />
+          <OpenService envId={envId} job={job} />
         </AlertDescription>
       </Alert>
     );
@@ -192,7 +307,7 @@ function Result({ envId, job }: { envId: string; job: UpdateJobView }) {
         <AlertTitle>{t("updates.console.cancelled.title")}</AlertTitle>
         <AlertDescription className="flex flex-col items-start gap-2">
           <span className="break-all">{t("updates.console.cancelled.body", { name })}</span>
-          <OpenService envId={envId} name={name} />
+          <OpenService envId={envId} job={job} />
         </AlertDescription>
       </Alert>
     );
@@ -208,7 +323,7 @@ function Result({ envId, job }: { envId: string; job: UpdateJobView }) {
             ? t("updates.console.failed.body", { reason, name })
             : t("updates.console.failed.bodyNoReason", { name })}
         </span>
-        <OpenService envId={envId} name={name} />
+        <OpenService envId={envId} job={job} />
       </AlertDescription>
     </Alert>
   );
@@ -295,6 +410,11 @@ export function UpdateConsole({ envId, jobId }: UpdateConsoleProps) {
   const startedAt = formatRelative(job.createdAt, new Date(now), t);
   const steps = consoleStepsOf(t, job);
   const row = rowOf(job);
+  // A container with a health check is waited for after it starts: the time it may still take shows.
+  const healthItem =
+    job.kind === "container"
+      ? (job.items ?? []).find((i) => i.id === "health" && i.state === "running")
+      : undefined;
 
   return (
     <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6">
@@ -344,6 +464,9 @@ export function UpdateConsole({ envId, jobId }: UpdateConsoleProps) {
         </p>
       </div>
       <UpdateProgress items={steps} />
+      {healthItem && !ended ? (
+        <HealthWait name={job.workload} windowSeconds={healthWindowOf(healthItem)} />
+      ) : null}
       <DeployStepList items={steps} envId={envId} />
       <ul aria-label={t("stackDeploy.steps.services")} className="flex flex-col">
         <DeployServiceRow item={row} />

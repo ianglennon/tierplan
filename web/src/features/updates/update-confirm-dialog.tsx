@@ -41,8 +41,9 @@ const WARNINGS_SHOWN = 3;
 interface UpdateConfirmDialogProps {
   envId: string;
   envName: string;
-  // What the confirm is for: a service, or every service of a stack TierPlan manages that has an update
-  // on offer (kind stack, named by the stack's name). Containers follow in a later version.
+  // What the confirm is for: a service, a plain container (recreated with the same settings and the new
+  // image), or every service of a stack TierPlan manages that has an update on offer (kind stack, named
+  // by the stack's name).
   workload: UpdateTarget;
   // The name of the stack TierPlan manages that a service belongs to. Set, the confirm says the update is
   // saved as a new revision of it (a stack's own confirm says so without it).
@@ -189,7 +190,14 @@ function warningText(t: ReturnType<typeof useT>, w: UpdateWarning): string {
 export function PreflightList({ warnings }: { warnings: readonly UpdateWarning[] }) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  const lines = warnings.map((w) => ({ w, text: warningText(t, w) })).filter((l) => l.text !== "");
+  // A container can't be replaced without stopping it, which is the first thing to know: it leads.
+  const lines = warnings
+    .map((w) => ({ w, text: warningText(t, w) }))
+    .filter((l) => l.text !== "")
+    .sort(
+      (a, b) =>
+        Number(b.w.code === "container_downtime") - Number(a.w.code === "container_downtime"),
+    );
   if (lines.length === 0) return null;
   const head = lines.slice(0, WARNINGS_SHOWN);
   const rest = lines.slice(WARNINGS_SHOWN);
@@ -284,6 +292,7 @@ export function UpdateConfirmDialog({
   const [nothing, setNothing] = useState(false);
   const stackScope = workload.kind === "stack";
   const stackName = stackScope ? workload.name : managedStack;
+  const containerScope = workload.kind === "container";
 
   const data = preview.data;
   const items = data?.items ?? [];
@@ -375,7 +384,9 @@ export function UpdateConfirmDialog({
           <DialogDescription className="break-words">
             {stackName
               ? t("updates.confirm.descriptionManaged", { stack: stackName })
-              : t("updates.confirm.description")}
+              : containerScope
+                ? t("updates.confirm.descriptionContainer", { name: workload.name })
+                : t("updates.confirm.description")}
           </DialogDescription>
         </DialogHeader>
 

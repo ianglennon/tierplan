@@ -36,22 +36,55 @@ export interface UpdateGate {
   // True when it cannot be used and there is nothing to say yet, because the caller's role is not
   // known: the control is disabled outright.
   unavailable: boolean;
+  // Set for a container of a Compose project TierPlan does not manage: it gets no one-click update,
+  // the control reads "Adopt to update…" and goes to the project's adopt flow (D-21). The permission
+  // and the reason are then those of adopting, not of updating.
+  adopt?: boolean;
 }
 
-// useUpdateGate decides what an Update control for a service does, from the permission the caller
-// holds (services.control, Operator), whether the environment is reporting, and the state the
-// server reports for the image. It only decides what to show; the server enforces every one of these
+// What the gate needs to know about a container, which has a refusal of its own: the swarm service a
+// task container belongs to, named in the reason.
+export interface ContainerGateTarget {
+  kind: "container";
+  service?: string;
+}
+
+// useUpdateGate decides what an Update control for a service or a container does, from the permission
+// the caller holds (services.control, Operator, and containers.control for a container), whether the
+// environment is reporting, and the state the server reports for the image. A container the server
+// refuses (UpdateInfo.refusal) is never updated here: a task container says to update its service,
+// and one of a Compose project TierPlan does not manage is sent to the adopt flow (Env Admin). It only decides what to show; the server enforces every one of these
 // (it refuses a moved digest, a held lock, a pinned image and the rest). Ignore under a lock is not
 // refused by the server; it is the control's to disable.
-export function useUpdateGate(envId: string, update: UpdateInfo | undefined): UpdateGate {
+export function useUpdateGate(
+  envId: string,
+  update: UpdateInfo | undefined,
+  container?: ContainerGateTarget,
+): UpdateGate {
   const t = useT();
-  const needs = useNeeds("services.control", envId);
+  const serviceNeeds = useNeeds("services.control", envId);
+  const containerNeeds = useNeeds("containers.control", envId);
+  const adoptNeeds = useNeeds("stacks.create", envId);
+  // A container is updated under both permissions (the server checks both); the first one missing
+  // is the one the reason names.
+  const needs = container && serviceNeeds.allowed ? containerNeeds : serviceNeeds;
   const envName = useEnvName(envId);
   const environments = useQuery(environmentsQuery);
   const status = environments.data?.items?.find((e) => e.id === envId)?.status?.state;
   const state = update?.state;
   if (!state || !OFFERED.has(state)) return { shown: false, unavailable: false };
 
+  if (container && update.refusal === "compose_unmanaged") {
+    if (adoptNeeds.allowed) return { shown: true, adopt: true, unavailable: false };
+    return adoptNeeds.reason
+      ? {
+          shown: true,
+          adopt: true,
+          reason: t("updates.menu.needs", { needs: adoptNeeds.reason, environment: envName }),
+          unavailable: false,
+        }
+      : { shown: true, adopt: true, unavailable: true };
+  }
   if (!needs.allowed) {
     return needs.reason
       ? {
@@ -60,6 +93,13 @@ export function useUpdateGate(envId: string, update: UpdateInfo | undefined): Up
           unavailable: false,
         }
       : { shown: true, unavailable: true };
+  }
+  if (container && update.refusal === "task_container") {
+    return {
+      shown: true,
+      reason: t("updates.menu.disabled.task_container", { name: container.service ?? "" }),
+      unavailable: false,
+    };
   }
   if (status !== undefined && !REPORTING.has(status)) {
     return {
