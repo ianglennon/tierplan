@@ -284,7 +284,12 @@ func (a *Applier) ManagedStackOf(ctx context.Context, envID, name string) (strin
 
 // managedStackID is the ID the row's labels name when the environment manages that stack, else "".
 func (a *Applier) managedStackID(ctx context.Context, envID string, row dockerx.ServiceRow) (string, error) {
-	id := row.Labels[stacks.LabelStackID]
+	return a.managedStackIDOf(ctx, envID, row.Name, row.Labels)
+}
+
+// managedStackIDOf is managedStackID for any workload: name is only used to say which one a failed look-up was for.
+func (a *Applier) managedStackIDOf(ctx context.Context, envID, name string, labels map[string]string) (string, error) {
+	id := labels[stacks.LabelStackID]
 	if id == "" {
 		return "", nil
 	}
@@ -292,7 +297,7 @@ func (a *Applier) managedStackID(ctx context.Context, envID string, row dockerx.
 	if a.ManagedStack != nil {
 		var err error
 		if managed, err = a.ManagedStack(ctx, envID, id); err != nil {
-			return "", fmt.Errorf("look up the stack of %s: %w", row.Name, err)
+			return "", fmt.Errorf("look up the stack of %s: %w", name, err)
 		}
 	}
 	if !managed {

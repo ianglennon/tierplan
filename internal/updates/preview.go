@@ -7,12 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // What an update would do, before it is asked for (plan 12-16, D-05). A preview reads the check that is stored and the live state
@@ -67,6 +70,9 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 		}
 		return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
 	}
+	if kind == "container" {
+		return a.previewContainer(ctx, envID, name)
+	}
 	if kind != "service" {
 		return Preview{}, ErrUnsupportedKind
 	}
@@ -105,20 +111,7 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 		return Preview{}, ErrWorkloadGone
 	}
 	v, w := sv.Verdict, sv.Workload
-	switch {
-	case w.PinnedInFile():
-		p.Refusal = NotUpdatablePinned
-	case !w.Checkable():
-		p.Refusal = NotUpdatableNoSource
-	case v.State == StateCheckFailed:
-		p.Refusal = RefusalCheckFailed
-	case v.State == StateNotChecked:
-		p.Refusal = RefusalNotChecked
-	case v.RemoteDigest == "" || v.RemoteDigest == v.RunningDigest:
-		p.Refusal = RefusalNothingToUpdate
-	case v.State == StateUpToDate || v.State == StateCheckStale:
-		p.Refusal = RefusalNothingToUpdate
-	}
+	p.Refusal = previewRefusal(v, w)
 	if p.Refusal != "" {
 		return p, nil
 	}
@@ -130,6 +123,103 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 	}}
 	p.Warnings = a.serviceWarnings(ctx, envID, row)
 	return p, nil
+}
+
+// previewRefusal is why a workload with that verdict is not offered an update, empty when it is.
+func previewRefusal(v Verdict, w Workload) string {
+	switch {
+	case w.PinnedInFile():
+		return NotUpdatablePinned
+	case !w.Checkable():
+		return NotUpdatableNoSource
+	case v.State == StateCheckFailed:
+		return RefusalCheckFailed
+	case v.State == StateNotChecked:
+		return RefusalNotChecked
+	case v.RemoteDigest == "" || v.RemoteDigest == v.RunningDigest:
+		return RefusalNothingToUpdate
+	case v.State == StateUpToDate || v.State == StateCheckStale:
+		return RefusalNothingToUpdate
+	}
+	return ""
+}
+
+// previewContainer describes the update of the plain container name: the digest change and the warnings of recreating it, or the
+// reason it would not be offered. A container of a stack TierPlan manages is described through that stack, limited to its service.
+func (a *Applier) previewContainer(ctx context.Context, envID, name string) (Preview, error) {
+	w, found, err := a.containerWorkload(ctx, envID, name)
+	if err != nil {
+		return Preview{}, err
+	}
+	if !found {
+		return Preview{}, ErrWorkloadGone
+	}
+	var p Preview
+	if h, held := a.Locks.Held(envID); held {
+		p.Lock = &h
+	}
+	var nu *NotUpdatableError
+	if err := a.containerUpdatable(ctx, envID, w); errors.As(err, &nu) {
+		if nu.Code == NotUpdatableManaged {
+			sp, err := a.PreviewStack(ctx, envID, w.Stack, []string{w.Labels[stacks.LabelComposeService]})
+			if err != nil {
+				return Preview{}, err
+			}
+			return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
+		}
+		p.Refusal = nu.Code
+		return p, nil
+	} else if err != nil {
+		return Preview{}, err
+	}
+	sv, found, err := a.Service.Find(ctx, envID, "container", name)
+	if err != nil {
+		return Preview{}, err
+	}
+	if !found {
+		return Preview{}, ErrWorkloadGone
+	}
+	v, w := sv.Verdict, sv.Workload
+	if p.Refusal = previewRefusal(v, w); p.Refusal != "" {
+		return p, nil
+	}
+	p.Offered = true
+	p.Items = []PreviewItem{{
+		Kind: "container", Name: strings.TrimPrefix(w.Name, "/"), Image: imageOf(w),
+		FromDigest: v.RunningDigest, ToDigest: v.RemoteDigest,
+		Platforms: append([]string{}, w.Platforms...), ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
+	}}
+	p.Warnings = a.containerWarnings(ctx, envID, w)
+	return p, nil
+}
+
+// containerWarnings are the pre-flight warnings of the container, from one inspect of it and, when it defines no health check
+// of its own, one inspect of its image on its node (T-12-45). A container that cannot be read has only the downtime warning: the
+// update itself reads it again and refuses what it cannot update.
+func (a *Applier) containerWarnings(ctx context.Context, envID string, w Workload) []Warning {
+	name := strings.TrimPrefix(w.Name, "/")
+	if a.Aggregator == nil || len(w.NodeIDs) == 0 {
+		return []Warning{{Workload: name, Code: WarnContainerDowntime}}
+	}
+	ictx, cancel := context.WithTimeout(ctx, previewInspectTimeout)
+	defer cancel()
+	var insp container.InspectResponse
+	if err := a.Aggregator.OnNode(ictx, envID, w.NodeIDs[0], func(c *dockerx.Client) error {
+		var e error
+		insp, e = c.ContainerInspectFull(ictx, w.ID)
+		return e
+	}); err != nil {
+		a.log().Warn("could not read a container to warn about its update", "environment", envID, "container", name, "error", err)
+		return []Warning{{Workload: name, Code: WarnContainerDowntime}}
+	}
+	var image *bool
+	if insp.Config == nil || insp.Config.Healthcheck == nil || len(insp.Config.Healthcheck.Test) == 0 {
+		if cfg := a.imageConfig(ictx, target{envID: envID, nodeID: w.NodeIDs[0], name: name}, insp.Image); cfg != nil {
+			has := cfg.Healthcheck != nil && len(cfg.Healthcheck.Test) > 0 && cfg.Healthcheck.Test[0] != "NONE"
+			image = &has
+		}
+	}
+	return ContainerWarnings(name, insp, image)
 }
 
 // serviceWarnings are the pre-flight warnings of the service. A service that cannot be read has none to give: the update itself

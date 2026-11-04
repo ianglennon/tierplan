@@ -54,6 +54,16 @@ const (
 	ItemHealth = "health"
 )
 
+// The items of a plain container's update, in order after check and pull (UI-SPEC "Steps (plain container)"): the replacement is
+// created beside the old container, the names are swapped, the replacement is started, waited for, and the old container removed.
+// The health item exists only when the replacement has a health check, and the last item is added once the replacement starts.
+const (
+	ItemCreate    = "create"
+	ItemSwap      = "swap"
+	ItemStart     = "start"
+	ItemRemoveOld = "remove_old"
+)
+
 // The reasons an update ends failed, in TierPlan's words. They are stored in the run and in the audit entry.
 const (
 	ReasonPullFailed     = "pull_failed"
@@ -65,6 +75,15 @@ const (
 	ReasonEngine         = "engine_error"
 	ReasonCancelled      = "cancelled"
 	ReasonInterrupted    = "interrupted"
+	// The reasons of a container's update (plan 12-20). create_refused: the engine would not create the replacement, nothing else
+	// was done. agent_host_policy: the node's agent refused it because it gives the container host access. host_read_only: the
+	// host's owner made the node read-only. container_changed: the container was changed or removed by someone else.
+	// restore_failed: the replacement failed and the old container could not be put back.
+	ReasonCreateRefused    = "create_refused"
+	ReasonAgentHostPolicy  = "agent_host_policy"
+	ReasonHostReadOnly     = "host_read_only"
+	ReasonContainerChanged = "container_changed"
+	ReasonRestoreFailed    = "restore_failed"
 )
 
 // The codes of a NotUpdatableError.
@@ -75,6 +94,10 @@ const (
 	NotUpdatablePinned     = "pinned_in_file"
 	NotUpdatableNoSource   = "not_from_registry"
 	NotUpdatableNotChecked = "not_checked"
+	// NotUpdatableComposeUnmanaged: the container belongs to a Compose project TierPlan does not manage, so a recreate would leave
+	// its config hash stale; it is adopted first (D-21). NotUpdatableTaskContainer: a task container is updated through its service.
+	NotUpdatableComposeUnmanaged = "compose_unmanaged"
+	NotUpdatableTaskContainer    = "task_container"
 )
 
 // digestGrammar is a digest as the image reference grammar writes one. Nothing else is ever put in a reference.
@@ -132,7 +155,7 @@ func (e *CheckFailedError) Error() string {
 // Request is one update asked for.
 type Request struct {
 	EnvID, EnvName string
-	// Kind is "service" here; "container" and "stack" are the paths of plans 12-20 and 12-18.
+	// Kind is "service" or "container" here; a stack is updated through its own revision (plan 12-18).
 	Kind string
 	Name string
 	// Expect maps a service name to the digest the confirm showed. A digest here is only compared with the one the
@@ -163,7 +186,10 @@ type Applier struct {
 	// ManagedStack says whether the environment manages the stack of that ID. Nil means every service that carries a
 	// TierPlan stack label is read as managed, which is the safe answer.
 	ManagedStack func(ctx context.Context, envID, stackID string) (bool, error)
-	Log          *slog.Logger
+	// SelfContainerID is the ID of the container TierPlan's server runs in. That container is never updated from here: stopping it
+	// would end the update. Empty when TierPlan cannot tell.
+	SelfContainerID string
+	Log             *slog.Logger
 }
 
 func (a *Applier) log() *slog.Logger {
@@ -189,6 +215,8 @@ func (a *Applier) convergeTimeout() time.Duration {
 
 // target is one service update, judged and ready: the digests, the image the service is given and what it is called.
 type target struct {
+	// kind is "service" or "container". nodeID is, for a container, the node it runs on, as the engine routes name it.
+	kind, nodeID    string
 	envID, name, id string
 	// image is what the service follows, as the audit log and the run name it (repository:tag).
 	image string
@@ -207,18 +235,34 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 	if a.Service == nil || a.Runs == nil || a.Locks == nil || a.Jobs == nil || a.Aggregator == nil {
 		return "", errors.New("updates: the applier is not wired")
 	}
-	if req.Kind != "service" {
+	var subject subject
+	switch req.Kind {
+	case "service":
+		row, found, err := a.serviceRow(ctx, req.EnvID, req.Name)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", ErrWorkloadGone
+		}
+		if err := a.updatable(ctx, req.EnvID, row); err != nil {
+			return "", err
+		}
+		subject = serviceSubject(row)
+	case "container":
+		w, found, err := a.containerWorkload(ctx, req.EnvID, req.Name)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", ErrWorkloadGone
+		}
+		if err := a.containerUpdatable(ctx, req.EnvID, w); err != nil {
+			return "", err
+		}
+		subject = containerSubject(w)
+	default:
 		return "", ErrUnsupportedKind
-	}
-	row, found, err := a.serviceRow(ctx, req.EnvID, req.Name)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		return "", ErrWorkloadGone
-	}
-	if err := a.updatable(ctx, req.EnvID, row); err != nil {
-		return "", err
 	}
 	// A held lock is answered before the registry is asked: a second update of a workload that is being updated must
 	// read as locked, and not as already up to date because the first has written its spec.
@@ -226,7 +270,7 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 		return "", &LockedError{Holder: h}
 	}
 
-	t, err := a.recheck(ctx, req, row)
+	t, err := a.recheck(ctx, req, subject)
 	if err != nil {
 		return "", err
 	}
@@ -245,12 +289,12 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 		return "", fmt.Errorf("new run id: %w", err)
 	}
 	run := Run{
-		ID: rid.String(), EnvID: req.EnvID, BulkID: req.BulkID, Kind: "service", Workload: t.name, WorkloadID: t.id,
+		ID: rid.String(), EnvID: req.EnvID, BulkID: req.BulkID, Kind: t.kind, Workload: t.name, WorkloadID: t.id,
 		Items: []RunItem{{Service: t.name, Image: t.image, FromDigest: t.from, ToDigest: t.to}},
 		State: RunRunning, Actor: actorKey(req.Actor), StartedAt: a.clock().Now().UTC(),
 	}
 	meta := map[string]string{
-		MetaWorkload: t.name, MetaKind: "service", MetaRunID: run.ID, MetaBy: req.Actor.Name, MetaFrom: t.from, MetaTo: t.to,
+		MetaWorkload: t.name, MetaKind: t.kind, MetaRunID: run.ID, MetaBy: req.Actor.Name, MetaFrom: t.from, MetaTo: t.to,
 		MetaEnvName: req.EnvName,
 	}
 	if req.BulkID != "" {
@@ -333,8 +377,8 @@ func (a *Applier) updatable(ctx context.Context, envID string, row dockerx.Servi
 // recheck asks the registry for the digest of the service's tag now, bypassing every cache and the recent-check rule, saves
 // the answer, and judges the service by it. It refuses what has nothing to update, what moved since the confirm, and
 // what cannot be checked.
-func (a *Applier) recheck(ctx context.Context, req Request, row dockerx.ServiceRow) (target, error) {
-	sv, found, err := a.Service.Find(ctx, req.EnvID, "service", row.Name)
+func (a *Applier) recheck(ctx context.Context, req Request, sub subject) (target, error) {
+	sv, found, err := a.Service.Find(ctx, req.EnvID, sub.kind, sub.name)
 	if err != nil {
 		return target{}, err
 	}
@@ -358,7 +402,7 @@ func (a *Applier) recheck(ctx context.Context, req Request, row dockerx.ServiceR
 		}
 		return target{}, fmt.Errorf("check the image of %s: %w", w.Name, err)
 	}
-	sv, found, err = a.Service.Find(ctx, req.EnvID, "service", row.Name)
+	sv, found, err = a.Service.Find(ctx, req.EnvID, sub.kind, sub.name)
 	if err != nil {
 		return target{}, err
 	}
@@ -382,16 +426,20 @@ func (a *Applier) recheck(ctx context.Context, req Request, row dockerx.ServiceR
 	if remote == "" || remote == v.RunningDigest {
 		return target{}, ErrNothingToUpdate
 	}
-	if want, ok := req.Expect[row.Name]; ok && want != remote {
-		return target{}, &MovedError{Items: []MovedItem{{Service: row.Name, FromDigest: v.RunningDigest, ToDigest: remote}}}
+	if want, ok := req.Expect[sub.name]; ok && want != remote {
+		return target{}, &MovedError{Items: []MovedItem{{Service: sub.name, FromDigest: v.RunningDigest, ToDigest: remote}}}
 	}
 	if !digestGrammar.MatchString(remote) {
 		return target{}, fmt.Errorf("the registry answered %s with something that is not a sha256 digest", w.Ref.Repo())
 	}
 	t := target{
-		envID: req.EnvID, name: row.Name, id: row.ID, image: imageOf(sv.Workload), from: v.RunningDigest, to: remote,
+		kind: sub.kind, nodeID: sub.nodeID, envID: req.EnvID, name: sub.name, id: sub.id, image: imageOf(sv.Workload), from: v.RunningDigest, to: remote,
 	}
-	t.ref = pinnedRef(row.Image, sv.Workload.Ref, remote)
+	specImage := sub.specImage
+	if sub.kind == "container" {
+		specImage = sv.Workload.Written
+	}
+	t.ref = pinnedRef(specImage, sv.Workload.Ref, remote)
 	t.pullRef = t.ref
 	if parsed, perr := registry.ParseRef(t.ref); perr == nil {
 		t.pullRef = parsed.String()
@@ -420,6 +468,15 @@ func pinnedRef(specImage string, followed registry.Ref, to string) string {
 
 // itemSpecs are the steps of the job.
 func (a *Applier) itemSpecs(t target) []jobs.ItemSpec {
+	if t.kind == "container" {
+		return []jobs.ItemSpec{
+			{ID: ItemCheck, Label: "Check the new version", Kind: stackops.KindStep},
+			{ID: ItemPull, Label: "Pull the image", Kind: stackops.KindStep},
+			{ID: ItemCreate, Label: "Create the new container", Kind: stackops.KindStep},
+			{ID: ItemSwap, Label: "Stop and rename the old container", Kind: stackops.KindStep},
+			{ID: ItemStart, Label: "Start the new container", Kind: stackops.KindStep},
+		}
+	}
 	specs := []jobs.ItemSpec{
 		{ID: ItemCheck, Label: "Check the new version", Kind: stackops.KindStep},
 		{ID: ItemPull, Label: "Pull the image", Kind: stackops.KindStep},
@@ -451,6 +508,10 @@ func (a *Applier) execute(ctx context.Context, r *jobs.Reporter, req Request, ru
 	r.Output("Checked " + t.image + ": " + shortDigest(t.from) + " to " + shortDigest(t.to))
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", map[string]string{"from": t.from, "to": t.to, "image": t.image})
 
+	if t.kind == "container" {
+		a.updateContainer(ctx, r, run, t, end)
+		return
+	}
 	a.updateService(ctx, r, t, end)
 }
 
@@ -461,9 +522,9 @@ func (a *Applier) auditEnd(ctx context.Context, req Request, t target, st RunSta
 		return
 	}
 	e := audit.Entry{
-		Actor: req.Actor, TargetType: "service", TargetID: t.id, EnvID: req.EnvID, IP: req.IP, UserAgent: req.UserAgent,
+		Actor: req.Actor, TargetType: t.kind, TargetID: t.id, EnvID: req.EnvID, IP: req.IP, UserAgent: req.UserAgent,
 		Details: map[string]string{
-			"kind": "service", "workload": t.name, "image": t.image, "from_digest": t.from, "to_digest": t.to,
+			"kind": t.kind, "workload": t.name, "image": t.image, "from_digest": t.from, "to_digest": t.to,
 		},
 	}
 	if req.BulkID != "" {

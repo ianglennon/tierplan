@@ -3541,7 +3541,7 @@ export interface paths {
         };
         /**
          * What updating a service would change
-         * @description The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. A service of a stack TierPlan manages, and kind stack, are described as the update of the stack: the services it would change and, in leftOut, those it leaves out because they are skipped or ignored. offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, nothing newer, a stack that must be adopted first (adopt_first), no check yet, a failed check, a pinned or local image) or when the environment is offline. lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.
+         * @description The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. A service of a stack TierPlan manages, and kind stack, are described as the update of the stack: the services it would change and, in leftOut, those it leaves out because they are skipped or ignored. offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, nothing newer, a stack that must be adopted first (adopt_first), no check yet, a failed check, a pinned or local image) or when the environment is offline. For kind container the warnings are container_downtime (always: it is stopped and recreated), no_healthcheck and volumes, and a container of a Compose project TierPlan does not manage, or a task container, is refused with compose_unmanaged or task_container. Needs containers.read (Viewer) as well. lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.
          */
         get: operations["previewImageUpdate"];
         put?: never;
@@ -3563,7 +3563,7 @@ export interface paths {
         put?: never;
         /**
          * Update a service to its newer image
-         * @description Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file or not_from_registry), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.
+         * @description Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged or task_container), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.
          */
         post: operations["runImageUpdate"];
         delete?: never;
@@ -14369,6 +14369,11 @@ export interface components {
              * @enum {string}
              */
             reason: "" | "auth" | "rate_limited" | "unreachable" | "not_found" | "unsupported" | "other";
+            /**
+             * @description Left out unless set, and only on a container: why it gets no one-click update whatever its state. compose_unmanaged (it belongs to a Compose project TierPlan does not manage, so the action reads Adopt to update) or task_container (a task container of a swarm service is updated through its service)
+             * @enum {string}
+             */
+            refusal?: "compose_unmanaged" | "task_container";
             /** @description The registry host the image is checked at; empty when the image cannot be checked */
             registry: string;
             /** @description The digest the tag pointed at when it was last checked successfully; empty before any check did */
@@ -14456,10 +14461,10 @@ export interface components {
             /** @description True when an update would be offered for this service */
             offered: boolean;
             /**
-             * @description Why no update is offered; empty when one is
+             * @description Why no update is offered; empty when one is. compose_unmanaged: the container belongs to a Compose project TierPlan does not manage, so it is adopted first; task_container: a task container of a swarm service is updated through its service
              * @enum {string}
              */
-            refusal: "" | "agent" | "job_mode" | "managed_by_stack" | "nothing_to_update" | "not_checked" | "check_failed" | "pinned_in_file" | "not_from_registry" | "offline" | "adopt_first";
+            refusal: "" | "agent" | "job_mode" | "managed_by_stack" | "nothing_to_update" | "not_checked" | "check_failed" | "pinned_in_file" | "not_from_registry" | "offline" | "adopt_first" | "compose_unmanaged" | "task_container";
             /** @description Pre-flight warnings, worked out on the server; empty when offered is false */
             warnings: components["schemas"]["UpdateWarningBody"][] | null;
         };
@@ -14474,8 +14479,8 @@ export interface components {
              * @description What it is
              * @enum {string}
              */
-            kind: "service";
-            /** @description The service's name; for a service of a stack on a standalone host, its name in the compose file */
+            kind: "service" | "container";
+            /** @description The service's or container's name; for a service of a stack on a standalone host, its name in the compose file */
             name: string;
             /** @description The platforms it runs on, for a multi-platform image; empty when none is known */
             platforms: string[] | null;
@@ -14491,16 +14496,16 @@ export interface components {
             stackId?: string;
         };
         UpdateRunRequest: {
-            /** @description For each service name (the compose service name on a standalone host), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request */
+            /** @description For each service name (the compose service name on a standalone host; the container's name for kind container), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request */
             expect?: {
                 [key: string]: string;
             };
             /**
-             * @description service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones. Containers follow in a later version
+             * @description service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), container for a plain container made with docker run (a container of a stack TierPlan manages is updated through that stack, one of a Compose project TierPlan does not manage is refused with not_updatable compose_unmanaged and a task container of a swarm service with task_container), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones
              * @enum {string}
              */
-            kind: "service" | "stack";
-            /** @description The service's name, or the stack's name for kind stack */
+            kind: "service" | "container" | "stack";
+            /** @description The service's or container's name, or the stack's name for kind stack */
             name: string;
         };
         UpdateSchedulePreviewBody: {
@@ -22365,9 +22370,9 @@ export interface operations {
     previewImageUpdate: {
         parameters: {
             query?: {
-                /** @description service for a swarm service (a service of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages. Containers follow in a later version */
-                kind?: "service" | "stack";
-                /** @description The service's name, or the stack's name for kind stack */
+                /** @description service for a swarm service (a service of a stack TierPlan manages is described through its stack), container for a plain container (needs containers.read as well; one of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages */
+                kind?: "service" | "container" | "stack";
+                /** @description The service's or container's name, or the stack's name for kind stack */
                 name?: string;
             };
             header?: never;

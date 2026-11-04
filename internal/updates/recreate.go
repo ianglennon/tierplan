@@ -4,7 +4,9 @@
 package updates
 
 import (
+	"bytes"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -140,8 +142,11 @@ func primaryNetwork(mode string, names []string) string {
 }
 
 // keptEndpoint is the part of an attachment somebody chose, as a fresh value: the aliases but
-// the old container's ID, the static addresses, the MAC address, the links, the driver options
-// and the gateway priority. The addresses and IDs the engine assigned are left out.
+// the old container's ID, the static addresses, the MAC address somebody set, the links, the
+// driver options and the gateway priority. The addresses and IDs the engine assigned are left
+// out, and so is a MAC address the engine derived from the old address (engineMAC): kept, it
+// would no longer match the replacement's own address and could be handed out a second time to
+// the next container that takes the old one's.
 func keptEndpoint(in *network.EndpointSettings, id, shortID string) *network.EndpointSettings {
 	out := &network.EndpointSettings{}
 	if in == nil {
@@ -151,7 +156,9 @@ func keptEndpoint(in *network.EndpointSettings, id, shortID string) *network.End
 	out.Links = slices.Clone(in.Links)
 	out.DriverOpts = maps.Clone(in.DriverOpts)
 	out.GwPriority = in.GwPriority
-	out.MacAddress = slices.Clone(in.MacAddress)
+	if !engineMAC(in) {
+		out.MacAddress = slices.Clone(in.MacAddress)
+	}
 	for _, a := range in.Aliases {
 		if a == id || (shortID != "" && a == shortID) {
 			continue
@@ -159,4 +166,86 @@ func keptEndpoint(in *network.EndpointSettings, id, shortID string) *network.End
 		out.Aliases = append(out.Aliases, a)
 	}
 	return out
+}
+
+// engineMAC reports whether the endpoint's MAC address is one the engine derived from an IPv4
+// address: 02:42 followed by the four bytes of the address. The address is the one the endpoint
+// has now, or the static one it asks for when the container is stopped. A MAC address somebody
+// set is never read as derived unless it is exactly that, and one whose address is not known is
+// kept.
+func engineMAC(es *network.EndpointSettings) bool {
+	mac := []byte(es.MacAddress)
+	if len(mac) != 6 || mac[0] != 0x02 || mac[1] != 0x42 {
+		return false
+	}
+	ip := es.IPAddress
+	if !ip.IsValid() && es.IPAMConfig != nil {
+		ip = es.IPAMConfig.IPv4Address
+	}
+	if !ip.Is4() {
+		return false
+	}
+	b := ip.As4()
+	return bytes.Equal(mac[2:], b[:])
+}
+
+// ForgetImageDefaults takes out of cfg what the old image contributed and the person did not
+// choose, so the replacement takes it from the new image instead of keeping the old image's
+// value. image is the config of the image the old container ran, which the inspect of that image
+// gives. A value counts as the image's when it is exactly what the image has: the same
+// environment entries, the same labels, the same entrypoint and command, health check, working
+// directory, user and stop signal. cfg is a copy of the old container's config (RecreateSpec);
+// only fields are replaced here and the old container's own maps and slices are never written.
+//
+// What the inspect cannot tell is a value the person set to the very value the image had: it is
+// read as the image's and follows the new image. A command the person gave stays, and so does an
+// entrypoint that is not the image's. The image's exposed ports are not taken out, since a
+// published port is also exposed and the two cannot be told apart from the config alone.
+func ForgetImageDefaults(cfg, image *container.Config) {
+	if cfg == nil || image == nil {
+		return
+	}
+	// The engine takes the image's command only when the container sets no entrypoint, so a
+	// command is the image's only while the entrypoint is.
+	if slices.Equal(cfg.Entrypoint, image.Entrypoint) {
+		cfg.Entrypoint = nil
+		if slices.Equal(cfg.Cmd, image.Cmd) {
+			cfg.Cmd = nil
+		}
+	}
+	if len(cfg.Env) > 0 && len(image.Env) > 0 {
+		baked := make(map[string]bool, len(image.Env))
+		for _, e := range image.Env {
+			baked[e] = true
+		}
+		kept := make([]string, 0, len(cfg.Env))
+		for _, e := range cfg.Env {
+			if !baked[e] {
+				kept = append(kept, e)
+			}
+		}
+		cfg.Env = kept
+	}
+	if len(cfg.Labels) > 0 && len(image.Labels) > 0 {
+		kept := make(map[string]string, len(cfg.Labels))
+		for k, v := range cfg.Labels {
+			if iv, ok := image.Labels[k]; ok && iv == v {
+				continue
+			}
+			kept[k] = v
+		}
+		cfg.Labels = kept
+	}
+	if cfg.Healthcheck != nil && reflect.DeepEqual(cfg.Healthcheck, image.Healthcheck) {
+		cfg.Healthcheck = nil
+	}
+	if cfg.WorkingDir == image.WorkingDir {
+		cfg.WorkingDir = ""
+	}
+	if cfg.User == image.User {
+		cfg.User = ""
+	}
+	if cfg.StopSignal == image.StopSignal {
+		cfg.StopSignal = ""
+	}
 }

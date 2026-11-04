@@ -550,9 +550,9 @@ func TestNotUpdatableKinds(t *testing.T) {
 		t.Errorf("Start(nobody) = %v, want ErrWorkloadGone", err)
 	}
 	req := r.request("web", "")
-	req.Kind = "container"
+	req.Kind = "stack" // a stack is updated through a revision of its own, never by the applier's Start
 	if _, err := r.applier.Start(testsupport.Context(t), req); !errors.Is(err, updates.ErrUnsupportedKind) {
-		t.Errorf("Start(container) = %v, want ErrUnsupportedKind", err)
+		t.Errorf("Start(stack) = %v, want ErrUnsupportedKind", err)
 	}
 	if n := len(r.fake.ServiceUpdates()); n != 0 {
 		t.Errorf("service updates = %d after refusals, want none", n)

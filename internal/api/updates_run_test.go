@@ -10,12 +10,17 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/updates"
@@ -362,5 +367,185 @@ func TestUpdateRoutePermissions(t *testing.T) {
 	}
 	if got := get("vera", "no-such-job"); got != http.StatusNotFound {
 		t.Errorf("reading a job that is not there = %d, want 404", got)
+	}
+}
+
+// The update of a plain container (plan 12-20, IMG-06, D-07, D-12, D-13, D-21, RESEARCH Pitfall 11). Docker is a fake standalone host
+// behind the real monitor, aggregator and cluster reader; the registry is a scripted Heads; the applier, its run store, the job hub,
+// the operation lock, the router and the permission checks are the real ones. The applier waits on a clock that answers at once,
+// so the wait for a container to run costs no time.
+
+const (
+	appRef = "registry.test/team/app:1"
+	appID  = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
+
+// instantClock answers every wait at once and moves its time on by what was asked, so a window is reached without sleeping.
+type instantClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *instantClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *instantClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	ch := make(chan time.Time, 1)
+	ch <- c.now
+	return ch
+}
+
+// plainContainer is a container somebody made with docker run: an environment, a command, a label, a restart policy, a network
+// with an alias and the old container's short ID as another, and a volume.
+func plainContainer() dockertest.FakeContainer {
+	doc := container.InspectResponse{
+		Config: &container.Config{
+			Image: appRef, Hostname: appID[:12], Env: []string{"MODE=prod"}, Cmd: []string{"serve"}, Labels: map[string]string{"team": "core"},
+			Volumes: map[string]struct{}{"/cache": {}},
+		},
+		HostConfig: &container.HostConfig{NetworkMode: "appnet", RestartPolicy: container.RestartPolicy{Name: "always"}, Binds: []string{"appdata:/data"}},
+		Mounts: []container.MountPoint{
+			{Type: mount.TypeVolume, Name: "appdata", Destination: "/data", RW: true},
+			{Type: mount.TypeVolume, Name: "anon0123", Destination: "/cache", RW: true},
+		},
+		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
+			"appnet": {NetworkID: "net-app", Aliases: []string{"app", "web", appID[:12]}},
+		}},
+	}
+	return dockertest.FakeContainer{
+		ID: appID, Names: []string{"/app"}, Image: appRef, ImageID: updImage('1'), State: "running", Status: "Up 1 hour",
+		Labels: map[string]string{"team": "core"}, Mounts: []string{"appdata", "anon0123"},
+		Networks: map[string]dockertest.FakeEndpoint{"appnet": {NetworkID: "net-app", Aliases: []string{"app", "web"}}},
+		Inspect:  dockertest.FakeInspect{Document: &doc, ImageID: updImage('1')},
+	}
+}
+
+// containerEngine is a standalone host running containers, with the image of appRef at digest a and the network appnet.
+func containerEngine(containers ...dockertest.FakeContainer) dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "host-1", Version: "29.1.0", Containers: containers,
+		Images:   []dockertest.FakeImage{{ID: updImage('1'), RepoTags: []string{appRef}, RepoDigests: []string{"registry.test/team/app@" + updDigest('a')}}},
+		Networks: []dockertest.FakeNetwork{{ID: "net-app", Name: "appnet", Driver: "bridge", Scope: "local"}},
+	}
+}
+
+// containerEnvOf is a standalone host the caller configured, whose applier waits on an instant clock.
+func containerEnvOf(t *testing.T, heads *scriptedHeads, cfg dockertest.FakeConfig) (*envFix, envBody) {
+	t.Helper()
+	f := newEnvFix(t, cfg)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.updateHeads = heads
+	f.updateApplier = func(a *updates.Applier) { a.Clock = &instantClock{now: time.Unix(1_700_000_000, 0)} }
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	return f, e
+}
+
+func containerRunBody(name string, expect map[string]string) string {
+	body := map[string]any{"kind": "container", "name": name}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+// writeKinds names the writes the engine served in a word each, leaving out the ones a test does not care about.
+func writeKinds(writes []string) []string {
+	var out []string
+	for _, w := range writes {
+		method, path, _ := strings.Cut(w, " ")
+		path, _, _ = strings.Cut(path, "?")
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		switch {
+		case path == "/images/create":
+			out = append(out, "pull")
+		case path == "/containers/create":
+			out = append(out, "create")
+		case method == http.MethodDelete && len(parts) == 2 && parts[0] == "containers":
+			out = append(out, "remove")
+		case len(parts) == 3 && parts[0] == "containers":
+			out = append(out, parts[2])
+		}
+	}
+	return out
+}
+
+// An Operator updates a plain docker run container in one click: the replacement is created beside it, the old one is stopped and
+// renamed, the replacement takes its name and starts, and only then is the old one removed, without its volumes (D-07, D-13).
+func TestPlainContainerUpdateEndToEnd(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvOf(t, heads, containerEngine(plainContainer()))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+
+	rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/updates/run", containerRunBody("app", map[string]string{"app": updDigest('b')}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.code, rec.body)
+	}
+	job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID)
+	if job.State != jobs.JobDone || job.Kind != updates.JobKind || job.EnvID != e.ID {
+		t.Fatalf("job = %s %s %s, want a done update job of this environment: %+v", job.State, job.Kind, job.EnvID, job.Items)
+	}
+
+	if got, want := writeKinds(f.fake.Writes()), []string{"pull", "create", "stop", "rename", "rename", "start", "remove"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the engine was asked %v, want %v: the replacement before anything stops, the old container last", got, want)
+	}
+	creates := f.fake.ContainerCreates()
+	if len(creates) != 1 {
+		t.Fatalf("creates = %d, want 1", len(creates))
+	}
+	c := creates[0]
+	if c.Name != "app-tierplan-new-"+appID[:12] || c.Config.Image != appRef+"@"+updDigest('b') {
+		t.Errorf("created %q from %q, want a temporary name and the image pinned to the new digest", c.Name, c.Config.Image)
+	}
+	if !reflect.DeepEqual(c.Config.Env, []string{"MODE=prod"}) || !reflect.DeepEqual(c.Config.Cmd, []string{"serve"}) || c.Config.Labels["team"] != "core" ||
+		c.HostConfig.RestartPolicy.Name != "always" || c.Config.Hostname != "" {
+		t.Errorf("replacement config = %+v host %+v, want the environment, command, label and restart policy kept and the hostname reset", c.Config, c.HostConfig)
+	}
+	ep := c.NetworkingConfig.EndpointsConfig["appnet"]
+	if ep == nil || !reflect.DeepEqual(ep.Aliases, []string{"app", "web"}) {
+		t.Errorf("replacement endpoint = %+v, want appnet with its aliases but not the old short ID", ep)
+	}
+	if !reflect.DeepEqual(c.HostConfig.Binds, []string{"appdata:/data"}) ||
+		!reflect.DeepEqual(c.HostConfig.Mounts, []mount.Mount{{Type: mount.TypeVolume, Source: "anon0123", Target: "/cache"}}) || len(c.Config.Volumes) != 0 {
+		t.Errorf("volumes: binds %v mounts %+v config volumes %v, want the named volume kept and the anonymous one attached again by name, not asked for as a new one", c.HostConfig.Binds, c.HostConfig.Mounts, c.Config.Volumes)
+	}
+	if got, want := f.fake.ContainerRenames(), []dockertest.FakeRename{
+		{ID: appID, From: "app", To: "app-tierplan-old-" + appID[:12]}, {ID: c.ID, From: c.Name, To: "app"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("renames = %+v, want %+v", got, want)
+	}
+	for _, w := range f.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE ") && strings.Contains(w, "v=") {
+			t.Errorf("the old container was removed with %q, want its volumes left", w)
+		}
+	}
+
+	run := f.runOf(t, job)
+	if run.State != updates.RunDone || run.Kind != "container" || run.Workload != "app" || run.WorkloadID != appID || run.OldContainer != appID ||
+		len(run.Items) != 1 || run.Items[0].FromDigest != updDigest('a') || run.Items[0].ToDigest != updDigest('b') || run.FinishedAt.IsZero() {
+		t.Errorf("run = %+v, want a done run of app from a to b that recorded the old container", run)
+	}
+	if s := stepStates(job); !reflect.DeepEqual(s, map[string]string{"check": "done", "pull": "done", "create": "done", "swap": "done", "start": "done", "remove_old": "done"}) {
+		t.Errorf("steps = %v, want every step done", s)
+	}
+	rows := f.auditRows(t, "image.updated")
+	if len(rows) != 1 || rows[0].TargetType != "container" || rows[0].Result != "success" || rows[0].Details["workload"] != "app" || rows[0].Details["kind"] != "container" ||
+		rows[0].Details["from_digest"] != updDigest('a') || rows[0].Details["to_digest"] != updDigest('b') || rows[0].Details["image"] != appRef {
+		t.Errorf("audit rows = %+v, want one naming the container, the image and both digests", rows)
+	}
+	if h, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is held by %+v after the update", h)
 	}
 }

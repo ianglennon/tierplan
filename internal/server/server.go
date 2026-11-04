@@ -958,7 +958,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	updateApplier := &updates.Applier{
 		Service: updateService, Runs: &updates.RunStore{Q: st.Q, W: st.Write}, Locks: stackLocks, Jobs: jobHub, Aggregator: aggregator,
 		Resolver: resolver, Audit: aud, ConvergeTimeout: cfg.StackConvergeTimeout,
-		ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: st, Vault: vlt}), Log: log,
+		ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: st, Vault: vlt}), SelfContainerID: selfID, Log: log,
 	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())

@@ -94,8 +94,18 @@ func (f *Fake) serveWrite(w http.ResponseWriter, r *http.Request, p string, cfg 
 		w.WriteHeader(http.StatusNotModified)
 		return true
 	}
+	next := verbState[verb]
+	if verb == "start" && cfg.ExitOnStart[c.Image] {
+		next = fakeState{"exited", "Exited (1) 1 second ago"}
+	}
 	f.mu.Lock()
-	f.states[id] = verbState[verb]
+	f.states[id] = next
+	if h := cfg.HealthOnStart[c.Image]; verb == "start" && h != "" {
+		if f.ctr.health == nil {
+			f.ctr.health = map[string]string{}
+		}
+		f.ctr.health[id] = h
+	}
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 	return true
@@ -262,6 +272,8 @@ type fakeContainerWrites struct {
 	creates []FakeContainerCreate
 	renames []FakeRename
 	names   map[string]string
+	// health is the health status a started container reports (FakeConfig.HealthOnStart), by ID.
+	health map[string]string
 }
 
 var _ = registerFakeHandler((*Fake).serveContainerCreate)
@@ -360,7 +372,7 @@ func (f *Fake) serveContainerCreate(w http.ResponseWriter, r *http.Request, p st
 		StopTimeout: req.Config.StopTimeout, StopSignal: req.Config.StopSignal,
 		Inspect: FakeInspect{
 			Env: req.Config.Env, Cmd: req.Config.Cmd, Entrypoint: req.Config.Entrypoint,
-			WorkingDir: req.Config.WorkingDir, User: req.Config.User, Tty: req.Config.Tty,
+			WorkingDir: req.Config.WorkingDir, User: req.Config.User, Tty: req.Config.Tty, Healthcheck: req.Config.Healthcheck,
 		},
 	}
 	if req.Config.Env == nil {
@@ -447,7 +459,7 @@ func (f *Fake) ContainerRenames() []FakeRename {
 // own and every renamed container under its new name. The slice is copied, so the Fake's own
 // configuration is not touched.
 func (c FakeConfig) withContainerWrites(w *fakeContainerWrites) FakeConfig {
-	if len(w.created) == 0 && len(w.names) == 0 {
+	if len(w.created) == 0 && len(w.names) == 0 && len(w.health) == 0 {
 		return c
 	}
 	cs := make([]FakeContainer, 0, len(c.Containers)+len(w.created))
@@ -456,8 +468,11 @@ func (c FakeConfig) withContainerWrites(w *fakeContainerWrites) FakeConfig {
 	for i, fc := range cs {
 		if to, ok := w.names[fc.ID]; ok {
 			fc.Names = []string{"/" + to}
-			cs[i] = fc
 		}
+		if h, ok := w.health[fc.ID]; ok {
+			fc.Health = h
+		}
+		cs[i] = fc
 	}
 	c.Containers = cs
 	return c

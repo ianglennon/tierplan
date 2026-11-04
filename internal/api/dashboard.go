@@ -525,7 +525,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), ReadOnly: readOnly[c.NodeID],
 					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 					TierPlanStackID: known.confirmedFor(containerStack(c.Labels), c.Labels),
-					Update:          updateOfContainer(judged, c.ID),
+					Update:          updateOfContainer(judged, c.ID, known),
 				}
 			})
 			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{

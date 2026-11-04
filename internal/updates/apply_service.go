@@ -47,6 +47,14 @@ var itemMessages = map[string]string{
 	ReasonEngine:         "The swarm could not be reached.",
 	ReasonCancelled:      "The update was cancelled.",
 	"network_full":       "A network the service needs has no free address left.",
+
+	// The reasons and codes of a container's update (plan 12-20).
+	ReasonCreateRefused:    "The new container could not be created, so nothing was changed.",
+	ReasonAgentHostPolicy:  "The node's agent doesn't let TierPlan create containers with host access. Nothing was changed.",
+	ReasonContainerChanged: "The container was changed or removed by someone else while it was being updated. Nothing was changed.",
+	ReasonRestoreFailed:    "The new container failed and the old one could not be put back.",
+	"auto_remove":          "A container started with automatic removal is removed when it stops, so it can't be put back if the update fails. Nothing was changed.",
+	"remove_old_failed":    "The new container is running. The old one could not be removed; it is stopped and keeps its temporary name.",
 }
 
 // updateService does the update of one plain service and ends the run through end. end is called once, before the last step of
@@ -302,30 +310,40 @@ func (a *Applier) pullOnTaskNodes(ctx context.Context, r *jobs.Reporter, t targe
 	}
 	index := map[string]int{}
 	for _, node := range nodes {
-		r.Output("Pull " + t.image + " on " + node.name)
-		pctx, cancel := context.WithTimeout(ctx, pullTimeout)
-		err := a.Aggregator.WriteOnNode(pctx, t.envID, node.id, func(c *dockerx.Client) error {
-			_, e := c.ImagePull(pctx, t.pullRef, dockerx.PullOptions{EncodedAuth: header}, func(ev dockerx.PullEvent) {
-				r.Update(ItemPull, func(it *jobs.Item) { stackops.ApplyPullEvent(it, index, ev) })
-			})
-			return e
-		})
-		cancel()
-		if err != nil {
-			c := stackops.PullErrorCode(err)
-			if c == dockerx.PullCodeFailed || c == stackops.CodeNodeUnreachable {
-				a.log().Warn("the pull of a service image failed", "environment", t.envID, "service", t.name, "node", node.id, "code", c, "error", err)
-			}
-			a.noteCredential(ctx, used, c)
-			if c == dockerx.PullCodeCancelled || ctx.Err() != nil {
-				return ReasonCancelled, ReasonCancelled
-			}
-			return c, ReasonPullFailed
+		if code, reason := a.pullOn(ctx, r, t, node, header, used, index); code != "" {
+			return code, reason
 		}
 	}
 	a.noteCredential(ctx, used, "")
 	r.Finish(ItemPull, jobs.ItemDone, "", "", map[string]string{"nodes": strconv.Itoa(len(nodes))})
 	return "", ""
+}
+
+// pullOn pulls the new image on one node with the header the credential made, reporting its progress on the pull item (index maps a
+// layer to its place in the item and belongs to the one step). It answers
+// the code of the step and the reason of the run when the pull failed, empty strings when it worked. Nothing is retried.
+func (a *Applier) pullOn(ctx context.Context, r *jobs.Reporter, t target, node taskNode, header string, used *registry.Candidate, index map[string]int) (code, reason string) {
+	r.Output("Pull " + t.image + " on " + node.name)
+	pctx, cancel := context.WithTimeout(ctx, pullTimeout)
+	defer cancel()
+	err := a.Aggregator.WriteOnNode(pctx, t.envID, node.id, func(c *dockerx.Client) error {
+		_, e := c.ImagePull(pctx, t.pullRef, dockerx.PullOptions{EncodedAuth: header}, func(ev dockerx.PullEvent) {
+			r.Update(ItemPull, func(it *jobs.Item) { stackops.ApplyPullEvent(it, index, ev) })
+		})
+		return e
+	})
+	if err == nil {
+		return "", ""
+	}
+	c := stackops.PullErrorCode(err)
+	if c == dockerx.PullCodeFailed || c == stackops.CodeNodeUnreachable {
+		a.log().Warn("the pull of an image failed", "environment", t.envID, "workload", t.name, "node", node.id, "code", c, "error", err)
+	}
+	a.noteCredential(ctx, used, c)
+	if c == dockerx.PullCodeCancelled || ctx.Err() != nil {
+		return ReasonCancelled, ReasonCancelled
+	}
+	return c, ReasonPullFailed
 }
 
 // taskNode is a node the service has a task on that TierPlan can reach.

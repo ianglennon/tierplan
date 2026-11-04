@@ -31,7 +31,7 @@ const (
 func oldContainer() container.InspectResponse {
 	port := network.MustParsePort("8080/tcp")
 	retries := 3
-	mac := network.HardwareAddr{0x02, 0x42, 0x0a, 0x14, 0x00, 0x05}
+	mac := network.HardwareAddr{0x02, 0xaa, 0x0a, 0x14, 0x00, 0x05} // chosen by somebody: not the 02:42 + address the engine derives
 	return container.InspectResponse{
 		ID:   oldID,
 		Name: "/web",
@@ -333,6 +333,22 @@ func TestRecreateSpecKeepsEverythingButImage(t *testing.T) {
 					if es.IPAddress.IsValid() || es.Gateway.IsValid() || es.EndpointID != "" || es.NetworkID != "" || es.IPPrefixLen != 0 || len(es.DNSNames) != 0 {
 						t.Errorf("%s keeps what the engine assigned: %+v", n, es)
 					}
+				}
+			},
+		},
+		{
+			name: "a MAC address the engine derived from the old address is left to be derived again, one somebody set is kept",
+			change: func(old *container.InspectResponse) {
+				old.NetworkSettings.Networks["back"].MacAddress = network.HardwareAddr{0x02, 0x42, 0x0a, 0x1e, 0x00, 0x07}
+				old.NetworkSettings.Networks["back"].IPAddress = netip.MustParseAddr("10.30.0.7")
+			},
+			check: func(t *testing.T, old container.InspectResponse, _ *container.Config, _ *container.HostConfig, first *network.NetworkingConfig, more map[string]*network.EndpointSettings) {
+				_, front := onlyEndpoint(t, first)
+				if len(front.MacAddress) == 0 {
+					t.Errorf("front MAC = %v, want the one somebody set", front.MacAddress)
+				}
+				if len(more["back"].MacAddress) != 0 {
+					t.Errorf("back MAC = %v, want none: the engine derived it from the old address", more["back"].MacAddress)
 				}
 			},
 		},

@@ -4,6 +4,7 @@
 package updates
 
 import (
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 )
@@ -78,6 +79,37 @@ func specHasHealthcheck(spec swarm.ServiceSpec, image *bool) bool {
 	cs := spec.TaskTemplate.ContainerSpec
 	if cs != nil && cs.Healthcheck != nil && len(cs.Healthcheck.Test) > 0 {
 		return cs.Healthcheck.Test[0] != "NONE"
+	}
+	return image != nil && *image
+}
+
+// ContainerWarnings are the warnings of updating the plain container name, from its inspect document. imageHasHealthcheck says
+// whether the image the container runs defines a health check: nil when the image could not be inspected, which reads as none.
+//
+//   - container_downtime: always, since the container is stopped and recreated.
+//   - no_healthcheck: the container defines no health check (or switches the image's off) and its image defines none.
+//   - volumes: it mounts a volume, which the new version will see in the state the old one left it.
+//
+// The warnings come in that order.
+func ContainerWarnings(name string, insp container.InspectResponse, imageHasHealthcheck *bool) []Warning {
+	out := []Warning{{Workload: name, Code: WarnContainerDowntime}}
+	if !containerHasHealthcheck(insp, imageHasHealthcheck) {
+		out = append(out, Warning{Workload: name, Code: WarnNoHealthcheck})
+	}
+	for _, m := range insp.Mounts {
+		if m.Type == mount.TypeVolume {
+			out = append(out, Warning{Workload: name, Code: WarnVolumes})
+			break
+		}
+	}
+	return out
+}
+
+// containerHasHealthcheck reports whether a container will be health-checked: its config defines a check that runs, or says
+// nothing and the image defines one. A config that switches the check off (NONE) is not checked whatever the image says.
+func containerHasHealthcheck(insp container.InspectResponse, image *bool) bool {
+	if insp.Config != nil && insp.Config.Healthcheck != nil && len(insp.Config.Healthcheck.Test) > 0 {
+		return insp.Config.Healthcheck.Test[0] != "NONE"
 	}
 	return image != nil && *image
 }

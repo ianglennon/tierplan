@@ -192,6 +192,12 @@ type FakeConfig struct {
 	// an engine does for a bad configuration (400), or an agent for a refusal by its policy (403 with the
 	// agent_policy_denied marker). The write is recorded whatever the answer.
 	RefuseCreate map[string]FakeRefusal
+	// ExitOnStart makes a start of a container whose image reference (Config.Image) is a key leave it exited, as a
+	// container whose command fails at once does. The start itself is answered as usual (204).
+	ExitOnStart map[string]bool
+	// HealthOnStart makes a container whose image reference is a key report that health status (starting, healthy
+	// or unhealthy) once it is started, as an image with a HEALTHCHECK does.
+	HealthOnStart map[string]string
 	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
 	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
 	RemoveErrors map[string]string

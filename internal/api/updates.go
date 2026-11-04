@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -103,6 +104,7 @@ type UpdateInfoBody struct {
 	Task             bool              `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
 	Holder           *UpdateHolderBody `json:"holder,omitempty" doc:"Set when the state is busy: who holds the environment's operation lock, which an update cannot start under"`
 	JobID            string            `json:"jobId,omitempty" doc:"Left out unless set: when the state is updating, the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows"`
+	Refusal          string            `json:"refusal,omitempty" enum:"compose_unmanaged,task_container" doc:"Left out unless set, and only on a container: why it gets no one-click update whatever its state. compose_unmanaged (it belongs to a Compose project TierPlan does not manage, so the action reads Adopt to update) or task_container (a task container of a swarm service is updated through its service)"`
 }
 
 // UpdateHolderBody is who holds an environment's operation lock, as the Busy badge and the confirm name them.
@@ -246,10 +248,28 @@ func containerUpdates(ctx context.Context, u *updates.Service, log *slog.Logger,
 	return j
 }
 
-// updateOfContainer is the update object of one container, nil when it has none.
-func updateOfContainer(j updates.ContainerJudgement, id string) *UpdateInfoBody {
+// updateOfContainer is the update object of one container, nil when it has none. known are the stacks TierPlan manages in its
+// environment, which decide whether a container of a Compose project is one TierPlan can update.
+func updateOfContainer(j updates.ContainerJudgement, id string, known stackIDs) *UpdateInfoBody {
 	if v, ok := j.Verdicts[id]; ok {
-		return updateInfoOf(v, j.Workloads[id])
+		b := updateInfoOf(v, j.Workloads[id])
+		b.Refusal = containerRefusal(j.Workloads[id], known)
+		return b
 	}
 	return nil
+}
+
+// containerRefusal is why a container gets no one-click update of its own, empty when it does or is updated through a stack
+// TierPlan manages: a task container is updated through its service, and a container of a Compose project TierPlan does not
+// manage is adopted first (D-21). A container of a managed stack carries that stack's ID and the stack states it.
+func containerRefusal(w updates.Workload, known stackIDs) string {
+	switch {
+	case w.Task:
+		return updates.NotUpdatableTaskContainer
+	case w.Labels[stacks.LabelComposeProject] == "":
+		return ""
+	case w.Labels[stacks.LabelStackID] != "" && known.confirmedFor(containerStack(w.Labels), w.Labels) != "":
+		return ""
+	}
+	return updates.NotUpdatableComposeUnmanaged
 }

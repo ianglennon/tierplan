@@ -35,9 +35,9 @@ const (
 
 // UpdateRunRequest names the workload to update and what the person confirmed.
 type UpdateRunRequest struct {
-	Kind   string            `json:"kind" enum:"service,stack" doc:"service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones. Containers follow in a later version"`
-	Name   string            `json:"name" minLength:"1" maxLength:"255" doc:"The service's name, or the stack's name for kind stack"`
-	Expect map[string]string `json:"expect,omitempty" maxProperties:"100" doc:"For each service name (the compose service name on a standalone host), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request"`
+	Kind   string            `json:"kind" enum:"service,container,stack" doc:"service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), container for a plain container made with docker run (a container of a stack TierPlan manages is updated through that stack, one of a Compose project TierPlan does not manage is refused with not_updatable compose_unmanaged and a task container of a swarm service with task_container), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones"`
+	Name   string            `json:"name" minLength:"1" maxLength:"255" doc:"The service's or container's name, or the stack's name for kind stack"`
+	Expect map[string]string `json:"expect,omitempty" maxProperties:"100" doc:"For each service name (the compose service name on a standalone host; the container's name for kind container), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request"`
 }
 
 // UpdateRunInput is the path and body of the update route.
@@ -119,9 +119,10 @@ func registerUpdateRun(r *httpx.Router, d UpdatesDeps) {
 		Description: "Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, " +
 			"then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. " +
 			"The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, " +
-			"409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file or not_from_registry), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. " +
+			"409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged or task_container), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. " +
 			"A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. " +
 			"The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. " +
+			"A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. " +
 			"Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermServicesControl, Scope: rbac.ScopeEnvironment},
@@ -182,6 +183,8 @@ func runImageUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *
 	}
 	// A stack, and a service of a stack TierPlan manages, are updated through a revision of that stack (plan 12-18).
 	switch in.Body.Kind {
+	case "container":
+		return runContainerUpdate(ctx, d, p, env, in)
 	case "stack":
 		return runStackUpdate(ctx, d, p, env, in, stackUpdateRun{Stack: in.Body.Name})
 	case "service":
@@ -199,6 +202,57 @@ func runImageUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *
 		EnvID: env.ID, EnvName: env.Name, Kind: in.Body.Kind, Name: in.Body.Name, Expect: in.Body.Expect,
 		Actor: p.AuditActor(), IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Owner: stackJobOwner(p),
 	})
+	if err != nil {
+		return UpdateRunBody{}, updateRunProblem(d, env, err)
+	}
+	return UpdateRunBody{JobID: jobID}, nil
+}
+
+// updateContainerNeedsControl is the 403 for someone who may update services but not control containers.
+const updateContainerNeedsControl = "Updating a container recreates it, which needs the permission to control containers here."
+
+// runContainerUpdate starts the update of a plain container and answers its job. Recreating a container is a container action, so
+// containers.control is checked beside the route's services.control. A container of a stack TierPlan manages is updated as that
+// stack's service (which needs stacks.deploy as well); a container of a Compose project TierPlan does not manage, and a task
+// container of a swarm service, are refused before anything is written.
+func runContainerUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *httpx.Env, in *UpdateRunInput) (UpdateRunBody, error) {
+	if d.Checker == nil {
+		return UpdateRunBody{}, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
+	}
+	dec := d.Checker.Check(ctx, p, rbac.Require(rbac.PermContainersControl), env.ID)
+	if dec.Err != nil {
+		return UpdateRunBody{}, snapshotProblem(d.log(), env.ID, dec.Err)
+	}
+	if !dec.Allowed {
+		return UpdateRunBody{}, httpx.Problem(http.StatusForbidden, "", updateContainerNeedsControl)
+	}
+	c, err := d.Applier.FindContainer(ctx, env.ID, in.Body.Name)
+	switch {
+	case errors.Is(err, updates.ErrWorkloadGone):
+		return UpdateRunBody{}, workloadGone("container")
+	case err != nil:
+		return UpdateRunBody{}, updateRunProblem(d, env, err)
+	case c.StackID != "":
+		// A container of a managed stack is that stack's service: its update is a revision of the stack.
+		if d.Stacks.Store == nil {
+			return UpdateRunBody{}, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
+		}
+		st, serr := d.Stacks.repo().Stack(ctx, env.ID, c.StackID)
+		switch {
+		case errors.Is(serr, stackops.ErrStackNotFound), serr == nil && (st.Name != c.Workload.Stack || c.Service == ""):
+			return UpdateRunBody{}, updateRunProblem(d, env, &updates.NotUpdatableError{Code: updates.NotUpdatableComposeUnmanaged})
+		case serr != nil:
+			return UpdateRunBody{}, stackLookupProblem(d.Stacks, env.ID, serr)
+		}
+		return runStackUpdate(ctx, d, p, env, in, stackUpdateRun{StackID: c.StackID, Services: []string{c.Service}})
+	}
+	jobID, err := d.Applier.Start(ctx, updates.Request{
+		EnvID: env.ID, EnvName: env.Name, Kind: "container", Name: in.Body.Name, Expect: in.Body.Expect,
+		Actor: p.AuditActor(), IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent, Owner: stackJobOwner(p),
+	})
+	if errors.Is(err, updates.ErrWorkloadGone) {
+		return UpdateRunBody{}, workloadGone("container")
+	}
 	if err != nil {
 		return UpdateRunBody{}, updateRunProblem(d, env, err)
 	}
