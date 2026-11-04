@@ -426,3 +426,64 @@ func TestJudgeLocalBuildInference(t *testing.T) {
 		})
 	}
 }
+
+// An update that was found a long time ago may have been followed by another, or taken back: the verdict
+// keeps its state and says it may be out of date (plan 12-09, D-01).
+func TestJudgeMayBeStale(t *testing.T) {
+	t.Parallel()
+	moved := func(age time.Duration) updates.JudgeInput {
+		at := t0.Add(-age)
+		return updates.JudgeInput{
+			Workload: serving("linux/amd64"), Now: t0, StaleAfter: 18 * time.Hour,
+			Check: &updates.Check{Digest: dg('9'), CheckedAt: at, SuccessAt: at},
+		}
+	}
+	if v := updates.Judge(moved(30 * time.Hour)); v.State != updates.StateUpdateAvailable || v.Note != updates.NoteMayBeStale {
+		t.Errorf("an update found 30h ago = %+v, want update_available with the note may_be_stale", v)
+	}
+	if v := updates.Judge(moved(17 * time.Hour)); v.State != updates.StateUpdateAvailable || v.Note != "" {
+		t.Errorf("an update found 17h ago = %+v, want update_available with no note", v)
+	}
+	if v := updates.Judge(moved(18 * time.Hour)); v.Note != "" {
+		t.Errorf("an update found exactly at the bound = %+v, want no note", v)
+	}
+	// The platform route says the same.
+	all := map[string]string{"linux/amd64": dg('a'), "linux/arm64": dg('b')}
+	in := updates.JudgeInput{
+		Workload: serving("linux/amd64"), Now: t0, StaleAfter: 18 * time.Hour,
+		Check:        &updates.Check{Digest: dg('9'), Index: true, Platforms: map[string]string{"linux/amd64": dg('f'), "linux/arm64": dg('b')}, CheckedAt: t0.Add(-30 * time.Hour), SuccessAt: t0.Add(-30 * time.Hour)},
+		RunPlatforms: all,
+	}
+	if v := updates.Judge(in); v.State != updates.StateUpdateAvailable || v.Note != updates.NoteMayBeStale || !slices.Equal(v.ChangedPlatforms, []string{"linux/amd64"}) {
+		t.Errorf("a platform change found 30h ago = %+v, want update_available, may_be_stale and the platform", v)
+	}
+	// A running index the registry no longer serves keeps the note that says so.
+	gone := moved(30 * time.Hour)
+	gone.RunIndexGone = true
+	if v := updates.Judge(gone); v.State != updates.StateUpdateAvailable || v.Note != updates.NoteRunningIndexGone {
+		t.Errorf("a gone index = %+v, want its own note", v)
+	}
+	// A same-digest result that old is stale, and carries no update note.
+	same := moved(30 * time.Hour)
+	same.Check.Digest = dg('1')
+	if v := updates.Judge(same); v.State != updates.StateCheckStale || v.Note != "" {
+		t.Errorf("the same digest 30h ago = %+v, want check_stale", v)
+	}
+}
+
+// A workload that was never checked says when the schedule will check it; one that was has no use for it.
+func TestJudgeNotCheckedCarriesNextCheck(t *testing.T) {
+	t.Parallel()
+	next := t0.Add(5 * time.Hour)
+	if v := updates.Judge(updates.JudgeInput{Workload: serving("linux/amd64"), Now: t0, NextCheckAt: next}); v.State != updates.StateNotChecked || !v.NextCheckAt.Equal(next) {
+		t.Errorf("no check stored = %+v, want not_checked and %v", v, next)
+	}
+	empty := &updates.Check{CheckedAt: t0}
+	if v := updates.Judge(updates.JudgeInput{Workload: serving("linux/amd64"), Check: empty, Now: t0, NextCheckAt: next}); v.State != updates.StateNotChecked || !v.NextCheckAt.Equal(next) {
+		t.Errorf("a row with no answer = %+v, want not_checked and %v", v, next)
+	}
+	ok := &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}
+	if v := updates.Judge(updates.JudgeInput{Workload: serving("linux/amd64"), Check: ok, Now: t0, StaleAfter: time.Hour, NextCheckAt: next}); !v.NextCheckAt.IsZero() {
+		t.Errorf("a checked workload = %+v, want no next check", v)
+	}
+}

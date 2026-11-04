@@ -39,6 +39,9 @@ type Service struct {
 	// StaleAfter is how old a successful check may be before an unchanged digest reads check_stale, per
 	// environment. Nil means 24 hours.
 	StaleAfter func(envID string) time.Duration
+	// NextCheck is when the schedule will check an environment next, and false when it will not (the
+	// scheduler's Next). Nil means no workload is told when it will be checked.
+	NextCheck func(envID string) (time.Time, bool)
 }
 
 // Snapshotter reads what an environment runs, node by node. *envs.Aggregator is one.
@@ -97,6 +100,12 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 		return nil, err
 	}
 	now, stale := s.now(), s.staleAfter(envID)
+	var nextCheck time.Time
+	if s.NextCheck != nil {
+		if at, ok := s.NextCheck(envID); ok {
+			nextCheck = at
+		}
+	}
 	out := make(map[string]Verdict, len(ws))
 	runs := map[runKey]runRead{}
 	for i, w := range ws {
@@ -105,7 +114,7 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 		if c, ok := stored[keyOf[i]]; ok && w.Checkable() {
 			chk = &c
 		}
-		in := JudgeInput{Workload: w, Check: chk, Now: now, StaleAfter: stale}
+		in := JudgeInput{Workload: w, Check: chk, Now: now, StaleAfter: stale, NextCheckAt: nextCheck}
 		if chk != nil {
 			in.RunPlatforms, in.RunIndexGone = s.runPlatforms(ctx, envID, w, chk, runs)
 		}

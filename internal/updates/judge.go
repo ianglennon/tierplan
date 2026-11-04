@@ -63,6 +63,11 @@ func ReasonOf(registryCode string) Reason {
 // serves: what changed cannot be told, so it reads update_available.
 const NoteRunningIndexGone = "running_index_gone"
 
+// NoteMayBeStale is the Note of an update_available verdict whose check is older than the bound the schedule
+// gives: the update was there when the tag was last asked about, and may have been followed or taken back
+// since. The state is kept; the page says so (D-01).
+const NoteMayBeStale = "may_be_stale"
+
 // JudgeInput is everything a verdict depends on. Judge reads no clock, store or network: Now and
 // StaleAfter are given.
 type JudgeInput struct {
@@ -80,6 +85,9 @@ type JudgeInput struct {
 	RunPlatforms map[string]string
 	// RunIndexGone is true when the registry no longer serves the index the workload runs.
 	RunIndexGone bool
+	// NextCheckAt is when the schedule will check the workload's environment next, zero when it will
+	// not. Only a workload that has not been checked carries it out.
+	NextCheckAt time.Time
 }
 
 // Verdict is what Judge decides about one workload.
@@ -96,6 +104,9 @@ type Verdict struct {
 	CheckedAt, SuccessAt time.Time
 	// Note is a plain-words addition for the page, empty for most states.
 	Note string
+	// NextCheckAt is when the schedule will check the workload next, set with StateNotChecked when the
+	// environment has a schedule.
+	NextCheckAt time.Time
 }
 
 // Judge decides what to say about a workload's image. The rules run in this order, and the first that
@@ -117,7 +128,23 @@ type Verdict struct {
 //     update_available with the note running_index_gone.
 //  6. The same digest, or none of the workload's platforms changed, found within StaleAfter:
 //     up_to_date; found longer ago: check_stale.
+//
+// An update_available verdict whose check is older than StaleAfter keeps its state and gains the note
+// may_be_stale, unless it already carries the note running_index_gone. A not_checked verdict carries
+// NextCheckAt.
 func Judge(in JudgeInput) Verdict {
+	v := judge(in)
+	if v.State == StateNotChecked {
+		v.NextCheckAt = in.NextCheckAt
+	}
+	if v.State == StateUpdateAvailable && v.Note == "" && !v.SuccessAt.IsZero() && in.Now.Sub(v.SuccessAt) > in.StaleAfter {
+		v.Note = NoteMayBeStale
+	}
+	return v
+}
+
+// judge is Judge before the notes that depend on the clock and the schedule.
+func judge(in JudgeInput) Verdict {
 	w, c := in.Workload, in.Check
 	v := Verdict{State: StateNotChecked, RunningDigest: w.RunningDigest}
 	if w.PinnedInFile() {
