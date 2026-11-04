@@ -18,6 +18,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UpdateMenuItems } from "@/features/updates/update-menu-items";
 import "@/i18n";
 import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
 
 // The update items of a row menu (plan 12-14, IMG-08, D-10, D-15): Skip this version with an Undo,
 // Stop skipping, and who may use them.
@@ -105,25 +106,34 @@ const writes = () => sent.filter((s) => s.method !== "GET");
 async function mount(
   update: UpdateInfo | undefined,
   name = "web",
-  extra: { kind?: "service" | "container"; withUpdate?: boolean } = {},
+  extra: {
+    kind?: "service" | "container";
+    withUpdate?: boolean;
+    project?: string;
+    service?: string;
+  } = {},
 ) {
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <DropdownMenu defaultOpen>
-          <DropdownMenuTrigger>menu</DropdownMenuTrigger>
-          <DropdownMenuContent>
-            <UpdateMenuItems
-              envId={ENV}
-              workload={{ kind: extra.kind ?? "service", name }}
-              update={update}
-              onIgnore={onIgnore}
-              onUpdate={extra.withUpdate === false ? undefined : onUpdate}
-            />
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Toaster />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <DropdownMenu defaultOpen>
+            <DropdownMenuTrigger>menu</DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <UpdateMenuItems
+                envId={ENV}
+                workload={{ kind: extra.kind ?? "service", name }}
+                update={update}
+                onIgnore={onIgnore}
+                onUpdate={extra.withUpdate === false ? undefined : onUpdate}
+                project={extra.project}
+                service={extra.service}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Toaster />
+        </TooltipProvider>
+      </TestRouter>
     </QueryClientProvider>,
   );
   // The role arrives with /api/me.
@@ -407,11 +417,71 @@ describe("UpdateMenuItems: Update…", () => {
     }
   });
 
-  it("is not offered for a container, or where the row cannot be updated here", async () => {
-    await mount(info(), "web", { kind: "container" });
-    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
-    cleanup();
+  it("is not offered where the row cannot be updated here", async () => {
     await mount(info(), "web", { withUpdate: false });
     expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+  });
+});
+
+describe("UpdateMenuItems: a container", () => {
+  const container = { kind: "container" as const, project: "shop", service: "" };
+
+  it("offers Update… to an Operator and opens the confirm, sending nothing itself", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info(), "cache", container);
+    const item = await screen.findByRole("menuitem", { name: "Update…" });
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(item);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menuitem", { name: "Adopt to update…" })).toBeNull();
+    expect(writes()).toEqual([]);
+  });
+
+  it("is unavailable below Operator, with the reason", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    await mount(info(), "cache", container);
+    await disabledItem("Needs Operator on Prod");
+  });
+
+  it("reads Adopt to update… for a container of a Compose project TierPlan does not manage, and goes to its adopt flow", async () => {
+    await mount(info({ refusal: "compose_unmanaged" }), "shop-web-1", container);
+    const link = await screen.findByRole("menuitem", { name: "Adopt to update…" });
+    await waitFor(() =>
+      expect(link.getAttribute("href")).toBe(`/env/${ENV}/unmanaged-stacks/shop/adopt`),
+    );
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+    fireEvent.click(link);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(writes()).toEqual([]);
+  });
+
+  it("encodes a project name with a slash in the adopt address", async () => {
+    await mount(info({ refusal: "compose_unmanaged" }), "x-1", { ...container, project: "a/b" });
+    const link = await screen.findByRole("menuitem", { name: "Adopt to update…" });
+    await waitFor(() => expect(link.getAttribute("href")).toContain("a%2Fb"));
+  });
+
+  it("makes Adopt to update… unavailable with the role it takes below Env Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ refusal: "compose_unmanaged" }), "shop-web-1", container);
+    const item = await screen.findByRole("menuitem", { name: "Adopt to update…" });
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBe("true"));
+    expect(item.getAttribute("href")).toBeNull();
+    expect(document.body.textContent).toContain("Needs Admin on Prod");
+  });
+
+  it("shows no Adopt to update… when the container is up to date", async () => {
+    await mount(
+      info({ state: "up_to_date", refusal: "compose_unmanaged" }),
+      "shop-web-1",
+      container,
+    );
+    expect(screen.queryByRole("menuitem", { name: "Adopt to update…" })).toBeNull();
+  });
+
+  it("makes Update… of a swarm task container unavailable and names the service to update instead", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ refusal: "task_container" }), "web.1.abc", { ...container, service: "web" });
+    await disabledItem("Update the service web instead. Its tasks are replaced for you.");
   });
 });

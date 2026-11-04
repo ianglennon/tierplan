@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { Link } from "@tanstack/react-router";
+
 import {
   type IgnoreTarget,
   type UpdateInfo,
@@ -52,11 +54,17 @@ interface UpdateMenuItemsProps {
   // Opens the ignore dialog. The dialog belongs to the row, not to this item: a menu's content is
   // gone as soon as an item is chosen.
   onIgnore: () => void;
-  // Opens the update confirm. Absent where the row cannot be updated here (a container, TierPlan's own
-  // agent), and then no Update… is shown. A service of a stack TierPlan manages is updated as a new
+  // Opens the update confirm. Absent where the row cannot be updated here (TierPlan's own agent), and
+  // then no Update… is shown. A service or container of a stack TierPlan manages is updated as a new
   // revision of its stack, and the confirm takes the person to the stack's console. Like the ignore
   // dialog, the confirm belongs to the row.
   onUpdate?: () => void;
+  // For a container: the Compose project it belongs to and the swarm service it is a task of. The
+  // server refuses a one-click update of a container of a project TierPlan does not manage
+  // (the item is "Adopt to update…" and goes to that project's adopt flow, D-21) and of a task
+  // container (the item is unavailable and names the service to update instead).
+  project?: string;
+  service?: string;
   // Called as an item that opens something is chosen, so a row menu can keep focus where it was.
   onChosen?: () => void;
 }
@@ -76,6 +84,8 @@ export function UpdateMenuItems({
   update,
   onIgnore,
   onUpdate,
+  project,
+  service,
   onChosen,
 }: UpdateMenuItemsProps) {
   const t = useT();
@@ -92,8 +102,17 @@ export function UpdateMenuItems({
   const blocked = !needs.allowed;
   const unavailable = blocked && !reason;
 
-  const gate = useUpdateGate(envId, update);
-  const canUpdate = onUpdate !== undefined && workload.kind === "service" && gate.shown;
+  const isContainer = workload.kind === "container";
+  const gate = useUpdateGate(
+    envId,
+    update,
+    isContainer ? { kind: "container", service: service || workload.name } : undefined,
+  );
+  // The server's refusal of a container: compose_unmanaged is sent to the adopt flow here, and
+  // task_container is worded by the gate as the reason Update… is unavailable.
+  const canAdopt =
+    isContainer && update?.refusal === "compose_unmanaged" && gate.shown && !!project;
+  const canUpdate = onUpdate !== undefined && gate.shown && !gate.adopt;
 
   const state = update?.state;
   const labelled = update?.ignore?.scope === "label";
@@ -104,6 +123,27 @@ export function UpdateMenuItems({
 
   return (
     <>
+      {canAdopt ? (
+        <NeedsTooltip reason={gate.reason}>
+          <DropdownMenuItem
+            className="max-md:min-h-11"
+            disabled={gate.unavailable}
+            asChild={!gate.reason && !gate.unavailable}
+            onSelect={() => {
+              if (gate.reason || gate.unavailable) return;
+              onChosen?.();
+            }}
+          >
+            {gate.reason || gate.unavailable ? (
+              t("updates.stack.action.adopt")
+            ) : (
+              <Link to="/env/$envId/unmanaged-stacks/$name/adopt" params={{ envId, name: project }}>
+                {t("updates.stack.action.adopt")}
+              </Link>
+            )}
+          </DropdownMenuItem>
+        </NeedsTooltip>
+      ) : null}
       {canUpdate ? (
         <NeedsTooltip reason={gate.reason}>
           <DropdownMenuItem
