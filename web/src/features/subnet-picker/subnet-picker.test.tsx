@@ -436,7 +436,8 @@ describe("SubnetPicker", () => {
     expect(onTick).toHaveBeenLastCalledWith(true);
     typeSubnet("10.0.1.0/25");
     await screen.findByText(/can't be created anyway/);
-    expect(onTick).toHaveBeenLastCalledWith(false);
+    // The tick clears in an effect after the text paints, so wait for it.
+    await waitFor(() => expect(onTick).toHaveBeenLastCalledWith(false));
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
