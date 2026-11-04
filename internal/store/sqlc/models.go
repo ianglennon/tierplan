@@ -228,6 +228,26 @@ type ImageUpdateIgnore struct {
 	SetAt  int64
 }
 
+type ImageUpdateRun struct {
+	ID           string
+	EnvID        string
+	BulkID       string
+	Kind         string
+	Workload     string
+	WorkloadID   string
+	StackID      string
+	Items        string
+	State        string
+	Reason       string
+	Actor        string
+	JobID        string
+	RevisionSeq  int64
+	RollbackSeq  int64
+	OldContainer string
+	StartedAt    int64
+	FinishedAt   int64
+}
+
 type JanitorDefault struct {
 	ID                      int64
 	Enabled                 int64

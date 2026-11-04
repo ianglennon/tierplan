@@ -141,6 +141,11 @@ var Tables = map[string]Class{
 	// are a person's choices, not derived, and hold no secret.
 	"image_update_ignores": Included,
 
+	// The record of every image update (Phase 12, IMG-06): which environment, workload and images, the
+	// state it ended in, who ran it and the revisions it wrote, so what was updated and by whom survives
+	// a restore. It belongs to its environment and holds no credential.
+	"image_update_runs": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.
