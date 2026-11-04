@@ -111,6 +111,7 @@ type updateInfo struct {
 	SuccessAt        string   `json:"successAt"`
 	Note             string   `json:"note"`
 	Task             bool     `json:"task"`
+	JobID            string   `json:"jobId"`
 }
 
 type updatedItem struct {

@@ -5,20 +5,33 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/updates"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // Updating and skipping many workloads across the fleet in one action (plan 12-30, ENV-10, IMG-06, D-10, D-11, D-14, D-15). Docker is a
 // fake daemon behind the real monitor, aggregator and cluster reader; the registry is a scripted Heads; the applier, its run store, the
 // job hub, the operation lock, the router and the permission checks are the real ones.
+
+// fail makes the registry unable to answer for the repository.
+func (h *scriptedHeads) fail(repo string, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.answers[repo] = headAnswer{err: err}
+}
 
 // bulkItem is one workload of a request.
 func bulkItem(envID, kind, name string, expect map[string]string) map[string]any {
@@ -137,6 +150,36 @@ func (f *envFix) runsOfBulk(t *testing.T, bulkID string) []updates.Run {
 	return out
 }
 
+// bulkFleet is two environments: the local host, a standalone engine running the container app, and a swarm reached through its
+// agent that runs the services web and api. Their registry says what heads says, and each has been checked.
+func bulkFleet(t *testing.T, heads *scriptedHeads) (f *agentFix, local, swarm envBody) {
+	t.Helper()
+	f = newAgentFixHost(t, "unix://"+dockertest.NewFake(t, containerEngine(plainContainer())).SocketPath())
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.updateHeads = heads
+	f.updateApplier = func(a *updates.Applier) { a.Clock = &instantClock{now: time.Unix(1_700_000_000, 0)} }
+	f.h = f.build(t)
+	local = f.add(t)
+	f.awaitFirstProbe(t, local.ID)
+
+	env := f.srv.NewEnvironment(t, "Swarm")
+	cfg := swarmManagerEngine(plainService("web", 'a'), plainService("api", 'a'))
+	cfg.TasksFollowWrites, cfg.SwarmNodeID, cfg.SwarmClusterID = true, "node-1", "cluster-1"
+	f.connect(t, env, cfg, &wire.Facts{
+		EngineID: "ENG:mgr-1", Hostname: "mgr-1", EngineReachable: true, EngineVersion: "29.1.0",
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-1", ClusterID: "cluster-1", Control: true},
+	})
+	f.whenState(t, env.ID, "online")
+	swarm = envBody{ID: env.ID}
+	for _, id := range []string{local.ID, swarm.ID} {
+		if rec := f.checkNow(t, envBody{ID: id}); rec.code != http.StatusOK {
+			t.Fatalf("check now %s: %d %s", id, rec.code, rec.body)
+		}
+	}
+	return f, local, swarm
+}
+
 // The tracer (plan 12-30, IMG-06, D-11): "Update 3 selected" across two environments makes two jobs, one in each, which update their
 // items one at a time under one bulk ID. A swarm reached through its agent has two services; the local host has one container. Every
 // item is done, every audit row of the selection carries the bulk ID, and each environment's job ends with a summary row.
@@ -145,28 +188,7 @@ func TestBulkUpdateTwoEnvironments(t *testing.T) {
 	heads := newScriptedHeads(map[string]headAnswer{
 		"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}, "team/app": {digest: updDigest('b')},
 	})
-	f := newAgentFixHost(t, "unix://"+dockertest.NewFake(t, containerEngine(plainContainer())).SocketPath())
-	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
-	f.svc.WithClusters(f.clusters)
-	f.updateHeads = heads
-	f.updateApplier = func(a *updates.Applier) { a.Clock = &instantClock{now: time.Unix(1_700_000_000, 0)} }
-	f.h = f.build(t)
-	local := f.add(t)
-	f.awaitFirstProbe(t, local.ID)
-
-	swarm := f.srv.NewEnvironment(t, "Swarm")
-	cfg := swarmManagerEngine(plainService("web", 'a'), plainService("api", 'a'))
-	cfg.TasksFollowWrites, cfg.SwarmNodeID, cfg.SwarmClusterID = true, "node-1", "cluster-1"
-	f.connect(t, swarm, cfg, &wire.Facts{
-		EngineID: "ENG:mgr-1", Hostname: "mgr-1", EngineReachable: true, EngineVersion: "29.1.0",
-		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-1", ClusterID: "cluster-1", Control: true},
-	})
-	f.whenState(t, swarm.ID, "online")
-	for _, id := range []string{local.ID, swarm.ID} {
-		if rec := f.checkNow(t, envBody{ID: id}); rec.code != http.StatusOK {
-			t.Fatalf("check now %s: %d %s", id, rec.code, rec.body)
-		}
-	}
+	f, local, swarm := bulkFleet(t, heads)
 
 	rec := f.bulkRun(t,
 		bulkItem(swarm.ID, "service", "web", map[string]string{"web": updDigest('b')}),
@@ -237,6 +259,382 @@ func TestBulkUpdateTwoEnvironments(t *testing.T) {
 	for _, id := range []string{swarm.ID, local.ID} {
 		if h, held := f.stackLocks.Held(id); held {
 			t.Errorf("the lock of %s is still held by %+v", id, h)
+		}
+	}
+}
+
+// rejectNewVersionOf makes every task of the service fail while it holds the digest c, as a swarm does when it cannot start an image.
+func rejectNewVersionOf(f *envFix, service string, c byte) {
+	var script []dockertest.FakeServiceTask
+	for slot := 1; slot <= 3; slot++ {
+		script = append(script, dockertest.FakeServiceTask{Slot: slot, State: "rejected", Desired: "shutdown", Err: "No such image"})
+	}
+	f.fake.SetServiceTasksWhileImage(service, updDigest(c), script...)
+}
+
+// threeServices are the services the single-environment bulk tests update.
+func threeServices() []dockertest.FakeService {
+	return []dockertest.FakeService{plainService("web", 'a'), plainService("api", 'a'), plainService("db", 'a')}
+}
+
+func threeAnswers(c byte) map[string]headAnswer {
+	return map[string]headAnswer{"team/web": {digest: updDigest(c)}, "team/api": {digest: updDigest(c)}, "team/db": {digest: updDigest(c)}}
+}
+
+// The job of one item failing does not take the others with it (plan 12-30, D-11): the second of three services is rejected by the
+// swarm, so it is put back and ends rolled back, and the first and the third are done. The job's summary reads 2 of 3 with one rolled
+// back, and every audit row carries the bulk ID.
+func TestBulkFailureIsolated(t *testing.T) {
+	t.Parallel()
+	f, e := bulkSwarm(t, newScriptedHeads(threeAnswers('b')), nil, threeServices()...)
+	rejectNewVersionOf(f, "api", 'b')
+
+	rec := f.bulkRun(t, bulkItem(e.ID, "service", "web", nil), bulkItem(e.ID, "service", "api", nil), bulkItem(e.ID, "service", "db", nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	job := f.awaitUpdate(t, ans.jobOf(t, e.ID))
+	if s := bulkItemStates(job); s["i0"] != "done" || s["i1"] != "failed" || s["i2"] != "done" || s["summary"] != "done" {
+		t.Fatalf("items = %v, want web and db done, api failed and the summary done", s)
+	}
+	if job.State != jobs.JobPartial {
+		t.Errorf("job = %s, want partial", job.State)
+	}
+	// api's own steps are under its item, with the rollback added to them.
+	steps := bulkItemStates(job)
+	if steps["i1/wait"] != "failed" || steps["i1/rollback"] != "done" || steps["i1/rollback_wait"] != "done" {
+		t.Errorf("api's steps = %v, want the wait failed and the rollback done", steps)
+	}
+
+	runs := map[string]updates.Run{}
+	for _, run := range f.runsOfBulk(t, ans.BulkID) {
+		runs[run.Workload] = run
+	}
+	if runs["web"].State != updates.RunDone || runs["db"].State != updates.RunDone || runs["api"].State != updates.RunRolledBack || runs["api"].Reason != updates.ReasonDidntStart {
+		t.Errorf("runs = web %s, api %s %q, db %s, want done, rolled_back (didnt_start), done", runs["web"].State, runs["api"].State, runs["api"].Reason, runs["db"].State)
+	}
+	// One at a time, in the order they were named: the update of api and its rollback come between web's and db's.
+	var order []string
+	for _, u := range f.fake.ServiceUpdates() {
+		order = append(order, u.Spec.Name)
+	}
+	if want := []string{"web", "api", "api", "db"}; !slices.Equal(order, want) {
+		t.Errorf("services written = %v, want %v", order, want)
+	}
+	for action, want := range map[string]int{"image.updated": 2, "image.update_failed": 1, "image.update_rolled_back": 1} {
+		rows := f.auditRows(t, action)
+		if len(rows) != want {
+			t.Errorf("%s rows = %d, want %d", action, len(rows), want)
+		}
+		for _, r := range rows {
+			if r.Details["bulk"] != ans.BulkID {
+				t.Errorf("%s row %+v does not carry the bulk ID", action, r)
+			}
+		}
+	}
+	sums := f.auditRows(t, "image.bulk_updated")
+	if len(sums) != 1 || sums[0].Details["done"] != "2" || sums[0].Details["total"] != "3" || sums[0].Details["rolled_back"] != "1" || sums[0].Details["skipped"] != "0" || sums[0].Result != "failure" {
+		t.Errorf("summary rows = %+v, want 2 of 3 with 1 rolled back, a failure", sums)
+	}
+	if u := f.heldOf(t, e, "api"); u.State != "rolled_back" {
+		t.Errorf("api reads %s, want rolled_back", u.State)
+	}
+	if _, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is still held after the job ended")
+	}
+}
+
+// An environment another operation holds has its items skipped as locked, and the environment that is free is updated (plan 12-30, D-10).
+func TestBulkLockedEnvironmentSkipped(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{
+		"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}, "team/app": {digest: updDigest('b')},
+	})
+	f, local, swarm := bulkFleet(t, heads)
+	if _, _, ok := f.stackLocks.TryAcquire(swarm.ID, stackops.Holder{StackID: "stk-1", StackName: "shop", Kind: "deploy", By: "ada", Started: time.Now()}); !ok {
+		t.Fatal("could not take the lock for a stack deploy")
+	}
+
+	rec := f.bulkRun(t, bulkItem(swarm.ID, "service", "web", nil), bulkItem(local.ID, "container", "app", nil), bulkItem(swarm.ID, "service", "api", nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	if len(ans.Jobs) != 1 || ans.Jobs[0].EnvID != local.ID {
+		t.Fatalf("jobs = %+v, want only the local host's", ans.Jobs)
+	}
+	if got := ans.reasons(); len(got) != 2 || got["service/web"] != "locked" || got["service/api"] != "locked" {
+		t.Errorf("skipped = %v, want web and api locked", got)
+	}
+	if job := f.awaitUpdate(t, ans.Jobs[0].JobID); job.State != jobs.JobDone {
+		t.Errorf("the free environment's job = %s, want done", job.State)
+	}
+	if h, held := f.stackLocks.Held(swarm.ID); !held || h.Kind != "deploy" {
+		t.Errorf("holder of the swarm = %+v %v, want the deploy still holding it", h, held)
+	}
+	if runs := f.runsOfBulk(t, ans.BulkID); len(runs) != 1 || runs[0].EnvID != local.ID {
+		t.Errorf("runs = %+v, want only the local container's", runs)
+	}
+}
+
+// An item whose newest version moved since it was confirmed is skipped at its turn and the others run (plan 12-30, D-05): the job
+// names it, its run is refused with the reason, nothing is written to its service, and the summary counts it skipped.
+func TestBulkMovedItemSkipped(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(threeAnswers('b'))
+	f, e := bulkSwarm(t, heads, nil, threeServices()...)
+	// The registry has moved on since the person looked.
+	heads.set("team/api", updDigest('c'))
+
+	rec := f.bulkRun(t,
+		bulkItem(e.ID, "service", "web", map[string]string{"web": updDigest('b')}),
+		bulkItem(e.ID, "service", "api", map[string]string{"api": updDigest('b')}),
+		bulkItem(e.ID, "service", "db", map[string]string{"db": updDigest('b')}),
+	)
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	job := f.awaitUpdate(t, ans.jobOf(t, e.ID))
+	s := bulkItemStates(job)
+	if s["i0"] != "done" || s["i1"] != "skipped" || s["i2"] != "done" || s["summary"] != "done" {
+		t.Fatalf("items = %v, want web and db done and api skipped", s)
+	}
+	for _, it := range job.Items {
+		if it.ID == "i1" && it.Code != "moved" {
+			t.Errorf("api's item code = %q, want moved", it.Code)
+		}
+	}
+	runs := map[string]updates.Run{}
+	for _, run := range f.runsOfBulk(t, ans.BulkID) {
+		runs[run.Workload] = run
+	}
+	if runs["api"].State != updates.RunRefused || runs["api"].Reason != "moved" || runs["web"].State != updates.RunDone || runs["db"].State != updates.RunDone {
+		t.Errorf("runs = %+v, want api refused as moved and the others done", runs)
+	}
+	for _, u := range f.fake.ServiceUpdates() {
+		if u.Spec.Name == "api" {
+			t.Errorf("api was written although its version moved")
+		}
+	}
+	sums := f.auditRows(t, "image.bulk_updated")
+	if len(sums) != 1 || sums[0].Details["done"] != "2" || sums[0].Details["total"] != "3" || sums[0].Details["skipped"] != "1" {
+		t.Errorf("summary rows = %+v, want 2 of 3 with 1 skipped", sums)
+	}
+	if rows := f.auditRows(t, "image.updated"); len(rows) != 2 {
+		t.Errorf("image.updated rows = %d, want two", len(rows))
+	}
+}
+
+// heldJob starts a bulk update of the three services whose first pull is held, and answers the job and the function that lets it go on.
+func heldJob(t *testing.T) (f *envFix, e envBody, ans bulkAnswer, release func()) {
+	t.Helper()
+	hold := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	f, e = bulkSwarm(t, newScriptedHeads(threeAnswers('b')), func(c *dockertest.FakeConfig) { c.PullHold = hold }, threeServices()...)
+	rec := f.bulkRun(t, bulkItem(e.ID, "service", "web", nil), bulkItem(e.ID, "service", "api", nil), bulkItem(e.ID, "service", "db", nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans = decode[bulkAnswer](t, rec)
+	testsupport.WaitFor(t, "web to read updating", func() bool { return f.heldOf(t, e, "web").State == "updating" })
+	return f, e, ans, release
+}
+
+// While a bulk job waits, its items read queued in every badge, then updating while each runs (plan 12-30, UI-SPEC "Queued").
+func TestBulkQueuedStates(t *testing.T) {
+	t.Parallel()
+	f, e, ans, release := heldJob(t)
+	jobID := ans.jobOf(t, e.ID)
+
+	web, api, db := f.heldOf(t, e, "web"), f.heldOf(t, e, "api"), f.heldOf(t, e, "db")
+	if web.State != "updating" || api.State != "queued" || db.State != "queued" {
+		t.Fatalf("states = web %s, api %s, db %s, want updating, queued, queued", web.State, api.State, db.State)
+	}
+	if web.JobID != jobID || api.JobID != jobID || db.JobID != jobID {
+		t.Errorf("jobs = %q %q %q, want the bulk job %s on each", web.JobID, api.JobID, db.JobID, jobID)
+	}
+	if runs, err := (updates.RunStore{Q: f.st.Q, W: f.st.Write}).Running(t.Context(), e.ID); err != nil || len(runs) != 3 {
+		t.Errorf("runs = %+v %v, want the three on record, one running and two queued", runs, err)
+	}
+
+	release()
+	if job := f.awaitUpdate(t, jobID); job.State != jobs.JobDone {
+		t.Fatalf("job = %s %+v, want done", job.State, job.Items)
+	}
+	for _, name := range []string{"web", "api", "db"} {
+		if u := f.heldOf(t, e, name); u.State == "queued" || u.State == "updating" || u.State == "busy" {
+			t.Errorf("%s reads %s after the job, want none of queued, updating or busy", name, u.State)
+		}
+	}
+}
+
+// A cancelled bulk job stops after the item in progress has ended and the rest are refused as cancelled; nothing of theirs is written
+// (plan 12-30, D-11).
+func TestBulkCancel(t *testing.T) {
+	t.Parallel()
+	f, e, ans, release := heldJob(t)
+	jobID := ans.jobOf(t, e.ID)
+
+	if err := f.jobHub.Cancel(jobID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	job := f.awaitUpdate(t, jobID)
+	release()
+	runs := map[string]updates.Run{}
+	for _, run := range f.runsOfBulk(t, ans.BulkID) {
+		runs[run.Workload] = run
+	}
+	if runs["web"].State == updates.RunQueued || runs["web"].State == updates.RunRunning || runs["web"].State == updates.RunDone {
+		t.Errorf("web = %s, want the item in progress ended, not done", runs["web"].State)
+	}
+	for _, name := range []string{"api", "db"} {
+		if r := runs[name]; r.State != updates.RunRefused || r.Reason != updates.ReasonCancelled {
+			t.Errorf("%s = %s %q, want refused as cancelled", name, r.State, r.Reason)
+		}
+	}
+	if s := bulkItemStates(job); s["i1"] != "cancelled" || s["i2"] != "cancelled" {
+		t.Errorf("items = %v, want api and db cancelled", s)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("services written = %d, want none: the first pull was cancelled and the rest never started", n)
+	}
+	if _, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is still held after the job ended")
+	}
+	sums := f.auditRows(t, "image.bulk_updated")
+	if len(sums) != 1 || sums[0].Details["done"] != "0" || sums[0].Details["total"] != "3" || sums[0].Details["skipped"] != "2" {
+		t.Errorf("summary rows = %+v, want 0 of 3 with 2 skipped", sums)
+	}
+}
+
+// A managed stack's services in a selection are one revision of the stack, deployed inside the bulk job under the lock the job already
+// holds: no second job, no second lock, its own history entry, and with its own automatic rollback when it fails (plan 12-30, D-06, D-12).
+func TestBulkStackItemInJob(t *testing.T) {
+	t.Parallel()
+	bulkAs := func(t *testing.T, s *shopFix, items ...map[string]any) bulkAnswer {
+		t.Helper()
+		rec := s.f.call(t, authReq{method: http.MethodPost, path: "/api/fleet/updates/run", body: bulkBody(items...), cookie: s.operator.cookie, csrf: s.operator.csrf})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("bulk update: %d %s", rec.Code, rec.Body)
+		}
+		return answerOf[bulkAnswer](t, rec)
+	}
+	t.Run("two services of one stack are one revision", func(t *testing.T) {
+		t.Parallel()
+		s := shopQuick(t, "web", "api")
+		s.move(t, "web", 'b')
+		s.move(t, "api", 'b')
+		jobsBefore := len(s.f.jobHub.List(func(jobs.Job) bool { return true }))
+
+		ans := bulkAs(t, s,
+			bulkItem(s.e.ID, "service", "shop_web", map[string]string{"shop_web": updDigest('b')}),
+			bulkItem(s.e.ID, "service", "shop_api", map[string]string{"shop_api": updDigest('b')}),
+		)
+		if len(ans.Jobs) != 1 || len(ans.Skipped) != 0 {
+			t.Fatalf("answer = %+v, want one job and nothing skipped", ans)
+		}
+		job := s.f.awaitUpdate(t, ans.Jobs[0].JobID)
+		if job.State != jobs.JobDone {
+			t.Fatalf("job = %s %+v, want done", job.State, job.Items)
+		}
+		if n := len(s.f.jobHub.List(func(jobs.Job) bool { return true })); n != jobsBefore+1 {
+			t.Errorf("jobs = %d, want %d: the bulk job and no job of the stack's own", n, jobsBefore+1)
+		}
+		st := bulkItemStates(job)
+		if st["i0"] != "done" || st["summary"] != "done" || len(job.Items) < 4 {
+			t.Errorf("items = %v, want the stack's item and the summary done, with the deploy's steps under the item", st)
+		}
+		for _, it := range job.Items {
+			if it.ID != "i0" && it.ID != "summary" && !strings.HasPrefix(it.ID, "i0/") {
+				t.Errorf("item %q (parent %q) is not under the stack's item", it.ID, it.Parent)
+			}
+		}
+		revs := s.f.revisions(t, s.st.ID)
+		if len(revs) != 2 || revs[1].Outcome != "good" {
+			t.Fatalf("revisions = %+v, want one good revision 2: both services in one", revs)
+		}
+		old, now := pinsOf(t, revs[0]), pinsOf(t, revs[1])
+		if now["shop_web"] != "registry.test/team/web:1@"+updDigest('b') || now["shop_api"] != "registry.test/team/api:1@"+updDigest('b') || old["shop_web"] == now["shop_web"] {
+			t.Errorf("pins were %v and are %v, want both services at b", old, now)
+		}
+		run := s.f.runByJob(t, job.ID)
+		if run.Kind != "stack" || run.StackID != s.st.ID || run.BulkID != ans.BulkID || run.State != updates.RunDone || run.RevisionSeq != 2 || len(run.Items) != 2 {
+			t.Errorf("run = %+v, want a done stack run of two services that made revision 2 in this bulk", run)
+		}
+		rows := s.f.auditRows(t, "image.updated")
+		if len(rows) != 2 {
+			t.Fatalf("image.updated rows = %+v, want one for each service", rows)
+		}
+		for _, r := range rows {
+			if r.Details["bulk"] != ans.BulkID {
+				t.Errorf("row %+v does not carry the bulk ID", r)
+			}
+		}
+		if sums := s.f.auditRows(t, "image.bulk_updated"); len(sums) != 1 || sums[0].Details["done"] != "2" || sums[0].Details["total"] != "2" {
+			t.Errorf("summary rows = %+v, want 2 of 2", sums)
+		}
+		if h, held := s.f.stackLocks.Held(s.e.ID); held {
+			t.Errorf("the lock is still held by %+v", h)
+		}
+	})
+	t.Run("a failing deploy puts the stack back inside the job", func(t *testing.T) {
+		t.Parallel()
+		s := shopQuick(t, "web", "api")
+		s.move(t, "web", 'b')
+		s.rejectNewVersion("web", 'b')
+
+		ans := bulkAs(t, s, bulkItem(s.e.ID, "service", "shop_web", nil))
+		job := s.f.awaitUpdate(t, ans.jobOf(t, s.e.ID))
+		if st := bulkItemStates(job); st["i0"] != "failed" || st["i0/rollback"] != "done" || st["summary"] != "done" {
+			t.Fatalf("items = %v, want the stack's item failed with its rollback done", st)
+		}
+		revs := s.f.revisions(t, s.st.ID)
+		if len(revs) != 3 || revs[1].Outcome != "failed" || revs[2].Outcome != "good" {
+			t.Fatalf("revisions = %+v, want good 1, the failed update 2 and a good rollback 3", revs)
+		}
+		run := s.f.runByJob(t, job.ID)
+		if run.State != updates.RunRolledBack || run.BulkID != ans.BulkID || run.RollbackSeq != 3 {
+			t.Errorf("run = %+v, want rolled_back by rollback 3 in this bulk", run)
+		}
+		if sums := s.f.auditRows(t, "image.bulk_updated"); len(sums) != 1 || sums[0].Details["done"] != "0" || sums[0].Details["rolled_back"] != "1" {
+			t.Errorf("summary rows = %+v, want 0 of 1 with 1 rolled back", sums)
+		}
+		if _, held := s.f.stackLocks.Held(s.e.ID); held {
+			t.Errorf("the lock is still held after the rollback")
+		}
+	})
+}
+
+// An item is judged again at its turn from what the check found, never from the queue it waits in: a registry that cannot be asked when
+// the turn comes skips the item and does not update it to the digest an earlier check found (plan 12-30, D-05, T-12-90).
+func TestBulkItemWhoseCheckFailsIsSkipped(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(threeAnswers('b'))
+	f, e := bulkSwarm(t, heads, nil, threeServices()...)
+	heads.fail("team/api", errors.New("connection refused"))
+	f.clk.t = f.clk.t.Add(time.Minute) // the failed check is newer than the good one that selected it
+
+	rec := f.bulkRun(t, bulkItem(e.ID, "service", "web", nil), bulkItem(e.ID, "service", "api", nil), bulkItem(e.ID, "service", "db", nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	job := f.awaitUpdate(t, ans.jobOf(t, e.ID))
+	if s := bulkItemStates(job); s["i0"] != "done" || s["i1"] != "skipped" || s["i2"] != "done" {
+		t.Fatalf("items = %v, want api skipped and the others done", s)
+	}
+	for _, u := range f.fake.ServiceUpdates() {
+		if u.Spec.Name == "api" {
+			t.Errorf("api was written although the registry could not be asked")
+		}
+	}
+	for _, run := range f.runsOfBulk(t, ans.BulkID) {
+		if run.Workload == "api" && (run.State != updates.RunRefused || run.Reason != updates.CodeCheckFailed) {
+			t.Errorf("api's run = %s %q, want refused as check_failed", run.State, run.Reason)
 		}
 	}
 }

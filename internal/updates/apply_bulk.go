@@ -525,7 +525,7 @@ func (a *Applier) bulkItem(ctx context.Context, r *jobs.Reporter, req BulkReques
 		a.bulkStackItem(ctx, r, steps, req, w, c, skipItem)
 		return
 	}
-	t, err := a.prepare(ctx, w.req, true)
+	t, err := a.prepare(WithoutLiveState(ctx), w.req, true)
 	if err != nil {
 		if _, code, ok := refusalOf(err); ok {
 			skipItem(jobs.ItemSkipped, code)
@@ -562,7 +562,7 @@ func (a *Applier) bulkStackItem(ctx context.Context, r, steps *jobs.Reporter, re
 	in := *w.stack
 	in.Run = w.run
 	in.Run.StartedAt = a.clock().Now().UTC()
-	if err := req.StackItem(ctx, steps, in); err != nil {
+	if err := req.StackItem(WithoutLiveState(ctx), steps, in); err != nil {
 		if _, code, ok := refusalOf(err); ok {
 			skipItem(jobs.ItemSkipped, code)
 			return

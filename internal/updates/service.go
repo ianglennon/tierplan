@@ -94,6 +94,17 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 	return s.judgeWith(ctx, envID, ws, true)
 }
 
+// noLiveKey marks a context under which verdicts leave out what is happening now.
+type noLiveKey struct{}
+
+// WithoutLiveState returns a context under which the verdicts of a Service say only what the checks found: no workload reads
+// updating, queued or busy. A bulk update judges its items at their turn under it (plan 12-30): it holds the environment's lock and has
+// every item queued, so the live state would hide what the check found (a failed check, a version that failed before) behind the
+// bulk update's own queue.
+func WithoutLiveState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noLiveKey{}, true)
+}
+
 // liveState is what is happening on an environment now, read once for a set of verdicts: the holder of its operation lock and the
 // image updates that run. A run list that cannot be read leaves no workload updating: the badge then shows what the check found.
 func (s *Service) liveState(ctx context.Context, envID string) (*stackops.Holder, []Run) {
@@ -184,7 +195,7 @@ func (s *Service) judgeWith(ctx context.Context, envID string, ws []Workload, li
 	}
 	var holder *stackops.Holder
 	var running []Run
-	if live {
+	if live && ctx.Value(noLiveKey{}) == nil {
 		holder, running = s.liveState(ctx, envID)
 	}
 	out := make(map[string]Verdict, len(ws))
