@@ -14,6 +14,7 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { CheckNowItem } from "@/features/updates/check-now-item";
 import { canBeNamed, imageRefOf, imageTextOf } from "@/features/updates/image-ref";
+import { useUpdateGate } from "@/features/updates/update-gate";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -51,12 +52,17 @@ interface UpdateMenuItemsProps {
   // Opens the ignore dialog. The dialog belongs to the row, not to this item: a menu's content is
   // gone as soon as an item is chosen.
   onIgnore: () => void;
+  // Opens the update confirm. Absent where the row cannot be updated here (a stack's service, a
+  // container, TierPlan's own agent), and then no Update… is shown. Like the ignore dialog, the
+  // confirm belongs to the row.
+  onUpdate?: () => void;
   // Called as an item that opens something is chosen, so a row menu can keep focus where it was.
   onChosen?: () => void;
 }
 
 // UpdateMenuItems is the update part of a row menu on the services list, the containers list and a
-// stack's services (D-15, D-16): "Skip this version" for an update on offer, "Stop skipping" for a
+// stack's services (D-05, D-15, D-16): "Update…" where the row can be updated here (it opens the confirm;
+// it is unavailable with the reason when it cannot work yet, D-10), "Skip this version" for an update on offer, "Stop skipping" for a
 // skipped one, "Ignore updates…" unless the compose label already does, "Stop ignoring updates"
 // for an ignored one, and "Check now" always. Skip and ignore need Env Admin (updates.manage); below
 // it they are unavailable with the reason (D-10), and the server decides either way. An ignore set
@@ -68,6 +74,7 @@ export function UpdateMenuItems({
   workload,
   update,
   onIgnore,
+  onUpdate,
   onChosen,
 }: UpdateMenuItemsProps) {
   const t = useT();
@@ -84,6 +91,9 @@ export function UpdateMenuItems({
   const blocked = !needs.allowed;
   const unavailable = blocked && !reason;
 
+  const gate = useUpdateGate(envId, update);
+  const canUpdate = onUpdate !== undefined && workload.kind === "service" && gate.shown;
+
   const state = update?.state;
   const labelled = update?.ignore?.scope === "label";
   const canSkip = state === "update_available";
@@ -93,6 +103,21 @@ export function UpdateMenuItems({
 
   return (
     <>
+      {canUpdate ? (
+        <NeedsTooltip reason={gate.reason}>
+          <DropdownMenuItem
+            className="max-md:min-h-11"
+            disabled={gate.unavailable}
+            onSelect={() => {
+              if (gate.reason || gate.unavailable) return;
+              onChosen?.();
+              onUpdate?.();
+            }}
+          >
+            {t("updates.menu.update")}
+          </DropdownMenuItem>
+        </NeedsTooltip>
+      ) : null}
       {canSkip ? (
         <NeedsTooltip reason={reason}>
           <DropdownMenuItem

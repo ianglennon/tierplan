@@ -197,7 +197,21 @@
       "ignore": "Ignore updates…",
       "unignore": "Stop ignoring updates",
       "needs": "{{needs}} on {{environment}}",
-      "labelIgnored": "Ignored by the tierplan.updates=ignore label on the object. Remove the label from your compose file to stop ignoring."
+      "labelIgnored": "Ignored by the tierplan.updates=ignore label on the object. Remove the label from your compose file to stop ignoring.",
+      "update": "Update…",
+      "disabled": {
+        "busy": "Waiting for a deploy to finish. {{what}}",
+        "busyStack": "{{stack}} is deploying.",
+        "busyUpdate": "{{workload}} is updating.",
+        "busyJanitor": "The janitor is cleaning {{environment}}.",
+        "busyOther": "Another operation is running in {{environment}}.",
+        "updating": "An update is already running. Open the console.",
+        "pinned_in_file": "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+        "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
+        "not_checked": "TierPlan has no check result for this image yet. Choose Check now first.",
+        "check_failed": "The last check failed: {{reason}} Choose Check now to try again.",
+        "offline": "{{environment}} isn't reporting, so TierPlan can't update it."
+      }
     },
     "skip": {
       "done": "Skipped {{digest}} for {{name}}. A newer version will show again.",
@@ -232,6 +246,127 @@
     "unignore": {
       "done": "Updates for {{scope}} will show again.",
       "failed": "Couldn't stop ignoring updates for {{name}}."
+    },
+    "header": {
+      "update": "Update"
+    },
+    "confirm": {
+      "title": "Update {{name}}",
+      "description": "TierPlan changes only the image of this service and keeps its other settings.",
+      "rowsLabel": "What will change",
+      "loading": "Loading what will change",
+      "loadFailed": "Couldn't load what this update changes.",
+      "retry": "Retry",
+      "noDigest": "unknown",
+      "preflight": {
+        "heading": "Before you update",
+        "downtime": "{{name}} runs 1 replica and Docker stops the old task before it starts the new one, so it will be down for a short time.",
+        "container_downtime": "A container can't be replaced without stopping it, so {{name}} will be down for a short time.",
+        "no_healthcheck": "{{name}}'s image has no health check. TierPlan can only tell the update worked if the new container is running, not that it is healthy.",
+        "host_ports": "{{name}} publishes a port in host mode. A new task can't start on a node while the old one still holds the port.",
+        "volumes": "{{name}} mounts a volume. The new version may change the data in it, and rolling back will not undo that.",
+        "previous_failure": "This version failed before. {{name}} was rolled back.",
+        "more_one": "Show {{count}} more warning",
+        "more_other": "Show {{count}} more warnings",
+        "fewer": "Show fewer warnings"
+      },
+      "note": "If the update fails, TierPlan puts the previous version back on its own and records both in the audit log.",
+      "cancel": "Cancel",
+      "commit": "Update {{name}}",
+      "checking": "Checking…",
+      "moved": {
+        "title": "A newer version appeared",
+        "body": "{{names}} changed again while you were looking. The list now shows the latest. Check it and choose Update again."
+      },
+      "lock": {
+        "stack": "Another stack operation is running on {{environment}}: {{stack}}, started",
+        "update": "{{workload}} is being updated on {{environment}}, started",
+        "janitor": "The janitor is cleaning {{environment}}, started",
+        "other": "Another operation is running on {{environment}}, started",
+        "after": ".",
+        "message": "Only one operation runs at a time. Try again when it finishes."
+      },
+      "lockedToast": "A deploy is running in {{environment}}. Try again when it finishes.",
+      "refusal": {
+        "title": "Nothing to update",
+        "nothing_to_update": "{{name}} already runs the newest version.",
+        "agent": "{{name}} is part of TierPlan and is updated by updating TierPlan.",
+        "job_mode": "{{name}} is a job, which runs to completion, so there is nothing to update in place.",
+        "managed_by_stack": "{{name}} belongs to a stack TierPlan manages. Update it from the stack.",
+        "not_checked": "TierPlan has no check result for this image yet. Choose Check now first.",
+        "check_failed": "The last check of this image failed. Choose Check now to try again.",
+        "pinned_in_file": "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+        "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
+        "offline": "{{environment}} isn't reporting, so TierPlan can't update it."
+      },
+      "failed": {
+        "title": "Couldn't start the update.",
+        "body": "Nothing was changed. Check the connection and try again.",
+        "check_failed": "Couldn't reach the registry to check the newest version. Nothing was changed. Check that the registry is up and try again.",
+        "permission": "You can't update {{name}} in {{environment}}. Nothing was changed."
+      }
+    },
+    "console": {
+      "title": "Update of {{name}}",
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "update": "Update of {{name}}"
+      },
+      "started": "Started by {{user}} {{time}}.",
+      "startedAnon": "Started {{time}}.",
+      "stepsLabel": "Steps of the update",
+      "progress": {
+        "label": "Update progress",
+        "text_one": "{{done}} of {{count}} step done",
+        "text_other": "{{done}} of {{count}} steps done"
+      },
+      "steps": {
+        "check": "Check the new version",
+        "pull": "Pull the image",
+        "pullNodes_one": "Pull the image on {{count}} node",
+        "pullNodes_other": "Pull the image on {{count}} nodes",
+        "update": "Update the service",
+        "wait": "Wait for the new tasks",
+        "health": "Wait for a healthy check",
+        "done": "Done"
+      },
+      "success": {
+        "title": "Updated",
+        "body": "{{name}} now runs {{digest}}.",
+        "bodyNoDigest": "{{name}} now runs the new version."
+      },
+      "failed": {
+        "title": "The update failed",
+        "body": "{{reason}} Open {{name}} to see what it runs now.",
+        "bodyNoReason": "Open {{name}} to see what it runs now."
+      },
+      "cancelled": {
+        "title": "The update was cancelled",
+        "body": "Open {{name}} to see what it runs now."
+      },
+      "openService": "Open {{name}}",
+      "announce": {
+        "updated": "{{name}} updated",
+        "failed": "Update of {{name}} failed",
+        "cancelled": "Update of {{name}} cancelled"
+      },
+      "gone": {
+        "title": "This update is no longer listed",
+        "body": "Finished updates stay here for a short while. Open the service to see what it runs now.",
+        "open": "Open services"
+      },
+      "error": {
+        "title": "Couldn't load the update.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading the update"
+      },
+      "loading": "Loading the update…",
+      "outcome": {
+        "done": "Updated",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "documentTitle": "Update"
     }
   }
 }

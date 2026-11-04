@@ -80,6 +80,7 @@ import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
 import { IgnoreUpdatesDialog } from "@/features/updates/ignore-updates-dialog";
 import { UpdateBadge } from "@/features/updates/update-badge";
+import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
 import { UpdateMenuItems } from "@/features/updates/update-menu-items";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
@@ -149,14 +150,18 @@ function RowActions({
   // item is chosen. While it is open the list holds still, as it does for an open menu, and when
   // it closes focus goes back to the row's menu button.
   const [ignoring, setIgnoring] = useState(false);
+  // Update… opens the compact confirm, which belongs to the row for the same reason.
+  const [updating, setUpdating] = useState(false);
+  const envName = useEnvName(envId);
   const button = useRef<HTMLButtonElement>(null);
   const report = useRef(onOpenChange);
   report.current = onOpenChange;
+  const holding = ignoring || updating;
   useEffect(() => {
-    if (!ignoring) return;
+    if (!holding) return;
     report.current(true);
     return () => report.current(false);
-  }, [ignoring]);
+  }, [holding]);
   return (
     <>
       <DropdownMenu onOpenChange={onOpenChange}>
@@ -239,6 +244,9 @@ function RowActions({
               chose.current = true;
             }}
             onIgnore={() => setIgnoring(true)}
+            onUpdate={
+              service.tierplanStackId || service.agent ? undefined : () => setUpdating(true)
+            }
           />
           <DropdownMenuSeparator />
           <RemoveServiceMenuItem
@@ -260,6 +268,15 @@ function RowActions({
           onOpenChange={(isOpen) => {
             if (!isOpen) setIgnoring(false);
           }}
+          onClosed={() => button.current?.focus()}
+        />
+      ) : null}
+      {updating ? (
+        <UpdateConfirmDialog
+          envId={envId}
+          envName={envName}
+          workload={{ kind: "service", name: service.name }}
+          onClose={() => setUpdating(false)}
           onClosed={() => button.current?.focus()}
         />
       ) : null}

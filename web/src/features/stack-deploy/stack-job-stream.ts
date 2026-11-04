@@ -165,6 +165,9 @@ export interface StackJobStreamOptions {
   stackId: string;
   jobId: string;
   onFrame: (frame: StackFrame) => void;
+  // The address of the stream when it is not a stack deploy's: an image update's job is followed the
+  // same way at another address. Given the last event seen, it answers the url to open.
+  streamUrl?: (lastEventId?: string) => string;
   // The real EventSource unless a test supplies one. Where the browser has none the stream is not
   // opened and the console keeps reading the job over HTTP.
   createSource?: (url: string) => EventSourceLike | undefined;
@@ -241,9 +244,10 @@ export function openStackJobStream(options: StackJobStreamOptions): StackJobStre
   };
 
   const connect = (): void => {
-    const mine = create(
-      stackJobStreamUrl(options.envId, options.stackId, options.jobId, lastEventId || undefined),
-    );
+    const address = options.streamUrl
+      ? options.streamUrl(lastEventId || undefined)
+      : stackJobStreamUrl(options.envId, options.stackId, options.jobId, lastEventId || undefined);
+    const mine = create(address);
     if (!mine) return;
     source = mine;
     const live = (): boolean => !disposed && source === mine;

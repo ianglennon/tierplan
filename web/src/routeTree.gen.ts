@@ -60,6 +60,7 @@ import { Route as AppEnvEnvIdServicesServiceIdRouteImport } from './routes/_app/
 import { Route as AppEnvEnvIdServicesNewRouteImport } from './routes/_app/env/$envId/services_.new'
 import { Route as AppEnvEnvIdStacksStackIdRouteImport } from './routes/_app/env/$envId/stacks_.$stackId'
 import { Route as AppEnvEnvIdUnmanagedStacksNameRouteImport } from './routes/_app/env/$envId/unmanaged-stacks.$name'
+import { Route as AppEnvEnvIdUpdateJobsJobIdRouteImport } from './routes/_app/env/$envId/update-jobs.$jobId'
 import { Route as AppEnvEnvIdVolumesVolumeNameRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName'
 import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/settings/access/teams_.$teamId'
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
@@ -381,6 +382,12 @@ const AppEnvEnvIdUnmanagedStacksNameRoute =
   AppEnvEnvIdUnmanagedStacksNameRouteImport.update({
     id: '/unmanaged-stacks/$name',
     path: '/unmanaged-stacks/$name',
+    getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
+const AppEnvEnvIdUpdateJobsJobIdRoute =
+  AppEnvEnvIdUpdateJobsJobIdRouteImport.update({
+    id: '/update-jobs/$jobId',
+    path: '/update-jobs/$jobId',
     getParentRoute: () => AppEnvEnvIdRoute,
   } as any)
 const AppEnvEnvIdVolumesVolumeNameRoute =
@@ -783,6 +790,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/env/$envId/stacks/$stackId': typeof AppEnvEnvIdStacksStackIdRouteWithChildren
   '/env/$envId/unmanaged-stacks/$name': typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
+  '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/env/$envId/volumes/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -880,6 +888,7 @@ export interface FileRoutesByTo {
   '/env/$envId/address-space/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
+  '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
@@ -991,6 +1000,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/services_/new': typeof AppEnvEnvIdServicesNewRoute
   '/_app/env/$envId/stacks_/$stackId': typeof AppEnvEnvIdStacksStackIdRouteWithChildren
   '/_app/env/$envId/unmanaged-stacks/$name': typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
+  '/_app/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/_app/env/$envId/volumes_/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -1103,6 +1113,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/new'
     | '/env/$envId/stacks/$stackId'
     | '/env/$envId/unmanaged-stacks/$name'
+    | '/env/$envId/update-jobs/$jobId'
     | '/env/$envId/volumes/$volumeName'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
@@ -1200,6 +1211,7 @@ export interface FileRouteTypes {
     | '/env/$envId/address-space/guide'
     | '/env/$envId/git-stacks/new'
     | '/env/$envId/services/new'
+    | '/env/$envId/update-jobs/$jobId'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
@@ -1310,6 +1322,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/services_/new'
     | '/_app/env/$envId/stacks_/$stackId'
     | '/_app/env/$envId/unmanaged-stacks/$name'
+    | '/_app/env/$envId/update-jobs/$jobId'
     | '/_app/env/$envId/volumes_/$volumeName'
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
@@ -1739,6 +1752,13 @@ declare module '@tanstack/react-router' {
       path: '/unmanaged-stacks/$name'
       fullPath: '/env/$envId/unmanaged-stacks/$name'
       preLoaderRoute: typeof AppEnvEnvIdUnmanagedStacksNameRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/update-jobs/$jobId': {
+      id: '/_app/env/$envId/update-jobs/$jobId'
+      path: '/update-jobs/$jobId'
+      fullPath: '/env/$envId/update-jobs/$jobId'
+      preLoaderRoute: typeof AppEnvEnvIdUpdateJobsJobIdRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/volumes_/$volumeName': {
@@ -2479,6 +2499,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdServicesNewRoute: typeof AppEnvEnvIdServicesNewRoute
   AppEnvEnvIdStacksStackIdRoute: typeof AppEnvEnvIdStacksStackIdRouteWithChildren
   AppEnvEnvIdUnmanagedStacksNameRoute: typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
+  AppEnvEnvIdUpdateJobsJobIdRoute: typeof AppEnvEnvIdUpdateJobsJobIdRoute
   AppEnvEnvIdVolumesVolumeNameRoute: typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   AppEnvEnvIdJanitorRunsRunIdRoute: typeof AppEnvEnvIdJanitorRunsRunIdRoute
   AppEnvEnvIdServicesServiceIdEditRoute: typeof AppEnvEnvIdServicesServiceIdEditRoute
@@ -2516,6 +2537,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdStacksStackIdRoute: AppEnvEnvIdStacksStackIdRouteWithChildren,
   AppEnvEnvIdUnmanagedStacksNameRoute:
     AppEnvEnvIdUnmanagedStacksNameRouteWithChildren,
+  AppEnvEnvIdUpdateJobsJobIdRoute: AppEnvEnvIdUpdateJobsJobIdRoute,
   AppEnvEnvIdVolumesVolumeNameRoute:
     AppEnvEnvIdVolumesVolumeNameRouteWithChildren,
   AppEnvEnvIdJanitorRunsRunIdRoute: AppEnvEnvIdJanitorRunsRunIdRoute,
