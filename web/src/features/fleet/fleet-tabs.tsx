@@ -5,11 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { environmentsQuery } from "@/api/environments";
-import { type FleetShowValue, useFleetSummary } from "@/api/fleet";
+import { type FleetShowValue, useFleetPools } from "@/api/fleet";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EnvFilter } from "@/features/fleet/env-filter";
-import { FleetCoverageAlert } from "@/features/fleet/fleet-coverage-alert";
 import { FleetFailingTable } from "@/features/fleet/fleet-failing-table";
+import { FleetPoolsTable } from "@/features/fleet/fleet-pools-table";
 import { FLEET_TABS, type FleetTab } from "@/features/fleet/fleet-search";
 import { FleetUpdatesTab } from "@/features/fleet/fleet-updates-tab";
 import { useT } from "@/i18n/use-t";
@@ -75,26 +79,28 @@ export function FleetTabs({
         />
       </TabsContent>
       <TabsContent value="pools" className="flex flex-col gap-4">
-        <FleetSummaryTab env={env} onEnvChange={onEnvChange} />
+        <FleetPoolsTab env={env} onEnvChange={onEnvChange} />
       </TabsContent>
     </Tabs>
   );
 }
 
-// The Updates and Address pools tabs open with what every fleet tab opens with: the environments
-// the view leaves out, and the environment filter. Its table is the next task's.
-function FleetSummaryTab({
+// FleetPoolsTab is the Address pools tab: the environment filter, then the pools near full of the
+// environments that were read, or why they could not be read.
+function FleetPoolsTab({
   env,
   onEnvChange,
 }: {
   env: readonly string[];
   onEnvChange: (ids: string[]) => void;
 }) {
-  const summary = useFleetSummary();
+  const t = useT();
+  const query = useFleetPools(env);
   const environments = useQuery(environmentsQuery);
+  const data = query.data;
+  const failed = query.isError && !data;
   return (
     <>
-      <FleetCoverageAlert notIncluded={summary.data?.notIncluded} />
       <div className="flex flex-wrap items-center gap-2">
         <EnvFilter
           value={env}
@@ -102,6 +108,32 @@ function FleetSummaryTab({
           environments={(environments.data?.items ?? []).map((e) => ({ id: e.id, name: e.name }))}
         />
       </div>
+      {failed ? (
+        <Alert variant="destructive">
+          <AlertTitle>{t("fleet.pools.error.heading")}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{t("fleet.pools.error.body")}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              {query.isFetching ? <Spinner aria-hidden="true" /> : null}
+              {t("fleet.pools.error.retry")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {!data && !failed ? (
+        <div className="flex flex-col gap-2" role="status" aria-label={t("fleet.pools.loading")}>
+          {Array.from({ length: 6 }, (_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: placeholder rows have no identity
+            <Skeleton key={i} className="h-9 w-full" />
+          ))}
+        </div>
+      ) : null}
+      {data ? <FleetPoolsTable items={data.items ?? []} notIncluded={data.notIncluded} /> : null}
     </>
   );
 }

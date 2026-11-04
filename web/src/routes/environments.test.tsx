@@ -62,6 +62,7 @@ let sent: string[];
 let fleetSummary: () => Response | Promise<Response>;
 let fleetFailing: (query: URLSearchParams) => Response | Promise<Response>;
 let fleetUpdates: (query: URLSearchParams) => Response | Promise<Response>;
+let fleetPools: (query: URLSearchParams) => Response | Promise<Response>;
 
 // The Overview's tiles and tabs read the fleet; most tests here are about the table, so by default
 // the fleet is whole and nothing is failing.
@@ -99,6 +100,7 @@ beforeEach(() => {
   fleetSummary = () => Response.json(SUMMARY);
   fleetFailing = () => Response.json({ items: [], notIncluded: [], readAt: SUMMARY.readAt });
   fleetUpdates = () => Response.json(EMPTY_UPDATES);
+  fleetPools = () => Response.json({ items: [], notIncluded: [], readAt: SUMMARY.readAt });
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -131,6 +133,7 @@ beforeEach(() => {
       if (path === "/api/fleet/summary") return fleetSummary();
       if (path === "/api/fleet/failing") return fleetFailing(new URL(req.url).searchParams);
       if (path === "/api/fleet/updates") return fleetUpdates(new URL(req.url).searchParams);
+      if (path === "/api/fleet/pools") return fleetPools(new URL(req.url).searchParams);
       return Response.json({}, { status: 404 });
     }),
   );
@@ -585,6 +588,36 @@ describe("the fleet tiles and tabs (D-17)", () => {
     fireEvent.click(screen.getByRole("radio", { name: /^Updates/ }));
     await waitFor(() => expect(search(r)).toEqual({ tab: "updates" }));
     expect(asked[0]).toBe("updates");
+  });
+
+  it("lists the pools near full on the Address pools tab and asks for the chosen environments", async () => {
+    const asked: string[] = [];
+    fleetPools = (query) => {
+      asked.push(query.getAll("env").join(","));
+      return Response.json({
+        items: [
+          {
+            envId: A,
+            envName: "alpha",
+            kind: "overlay",
+            name: "shop_default",
+            subnet: "10.0.3.0/24",
+            used: 200,
+            capacity: 254,
+            percent: 78,
+            state: "getting_full",
+            unit: "addresses",
+            estimated: false,
+          },
+        ],
+        notIncluded: [],
+        readAt: SUMMARY.readAt,
+      });
+    };
+    renderAt(`/environments?tab=pools&env=${enc([A])}`);
+    const table = await screen.findByRole("table", { name: "Address pools near full" });
+    expect(within(table).getByText("shop_default")).toBeTruthy();
+    expect(asked).toEqual([A]);
   });
 
   it("keeps the sort only on the Environments tab", async () => {
