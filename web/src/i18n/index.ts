@@ -21,6 +21,7 @@ import env from "./en/env.json";
 import envaccess from "./en/envaccess.json";
 import envsettings from "./en/envsettings.json";
 import events from "./en/events.json";
+import fleet from "./en/fleet.json";
 import fullpage from "./en/fullpage.json";
 import git from "./en/git.json";
 import gitsource from "./en/gitsource.json";
@@ -139,6 +140,7 @@ export const resources = {
     envaccess,
     envsettings,
     events,
+    fleet,
     fullpage,
     git,
     gitSource: gitsource,

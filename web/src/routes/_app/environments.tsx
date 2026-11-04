@@ -7,6 +7,7 @@ import { Server, Waypoints } from "lucide-react";
 import { type MouseEvent, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
+import { useFleetSummary } from "@/api/fleet";
 import { NoPermission } from "@/components/full-page-state";
 import { LiveChip } from "@/components/live-chip";
 import { NoAccessState } from "@/components/no-access-state";
@@ -26,7 +27,9 @@ import { useHealthLive } from "@/features/environments/health-stream";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { LocalHostPanel } from "@/features/environments/local-host-panel";
 import { EnvOverviewTable } from "@/features/environments/overview-table";
-import { SORT_KEYS, type SortDir, type SortKey } from "@/features/environments/sort";
+import { type FleetTab, fleetSearchSchema } from "@/features/fleet/fleet-search";
+import { FleetTabs } from "@/features/fleet/fleet-tabs";
+import { FleetTiles } from "@/features/fleet/fleet-tiles";
 import {
   hasNoEnvironmentAccess,
   hasPermission,
@@ -37,20 +40,6 @@ import {
 } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
-interface EnvironmentsSearch {
-  sort?: SortKey;
-  dir?: SortDir;
-}
-
-// The sort lives in the URL so a sorted view is a link (D-32). A value the page
-// does not know is dropped, so a stale or hand-edited link shows the default
-// problems-first order instead of an error.
-function validateSearch(search: Record<string, unknown>): EnvironmentsSearch {
-  const sort = SORT_KEYS.find((key) => key === search.sort);
-  const dir = search.dir === "asc" || search.dir === "desc" ? search.dir : undefined;
-  return { sort, dir };
-}
-
 // The overview, ENV-06: every environment's health in one place (D-32). The
 // server limits the list and the stream to what the caller may read, so this
 // only decides what to show; a caller who may read no environment gets the No
@@ -59,11 +48,12 @@ function EnvironmentsPage() {
   const t = useT();
   useDocumentTitle(t("overview.tabTitle"));
   const navigate = Route.useNavigate();
-  const { sort, dir } = Route.useSearch();
+  const { tab, env, sort, dir } = Route.useSearch();
   const { data: me } = useMe();
   const allowed = useAnyEnvironmentPermission("environments.read");
   const canCreate = usePermission("environments.create");
   const environments = useQuery(environmentsQuery);
+  const summary = useFleetSummary();
   const live = useHealthLive();
   // One install dialog serves "Add environment" and "Finish setup" (D-15).
   const [install, setInstall] = useState<{ open: boolean; mode: "add" | "rotate"; envId?: string }>(
@@ -101,6 +91,16 @@ function EnvironmentsPage() {
     setInstall({ open: true, mode: "rotate", envId });
   };
 
+  // A tab switch replaces the history entry, keeps the environment filter and drops what does not
+  // belong to the new tab; the filter changes the same way (D-17).
+  const goTab = (next: FleetTab) =>
+    void navigate({ search: (prev) => ({ tab: next, env: prev.env }), replace: true });
+  const goEnv = (ids: string[]) =>
+    void navigate({
+      search: (prev) => ({ ...prev, env: ids.length > 0 ? ids : undefined }),
+      replace: true,
+    });
+
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -112,7 +112,7 @@ function EnvironmentsPage() {
         ) : null}
         {live === "live" || live === "reconnecting" ? <LiveChip state={live} /> : null}
         {/* One primary button per view: the empty state carries its own. */}
-        {canCreate && !empty ? (
+        {canCreate && !empty && tab === "environments" ? (
           <Button
             className="ms-auto max-md:order-last max-md:h-11 max-md:w-full"
             onClick={addEnvironment}
@@ -121,42 +121,6 @@ function EnvironmentsPage() {
           </Button>
         ) : null}
       </header>
-
-      {failed ? (
-        <Alert variant="destructive">
-          <AlertTitle>{t("overview.error.heading")}</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{t("overview.error.body")}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={environments.isFetching}
-              onClick={() => void environments.refetch()}
-            >
-              {environments.isFetching ? <Spinner aria-hidden="true" /> : null}
-              {t("overview.error.retry")}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      {foldSwarm ? (
-        <Alert>
-          <Waypoints aria-hidden="true" />
-          <AlertTitle>{t("overview.fold.title", { swarm: foldSwarm.name })}</AlertTitle>
-          <AlertDescription className="flex flex-col gap-1">
-            <span>{t("overview.fold.body")}</span>
-            <Link
-              to="/settings/environments/$envId"
-              params={{ envId: foldSwarm.id }}
-              hash="fold"
-              className="w-fit rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:inline-flex max-md:min-h-11 max-md:items-center"
-            >
-              {t("overview.fold.review")}
-            </Link>
-          </AlertDescription>
-        </Alert>
-      ) : null}
 
       {empty ? (
         <div className="mx-auto flex w-full max-w-120 flex-col gap-6">
@@ -190,20 +154,80 @@ function EnvironmentsPage() {
         </div>
       ) : null}
 
-      {!failed && !empty ? (
-        <EnvOverviewTable
-          items={items}
-          loading={!loaded}
-          sort={sort}
-          dir={dir}
-          onSortChange={(nextSort, nextDir) =>
-            // replace: a sorted view is a link, but every click is not a step
-            // for the Back button.
-            void navigate({ search: { sort: nextSort, dir: nextDir }, replace: true })
-          }
-          canFinishSetup={() => hasPermission(me, "environments.token")}
-          onFinishSetup={finishSetup}
-        />
+      {!empty ? (
+        <>
+          <div className="mb-4">
+            <FleetTiles
+              summary={summary.data}
+              loading={summary.isPending}
+              failed={summary.isError && !summary.data}
+              env={env}
+            />
+          </div>
+          <FleetTabs
+            tab={tab}
+            env={env ?? []}
+            onTabChange={goTab}
+            onEnvChange={goEnv}
+            environmentsBody={
+              <>
+                {failed ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>{t("overview.error.heading")}</AlertTitle>
+                    <AlertDescription className="flex flex-wrap items-center gap-3">
+                      <span>{t("overview.error.body")}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={environments.isFetching}
+                        onClick={() => void environments.refetch()}
+                      >
+                        {environments.isFetching ? <Spinner aria-hidden="true" /> : null}
+                        {t("overview.error.retry")}
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {foldSwarm ? (
+                  <Alert>
+                    <Waypoints aria-hidden="true" />
+                    <AlertTitle>{t("overview.fold.title", { swarm: foldSwarm.name })}</AlertTitle>
+                    <AlertDescription className="flex flex-col gap-1">
+                      <span>{t("overview.fold.body")}</span>
+                      <Link
+                        to="/settings/environments/$envId"
+                        params={{ envId: foldSwarm.id }}
+                        hash="fold"
+                        className="w-fit rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                      >
+                        {t("overview.fold.review")}
+                      </Link>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                {!failed ? (
+                  <EnvOverviewTable
+                    items={items}
+                    loading={!loaded}
+                    sort={sort}
+                    dir={dir}
+                    onSortChange={(nextSort, nextDir) =>
+                      // replace: a sorted view is a link, but every click is not a step
+                      // for the Back button.
+                      void navigate({
+                        search: (prev) => ({ ...prev, sort: nextSort, dir: nextDir }),
+                        replace: true,
+                      })
+                    }
+                    canFinishSetup={() => hasPermission(me, "environments.token")}
+                    onFinishSetup={finishSetup}
+                  />
+                ) : null}
+              </>
+            }
+          />
+        </>
       ) : null}
 
       <InstallDialog
@@ -217,7 +241,10 @@ function EnvironmentsPage() {
   );
 }
 
+// The tab, the environment filter and the sort live in the URL so a view is a link (D-17, D-32).
+// A value the page does not know is dropped, so a stale or hand-edited link shows the default
+// view instead of an error. A parameter that does not belong to the tab is dropped too.
 export const Route = createFileRoute("/_app/environments")({
-  validateSearch,
+  validateSearch: fleetSearchSchema,
   component: EnvironmentsPage,
 });

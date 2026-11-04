@@ -230,7 +230,8 @@ export function AppSidebar() {
                       <Link
                         to="/environments"
                         onClick={closeMenu}
-                        activeOptions={{ exact: true }}
+                        // The Overview's tab and sort are in its address; the item is the page's.
+                        activeOptions={{ exact: true, includeSearch: false }}
                         activeProps={{ "aria-current": "page", "data-active": true }}
                       >
                         <LayoutGrid aria-hidden="true" />

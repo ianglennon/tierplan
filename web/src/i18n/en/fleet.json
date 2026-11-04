@@ -1,0 +1,100 @@
+{
+  "fleet": {
+    "tabs": {
+      "label": "Fleet views",
+      "environments": "Environments",
+      "failing": "Failing services",
+      "updates": "Updates",
+      "pools": "Address pools"
+    },
+    "tiles": {
+      "label": "Fleet summary",
+      "unreadable": "Couldn't read this.",
+      "partial": "Some environments aren't included",
+      "environments": {
+        "label": "Environments",
+        "needAttention_one": "{{count}} needs attention",
+        "needAttention_other": "{{count}} need attention",
+        "allReporting": "All reporting"
+      },
+      "failing": {
+        "label": "Failing services",
+        "in_one": "in {{count}} environment",
+        "in_other": "in {{count}} environments",
+        "none": "None failing"
+      },
+      "updates": {
+        "label": "Updates available",
+        "checksFailed_one": "{{count}} check failed",
+        "checksFailed_other": "{{count}} checks failed",
+        "checked": "Checked {{when}}",
+        "notAllChecked": "Not every environment is checked yet"
+      },
+      "pools": {
+        "label": "Pools near full",
+        "almostFull": "{{count}} almost full",
+        "allUnder": "All under 70%",
+        "noneAlmost": "None almost full"
+      }
+    },
+    "coverage": {
+      "title": "Some environments aren't included",
+      "body": "{{names}}. They will appear here when they report again.",
+      "name": "{{name}} ({{reason}})",
+      "reason": {
+        "offline": "offline",
+        "not_reporting": "not reporting",
+        "waiting_first_agent": "waiting for the first agent",
+        "nodes_not_reporting_one": "{{count}} node not reporting",
+        "nodes_not_reporting_other": "{{count}} nodes not reporting"
+      },
+      "more_one": "Show {{count}} more",
+      "more_other": "Show {{count}} more",
+      "fewer": "Show fewer"
+    },
+    "filter": {
+      "label": "Environment",
+      "all": "Environment: All",
+      "one": "Environment: {{name}}",
+      "many_one": "{{count}} environment",
+      "many_other": "{{count}} environments",
+      "search": "Find an environment",
+      "empty": "No environment matches.",
+      "clear": "Clear",
+      "list": "Environments"
+    },
+    "failing": {
+      "caption": "Failing services and containers",
+      "sortBy": "Sort by {{column}}",
+      "columns": {
+        "name": "Name",
+        "env": "Environment",
+        "stack": "Stack",
+        "state": "State",
+        "since": "Since",
+        "error": "Last error"
+      },
+      "running": "{{running}} of {{desired}} running",
+      "containerState": {
+        "restarting": "Restarting",
+        "exited": "Exited",
+        "unhealthy": "Unhealthy"
+      },
+      "missing": "—",
+      "empty": {
+        "heading": "Nothing is failing",
+        "body": "Every service and container that reports to TierPlan is running as it should.",
+        "headingPartial": "Nothing is failing in the environments that reported",
+        "bodyPartial": "Everything that reported is running as it should. The environments below did not report."
+      },
+      "error": {
+        "heading": "Couldn't load this view.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading"
+      },
+      "loading": "Loading failing services",
+      "count_one": "{{count}} failing service or container",
+      "count_other": "{{count}} failing services and containers"
+    }
+  }
+}
