@@ -179,8 +179,8 @@ func TestPlainContainerRecreateRealEngine(t *testing.T) {
 	// 2. The tag moves to a build whose command exits at once; the update fails and the container stays as it was.
 	digestC := dockertest.PushVariantCmd(t, node, dockertest.ServiceTestImage, image, "C", "", nil)
 	job, run = update(digestC)
-	if job.State == jobs.JobDone || run.State != updates.RunFailed || run.Reason != updates.ReasonDidntStart {
-		t.Fatalf("the bad update: job %s run %s %q steps %s, want failed didnt_start", job.State, run.State, run.Reason, describe(job))
+	if job.State == jobs.JobDone || run.State != updates.RunRolledBack || run.Reason != updates.ReasonDidntStart {
+		t.Fatalf("the bad update: job %s run %s %q steps %s, want rolled_back didnt_start", job.State, run.State, run.Reason, describe(job))
 	}
 	kept, err := cli.ContainerInspectFull(ctx, "app")
 	if err != nil {

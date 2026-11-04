@@ -3563,7 +3563,7 @@ export interface paths {
         put?: never;
         /**
          * Update a service to its newer image
-         * @description Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged or task_container), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.
+         * @description Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged or task_container), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. When a service or container update fails after the engine was changed, TierPlan puts the previous version back itself and the run ends rolled_back (or rollback_failed when that failed too); the digest that failed is then not offered again until the tag points at another. Audited as image.updated, or image.update_failed (and image.update_rolled_back when the previous version was put back) when it ends. Needs services.control (Operator) on the environment.
          */
         post: operations["runImageUpdate"];
         delete?: never;
@@ -14281,6 +14281,21 @@ export interface components {
             /** @description The new name, 1 to 64 characters */
             name?: string;
         };
+        UpdateFailureBody: {
+            /**
+             * Format: date-time
+             * @description When it failed
+             */
+            at: string;
+            /** @description The digest the update failed with: the version that is not offered again */
+            digest: string;
+            /** @description Left out unless known: the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows while TierPlan still keeps it */
+            jobId?: string;
+            /** @description Why it failed, as a stable code: pull_failed, didnt_start, timeout, unhealthy, engine_error, service_rejected and so on */
+            reason: string;
+            /** @description True when putting the previous version back failed too, so the workload may still be running the version that failed */
+            rollbackFailed: boolean;
+        };
         UpdateHeldBody: {
             /** @description What is known about the workload's image now. Absent for an ignore of an image, which covers many workloads */
             update?: components["schemas"]["UpdateInfoBody"];
@@ -14353,6 +14368,8 @@ export interface components {
              * @description When the tag was last checked, whatever came of it; empty when it never was
              */
             checkedAt: string;
+            /** @description Left out unless set: when the state is rolled_back or rollback_failed, the update that failed with the version the tag still points at, which is not offered again until the tag points at another */
+            failure?: components["schemas"]["UpdateFailureBody"];
             /** @description Set when the state is busy: who holds the environment's operation lock, which an update cannot start under */
             holder?: components["schemas"]["UpdateHolderBody"];
             /** @description Set when the state is skipped or ignored: which, how far it reaches, who chose it and when */

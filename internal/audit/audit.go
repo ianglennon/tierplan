@@ -287,6 +287,10 @@ const (
 	// in TierPlan's words; bulk is set when it was one of several updated together.
 	ActionImageUpdated      = "image.updated"
 	ActionImageUpdateFailed = "image.update_failed"
+	// TierPlan put the previous version back after a failed update (plan 12-22, IMG-07, D-12). The result is success when the
+	// previous version runs again and failure when the restore failed too; the entry names the same keys as image.update_failed,
+	// the reason being why the update failed.
+	ActionImageUpdateRolledBack = "image.update_rolled_back"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

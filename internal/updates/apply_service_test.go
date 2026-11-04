@@ -107,6 +107,8 @@ type applyRig struct {
 	locks   *stackops.Locks
 	runs    updates.RunStore
 	applier *updates.Applier
+	// failures is the memory of the digests updates failed with, shared by the applier and the service that judges.
+	failures *updates.FailureStore
 }
 
 // newApplyRig builds the rig over a fake manager whose tasks follow the writes made to it. tune changes the manager's configuration
@@ -165,11 +167,13 @@ func newApplyRigOn(t *testing.T, host string, fake *dockertest.Fake) *applyRig {
 	t.Cleanup(hub.Close)
 	locks := stackops.NewLocks()
 	runs := updates.RunStore{Q: st.Q, W: st.Write}
+	failures := &updates.FailureStore{Q: st.Q, W: st.Write}
+	usvc.Failures, usvc.UpdateRuns = failures, &runs
 	return &applyRig{
-		fake: fake, envID: env.ID, st: st, reg: rs, heads: heads, clock: clk, hub: hub, locks: locks, runs: runs,
+		fake: fake, envID: env.ID, st: st, reg: rs, heads: heads, clock: clk, hub: hub, locks: locks, runs: runs, failures: failures,
 		applier: &updates.Applier{
 			Service: usvc, Runs: &runs, Locks: locks, Jobs: hub, Aggregator: agg, Resolver: registry.NewResolver(rs), Audit: aud,
-			Clock: clk, ConvergeTimeout: 30 * time.Second, Log: log,
+			Clock: clk, ConvergeTimeout: 30 * time.Second, Failures: failures, Log: log,
 		},
 	}
 }
@@ -444,8 +448,9 @@ func TestPullFailureChangesNothing(t *testing.T) {
 	}
 }
 
-// Every way the new tasks can fail ends the run failed with a reason in TierPlan's words, on a clock the test controls
-// (plan 12-15, D-13).
+// Every way the new tasks can fail puts the previous version back and ends the run rolled back with the reason in TierPlan's
+// words, on a clock the test controls (plan 12-15, D-13; the rollback is plan 12-22's, D-12). The new version's tasks fail, the
+// previous version's run: tasks are scripted for the writes whose image holds the new digest.
 func TestFailureReasons(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -462,23 +467,23 @@ func TestFailureReasons(t *testing.T) {
 			r := newApplyRig(t, nil, swarmService("web", 'a'))
 			r.offer("web", dg('b'))
 			if tc.state == "preparing" {
-				r.fake.SetTaskState("web", tc.state, tc.text)
+				r.fake.SetTaskStateWhileImage("web", dg('b'), tc.state, tc.text)
 			} else {
 				// A task that ended is not wanted by the swarm any more: it is in a slot with no task left that runs.
 				var script []dockertest.FakeServiceTask
 				for slot := 1; slot <= 3; slot++ {
 					script = append(script, dockertest.FakeServiceTask{Slot: slot, State: tc.state, Desired: "shutdown", Err: tc.text})
 				}
-				r.fake.SetServiceTasks("web", script...)
+				r.fake.SetServiceTasksWhileImage("web", dg('b'), script...)
 			}
 
 			job := r.run(t, r.request("web", dg('b')))
 			run := r.runRow(t, job)
-			if run.State != updates.RunFailed || run.Reason != tc.reason {
-				t.Errorf("run = %s %q, want failed with %q", run.State, run.Reason, tc.reason)
+			if run.State != updates.RunRolledBack || run.Reason != tc.reason {
+				t.Errorf("run = %s %q, want rolled_back with %q", run.State, run.Reason, tc.reason)
 			}
-			if n := len(r.fake.ServiceUpdates()); n != 1 {
-				t.Errorf("service updates = %d, want the one that was written", n)
+			if n := len(r.fake.ServiceUpdates()); n != 2 {
+				t.Errorf("service updates = %d, want the one that was written and the one that put the previous version back", n)
 			}
 			var failed jobs.Item
 			for _, it := range job.Items {
@@ -504,7 +509,7 @@ func TestFailureReasons(t *testing.T) {
 		r := newApplyRig(t, nil, swarmService("web", 'a'))
 		r.offer("web", dg('b'))
 		r.clock.hold = true
-		r.fake.SetTaskState("web", "preparing", "")
+		r.fake.SetTaskStateWhileImage("web", dg('b'), "preparing", "")
 		t.Cleanup(func() { r.clock.mu.Lock(); r.clock.hold = false; r.clock.mu.Unlock() })
 
 		id, err := r.applier.Start(testsupport.Context(t), r.request("web", dg('b')))
@@ -520,8 +525,8 @@ func TestFailureReasons(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if run := r.runRow(t, job); run.State != updates.RunFailed || run.Reason != updates.ReasonDidntStart {
-			t.Errorf("run = %s %q, want failed with didnt_start for a paused update", run.State, run.Reason)
+		if run := r.runRow(t, job); run.State != updates.RunRolledBack || run.Reason != updates.ReasonDidntStart {
+			t.Errorf("run = %s %q, want rolled_back with didnt_start for a paused update", run.State, run.Reason)
 		}
 	})
 }
@@ -622,5 +627,109 @@ func TestHealthStepOnlyWhenTheImageHasACheck(t *testing.T) {
 	}
 	if got := steps("plain"); !reflect.DeepEqual(got, []string{"check", "pull", "update", "wait"}) {
 		t.Errorf("steps of an image with none = %v", got)
+	}
+}
+
+// failureOf is the failure remembered for a service, and whether there is one.
+func (r *applyRig) failureOf(t *testing.T, name string) (updates.Failure, bool) {
+	t.Helper()
+	all, err := r.failures.ForEnv(context.Background(), r.envID)
+	if err != nil {
+		t.Fatalf("read the failures: %v", err)
+	}
+	f, ok := all[updates.FailureKey("service", name)]
+	return f, ok
+}
+
+// verdictOf is what the page would say about a service now.
+func (r *applyRig) verdictOf(t *testing.T, name string) updates.Verdict {
+	t.Helper()
+	sv, found, err := r.applier.Service.Find(testsupport.Context(t), r.envID, "service", name)
+	if err != nil || !found {
+		t.Fatalf("Find(%s) = %v found %v", name, err, found)
+	}
+	return sv.Verdict
+}
+
+// An update whose new tasks keep failing is put back by TierPlan: the second write carries the previous digest, with a fresh
+// registry header, the run ends rolled back, the digest that failed is remembered and the badge says so, and the failure and the
+// rollback are each audited (plan 12-22, IMG-07, D-12, D-14, T-12-63).
+func TestServiceUpdateFailureRollsBack(t *testing.T) {
+	t.Parallel()
+	const secret = "s3cret-token-value-0123"
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	cred, err := r.reg.Create(testsupport.Context(t), registry.CreateInput{
+		Name: "team", Type: registry.TypeGeneric, Host: "registry.test", Prefix: "team", Username: "bot", Secret: secret,
+	}, "admin-1", nil)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	r.heads.set("registry.test/team/web:1", answer{digest: dg('b'), credID: cred.ID})
+	var script []dockertest.FakeServiceTask
+	for slot := 1; slot <= 3; slot++ {
+		script = append(script, dockertest.FakeServiceTask{Slot: slot, State: "rejected", Desired: "shutdown", Err: "No such image"})
+	}
+	r.fake.SetServiceTasksWhileImage("web", dg('b'), script...)
+
+	job := r.run(t, r.request("web", dg('b')))
+	run := r.runRow(t, job)
+	if run.State != updates.RunRolledBack || run.Reason != updates.ReasonDidntStart || run.FinishedAt.IsZero() {
+		t.Fatalf("run = %s %q, want rolled_back with didnt_start", run.State, run.Reason)
+	}
+
+	sent := r.fake.ServiceUpdates()
+	if len(sent) != 2 {
+		t.Fatalf("service updates = %d, want the update and the rollback", len(sent))
+	}
+	want := swarmSpec("web", 'a')
+	if !reflect.DeepEqual(sent[1].Spec, want) {
+		t.Errorf("the rollback spec differs from the original in more than nothing:\n got %+v\nwant %+v", sent[1].Spec, want)
+	}
+	if got := sent[1].Spec.TaskTemplate.ContainerSpec.Image; got != "registry.test/team/web:1@"+dg('a') {
+		t.Errorf("rollback image = %q, want the previous digest", got)
+	}
+	if sent[1].Auth == "" || sent[1].Query.Get("registryAuthFrom") != "" {
+		t.Errorf("rollback auth = %q from %q, want the registry header again", sent[1].Auth, sent[1].Query.Get("registryAuthFrom"))
+	}
+	if sent[1].Version != "2" {
+		t.Errorf("rollback version = %s, want the version the update left (2)", sent[1].Version)
+	}
+
+	states := map[string]string{}
+	for _, it := range job.Items {
+		states[it.ID] = it.State
+	}
+	if states["wait"] != jobs.ItemFailed || states["rollback"] != jobs.ItemDone || states["rollback_wait"] != jobs.ItemDone {
+		t.Errorf("steps = %v, want wait failed and both rollback steps done", states)
+	}
+
+	f, ok := r.failureOf(t, "web")
+	if !ok || f.Digest != dg('b') || f.Reason != updates.ReasonDidntStart || f.RollbackFailed || f.RunID != run.ID {
+		t.Errorf("failure = %+v %v, want the new digest with didnt_start, not rollback_failed", f, ok)
+	}
+	v := r.verdictOf(t, "web")
+	if v.State != updates.StateRolledBack || v.Failure == nil || v.Failure.Digest != dg('b') || v.FailureJob != job.ID {
+		t.Errorf("verdict = %s %+v job %q, want rolled_back for the digest that failed, with its job", v.State, v.Failure, v.FailureJob)
+	}
+
+	failed, rolled := r.audits(t, "image.update_failed"), r.audits(t, "image.update_rolled_back")
+	if len(failed) != 1 || failed[0]["reason"] != updates.ReasonDidntStart || failed[0]["_result"] != "failure" {
+		t.Errorf("failure audit rows = %+v, want one with the reason", failed)
+	}
+	if len(rolled) != 1 || rolled[0]["_result"] != "success" || rolled[0]["workload"] != "web" || rolled[0]["from_digest"] != dg('a') || rolled[0]["to_digest"] != dg('b') || rolled[0]["reason"] != updates.ReasonDidntStart {
+		t.Errorf("rollback audit rows = %+v, want one success for web", rolled)
+	}
+	if rows := r.audits(t, "image.updated"); len(rows) != 0 {
+		t.Errorf("success audit rows = %+v, want none", rows)
+	}
+	// The credential went to the engine only (T-12-66).
+	for what, v := range map[string]any{"job": job, "run": run, "failure audit": failed, "rollback audit": rolled} {
+		text, _ := json.Marshal(v)
+		if strings.Contains(string(text), secret) || strings.Contains(string(text), sent[1].Auth) {
+			t.Errorf("the %s holds the registry credential: %s", what, text)
+		}
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Errorf("the lock is still held after the job ended")
 	}
 }

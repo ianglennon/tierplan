@@ -51,6 +51,9 @@ type Service struct {
 	// (IMG-06). With them a workload reads updating or busy; nil means neither is ever read.
 	Locks      stackops.OperationLock
 	UpdateRuns *RunStore
+	// Failures holds the digest an update last failed with, per workload (IMG-07, D-14). A workload whose newest version is that
+	// digest reads rolled_back or rollback_failed instead of update_available. Nil means no failure is remembered.
+	Failures *FailureStore
 }
 
 // Snapshotter reads what an environment runs, node by node. *envs.Aggregator is one.
@@ -165,6 +168,12 @@ func (s *Service) judgeWith(ctx context.Context, envID string, ws []Workload, li
 			return nil, err
 		}
 	}
+	var failures map[string]Failure
+	if s.Failures != nil {
+		if failures, err = s.Failures.ForEnv(ctx, envID); err != nil {
+			return nil, err
+		}
+	}
 	var holder *stackops.Holder
 	var running []Run
 	if live {
@@ -185,12 +194,32 @@ func (s *Service) judgeWith(ctx context.Context, envID string, ws []Workload, li
 		}
 		in.Ignore = held.Match(w, remote)
 		in.Holder, in.RunningJob = holder, runningJob(running, w)
+		if f, ok := failures[FailureKey(w.Kind, strings.TrimPrefix(w.Name, "/"))]; ok {
+			in.Failure = &f
+		}
 		if chk != nil {
 			in.RunPlatforms, in.RunIndexGone = s.runPlatforms(ctx, envID, w, chk, runs)
 		}
-		out[w.ID] = Judge(in)
+		v := Judge(in)
+		if v.Failure != nil {
+			v.FailureJob = s.failureJob(ctx, v.Failure.RunID)
+		}
+		out[w.ID] = v
 	}
 	return out, nil
+}
+
+// failureJob is the job of the update run that failed, empty when it cannot be told. The hub forgets old jobs, so the ID is only a
+// way to the console while it is kept.
+func (s *Service) failureJob(ctx context.Context, runID string) string {
+	if s.UpdateRuns == nil || runID == "" {
+		return ""
+	}
+	run, err := s.UpdateRuns.Get(ctx, runID)
+	if err != nil {
+		return ""
+	}
+	return run.JobID
 }
 
 // ContainerJudgement is what is known about the image of each container of an environment: its verdict

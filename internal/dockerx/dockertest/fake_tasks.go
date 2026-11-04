@@ -19,6 +19,18 @@ import (
 type fakeTaskState struct {
 	state, errText string
 	tasks          []FakeServiceTask
+	// whileImage, when set, limits the state to the writes whose image contains it: a service written with another image has tasks
+	// that run, as a swarm's do once a bad version is replaced.
+	whileImage string
+}
+
+// appliesTo reports whether the state is the one the spec's tasks are in.
+func (o fakeTaskState) appliesTo(spec *swarm.ServiceSpec) bool {
+	if o.whileImage == "" {
+		return true
+	}
+	cs := spec.TaskTemplate.ContainerSpec
+	return cs != nil && strings.Contains(cs.Image, o.whileImage)
 }
 
 // FakeServiceTask is one task of a service whose tasks SetServiceTasks scripts.
@@ -68,6 +80,32 @@ func (f *Fake) SetTaskState(service, state, errText string) {
 		return
 	}
 	f.taskStates[service] = fakeTaskState{state: state, errText: errText}
+}
+
+// SetTaskStateWhileImage is SetTaskState for the writes whose image contains imageContains: a service written with another image
+// has tasks that run. A test uses it to make a bad version fail and the version put back by a rollback run, with no move of the
+// clock between the two.
+func (f *Fake) SetTaskStateWhileImage(service, imageContains, state, errText string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.taskStates == nil {
+		f.taskStates = map[string]fakeTaskState{}
+	}
+	f.taskStates[service] = fakeTaskState{state: state, errText: errText, whileImage: imageContains}
+}
+
+// SetServiceTasksWhileImage is SetServiceTasks for the writes whose image contains imageContains, like SetTaskStateWhileImage.
+func (f *Fake) SetServiceTasksWhileImage(service, imageContains string, tasks ...FakeServiceTask) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.taskStates == nil {
+		f.taskStates = map[string]fakeTaskState{}
+	}
+	if len(tasks) == 0 {
+		delete(f.taskStates, service)
+		return
+	}
+	f.taskStates[service] = fakeTaskState{tasks: slices.Clone(tasks), whileImage: imageContains}
 }
 
 // SetServiceTasks scripts the tasks of the service of that name. They replace the tasks that follow the
@@ -141,12 +179,12 @@ func (c FakeConfig) followingTasks() []swarm.Task {
 		if fs.Spec == nil {
 			continue
 		}
-		if o, ok := c.taskStates[fs.Name]; ok && o.tasks != nil {
+		if o, ok := c.taskStates[fs.Name]; ok && o.tasks != nil && o.appliesTo(fs.Spec) {
 			out = append(out, c.scriptedTasks(fs, o.tasks)...)
 			continue
 		}
 		state, errText := swarm.TaskStateRunning, ""
-		if o, ok := c.taskStates[fs.Name]; ok {
+		if o, ok := c.taskStates[fs.Name]; ok && o.tasks == nil && o.appliesTo(fs.Spec) {
 			state, errText = swarm.TaskState(o.state), o.errText
 		}
 		var nodes []string

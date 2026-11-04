@@ -26,7 +26,8 @@ import (
 // Applying an image update (plan 12-15, IMG-06). An update is a job: the digest is read from the registry at the moment of
 // the click and never taken from the request, the environment's operation lock is held from before the first engine write
 // until the run has ended, and the run is on record before the engine is touched, so an update that was interrupted is found
-// again. The automatic rollback of a failed update is plan 12-22's.
+// again. A plain workload whose update fails after the engine was written is put back by TierPlan itself (plan 12-22, IMG-07,
+// D-12): the run then ends rolled_back, or rollback_failed when the restore failed too, and the digest that failed is remembered.
 
 // JobKind is the Kind of the job of an image update in the jobs hub.
 const JobKind = "image_update"
@@ -52,6 +53,10 @@ const (
 	ItemUpdate = "update"
 	ItemWait   = "wait"
 	ItemHealth = "health"
+	// ItemRollback and ItemRollbackWait are added to the job when an update failed and TierPlan puts the previous version back
+	// (plan 12-22): the write that does it and the wait for the previous version to run.
+	ItemRollback     = "rollback"
+	ItemRollbackWait = "rollback_wait"
 )
 
 // The items of a plain container's update, in order after check and pull (UI-SPEC "Steps (plain container)"): the replacement is
@@ -186,6 +191,9 @@ type Applier struct {
 	// ManagedStack says whether the environment manages the stack of that ID. Nil means every service that carries a
 	// TierPlan stack label is read as managed, which is the safe answer.
 	ManagedStack func(ctx context.Context, envID, stackID string) (bool, error)
+	// Failures remembers the digest an update failed with, per workload, and forgets it after a good update (IMG-07, D-14). Nil
+	// means nothing is remembered.
+	Failures *FailureStore
 	// SelfContainerID is the ID of the container TierPlan's server runs in. That container is never updated from here: stopping it
 	// would end the update. Empty when TierPlan cannot tell.
 	SelfContainerID string
@@ -486,23 +494,28 @@ func (a *Applier) itemSpecs(t target) []jobs.ItemSpec {
 	return specs
 }
 
+// endFunc ends the run of an update. reason is what the run keeps. cause is why the update failed, which differs from reason only
+// when the restore failed too (the run then keeps restore_failed); for a run that did not fail it is empty.
+type endFunc func(st RunState, reason, cause string)
+
 // execute is the job of an update: it does the work of the kind, ends the run, writes the audit entry and frees the lock
 // before the job's last step ends, so whoever sees the job finished can start the next operation at once.
 func (a *Applier) execute(ctx context.Context, r *jobs.Reporter, req Request, run Run, t target, release func()) {
 	var once sync.Once
-	end := func(st RunState, reason string) {
+	end := func(st RunState, reason, cause string) {
 		once.Do(func() {
 			wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
 			defer cancel()
 			if _, err := a.Runs.Finish(wctx, run.ID, st, reason, 0, 0); err != nil {
 				a.log().Error("an image update run could not be finished on record", "run", run.ID, "error", err)
 			}
-			a.auditEnd(wctx, req, t, st, reason)
+			a.rememberFailure(wctx, run, t, st, cause)
+			a.auditEnd(wctx, req, t, st, reason, cause)
 			release()
 		})
 	}
 	// Whatever ends the function without ending the run (a panic included) ends it failed, and frees the lock.
-	defer end(RunFailed, ReasonInterrupted)
+	defer end(RunFailed, ReasonInterrupted, ReasonInterrupted)
 
 	r.Update(ItemCheck, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	r.Output("Checked " + t.image + ": " + shortDigest(t.from) + " to " + shortDigest(t.to))
@@ -515,29 +528,48 @@ func (a *Applier) execute(ctx context.Context, r *jobs.Reporter, req Request, ru
 	a.updateService(ctx, r, t, end)
 }
 
-// auditEnd writes the one audit entry of an update that ended. The detail keys are TierPlan's own words and digests, never
-// a credential.
-func (a *Applier) auditEnd(ctx context.Context, req Request, t target, st RunState, reason string) {
+// auditEnd writes the audit entries of an update that ended. The detail keys are TierPlan's own words and digests, never
+// a credential. A good update is one image.updated entry; one that failed is an image.update_failed entry with the reason, and,
+// when TierPlan put the previous version back or tried to, an image.update_rolled_back entry whose result says whether it worked.
+func (a *Applier) auditEnd(ctx context.Context, req Request, t target, st RunState, reason, cause string) {
 	if a.Audit == nil {
 		return
 	}
-	e := audit.Entry{
-		Actor: req.Actor, TargetType: t.kind, TargetID: t.id, EnvID: req.EnvID, IP: req.IP, UserAgent: req.UserAgent,
-		Details: map[string]string{
-			"kind": t.kind, "workload": t.name, "image": t.image, "from_digest": t.from, "to_digest": t.to,
-		},
+	entry := func(action string, result audit.Result, why, detail string) audit.Entry {
+		e := audit.Entry{
+			Actor: req.Actor, TargetType: t.kind, TargetID: t.id, EnvID: req.EnvID, IP: req.IP, UserAgent: req.UserAgent,
+			Action: action, Result: result, Reason: why,
+			Details: map[string]string{
+				"kind": t.kind, "workload": t.name, "image": t.image, "from_digest": t.from, "to_digest": t.to,
+			},
+		}
+		if detail != "" {
+			e.Details["reason"] = detail
+		}
+		if req.BulkID != "" {
+			e.Details["bulk"] = req.BulkID
+		}
+		return e
 	}
-	if req.BulkID != "" {
-		e.Details["bulk"] = req.BulkID
+	var entries []audit.Entry
+	switch st {
+	case RunDone:
+		entries = append(entries, entry(audit.ActionImageUpdated, audit.ResultSuccess, "", ""))
+	case RunRolledBack:
+		entries = append(entries,
+			entry(audit.ActionImageUpdateFailed, audit.ResultFailure, cause, cause),
+			entry(audit.ActionImageUpdateRolledBack, audit.ResultSuccess, "", cause))
+	case RunRollbackFailed:
+		entries = append(entries,
+			entry(audit.ActionImageUpdateFailed, audit.ResultFailure, cause, cause),
+			entry(audit.ActionImageUpdateRolledBack, audit.ResultFailure, reason, cause))
+	default:
+		entries = append(entries, entry(audit.ActionImageUpdateFailed, audit.ResultFailure, reason, reason))
 	}
-	if st == RunDone {
-		e.Action, e.Result = audit.ActionImageUpdated, audit.ResultSuccess
-	} else {
-		e.Action, e.Result, e.Reason = audit.ActionImageUpdateFailed, audit.ResultFailure, reason
-		e.Details["reason"] = reason
-	}
-	if err := a.Audit.Record(ctx, e); err != nil {
-		a.log().Error("an image update could not be written to the audit log", "environment", req.EnvID, "workload", t.name, "error", err)
+	for _, e := range entries {
+		if err := a.Audit.Record(ctx, e); err != nil {
+			a.log().Error("an image update could not be written to the audit log", "environment", req.EnvID, "workload", t.name, "action", e.Action, "error", err)
+		}
 	}
 }
 

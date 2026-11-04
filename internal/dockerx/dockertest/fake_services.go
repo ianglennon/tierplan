@@ -237,6 +237,13 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": fs.UpdateError})
 		return true
 	}
+	f.mu.Lock()
+	refused := f.svcRefuse[fs.ID]
+	f.mu.Unlock()
+	if refused != "" && q.Get("rollback") != "previous" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": refused})
+		return true
+	}
 	var now swarm.ServiceSpec
 	for _, s := range cfg.serviceList(false) {
 		if s.ID == fs.ID {
@@ -272,6 +279,53 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 	})
 	f.mu.Unlock()
 	writeJSON(w, http.StatusOK, swarm.ServiceUpdateResponse{Warnings: fs.UpdateWarnings})
+	return true
+}
+
+// RefuseServiceUpdates makes the service of that name refuse every update from now on with this message, as a swarm does a spec it
+// will not take; "" takes the refusal away. A test uses it to refuse the write that puts a previous version back after the
+// write of the new one was accepted.
+func (f *Fake) RefuseServiceUpdates(service, message string) bool {
+	fs, ok := f.config().resolveService(service)
+	if !ok {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.svcRefuse == nil {
+		f.svcRefuse = map[string]string{}
+	}
+	if message == "" {
+		delete(f.svcRefuse, fs.ID)
+	} else {
+		f.svcRefuse[fs.ID] = message
+	}
+	return true
+}
+
+// RollBackService makes the swarm roll the service back by itself, as its own update_config failure action does: the previous spec
+// becomes the service's and its update status reads rollback_completed. It answers false for a service never updated.
+func (f *Fake) RollBackService(service string) bool {
+	cfg := f.config()
+	fs, ok := cfg.resolveService(service)
+	if !ok || fs.PreviousSpec == nil {
+		return false
+	}
+	var now swarm.ServiceSpec
+	for _, s := range cfg.serviceList(false) {
+		if s.ID == fs.ID {
+			now = s.Spec
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.svcState == nil {
+		f.svcState = map[string]fakeServiceState{}
+	}
+	f.svcState[fs.ID] = fakeServiceState{
+		version: max(fs.Version, 1) + 1, spec: *fs.PreviousSpec, previous: &now,
+		updateState: "rollback_completed", updateMessage: "rollback completed",
+	}
 	return true
 }
 

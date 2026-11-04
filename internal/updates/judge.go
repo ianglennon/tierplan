@@ -100,6 +100,10 @@ type JudgeInput struct {
 	// Holder is who holds the operation lock of the workload's environment, nil when nobody does. A workload an update would
 	// be offered for then reads busy, because nothing can be started on the environment until the holder is done.
 	Holder *stackops.Holder
+	// Failure is the update of this workload that last failed, nil when none did (IMG-07, D-14). An update_available verdict whose
+	// remote digest is the one that failed reads rolled_back, or rollback_failed when the restore failed too, until the tag points
+	// at another digest.
+	Failure *Failure
 }
 
 // Verdict is what Judge decides about one workload.
@@ -125,6 +129,10 @@ type Verdict struct {
 	JobID string
 	// Holder is who holds the environment's lock, set with StateBusy.
 	Holder *stackops.Holder
+	// Failure is the failed update the state is rolled_back or rollback_failed because of, and FailureJob the job of its run when
+	// that is known (Service sets it; Judge does not).
+	Failure    *Failure
+	FailureJob string
 }
 
 // Judge decides what to say about a workload's image. The rules run in this order, and the first that
@@ -153,6 +161,9 @@ type Verdict struct {
 // is never ignored or skipped: there is nothing to hide. The label, then an ignore, then a skip is the order
 // Ignores.Match answers in, so exactly one applies.
 //
+// A failed update (D-14) then replaces update_available with rolled_back, or rollback_failed when the restore failed too, while the
+// stored remote digest is the one that failed; a skip or an ignore still takes precedence.
+//
 // An update_available verdict whose check is older than StaleAfter keeps its state and gains the note
 // may_be_stale, unless it already carries the note running_index_gone. A not_checked verdict carries
 // NextCheckAt.
@@ -162,7 +173,7 @@ type Verdict struct {
 // or rolled_back reads busy, with the holder. Every other state is information that stays true while the lock is held (up to
 // date, a failed check, pinned, not from a registry, not checked, stale, skipped, ignored), so none is replaced by busy.
 func Judge(in JudgeInput) Verdict {
-	v := hold(in, judge(in))
+	v := failed(in, hold(in, judge(in)))
 	if v.State == StateNotChecked {
 		v.NextCheckAt = in.NextCheckAt
 	}
@@ -177,6 +188,24 @@ func Judge(in JudgeInput) Verdict {
 		h := *in.Holder
 		v.State, v.Holder = StateBusy, &h
 	}
+	return v
+}
+
+// failed applies the failure of in to a verdict: an update that failed with the digest the tag still points at is not offered
+// again (IMG-07, D-14). It replaces update_available and nothing else, so a skip or an ignore, which came first, still wins, and a
+// tag that points at another digest than the one that failed offers the update as usual.
+func failed(in JudgeInput, v Verdict) Verdict {
+	f := in.Failure
+	if f == nil || v.State != StateUpdateAvailable || f.Digest == "" || f.Digest != v.RemoteDigest {
+		return v
+	}
+	v.State = StateRolledBack
+	if f.RollbackFailed {
+		v.State = StateRollbackFailed
+	}
+	fc := *f
+	v.Failure = &fc
+	v.Note, v.ChangedPlatforms = "", nil
 	return v
 }
 

@@ -89,22 +89,32 @@ func (d UpdatesDeps) location() *time.Location {
 // UpdateInfoBody is what the page says about the image of one workload (D-03). It carries TierPlan's
 // words only: a state, a reason code and the digests, never the registry's own text.
 type UpdateInfoBody struct {
-	State            string            `json:"state" enum:"update_available,updating,busy,queued,up_to_date,check_stale,check_failed,rolled_back,rollback_failed,not_from_registry,pinned_in_file,not_checked,skipped,ignored" doc:"What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored"`
-	Reason           string            `json:"reason" enum:",auth,rate_limited,unreachable,not_found,unsupported,other" doc:"Why the last check failed, in TierPlan's words; empty unless state is check_failed"`
-	Registry         string            `json:"registry" doc:"The registry host the image is checked at; empty when the image cannot be checked"`
-	Repository       string            `json:"repository" doc:"The repository below the registry host; empty when the image cannot be checked"`
-	Tag              string            `json:"tag" doc:"The tag that is followed; empty for an image named by digest alone"`
-	RunningDigest    string            `json:"runningDigest" doc:"The digest the service runs, from its spec; empty when its spec names none"`
-	RemoteDigest     string            `json:"remoteDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
-	ChangedPlatforms []string          `json:"changedPlatforms" doc:"For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named"`
-	CheckedAt        string            `json:"checkedAt" format:"date-time" doc:"When the tag was last checked, whatever came of it; empty when it never was"`
-	SuccessAt        string            `json:"successAt" format:"date-time" doc:"When a check of the tag last succeeded; empty when none did"`
-	Note             string            `json:"note" enum:",running_index_gone,may_be_stale" doc:"A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states"`
-	Ignore           *UpdateIgnoreBody `json:"ignore,omitempty" doc:"Set when the state is skipped or ignored: which, how far it reaches, who chose it and when"`
-	Task             bool              `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
-	Holder           *UpdateHolderBody `json:"holder,omitempty" doc:"Set when the state is busy: who holds the environment's operation lock, which an update cannot start under"`
-	JobID            string            `json:"jobId,omitempty" doc:"Left out unless set: when the state is updating, the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows"`
-	Refusal          string            `json:"refusal,omitempty" enum:"compose_unmanaged,task_container" doc:"Left out unless set, and only on a container: why it gets no one-click update whatever its state. compose_unmanaged (it belongs to a Compose project TierPlan does not manage, so the action reads Adopt to update) or task_container (a task container of a swarm service is updated through its service)"`
+	State            string             `json:"state" enum:"update_available,updating,busy,queued,up_to_date,check_stale,check_failed,rolled_back,rollback_failed,not_from_registry,pinned_in_file,not_checked,skipped,ignored" doc:"What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored"`
+	Reason           string             `json:"reason" enum:",auth,rate_limited,unreachable,not_found,unsupported,other" doc:"Why the last check failed, in TierPlan's words; empty unless state is check_failed"`
+	Registry         string             `json:"registry" doc:"The registry host the image is checked at; empty when the image cannot be checked"`
+	Repository       string             `json:"repository" doc:"The repository below the registry host; empty when the image cannot be checked"`
+	Tag              string             `json:"tag" doc:"The tag that is followed; empty for an image named by digest alone"`
+	RunningDigest    string             `json:"runningDigest" doc:"The digest the service runs, from its spec; empty when its spec names none"`
+	RemoteDigest     string             `json:"remoteDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
+	ChangedPlatforms []string           `json:"changedPlatforms" doc:"For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named"`
+	CheckedAt        string             `json:"checkedAt" format:"date-time" doc:"When the tag was last checked, whatever came of it; empty when it never was"`
+	SuccessAt        string             `json:"successAt" format:"date-time" doc:"When a check of the tag last succeeded; empty when none did"`
+	Note             string             `json:"note" enum:",running_index_gone,may_be_stale" doc:"A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states"`
+	Ignore           *UpdateIgnoreBody  `json:"ignore,omitempty" doc:"Set when the state is skipped or ignored: which, how far it reaches, who chose it and when"`
+	Task             bool               `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
+	Holder           *UpdateHolderBody  `json:"holder,omitempty" doc:"Set when the state is busy: who holds the environment's operation lock, which an update cannot start under"`
+	JobID            string             `json:"jobId,omitempty" doc:"Left out unless set: when the state is updating, the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows"`
+	Failure          *UpdateFailureBody `json:"failure,omitempty" doc:"Left out unless set: when the state is rolled_back or rollback_failed, the update that failed with the version the tag still points at, which is not offered again until the tag points at another"`
+	Refusal          string             `json:"refusal,omitempty" enum:"compose_unmanaged,task_container" doc:"Left out unless set, and only on a container: why it gets no one-click update whatever its state. compose_unmanaged (it belongs to a Compose project TierPlan does not manage, so the action reads Adopt to update) or task_container (a task container of a swarm service is updated through its service)"`
+}
+
+// UpdateFailureBody is the update of a workload that failed and was put back (IMG-07, D-14).
+type UpdateFailureBody struct {
+	Digest         string `json:"digest" doc:"The digest the update failed with: the version that is not offered again"`
+	Reason         string `json:"reason" doc:"Why it failed, as a stable code: pull_failed, didnt_start, timeout, unhealthy, engine_error, service_rejected and so on"`
+	At             string `json:"at" format:"date-time" doc:"When it failed"`
+	RollbackFailed bool   `json:"rollbackFailed" doc:"True when putting the previous version back failed too, so the workload may still be running the version that failed"`
+	JobID          string `json:"jobId,omitempty" doc:"Left out unless known: the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows while TierPlan still keeps it"`
 }
 
 // UpdateHolderBody is who holds an environment's operation lock, as the Busy badge and the confirm name them.
@@ -134,6 +144,11 @@ func updateInfoOf(v updates.Verdict, w updates.Workload) *UpdateInfoBody {
 	if v.Holder != nil {
 		h := holderBodyOf(*v.Holder)
 		b.Holder = &h
+	}
+	if f := v.Failure; f != nil {
+		b.Failure = &UpdateFailureBody{
+			Digest: f.Digest, Reason: f.Reason, At: rfc3339(f.FailedAt), RollbackFailed: f.RollbackFailed, JobID: v.FailureJob,
+		}
 	}
 	if w.Checkable() {
 		b.Registry, b.Repository, b.Tag = w.Ref.Domain, w.Ref.Path, w.Ref.Tag

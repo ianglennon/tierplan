@@ -115,6 +115,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "image.updates_unignored",
   "image.updated",
   "image.update_failed",
+  "image.update_rolled_back",
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",
@@ -465,6 +466,13 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     return t("audit.actions.image.update_failed_named", {
       name: details.workload,
       reason: t(`audit.actions.image.update_reason_${reason}`),
+    });
+  }
+  // A rollback names the workload and the version that was put back.
+  if (key === "image.update_rolled_back" && details?.workload && details.from_digest) {
+    return t("audit.actions.image.update_rolled_back_named", {
+      name: details.workload,
+      digest: details.from_digest.replace(/^sha256:/, "").slice(0, 12),
     });
   }
   if (key === "swarm.task_history_limit_changed" && details?.to) {

@@ -198,8 +198,8 @@ func TestContainerFailureRestoresOld(t *testing.T) {
 		t.Errorf("the engine was asked %v, want %v: the replacement removed, the old one renamed back and started", got, want)
 	}
 	run := r.runRow(t, job)
-	if run.State != updates.RunFailed || run.Reason != updates.ReasonDidntStart || run.OldContainer != appID {
-		t.Errorf("run = %s %q old %q, want failed didnt_start that recorded the old container", run.State, run.Reason, run.OldContainer)
+	if run.State != updates.RunRolledBack || run.Reason != updates.ReasonDidntStart || run.OldContainer != appID {
+		t.Errorf("run = %s %q old %q, want rolled_back didnt_start that recorded the old container", run.State, run.Reason, run.OldContainer)
 	}
 	if now := r.containersNow(t); !reflect.DeepEqual(now, map[string]string{"app": "running " + appID}) {
 		t.Errorf("containers = %v, want only the old container, under its own name and running", now)
@@ -240,8 +240,8 @@ func TestContainerUnhealthyRestoresOld(t *testing.T) {
 				t.Fatalf("job = %s %+v, want it to fail", job.State, job.Items)
 			}
 			run := r.runRow(t, job)
-			if run.State != updates.RunFailed || run.Reason != reason {
-				t.Errorf("run = %s %q, want failed %s", run.State, run.Reason, reason)
+			if run.State != updates.RunRolledBack || run.Reason != reason {
+				t.Errorf("run = %s %q, want rolled_back %s", run.State, run.Reason, reason)
 			}
 			if s := stepStates(job); s["health"] != "failed" || s["remove_old"] != "skipped" {
 				t.Errorf("steps = %v, want the health step failed and the old container never removed", s)

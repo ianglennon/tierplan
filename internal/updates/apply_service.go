@@ -55,15 +55,31 @@ var itemMessages = map[string]string{
 	ReasonRestoreFailed:    "The new container failed and the old one could not be put back.",
 	"auto_remove":          "A container started with automatic removal is removed when it stops, so it can't be put back if the update fails. Nothing was changed.",
 	"remove_old_failed":    "The new container is running. The old one could not be removed; it is stopped and keeps its temporary name.",
+
+	// The codes of the restore of a service (plan 12-22).
+	CodeRestoreRefused:   "The swarm would not take the previous version back.",
+	CodeRestoreUnsettled: "The previous version did not run in time.",
+	CodeRestoreChanged:   "The service was changed by someone else, so the previous version was not put back.",
 }
 
+// The codes of the restore steps of a service's update.
+const (
+	CodeRestoreRefused   = "restore_refused"
+	CodeRestoreUnsettled = "restore_unsettled"
+	CodeRestoreChanged   = "restore_service_changed"
+
+	// updateRollbackCompleted is the UpdateStatus of a service the swarm rolled back by itself (the person's failure action).
+	updateRollbackCompleted = "rollback_completed"
+)
+
 // updateService does the update of one plain service and ends the run through end. end is called once, before the last step of
-// the job is finished, and frees the environment's lock.
-func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target, end func(RunState, string)) {
+// the job is finished, and frees the environment's lock. A failure before the swarm was written ends the run failed. A failure
+// after it puts the previous image back (rollbackService) and ends the run rolled_back, or rollback_failed.
+func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target, end endFunc) {
 	// order is the steps still to come, so a failure can end the rest as skipped.
 	order := []string{ItemPull, ItemUpdate, ItemWait}
-	fail := func(item, code, reason string) {
-		end(RunFailed, reason)
+	// finish ends the failing step and skips the rest, without ending the run.
+	finish := func(item, code, reason string) {
 		msg := itemMessages[code]
 		if msg == "" {
 			msg = itemMessages[reason]
@@ -82,6 +98,10 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 				r.Finish(id, jobs.ItemSkipped, stackops.CodeNotRun, "", nil)
 			}
 		}
+	}
+	fail := func(item, code, reason string) {
+		end(RunFailed, reason, reason)
+		finish(item, code, reason)
 	}
 	if ctx.Err() != nil {
 		fail(ItemPull, ReasonCancelled, ReasonCancelled)
@@ -120,6 +140,12 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 		a.log().Warn("a service has no container spec to update", "environment", t.envID, "service", t.name)
 		fail(ItemUpdate, ReasonRejected, ReasonRejected)
 		return
+	}
+	// The image the service has now is the one a rollback puts back: the same text, or, when it names no digest, the digest it ran.
+	previous := spec.TaskTemplate.ContainerSpec.Image
+	if !strings.HasSuffix(previous, "@"+t.from) {
+		base, _, _ := strings.Cut(t.ref, "@")
+		previous = base + "@" + t.from
 	}
 	spec.TaskTemplate.ContainerSpec.Image = t.ref
 	hasHealth := hasHealthcheck(spec.TaskTemplate.ContainerSpec)
@@ -173,10 +199,71 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 	// starting until its check passes).
 	r.Update(ItemWait, func(it *jobs.Item) { it.State = jobs.ItemRunning; it.Unit = "tasks" })
 	if hasHealth {
-		r.Update(ItemHealth, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+		// The health step counts the window it is waited for in, so the console can show how long is left.
+		r.Update(ItemHealth, func(it *jobs.Item) {
+			it.State, it.Unit, it.Total = jobs.ItemRunning, "seconds", int64(a.convergeTimeout()/time.Second)
+		})
 	}
-	var last stackops.Convergence
-	werr = stackops.WaitConverged(ctx, a.clock(), a.convergeTimeout(), func(ctx context.Context) (stackops.Convergence, []dockerx.TaskRow, error) {
+	var (
+		last     stackops.Convergence
+		starting bool
+	)
+	werr = a.waitServiceSettled(ctx, t, detail.ID, detail.UpdateStatus, false, func(c stackops.Convergence, rows []dockerx.TaskRow) {
+		last = c
+		starting = anyStarting(c, rows)
+		r.Update(ItemWait, func(it *jobs.Item) { it.Current, it.Total = int64(c.Running), int64(c.Want) })
+	})
+
+	switch {
+	case werr == nil:
+		end(RunDone, "", "")
+		r.Finish(ItemWait, jobs.ItemDone, "", "", map[string]string{"running": strconv.Itoa(last.Running)})
+		if hasHealth {
+			r.Finish(ItemHealth, jobs.ItemDone, "", "", nil)
+		}
+	case ctx.Err() != nil:
+		// A person who stopped watching has not said the version is bad: it is left as the swarm has it.
+		fail(ItemWait, ReasonCancelled, ReasonCancelled)
+	default:
+		reason, code := convergeReason(werr, last, hasHealth && starting)
+		a.log().Warn("a service update did not settle", "environment", t.envID, "service", t.name, "reason", reason, "error", werr)
+		item := ItemWait
+		if reason == ReasonUnhealthy && hasHealth {
+			item = ItemHealth
+		}
+		// The steps of the restore are added while the failing step still runs, so the job does not end between the two.
+		r.Add(jobs.ItemSpec{ID: ItemRollback, Label: "Roll back to the previous version", Kind: stackops.KindStep})
+		r.Add(jobs.ItemSpec{ID: ItemRollbackWait, Label: "Wait for the previous version to run", Kind: stackops.KindStep})
+		if text := firstText(last.DeadErr, last.Err, last.Message); text != "" {
+			r.Detail(item, text)
+		}
+		if item == ItemHealth {
+			r.Finish(ItemWait, jobs.ItemDone, "", "", map[string]string{"running": strconv.Itoa(last.Running)})
+		}
+		finish(item, code, reason)
+		a.rollbackService(ctx, r, t, previous, reason, end)
+	}
+}
+
+// anyStarting reports whether a task the swarm means to run, on the service's current template, is still starting: the state a task
+// with a health check stays in until the check passes.
+func anyStarting(c stackops.Convergence, rows []dockerx.TaskRow) bool {
+	for _, row := range rows {
+		if row.DesiredState == stackops.TaskRunning && row.State == taskStarting && row.SpecHash == c.Template {
+			return true
+		}
+	}
+	return false
+}
+
+// taskStarting is the state of a task whose container started and whose health check has not passed.
+const taskStarting = "starting"
+
+// waitServiceSettled polls the service until it has settled on its spec. prior is the update status it had before the write the
+// wait follows, which is not this write's. With restoring set, the rolled-back status of the swarm's own rollback is no
+// stop either: the wait is for the previous version to run.
+func (a *Applier) waitServiceSettled(ctx context.Context, t target, id string, prior *dockerx.ServiceUpdateStatus, restoring bool, on func(stackops.Convergence, []dockerx.TaskRow)) error {
+	return stackops.WaitConverged(ctx, a.clock(), a.convergeTimeout(), func(ctx context.Context) (stackops.Convergence, []dockerx.TaskRow, error) {
 		rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
 		defer cancel()
 		var (
@@ -185,7 +272,7 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 		)
 		if err := a.Service.Clusters.ClusterRead(rctx, t.envID, func(c *dockerx.Client) error {
 			var e error
-			if d, _, e = c.ServiceInspect(rctx, detail.ID); e != nil {
+			if d, _, e = c.ServiceInspect(rctx, id); e != nil {
 				return e
 			}
 			rows, e = c.Tasks(rctx, dockerx.TaskFilter{ServiceIDs: []string{d.ID}})
@@ -193,39 +280,151 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 		}); err != nil {
 			return stackops.Convergence{}, nil, err
 		}
-		return stackops.Progress(d, rows).IgnoringUpdate(detail.UpdateStatus), rows, nil
-	}, nil, func(c stackops.Convergence, _ []dockerx.TaskRow) {
-		last = c
-		r.Update(ItemWait, func(it *jobs.Item) { it.Current, it.Total = int64(c.Running), int64(c.Want) })
-	})
+		c := stackops.Progress(d, rows).IgnoringUpdate(prior)
+		if restoring && c.State == updateRollbackCompleted {
+			c = c.IgnoringUpdate(d.UpdateStatus)
+		}
+		return c, rows, nil
+	}, nil, on)
+}
 
-	switch {
-	case werr == nil:
-		end(RunDone, "")
-		r.Finish(ItemWait, jobs.ItemDone, "", "", map[string]string{"running": strconv.Itoa(last.Running)})
-		if hasHealth {
-			r.Finish(ItemHealth, jobs.ItemDone, "", "", nil)
+// rollbackService puts the previous image back after an update failed for cause, and ends the run: rolled_back when the previous
+// version runs again, rollback_failed when it does not (D-12). The service is read at its current version and only the image is
+// changed, so the person's own update_config and every other setting is kept. If the swarm already rolled the service back by its
+// own failure action, nothing is written and the wait is for that rollback. A service that now runs neither of the two images was
+// changed by someone else and is left alone. The registry credential is chosen again and goes to the engine only.
+func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t target, previous, cause string, end endFunc) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.convergeTimeout()+restoreTimeout)
+	defer cancel()
+
+	failed := func(item, code string) {
+		a.log().Error("a service could not be put back to its previous version", "environment", t.envID, "service", t.name, "cause", cause, "code", code)
+		end(RunRollbackFailed, ReasonRestoreFailed, cause)
+		r.Finish(item, jobs.ItemFailed, code, itemMessages[code], nil)
+		if item == ItemRollback {
+			r.Finish(ItemRollbackWait, jobs.ItemSkipped, stackops.CodeNotRun, "", nil)
 		}
-	case ctx.Err() != nil:
-		fail(ItemWait, ReasonCancelled, ReasonCancelled)
+	}
+	r.Update(ItemRollback, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	r.Output("Rolling " + t.name + " back to " + shortDigest(t.from))
+
+	var detail dockerx.ServiceDetail
+	if err := a.Service.Clusters.ClusterRead(rctx, t.envID, func(c *dockerx.Client) error {
+		var e error
+		detail, _, e = c.ServiceInspect(rctx, t.id)
+		return e
+	}); err != nil {
+		a.log().Warn("could not read a service to put its previous version back", "environment", t.envID, "service", t.name, "error", err)
+		failed(ItemRollback, CodeRestoreRefused)
+		return
+	}
+	var spec swarm.ServiceSpec
+	if err := json.Unmarshal(detail.Spec, &spec); err != nil || spec.TaskTemplate.ContainerSpec == nil {
+		failed(ItemRollback, CodeRestoreRefused)
+		return
+	}
+	prior := detail.UpdateStatus
+	switch image := spec.TaskTemplate.ContainerSpec.Image; {
+	case strings.HasSuffix(image, "@"+t.from):
+		// The swarm put the previous version back itself: its own rollback is what is waited for.
+		r.Output("The swarm has already put the previous version back")
+		prior = nil
+	case strings.HasSuffix(image, "@"+t.to):
+		if !digestGrammar.MatchString(t.from) {
+			failed(ItemRollback, CodeRestoreRefused)
+			return
+		}
+		spec.TaskTemplate.ContainerSpec.Image = previous
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			failed(ItemRollback, CodeRestoreRefused)
+			return
+		}
+		auth, used, aerr := a.authFor(rctx, t)
+		if aerr != nil {
+			a.log().Error("could not resolve the registry credential of a service rollback", "environment", t.envID, "service", t.name, "error", aerr)
+			failed(ItemRollback, CodeRestoreRefused)
+			return
+		}
+		werr := a.Aggregator.WriteOnManager(rctx, t.envID, func(c *dockerx.Client) error {
+			var e error
+			if auth == "" {
+				_, e = c.ServiceUpdateAuthFromSpec(rctx, detail.ID, detail.Version, raw)
+			} else {
+				_, e = c.ServiceUpdate(rctx, detail.ID, detail.Version, raw, auth)
+			}
+			return e
+		})
+		if used != nil {
+			a.noteCredential(rctx, used, "")
+		}
+		if werr != nil {
+			a.log().Warn("the swarm did not take a service's previous version back", "environment", t.envID, "service", t.name, "error", werr)
+			failed(ItemRollback, CodeRestoreRefused)
+			return
+		}
 	default:
-		reason, code := convergeReason(werr, last)
-		a.log().Warn("a service update did not settle", "environment", t.envID, "service", t.name, "reason", reason, "error", werr)
-		item := ItemWait
-		if reason == ReasonUnhealthy && hasHealth {
-			item = ItemHealth
-		}
-		fail(item, code, reason)
-		if text := firstText(last.DeadErr, last.Err, last.Message); text != "" {
-			r.Detail(item, text)
-		}
+		// Neither version: somebody else changed the service. Putting an image back over that would undo their change.
+		a.log().Warn("a service was changed by someone else while its update failed, so it is left alone", "environment", t.envID, "service", t.name)
+		end(RunFailed, cause, cause)
+		r.Finish(ItemRollback, jobs.ItemFailed, CodeRestoreChanged, itemMessages[CodeRestoreChanged], nil)
+		r.Finish(ItemRollbackWait, jobs.ItemSkipped, stackops.CodeNotRun, "", nil)
+		return
+	}
+	r.Output("Put " + t.name + " back to " + shortDigest(t.from))
+	r.Finish(ItemRollback, jobs.ItemDone, "", "", map[string]string{"to": t.from})
+
+	r.Update(ItemRollbackWait, func(it *jobs.Item) { it.State = jobs.ItemRunning; it.Unit = "tasks" })
+	if err := a.waitServiceSettled(rctx, t, detail.ID, prior, true, func(c stackops.Convergence, _ []dockerx.TaskRow) {
+		r.Update(ItemRollbackWait, func(it *jobs.Item) { it.Current, it.Total = int64(c.Running), int64(c.Want) })
+	}); err != nil {
+		a.log().Warn("a service's previous version did not run after it was put back", "environment", t.envID, "service", t.name, "error", err)
+		failed(ItemRollbackWait, CodeRestoreUnsettled)
+		return
+	}
+	end(RunRolledBack, cause, cause)
+	r.Output(t.name + " runs " + shortDigest(t.from) + " again")
+	r.Finish(ItemRollbackWait, jobs.ItemDone, "", "", nil)
+}
+
+// rememberFailure keeps what the next judgement needs of an update that ended (IMG-07, D-14). A good update forgets the failure the
+// workload had. A rolled-back or rollback-failed update, and one whose pull failed (the digest could not even be fetched), remember
+// the digest that failed, so the badge says so and stops offering it until the tag points at another. An update that was cancelled
+// says nothing about the version, and one that was refused before anything changed, other than by its pull, is not remembered
+// either. A failed write is logged and changes nothing else.
+func (a *Applier) rememberFailure(ctx context.Context, run Run, t target, st RunState, cause string) {
+	if a.Failures == nil {
+		return
+	}
+	var err error
+	switch {
+	case st == RunDone:
+		_, err = a.Failures.Clear(ctx, t.envID, t.kind, t.name)
+	case cause == ReasonCancelled:
+		return
+	case st == RunRolledBack, st == RunRollbackFailed, st == RunFailed && cause == ReasonPullFailed:
+		err = a.Failures.Record(ctx, Failure{
+			EnvID: t.envID, Kind: t.kind, Workload: t.name, Digest: t.to, Reason: cause, RunID: run.ID,
+			RollbackFailed: st == RunRollbackFailed,
+		})
+	default:
+		return
+	}
+	if err != nil {
+		a.log().Error("the outcome of an image update could not be remembered", "environment", t.envID, "workload", t.name, "error", err)
 	}
 }
 
 // convergeReason words how a wait that did not settle ended: the reason the run keeps and the code of the step.
-func convergeReason(err error, last stackops.Convergence) (reason, code string) {
+//
+// A wait that ran out of time reads unhealthy, not timeout, when the image defines a health check and the tasks it was waiting for
+// were still starting: the swarm keeps a task in that state until its check passes (starting says so).
+func convergeReason(err error, last stackops.Convergence, starting bool) (reason, code string) {
 	switch {
 	case errors.Is(err, stackops.ErrConvergeTimeout):
+		if starting {
+			return ReasonUnhealthy, ReasonUnhealthy
+		}
 		return ReasonTimeout, ReasonTimeout
 	case errors.Is(err, stackops.ErrNetworkFull):
 		return ReasonDidntStart, "network_full"

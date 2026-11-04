@@ -157,12 +157,17 @@ func (a *Applier) isSelf(id string) bool {
 
 // updateContainer does the update of one plain container and ends the run through end. end is called once, before the last
 // step of the job is finished, and frees the environment's lock.
-func (a *Applier) updateContainer(ctx context.Context, r *jobs.Reporter, run Run, t target, end func(RunState, string)) {
+func (a *Applier) updateContainer(ctx context.Context, r *jobs.Reporter, run Run, t target, end endFunc) {
 	// order is the steps that exist and are still to come, so a failure can end the rest as skipped.
 	order := []string{ItemPull, ItemCreate, ItemSwap, ItemStart}
 	endState := RunFailed
+	// cause is why the update failed when the run ends rollback_failed, which keeps restore_failed as its reason.
+	cause := ""
 	fail := func(item, code, reason string) {
-		end(endState, reason)
+		if cause == "" {
+			cause = reason
+		}
+		end(endState, reason, cause)
 		msg := itemMessages[code]
 		if msg == "" {
 			msg = itemMessages[reason]
@@ -314,10 +319,15 @@ func (a *Applier) updateContainer(ctx context.Context, r *jobs.Reporter, run Run
 		return ok
 	}
 	abort := func(item, code, reason string) {
-		if !restore() {
+		cause = reason
+		switch {
+		case !restore():
 			endState = RunRollbackFailed
 			r.Output("The old container could not be put back. It is " + oldName + " if it was renamed; check " + name + " on the node.")
 			reason = ReasonRestoreFailed
+		case stopAttempted || renamedOld:
+			// The old container had been touched and is back: the update is rolled back, not merely refused (IMG-07).
+			endState = RunRolledBack
 		}
 		fail(item, code, reason)
 	}
@@ -438,7 +448,9 @@ func (a *Applier) updateContainer(ctx context.Context, r *jobs.Reporter, run Run
 		if hasHealth {
 			waitItem = ItemHealth
 			r.Finish(ItemStart, jobs.ItemDone, "", "", nil)
-			r.Update(ItemHealth, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+			// The step counts the window the replacement is waited for in, so the console can show how long is left.
+			window := int64(a.healthWindow(hc, hasHealth) / time.Second)
+			r.Update(ItemHealth, func(it *jobs.Item) { it.State, it.Unit, it.Total = jobs.ItemRunning, "seconds", window })
 		}
 		if reason := a.waitUp(ctx, t, newID, hc, hasHealth, read); reason != "" {
 			a.log().Warn("the replacement of a container did not come up", "environment", t.envID, "container", t.name, "reason", reason)
@@ -454,7 +466,7 @@ func (a *Applier) updateContainer(ctx context.Context, r *jobs.Reporter, run Run
 	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), containerWriteTimeout)
 	rmErr := write(rctx, func(c *dockerx.Client) error { return c.ContainerRemove(rctx, old.ID, dockerx.RemoveOptions{}) })
 	rcancel()
-	end(RunDone, "")
+	end(RunDone, "", "")
 	if rmErr != nil && !dockerx.IsNotFound(rmErr) {
 		a.log().Warn("the old container could not be removed after its update", "environment", t.envID, "container", t.name, "error", rmErr)
 		r.Output("The old container could not be removed; it is stopped and named " + oldName)

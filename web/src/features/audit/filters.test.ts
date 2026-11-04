@@ -260,6 +260,12 @@ describe("actionLabel (janitor)", () => {
     );
     expect(actionLabel("image.updated", real, {})).toBe("Updated an image");
     expect(actionLabel("image.update_failed", real, {})).toBe("An image update failed");
+    expect(
+      actionLabel("image.update_rolled_back", real, { workload: "web", from_digest: digest }),
+    ).toBe("Rolled back web to bbbbbbbbbbbb after a failed update");
+    expect(actionLabel("image.update_rolled_back", real, {})).toBe(
+      "An image update was rolled back",
+    );
   });
 
   it("names the node whose janitor setting changed", () => {

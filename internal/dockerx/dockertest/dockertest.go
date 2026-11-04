@@ -690,6 +690,8 @@ type Fake struct {
 	// svcUpdates the updates themselves (fake_services.go).
 	svcState   map[string]fakeServiceState
 	svcUpdates []FakeServiceUpdate
+	// svcRefuse are the messages RefuseServiceUpdates gave services, by ID.
+	svcRefuse map[string]string
 	// svcCreated are the services created through the fake, listed after the configured ones, and
 	// svcCreates the creates themselves (fake_services.go).
 	svcCreated []FakeService
