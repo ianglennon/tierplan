@@ -152,13 +152,27 @@ func PushVariant(t testing.TB, node *Node, base, target, marker string, login *L
 // the same tag.
 func PushVariantCmd(t testing.TB, node *Node, base, target, marker, cmd string, login *Login) string {
 	t.Helper()
+	if cmd == "" {
+		return PushVariantWith(t, node, base, target, marker, login)
+	}
+	return PushVariantWith(t, node, base, target, marker, login, "CMD "+cmd)
+}
+
+// PushVariantWith is PushVariant with Dockerfile instructions applied to the committed image (docker commit --change), such as
+// `CMD ["sleep","3600"]` or `HEALTHCHECK --interval=2s --retries=1 CMD false`. Each instruction is one argument and must not
+// hold a single quote.
+func PushVariantWith(t testing.TB, node *Node, base, target, marker string, login *Login, changes ...string) string {
+	t.Helper()
 	LoadImage(t, base, node)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	name := "tp-variant-" + randHex(3)
 	change := ""
-	if cmd != "" {
-		change = fmt.Sprintf("--change 'CMD %s' ", cmd)
+	for _, c := range changes {
+		if strings.Contains(c, "'") {
+			t.Fatalf("the instruction %q holds a single quote", c)
+		}
+		change += fmt.Sprintf("--change '%s' ", c)
 	}
 	if out, err := node.Sh(ctx, fmt.Sprintf("docker run --name %s %s sh -c 'echo %s > /tp-marker' && docker commit %s%s %s && docker rm %s", name, base, marker, change, name, target, name)); err != nil {
 		t.Fatalf("make a variant of %s on %s: %v\n%s", base, node.Hostname, err, out)
