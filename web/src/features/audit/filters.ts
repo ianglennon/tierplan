@@ -299,6 +299,8 @@ const UPDATE_FAILURE_REASONS: readonly string[] = [
   "engine_error",
   "cancelled",
   "interrupted",
+  "server_restarted",
+  "environment_offline",
 ];
 const REMOVED_KINDS = ["containers", "images", "networks"] as const;
 

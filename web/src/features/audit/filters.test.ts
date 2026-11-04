@@ -258,6 +258,9 @@ describe("actionLabel (janitor)", () => {
     expect(actionLabel("image.update_failed", real, { workload: "web", reason: "mystery" })).toBe(
       "Update of web failed: see the update's record",
     );
+    expect(
+      actionLabel("image.update_failed", real, { workload: "web", reason: "server_restarted" }),
+    ).toBe("Update of web failed: TierPlan restarted during this update");
     expect(actionLabel("image.updated", real, {})).toBe("Updated an image");
     expect(actionLabel("image.update_failed", real, {})).toBe("An image update failed");
     expect(

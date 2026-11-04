@@ -223,6 +223,8 @@
         "update_reason_engine_error": "the engine could not be reached",
         "update_reason_cancelled": "it was cancelled",
         "update_reason_interrupted": "TierPlan stopped during the update",
+        "update_reason_server_restarted": "TierPlan restarted during this update",
+        "update_reason_environment_offline": "the environment could not be reached to put the previous version back",
         "update_reason_other": "see the update's record"
       },
       "registry": {
