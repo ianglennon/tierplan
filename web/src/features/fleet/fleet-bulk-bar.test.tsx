@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +16,7 @@ import type {
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FleetUpdatesTab } from "@/features/fleet/fleet-updates-tab";
-import "@/i18n";
+import i18n from "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
@@ -434,5 +434,297 @@ describe("Skip selected versions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Skip selected versions" }));
     await waitFor(() => expect(screen.getByText(/Couldn't skip these versions/)).toBeTruthy());
     expect(screen.getByRole("toolbar", { name: "Bulk actions" })).toBeTruthy();
+  });
+});
+
+describe("ticks on the Updates tab", () => {
+  const three = () =>
+    body([
+      group({
+        items: [
+          item({ id: "s1", name: "web" }),
+          item({ id: "s2", name: "api" }),
+          item({ id: "s3", name: "db" }),
+        ],
+      }),
+    ]);
+  const groupBox = () => screen.getByRole("checkbox", { name: "Select all in prod" });
+
+  it("reads mixed when two of three are ticked, and ticking it ticks all three", async () => {
+    answer = () => Response.json(three());
+    mount();
+    await table();
+    expect(groupBox().getAttribute("aria-checked")).toBe("false");
+    tick("Select web");
+    tick("Select api");
+    expect(groupBox().getAttribute("aria-checked")).toBe("mixed");
+    expect(screen.getByText("2 selected")).toBeTruthy();
+
+    fireEvent.click(groupBox());
+    expect(groupBox().getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("3 selected")).toBeTruthy();
+    for (const name of ["web", "api", "db"]) {
+      expect(
+        screen.getByRole("checkbox", { name: `Select ${name}` }).getAttribute("aria-checked"),
+      ).toBe("true");
+    }
+
+    // Ticking it again clears the group.
+    fireEvent.click(groupBox());
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+  });
+
+  it("ticks every row that can be updated from the header, and clears them from it again", async () => {
+    answer = () => Response.json(threeUpdates());
+    mount();
+    await table();
+    const all = screen.getByRole("checkbox", { name: "Select all updates" });
+    fireEvent.click(all);
+    expect(screen.getByText("3 selected")).toBeTruthy();
+    expect(all.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(all);
+    expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull();
+  });
+
+  it("offers no tick on a skipped, an ignored or a rolled-back row, nor on one that cannot run now", async () => {
+    answer = () =>
+      Response.json(
+        body([
+          group({
+            items: [
+              item({ id: "s1", name: "web" }),
+              item({
+                id: "s2",
+                name: "skipped-one",
+                selectable: false,
+                update: info({ state: "skipped" }),
+              }),
+              item({
+                id: "s3",
+                name: "ignored-one",
+                selectable: false,
+                update: info({ state: "ignored" }),
+              }),
+              item({
+                id: "s4",
+                name: "rolled-one",
+                selectable: false,
+                update: info({ state: "rolled_back" }),
+              }),
+              item({
+                id: "s5",
+                name: "busy-one",
+                selectable: false,
+                update: info({ state: "busy" }),
+              }),
+            ],
+          }),
+        ]),
+      );
+    mount();
+    await table();
+    expect(screen.getByRole("checkbox", { name: "Select web" })).toBeTruthy();
+    for (const name of ["skipped-one", "ignored-one", "rolled-one", "busy-one"]) {
+      expect(screen.getByRole("link", { name })).toBeTruthy();
+      expect(screen.queryByRole("checkbox", { name: `Select ${name}` })).toBeNull();
+    }
+    // Select all ticks only the one that can be updated.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all updates" }));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
+  it("offers no tick in a group with nothing that can be updated, and disables the header's", async () => {
+    answer = () =>
+      Response.json(
+        body([group({ items: [item({ selectable: false, update: info({ state: "skipped" }) })] })]),
+      );
+    mount();
+    await table();
+    expect(screen.queryByRole("checkbox", { name: "Select all in prod" })).toBeNull();
+    expect(
+      screen.getByRole("checkbox", { name: "Select all updates" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("drops a tick when its row stops being updatable after a refresh", async () => {
+    mount();
+    await table();
+    tick("Select web");
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    answer = () => Response.json(threeUpdates("queued"));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["fleet"] });
+    });
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).toBeNull());
+  });
+});
+
+// Four environments of 500 workloads each: the list draws only the rows in view, and a tick is a key.
+describe("Update selected at scale", () => {
+  // jsdom lays nothing out, so the list's box is given a size for it to know which rows are in view.
+  const saved: Record<string, PropertyDescriptor | undefined> = {};
+  const lay = (prop: string, value: number) => {
+    saved[prop] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+    Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, value });
+  };
+  beforeEach(() => {
+    lay("offsetHeight", 400);
+    lay("offsetWidth", 800);
+  });
+  afterEach(() => {
+    for (const [prop, descriptor] of Object.entries(saved)) {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, prop, descriptor);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[prop];
+    }
+  });
+  const ENVS = ["e1", "e2", "e3", "e4"];
+  const big = () =>
+    body(
+      ENVS.map((envId, e) =>
+        group({
+          envId,
+          envName: `env${e + 1}`,
+          items: Array.from({ length: 500 }, (_, i) =>
+            item({ id: `${envId}-${i}`, name: `w${e}-${String(i).padStart(3, "0")}` }),
+          ),
+        }),
+      ),
+    );
+
+  it("ticks all 2,000 from the header, though the list draws only some of them, and says the limit", async () => {
+    answer = () => Response.json(big());
+    me = makeMe({ envs: Object.fromEntries(ENVS.map((e) => [e, "operator"])) as never });
+    mount();
+    const t = await table();
+    // Past 100 rows only the rows in view are drawn.
+    expect(within(t).getAllByRole("row").length).toBeLessThan(200);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all updates" }));
+    expect(screen.getByText("2,000 selected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Update 2,000 selected" }));
+
+    // More than the server takes in one request: the confirm says so and starts nothing.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Update 2,000 items", { selector: "h2" })).toBeTruthy();
+    expect(within(dialog).getByText(/at most 500 at a time/)).toBeTruthy();
+    const commit = within(dialog).getByRole("button", { name: "Update 2,000 items" });
+    expect(commit.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(commit);
+    expect(runPosts()).toHaveLength(0);
+    // It lists five of each environment's rows and folds the rest.
+    expect(within(dialog).getAllByRole("button", { name: "Show all 500" })).toHaveLength(4);
+  });
+
+  it("sends exactly as many items as the button says", async () => {
+    answer = () => Response.json(big());
+    me = makeMe({ envs: Object.fromEntries(ENVS.map((e) => [e, "operator"])) as never });
+    answerRun = () =>
+      Response.json({ bulkId: "b", jobs: [{ envId: "e2", jobId: "j" }], skipped: [] });
+    mount();
+    const t = await table();
+    // Folding the first environment brings the second's header into view; its 500 rows are not drawn.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse env1" }));
+    expect(within(t).queryByRole("checkbox", { name: "Select w1-499" })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all in env2" }));
+    const button = screen.getByRole("button", { name: "Update 500 selected" });
+    fireEvent.click(button);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update 500 items" }));
+    await waitFor(() => expect(runPosts()).toHaveLength(1));
+    const posted = itemsOf(runPosts()[0]) as { envId: string; name: string }[];
+    expect(posted).toHaveLength(500);
+    expect(new Set(posted.map((p) => p.envId))).toEqual(new Set(["e2"]));
+    expect(new Set(posted.map((p) => p.name)).size).toBe(500);
+  });
+
+  it("builds the request from the ticks, not from the rows in view", async () => {
+    answer = () => Response.json(big());
+    me = makeMe({ envs: Object.fromEntries(ENVS.map((e) => [e, "operator"])) as never });
+    mount();
+    await table();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all in env1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update 500 selected" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show all 500" }));
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(500);
+  });
+});
+
+// The words of a count, at 0, 1 and 1,200 (UI-SPEC: i18next plurals, with Intl grouping).
+describe("plurals", () => {
+  const t = (key: string, count: number, extra: Record<string, unknown> = {}) =>
+    i18n.t(key, { count, ns: key.split(".")[0], ...extra }) as string;
+
+  it.each([
+    [0, "Update 0 selected"],
+    [1, "Update 1 selected"],
+    [1200, "Update 1,200 selected"],
+  ])("the bulk button reads %s", (n, text) => {
+    expect(t("fleet.bulk.update", n)).toBe(text);
+  });
+
+  it.each([
+    [0, "0 selected"],
+    [1, "1 selected"],
+    [1200, "1,200 selected"],
+  ])("the bar's count reads %s", (n, text) => {
+    expect(t("actions.bulk.selected", n)).toBe(text);
+  });
+
+  it.each([
+    [0, "Update 0 items"],
+    [1, "Update 1 item"],
+    [1200, "Update 1,200 items"],
+  ])("the confirm's title and commit read %s", (n, text) => {
+    expect(t("updates.confirm.fleet.title", n)).toBe(text);
+    expect(t("updates.confirm.fleet.commit", n)).toBe(text);
+  });
+
+  it.each([
+    [0, "0 items"],
+    [1, "1 item"],
+    [1200, "1,200 items"],
+  ])("a group's count reads %s", (n, text) => {
+    expect(t("updates.confirm.fleet.groupCount", n)).toBe(text);
+  });
+
+  it.each([
+    [1, "Started 1 update."],
+    [0, "Started 0 updates."],
+    [1200, "Started 1,200 updates."],
+  ])("the start toast reads %s", (n, text) => {
+    expect(t("fleet.bulk.started", n)).toContain(text);
+  });
+
+  it.each([
+    [1, "1 wasn't started: a."],
+    [3, "3 weren't started: a."],
+    [1200, "1,200 weren't started: a."],
+  ])("the refusal toast reads %s", (n, text) => {
+    expect(t("fleet.bulk.notStarted", n, { names: "a" })).toBe(text);
+  });
+
+  it.each([
+    [1, "Skipped 1 version."],
+    [1200, "Skipped 1,200 versions."],
+  ])("the skip toast reads %s", (n, text) => {
+    expect(t("fleet.bulk.skipped", n)).toContain(text);
+  });
+
+  it("the end toast groups its numbers", () => {
+    expect(
+      i18n.t("jobs.toast.bulk.done", { ns: "jobs", done: 1200, total: 1500, environment: "prod" }),
+    ).toBe("Updated 1,200 of 1,500 in prod.");
+    expect(
+      i18n.t("jobs.toast.bulk.done", { ns: "jobs", done: 0, total: 1, environment: "prod" }),
+    ).toBe("Updated 0 of 1 in prod.");
+  });
+
+  it("the indicator's title counts items", () => {
+    const row = (count: number) =>
+      i18n.t("jobs.indicator.update.bulk", { ns: "jobs", count, environment: "prod" });
+    expect(row(1)).toBe("Updating 1 item in prod");
+    expect(row(3)).toBe("Updating 3 items in prod");
+    expect(row(1200)).toBe("Updating 1,200 items in prod");
   });
 });

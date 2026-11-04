@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -30,6 +30,7 @@ interface Item {
   total?: number;
   unit?: string;
   result?: Record<string, string>;
+  parent?: string;
 }
 
 const item = (over: Item): Record<string, unknown> => ({
@@ -65,7 +66,7 @@ const wait = (state: Item["state"] = "waiting", over: Partial<Item> = {}): Item 
 });
 
 let state: "running" | "done" | "failed" | "cancelled";
-let kind: "service" | "container";
+let kind: "service" | "container" | "bulk";
 let workload: string;
 let items: Item[];
 let status: number;
@@ -677,5 +678,111 @@ describe("HealthWait", () => {
     expect(screen.getByText("Waiting for web to be healthy. Up to 0 seconds left.")).toBeTruthy();
     expect(polite()).toHaveLength(4);
     expect(bar().getAttribute("aria-valuenow")).toBe("100");
+  });
+});
+
+// A bulk update (plan 12-31, D-11): one job for the environment with a top-level item for each workload,
+// the steps of its update under it, and a summary the job ends with.
+describe("UpdateConsole: a bulk update", () => {
+  const top = (
+    id: string,
+    label: string,
+    state: Item["state"],
+    over: Partial<Item> = {},
+  ): Item => ({
+    id,
+    label,
+    state,
+    ...over,
+  });
+  const summary = (result: Record<string, string>): Item =>
+    top("summary", "Summary", "done", { result });
+
+  function bulk(list: Item[], end: typeof state = "done") {
+    kind = "bulk";
+    workload = "3 workloads";
+    from = "";
+    state = end;
+    items = list;
+    lines = ["Updated 1 of 3. 1 rolled back. 1 skipped."];
+  }
+
+  it("ends with Partly done when one was rolled back and one skipped", async () => {
+    bulk(
+      [
+        top("i0", "Update web", "done"),
+        top("i0/pull", "Pull the image", "done", { parent: "i0" }),
+        top("i1", "Update api", "failed", { code: "unhealthy" }),
+        top("i1/rollback", "Roll back", "done", { parent: "i1" }),
+        top("i2", "Update cache", "skipped", { code: "moved" }),
+        summary({ done: "1", total: "3", rolled_back: "1", skipped: "1" }),
+      ],
+      "failed",
+    );
+    mount();
+    expect(await screen.findByRole("heading", { name: /Update of 3 items/ })).toBeTruthy();
+    const title = await screen.findByText("Partly done", { selector: "[data-slot=alert-title]" });
+    const alert = title.closest("[role=status]") as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.textContent).toContain("Updated 1 of 3. 1 was rolled back and 1 was skipped.");
+    // Every item says what happened to it, in the console's words.
+    const rows = screen.getByRole("list", { name: "Items of the update" });
+    const text = rows.textContent ?? "";
+    expect(text).toContain("web");
+    expect(text).toContain("Updated");
+    expect(text).toContain("Rolled back");
+    expect(text).toContain("api didn't become healthy");
+    expect(text).toContain("Skipped");
+    expect(text).toContain("A newer version appeared since you confirmed, so cache was skipped.");
+    // The steps of an item are not listed as items of their own.
+    expect(within(rows).getAllByRole("listitem")).toHaveLength(3);
+    // There is no one workload to update again, and no Update anyway.
+    expect(screen.queryByRole("button", { name: /Update anyway/ })).toBeNull();
+  });
+
+  it("ends with the success alert when every item was updated", async () => {
+    bulk(
+      [
+        top("i0", "Update web", "done"),
+        top("i1", "Update api", "done"),
+        summary({ done: "2", total: "2", rolled_back: "0", skipped: "0" }),
+      ],
+      "done",
+    );
+    mount();
+    const title = await screen.findByText("Updated", { selector: "[data-slot=alert-title]" });
+    expect(title.closest("[role=status]")?.textContent).toContain("All 2 items");
+    expect(screen.queryByText("Partly done")).toBeNull();
+  });
+
+  it("shows the items that have not run as waiting while the job runs, and no result", async () => {
+    bulk(
+      [
+        top("i0", "Update web", "running"),
+        top("i1", "Update api", "waiting"),
+        top("summary", "Summary", "waiting"),
+      ],
+      "running",
+    );
+    mount();
+    await screen.findByRole("heading", { name: /Update of 2 items/ });
+    const rows = screen.getByRole("list", { name: "Items of the update" });
+    expect(within(rows).getByText("Updating…")).toBeTruthy();
+    expect(within(rows).getByText("Waiting")).toBeTruthy();
+    expect(screen.queryByText("Partly done")).toBeNull();
+  });
+
+  it("counts a failure that was not rolled back and names the one that was cancelled", async () => {
+    bulk(
+      [
+        top("i0", "Update web", "failed", { code: "engine_error" }),
+        top("i1", "Update api", "cancelled", { code: "cancelled" }),
+        summary({ done: "0", total: "2", rolled_back: "0", skipped: "1" }),
+      ],
+      "cancelled",
+    );
+    mount();
+    const title = await screen.findByText("Cancelled", { selector: "[data-slot=alert-title]" });
+    expect(title.closest("[role=status]")?.textContent).toContain("Updated 0 of 2.");
   });
 });

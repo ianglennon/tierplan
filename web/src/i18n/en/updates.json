@@ -410,7 +410,8 @@
         "cancelled": "Update of {{name}} cancelled.",
         "rolledBack": "Update of {{name}} failed and was rolled back.",
         "rollbackFailed": "Update of {{name}} failed and the rollback failed.",
-        "pullFailed": "Update of {{name}} failed. The image could not be pulled and nothing was changed."
+        "pullFailed": "Update of {{name}} failed. The image could not be pulled and nothing was changed.",
+        "bulk": "The update of {{count}} items has ended."
       },
       "gone": {
         "title": "This update is no longer listed",
@@ -453,7 +454,63 @@
         "body": "Nothing was changed: {{name}} still runs {{old}}. TierPlan won't offer this version again until a newer one appears, but you can still try it with Update anyway.",
         "bodyNoDigest": "Nothing was changed: {{name}} still runs the version it ran before. TierPlan won't offer this version again until a newer one appears, but you can still try it with Update anyway."
       },
-      "updateAnyway": "Update anyway…"
+      "updateAnyway": "Update anyway…",
+      "bulk": {
+        "title_one": "Update of {{count, number}} item",
+        "title_other": "Update of {{count, number}} items",
+        "itemsLabel": "Items of the update",
+        "state": {
+          "waiting": "Waiting",
+          "running": "Updating…",
+          "done": "Updated",
+          "rolledBack": "Rolled back",
+          "failed": "Failed",
+          "skipped": "Skipped",
+          "cancelled": "Cancelled"
+        },
+        "reason": {
+          "moved": "A newer version appeared since you confirmed, so {{name}} was skipped.",
+          "locked": "Another operation holds the environment, so {{name}} was skipped.",
+          "nothing_to_update": "{{name}} already runs the newest version.",
+          "previously_failed": "An update of {{name}} to this version failed before, so it was skipped.",
+          "check_failed": "The registry could not be asked for the newest version of {{name}}, so nothing was changed.",
+          "workload_gone": "{{name}} is not there any more.",
+          "cancelled": "The update was cancelled before {{name}} was started.",
+          "managed_by_stack": "{{name}} belongs to a stack, which is updated through a new revision of the stack.",
+          "compose_unmanaged": "{{name}} belongs to a Compose project TierPlan does not manage. Adopt the stack first.",
+          "pinned_in_file": "The image of {{name}} is pinned to a digest in its file.",
+          "not_checked": "The image of {{name}} has not been checked yet.",
+          "other": "{{name}} was not updated, and nothing was changed."
+        },
+        "rolledBackReason": "{{reason}}. TierPlan put the previous version back.",
+        "failedReason": "{{name}} could not be updated.",
+        "partial": {
+          "title": "Partly done",
+          "none": "Nothing was updated",
+          "updated": "Updated {{done, number}} of {{total, number}}.",
+          "rolledBack_one": "{{count, number}} was rolled back",
+          "rolledBack_other": "{{count, number}} were rolled back",
+          "failed_one": "{{count, number}} failed",
+          "failed_other": "{{count, number}} failed",
+          "skipped_one": "{{count, number}} was skipped",
+          "skipped_other": "{{count, number}} were skipped"
+        },
+        "success": {
+          "title": "Updated",
+          "body_one": "{{count, number}} item now runs its newest version.",
+          "body_other": "All {{count, number}} items now run their newest version."
+        },
+        "cancelled": {
+          "title": "Cancelled"
+        },
+        "pullFailed": "{{name}} could not be pulled. Nothing was changed.",
+        "progress": {
+          "text_one": "{{done}} of {{count}} item done",
+          "text_other": "{{done}} of {{count}} items done"
+        },
+        "started": "Started by {{user}} {{time}} as part of an update of {{count, number}} items.",
+        "startedAnon": "Started {{time}} as part of an update of {{count, number}} items."
+      }
     },
     "rollbackReason": {
       "didnt_start": "{{subject}} didn't start",

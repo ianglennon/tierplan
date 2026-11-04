@@ -3,13 +3,14 @@
 
 import { Link } from "@tanstack/react-router";
 import { CircleCheck, CircleX, Rocket, TriangleAlert, Undo2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-
+import { type RefObject, useEffect, useRef, useState } from "react";
+import type { HealthState } from "@/api/environments";
 import type { StackJobItem } from "@/api/stacks";
 import { type UpdateJobView, useImageUpdateJob } from "@/api/updates";
 import { LiveChip } from "@/components/live-chip";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { useNow } from "@/components/relative-time";
+import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,12 +33,13 @@ import { shortDigest } from "@/features/tags/platform-chips";
 import {
   DEFAULT_CONTAINER_WINDOW_SECONDS,
   DEFAULT_SERVICE_WINDOW_SECONDS,
+  reasonCodeOf,
   restoreReasonText,
   rollbackReasonText,
 } from "@/features/updates/reasons";
 import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
 import { useNeeds } from "@/hooks/use-needs";
-import { useT } from "@/i18n/use-t";
+import { keyExists, useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
 
 interface UpdateConsoleProps {
@@ -539,6 +541,342 @@ function Result({
   );
 }
 
+// --- A bulk update (D-11) -------------------------------------------------------------------------
+// One job for an environment: a top-level item for each workload in the order they are updated, the steps of
+// that update under it (their parent is the item), and a summary the job ends with. The console lists the
+// workloads, not their steps, and words what happened to each in its own words.
+
+type BulkItemOutcome =
+  | "waiting"
+  | "running"
+  | "done"
+  | "rolledBack"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+// The codes of an item that was not updated because of what it was, or what had changed, when its turn
+// came. Nothing was written for them.
+const SKIP_CODES: ReadonlySet<string> = new Set([
+  "moved",
+  "locked",
+  "nothing_to_update",
+  "previously_failed",
+  "check_failed",
+  "workload_gone",
+  "cancelled",
+  "managed_by_stack",
+  "compose_unmanaged",
+  "pinned_in_file",
+  "not_checked",
+]);
+
+const BULK_TONE: Record<BulkItemOutcome, HealthState> = {
+  waiting: "pending",
+  running: "reconnecting",
+  done: "online",
+  rolledBack: "degraded",
+  failed: "offline",
+  skipped: "unknown",
+  cancelled: "unknown",
+};
+
+// bulkItemsOf are the workloads of a bulk update's job, without the steps under them and the summary.
+export function bulkItemsOf(job: UpdateJobView): StackJobItem[] {
+  return (job.items ?? []).filter((i) => !i.parent && i.id !== "summary");
+}
+
+// bulkNameOf is the workload's name: the job labels an item "Update {name}".
+const bulkNameOf = (item: StackJobItem) => item.label.replace(/^Update /, "");
+
+// bulkOutcomeOf is how an item went. An item the engine was written for and that failed was put back by
+// the update's own rollback (a step of that name under it, or a reason a rollback answers); one whose
+// image could not be pulled changed nothing.
+export function bulkOutcomeOf(job: UpdateJobView, item: StackJobItem): BulkItemOutcome {
+  switch (item.state) {
+    case "waiting":
+    case "running":
+    case "done":
+    case "cancelled":
+      return item.state;
+    case "skipped":
+      return "skipped";
+    default: {
+      if (SKIP_CODES.has(item.code)) return "skipped";
+      if (item.code === "pull_failed") return "failed";
+      const rolled =
+        (job.items ?? []).some((i) => i.id === `${item.id}/rollback`) ||
+        reasonCodeOf(item.code) !== "other";
+      return rolled ? "rolledBack" : "failed";
+    }
+  }
+}
+
+interface BulkCounts {
+  done: number;
+  total: number;
+  rolledBack: number;
+  skipped: number;
+  failed: number;
+}
+
+// bulkCountsOf are the numbers the summary item ended with (the work done, counted as the workloads
+// selected), or, before it did, those counted from the items.
+export function bulkCountsOf(job: UpdateJobView): BulkCounts {
+  const summary = (job.items ?? []).find((i) => i.id === "summary");
+  const r = summary?.result ?? {};
+  const total = Number(r.total);
+  if (summary && summary.state === "done" && Number.isFinite(total) && r.total !== undefined) {
+    const done = Number(r.done) || 0;
+    const rolledBack = Number(r.rolled_back) || 0;
+    const skipped = Number(r.skipped) || 0;
+    return {
+      done,
+      total,
+      rolledBack,
+      skipped,
+      failed: Math.max(0, total - done - rolledBack - skipped),
+    };
+  }
+  const items = bulkItemsOf(job);
+  const outcomes = items.map((i) => bulkOutcomeOf(job, i));
+  const count = (o: BulkItemOutcome) => outcomes.filter((x) => x === o).length;
+  return {
+    done: count("done"),
+    total: items.length,
+    rolledBack: count("rolledBack"),
+    skipped: count("skipped") + count("cancelled"),
+    failed: count("failed"),
+  };
+}
+
+// bulkSentence is "Updated {done} of {total}. {rolled} were rolled back and {skipped} were skipped."
+function bulkSentence(t: Translate, c: BulkCounts): string {
+  const clauses = [
+    c.rolledBack > 0 ? t("updates.console.bulk.partial.rolledBack", { count: c.rolledBack }) : "",
+    c.failed > 0 ? t("updates.console.bulk.partial.failed", { count: c.failed }) : "",
+    c.skipped > 0 ? t("updates.console.bulk.partial.skipped", { count: c.skipped }) : "",
+  ].filter(Boolean);
+  const updated = t("updates.console.bulk.partial.updated", { done: c.done, total: c.total });
+  if (clauses.length === 0) return updated;
+  const list = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(clauses);
+  return `${updated} ${list}.`;
+}
+
+type BulkEnd = "done" | "partial" | "none" | "cancelled";
+
+function bulkEndOf(job: UpdateJobView, c: BulkCounts): BulkEnd {
+  if (job.state === "cancelled") return "cancelled";
+  if (c.done >= c.total && job.state === "done") return "done";
+  return c.done === 0 ? "none" : "partial";
+}
+
+// BulkReason is the sentence under an item that was not updated: why, in the console's own words for the
+// item's code. The server's English is only read for a code this build has no words for.
+function bulkReasonText(t: Translate, job: UpdateJobView, item: StackJobItem): string {
+  const name = bulkNameOf(item);
+  switch (bulkOutcomeOf(job, item)) {
+    case "skipped":
+    case "cancelled": {
+      const key = `updates.console.bulk.reason.${item.code}`;
+      return keyExists(key) ? t(key, { name }) : t("updates.console.bulk.reason.other", { name });
+    }
+    case "rolledBack":
+      return t("updates.console.bulk.rolledBackReason", {
+        reason: rollbackReasonText(t, item.code, { subject: name }),
+      });
+    case "failed":
+      return item.code === "pull_failed"
+        ? t("updates.console.bulk.pullFailed", { name })
+        : t("updates.console.bulk.failedReason", { name });
+    default:
+      return "";
+  }
+}
+
+function BulkItemRow({ job, item }: { job: UpdateJobView; item: StackJobItem }) {
+  const t = useT();
+  const outcome = bulkOutcomeOf(job, item);
+  const reason = bulkReasonText(t, job, item);
+  return (
+    <li
+      data-slot="bulk-item"
+      className="flex min-w-0 flex-col gap-0.5 border-b py-2 last:border-b-0"
+    >
+      <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="min-w-0 font-mono text-sm break-all">{bulkNameOf(item)}</span>
+        <StatusDot state={BULK_TONE[outcome]} label={t(`updates.console.bulk.state.${outcome}`)} />
+      </span>
+      {reason ? <span className="text-xs break-words text-muted-foreground">{reason}</span> : null}
+    </li>
+  );
+}
+
+// BulkResult is how a bulk update ended: every item updated, or "Partly done" with how many were updated,
+// rolled back, failed and skipped. A failure rolled back only its own item, and the others went on.
+function BulkResult({ job }: { job: UpdateJobView }) {
+  const t = useT();
+  if (job.state === "running") return null;
+  const counts = bulkCountsOf(job);
+  const end = bulkEndOf(job, counts);
+  if (end === "done") {
+    return (
+      <Alert role="status" data-slot="update-result">
+        <CircleCheck aria-hidden="true" className="text-status-online-text" />
+        <AlertTitle>{t("updates.console.bulk.success.title")}</AlertTitle>
+        <AlertDescription>
+          {t("updates.console.bulk.success.body", { count: counts.total })}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (end === "none") {
+    return (
+      <Alert variant="destructive" role="alert" data-slot="update-result">
+        <CircleX aria-hidden="true" />
+        <AlertTitle>{t("updates.console.bulk.partial.none")}</AlertTitle>
+        <AlertDescription className="break-words">{bulkSentence(t, counts)}</AlertDescription>
+      </Alert>
+    );
+  }
+  return (
+    <Alert variant="warning" role="status" data-slot="update-result">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>
+        {t(
+          end === "cancelled"
+            ? "updates.console.bulk.cancelled.title"
+            : "updates.console.bulk.partial.title",
+        )}
+      </AlertTitle>
+      <AlertDescription className="break-words">{bulkSentence(t, counts)}</AlertDescription>
+    </Alert>
+  );
+}
+
+// BulkConsole is the console of a bulk update: the workloads in the order they are updated, each with what
+// became of it, the output, and how it ended.
+function BulkConsole({
+  envId,
+  job,
+  follow,
+  title,
+}: {
+  envId: string;
+  job: UpdateJobView;
+  follow: ReturnType<typeof useImageUpdateJob>;
+  title: RefObject<HTMLHeadingElement | null>;
+}) {
+  const t = useT();
+  const envName = useEnvName(envId);
+  const now = useNow();
+  const items = bulkItemsOf(job);
+  const counts = items.map((i) => bulkOutcomeOf(job, i));
+  const finished = counts.filter((o) => o === "done").length;
+  const ended = job.state !== "running";
+  const end = ended ? bulkEndOf(job, bulkCountsOf(job)) : undefined;
+  const chip =
+    !ended && !follow.finished && (follow.status === "live" || follow.status === "reconnecting")
+      ? follow.status
+      : undefined;
+  const startedAt = formatRelative(job.createdAt, new Date(now), t);
+  const heading = t("updates.console.bulk.title", { count: items.length });
+  return (
+    <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6">
+      <nav aria-label={t("updates.console.breadcrumb.label")}>
+        <ol className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+          <li className="min-w-0 break-all">
+            {envName}
+            <span aria-hidden="true"> /</span>
+          </li>
+          <li className="min-w-0 break-all" aria-current="page">
+            {heading}
+          </li>
+        </ol>
+      </nav>
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1
+            ref={title}
+            tabIndex={-1}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xl font-semibold outline-none"
+          >
+            <span>{heading}</span>
+            {end ? (
+              <span className="inline-flex items-center gap-1.5 text-base font-medium">
+                {end === "done" ? (
+                  <CircleCheck aria-hidden="true" className="size-4 text-status-online-text" />
+                ) : end === "none" ? (
+                  <CircleX aria-hidden="true" className="size-4 text-destructive" />
+                ) : (
+                  <TriangleAlert aria-hidden="true" className="size-4 text-status-warning-text" />
+                )}
+                {t(
+                  end === "done"
+                    ? "updates.console.bulk.success.title"
+                    : end === "none"
+                      ? "updates.console.bulk.partial.none"
+                      : end === "cancelled"
+                        ? "updates.console.bulk.cancelled.title"
+                        : "updates.console.bulk.partial.title",
+                )}
+              </span>
+            ) : null}
+          </h1>
+          {chip ? <LiveChip state={chip} /> : null}
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {job.startedBy
+            ? t("updates.console.bulk.started", {
+                time: startedAt,
+                user: job.startedBy,
+                count: items.length,
+              })
+            : t("updates.console.bulk.startedAnon", { time: startedAt, count: items.length })}{" "}
+          <Elapsed job={job} />
+        </p>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Progress
+          value={items.length === 0 ? 0 : Math.round((finished / items.length) * 100)}
+          aria-label={t("updates.console.progress.label")}
+        />
+        <p aria-live="off" className="text-sm text-muted-foreground">
+          {t("updates.console.bulk.progress.text", { done: finished, count: items.length })}
+        </p>
+      </div>
+      <ul aria-label={t("updates.console.bulk.itemsLabel")} className="flex flex-col">
+        {items.map((item) => (
+          <BulkItemRow key={item.id} job={job} item={item} />
+        ))}
+      </ul>
+      <DeployOutput lines={follow.output} failed={job.state === "failed"} />
+      <BulkAnnouncer job={job} count={items.length} />
+      <div className="flex flex-col gap-3">
+        <BulkResult job={job} />
+      </div>
+    </div>
+  );
+}
+
+// BulkAnnouncer speaks once, as the job ends in front of the person, that it has.
+function BulkAnnouncer({ job, count }: { job: UpdateJobView; count: number }) {
+  const t = useT();
+  const before = useRef<string | null>(null);
+  const [spoken, setSpoken] = useState("");
+  useEffect(() => {
+    const was = before.current;
+    before.current = job.state;
+    if (was !== "running" || job.state === "running") return;
+    setSpoken(t("updates.console.announce.bulk", { count }));
+  }, [job.state, count, t]);
+  return (
+    <div data-slot="update-announcer" aria-live="polite" className="sr-only">
+      {spoken ? <p>{spoken}</p> : null}
+    </div>
+  );
+}
+
 // UpdateConsole is the live view of an image update (IMG-06, D-05): the P7 deploy console's parts for
 // a plain service. It is a view of a job on the server, so leaving never stops the update: opening it
 // again shows the job as it stands and follows it from there, and a finished one shows how it ended
@@ -610,6 +948,10 @@ export function UpdateConsole({ envId, jobId }: UpdateConsoleProps) {
         <Skeleton className="h-6 w-full max-w-md" />
       </div>
     );
+  }
+
+  if (job.kind === "bulk") {
+    return <BulkConsole envId={envId} job={job} follow={follow} title={title} />;
   }
 
   const ended = job.state !== "running";

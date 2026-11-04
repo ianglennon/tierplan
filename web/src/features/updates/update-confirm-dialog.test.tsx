@@ -3,16 +3,21 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import type { FleetSelected } from "@/api/fleet";
 import type { UpdatePreview, UpdatePreviewItem } from "@/api/updates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
+import {
+  type FleetUnavailable,
+  FleetUpdateConfirmDialog,
+  UpdateConfirmDialog,
+} from "@/features/updates/update-confirm-dialog";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -752,5 +757,125 @@ describe("UpdateConfirmDialog: Update anyway", () => {
       await screen.findByText(/This version failed before: <b>web<\/b> didn't start/),
     ).toBeTruthy();
     expect(document.querySelector("section b")).toBeNull();
+  });
+});
+
+// The confirm of "Update {n} selected" (plan 12-31, D-11): the ticked workloads by environment.
+describe("FleetUpdateConfirmDialog", () => {
+  const selected = (envId: string, envName: string, name: string, extra = {}): FleetSelected => ({
+    envId,
+    envName,
+    type: "swarm",
+    item: {
+      kind: "service",
+      id: `${envId}-${name}`,
+      name,
+      stack: "",
+      image: "nginx:1.27",
+      fromDigest: A,
+      toDigest: B,
+      changedPlatforms: [],
+      selectable: true,
+      update: {} as FleetSelected["item"]["update"],
+      ...extra,
+    },
+  });
+  let started: Mock;
+
+  function mountFleet(
+    items: FleetSelected[],
+    unavailable: Map<string, FleetUnavailable> = new Map(),
+  ) {
+    started = vi.fn();
+    return render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <FleetUpdateConfirmDialog
+              items={items}
+              unavailable={unavailable}
+              onClose={onClose}
+              onStarted={started}
+            />
+            <Toaster />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("reads Update 1 item for one workload, and groups it under its environment", async () => {
+    mountFleet([selected("e1", "prod", "web")]);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Update 1 item", { selector: "h2" })).toBeTruthy();
+    expect(within(dialog).getByRole("region", { name: "prod" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Update 1 item" })).toBeTruthy();
+  });
+
+  it("draws a name as text, never as markup", async () => {
+    mountFleet([selected("e1", "<b>prod</b>", "<img src=x onerror=alert(1)>")]);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("<img src=x onerror=alert(1)>")).toBeTruthy();
+    expect(within(dialog).getByText("<b>prod</b>")).toBeTruthy();
+    expect(dialog.querySelector("img, b")).toBeNull();
+  });
+
+  it("leaves out an environment the caller may not update in, and says so", async () => {
+    mountFleet(
+      [selected("e1", "prod", "web"), selected("e2", "edge", "cache")],
+      new Map([["e2", { kind: "no_permission" }]]),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Update 1 item", { selector: "h2" })).toBeTruthy();
+    expect(within(dialog).getByText("Skipped: you can't update anything in edge.")).toBeTruthy();
+    expect(within(dialog).queryByText("cache")).toBeNull();
+  });
+
+  it("shows the lock Alert for an environment whose lock is held, and leaves it out", async () => {
+    mountFleet(
+      [selected("e1", "prod", "web"), selected("e2", "edge", "cache")],
+      new Map([
+        [
+          "e2",
+          {
+            kind: "locked",
+            lock: { kind: "unknown", started: "2026-11-04T10:00:00Z", jobId: "j" },
+          },
+        ],
+      ]),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Update 1 item", { selector: "h2" })).toBeTruthy();
+    expect(within(dialog).getByText(/Another operation is running on edge/)).toBeTruthy();
+    expect(dialog.querySelector("[data-slot=operation-lock]")).toBeTruthy();
+  });
+
+  it("starts nothing when every environment is left out", async () => {
+    mountFleet([selected("e1", "prod", "web")], new Map([["e1", { kind: "offline" }]]));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Skipped: prod isn't reporting.")).toBeTruthy();
+    const commit = within(dialog).getByRole("button", { name: "Update 0 items" });
+    expect(commit.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(commit);
+    expect(runs()).toHaveLength(0);
+    expect(started).not.toHaveBeenCalled();
+  });
+
+  it("folds the rows of a long group and shows them all on request", async () => {
+    mountFleet(Array.from({ length: 8 }, (_, i) => selected("e1", "prod", `svc${i}`)));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(5);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show all 8" }));
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(8);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show fewer" }));
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(5);
+  });
+
+  it("closes on Cancel without asking the server", async () => {
+    mountFleet([selected("e1", "prod", "web")]);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(runs()).toHaveLength(0);
   });
 });

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { followBulkJob } from "@/api/fleet";
 import { type JanitorJobSummary, janitorJobsKey } from "@/api/janitor";
 import { PULLS_POLL_RUNNING_MS, type PullSummary } from "@/api/pulls";
 import { type StackJobSummary, stackJobsKey } from "@/api/stacks";
@@ -73,6 +74,8 @@ let stackJobsStatus: number | "never";
 let janitorJobs: JanitorJobSummary[];
 let janitorJobsStatus: number;
 let updateJobs: ImageUpdateJobSummary[];
+// What GET /api/env/e1/update-jobs/{id} answers for a bulk job: its items and summary.
+let bulkDetail: Record<string, unknown> | undefined;
 let janitorRun: ReturnType<typeof run>;
 let listStatus: number;
 let client: QueryClient;
@@ -86,6 +89,7 @@ beforeEach(() => {
   janitorJobs = [];
   janitorJobsStatus = 200;
   updateJobs = [];
+  bulkDetail = undefined;
   janitorRun = run({ state: "completed" });
   listStatus = 200;
   calls = [];
@@ -120,6 +124,9 @@ beforeEach(() => {
             );
       }
       if (path === "/api/update-jobs") return Response.json({ jobs: updateJobs });
+      if (/^\/api\/env\/e1\/update-jobs\/[^/]+$/.test(path)) {
+        return bulkDetail ? Response.json(bulkDetail) : Response.json({}, { status: 404 });
+      }
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: "e1", name: "Home lab", envType: "swarm" }] });
       }
@@ -744,6 +751,160 @@ describe("JobsIndicator image updates", () => {
     const rows = within(await screen.findByRole("list")).getAllByRole("listitem");
     expect(rows).toHaveLength(2);
     expect(within(rows[0] as HTMLElement).getByText("Updating web")).toBeTruthy();
+  });
+});
+
+// A bulk update is one job for an environment (plan 12-31, D-11): its row says how many items it holds, and
+// the person who started it is told once, per environment, how it ended.
+describe("JobsIndicator bulk updates", () => {
+  const bulkJob = (over: Partial<ImageUpdateJobSummary> = {}): ImageUpdateJobSummary => ({
+    id: "b1",
+    envId: "e1",
+    envName: "prod",
+    workload: "3 workloads",
+    // The server names the kind of a bulk job's summary "bulk", which its published list leaves out.
+    kind: "bulk" as ImageUpdateJobSummary["kind"],
+    state: "running",
+    startedAt: "2026-10-11T10:00:00Z",
+    endedAt: "",
+    bulk: "bulk-1",
+    ...over,
+  });
+  const step = (id: string, state: string, over: Record<string, unknown> = {}) => ({
+    id,
+    label: id,
+    state,
+    kind: "step",
+    code: "",
+    current: 0,
+    total: 0,
+    unit: "",
+    message: "",
+    detail: "",
+    parent: "",
+    result: {},
+    ...over,
+  });
+  const detail = (summary: Record<string, string> | undefined, state = "done") => ({
+    id: "b1",
+    runId: "",
+    kind: "bulk",
+    workload: "3 workloads",
+    fromDigest: "",
+    toDigest: "",
+    startedBy: "ada",
+    state,
+    createdAt: "2026-10-11T10:00:00Z",
+    finishedAt: state === "running" ? "" : "2026-10-11T10:05:00Z",
+    output: [],
+    items: [
+      step("i0", "done"),
+      step("i1", "failed", { code: "unhealthy" }),
+      step("i2", "done"),
+      step("summary", summary ? "done" : "waiting", { result: summary ?? {} }),
+    ],
+  });
+  const open = async (name: string | RegExp = "Jobs, 1 in progress") =>
+    fireEvent.click(await screen.findByRole("button", { name }));
+  const refresh = () => client.invalidateQueries({ queryKey: ["update-jobs"] });
+
+  it("reads Updating 3 items in prod while it runs, without repeating the environment", async () => {
+    updateJobs = [bulkJob()];
+    bulkDetail = detail(undefined, "running");
+    mount();
+    await open();
+    const row = within(await screen.findByRole("list")).getAllByRole("listitem")[0] as HTMLElement;
+    expect(await within(row).findByText("Updating 3 items in prod")).toBeTruthy();
+    expect(within(row).getByText("Updating…")).toBeTruthy();
+    const link = within(row).getByRole("link", { name: "Open the console of the update in prod" });
+    expect(link.getAttribute("href")).toBe("/env/e1/update-jobs/b1");
+  });
+
+  it("says Updating items in prod when the items cannot be counted", async () => {
+    updateJobs = [bulkJob()];
+    mount();
+    await open();
+    expect(await screen.findByText("Updating items in prod")).toBeTruthy();
+  });
+
+  it("words an ended bulk job Updated, Partly done or Cancelled, never Failed", async () => {
+    updateJobs = [
+      bulkJob({ id: "b1", state: "done", endedAt: "2026-10-11T10:05:00Z" }),
+      bulkJob({ id: "b2", state: "failed", endedAt: "2026-10-11T10:06:00Z" }),
+      bulkJob({ id: "b3", state: "cancelled", endedAt: "2026-10-11T10:07:00Z" }),
+    ];
+    bulkDetail = detail({ done: "3", total: "3", rolled_back: "0", skipped: "0" });
+    mount();
+    await open("Jobs");
+    const rows = within(await screen.findByRole("list")).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    const words = rows.map((r) => r.textContent ?? "");
+    expect(words.some((w) => w.includes("Updated"))).toBe(true);
+    expect(words.some((w) => w.includes("Partly done"))).toBe(true);
+    expect(words.some((w) => w.includes("Cancelled"))).toBe(true);
+    expect(words.every((w) => !w.includes("Failed"))).toBe(true);
+  });
+
+  it("tells a person once, per environment, how many were updated and how many rolled back", async () => {
+    updateJobs = [bulkJob()];
+    bulkDetail = detail(undefined, "running");
+    followBulkJob("b1", { envId: "e1", envName: "prod" });
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+
+    bulkDetail = detail({ done: "2", total: "3", rolled_back: "1", skipped: "0" }, "failed");
+    updateJobs = [bulkJob({ state: "failed", endedAt: "2026-10-11T10:05:00Z" })];
+    await act(async () => {
+      await refresh();
+    });
+    expect(await screen.findByText("Updated 2 of 3 in prod. 1 rolled back.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open console" })).toBeTruthy();
+
+    // However often the list is read again, it is told once.
+    await act(async () => {
+      await refresh();
+      await refresh();
+    });
+    expect(screen.getAllByText("Updated 2 of 3 in prod. 1 rolled back.")).toHaveLength(1);
+  });
+
+  it("says only how many were updated when nothing was rolled back", async () => {
+    updateJobs = [bulkJob({ id: "b4" })];
+    followBulkJob("b4", { envId: "e1", envName: "prod" });
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    bulkDetail = detail({ done: "3", total: "3", rolled_back: "0", skipped: "0" });
+    updateJobs = [bulkJob({ id: "b4", state: "done", endedAt: "2026-10-11T10:05:00Z" })];
+    await act(async () => {
+      await refresh();
+    });
+    expect(await screen.findByText("Updated 3 of 3 in prod.")).toBeTruthy();
+  });
+
+  it("says nothing for a bulk job this browser did not start", async () => {
+    updateJobs = [bulkJob({ id: "b5" })];
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    bulkDetail = detail({ done: "3", total: "3", rolled_back: "0", skipped: "0" });
+    updateJobs = [bulkJob({ id: "b5", state: "done", endedAt: "2026-10-11T10:05:00Z" })];
+    await act(async () => {
+      await refresh();
+    });
+    await waitFor(() => expect(calls).toContain("GET /api/update-jobs"));
+    expect(screen.queryByText(/Updated 3 of 3/)).toBeNull();
+  });
+
+  it("falls back to saying the updates ended when the outcome cannot be read", async () => {
+    updateJobs = [bulkJob({ id: "b6" })];
+    followBulkJob("b6", { envId: "e1", envName: "prod" });
+    mount();
+    await screen.findByRole("button", { name: "Jobs, 1 in progress" });
+    bulkDetail = undefined;
+    updateJobs = [bulkJob({ id: "b6", state: "failed", endedAt: "2026-10-11T10:05:00Z" })];
+    await act(async () => {
+      await refresh();
+    });
+    expect(await screen.findByText("The updates in prod have ended.")).toBeTruthy();
   });
 });
 
