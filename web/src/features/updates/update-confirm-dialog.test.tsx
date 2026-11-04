@@ -42,6 +42,7 @@ const preview = (extra: Partial<UpdatePreview> = {}): UpdatePreview => ({
     { code: "downtime", workload: "web" },
     { code: "no_healthcheck", workload: "web" },
   ],
+  leftOut: [],
   offered: true,
   refusal: "",
   ...extra,

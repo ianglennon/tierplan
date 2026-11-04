@@ -46,7 +46,7 @@ type stackUpdateRun struct {
 // stacks, finds the stack TierPlan manages, and hands over to updateStackImages. A stack that is only discovered is 409
 // adopt_first.
 func runStackUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *httpx.Env, in *UpdateRunInput, run stackUpdateRun) (UpdateRunBody, error) {
-	if d.Applier == nil {
+	if d.Applier == nil || d.Stacks.Store == nil || d.Stacks.Locks == nil {
 		return UpdateRunBody{}, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
 	}
 	if d.Checker == nil {
@@ -69,14 +69,7 @@ func runStackUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *
 	}
 	switch {
 	case errors.Is(err, stackops.ErrStackNotFound):
-		// A stack TierPlan has no record of: found on the engine, it is adopted first; else there is no such stack.
-		if _, perr := d.Applier.PlanStack(ctx, updates.StackRequest{EnvID: env.ID, Stack: run.Stack}); perr == nil || errors.Is(perr, updates.ErrNothingToUpdate) {
-			return UpdateRunBody{}, httpx.Problem(http.StatusConflict, problemAdoptFirst, adoptFirstSentence)
-		} else if errors.Is(perr, updates.ErrWorkloadGone) {
-			return UpdateRunBody{}, workloadGone("stack")
-		} else {
-			return UpdateRunBody{}, updateRunProblem(d, env, perr)
-		}
+		return UpdateRunBody{}, unmanagedStackProblem(ctx, d, env, run.Stack)
 	case err != nil:
 		return UpdateRunBody{}, stackLookupProblem(d.Stacks, env.ID, err)
 	}
@@ -85,6 +78,19 @@ func runStackUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *
 		return UpdateRunBody{}, plainProblem(err)
 	}
 	return UpdateRunBody{JobID: out.Body.JobID, StackID: st.ID}, nil
+}
+
+// unmanagedStackProblem is the answer to an update of a stack TierPlan has no record of: found on the engine, it is adopted first;
+// else there is no such stack.
+func unmanagedStackProblem(ctx context.Context, d UpdatesDeps, env *httpx.Env, name string) error {
+	_, err := d.Applier.PlanStack(ctx, updates.StackRequest{EnvID: env.ID, Stack: name})
+	switch {
+	case err == nil || errors.Is(err, updates.ErrNothingToUpdate):
+		return httpx.Problem(http.StatusConflict, problemAdoptFirst, adoptFirstSentence)
+	case errors.Is(err, updates.ErrWorkloadGone):
+		return workloadGone("stack")
+	}
+	return updateRunProblem(d, env, err)
 }
 
 // managedStackByName finds the stack of that name among those TierPlan manages in the environment.

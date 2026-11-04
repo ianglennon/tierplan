@@ -120,6 +120,8 @@ func registerUpdateRun(r *httpx.Router, d UpdatesDeps) {
 			"then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. " +
 			"The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, " +
 			"409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file or not_from_registry), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. " +
+			"A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. " +
+			"The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. " +
 			"Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermServicesControl, Scope: rbac.ScopeEnvironment},

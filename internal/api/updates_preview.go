@@ -73,7 +73,8 @@ func registerImageUpdatePreview(r *httpx.Router, d UpdatesDeps) {
 		Summary: "What updating a service would change",
 		Description: "The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). " +
 			"Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. " +
-			"offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, a service of a managed stack, nothing newer, no check yet, a failed check, a pinned or local image) or when the environment is offline. " +
+			"A service of a stack TierPlan manages, and kind stack, are described as the update of the stack: the services it would change and, in leftOut, those it leaves out because they are skipped or ignored. " +
+			"offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, nothing newer, a stack that must be adopted first (adopt_first), no check yet, a failed check, a pinned or local image) or when the environment is offline. " +
 			"lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermServicesRead, Scope: rbac.ScopeEnvironment},
@@ -97,9 +98,11 @@ func previewImageUpdate(ctx context.Context, d UpdatesDeps, envID string, in *Up
 	}
 	if in.Kind == "stack" && d.Stacks.Store != nil {
 		// A stack that is only discovered has no revision to update: it is adopted first (D-09).
-		if _, err := managedStackByName(ctx, d.Stacks.repo(), envID, in.Name); errors.Is(err, stackops.ErrStackNotFound) {
+		_, err := managedStackByName(ctx, d.Stacks.repo(), envID, in.Name)
+		switch {
+		case errors.Is(err, stackops.ErrStackNotFound):
 			return UpdatePreviewBody{Items: []UpdatePreviewItem{}, Warnings: []UpdateWarningBody{}, LeftOut: []UpdateLeftOutBody{}, Refusal: problemAdoptFirst}, nil
-		} else if err != nil {
+		case err != nil:
 			return UpdatePreviewBody{}, snapshotProblem(d.log(), envID, err)
 		}
 	}
