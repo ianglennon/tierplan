@@ -373,7 +373,8 @@ function UpdateAnyway({ envId, job }: { envId: string; job: UpdateJobView }) {
   const [open, setOpen] = useState(false);
   const service = useNeeds("services.control", envId);
   const container = useNeeds("containers.control", envId);
-  if (job.kind === "stack") return null;
+  // A stack is updated anyway through its own page, and a bulk update has no one workload to try again.
+  if (job.kind === "stack" || job.kind === "bulk") return null;
   const needs = job.kind === "container" && service.allowed ? container : service;
   const reason = needs.reason
     ? t("updates.menu.needs", { needs: needs.reason, environment: envName })

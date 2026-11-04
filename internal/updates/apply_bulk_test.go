@@ -12,6 +12,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -254,5 +255,43 @@ func TestBulkQueuesRunsBeforeTheirTurn(t *testing.T) {
 	close(hold)
 	if job, err := r.hub.Wait(testsupport.Context(t), id); err != nil || job.State != jobs.JobDone {
 		t.Fatalf("job = %v %v, want done", job.State, err)
+	}
+}
+
+// A service of a stack TierPlan manages is deployed as a revision of the stack, which needs stacks.deploy: without it the item is
+// skipped no_permission, and with it but with no way to deploy a stack it is not updatable here, never updated as a plain service
+// (plan 12-30, D-06, T-12-89).
+func TestBulkStackServiceNeedsTheStackDeployPermission(t *testing.T) {
+	t.Parallel()
+	managed := swarmService("managed", 'a')
+	managed.Spec.Annotations.Labels = map[string]string{stacks.LabelStackID: "stack-1"}
+	managed.Labels = managed.Spec.Annotations.Labels
+	r := newApplyRig(t, nil, managed, swarmService("web", 'a'))
+	r.applier.ManagedStack = func(_ context.Context, _, id string) (bool, error) { return id == "stack-1", nil }
+	r.offer("web", dg('b'))
+	r.offer("managed", dg('b'))
+
+	for name, tc := range map[string]struct {
+		deploy       bool
+		reason, code string
+	}{
+		"without stacks.deploy":       {deploy: false, reason: updates.BulkNoPermission, code: updates.NotUpdatableManaged},
+		"with it but no stack engine": {deploy: true, reason: updates.BulkNotUpdatable, code: updates.NotUpdatableManaged},
+	} {
+		req := r.bulkRequest("", "managed", "web")
+		req.StackDeploy = tc.deploy
+		job, skipped := r.runBulk(t, req)
+		if len(skipped) != 1 || skipped[0].Name != "managed" || skipped[0].Reason != tc.reason || skipped[0].Code != tc.code {
+			t.Errorf("%s: skipped = %+v, want managed skipped %s %s", name, skipped, tc.reason, tc.code)
+		}
+		if job.State != jobs.JobDone {
+			t.Errorf("%s: job = %s, want done for web alone", name, job.State)
+		}
+		r.offer("web", dg('b'))
+	}
+	for _, u := range r.fake.ServiceUpdates() {
+		if u.Spec.Name == "managed" {
+			t.Errorf("a service of a managed stack was written as a plain one")
+		}
 	}
 }

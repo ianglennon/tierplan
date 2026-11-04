@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -636,5 +637,242 @@ func TestBulkItemWhoseCheckFailsIsSkipped(t *testing.T) {
 		if run.Workload == "api" && (run.State != updates.RunRefused || run.Reason != updates.CodeCheckFailed) {
 			t.Errorf("api's run = %s %q, want refused as check_failed", run.State, run.Reason)
 		}
+	}
+}
+
+// bulkAsUser posts to a fleet bulk route as the named signed-in user.
+func (f *authFixture) bulkAsUser(t *testing.T, user, path, body string) *envRec {
+	t.Helper()
+	cookie, csrf := f.signIn(t, user, false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	return &envRec{rec.Code, rec.Body.Bytes(), ""}
+}
+
+type bulkSkipAnswer struct {
+	BulkID  string        `json:"bulkId"`
+	Skipped int           `json:"skipped"`
+	Refused []bulkSkipped `json:"refused"`
+}
+
+func skipBulkBody(items ...map[string]any) string { return bulkBody(items...) }
+
+// Skipping the selected versions across environments needs updates.manage on each (plan 12-30, D-10, D-15): a person who is an Admin of
+// one environment has theirs skipped, each with its own audit row carrying the one bulk ID, and the items of the environment where
+// they are not are answered no_permission.
+func TestFleetSkipSelected(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{
+		"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}, "team/app": {digest: updDigest('b')},
+	})
+	f, local, swarm := bulkFleet(t, heads)
+	f.addUser(t, "sam", false)
+	f.addEnvRole(t, "sam", swarm.ID, "admin")
+	f.addEnvRole(t, "sam", local.ID, "operator")
+
+	rec := f.bulkAsUser(t, "sam", "/api/fleet/updates/skip", skipBulkBody(
+		bulkItem(swarm.ID, "service", "web", nil), bulkItem(local.ID, "container", "app", nil), bulkItem(swarm.ID, "service", "api", nil),
+	))
+	if rec.code != http.StatusOK {
+		t.Fatalf("skip: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkSkipAnswer](t, rec)
+	if ans.Skipped != 2 || len(ans.Refused) != 1 || ans.Refused[0].Name != "app" || ans.Refused[0].Reason != "no_permission" || ans.Refused[0].EnvID != local.ID || ans.BulkID == "" {
+		t.Fatalf("answer = %+v, want two skipped and the container refused no_permission", ans)
+	}
+	rows := f.auditRows(t, "image.update_skipped")
+	if len(rows) != 2 {
+		t.Fatalf("image.update_skipped rows = %+v, want one for each skipped workload", rows)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		if r.Details["bulk"] != ans.BulkID || r.Details["digest"] != updDigest('b') || r.EnvID != swarm.ID {
+			t.Errorf("row %+v, want the swarm, the digest passed over and the bulk ID", r)
+		}
+		got[r.Details["workload"]] = r.Details["kind"]
+	}
+	if got["web"] != "service" || got["api"] != "service" {
+		t.Errorf("rows name %v, want web and api", got)
+	}
+	for _, name := range []string{"web", "api"} {
+		if u := f.swarmServiceUpdate(t, swarm.ID, name); u != "skipped" {
+			t.Errorf("%s reads %s, want skipped", name, u)
+		}
+	}
+	if u := f.localContainerUpdate(t, local.ID, "app"); u != "update_available" {
+		t.Errorf("app reads %s, want update_available: it was refused", u)
+	}
+}
+
+// swarmServiceUpdate is the state the services list of the environment gives the service.
+func (f *agentFix) swarmServiceUpdate(t *testing.T, envID, name string) string {
+	t.Helper()
+	list := decode[heldList](t, f.req(t, http.MethodGet, "/api/env/"+envID+"/services", ""))
+	for _, it := range list.Items {
+		if it.Name == name && it.Update != nil {
+			return it.Update.State
+		}
+	}
+	t.Fatalf("no service %q in %+v", name, list)
+	return ""
+}
+
+// localContainerUpdate is the state the containers list of the environment gives the container.
+func (f *agentFix) localContainerUpdate(t *testing.T, envID, name string) string {
+	t.Helper()
+	list := decode[heldList](t, f.req(t, http.MethodGet, "/api/env/"+envID+"/containers", ""))
+	for _, it := range list.Items {
+		if it.Name == name && it.Update != nil {
+			return it.Update.State
+		}
+	}
+	t.Fatalf("no container %q in %+v", name, list)
+	return ""
+}
+
+// Skipped, ignored and rolled back versions are never taken into a bulk update, nor is one that is up to date, however the client names
+// them; the server judges each as it is now (plan 12-30, D-14, D-15, T-12-90). The one that can be updated is, and nothing is written for
+// the others.
+func TestBulkRefusesUnselectable(t *testing.T) {
+	t.Parallel()
+	answers := threeAnswers('b')
+	answers["team/cache"] = headAnswer{digest: updDigest('b')}
+	answers["team/fresh"] = headAnswer{digest: updDigest('b')}
+	heads := newScriptedHeads(answers)
+	f, e := bulkSwarm(t, heads, nil, plainService("web", 'a'), plainService("api", 'a'), plainService("db", 'a'), plainService("cache", 'a'), plainService("fresh", 'b'))
+
+	// cache's update fails and is put back, so that version is rolled back; api's version is skipped; db is ignored.
+	rejectNewVersionOf(f, "cache", 'b')
+	rec := f.bulkRun(t, bulkItem(e.ID, "service", "cache", nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("setup update: %d %s", rec.code, rec.body)
+	}
+	if job := f.awaitUpdate(t, decode[bulkAnswer](t, rec).jobOf(t, e.ID)); bulkItemStates(job)["i0"] != "failed" {
+		t.Fatalf("setup job = %+v, want the cache update failed", job.Items)
+	}
+	if rec := f.skip(t, e, http.MethodPost, "api"); rec.code != http.StatusOK {
+		t.Fatalf("skip api: %d %s", rec.code, rec.body)
+	}
+	if rec := f.ignoreReq(t, e, http.MethodPost, `{"scope":"workload","kind":"service","name":"db"}`); rec.code != http.StatusOK {
+		t.Fatalf("ignore db: %d %s", rec.code, rec.body)
+	}
+	before := len(f.fake.ServiceUpdates())
+
+	rec = f.bulkRun(t,
+		bulkItem(e.ID, "service", "web", nil), bulkItem(e.ID, "service", "api", nil), bulkItem(e.ID, "service", "db", nil),
+		bulkItem(e.ID, "service", "cache", nil), bulkItem(e.ID, "service", "fresh", nil), bulkItem(e.ID, "service", "nobody", nil),
+	)
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	want := map[string]string{
+		"service/api": "not_selectable", "service/db": "not_selectable", "service/cache": "not_selectable",
+		"service/fresh": "not_selectable", "service/nobody": "not_selectable",
+	}
+	if got := ans.reasons(); len(got) != len(want) || got["service/api"] != want["service/api"] || got["service/db"] != want["service/db"] ||
+		got["service/cache"] != want["service/cache"] || got["service/fresh"] != want["service/fresh"] || got["service/nobody"] != want["service/nobody"] {
+		t.Errorf("skipped = %v, want %v", got, want)
+	}
+	if job := f.awaitUpdate(t, ans.jobOf(t, e.ID)); job.State != jobs.JobDone || bulkItemStates(job)["i0"] != "done" {
+		t.Errorf("job = %s %+v, want web alone, done", job.State, bulkItemStates(job))
+	}
+	var written []string
+	for _, u := range f.fake.ServiceUpdates()[before:] {
+		written = append(written, u.Spec.Name)
+	}
+	if !slices.Equal(written, []string{"web"}) {
+		t.Errorf("services written by the bulk update = %v, want web alone", written)
+	}
+	if u := f.heldOf(t, e, "cache"); u.State != "rolled_back" {
+		t.Errorf("cache reads %s, want rolled_back: a bulk update must not retry it", u.State)
+	}
+}
+
+// A Viewer who posts a bulk update gets every item answered no_permission and nothing is started, taken or written; an Operator of one
+// environment has theirs updated and the other's refused (plan 12-30, D-10, T-12-89).
+func TestBulkViewerStartsNothing(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{
+		"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}, "team/app": {digest: updDigest('b')},
+	})
+	f, local, swarm := bulkFleet(t, heads)
+	f.addUser(t, "vera", false)
+	f.addEnvRole(t, "vera", swarm.ID, "viewer")
+	f.addEnvRole(t, "vera", local.ID, "viewer")
+	f.addUser(t, "olive", false)
+	f.addEnvRole(t, "olive", swarm.ID, "operator")
+	f.addEnvRole(t, "olive", local.ID, "viewer")
+	f.addUser(t, "nina", false) // no access to either
+
+	body := bulkBody(bulkItem(swarm.ID, "service", "web", nil), bulkItem(local.ID, "container", "app", nil), bulkItem(swarm.ID, "service", "api", nil))
+	for _, user := range []string{"vera", "nina"} {
+		rec := f.bulkAsUser(t, user, "/api/fleet/updates/run", body)
+		if rec.code != http.StatusOK {
+			t.Fatalf("%s's bulk update: %d %s", user, rec.code, rec.body)
+		}
+		ans := decode[bulkAnswer](t, rec)
+		if len(ans.Jobs) != 0 || len(ans.Skipped) != 3 {
+			t.Fatalf("%s's answer = %+v, want no job and three skipped", user, ans)
+		}
+		for _, s := range ans.Skipped {
+			if s.Reason != "no_permission" {
+				t.Errorf("%s: %s/%s = %s, want no_permission", user, s.Kind, s.Name, s.Reason)
+			}
+		}
+	}
+	if runs := f.runsOfBulk(t, ""); len(runs) != 0 {
+		t.Errorf("runs = %+v, want none", runs)
+	}
+	for _, id := range []string{swarm.ID, local.ID} {
+		if h, held := f.stackLocks.Held(id); held {
+			t.Errorf("the lock of %s is held by %+v after refusals", id, h)
+		}
+	}
+	if rows := f.auditRows(t, "image.bulk_updated"); len(rows) != 0 {
+		t.Errorf("image.bulk_updated rows = %+v, want none", rows)
+	}
+	// An unnamed caller is refused before anything.
+	if rec := f.call(t, authReq{method: http.MethodPost, path: "/api/fleet/updates/run", body: body}); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+		t.Errorf("an anonymous bulk update = %d, want 401 or 403", rec.Code)
+	}
+
+	rec := f.bulkAsUser(t, "olive", "/api/fleet/updates/run", body)
+	if rec.code != http.StatusOK {
+		t.Fatalf("olive's bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	if len(ans.Jobs) != 1 || ans.Jobs[0].EnvID != swarm.ID || len(ans.Skipped) != 1 || ans.Skipped[0].Name != "app" || ans.Skipped[0].Reason != "no_permission" {
+		t.Fatalf("olive's answer = %+v, want the swarm's job and the container refused no_permission", ans)
+	}
+	if job := f.awaitUpdate(t, ans.Jobs[0].JobID); job.State != jobs.JobDone {
+		t.Errorf("olive's job = %s, want done", job.State)
+	}
+}
+
+// At most 500 workloads in a request: 501 is 422 before anything is read, 500 is judged, one by one (plan 12-30, T-12-91).
+func TestBulkMaxItems(t *testing.T) {
+	t.Parallel()
+	f, e := bulkSwarm(t, newScriptedHeads(threeAnswers('b')), nil, threeServices()...)
+	items := make([]map[string]any, 0, 501)
+	for i := range 501 {
+		items = append(items, bulkItem(e.ID, "service", "svc-"+strconv.Itoa(i), nil))
+	}
+	for _, path := range []string{"/api/fleet/updates/run", "/api/fleet/updates/skip"} {
+		if rec := f.req(t, http.MethodPost, path, bulkBody(items...)); rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("501 items to %s = %d %s, want 422", path, rec.code, rec.body)
+		}
+		if rec := f.req(t, http.MethodPost, path, `{"items":[]}`); rec.code != http.StatusUnprocessableEntity {
+			t.Errorf("no items to %s = %d %s, want 422", path, rec.code, rec.body)
+		}
+	}
+	rec := f.req(t, http.MethodPost, "/api/fleet/updates/run", bulkBody(items[:500]...))
+	if rec.code != http.StatusOK {
+		t.Fatalf("500 items: %d %s", rec.code, rec.body)
+	}
+	if ans := decode[bulkAnswer](t, rec); len(ans.Jobs) != 0 || len(ans.Skipped) != 500 {
+		t.Errorf("answer: %d jobs, %d skipped, want none and 500 not selectable", len(ans.Jobs), len(ans.Skipped))
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("services written = %d, want none", n)
 	}
 }
