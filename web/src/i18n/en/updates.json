@@ -20,6 +20,7 @@
       "check_stale": "Check stale",
       "check_failed": "Check failed",
       "rolled_back": "Update failed, rolled back",
+      "pull_failed": "Couldn't pull the image",
       "rollback_failed": "Rollback failed",
       "not_from_registry": "Not from a registry",
       "pinned_in_file": "Pinned in file",
@@ -56,7 +57,13 @@
       "ignored_by": "{{user}} ignored updates for {{scope}} {{when}}.",
       "ignored_label": "Ignored by the tierplan.updates=ignore label.",
       "someone": "Someone",
-      "thisWorkload": "this workload"
+      "thisWorkload": "this workload",
+      "rolled_back_failure": "TierPlan rolled {{name}} back {{when}} because {{reason}}. It won't offer {{new}} again until a newer version appears. You can still update by hand.",
+      "rolled_back_failureNoDigest": "TierPlan rolled {{name}} back {{when}} because {{reason}}. It won't offer that version again until a newer version appears. You can still update by hand.",
+      "pull_failed": "TierPlan couldn't pull the image for {{new}} {{when}}, so nothing was changed on {{name}}. It won't offer {{new}} again until a newer version appears. You can still try it with Update anyway.",
+      "pull_failedNoDigest": "TierPlan couldn't pull the image for that version {{when}}, so nothing was changed on {{name}}. It won't offer it again until a newer version appears. You can still try it with Update anyway.",
+      "workloadFallback": "this workload",
+      "itFallback": "it"
     },
     "reason": {
       "registryFallback": "The registry",
@@ -217,7 +224,8 @@
         "check_failed": "The last check failed: {{reason}} Choose Check now to try again.",
         "offline": "{{environment}} isn't reporting, so TierPlan can't update it.",
         "task_container": "Update the service {{name}} instead. Its tasks are replaced for you."
-      }
+      },
+      "updateAnyway": "Update anyway…"
     },
     "skip": {
       "done": "Skipped {{digest}} for {{name}}. A newer version will show again.",
@@ -280,10 +288,12 @@
         "no_healthcheck": "{{name}}'s image has no health check. TierPlan can only tell the update worked if the new container is running, not that it is healthy.",
         "host_ports": "{{name}} publishes a port in host mode. A new task can't start on a node while the old one still holds the port.",
         "volumes": "{{name}} mounts a volume. The new version may change the data in it, and rolling back will not undo that.",
-        "previous_failure": "This version failed before. {{name}} was rolled back.",
+        "previous_failure": "This version failed before: {{reason}}. It was rolled back {{when}}.",
         "more_one": "Show {{count}} more warning",
         "more_other": "Show {{count}} more warnings",
-        "fewer": "Show fewer warnings"
+        "fewer": "Show fewer warnings",
+        "previous_failure_pull": "This version failed before: TierPlan couldn't pull the image. Nothing was changed, so nothing was rolled back. That was {{when}}.",
+        "previous_failure_noWhen": "This version failed before: {{reason}}. It was rolled back."
       },
       "note": "If the update fails, TierPlan puts the previous version back on its own and records both in the audit log.",
       "cancel": "Cancel",
@@ -326,7 +336,9 @@
         "check_failed": "Couldn't reach the registry to check the newest version. Nothing was changed. Check that the registry is up and try again.",
         "permission": "You can't update {{name}} in {{environment}}. Nothing was changed."
       },
-      "descriptionContainer": "TierPlan recreates {{name}} with the same settings and the new image. It keeps the old container until the new one is running, then removes it."
+      "descriptionContainer": "TierPlan recreates {{name}} with the same settings and the new image. It keeps the old container until the new one is running, then removes it.",
+      "anywayTitle": "Update {{name}} anyway",
+      "commitAnyway": "Update {{name}} anyway"
     },
     "console": {
       "title": "Update of {{name}}",
@@ -354,7 +366,9 @@
         "create": "Create the new container",
         "swap": "Stop and rename the old container",
         "start": "Start the new container",
-        "remove_old": "Remove the old container"
+        "remove_old": "Remove the old container",
+        "rollback": "Roll back to the previous version",
+        "rollback_wait": "Wait for the previous version to run"
       },
       "success": {
         "title": "Updated",
@@ -372,9 +386,12 @@
       },
       "openService": "Open {{name}}",
       "announce": {
-        "updated": "{{name}} updated",
-        "failed": "Update of {{name}} failed",
-        "cancelled": "Update of {{name}} cancelled"
+        "updated": "Update of {{name}} completed.",
+        "failed": "Update of {{name}} failed.",
+        "cancelled": "Update of {{name}} cancelled.",
+        "rolledBack": "Update of {{name}} failed and was rolled back.",
+        "rollbackFailed": "Update of {{name}} failed and the rollback failed.",
+        "pullFailed": "Update of {{name}} failed. The image could not be pulled and nothing was changed."
       },
       "gone": {
         "title": "This update is no longer listed",
@@ -390,7 +407,10 @@
       "outcome": {
         "done": "Updated",
         "failed": "Failed",
-        "cancelled": "Cancelled"
+        "cancelled": "Cancelled",
+        "rolled_back": "Rolled back",
+        "rollback_failed": "Rollback failed",
+        "pull_failed": "Not updated"
       },
       "documentTitle": "Update",
       "healthWait": {
@@ -398,7 +418,42 @@
         "valueText": "Waiting for {{name}} to be healthy, {{window}} left",
         "announce": "Waiting for {{name}} to be healthy, {{window}} left",
         "label": "Time left to become healthy"
-      }
+      },
+      "rolledBack": {
+        "title": "The update failed and was rolled back",
+        "body": "{{reason}}. TierPlan put {{old}} back. The failed version won't be offered again until a newer one appears.",
+        "bodyNoDigest": "{{reason}}. TierPlan put the previous version back. The failed version won't be offered again until a newer one appears."
+      },
+      "rollbackFailed": {
+        "title": "The rollback failed",
+        "body": "{{name}} may not be running the version you expect. TierPlan couldn't restore {{old}}: {{reason}}. Open {{name}} to see what it runs, or update it again.",
+        "bodyNoDigest": "{{name}} may not be running the version you expect. TierPlan couldn't restore the previous version: {{reason}}. Open {{name}} to see what it runs, or update it again."
+      },
+      "pullFailed": {
+        "title": "The image couldn't be pulled",
+        "body": "Nothing was changed: {{name}} still runs {{old}}. TierPlan won't offer this version again until a newer one appears, but you can still try it with Update anyway.",
+        "bodyNoDigest": "Nothing was changed: {{name}} still runs the version it ran before. TierPlan won't offer this version again until a newer one appears, but you can still try it with Update anyway."
+      },
+      "updateAnyway": "Update anyway…"
+    },
+    "rollbackReason": {
+      "didnt_start": "{{subject}} didn't start",
+      "unhealthy": "{{subject}} didn't become healthy within {{window}}",
+      "unhealthy_noWindow": "{{subject}} didn't become healthy in time",
+      "timeout": "{{subject}} didn't finish updating within {{window}}",
+      "timeout_noWindow": "{{subject}} didn't finish updating in time",
+      "pull_failed": "TierPlan couldn't pull the image",
+      "server_restarted": "TierPlan restarted during this update",
+      "environment_offline": "TierPlan lost contact with the environment",
+      "create_refused": "{{subject}} couldn't be recreated",
+      "agent_host_policy": "{{subject}} isn't allowed to run with host access on its node",
+      "other": "{{subject}} couldn't be updated"
+    },
+    "restoreReason": {
+      "restore_refused": "the swarm wouldn't take it back",
+      "restore_unsettled": "it didn't run in time",
+      "restore_failed": "the old container couldn't be put back",
+      "other": "the restore didn't finish"
     }
   }
 }

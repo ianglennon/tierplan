@@ -519,7 +519,17 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
       header: t("updates.list.column"),
       className: "w-44 min-w-44",
       // The server's word for the row; a row it sent no update object for shows a dash, never "Up to date".
-      cell: (c) => (c.update ? <UpdateBadge info={c.update} /> : <span>{missing}</span>),
+      cell: (c) =>
+        c.update ? (
+          <UpdateBadge
+            info={c.update}
+            name={c.name}
+            envId={envId}
+            stackId={c.tierplanStackId || undefined}
+          />
+        ) : (
+          <span>{missing}</span>
+        ),
     },
     {
       id: "image",

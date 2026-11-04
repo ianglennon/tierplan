@@ -124,7 +124,14 @@ function Header({ envId, data }: { envId: string; data: ServiceDetail }) {
               updateState: data.updateStatus,
             }}
           />
-          {data.update ? <UpdateBadge info={data.update} /> : null}
+          {data.update ? (
+            <UpdateBadge
+              info={data.update}
+              name={data.name}
+              envId={envId}
+              stackId={data.tierplanStackId || undefined}
+            />
+          ) : null}
           <Badge variant="outline" className="shrink-0">
             {t(modeKey)}
           </Badge>

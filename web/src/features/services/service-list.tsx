@@ -715,7 +715,17 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       header: t("updates.list.column"),
       className: "w-44 min-w-44",
       // The server's word for the row; a row it sent no update object for shows a dash, never "Up to date".
-      cell: (s) => (s.update ? <UpdateBadge info={s.update} /> : <span>{missing}</span>),
+      cell: (s) =>
+        s.update ? (
+          <UpdateBadge
+            info={s.update}
+            name={s.name}
+            envId={envId}
+            stackId={s.tierplanStackId || undefined}
+          />
+        ) : (
+          <span>{missing}</span>
+        ),
     },
     {
       id: "mode",

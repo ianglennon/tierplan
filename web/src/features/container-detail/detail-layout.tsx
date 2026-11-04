@@ -179,7 +179,14 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
                   <TooltipContent className="break-all">{data.name}</TooltipContent>
                 </Tooltip>
                 <ContainerStateCell state={data.state} health={data.health} />
-                {data.update ? <UpdateBadge info={data.update} /> : null}
+                {data.update ? (
+                  <UpdateBadge
+                    info={data.update}
+                    name={data.name}
+                    envId={envId}
+                    stackId={data.tierplanStackId || undefined}
+                  />
+                ) : null}
                 <RestartLoopBadge loop={data.restartLoop} muted={data.muted} kind="container" />
                 {isSwarm && data.node ? (
                   <Badge variant="outline" className="shrink-0">

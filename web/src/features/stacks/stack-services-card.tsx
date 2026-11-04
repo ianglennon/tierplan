@@ -181,6 +181,8 @@ function ServiceUpdateMenu({ envId, row }: { envId: string; row: StackService })
 
 interface RowProps {
   envId: string;
+  // The stack TierPlan manages that the services belong to; absent for a project it does not manage.
+  stackId?: string;
   row: StackService;
   swarm: boolean;
   open: boolean;
@@ -188,7 +190,7 @@ interface RowProps {
 }
 
 // ServiceRows is a service and, once opened on a standalone host, its containers beneath it.
-function ServiceRows({ envId, row, swarm, open, onToggle }: RowProps) {
+function ServiceRows({ envId, stackId, row, swarm, open, onToggle }: RowProps) {
   const t = useT();
   const panel = `containers-${row.name}`;
   return (
@@ -244,7 +246,7 @@ function ServiceRows({ envId, row, swarm, open, onToggle }: RowProps) {
         </TableCell>
         <TableCell className="whitespace-nowrap">
           {row.update ? (
-            <UpdateBadge info={row.update} />
+            <UpdateBadge info={row.update} name={row.name} envId={envId} stackId={stackId} />
           ) : (
             <span className="text-muted-foreground">{DASH}</span>
           )}
@@ -295,6 +297,8 @@ function ServiceRows({ envId, row, swarm, open, onToggle }: RowProps) {
 
 interface ServicesTableProps {
   envId: string;
+  // The managed stack the rows belong to; a failed update's badge opens that stack's console.
+  stackId?: string;
   rows: StackService[];
   // True for a swarm, whose services link to their page; a standalone host opens each to its containers.
   swarm: boolean;
@@ -303,7 +307,7 @@ interface ServicesTableProps {
 // StackServicesTable is the table of services of a stack: each with its state, its replicas or containers, its
 // image with the pin and its ports. A swarm service links to its page; a standalone service opens to its
 // containers, which link to theirs. It is the table of a managed stack's Overview and of an unmanaged stack's.
-export function StackServicesTable({ envId, rows, swarm }: ServicesTableProps) {
+export function StackServicesTable({ envId, stackId, rows, swarm }: ServicesTableProps) {
   const t = useT();
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
 
@@ -343,6 +347,7 @@ export function StackServicesTable({ envId, rows, swarm }: ServicesTableProps) {
           <ServiceRows
             key={row.name}
             envId={envId}
+            stackId={stackId}
             row={row}
             swarm={swarm}
             open={opened.has(row.name)}
@@ -393,7 +398,7 @@ export function StackServicesCard({ envId, stackId, name, target, busy }: StackS
         rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("stackOverview.services.empty")}</p>
         ) : (
-          <StackServicesTable envId={envId} rows={rows} swarm={swarm} />
+          <StackServicesTable envId={envId} stackId={stackId} rows={rows} swarm={swarm} />
         )
       ) : null}
     </SettingsCard>

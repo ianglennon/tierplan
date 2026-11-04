@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { useRouterState } from "@tanstack/react-router";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { UpdateInfo, UpdateState } from "@/api/updates";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UpdateBadge } from "@/features/updates/update-badge";
 import "@/i18n";
+import { TestRouter } from "@/test-router";
 
 afterEach(cleanup);
 
@@ -252,5 +254,133 @@ describe("UpdateBadge: ignored updates", () => {
     expect(descriptionOf("Updates ignored")).toContain(
       "<b>Ada</b> ignored updates for acme/<i>x</i>:1.4",
     );
+  });
+});
+
+// The failure a rolled-back state names (UpdateInfoBody.failure, 12-22).
+const failed = (extra: Partial<NonNullable<UpdateInfo["failure"]>> = {}) => ({
+  digest: `sha256:${"b".repeat(64)}`,
+  reason: "didnt_start",
+  at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+  rollbackFailed: false,
+  jobId: "",
+  ...extra,
+});
+
+describe("UpdateBadge: a rolled-back update (IMG-07, D-12)", () => {
+  it("says who rolled it back, when and why, and that the version won't be offered again", () => {
+    render(
+      <TooltipProvider>
+        <UpdateBadge info={info({ state: "rolled_back", failure: failed() })} name="web" />
+      </TooltipProvider>,
+    );
+    expect(descriptionOf("Update failed, rolled back")).toBe(
+      "TierPlan rolled web back 2 h ago because it didn't start. It won't offer sha256:bbbbbbbbbbbb again until a newer version appears. You can still update by hand.",
+    );
+  });
+
+  it("words a restart as the reason without a subject", () => {
+    render(
+      <TooltipProvider>
+        <UpdateBadge
+          info={info({ state: "rolled_back", failure: failed({ reason: "server_restarted" }) })}
+          name="web"
+        />
+      </TooltipProvider>,
+    );
+    expect(descriptionOf("Update failed, rolled back")).toContain(
+      "because TierPlan restarted during this update.",
+    );
+  });
+
+  it("is a plain badge when the update's console is not named", () => {
+    render(
+      <TooltipProvider>
+        <UpdateBadge info={info({ state: "rolled_back", failure: failed() })} name="web" />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  function Where() {
+    return (
+      <span data-testid="where">{useRouterState({ select: (s) => s.location.pathname })}</span>
+    );
+  }
+
+  function showWithRouter(extra: Partial<UpdateInfo>, props: { stackId?: string } = {}) {
+    return render(
+      <TestRouter path="/env/e1">
+        <TooltipProvider>
+          <UpdateBadge info={info(extra)} name="web" envId="e1" {...props} />
+          <Where />
+        </TooltipProvider>
+      </TestRouter>,
+    );
+  }
+
+  it("is a button that opens the update's console, where there is one to open", async () => {
+    showWithRouter({ state: "rolled_back", failure: failed({ jobId: "j1" }) });
+    const button = screen.getByRole("button", { name: /Update failed, rolled back/ });
+    expect(button.getAttribute("aria-describedby")).toBeTruthy();
+    fireEvent.click(button);
+    expect(await screen.findByText("/env/e1/update-jobs/j1")).toBeTruthy();
+  });
+
+  it("opens the stack's own console for a workload a managed stack owns", async () => {
+    showWithRouter(
+      { state: "rolled_back", failure: failed({ jobId: "j9" }) },
+      { stackId: "stk-1" },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Update failed, rolled back/ }));
+    expect(await screen.findByText("/env/e1/stacks/stk-1/deploys/j9")).toBeTruthy();
+  });
+
+  it("is a button for a failed rollback too", async () => {
+    showWithRouter({
+      state: "rollback_failed",
+      failure: failed({ jobId: "j2", rollbackFailed: true }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Rollback failed/ }));
+    expect(await screen.findByText("/env/e1/update-jobs/j2")).toBeTruthy();
+  });
+
+  it("stays a plain element in every state that opens nothing", () => {
+    for (const state of ["update_available", "up_to_date", "check_failed", "skipped"] as const) {
+      showWithRouter({ state, failure: failed({ jobId: "j1" }) });
+      expect(screen.queryByRole("button"), state).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("draws a workload name with markup as text", () => {
+    const { container } = render(
+      <TooltipProvider>
+        <UpdateBadge info={info({ state: "rolled_back", failure: failed() })} name="<b>web</b>" />
+      </TooltipProvider>,
+    );
+    expect(container.querySelector("b")).toBeNull();
+    expect(descriptionOf("Update failed, rolled back")).toContain("rolled <b>web</b> back");
+  });
+});
+
+describe("UpdateBadge: an image that could not be pulled (user decision, D-14)", () => {
+  const pulled = () =>
+    info({ state: "rolled_back", failure: failed({ reason: "pull_failed", jobId: "j3" }) });
+
+  it("says the image could not be pulled and nothing was changed, never that it was rolled back", () => {
+    render(
+      <TestRouter path="/env/e1">
+        <TooltipProvider>
+          <UpdateBadge info={pulled()} name="web" envId="e1" />
+        </TooltipProvider>
+      </TestRouter>,
+    );
+    expect(screen.getByText("Couldn't pull the image")).toBeTruthy();
+    const text = descriptionOf("Couldn't pull the image");
+    expect(text).toContain("TierPlan couldn't pull the image for sha256:bbbbbbbbbbbb 2 h ago");
+    expect(text).toContain("nothing was changed on web");
+    expect(text).toContain("You can still try it with Update anyway.");
+    expect(document.body.textContent).not.toMatch(/rolled back/i);
   });
 });

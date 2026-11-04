@@ -69,6 +69,9 @@ let kind: "service" | "container";
 let workload: string;
 let items: Item[];
 let status: number;
+let role: "viewer" | "operator";
+let lines: string[];
+let from: string;
 let client: QueryClient;
 
 function jobBody() {
@@ -77,14 +80,14 @@ function jobBody() {
     runId: "r1",
     kind,
     workload,
-    fromDigest: A,
+    fromDigest: from,
     toDigest: B,
     startedBy: "ada",
     state,
     createdAt: "2026-11-04T12:00:00Z",
     finishedAt: state === "running" ? "" : "2026-11-04T12:00:09Z",
     items: items.map(item),
-    output: [{ seq: 1, at: "2026-11-04T12:00:01Z", text: "Pulled nginx on 2 nodes" }],
+    output: lines.map((text, i) => ({ seq: i + 1, at: "2026-11-04T12:00:01Z", text })),
   };
 }
 
@@ -94,6 +97,9 @@ beforeEach(() => {
   workload = "web";
   items = [check, pull, update(), wait(), { id: "health", label: "x", state: "waiting" }];
   status = 200;
+  role = "viewer";
+  lines = ["Pulled nginx on 2 nodes"];
+  from = A;
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
@@ -102,7 +108,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
@@ -216,13 +222,12 @@ describe("UpdateConsole: a finished update", () => {
     state = "failed";
     items = [
       check,
+      pull,
       {
-        ...pull,
-        state: "failed",
-        code: "pull_failed",
-        message: "The image could not be pulled, so nothing was changed.",
+        ...update("failed"),
+        code: "service_rejected",
+        message: "The swarm refused the new version. Nothing was changed.",
       },
-      { ...update("skipped"), code: "not_run" },
       wait("skipped"),
     ];
     mount();
@@ -231,9 +236,303 @@ describe("UpdateConsole: a finished update", () => {
     });
     expect(alert.closest("[role=alert]")).toBeTruthy();
     expect(
-      screen.getAllByText(/The image could not be pulled, so nothing was changed\./).length,
+      screen.getAllByText(/The swarm refused the new version\. Nothing was changed\./).length,
     ).toBeGreaterThan(0);
     expect(screen.queryByText("Updated", { selector: "[data-slot=alert-title]" })).toBeNull();
+    expect(screen.queryByText(/rolled back/)).toBeNull();
+  });
+});
+
+// The service steps of an update whose new tasks failed, as the server writes them when it also put the
+// previous version back (12-22): the failing step, then the two steps it added.
+const failingWait = (code: string): Item => ({
+  id: "wait",
+  label: "Wait for the new tasks",
+  state: "failed",
+  code,
+  message: "The service did not finish updating in time.",
+});
+const restore = (back: Item["state"] = "done", waited: Item["state"] = "done"): Item[] => [
+  { id: "rollback", label: "Roll back to the previous version", state: back },
+  { id: "rollback_wait", label: "Wait for the previous version to run", state: waited },
+];
+
+describe("UpdateConsole: a failed update that was rolled back (IMG-07, D-12)", () => {
+  beforeEach(() => {
+    state = "failed";
+  });
+
+  it("adds the two restore steps and says the update failed and was rolled back, with the old digest", async () => {
+    items = [check, pull, update("done"), failingWait("timeout"), ...restore()];
+    mount();
+    const title = await screen.findByText("The update failed and was rolled back", {
+      selector: "[data-slot=alert-title]",
+    });
+    const alert = title.closest("[data-slot=update-result]");
+    expect(alert?.getAttribute("role")).toBe("status");
+    expect(alert?.textContent).toContain(
+      `web didn't finish updating within 10 minutes. TierPlan put sha256:${"a".repeat(12)} back.`,
+    );
+    expect(alert?.textContent).toContain(
+      "The failed version won't be offered again until a newer one appears.",
+    );
+    const steps = screen.getByRole("list", { name: "Steps of the deploy" }).textContent ?? "";
+    expect(steps).toContain("Roll back to the previous version");
+    expect(steps).toContain("Wait for the previous version to run");
+    // The heading names the outcome, and nothing says the update worked.
+    expect(screen.getByRole("heading", { name: /Rolled back/ })).toBeTruthy();
+    expect(screen.queryByText("Updated", { selector: "[data-slot=alert-title]" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Open web" })).toBeTruthy();
+  });
+
+  it.each([
+    ["didnt_start", [], "web didn't start."],
+    ["unhealthy", [], "web didn't become healthy within 10 minutes."],
+    ["converge_timeout", [], "web didn't finish updating within 10 minutes."],
+    ["network_full", [], "web didn't start."],
+    ["engine_error", [], "web couldn't be updated."],
+  ])(
+    "words the failed step %s as a reason that ends a sentence about the service",
+    async (code, _x, sentence) => {
+      items = [check, pull, update("done"), failingWait(code), ...restore()];
+      mount();
+      await screen.findByText("The update failed and was rolled back");
+      expect(screen.getByText(new RegExp(sentence.replaceAll(".", "\\.")))).toBeTruthy();
+    },
+  );
+
+  it("takes the window of an unhealthy wait from the health step, in seconds", async () => {
+    items = [
+      check,
+      pull,
+      update("done"),
+      { id: "wait", label: "x", state: "done" },
+      {
+        id: "health",
+        label: "x",
+        state: "failed",
+        code: "unhealthy",
+        unit: "seconds",
+        total: 120,
+        message: "The new version did not become healthy.",
+      },
+      ...restore(),
+    ];
+    mount();
+    expect(await screen.findByText(/web didn't become healthy within 2 minutes\./)).toBeTruthy();
+  });
+
+  it("says TierPlan restarted when the job only restores (a recovery after a restart)", async () => {
+    state = "done";
+    items = restore();
+    mount();
+    await screen.findByText("The update failed and was rolled back");
+    expect(
+      screen.getByText(/TierPlan restarted during this update\. TierPlan put sha256:a{12} back\./),
+    ).toBeTruthy();
+    expect(screen.queryByText("Updated", { selector: "[data-slot=alert-title]" })).toBeNull();
+  });
+
+  it("shows the destructive alert when the rollback itself failed, with why", async () => {
+    items = [
+      check,
+      pull,
+      update("done"),
+      failingWait("didnt_start"),
+      {
+        id: "rollback",
+        label: "x",
+        state: "failed",
+        code: "restore_refused",
+        message: "The swarm would not take the previous version back.",
+      },
+      { id: "rollback_wait", label: "x", state: "skipped", code: "not_run" },
+    ];
+    mount();
+    const title = await screen.findByText("The rollback failed", {
+      selector: "[data-slot=alert-title]",
+    });
+    const alert = title.closest("[data-slot=update-result]");
+    expect(alert?.getAttribute("role")).toBe("alert");
+    expect(alert?.textContent).toContain(
+      `web may not be running the version you expect. TierPlan couldn't restore sha256:${"a".repeat(12)}: the swarm wouldn't take it back.`,
+    );
+    expect(screen.queryByText("The update failed and was rolled back")).toBeNull();
+  });
+
+  it("does not call it a rollback when somebody else changed the service meanwhile", async () => {
+    items = [
+      check,
+      pull,
+      update("done"),
+      failingWait("timeout"),
+      {
+        id: "rollback",
+        label: "x",
+        state: "failed",
+        code: "restore_service_changed",
+        message:
+          "The service was changed by someone else, so the previous version was not put back.",
+      },
+      { id: "rollback_wait", label: "x", state: "skipped", code: "not_run" },
+    ];
+    mount();
+    const title = await screen.findByText("The update failed", {
+      selector: "[data-slot=alert-title]",
+    });
+    expect(title.closest("[role=alert]")).toBeTruthy();
+    expect(
+      screen.getAllByText(/changed by someone else, so the previous version was not put back/)
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/was rolled back/)).toBeNull();
+  });
+
+  it("announces the outcome once, and not for a job that had already ended", async () => {
+    state = "running";
+    items = [check, pull, update("done"), wait("running"), ...restore("waiting", "waiting")];
+    mount();
+    await screen.findByRole("heading", { name: "Update of web" });
+    await act(async () => stream()?.sendFrame("snapshot", jobBody(), "1"));
+    await screen.findByText("Live");
+    const spoken = () => document.querySelector("[data-slot=update-announcer]")?.textContent;
+    expect(spoken()).toBe("");
+    state = "failed";
+    items = [check, pull, update("done"), failingWait("timeout"), ...restore()];
+    await act(async () => stream()?.sendFrame("done", jobBody(), "9"));
+    await screen.findByText("The update failed and was rolled back");
+    expect(spoken()).toBe("Update of web failed and was rolled back.");
+  });
+
+  it("announces a success as completed", async () => {
+    state = "running";
+    mount();
+    await screen.findByRole("heading", { name: "Update of web" });
+    await act(async () => stream()?.sendFrame("snapshot", jobBody(), "1"));
+    await screen.findByText("Live");
+    state = "done";
+    items = [check, pull, update("done"), wait("done")];
+    await act(async () => stream()?.sendFrame("done", jobBody(), "9"));
+    await screen.findByText("Updated", { selector: "[data-slot=alert-title]" });
+    expect(document.querySelector("[data-slot=update-announcer]")?.textContent).toBe(
+      "Update of web completed.",
+    );
+  });
+});
+
+describe("UpdateConsole: a pull that failed changed nothing (user decision, D-14)", () => {
+  beforeEach(() => {
+    state = "failed";
+    items = [
+      check,
+      {
+        ...pull,
+        state: "failed",
+        code: "registry_unreachable",
+        message: "The image could not be pulled, so nothing was changed.",
+      },
+      { ...update("skipped"), code: "not_run" },
+      wait("skipped"),
+    ];
+  });
+
+  it("says the image could not be pulled and nothing was changed, and never that it was rolled back", async () => {
+    mount();
+    const title = await screen.findByText("The image couldn't be pulled", {
+      selector: "[data-slot=alert-title]",
+    });
+    const alert = title.closest("[data-slot=update-result]");
+    expect(alert?.getAttribute("role")).toBe("status");
+    expect(alert?.textContent).toContain(
+      `Nothing was changed: web still runs sha256:${"a".repeat(12)}.`,
+    );
+    expect(document.body.textContent).not.toMatch(/rolled back/i);
+    expect(screen.queryByText("Roll back to the previous version")).toBeNull();
+    expect(screen.getByRole("heading", { name: /Not updated/ })).toBeTruthy();
+  });
+
+  it("offers Update anyway to an Operator", async () => {
+    role = "operator";
+    mount();
+    const button = await screen.findByRole("button", { name: "Update anyway…" });
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("shows Update anyway unavailable to a Viewer", async () => {
+    mount();
+    const button = (await screen.findByRole("button", {
+      name: "Update anyway…",
+    })) as HTMLButtonElement;
+    expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
+  });
+
+  it("announces that the image could not be pulled", async () => {
+    state = "running";
+    mount();
+    await screen.findByRole("heading", { name: "Update of web" });
+    await act(async () => stream()?.sendFrame("snapshot", jobBody(), "1"));
+    await screen.findByText("Live");
+    state = "failed";
+    items = [{ ...pull, state: "failed", code: "registry_unreachable" }];
+    await act(async () => stream()?.sendFrame("done", jobBody(), "9"));
+    await screen.findByText("The image couldn't be pulled");
+    expect(document.querySelector("[data-slot=update-announcer]")?.textContent).toBe(
+      "Update of web failed. The image could not be pulled and nothing was changed.",
+    );
+  });
+});
+
+describe("UpdateConsole: a container that failed after the old one was touched", () => {
+  const step = (id: string, state: Item["state"], over: Partial<Item> = {}): Item => ({
+    id,
+    label: "x",
+    state,
+    ...over,
+  });
+
+  beforeEach(() => {
+    kind = "container";
+    workload = "cache";
+    state = "failed";
+    items = [
+      step("check", "done"),
+      step("pull", "done"),
+      step("create", "done"),
+      step("swap", "done"),
+      step("start", "failed", { code: "didnt_start", message: "The new version did not start." }),
+      step("remove_old", "skipped", { code: "not_run" }),
+    ];
+  });
+
+  it("reads the old container's return as a rollback", async () => {
+    lines = ["Create cache", "The new container did not start"];
+    mount();
+    await screen.findByText("The update failed and was rolled back");
+    expect(screen.getByText(/cache didn't start\. TierPlan put sha256:a{12} back\./)).toBeTruthy();
+  });
+
+  it("reads a restore that did not work as a failed rollback", async () => {
+    lines = [
+      "The old container could not be put back. It is cache_old if it was renamed; check cache on the node.",
+    ];
+    mount();
+    await screen.findByText("The rollback failed", { selector: "[data-slot=alert-title]" });
+    expect(screen.getByText(/the old container couldn't be put back/)).toBeTruthy();
+  });
+
+  it("does not claim a rollback for a failure before the old container was touched", async () => {
+    items = [
+      step("check", "done"),
+      step("pull", "done"),
+      step("create", "failed", {
+        code: "create_refused",
+        message: "The new container could not be created, so nothing was changed.",
+      }),
+      step("swap", "skipped", { code: "not_run" }),
+    ];
+    mount();
+    await screen.findByText("The update failed", { selector: "[data-slot=alert-title]" });
+    expect(screen.queryByText(/rolled back/)).toBeNull();
   });
 });
 
