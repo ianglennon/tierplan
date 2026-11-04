@@ -33,6 +33,8 @@ func updDigest(c byte) string { return "sha256:" + strings.Repeat(string(c), 64)
 type headAnswer struct {
 	digest string
 	err    error
+	// platforms, when set, makes the digest an index that lists these platforms (linux/amd64 to manifest digest).
+	platforms map[string]string
 }
 
 // scriptedHeads answers for the registry by repository path and counts nothing else. A repository nobody
@@ -65,7 +67,12 @@ func (h *scriptedHeads) requests() int {
 	return h.asked
 }
 
-func (h *scriptedHeads) Index(context.Context, string, registry.Ref, string) (bool, map[string]string, error) {
+func (h *scriptedHeads) Index(_ context.Context, _ string, ref registry.Ref, _ string) (bool, map[string]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p := h.answers[ref.Path].platforms; len(p) > 0 {
+		return true, p, nil
+	}
 	return false, nil, nil
 }
 
