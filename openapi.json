@@ -7081,6 +7081,88 @@
         ],
         "type": "object"
       },
+      "ImageUpdateJobListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "description": "The image updates running or ended in the last 10 minutes on the environments the caller may read, newest first",
+            "items": {
+              "$ref": "#/components/schemas/ImageUpdateJobSummary"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "type": "object"
+      },
+      "ImageUpdateJobSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "bulk": {
+            "description": "Left out unless set: the bulk update this one belongs to",
+            "type": "string"
+          },
+          "endedAt": {
+            "description": "When the job ended, RFC 3339 UTC, empty while it runs",
+            "type": "string"
+          },
+          "envId": {
+            "description": "The environment the update runs on",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name when the update started",
+            "type": "string"
+          },
+          "id": {
+            "description": "The job ID: follow it at GET /api/env/{envId}/update-jobs/{id}",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is updated",
+            "enum": [
+              "service",
+              "container",
+              "stack"
+            ],
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When the job started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "state": {
+            "description": "Where it is. A job that ended with some of its work done and some not reads failed",
+            "enum": [
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "workload": {
+            "description": "The service's, container's or stack's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "envId",
+          "envName",
+          "workload",
+          "kind",
+          "state",
+          "startedAt",
+          "endedAt"
+        ],
+        "type": "object"
+      },
       "ImageUsedByBody": {
         "additionalProperties": false,
         "properties": {
@@ -21989,9 +22071,17 @@
             "format": "date-time",
             "type": "string"
           },
+          "holder": {
+            "$ref": "#/components/schemas/UpdateHolderBody",
+            "description": "Set when the state is busy: who holds the environment's operation lock, which an update cannot start under"
+          },
           "ignore": {
             "$ref": "#/components/schemas/UpdateIgnoreBody",
             "description": "Set when the state is skipped or ignored: which, how far it reaches, who chose it and when"
+          },
+          "jobId": {
+            "description": "Left out unless set: when the state is updating, the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows",
+            "type": "string"
           },
           "note": {
             "description": "A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states",
@@ -41286,6 +41376,45 @@
         "summary": "Remove a user from a team",
         "tags": [
           "teams"
+        ]
+      }
+    },
+    "/api/update-jobs": {
+      "get": {
+        "description": "The image updates that are running or ended in the last 10 minutes, newest first, for the header's Jobs indicator. Every update on an environment you may read (environments.read) is listed, whoever started it; an update on any other environment is left out, as if it did not exist. An update that has left the server's history is not listed, and its job answers 404 update_job_not_found.",
+        "operationId": "listImageUpdateJobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUpdateJobListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The image updates you can follow",
+        "tags": [
+          "environments"
         ]
       }
     },

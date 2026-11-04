@@ -5,7 +5,10 @@ package updates
 
 import (
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // State is what the page says about a workload's image (D-03). The states are the whole vocabulary of
@@ -91,6 +94,12 @@ type JudgeInput struct {
 	// Ignore is the skip or ignore that applies to the workload, from Ignores.Match, nil when none does
 	// (D-15, D-16).
 	Ignore *Ignore
+	// RunningJob is the job of an image update of this workload that is running now, empty when none is (IMG-06). The workload
+	// then reads updating, whatever else is known about it.
+	RunningJob string
+	// Holder is who holds the operation lock of the workload's environment, nil when nobody does. A workload an update would
+	// be offered for then reads busy, because nothing can be started on the environment until the holder is done.
+	Holder *stackops.Holder
 }
 
 // Verdict is what Judge decides about one workload.
@@ -112,6 +121,10 @@ type Verdict struct {
 	NextCheckAt time.Time
 	// Ignore is the skip or ignore the state is skipped or ignored because of, with who set it and when.
 	Ignore *Ignore
+	// JobID is the job of the update that is running, set with StateUpdating.
+	JobID string
+	// Holder is who holds the environment's lock, set with StateBusy.
+	Holder *stackops.Holder
 }
 
 // Judge decides what to say about a workload's image. The rules run in this order, and the first that
@@ -143,6 +156,11 @@ type Verdict struct {
 // An update_available verdict whose check is older than StaleAfter keeps its state and gains the note
 // may_be_stale, unless it already carries the note running_index_gone. A not_checked verdict carries
 // NextCheckAt.
+//
+// What is happening now then overrides what was found, in this order (plan 12-16): a workload with an image update running
+// reads updating, with the job; while another operation holds the environment's lock, a workload that reads update_available
+// or rolled_back reads busy, with the holder. Every other state is information that stays true while the lock is held (up to
+// date, a failed check, pinned, not from a registry, not checked, stale, skipped, ignored), so none is replaced by busy.
 func Judge(in JudgeInput) Verdict {
 	v := hold(in, judge(in))
 	if v.State == StateNotChecked {
@@ -150,6 +168,14 @@ func Judge(in JudgeInput) Verdict {
 	}
 	if v.State == StateUpdateAvailable && v.Note == "" && !v.SuccessAt.IsZero() && in.Now.Sub(v.SuccessAt) > in.StaleAfter {
 		v.Note = NoteMayBeStale
+	}
+	switch {
+	case in.RunningJob != "":
+		v.State, v.JobID = StateUpdating, in.RunningJob
+		v.Reason, v.Note, v.ChangedPlatforms, v.Ignore, v.NextCheckAt = "", "", nil, nil, time.Time{}
+	case in.Holder != nil && (v.State == StateUpdateAvailable || v.State == StateRolledBack):
+		h := *in.Holder
+		v.State, v.Holder = StateBusy, &h
 	}
 	return v
 }
@@ -246,4 +272,30 @@ func changedPlatforms(w Workload, c *Check, run map[string]string) (names []stri
 	}
 	slices.Sort(names)
 	return names, len(names) > 0
+}
+
+// The kinds of operation that can hold an environment's lock, in the words the badge uses.
+const (
+	HolderGitDeploy = "git_deploy"
+	HolderDeploy    = "deploy"
+	HolderRollback  = "rollback"
+	HolderJanitor   = "janitor"
+	HolderUpdate    = "update"
+)
+
+// HolderKind says which of the five kinds of operation holds the lock with that holder: a janitor run, a roll back (or the
+// restore that is one), an image update (a plain one, or a stack's Update images), an automatic deploy from git (a deploy that a
+// system principal of git started) and, for every other stack operation (a deploy, a stop, a start, a removal, an adoption), deploy.
+func HolderKind(h stackops.Holder) string {
+	switch {
+	case h.Kind == stackops.HolderKindJanitor:
+		return HolderJanitor
+	case h.Kind == "rollback", h.Kind == "restore":
+		return HolderRollback
+	case h.Kind == stackops.HolderKindImageUpdate, h.Kind == "update":
+		return HolderUpdate
+	case h.Kind == "deploy" && (strings.HasPrefix(h.By, "system:git") || strings.HasPrefix(h.By, "system:webhook")):
+		return HolderGitDeploy
+	}
+	return HolderDeploy
 }

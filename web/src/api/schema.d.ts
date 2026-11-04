@@ -4999,6 +4999,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/update-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The image updates you can follow
+         * @description The image updates that are running or ended in the last 10 minutes, newest first, for the header's Jobs indicator. Every update on an environment you may read (environments.read) is listed, whoever started it; an update on any other environment is left out, as if it did not exist. An update that has left the server's history is not listed, and its job answers 404 update_job_not_found.
+         */
+        get: operations["listImageUpdateJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users": {
         parameters: {
             query?: never;
@@ -8136,6 +8156,36 @@ export interface components {
              * @enum {string}
              */
             result: "done" | "failed";
+        };
+        ImageUpdateJobListBody: {
+            /** @description The image updates running or ended in the last 10 minutes on the environments the caller may read, newest first */
+            jobs: components["schemas"]["ImageUpdateJobSummary"][] | null;
+        };
+        ImageUpdateJobSummary: {
+            /** @description Left out unless set: the bulk update this one belongs to */
+            bulk?: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            endedAt: string;
+            /** @description The environment the update runs on */
+            envId: string;
+            /** @description The environment's name when the update started */
+            envName: string;
+            /** @description The job ID: follow it at GET /api/env/{envId}/update-jobs/{id} */
+            id: string;
+            /**
+             * @description What is updated
+             * @enum {string}
+             */
+            kind: "service" | "container" | "stack";
+            /** @description When the job started, RFC 3339 UTC */
+            startedAt: string;
+            /**
+             * @description Where it is. A job that ended with some of its work done and some not reads failed
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed" | "cancelled";
+            /** @description The service's, container's or stack's name */
+            workload: string;
         };
         ImageUsedByBody: {
             /** @description Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task */
@@ -14301,8 +14351,12 @@ export interface components {
              * @description When the tag was last checked, whatever came of it; empty when it never was
              */
             checkedAt: string;
+            /** @description Set when the state is busy: who holds the environment's operation lock, which an update cannot start under */
+            holder?: components["schemas"]["UpdateHolderBody"];
             /** @description Set when the state is skipped or ignored: which, how far it reaches, who chose it and when */
             ignore?: components["schemas"]["UpdateIgnoreBody"];
+            /** @description Left out unless set: when the state is updating, the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows */
+            jobId?: string;
             /**
              * @description A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states
              * @enum {string}
@@ -25418,6 +25472,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listImageUpdateJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUpdateJobListBody"];
                 };
             };
             /** @description Error */

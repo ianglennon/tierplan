@@ -41,6 +41,8 @@ const (
 	MetaFrom     = "fromDigest"
 	MetaTo       = "toDigest"
 	MetaBulk     = "bulk"
+	// MetaEnvName is the environment's name when the update started, for the header's list of jobs.
+	MetaEnvName = "envName"
 )
 
 // The items of an update's job, in order (UI-SPEC "Steps (plain service)"). The health item exists only when the image
@@ -250,6 +252,7 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 	}
 	meta := map[string]string{
 		MetaWorkload: t.name, MetaKind: "service", MetaRunID: run.ID, MetaBy: req.Actor.Name, MetaFrom: t.from, MetaTo: t.to,
+		MetaEnvName: req.EnvName,
 	}
 	if req.BulkID != "" {
 		meta[MetaBulk] = req.BulkID

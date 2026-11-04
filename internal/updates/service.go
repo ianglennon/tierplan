@@ -14,6 +14,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -46,6 +47,10 @@ type Service struct {
 	// NextCheck is when the schedule will check an environment next, and false when it will not (the
 	// scheduler's Next). Nil means no workload is told when it will be checked.
 	NextCheck func(envID string) (time.Time, bool)
+	// Locks and UpdateRuns say what is happening on an environment now: who holds its operation lock and which image updates run
+	// (IMG-06). With them a workload reads updating or busy; nil means neither is ever read.
+	Locks      stackops.OperationLock
+	UpdateRuns *RunStore
 }
 
 // Snapshotter reads what an environment runs, node by node. *envs.Aggregator is one.
@@ -78,8 +83,52 @@ func (s *Service) ServiceVerdicts(ctx context.Context, envID string, rows []dock
 	return s.judge(ctx, envID, s.withPlatforms(ctx, envID, ServiceWorkloads(rows)))
 }
 
-// judge matches the stored checks to the workloads and judges each, keyed by workload ID.
+// judge matches the stored checks to the workloads and judges each, keyed by workload ID. The verdicts are live: a workload with
+// an update running reads updating, and one an update is offered for reads busy while the environment's lock is held by another
+// operation.
 func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[string]Verdict, error) {
+	return s.judgeWith(ctx, envID, ws, true)
+}
+
+// liveState is what is happening on an environment now, read once for a set of verdicts: the holder of its operation lock and the
+// image updates that run. A run list that cannot be read leaves no workload updating: the badge then shows what the check found.
+func (s *Service) liveState(ctx context.Context, envID string) (*stackops.Holder, []Run) {
+	var holder *stackops.Holder
+	if s.Locks != nil {
+		if h, held := s.Locks.Held(envID); held {
+			holder = &h
+		}
+	}
+	var runs []Run
+	if s.UpdateRuns != nil {
+		if r, err := s.UpdateRuns.Running(ctx, envID); err == nil {
+			runs = r
+		}
+	}
+	return holder, runs
+}
+
+// runningJob is the job of the image update that is running for w: a run of the service or container itself, or of the stack it
+// belongs to. Empty when none is.
+func runningJob(runs []Run, w Workload) string {
+	name := strings.TrimPrefix(w.Name, "/")
+	for _, r := range runs {
+		if r.JobID == "" {
+			continue
+		}
+		switch {
+		case r.Kind == "stack" && w.Stack != "" && r.Workload == w.Stack:
+			return r.JobID
+		case r.Kind == w.Kind && r.Workload == name:
+			return r.JobID
+		}
+	}
+	return ""
+}
+
+// judgeWith is judge with the live state left out when live is false: the verdicts then say only what the checks found, which is
+// what a count of updates needs.
+func (s *Service) judgeWith(ctx context.Context, envID string, ws []Workload, live bool) (map[string]Verdict, error) {
 	creds := map[hostRepo]string{}
 	keyOf := make([]Key, len(ws))
 	var keys []Key
@@ -116,6 +165,11 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 			return nil, err
 		}
 	}
+	var holder *stackops.Holder
+	var running []Run
+	if live {
+		holder, running = s.liveState(ctx, envID)
+	}
 	out := make(map[string]Verdict, len(ws))
 	runs := map[runKey]runRead{}
 	for i, w := range ws {
@@ -130,6 +184,7 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 			remote = chk.Digest
 		}
 		in.Ignore = held.Match(w, remote)
+		in.Holder, in.RunningJob = holder, runningJob(running, w)
 		if chk != nil {
 			in.RunPlatforms, in.RunIndexGone = s.runPlatforms(ctx, envID, w, chk, runs)
 		}
@@ -159,8 +214,13 @@ func (s *Service) ContainerVerdicts(ctx context.Context, envID string, agg envs.
 // ContainerJudgements is ContainerVerdicts with the workload each verdict is for, which names the image
 // that is followed.
 func (s *Service) ContainerJudgements(ctx context.Context, envID string, agg envs.Aggregate) (ContainerJudgement, error) {
+	return s.containerJudgements(ctx, envID, agg, true)
+}
+
+// containerJudgements is ContainerJudgements with the live state left out when live is false.
+func (s *Service) containerJudgements(ctx context.Context, envID string, agg envs.Aggregate, live bool) (ContainerJudgement, error) {
 	ws := ContainerWorkloads(agg, s.textFunc(ctx, envID, agg))
-	verdicts, err := s.judge(ctx, envID, ws)
+	verdicts, err := s.judgeWith(ctx, envID, ws, live)
 	if err != nil {
 		return ContainerJudgement{}, err
 	}
@@ -174,7 +234,9 @@ func (s *Service) ContainerJudgements(ctx context.Context, envID string, agg env
 
 // Count is how many things in the environment have an update available: its swarm services, and its
 // containers that are not task containers (a task's update is its service's). It counts verdicts, so a
-// rebuild of a platform nobody runs, a skipped version or an ignored image is not counted (IMG-05).
+// rebuild of a platform nobody runs, a skipped version or an ignored image is not counted (IMG-05). The verdicts are the
+// checks' own, not the live ones: an update that is running or an operation that holds the lock does not make an update vanish
+// from the count.
 func (s *Service) Count(ctx context.Context, envID string) (int, error) {
 	if s.Aggregator == nil {
 		return 0, errors.New("updates: no aggregator to read the containers with")
@@ -189,7 +251,7 @@ func (s *Service) Count(ctx context.Context, envID string) (int, error) {
 		if err != nil && st.FetchedAt.IsZero() {
 			return 0, err
 		}
-		verdicts, err := s.ServiceVerdicts(ctx, envID, st.Read.Services)
+		verdicts, err := s.judgeWith(ctx, envID, s.withPlatforms(ctx, envID, ServiceWorkloads(st.Read.Services)), false)
 		if err != nil {
 			return 0, err
 		}
@@ -199,7 +261,7 @@ func (s *Service) Count(ctx context.Context, envID string) (int, error) {
 			}
 		}
 	}
-	j, err := s.ContainerJudgements(ctx, envID, agg)
+	j, err := s.containerJudgements(ctx, envID, agg, false)
 	if err != nil {
 		return 0, err
 	}

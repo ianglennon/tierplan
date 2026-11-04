@@ -219,6 +219,16 @@ func skipImageUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, envI
 	case updates.StateSkipped:
 		return UpdateHeldBody{Update: updateInfoOf(sv.Verdict, sv.Workload)}, nil // skipped already: the first skip stands
 	case updates.StateUpdateAvailable:
+	case updates.StateBusy, updates.StateUpdating:
+		// Another operation holds the environment: the update is there, but nothing is changed on the environment until that ends.
+		if sv.Verdict.Holder != nil {
+			name := ""
+			if env := httpx.EnvFrom(ctx); env != nil {
+				name = env.Name
+			}
+			return UpdateHeldBody{}, operationLocked(name, *sv.Verdict.Holder)
+		}
+		return UpdateHeldBody{}, httpx.Problem(http.StatusConflict, problemNothingToSkip, "An update of this is running.")
 	default:
 		return UpdateHeldBody{}, httpx.Problem(http.StatusConflict, problemNothingToSkip, "There is no update to skip.")
 	}

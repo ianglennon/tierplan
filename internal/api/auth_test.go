@@ -486,6 +486,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		// Schedules are read in UTC so that a test's expected time does not depend on the zone of the machine.
 		var applier *updates.Applier
 		if updateSvc != nil {
+			updateSvc.Locks, updateSvc.UpdateRuns = f.stackLocks, &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
 			applier = &updates.Applier{
 				Service: updateSvc, Runs: &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}, Locks: f.stackLocks, Jobs: f.jobHub,
 				Aggregator: f.agg, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Audit: f.aud,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -592,5 +593,104 @@ func TestIgnoredNeverCounted(t *testing.T) {
 	}
 	if got := updates.Aggregate([]updates.Verdict{web, api, db}); got.Count != 1 || got.State != updates.StateUpdateAvailable {
 		t.Errorf("stack with one real update = %+v, want it counted alone", got)
+	}
+}
+
+// Updating and Busy (plan 12-16, IMG-05, IMG-06, UI-SPEC): what is happening now overrides what the check found, but only where
+// it is true, and informational states are never turned into Busy.
+func TestJudgeUpdatingAndBusy(t *testing.T) {
+	t.Parallel()
+	moved := &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}
+	same := &updates.Check{Digest: dg('1'), CheckedAt: t0, SuccessAt: t0}
+	failed := &updates.Check{Digest: dg('9'), Error: updates.ReasonRateLimited, CheckedAt: t0, SuccessAt: t0.Add(-time.Minute)}
+	janitor := &stackops.Holder{Kind: stackops.HolderKindJanitor, RunID: "run-1", Started: t0}
+	updateOfWeb := &stackops.Holder{Kind: stackops.HolderKindImageUpdate, Workload: "web", By: "ann", Started: t0}
+	ignoreWeb := updates.Ignores{{EnvID: "env-a", Mode: updates.ModeIgnore, Scope: updates.ScopeWorkload, Kind: "service", Name: "web"}}
+	named := func(name string) updates.Workload {
+		w := held(nil)
+		w.Name = name
+		return w
+	}
+	pinned := held(nil)
+	pinned.Written, pinned.Ref = "acme/app@"+dg('1'), registry.Ref{Domain: "docker.io", Path: "acme/app", Digest: dg('1')}
+
+	for _, tc := range []struct {
+		name   string
+		w      updates.Workload
+		chk    *updates.Check
+		igs    updates.Ignores
+		holder *stackops.Holder
+		job    string
+		state  updates.State
+		jobID  string
+		kind   string
+	}{
+		{name: "an update running for it reads updating, with its job", w: named("web"), chk: moved, job: "job-7", state: updates.StateUpdating, jobID: "job-7"},
+		{name: "updating wins over busy when its own update holds the lock", w: named("web"), chk: moved, holder: updateOfWeb, job: "job-7", state: updates.StateUpdating, jobID: "job-7"},
+		{name: "updating wins even over a check that says it is up to date", w: named("web"), chk: same, job: "job-7", state: updates.StateUpdating, jobID: "job-7"},
+		{name: "the janitor holds the lock: an update that would be offered is busy", w: named("api"), chk: moved, holder: janitor, state: updates.StateBusy, kind: updates.HolderJanitor},
+		{name: "an update of web holds the lock: api is busy with that holder", w: named("api"), chk: moved, holder: updateOfWeb, state: updates.StateBusy, kind: updates.HolderUpdate},
+		{name: "up to date stays up to date under a lock", w: named("api"), chk: same, holder: janitor, state: updates.StateUpToDate},
+		{name: "a failed check stays failed under a lock", w: named("api"), chk: failed, holder: janitor, state: updates.StateCheckFailed},
+		{name: "not checked stays not checked under a lock", w: named("api"), holder: janitor, state: updates.StateNotChecked},
+		{name: "pinned stays pinned under a lock", w: pinned, chk: moved, holder: janitor, state: updates.StatePinned},
+		{name: "ignored stays ignored under a lock", w: named("web"), chk: moved, igs: ignoreWeb, holder: janitor, state: updates.StateIgnored},
+		{name: "no lock and no run changes nothing", w: named("web"), chk: moved, state: updates.StateUpdateAvailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			remote := ""
+			if tc.chk != nil {
+				remote = tc.chk.Digest
+			}
+			got := updates.Judge(updates.JudgeInput{
+				Workload: tc.w, Check: tc.chk, Now: t0, StaleAfter: time.Hour, Ignore: tc.igs.Match(tc.w, remote),
+				Holder: tc.holder, RunningJob: tc.job,
+			})
+			if got.State != tc.state || got.JobID != tc.jobID {
+				t.Fatalf("verdict = %s job %q, want %s job %q", got.State, got.JobID, tc.state, tc.jobID)
+			}
+			switch {
+			case tc.state == updates.StateBusy:
+				if got.Holder == nil || updates.HolderKind(*got.Holder) != tc.kind || got.Holder.Workload != tc.holder.Workload {
+					t.Errorf("holder = %+v, want kind %s of %+v", got.Holder, tc.kind, tc.holder)
+				}
+			case got.Holder != nil:
+				t.Errorf("holder = %+v on a %s verdict, want none", got.Holder, got.State)
+			}
+			if tc.state == updates.StateUpdating && (got.Reason != "" || got.Note != "" || got.Ignore != nil) {
+				t.Errorf("an updating verdict carries %q %q %+v, want none of the old story", got.Reason, got.Note, got.Ignore)
+			}
+			if tc.state == updates.StateBusy && got.RemoteDigest != dg('9') {
+				t.Errorf("a busy verdict keeps the digest it was offered: remote = %q", got.RemoteDigest)
+			}
+		})
+	}
+}
+
+// The kinds of operation a Busy badge names (plan 12-16, UI-SPEC).
+func TestHolderKinds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		h    stackops.Holder
+		want string
+	}{
+		{"the janitor", stackops.Holder{Kind: stackops.HolderKindJanitor, RunID: "r"}, updates.HolderJanitor},
+		{"a roll back", stackops.Holder{Kind: "rollback", StackName: "shop", By: "ann"}, updates.HolderRollback},
+		{"a restore is a roll back", stackops.Holder{Kind: "restore", StackName: "shop", By: "ann"}, updates.HolderRollback},
+		{"an image update", stackops.Holder{Kind: stackops.HolderKindImageUpdate, Workload: "web"}, updates.HolderUpdate},
+		{"a stack's Update images", stackops.Holder{Kind: "update", StackName: "shop", By: "ann"}, updates.HolderUpdate},
+		{"a person's deploy", stackops.Holder{Kind: "deploy", StackName: "shop", By: "ann"}, updates.HolderDeploy},
+		{"a git auto-deploy by poll", stackops.Holder{Kind: "deploy", StackName: "shop", By: "system:gitsync"}, updates.HolderGitDeploy},
+		{"a git auto-deploy for an owner", stackops.Holder{Kind: "deploy", StackName: "shop", By: "system:gitsync:u-1"}, updates.HolderGitDeploy},
+		{"a git auto-deploy by webhook", stackops.Holder{Kind: "deploy", StackName: "shop", By: "system:webhook"}, updates.HolderGitDeploy},
+		{"a stop", stackops.Holder{Kind: "stop", StackName: "shop", By: "ann"}, updates.HolderDeploy},
+		{"a removal", stackops.Holder{Kind: stackops.ModeRemove, StackName: "shop", By: "ann"}, updates.HolderDeploy},
+		{"an adoption", stackops.Holder{Kind: "adopt", StackName: "shop", By: "ann"}, updates.HolderDeploy},
+	} {
+		if got := updates.HolderKind(tc.h); got != tc.want {
+			t.Errorf("%s: kind = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

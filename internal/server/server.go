@@ -951,6 +951,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	updateService.StaleAfter = updateSched.StaleAfter
 	updateService.NextCheck = updateSched.Next
+	// A workload reads updating while an image update of it runs, and busy while another operation holds the environment's lock.
+	updateService.Locks, updateService.UpdateRuns = stackLocks, &updates.RunStore{Q: st.Q, W: st.Write}
 	// An image update is one job under the environment's operation lock, shared with deploys and the janitor; its runs are on
 	// record before the engine is touched.
 	updateApplier := &updates.Applier{
