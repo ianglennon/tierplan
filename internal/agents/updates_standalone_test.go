@@ -52,7 +52,15 @@ func TestStandaloneStackForcedUpdate(t *testing.T) {
 
 	check := func() {
 		t.Helper()
-		if code, body := f.srv.Do(http.MethodPost, base+"/updates/check", nil); code != http.StatusOK {
+		var code int
+		var body []byte
+		// The server lets one person check one environment once in ten seconds (429 too_many_requests): a check made soon
+		// after the last waits for its turn.
+		f.srv.WaitFor("the server to accept a check", time.Minute, func() (bool, string) {
+			code, body = f.srv.Do(http.MethodPost, base+"/updates/check", nil)
+			return code != http.StatusTooManyRequests, string(body)
+		})
+		if code != http.StatusOK {
 			t.Fatalf("POST updates/check = %d %s", code, body)
 		}
 	}

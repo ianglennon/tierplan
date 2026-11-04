@@ -4,10 +4,12 @@
 package api_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +23,12 @@ import (
 // verdicts are is set on the fake.
 
 var errNoRead = errors.New("the environment could not be read")
+
+// fleetWork is what the fake answers Workloads with.
+type fleetWork struct {
+	list []updates.Workload
+	err  error
+}
 
 // fleetVerdicts is what the fake answers EnvVerdicts with.
 type fleetVerdicts struct {
@@ -220,5 +228,281 @@ func TestFleetUpdatesNamesWhatItCouldNotRead(t *testing.T) {
 	}
 	if asked := f.fake.asked(); !slices.Equal(asked, []string{alpha}) {
 		t.Errorf("environments read for the viewer = %v, want only Alpha", asked)
+	}
+}
+
+// fleetCheckSpacing is how long the server makes one person wait between two fleet-wide checks.
+const fleetCheckSpacing = 30 * time.Second
+
+// fleetClock is a clock a test moves by hand, for the fleet routes and the update routes.
+type fleetClock struct{ ns atomic.Int64 }
+
+func newFleetClock() *fleetClock {
+	c := &fleetClock{}
+	c.ns.Store(fleetNow.UnixNano())
+	return c
+}
+
+func (c *fleetClock) now() time.Time { return time.Unix(0, c.ns.Load()).UTC() }
+
+func (c *fleetClock) advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+type fleetCheckResp struct {
+	Checked int `json:"checked"`
+	Updates int `json:"updates"`
+	Failed  int `json:"failed"`
+	Skipped []struct {
+		EnvID   string `json:"envId"`
+		EnvName string `json:"envName"`
+		Reason  string `json:"reason"`
+	} `json:"skipped"`
+}
+
+// checkFleet posts the fleet-wide Check now as the admin (as empty) or the named user.
+func (f *fleetFix) checkFleet(t *testing.T, as, body string) (*envRec, fleetCheckResp) {
+	t.Helper()
+	var rec *envRec
+	if as == "" {
+		rec = f.req(t, http.MethodPost, "/api/fleet/updates/check", body)
+	} else {
+		rec = f.asUser(t, as, http.MethodPost, "/api/fleet/updates/check", body)
+	}
+	var r fleetCheckResp
+	if rec.code == http.StatusOK {
+		if err := json.Unmarshal(rec.body, &r); err != nil {
+			t.Fatalf("decode %s: %v", rec.body, err)
+		}
+	}
+	return rec, r
+}
+
+func TestFleetCheckNowSkipsUnpermitted(t *testing.T) {
+	t.Parallel()
+	f := newFleetFix(t, "Alpha", "Beta", "Gamma", "Delta")
+	alpha, beta, gamma, delta := f.id("Alpha"), f.id("Beta"), f.id("Gamma"), f.id("Delta")
+	clk := newFleetClock()
+	f.fleet.Now = clk.now
+	for _, id := range []string{alpha, beta} {
+		f.fake.online(id)
+	}
+	f.fake.down(gamma, envs.StateOffline)
+	f.fake.work[alpha] = fleetWork{list: []updates.Workload{{Kind: "container", ID: "c1", Name: "cache"}}}
+	f.fake.work[gamma] = fleetWork{err: errNoRead}
+	f.fake.checkRes[alpha] = updates.CheckResult{Checked: 2, Failed: 1}
+	f.fake.tally[alpha] = fleetTally{t: updates.Tally{Available: 3}}
+	// Olive may check Alpha and Gamma, only look at Beta, and knows nothing of Delta.
+	f.addEnvUser(t, "olive", alpha, "operator")
+	f.addEnvRole(t, "olive", gamma, "operator")
+	f.addEnvRole(t, "olive", beta, "viewer")
+	f.rebuild(t)
+
+	skipped := func(r fleetCheckResp) []string {
+		var out []string
+		for _, s := range r.Skipped {
+			out = append(out, s.EnvName+":"+s.Reason)
+		}
+		return out
+	}
+	rec, got := f.checkFleet(t, "olive", `{"envIds":["`+alpha+`","`+beta+`","`+gamma+`","`+delta+`"]}`)
+	if rec.code != http.StatusOK {
+		t.Fatalf("fleet check as an Operator = %d %s", rec.code, rec.body)
+	}
+	if got.Checked != 2 || got.Failed != 1 || got.Updates != 3 {
+		t.Errorf("answer = %+v, want 2 checked, 1 failed, 3 updates", got)
+	}
+	if want := []string{"Beta:no_permission", "Gamma:offline"}; !slices.Equal(skipped(got), want) {
+		t.Errorf("skipped = %v, want %v: Delta is not hers to know of", skipped(got), want)
+	}
+	if !slices.Equal(f.fake.checked[0], []string{alpha}) || len(f.fake.checked) != 1 {
+		t.Errorf("environments checked = %v, want one pass over Alpha only", f.fake.checked)
+	}
+	for _, id := range f.fake.asked() {
+		if id == delta {
+			t.Errorf("Delta was read for a person who may not read it")
+		}
+	}
+
+	// With no environments named, every readable one she may check is checked.
+	clk.advance(fleetCheckSpacing)
+	rec, got = f.checkFleet(t, "olive", "")
+	if rec.code != http.StatusOK || got.Checked != 2 || len(got.Skipped) != 2 {
+		t.Errorf("fleet check with no body = %d %s, want Alpha checked and Beta and Gamma skipped", rec.code, rec.body)
+	}
+	if !slices.Equal(f.fake.checked[1], []string{alpha}) {
+		t.Errorf("second pass = %v, want Alpha only", f.fake.checked[1])
+	}
+
+	// An administrator checks what is reachable: Alpha and Beta; Gamma is offline and Delta has nothing to read.
+	clk.advance(fleetCheckSpacing)
+	f.fake.online(delta)
+	rec, got = f.checkFleet(t, "", "")
+	if rec.code != http.StatusOK || len(got.Skipped) != 1 || got.Skipped[0].EnvName != "Gamma" || got.Skipped[0].Reason != "offline" {
+		t.Errorf("admin fleet check = %d %s, want only Gamma skipped, offline", rec.code, rec.body)
+	}
+	if !slices.Equal(f.fake.checked[2], []string{alpha, beta, delta}) {
+		t.Errorf("admin pass = %v, want Alpha, Beta and Delta", f.fake.checked[2])
+	}
+	if rec.body != nil && !bytes.Contains(rec.body, []byte(`"skipped"`)) {
+		t.Errorf("answer %s has no skipped list", rec.body)
+	}
+}
+
+func TestFleetCheckNowRateLimited(t *testing.T) {
+	t.Parallel()
+	f := newFleetFix(t, "Alpha")
+	alpha := f.id("Alpha")
+	clk := newFleetClock()
+	f.fleet.Now = clk.now
+	f.fake.online(alpha)
+	f.addEnvUser(t, "olive", alpha, "operator")
+	f.rebuild(t)
+
+	if rec, _ := f.checkFleet(t, "olive", ""); rec.code != http.StatusOK {
+		t.Fatalf("first check = %d %s", rec.code, rec.body)
+	}
+	clk.advance(fleetCheckSpacing - time.Second)
+	if rec, _ := f.checkFleet(t, "olive", ""); rec.code != http.StatusTooManyRequests || rec.ptyp != "too_many_requests" {
+		t.Errorf("second check within 30 s = %d %s (%q), want 429 too_many_requests", rec.code, rec.body, rec.ptyp)
+	}
+	// Someone else is not held back by her check.
+	if rec, _ := f.checkFleet(t, "", ""); rec.code != http.StatusOK {
+		t.Errorf("another person's check = %d %s, want 200", rec.code, rec.body)
+	}
+	clk.advance(time.Second)
+	if rec, _ := f.checkFleet(t, "olive", ""); rec.code != http.StatusOK {
+		t.Errorf("check after 30 s = %d %s, want 200", rec.code, rec.body)
+	}
+	if n := len(f.fake.checked); n != 3 {
+		t.Errorf("%d passes over the registries, want 3: the refused one asked nobody", n)
+	}
+}
+
+func TestFleetCoverageStates(t *testing.T) {
+	t.Parallel()
+	at := func(h time.Duration) time.Time { return fleetNow.Add(-h * time.Hour) }
+	run := func(t *testing.T, cov updates.Coverage, list ...updates.WorkloadVerdict) fleetUpdatesResp {
+		t.Helper()
+		f := newFleetFix(t, "Alpha")
+		f.fake.online(f.id("Alpha"))
+		f.fake.verdicts[f.id("Alpha")] = fleetVerdicts{list: list, cov: cov}
+		f.rebuild(t)
+		return f.updatesList(t, "", "")
+	}
+
+	t.Run("everything checked and nothing newer", func(t *testing.T) {
+		t.Parallel()
+		got := run(t, updates.Coverage{Checkable: 2, Checked: 2, LastCheckedAt: at(1)},
+			verdictOf(t, "container", "a", "", updates.StateUpToDate), verdictOf(t, "container", "b", "", updates.StateUpToDate))
+		c := got.Coverage
+		if c.Checked != c.Checkable || c.Checkable != 2 || c.Failed != 0 || c.NeverChecked != 0 || c.Skipped != 0 || got.Counts.All != 0 || len(got.Groups) != 0 {
+			t.Errorf("coverage %+v counts %+v groups %d, want 2 of 2 checked, nothing to list", c, got.Counts, len(got.Groups))
+		}
+		if c.LastCheckedAt == "" || c.FirstCheckAt != "" || c.Environments != 1 {
+			t.Errorf("coverage = %+v, want a last check, no first check pending, one environment", c)
+		}
+	})
+	t.Run("some checks failed", func(t *testing.T) {
+		t.Parallel()
+		got := run(t, updates.Coverage{Checkable: 2, Checked: 2, Failed: 1, LastCheckedAt: at(1)},
+			verdictOf(t, "container", "a", "", updates.StateUpToDate), failedVerdict(t, "container", "b"))
+		if got.Coverage.Failed != 1 || got.Counts.Updates != 0 || got.Counts.Problems != 1 || len(got.Groups) != 0 {
+			t.Errorf("coverage %+v counts %+v groups %d, want 1 failed, no updates, the failure under Problems and not listed under Updates", got.Coverage, got.Counts, len(got.Groups))
+		}
+	})
+	t.Run("some never checked", func(t *testing.T) {
+		t.Parallel()
+		next := fleetNow.Add(3 * time.Hour)
+		got := run(t, updates.Coverage{Checkable: 3, Checked: 1, NeverChecked: 2, LastCheckedAt: at(5), NextCheckAt: &next},
+			verdictOf(t, "container", "a", "", updates.StateUpToDate),
+			verdictOf(t, "container", "b", "", updates.StateNotChecked), verdictOf(t, "container", "c", "", updates.StateNotChecked))
+		if got.Coverage.NeverChecked != 2 || got.Coverage.FirstCheckAt != next.Format(time.RFC3339) {
+			t.Errorf("coverage = %+v, want 2 never checked and the first check at %s", got.Coverage, next.Format(time.RFC3339))
+		}
+	})
+	t.Run("only skipped and ignored remain", func(t *testing.T) {
+		t.Parallel()
+		got := run(t, updates.Coverage{Checkable: 3, Checked: 3, LastCheckedAt: at(1)},
+			verdictOf(t, "container", "a", "", updates.StateSkipped), verdictOf(t, "container", "b", "", updates.StateIgnored),
+			verdictOf(t, "container", "c", "", updates.StateUpToDate))
+		if got.Coverage.Skipped != 2 || got.Counts.Updates != 0 || got.Counts.Ignored != 2 || len(got.Groups) != 0 {
+			t.Errorf("coverage %+v counts %+v, want 2 skipped or ignored and nothing under Updates", got.Coverage, got.Counts)
+		}
+	})
+	t.Run("no environment is read", func(t *testing.T) {
+		t.Parallel()
+		f := newFleetFix(t, "Alpha")
+		f.fake.down(f.id("Alpha"), envs.StateOffline)
+		f.rebuild(t)
+		got := f.updatesList(t, "", "")
+		if got.Coverage.Environments != 0 || len(got.NotIncluded) != 1 {
+			t.Errorf("coverage %+v notIncluded %+v, want no environment included and Alpha named", got.Coverage, got.NotIncluded)
+		}
+	})
+}
+
+func TestFleetUpdatesOrderStable(t *testing.T) {
+	t.Parallel()
+	f := newFleetFix(t, "Zulu", "Alpha", "Mike", "Broken")
+	for _, n := range []string{"Zulu", "Alpha", "Mike", "Broken"} {
+		f.fake.online(f.id(n))
+	}
+	// The same names in every environment, a service and a container of one name in each.
+	same := func() []updates.WorkloadVerdict {
+		return []updates.WorkloadVerdict{
+			verdictOf(t, "service", "web", "", updates.StateUpdateAvailable),
+			verdictOf(t, "container", "web", "", updates.StateUpdateAvailable),
+			verdictOf(t, "container", "api", "", updates.StateUpdateAvailable),
+		}
+	}
+	for _, n := range []string{"Zulu", "Alpha", "Mike"} {
+		f.fake.verdicts[f.id(n)] = fleetVerdicts{list: same()}
+	}
+	f.fake.verdicts[f.id("Broken")] = fleetVerdicts{list: append(same(), failedVerdict(t, "container", "zz"))}
+	f.rebuild(t)
+
+	first := f.fleetGet(t, "", "/api/fleet/updates")
+	second := f.fleetGet(t, "", "/api/fleet/updates")
+	if first.code != http.StatusOK || !bytes.Equal(first.body, second.body) {
+		t.Fatalf("two calls with the same input differ:\n%s\n%s", first.body, second.body)
+	}
+	got := f.updatesList(t, "", "")
+	var groups []string
+	for _, g := range got.Groups {
+		groups = append(groups, g.EnvName)
+	}
+	if want := []string{"Broken", "Alpha", "Mike", "Zulu"}; !slices.Equal(groups, want) {
+		t.Errorf("groups = %v, want %v: the failed check first, then by name", groups, want)
+	}
+	var items []string
+	for _, it := range got.Groups[1].Items {
+		items = append(items, it.Name+"/"+it.Kind)
+	}
+	if want := []string{"api/container", "web/container", "web/service"}; !slices.Equal(items, want) {
+		t.Errorf("items = %v, want %v: by name, then kind", items, want)
+	}
+}
+
+func TestEnvCheckNowRateLimited(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('a')}})
+	f, e := updatesEnv(t, heads, updatedService("web", 'a'))
+
+	if rec := f.checkNowSoon(t, e); rec.code != http.StatusOK {
+		t.Fatalf("first check = %d %s", rec.code, rec.body)
+	}
+	f.clk.t = f.clk.t.Add(envCheckSpacing - time.Second)
+	if rec := f.checkNowSoon(t, e); rec.code != http.StatusTooManyRequests || rec.ptyp != "too_many_requests" {
+		t.Errorf("second check within 10 s = %d %s (%q), want 429 too_many_requests", rec.code, rec.body, rec.ptyp)
+	}
+	if got := heads.requests(); got != 1 {
+		t.Errorf("the refused check asked the registry: %d requests, want 1", got)
+	}
+	// Another person is not held back by it.
+	if rec := f.checkNowAs(t, e, "olive", "operator"); rec.Code != http.StatusOK {
+		t.Errorf("another person's check = %d %s, want 200", rec.Code, rec.Body)
+	}
+	f.clk.t = f.clk.t.Add(time.Second)
+	if rec := f.checkNowSoon(t, e); rec.code != http.StatusOK {
+		t.Errorf("check after 10 s = %d %s, want 200", rec.code, rec.body)
 	}
 }

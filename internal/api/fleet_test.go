@@ -53,6 +53,10 @@ type fleetFake struct {
 	tally    map[string]fleetTally
 	space    map[string]fleetSpace
 	verdicts map[string]fleetVerdicts
+	work     map[string]fleetWork
+	// checked is the environments each CheckFleet was asked about, in order; checkRes is what it answers.
+	checked  [][]string
+	checkRes map[string]updates.CheckResult
 	// wait, when set, is called by every Snapshot before it answers.
 	wait         func(ctx context.Context) error
 	active, peak int
@@ -61,7 +65,7 @@ type fleetFake struct {
 func newFleetFake() *fleetFake {
 	return &fleetFake{
 		read: map[string]int{}, snap: map[string]fleetSnap{}, swarm: map[string]bool{}, state: map[string]envs.ClusterState{},
-		policies: map[string]*envs.PolicyCache{}, tally: map[string]fleetTally{}, space: map[string]fleetSpace{}, verdicts: map[string]fleetVerdicts{},
+		policies: map[string]*envs.PolicyCache{}, tally: map[string]fleetTally{}, space: map[string]fleetSpace{}, verdicts: map[string]fleetVerdicts{}, work: map[string]fleetWork{}, checkRes: map[string]updates.CheckResult{},
 	}
 }
 
@@ -135,6 +139,28 @@ func (f *fleetFake) EnvVerdicts(_ context.Context, id string) ([]updates.Workloa
 	f.touch(id)
 	v := f.verdicts[id]
 	return v.list, v.cov, v.err
+}
+
+func (f *fleetFake) Workloads(_ context.Context, id string) ([]updates.Workload, error) {
+	f.touch(id)
+	w := f.work[id]
+	return w.list, w.err
+}
+
+func (f *fleetFake) CheckFleet(_ context.Context, workloads map[string][]updates.Workload) (map[string]updates.CheckResult, error) {
+	ids := make([]string, 0, len(workloads))
+	for id := range workloads {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	f.mu.Lock()
+	f.checked = append(f.checked, ids)
+	f.mu.Unlock()
+	out := map[string]updates.CheckResult{}
+	for _, id := range ids {
+		out[id] = f.checkRes[id]
+	}
+	return out, nil
 }
 
 func (f *fleetFake) Read(_ context.Context, id string) (envs.AddressSpace, error) {

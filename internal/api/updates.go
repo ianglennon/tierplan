@@ -28,6 +28,9 @@ const (
 	checkNowTimeout = 60 * time.Second
 
 	problemCheckTimedOut = "check_timed_out"
+
+	// envCheckEvery is how often one person may check one environment's images (T-12-86).
+	envCheckEvery = 10 * time.Second
 )
 
 // UpdatesDeps are the dependencies of the image update routes.
@@ -188,19 +191,26 @@ type CheckUpdatesOutput struct {
 
 // RegisterUpdates registers the image update routes.
 func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
+	// One check of an environment per person every ten seconds: a button pressed twice is one check, and a script cannot
+	// turn the route into a stream of registry requests.
+	limiter := &intervalLimiter{every: envCheckEvery}
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkEnvironmentUpdates", Method: http.MethodPost, Path: "/api/env/{envId}/updates/check",
 		Summary: "Check the environment's images for updates now",
 		Description: "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. " +
 			"Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; " +
 			"a check that takes longer is 504 check_timed_out, and what it had learned stays stored. " +
-			"The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.",
+			"The services and containers lists carry the outcome for each. One request per 10 seconds per caller and environment: another is 429 " + problemTooManyRequests + ". " +
+			"Needs updates.check (Operator) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermUpdatesCheck, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *EnvironmentPathInput) (*CheckUpdatesOutput, error) {
 			env := httpx.EnvFrom(ctx)
 			if env == nil {
 				return nil, huma.Error500InternalServerError("internal error")
+			}
+			if p := httpx.PrincipalFrom(ctx); p != nil && !limiter.allow(p.ID+"\x00"+env.ID, d.now()) {
+				return nil, httpx.Problem(http.StatusTooManyRequests, problemTooManyRequests, "Too many checks. Wait 10 seconds and try again.")
 			}
 			body, err := checkEnvironmentUpdates(ctx, d, env.ID)
 			if err != nil {

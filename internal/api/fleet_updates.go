@@ -6,9 +6,11 @@ package api
 import (
 	"cmp"
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -22,6 +24,46 @@ import (
 // The fleet's pending image updates (plan 12-28, ENV-10, IMG-04, IMG-05, D-17): every update the
 // caller may see across the environments they may read, grouped by environment, with the counts and
 // the coverage the Updates tab needs to word its empty states honestly.
+
+const (
+	// fleetCheckEvery is how often one person may check the whole fleet (UI-SPEC interpretation 11, T-12-86).
+	fleetCheckEvery = 30 * time.Second
+
+	problemTooManyRequests = "too_many_requests"
+
+	fleetSkipNoPermission = "no_permission"
+	fleetSkipOffline      = "offline"
+)
+
+// intervalLimiter lets each key through once in every interval. The clock is given by the caller, so a test needs no wait.
+type intervalLimiter struct {
+	every time.Duration
+	mu    sync.Mutex
+	last  map[string]time.Time
+}
+
+// allow reports whether key may go ahead at now, and counts it if so. A key that was let through less than the interval ago
+// is refused. A clock that went back lets the key through.
+func (l *intervalLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last == nil {
+		l.last = map[string]time.Time{}
+	}
+	if at, ok := l.last[key]; ok && !now.Before(at) && now.Sub(at) < l.every {
+		return false
+	}
+	// Forget the keys that are free again, so the map holds only the people who checked lately.
+	if len(l.last) >= 256 {
+		for k, at := range l.last {
+			if now.Sub(at) >= l.every || now.Before(at) {
+				delete(l.last, k)
+			}
+		}
+	}
+	l.last[key] = now
+	return true
+}
 
 // The values of the show query.
 const (
@@ -246,6 +288,7 @@ func boolRank(b bool) int {
 
 // registerFleetUpdates registers the fleet's update routes on r.
 func registerFleetUpdates(r *httpx.Router, d FleetDeps, fail func(what string, err error) error) {
+	registerFleetCheck(r, d, fail)
 	httpx.Register(r, huma.Operation{
 		OperationID: "listFleetUpdates",
 		Method:      http.MethodGet,
@@ -273,5 +316,134 @@ func registerFleetUpdates(r *httpx.Router, d FleetDeps, fail func(what string, e
 		body := fleetUpdates(results, cmp.Or(in.Show, fleetShowUpdates))
 		body.NotIncluded, body.ReadAt = fleetNotIncluded(results), rfc3339(d.now())
 		return &FleetUpdatesOutput{CacheControl: "no-store", Body: body}, nil
+	})
+}
+
+// FleetCheckSkipped is an environment Check now did not check.
+type FleetCheckSkipped struct {
+	EnvID   string `json:"envId" doc:"The environment's ID"`
+	EnvName string `json:"envName" doc:"The environment's name"`
+	Reason  string `json:"reason" enum:"no_permission,offline" doc:"no_permission: the caller does not hold updates.check on it. offline: it could not be read, so there was nothing to check"`
+}
+
+// FleetCheckRequest is the body of POST /api/fleet/updates/check.
+type FleetCheckRequest struct {
+	EnvIDs []string `json:"envIds,omitempty" maxItems:"100" doc:"The environments to check. Empty or left out means every environment the caller may read. An ID the caller may not read is ignored, as if it were not given"`
+}
+
+// FleetCheckInput is the request of POST /api/fleet/updates/check. The body is optional.
+type FleetCheckInput struct {
+	Body *FleetCheckRequest
+}
+
+// FleetCheckBody is the answer of POST /api/fleet/updates/check.
+type FleetCheckBody struct {
+	Checked int                 `json:"checked" minimum:"0" doc:"How many distinct images (registry, repository and tag) were asked about"`
+	Updates int                 `json:"updates" minimum:"0" doc:"How many workloads of the environments that were checked have an update available now, judged platform by platform"`
+	Failed  int                 `json:"failed" minimum:"0" doc:"How many images could not be checked; the Updates tab says why for each"`
+	Skipped []FleetCheckSkipped `json:"skipped" doc:"The environments that were not checked, and why, by name"`
+}
+
+// FleetCheckOutput wraps FleetCheckBody for huma.
+type FleetCheckOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         FleetCheckBody
+}
+
+// canCheckUpdates reports whether the grants listed for each environment include checking its images.
+func canCheckUpdates(perEnv map[string][]rbac.Perm, id string) bool {
+	return slices.Contains(perEnv[id], rbac.PermUpdatesCheck) || slices.Contains(perEnv[rbac.AllEnvironments], rbac.PermUpdatesCheck)
+}
+
+// registerFleetCheck registers the fleet-wide Check now on r.
+func registerFleetCheck(r *httpx.Router, d FleetDeps, fail func(what string, err error) error) {
+	limiter := &intervalLimiter{every: fleetCheckEvery}
+	httpx.Register(r, huma.Operation{
+		OperationID: "checkFleetUpdates",
+		Method:      http.MethodPost,
+		Path:        "/api/fleet/updates/check",
+		Summary:     "Check the images of the environments given, or of all the caller may read, for updates now",
+		Description: "Asks the registries what each image tag of the chosen environments points at now, one request for each distinct image across all of them, and stores the answers. " +
+			"Only environments the caller holds updates.check on are checked; the others, and any that cannot be reached, are skipped and named in skipped. " +
+			"With no environments given, every environment the caller may read is considered. Answers within 60 seconds; a check that takes longer is 504 check_timed_out, and what it learned stays stored. " +
+			"One request per 30 seconds per caller: another is 429 " + problemTooManyRequests + ".",
+		Tags: []string{"fleet"},
+	}, rbac.SelfService, func(ctx context.Context, in *FleetCheckInput) (*FleetCheckOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Updates == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available on this server.")
+		}
+		if !limiter.allow(p.ID, d.now()) {
+			return nil, httpx.Problem(http.StatusTooManyRequests, problemTooManyRequests, "Too many checks. Wait 30 seconds and try again.")
+		}
+		var named []string
+		if in.Body != nil {
+			named = in.Body.EnvIDs
+		}
+		list, perEnv, err := fleetReadableWith(ctx, d, p, named)
+		if err != nil {
+			return nil, fail("read the fleet", err)
+		}
+		body := FleetCheckBody{Skipped: []FleetCheckSkipped{}}
+		var permitted []envs.Environment
+		for _, e := range list {
+			if canCheckUpdates(perEnv, e.ID) {
+				permitted = append(permitted, e)
+			} else {
+				body.Skipped = append(body.Skipped, FleetCheckSkipped{EnvID: e.ID, EnvName: e.Name, Reason: fleetSkipNoPermission})
+			}
+		}
+		read := fleetReadEach(ctx, d, permitted, func(ctx context.Context, env envs.Environment) ([]updates.Workload, int, error) {
+			ws, err := d.Updates.Workloads(ctx, env.ID)
+			return ws, 0, err
+		})
+		workloads := map[string][]updates.Workload{}
+		var reachable []envs.Environment
+		for _, r := range read {
+			if r.Err != nil {
+				body.Skipped = append(body.Skipped, FleetCheckSkipped{EnvID: r.Env.ID, EnvName: r.Env.Name, Reason: fleetSkipOffline})
+				continue
+			}
+			workloads[r.Env.ID] = r.Val
+			reachable = append(reachable, r.Env)
+		}
+		slices.SortFunc(body.Skipped, func(a, b FleetCheckSkipped) int {
+			return cmp.Or(strings.Compare(a.EnvName, b.EnvName), strings.Compare(a.EnvID, b.EnvID))
+		})
+		if len(reachable) == 0 {
+			return &FleetCheckOutput{CacheControl: "no-store", Body: body}, nil
+		}
+		cctx, cancel := context.WithTimeout(ctx, checkNowTimeout)
+		defer cancel()
+		results, err := d.Updates.CheckFleet(cctx, workloads)
+		switch {
+		case err == nil:
+		case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+			return nil, httpx.Problem(http.StatusGatewayTimeout, problemCheckTimedOut, "The check took longer than 60 seconds. What it learned is kept; check again.")
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return nil, httpx.Problem(http.StatusServiceUnavailable, "", "The check was cut short.")
+		default:
+			return nil, fail("check the fleet's images", err)
+		}
+		for _, res := range results {
+			body.Checked += res.Checked
+			body.Failed += res.Failed
+		}
+		// CheckResult.Updates counts every workload whose digest differs from its tag's, which a rebuild of a platform nobody
+		// runs does too. The count shown is the one the verdicts give.
+		for _, t := range fleetReadEach(cctx, d, reachable, func(ctx context.Context, env envs.Environment) (updates.Tally, int, error) {
+			t, err := d.Updates.Tally(ctx, env.ID)
+			return t, 0, err
+		}) {
+			if t.Err == nil {
+				body.Updates += t.Val.Available
+			} else {
+				d.Log.Warn("could not judge the images to count their updates", "environment", t.Env.ID, "error", t.Err)
+			}
+		}
+		return &FleetCheckOutput{CacheControl: "no-store", Body: body}, nil
 	})
 }

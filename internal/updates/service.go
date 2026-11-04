@@ -663,3 +663,16 @@ func (s *Service) CheckNow(ctx context.Context, envID string) (CheckResult, erro
 	}
 	return s.Checker.CheckEnv(ctx, envID, ws)
 }
+
+// CheckFleet asks the registries about the images of the given workloads of several environments now, as a person asked for
+// it, and stores the answers: one request for each distinct image across all of them, and a key checked a moment ago by someone
+// else is joined, not asked again. The result holds one CheckResult for each environment named. The workloads are
+// the ones Workloads gives, keyed by environment ID.
+func (s *Service) CheckFleet(ctx context.Context, workloads map[string][]Workload) (map[string]CheckResult, error) {
+	ids := make([]string, 0, len(workloads))
+	for id := range workloads {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return s.Checker.CheckFleet(ctx, ids, workloads, true)
+}

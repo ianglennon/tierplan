@@ -5065,6 +5065,90 @@
         ],
         "type": "object"
       },
+      "FleetCheckBody": {
+        "additionalProperties": false,
+        "properties": {
+          "checked": {
+            "description": "How many distinct images (registry, repository and tag) were asked about",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "description": "How many images could not be checked; the Updates tab says why for each",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "The environments that were not checked, and why, by name",
+            "items": {
+              "$ref": "#/components/schemas/FleetCheckSkipped"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "updates": {
+            "description": "How many workloads of the environments that were checked have an update available now, judged platform by platform",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checked",
+          "updates",
+          "failed",
+          "skipped"
+        ],
+        "type": "object"
+      },
+      "FleetCheckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "envIds": {
+            "description": "The environments to check. Empty or left out means every environment the caller may read. An ID the caller may not read is ignored, as if it were not given",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FleetCheckSkipped": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name",
+            "type": "string"
+          },
+          "reason": {
+            "description": "no_permission: the caller does not hold updates.check on it. offline: it could not be read, so there was nothing to check",
+            "enum": [
+              "no_permission",
+              "offline"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "reason"
+        ],
+        "type": "object"
+      },
       "FleetEnvironmentsTile": {
         "additionalProperties": false,
         "properties": {
@@ -37182,7 +37266,7 @@
     },
     "/api/env/{envId}/updates/check": {
       "post": {
-        "description": "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.",
+        "description": "Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. One request per 10 seconds per caller and environment: another is 429 too_many_requests. Needs updates.check (Operator) on the environment.",
         "operationId": "checkEnvironmentUpdates",
         "parameters": [
           {
@@ -38766,6 +38850,54 @@
           }
         },
         "summary": "List the pending image updates across the environments the caller may read",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/updates/check": {
+      "post": {
+        "description": "Asks the registries what each image tag of the chosen environments points at now, one request for each distinct image across all of them, and stores the answers. Only environments the caller holds updates.check on are checked; the others, and any that cannot be reached, are skipped and named in skipped. With no environments given, every environment the caller may read is considered. Answers within 60 seconds; a check that takes longer is 504 check_timed_out, and what it learned stays stored. One request per 30 seconds per caller: another is 429 too_many_requests.",
+        "operationId": "checkFleetUpdates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetCheckRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetCheckBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check the images of the environments given, or of all the caller may read, for updates now",
         "tags": [
           "fleet"
         ]

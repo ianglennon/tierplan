@@ -71,7 +71,14 @@ func (f *swarmFix) waitUpdateState(t *testing.T, name, want string, d time.Durat
 // asked about and how many could not be read.
 func (f *swarmFix) checkNow(t *testing.T) (checked, failed int) {
 	t.Helper()
-	code, body := f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/updates/check", nil)
+	var code int
+	var body []byte
+	// The server lets one person check one environment once in ten seconds (429 too_many_requests): a check made soon after
+	// the last waits for its turn.
+	f.srv.WaitFor("the server to accept a check", time.Minute, func() (bool, string) {
+		code, body = f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/updates/check", nil)
+		return code != http.StatusTooManyRequests, string(body)
+	})
 	var res struct {
 		Checked int `json:"checked"`
 		Failed  int `json:"failed"`

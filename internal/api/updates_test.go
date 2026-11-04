@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/regclient/regclient/types/errs"
 
@@ -140,7 +141,19 @@ func updateOf(t *testing.T, list updatedList, name string) *updateInfo {
 	return nil
 }
 
+// envCheckSpacing is how long the server makes one person wait between two checks of one environment.
+const envCheckSpacing = 10 * time.Second
+
+// checkNow posts to the update check of e as the fixture's administrator. It moves the fixture's clock past the spacing the server
+// keeps between checks first, so a test may check as often as it needs; checkNowSoon does not.
 func (f *envFix) checkNow(t *testing.T, e envBody) *envRec {
+	t.Helper()
+	f.clk.t = f.clk.t.Add(envCheckSpacing)
+	return f.checkNowSoon(t, e)
+}
+
+// checkNowSoon is checkNow without moving the clock: a check made soon after the last is refused.
+func (f *envFix) checkNowSoon(t *testing.T, e envBody) *envRec {
 	t.Helper()
 	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/updates/check", "")
 }

@@ -69,6 +69,10 @@ type FleetUpdates interface {
 	Tally(ctx context.Context, envID string) (updates.Tally, error)
 	// EnvVerdicts judges every checkable workload of an environment and says how far the checks reach.
 	EnvVerdicts(ctx context.Context, envID string) ([]updates.WorkloadVerdict, updates.Coverage, error)
+	// Workloads are what a check of an environment asks the registries about.
+	Workloads(ctx context.Context, envID string) ([]updates.Workload, error)
+	// CheckFleet checks the workloads of several environments now, forced.
+	CheckFleet(ctx context.Context, workloads map[string][]updates.Workload) (map[string]updates.CheckResult, error)
 }
 
 // FleetAddresses reads an environment's address space (envs.AddressSpaces).
@@ -208,13 +212,19 @@ type fleetResult[T any] struct {
 // fleetReadable is the environments the caller may read, in the order the registry lists them,
 // narrowed to filter when it is not empty. An ID in filter that is not readable is ignored.
 func fleetReadable(ctx context.Context, d FleetDeps, p *rbac.Principal, filter []string) ([]envs.Environment, error) {
+	list, _, err := fleetReadableWith(ctx, d, p, filter)
+	return list, err
+}
+
+// fleetReadableWith is fleetReadable with the permissions it judged them by, for a route that needs another one of the caller.
+func fleetReadableWith(ctx context.Context, d FleetDeps, p *rbac.Principal, filter []string) ([]envs.Environment, map[string][]rbac.Perm, error) {
 	_, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
 	if err != nil {
-		return nil, fmt.Errorf("effective permissions: %w", err)
+		return nil, nil, fmt.Errorf("effective permissions: %w", err)
 	}
 	all, err := d.Envs.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list environments: %w", err)
+		return nil, nil, fmt.Errorf("list environments: %w", err)
 	}
 	out := make([]envs.Environment, 0, len(all))
 	for _, e := range all {
@@ -226,7 +236,7 @@ func fleetReadable(ctx context.Context, d FleetDeps, p *rbac.Principal, filter [
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out, perEnv, nil
 }
 
 // fleetFanOut reads every environment the caller may read (envFilter narrows them), at most
@@ -238,6 +248,11 @@ func fleetFanOut[T any](ctx context.Context, d FleetDeps, p *rbac.Principal, env
 	if err != nil {
 		return nil, err
 	}
+	return fleetReadEach(ctx, d, list, read), nil
+}
+
+// fleetReadEach is fleetFanOut over environments already judged readable.
+func fleetReadEach[T any](ctx context.Context, d FleetDeps, list []envs.Environment, read func(ctx context.Context, env envs.Environment) (T, int, error)) []fleetResult[T] {
 	results := make([]fleetResult[T], len(list))
 	var g errgroup.Group
 	g.SetLimit(fleetParallel)
@@ -256,7 +271,7 @@ func fleetFanOut[T any](ctx context.Context, d FleetDeps, p *rbac.Principal, env
 		})
 	}
 	_ = g.Wait()
-	return results, nil
+	return results
 }
 
 // fleetReason is why a read failed, in the words of the Overview.

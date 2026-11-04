@@ -3479,7 +3479,7 @@ export interface paths {
         put?: never;
         /**
          * Check the environment's images for updates now
-         * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. Needs updates.check (Operator) on the environment.
+         * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. One request per 10 seconds per caller and environment: another is 429 too_many_requests. Needs updates.check (Operator) on the environment.
          */
         post: operations["checkEnvironmentUpdates"];
         delete?: never;
@@ -3926,6 +3926,26 @@ export interface paths {
         get: operations["listFleetUpdates"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/updates/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the images of the environments given, or of all the caller may read, for updates now
+         * @description Asks the registries what each image tag of the chosen environments points at now, one request for each distinct image across all of them, and stores the answers. Only environments the caller holds updates.check on are checked; the others, and any that cannot be reached, are skipped and named in skipped. With no environments given, every environment the caller may read is considered. Answers within 60 seconds; a check that takes longer is 504 check_timed_out, and what it learned stays stored. One request per 30 seconds per caller: another is 429 too_many_requests.
+         */
+        post: operations["checkFleetUpdates"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7504,6 +7524,40 @@ export interface components {
             envId: string;
             /** @description Its name */
             envName: string;
+        };
+        FleetCheckBody: {
+            /**
+             * Format: int64
+             * @description How many distinct images (registry, repository and tag) were asked about
+             */
+            checked: number;
+            /**
+             * Format: int64
+             * @description How many images could not be checked; the Updates tab says why for each
+             */
+            failed: number;
+            /** @description The environments that were not checked, and why, by name */
+            skipped: components["schemas"]["FleetCheckSkipped"][] | null;
+            /**
+             * Format: int64
+             * @description How many workloads of the environments that were checked have an update available now, judged platform by platform
+             */
+            updates: number;
+        };
+        FleetCheckRequest: {
+            /** @description The environments to check. Empty or left out means every environment the caller may read. An ID the caller may not read is ignored, as if it were not given */
+            envIds?: string[] | null;
+        };
+        FleetCheckSkipped: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /**
+             * @description no_permission: the caller does not hold updates.check on it. offline: it could not be read, so there was nothing to check
+             * @enum {string}
+             */
+            reason: "no_permission" | "offline";
         };
         FleetEnvironmentsTile: {
             /**
@@ -23618,6 +23672,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetUpdatesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkFleetUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FleetCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetCheckBody"];
                 };
             };
             /** @description Error */
