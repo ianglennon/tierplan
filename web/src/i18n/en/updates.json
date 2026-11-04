@@ -91,6 +91,98 @@
         "skipped": "The new version of each service that can be checked was skipped. A newer version will show again.",
         "ignored": "Updates are ignored for the services of this stack that can be checked."
       }
+    },
+    "schedule": {
+      "run": "Check",
+      "at": "At",
+      "on": "On",
+      "cron": "Cron expression",
+      "cronPlaceholder": "0 3 * * *",
+      "helper": "Server time ({{timezone}}). The start is spread out a little per environment, and identical images are checked once for the whole fleet.",
+      "presets": {
+        "hourly": "Hourly",
+        "every_6h": "Every 6 hours",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "custom": "Custom (cron)"
+      },
+      "weekdays": {
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday",
+        "0": "Sunday"
+      },
+      "checking": "Checking the schedule…",
+      "nextRuns": "Next checks: {{times}}.",
+      "invalid": "Enter a cron expression like 0 3 * * * (minute hour day month weekday).",
+      "tooFrequent": "Checks can be at most once an hour.",
+      "timeMissing": "Pick a time of day."
+    },
+    "checks": {
+      "title": "Image update checks",
+      "caption": "How often TierPlan looks for newer versions of the images this environment runs. Fields marked Default follow Settings, General; change a field here to override it for this environment.",
+      "loading": "Loading the update check settings",
+      "loadFailed": {
+        "title": "Couldn't load the update check settings.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading settings"
+      },
+      "status": {
+        "both": "Last checked <time/>. Next check {{next}}.",
+        "last": "Last checked <time/>.",
+        "nextOnly": "Not checked yet. Next check {{next}}.",
+        "never": "Not checked yet."
+      },
+      "rows": {
+        "enabled": {
+          "label": "Update checks",
+          "switch": "Check this environment for image updates",
+          "helper": "On by default. Turning it off stops scheduled checks; you can still choose Check now. TierPlan never updates anything by itself."
+        },
+        "schedule": {
+          "label": "Schedule"
+        }
+      },
+      "footer": {
+        "save": "Save update check settings",
+        "saving": "Saving…",
+        "saved": "Saved the update check settings.",
+        "saveFailed": "Couldn't save the update check settings.",
+        "retry": "Try again.",
+        "unsaved": "Unsaved changes"
+      },
+      "conflict": {
+        "message": "{{user}} changed this schedule while you were editing. Reload to see it.",
+        "messageAnon": "This schedule was changed while you were editing. Reload to see it.",
+        "reload": "Reload"
+      }
+    },
+    "defaults": {
+      "title": "Image update check defaults",
+      "caption": "Every environment follows these unless it overrides a field on its own settings page.",
+      "loading": "Loading the update check defaults",
+      "loadFailed": {
+        "title": "Couldn't load the update check defaults.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading defaults"
+      },
+      "enabledSwitch": "Check environments that follow this default for image updates",
+      "footer": {
+        "save": "Save update check defaults",
+        "saving": "Saving…",
+        "unsaved": "Unsaved changes"
+      },
+      "saved": "Saved the update check defaults.",
+      "saveFailed": "Couldn't save the update check defaults.",
+      "retry": "Try again.",
+      "conflict": {
+        "message": "{{user}} changed the update check defaults while you were editing. Reload to see them.",
+        "messageAnon": "The update check defaults were changed while you were editing. Reload to see them.",
+        "reload": "Reload"
+      }
     }
   }
 }

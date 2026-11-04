@@ -4,6 +4,7 @@
 import { useState } from "react";
 
 import { type SchedulePreset, useSchedulePreview } from "@/api/janitor";
+import { usePreviewUpdateSchedule } from "@/api/updates";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,6 +52,9 @@ interface ScheduleFieldProps {
   // A refusal the card already knows of (a blank expression, or the server's answer to a save). It
   // takes the place of the live line.
   problem?: ScheduleProblem | null;
+  // Whose schedule this is: the janitor's, or the image update checks'. It picks the preview route and
+  // the words that differ (the helper, the floor, "Next runs" or "Next checks"). Absent is the janitor.
+  scope?: "janitor" | "updates";
 }
 
 // ScheduleField is the Schedule row's control: a preset (Hourly, Every 6 hours, Daily, Weekly) or a
@@ -65,10 +69,23 @@ export function ScheduleField({
   timezone,
   locked,
   problem,
+  scope = "janitor",
 }: ScheduleFieldProps) {
   const t = useT();
   const custom = value.preset === "custom";
-  const preview = useSchedulePreview(envId ?? "", value.cron, custom && envId !== undefined);
+  const copy = scope === "updates" ? "updates.schedule" : "janitorPolicy.schedule";
+  // Both hooks are called every render; only the one for the scope asks the server.
+  const janitorPreview = useSchedulePreview(
+    envId ?? "",
+    value.cron,
+    scope === "janitor" && custom && envId !== undefined,
+  );
+  const updatesPreview = usePreviewUpdateSchedule(
+    envId ?? "",
+    value.cron,
+    scope === "updates" && custom && envId !== undefined,
+  );
+  const preview = scope === "updates" ? updatesPreview : janitorPreview;
   // A select that may not be changed is held shut rather than disabled, so it keeps its place in the
   // tab order and its reason opens on focus (NeedsTooltip). Radix opens it on pointer down, which
   // the tooltip's click guard does not stop.
@@ -87,7 +104,7 @@ export function ScheduleField({
       : null);
   const nextRuns =
     custom && preview.data?.valid && (preview.data.nextRuns?.length ?? 0) > 0
-      ? t("janitorPolicy.schedule.nextRuns", {
+      ? t(`${copy}.nextRuns`, {
           times: (preview.data.nextRuns ?? [])
             .map((at) => formatServerTime(at, preview.data?.timezone ?? timezone))
             .join("; "),
@@ -96,16 +113,16 @@ export function ScheduleField({
   const lineText = lineProblem
     ? t(
         lineProblem === "too_frequent"
-          ? "janitorPolicy.schedule.tooFrequent"
+          ? `${copy}.tooFrequent`
           : lineProblem === "time_missing"
-            ? "janitorPolicy.schedule.timeMissing"
-            : "janitorPolicy.schedule.invalid",
+            ? `${copy}.timeMissing`
+            : `${copy}.invalid`,
       )
-    : nextRuns || (custom && preview.waiting ? t("janitorPolicy.schedule.checking") : "");
+    : nextRuns || (custom && preview.waiting ? t(`${copy}.checking`) : "");
 
   const timeInput = (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={`${id}-time`}>{t("janitorPolicy.schedule.at")}</Label>
+      <Label htmlFor={`${id}-time`}>{t(`${copy}.at`)}</Label>
       <NeedsTooltip reason={locked}>
         <Input
           id={`${id}-time`}
@@ -124,7 +141,7 @@ export function ScheduleField({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-preset`}>{t("janitorPolicy.schedule.run")}</Label>
+          <Label htmlFor={`${id}-preset`}>{t(`${copy}.run`)}</Label>
           <Select
             value={value.preset}
             open={presetOpen && !readOnly}
@@ -139,7 +156,7 @@ export function ScheduleField({
             <SelectContent>
               {PRESETS.map((preset) => (
                 <SelectItem key={preset} value={preset}>
-                  {t(`janitorPolicy.schedule.presets.${preset}`)}
+                  {t(`${copy}.presets.${preset}`)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -149,7 +166,7 @@ export function ScheduleField({
         <div aria-live="polite" className="flex flex-wrap items-end gap-3">
           {value.preset === "weekly" ? (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${id}-day`}>{t("janitorPolicy.schedule.on")}</Label>
+              <Label htmlFor={`${id}-day`}>{t(`${copy}.on`)}</Label>
               <Select
                 value={String(value.weekday)}
                 open={dayOpen && !readOnly}
@@ -164,7 +181,7 @@ export function ScheduleField({
                 <SelectContent>
                   {WEEKDAYS.map((day) => (
                     <SelectItem key={day} value={String(day)}>
-                      {t(`janitorPolicy.schedule.weekdays.${day}`)}
+                      {t(`${copy}.weekdays.${day}`)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -174,7 +191,7 @@ export function ScheduleField({
           {value.preset === "daily" || value.preset === "weekly" ? timeInput : null}
           {custom ? (
             <div className="flex min-w-48 flex-1 flex-col gap-1.5 md:max-w-80">
-              <Label htmlFor={`${id}-cron`}>{t("janitorPolicy.schedule.cron")}</Label>
+              <Label htmlFor={`${id}-cron`}>{t(`${copy}.cron`)}</Label>
               <NeedsTooltip reason={locked}>
                 <Input
                   id={`${id}-cron`}
@@ -183,7 +200,7 @@ export function ScheduleField({
                   spellCheck={false}
                   autoComplete="off"
                   autoCapitalize="none"
-                  placeholder={t("janitorPolicy.schedule.cronPlaceholder")}
+                  placeholder={t(`${copy}.cronPlaceholder`)}
                   aria-invalid={
                     lineProblem === "invalid" || lineProblem === "too_frequent" || undefined
                   }
@@ -196,9 +213,7 @@ export function ScheduleField({
           ) : null}
         </div>
       </div>
-      <p className="text-sm text-muted-foreground">
-        {t("janitorPolicy.schedule.helper", { timezone })}
-      </p>
+      <p className="text-sm text-muted-foreground">{t(`${copy}.helper`, { timezone })}</p>
       {custom || lineProblem ? (
         <p
           id={`${id}-line`}

@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { api } from "@/api/client";
-import { readProblem } from "@/api/problem";
+import { type ProblemField, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -13,6 +20,12 @@ export type UpdateInfo = components["schemas"]["UpdateInfoBody"];
 export type UpdateState = UpdateInfo["state"];
 export type UpdateReason = UpdateInfo["reason"];
 export type CheckUpdatesResult = components["schemas"]["CheckUpdatesBody"];
+export type UpdateCheckStatus = components["schemas"]["UpdateCheckStatusBody"];
+export type UpdateCheckPolicyRequest = components["schemas"]["UpdateCheckPolicyRequest"];
+export type UpdateCheckDefaults = components["schemas"]["UpdateCheckDefaultsBody"];
+export type UpdateCheckDefaultsRequest = components["schemas"]["UpdateCheckDefaultsRequest"];
+export type UpdateSchedulePreview = components["schemas"]["UpdateSchedulePreviewBody"];
+export type UpdateSchedulePreset = UpdateCheckDefaults["preset"];
 
 // CheckUpdatesError is a Check now the server refused or could not answer. The status and the
 // problem type tell a standalone host (409 not_a_swarm) or a check that outlasted its minute (504
@@ -76,5 +89,198 @@ export function useCheckUpdates(envId: string) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["env", envId] });
     },
+  });
+}
+
+// UpdateSettingsError is an update-check settings call the server refused or never answered. status
+// is 0 when the server could not be reached; type is the problem type it named (settings_changed,
+// invalid_schedule, schedule_too_frequent); fields hold what the problem names (changedBy).
+export class UpdateSettingsError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly fields: ProblemField[];
+  constructor(method: string, status: number, type?: string, fields: ProblemField[] = []) {
+    super(`${method} update checks failed (${status})`);
+    this.name = "UpdateSettingsError";
+    this.status = status;
+    this.type = type;
+    this.fields = fields;
+  }
+
+  // fieldOf is what the problem named at a location, empty when it named none.
+  fieldOf(location: string): string {
+    return this.fields.find((f) => f.location === location)?.message ?? "";
+  }
+}
+
+function failureOf(method: string, res: { error?: unknown; response: Response }) {
+  const problem = readProblem(res.error, res.response);
+  return new UpdateSettingsError(method, problem.status, problem.type, problem.fields);
+}
+
+// conflictOf is who saved the schedule last, as a 409 settings_changed names them. Empty when the
+// server did not know the person.
+export function conflictOf(err: UpdateSettingsError): string {
+  return err.fieldOf("changedBy");
+}
+
+// The key of one environment's update-check status. The schedule previews sit under it, so one
+// invalidation of the status makes them stale together. It starts with "env" and the environment, so
+// the invalidation after a Check now reaches it too.
+export function updateCheckStatusKey(envId: string) {
+  return ["env", envId, "update-checks", "status"] as const;
+}
+
+// updateCheckStatusQuery is an environment's update-check schedule: for the switch and the schedule
+// the value that applies and whether the environment set it itself, when it was last checked, when
+// the next check starts, the version to send back with a save and the server's time zone. It is
+// read when the page opens and when the window regains focus, not on a timer: a person's unsaved
+// edits are kept against the snapshot they began from.
+export function updateCheckStatusQuery(envId: string) {
+  return queryOptions({
+    queryKey: updateCheckStatusKey(envId),
+    queryFn: async (): Promise<UpdateCheckStatus> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/updates", { params: { path: { envId } } });
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof UpdateSettingsError ? e : new UpdateSettingsError("GET", 0);
+      }
+    },
+  });
+}
+
+// useUpdateCheckStatus reads the status; enabled is false for a person who may not read the
+// environment.
+export function useUpdateCheckStatus(envId: string, enabled = true) {
+  return useQuery({ ...updateCheckStatusQuery(envId), enabled });
+}
+
+// useSaveUpdateCheckPolicy saves the environment's two settings (a PUT is a full replace: a field
+// that is null follows the instance default). It is never retried (P2 D-42). The answer is the status
+// as saved and replaces what the page holds. A save made against another version is 409
+// settings_changed, and an unusable schedule 422 invalid_schedule or schedule_too_frequent.
+export function useSaveUpdateCheckPolicy(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<UpdateCheckStatus, UpdateSettingsError, UpdateCheckPolicyRequest>({
+    retry: false,
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/updates/policy", {
+          params: { path: { envId } },
+          body,
+        });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof UpdateSettingsError ? e : new UpdateSettingsError("PUT", 0);
+      }
+    },
+    onSuccess: (saved) => queryClient.setQueryData(updateCheckStatusKey(envId), saved),
+  });
+}
+
+// How long after the last keystroke the server is asked what a cron expression would do. The server
+// holds a person to 120 calls a minute, so typing never gets near it.
+export const UPDATE_SCHEDULE_DEBOUNCE_MS = 400;
+
+export interface UpdateSchedulePreviewState {
+  // The server's answer for the expression as it stands now. Undefined while the person is still
+  // typing, while the answer is on its way, for a blank expression and when the question failed.
+  data: UpdateSchedulePreview | undefined;
+  // True from a keystroke until the answer to it has come.
+  waiting: boolean;
+}
+
+// usePreviewUpdateSchedule asks the server which times an expression would check at, 400 ms after the
+// last change. The times are the scheduler's own (it does the cron arithmetic, in the server's time
+// zone, with the environment's start offset); the browser does none. It reads only, so asking again is
+// harmless. enabled is false for a preset, whose times need no question.
+export function usePreviewUpdateSchedule(
+  envId: string,
+  schedule: string,
+  enabled = true,
+): UpdateSchedulePreviewState {
+  const typed = schedule.trim();
+  const [settled, setSettled] = useState(typed);
+  useEffect(() => {
+    if (typed === settled) return;
+    const id = setTimeout(() => setSettled(typed), UPDATE_SCHEDULE_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [typed, settled]);
+  const asking = enabled && settled !== "";
+  const query = useQuery({
+    queryKey: [...updateCheckStatusKey(envId), "schedule-preview", settled] as const,
+    queryFn: async (): Promise<UpdateSchedulePreview> => {
+      const res = await api.POST("/api/env/{envId}/updates/schedule-preview", {
+        params: { path: { envId } },
+        body: { schedule: settled },
+      });
+      if (!res.data) throw failureOf("POST", res);
+      return res.data;
+    },
+    enabled: asking,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const current = typed === settled;
+  return {
+    data: asking && current ? query.data : undefined,
+    waiting: enabled && typed !== "" && (!current || query.isFetching),
+  };
+}
+
+// The key of the instance-wide update-check defaults (Settings, General). It sits outside the "env"
+// keys because it belongs to no environment.
+export const updateCheckDefaultsKey = ["settings", "update-checks"] as const;
+
+// updateCheckDefaultsQuery is what every environment's update checks follow until the environment
+// sets the field itself, the version a save must send back and how many environments follow. Reading
+// needs settings.read.
+export function updateCheckDefaultsQuery() {
+  return queryOptions({
+    queryKey: updateCheckDefaultsKey,
+    queryFn: async (): Promise<UpdateCheckDefaults> => {
+      try {
+        const res = await api.GET("/api/settings/update-checks");
+        if (!res.data) throw failureOf("GET", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof UpdateSettingsError ? e : new UpdateSettingsError("GET", 0);
+      }
+    },
+  });
+}
+
+// useUpdateCheckDefaults reads the instance-wide defaults; enabled is false for a person without
+// settings.read.
+export function useUpdateCheckDefaults(enabled = true) {
+  return useQuery({ ...updateCheckDefaultsQuery(), enabled });
+}
+
+// useSaveUpdateCheckDefaults saves the defaults (a PUT is a full replace). It is never retried (P2
+// D-42). The answer replaces what the page holds, and every environment's status is made stale,
+// because the environments that follow a default now check by the new one. A save made against
+// another version is 409 settings_changed, an unusable schedule 422 invalid_schedule or
+// schedule_too_frequent.
+export function useSaveUpdateCheckDefaults() {
+  const queryClient = useQueryClient();
+  return useMutation<UpdateCheckDefaults, UpdateSettingsError, UpdateCheckDefaultsRequest>({
+    retry: false,
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/settings/update-checks", { body });
+        if (!res.data) throw failureOf("PUT", res);
+        return res.data;
+      } catch (e) {
+        throw e instanceof UpdateSettingsError ? e : new UpdateSettingsError("PUT", 0);
+      }
+    },
+    onSuccess: (saved) => queryClient.setQueryData(updateCheckDefaultsKey, saved),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        predicate: (q) => q.queryKey[0] === "env" && q.queryKey[2] === "update-checks",
+      }),
   });
 }
