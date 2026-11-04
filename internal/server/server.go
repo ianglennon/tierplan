@@ -951,6 +951,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	updateService.StaleAfter = updateSched.StaleAfter
 	updateService.NextCheck = updateSched.Next
+	// An image update is one job under the environment's operation lock, shared with deploys and the janitor; its runs are on
+	// record before the engine is touched.
+	updateApplier := &updates.Applier{
+		Service: updateService, Runs: &updates.RunStore{Q: st.Q, W: st.Write}, Locks: stackLocks, Jobs: jobHub, Aggregator: aggregator,
+		Resolver: resolver, Audit: aud, ConvergeTimeout: cfg.StackConvergeTimeout,
+		ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: st, Vault: vlt}), Log: log,
+	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
@@ -1019,7 +1026,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Updates: updateService, Log: log},
-		Updates:       api.UpdatesDeps{Updates: updateService, Checker: checker, Store: st, Audit: aud, Policies: updatePolicies, Scheduler: updateSched, Log: log},
+		Updates:       api.UpdatesDeps{Updates: updateService, Checker: checker, Store: st, Audit: aud, Policies: updatePolicies, Scheduler: updateSched, Applier: updateApplier, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},

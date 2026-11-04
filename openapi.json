@@ -22042,6 +22042,102 @@
         ],
         "type": "object"
       },
+      "UpdateJobBody": {
+        "additionalProperties": false,
+        "properties": {
+          "bulk": {
+            "description": "Left out unless set: the bulk update this one belongs to",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the job started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "finishedAt": {
+            "description": "When the job ended, RFC 3339 UTC, empty while it runs",
+            "type": "string"
+          },
+          "fromDigest": {
+            "description": "The digest it ran",
+            "type": "string"
+          },
+          "id": {
+            "description": "The job ID",
+            "type": "string"
+          },
+          "items": {
+            "description": "The steps, in the order they run: check, pull, update, wait and, when the image has a health check, health",
+            "items": {
+              "$ref": "#/components/schemas/StackJobItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "What is updated",
+            "enum": [
+              "service",
+              "container",
+              "stack"
+            ],
+            "type": "string"
+          },
+          "output": {
+            "description": "The output log, oldest first",
+            "items": {
+              "$ref": "#/components/schemas/StackJobOutputLine"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "runId": {
+            "description": "The update's run, kept after the job leaves the server's history",
+            "type": "string"
+          },
+          "startedBy": {
+            "description": "Who started the update, as a name",
+            "type": "string"
+          },
+          "state": {
+            "description": "running until every step has ended, then done when every step is",
+            "enum": [
+              "running",
+              "done",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "toDigest": {
+            "description": "The digest it is updated to, as the server read it from the registry",
+            "type": "string"
+          },
+          "workload": {
+            "description": "The service's, container's or stack's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "kind",
+          "workload",
+          "fromDigest",
+          "toDigest",
+          "startedBy",
+          "state",
+          "createdAt",
+          "finishedAt",
+          "items",
+          "output"
+        ],
+        "type": "object"
+      },
       "UpdateMyProfileInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -22063,6 +22159,50 @@
         },
         "required": [
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "UpdateRunBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      },
+      "UpdateRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expect": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "For each service name, the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request",
+            "maxProperties": 100,
+            "type": "object"
+          },
+          "kind": {
+            "description": "service for a swarm service. Containers and stacks follow in later versions",
+            "enum": [
+              "service"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's name",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
         ],
         "type": "object"
       },
@@ -35835,6 +35975,67 @@
         ]
       }
     },
+    "/api/env/{envId}/update-jobs/{jobId}": {
+      "get": {
+        "description": "The job of an image update as it stands: its steps and output. Anyone who may read the environment may read it. A job that is not an update of this environment, or that has left the server's history, is 404 update_job_not_found.",
+        "operationId": "getImageUpdateJob",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The update's job ID",
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "description": "The update's job ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "An image update's job",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/updates": {
       "get": {
         "description": "Answers whether the environment is checked by itself, its schedule and the time zone it is read in (each with the value that applies and whether this environment set it or follows the instance default), when an image of it was last checked, when the next scheduled check starts, and the version a save must send back. The default is every 6 hours; each environment starts at its own offset of up to 10 minutes that never changes. A check missed while the server was stopped is not made up. Needs environments.read on the environment.",
@@ -36099,6 +36300,67 @@
           }
         },
         "summary": "Change when an environment is checked for image updates",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/updates/run": {
+      "post": {
+        "description": "Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file or not_from_registry), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.",
+        "operationId": "runImageUpdate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateRunBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update a service to its newer image",
         "tags": [
           "environments"
         ]

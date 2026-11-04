@@ -207,7 +207,21 @@
         "updates_ignored": "Ignored image updates",
         "updates_ignored_named": "Ignored updates for {{scope}}",
         "updates_unignored": "Stopped ignoring image updates",
-        "updates_unignored_named": "Stopped ignoring updates for {{scope}}"
+        "updates_unignored_named": "Stopped ignoring updates for {{scope}}",
+        "updated": "Updated an image",
+        "updated_named": "Updated {{name}} to {{digest}}",
+        "update_failed": "An image update failed",
+        "update_failed_named": "Update of {{name}} failed: {{reason}}",
+        "update_reason_pull_failed": "the image could not be pulled",
+        "update_reason_didnt_start": "the new version did not start",
+        "update_reason_timeout": "it did not finish updating in time",
+        "update_reason_unhealthy": "the new version did not become healthy",
+        "update_reason_service_rejected": "the swarm refused the change",
+        "update_reason_service_changed": "the service was changed by someone else",
+        "update_reason_engine_error": "the engine could not be reached",
+        "update_reason_cancelled": "it was cancelled",
+        "update_reason_interrupted": "TierPlan stopped during the update",
+        "update_reason_other": "see the update's record"
       },
       "registry": {
         "credential_created": "Registry credential added",

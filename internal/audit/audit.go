@@ -282,6 +282,11 @@ const (
 	// kind and name.
 	ActionImageUpdatesIgnored   = "image.updates_ignored"
 	ActionImageUpdatesUnignored = "image.updates_unignored"
+	// An image update ended (plan 12-15, IMG-06). image.updated is one that finished well: the entry names the kind, the
+	// workload, the image and the digest it ran and now runs. image.update_failed is one that did not, with the reason
+	// in TierPlan's words; bulk is set when it was one of several updated together.
+	ActionImageUpdated      = "image.updated"
+	ActionImageUpdateFailed = "image.update_failed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

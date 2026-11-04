@@ -41,6 +41,12 @@ type UpdatesDeps struct {
 	Policies *updates.PolicyStore
 	// Scheduler gives the time zone the schedules are read in. Nil means the server's local zone.
 	Scheduler UpdateScheduler
+	// Applier updates workloads to their newer image (plan 12-15). Nil means the update routes answer 503.
+	Applier *updates.Applier
+	// Heartbeat is how often an idle update stream gets a ping, MaxStreamsPerUser how many one person may hold open
+	// and MaxLifetime how long one may live. Zero takes the defaults.
+	Heartbeat, MaxLifetime time.Duration
+	MaxStreamsPerUser      int
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -163,6 +169,7 @@ func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
 		})
 	registerUpdatePolicy(r, d)
 	registerUpdateIgnores(r, d)
+	registerUpdateRun(r, d)
 }
 
 // checkEnvironmentUpdates checks the images of an environment's services now and counts what it found.

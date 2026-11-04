@@ -13,6 +13,10 @@ import (
 // the holder says the janitor is cleaning the environment.
 const HolderKindJanitor = "janitor"
 
+// HolderKindImageUpdate is the Kind of the Holder of an image update (Phase 12). Such a holder names no stack: its
+// Workload names the service, container or stack being updated, and its JobID the job that runs the update.
+const HolderKindImageUpdate = "image_update"
+
 // Holder is who holds an environment's operation lock: the stack, the job that runs the operation,
 // what it is (deploy, update, rollback, start, stop or remove), who started it and when.
 //
@@ -20,8 +24,11 @@ const HolderKindJanitor = "janitor"
 type Holder struct {
 	StackID, StackName, JobID, Kind, By string
 	// RunID is the janitor run that holds the lock, empty for every other Kind.
-	RunID   string
-	Started time.Time
+	RunID string
+	// Workload is what an image update (Kind HolderKindImageUpdate) updates: the name of the service or container, or
+	// of the stack. It is empty for every other Kind.
+	Workload string
+	Started  time.Time
 }
 
 // OperationLock lets one stack operation at a time run on an environment (STK-09, T-07-87). A

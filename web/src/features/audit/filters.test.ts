@@ -247,6 +247,21 @@ describe("actionLabel (janitor)", () => {
     );
   });
 
+  it("names the workload an image update finished or failed for", () => {
+    const digest = `sha256:${"b".repeat(64)}`;
+    expect(actionLabel("image.updated", real, { workload: "web", to_digest: digest })).toBe(
+      "Updated web to bbbbbbbbbbbb",
+    );
+    expect(
+      actionLabel("image.update_failed", real, { workload: "web", reason: "pull_failed" }),
+    ).toBe("Update of web failed: the image could not be pulled");
+    expect(actionLabel("image.update_failed", real, { workload: "web", reason: "mystery" })).toBe(
+      "Update of web failed: see the update's record",
+    );
+    expect(actionLabel("image.updated", real, {})).toBe("Updated an image");
+    expect(actionLabel("image.update_failed", real, {})).toBe("An image update failed");
+  });
+
   it("names the node whose janitor setting changed", () => {
     expect(actionLabel("janitor.node_policy_changed", real, { node: "worker-2" })).toBe(
       "Changed a node's janitor setting (worker-2)",

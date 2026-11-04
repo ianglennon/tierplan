@@ -142,6 +142,9 @@ type authFixture struct {
 	// updateInspect replaces how the image text of a container whose list row shows an image ID is read
 	// (plan 12-06).
 	updateInspect func(ctx context.Context, envID string, ids []string) (map[string]string, error)
+	// updateApplier, when set, changes the applier of image updates the routes are built with (plan 12-15): a test
+	// sets its clock, its convergence timeout or the stacks it reads as managed.
+	updateApplier func(*updates.Applier)
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18); agg is the aggregator over it that the routes read
 	// through (plan 02-11).
@@ -481,9 +484,20 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Updates: updateSvc, Log: log,
 		})
 		// Schedules are read in UTC so that a test's expected time does not depend on the zone of the machine.
+		var applier *updates.Applier
+		if updateSvc != nil {
+			applier = &updates.Applier{
+				Service: updateSvc, Runs: &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}, Locks: f.stackLocks, Jobs: f.jobHub,
+				Aggregator: f.agg, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Audit: f.aud,
+				ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: f.st, Vault: f.v}), Log: log,
+			}
+			if f.updateApplier != nil {
+				f.updateApplier(applier)
+			}
+		}
 		api.RegisterUpdates(r, api.UpdatesDeps{
 			Updates: updateSvc, Checker: checker, Store: f.st, Audit: f.aud, Policies: &updates.PolicyStore{Q: f.st.Q, W: f.st.Write},
-			Scheduler: &updates.Scheduler{Loc: time.UTC}, Now: f.clk.now, Log: log,
+			Scheduler: &updates.Scheduler{Loc: time.UTC}, Applier: applier, Now: f.clk.now, Log: log,
 		})
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))

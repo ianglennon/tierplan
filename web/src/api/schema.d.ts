@@ -3428,6 +3428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/update-jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An image update's job
+         * @description The job of an image update as it stands: its steps and output. Anyone who may read the environment may read it. A job that is not an update of this environment, or that has left the server's history, is 404 update_job_not_found.
+         */
+        get: operations["getImageUpdateJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/updates": {
         parameters: {
             query?: never;
@@ -3506,6 +3526,26 @@ export interface paths {
          */
         put: operations["setUpdateCheckPolicy"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update a service to its newer image
+         * @description Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file or not_from_registry), 409 update_check_failed when the registry could not be asked, 404 not_found when the service is not there. Audited as image.updated or image.update_failed when it ends. Needs services.control (Operator) on the environment.
+         */
+        post: operations["runImageUpdate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14258,6 +14298,40 @@ export interface components {
             /** @description True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own */
             task: boolean;
         };
+        UpdateJobBody: {
+            /** @description Left out unless set: the bulk update this one belongs to */
+            bulk?: string;
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The digest it ran */
+            fromDigest: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The steps, in the order they run: check, pull, update, wait and, when the image has a health check, health */
+            items: components["schemas"]["StackJobItemBody"][] | null;
+            /**
+             * @description What is updated
+             * @enum {string}
+             */
+            kind: "service" | "container" | "stack";
+            /** @description The output log, oldest first */
+            output: components["schemas"]["StackJobOutputLine"][] | null;
+            /** @description The update's run, kept after the job leaves the server's history */
+            runId: string;
+            /** @description Who started the update, as a name */
+            startedBy: string;
+            /**
+             * @description running until every step has ended, then done when every step is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /** @description The digest it is updated to, as the server read it from the registry */
+            toDigest: string;
+            /** @description The service's, container's or stack's name */
+            workload: string;
+        };
         UpdateMyProfileInputBody: {
             /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
             displayName?: string;
@@ -14268,6 +14342,23 @@ export interface components {
              * @description The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change
              */
             updatedAt: string;
+        };
+        UpdateRunBody: {
+            /** @description The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream */
+            jobId: string;
+        };
+        UpdateRunRequest: {
+            /** @description For each service name, the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request */
+            expect?: {
+                [key: string]: string;
+            };
+            /**
+             * @description service for a swarm service. Containers and stacks follow in later versions
+             * @enum {string}
+             */
+            kind: "service";
+            /** @description The service's name */
+            name: string;
         };
         UpdateSchedulePreviewBody: {
             /** @description The next three checks in the server's time zone, with this environment's start offset; empty when the expression is not valid */
@@ -21910,6 +22001,41 @@ export interface operations {
             };
         };
     };
+    getImageUpdateJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The update's job ID */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getUpdateCheckStatus: {
         parameters: {
             query?: never;
@@ -22071,6 +22197,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdateCheckStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    runImageUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRunRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateRunBody"];
                 };
             };
             /** @description Error */

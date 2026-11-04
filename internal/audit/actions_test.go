@@ -453,6 +453,10 @@ var phase12DetailKeys = map[string][]string{
 	audit.ActionImageUpdateUnskipped:  {"kind", "workload", "image", "bulk"},
 	audit.ActionImageUpdatesIgnored:   {"kind", "workload", "scope", "image"},
 	audit.ActionImageUpdatesUnignored: {"kind", "workload", "scope", "image"},
+	// An update names the workload, the image, the digest it ran and the one it runs now, and for a failure the reason
+	// (plan 12-15, IMG-06).
+	audit.ActionImageUpdated:      {"kind", "workload", "image", "from_digest", "to_digest", "bulk"},
+	audit.ActionImageUpdateFailed: {"kind", "workload", "image", "from_digest", "to_digest", "reason", "bulk"},
 }
 
 func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -472,8 +476,8 @@ func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 			}
 		}
 	}
-	if len(phase12DetailKeys) != 6 {
-		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records and the 4 skip and ignore records", len(phase12DetailKeys))
+	if len(phase12DetailKeys) != 8 {
+		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records, the 4 skip and ignore records and the 2 update records", len(phase12DetailKeys))
 	}
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase12DetailKeys) {
 		t.Fatalf("verify = %+v", got)
@@ -485,6 +489,8 @@ func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 		"image.update_unskipped":   audit.ActionImageUpdateUnskipped,
 		"image.updates_ignored":    audit.ActionImageUpdatesIgnored,
 		"image.updates_unignored":  audit.ActionImageUpdatesUnignored,
+		"image.updated":            audit.ActionImageUpdated,
+		"image.update_failed":      audit.ActionImageUpdateFailed,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

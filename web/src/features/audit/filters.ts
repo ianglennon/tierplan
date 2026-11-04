@@ -113,6 +113,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "image.update_unskipped",
   "image.updates_ignored",
   "image.updates_unignored",
+  "image.updated",
+  "image.update_failed",
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",
@@ -284,6 +286,19 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 // The kinds of item a person keeps out of cleanup, and what a run reports removing. Both come from the details of an
 // entry, so only these words ever become part of a copy key.
 const KEPT_KINDS: readonly string[] = ["container", "image", "network"];
+
+/** The reasons an image update can fail with that the audit page words; any other reads "other". */
+const UPDATE_FAILURE_REASONS: readonly string[] = [
+  "pull_failed",
+  "didnt_start",
+  "timeout",
+  "unhealthy",
+  "service_rejected",
+  "service_changed",
+  "engine_error",
+  "cancelled",
+  "interrupted",
+];
 const REMOVED_KINDS = ["containers", "images", "networks"] as const;
 
 const HOUR_MS = 3_600_000;
@@ -436,6 +451,21 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   if (key === "image.updates_ignored" || key === "image.updates_unignored") {
     const scope = details?.scope === "image" ? details.image : details?.workload;
     if (scope) return t(`audit.actions.${key}_named`, { scope });
+  }
+  // An update names the workload and the version it now runs, or why it did not finish.
+  if (key === "image.updated" && details?.workload && details.to_digest) {
+    return t("audit.actions.image.updated_named", {
+      name: details.workload,
+      digest: details.to_digest.replace(/^sha256:/, "").slice(0, 12),
+    });
+  }
+  if (key === "image.update_failed" && details?.workload) {
+    const reason =
+      details.reason && UPDATE_FAILURE_REASONS.includes(details.reason) ? details.reason : "other";
+    return t("audit.actions.image.update_failed_named", {
+      name: details.workload,
+      reason: t(`audit.actions.image.update_reason_${reason}`),
+    });
   }
   if (key === "swarm.task_history_limit_changed" && details?.to) {
     return t("audit.actions.swarm.task_history_limit_changed_named", { limit: details.to });
