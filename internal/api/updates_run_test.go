@@ -829,3 +829,220 @@ func TestForceNeedsOperator(t *testing.T) {
 		t.Errorf("image.updated rows = %+v, want one", rows)
 	}
 }
+
+// previousFailureAnswer is the preview as far as the warning of an earlier failure is read.
+type previousFailureAnswer struct {
+	Offered  bool `json:"offered"`
+	Warnings []struct {
+		Workload string `json:"workload"`
+		Code     string `json:"code"`
+		Reason   string `json:"reason"`
+		At       string `json:"at"`
+	} `json:"warnings"`
+	Refusal string `json:"refusal"`
+}
+
+// previousFailureOf is the previous_failure warning of an answer, and whether there is one.
+func (a previousFailureAnswer) previousFailureOf(workload string) (reason, at string, ok bool) {
+	for _, w := range a.Warnings {
+		if w.Code == "previous_failure" && w.Workload == workload {
+			return w.Reason, w.At, true
+		}
+	}
+	return "", "", false
+}
+
+// The preview of a version that failed before is still offered, so it can be tried again, and says when and why it failed (plan 12-45,
+// D-14). A pull that failed is told as that: the reason is pull_failed, which the web words as "could not be pulled, nothing changed".
+func TestPreviewPreviousFailure(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{updates.ReasonTimeout, updates.ReasonPullFailed} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}})
+			f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'), plainService("api", 'a'))
+			if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+				t.Fatalf("check now: %d %s", rec.code, rec.body)
+			}
+			remember(t, f.failureStoreOf(), e.ID, "service", "web", updDigest('b'), reason, false)
+
+			rec := f.preview(t, e, "web")
+			if rec.code != http.StatusOK {
+				t.Fatalf("preview = %d %s", rec.code, rec.body)
+			}
+			got := decode[previousFailureAnswer](t, rec)
+			why, at, ok := got.previousFailureOf("web")
+			if !got.Offered || got.Refusal != "" || !ok || why != reason {
+				t.Fatalf("preview = %+v, want it offered with previous_failure and the reason %s", got, reason)
+			}
+			if _, err := time.Parse(time.RFC3339, at); err != nil {
+				t.Errorf("at = %q: %v, want when it failed", at, err)
+			}
+			// A service that did not fail has no such warning.
+			other := decode[previousFailureAnswer](t, f.preview(t, e, "api"))
+			if _, _, has := other.previousFailureOf("api"); has || !other.Offered {
+				t.Errorf("api preview = %+v, want it offered with no previous_failure", other)
+			}
+		})
+	}
+}
+
+// A service of a stack TierPlan manages goes through the stack path with force like any update of it: without force the stack is not
+// touched, with force one revision changes that service alone, the failure is forgotten and the preview had warned first (plan 12-45,
+// D-06, D-14).
+func TestForceThroughManagedStack(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web", "api")
+	s.move(t, "web", 'b')
+	remember(t, s.f.failureStoreOf(), s.e.ID, "service", "shop_web", updDigest('b'), updates.ReasonUnhealthy, false)
+
+	pre := decode[previousFailureAnswer](t, s.f.req(t, http.MethodGet, "/api/env/"+s.e.ID+"/updates/preview?kind=service&name=shop_web", ""))
+	if why, _, ok := pre.previousFailureOf("shop_web"); !pre.Offered || !ok || why != updates.ReasonUnhealthy {
+		t.Fatalf("preview = %+v, want it offered with previous_failure unhealthy", pre)
+	}
+
+	expect := map[string]string{"shop_web": updDigest('b')}
+	rec := s.operator.do(http.MethodPost, "updates/run", stackForceBody("service", "shop_web", expect, false))
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "previously_failed" {
+		t.Fatalf("update without force = %d %s, want 409 previously_failed", rec.Code, rec.Body)
+	}
+	s.noNewRevision(t, 1)
+
+	before := len(s.f.fake.ServiceUpdates())
+	rec = s.operator.do(http.MethodPost, "updates/run", stackForceBody("service", "shop_web", expect, true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update with force = %d %s, want 200", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRunAnswer](t, rec)
+	if got.StackID != s.st.ID {
+		t.Fatalf("answer = %+v, want the stack's own deploy job", got)
+	}
+	if job := s.f.awaitDeploy(t, got.JobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+	sent := map[string]string{}
+	for _, u := range s.f.fake.ServiceUpdates()[before:] {
+		sent[u.Spec.Name] = u.Spec.TaskTemplate.ContainerSpec.Image
+	}
+	if sent["shop_web"] != "registry.test/team/web:1@"+updDigest('b') || sent["shop_api"] != "registry.test/team/api:1@"+updDigest('a') {
+		t.Errorf("services sent = %v, want web at b and api still at a", sent)
+	}
+	revs := s.f.revisions(t, s.st.ID)
+	if len(revs) != 2 || revs[1].Outcome != "good" {
+		t.Fatalf("revisions = %+v, want a good revision 2", revs)
+	}
+	old, now := pinsOf(t, revs[0]), pinsOf(t, revs[1])
+	if now["shop_web"] != "registry.test/team/web:1@"+updDigest('b') || now["shop_api"] != old["shop_api"] {
+		t.Errorf("pins were %v and are %v, want only shop_web moved to b", old, now)
+	}
+	if run := s.f.runByJob(t, got.JobID); run.State != updates.RunDone || len(run.Items) != 1 || run.Items[0].Service != "shop_web" {
+		t.Errorf("run = %+v, want a done run of shop_web alone", run)
+	}
+	if all, err := s.f.failureStoreOf().ForEnv(context.Background(), s.e.ID); err != nil || len(all) != 0 {
+		t.Errorf("failures = %+v %v, want the failure forgotten after the forced update worked", all, err)
+	}
+}
+
+// stackForceBody is the body of a request to update a stack or one of its services, with force.
+func stackForceBody(kind, name string, expect map[string]string, force bool) string {
+	body := map[string]any{"kind": kind, "name": name, "force": force}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+// Update stack never retries a version that failed: the revision changes the services that have an update and leaves the rolled-back
+// one alone, even when the request carries force, and a stack with nothing else to update is refused (plan 12-45, D-14, IMG-07).
+func TestRolledBackNeverInUpdateStack(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web", "api", "db")
+	s.heads.set("team/web", updDigest('b'))
+	s.heads.set("team/api", updDigest('b'))
+	s.heads.set("team/db", updDigest('b'))
+	if rec := s.f.checkNow(t, s.e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	fs := s.f.failureStoreOf()
+	remember(t, fs, s.e.ID, "service", "shop_web", updDigest('b'), updates.ReasonTimeout, false)
+
+	// The preview of the stack names the two services it would change, and not the one that failed.
+	pre := answerOf[stackPreviewAnswer](t, s.operator.do(http.MethodGet, "updates/preview?kind=stack&name=shop", ""))
+	var names []string
+	for _, it := range pre.Items {
+		names = append(names, it.Name)
+	}
+	if !pre.Offered || strings.Join(names, ",") != "shop_api,shop_db" {
+		t.Fatalf("preview = %+v, want shop_api and shop_db only", pre)
+	}
+
+	// force on a request for the whole stack means nothing.
+	rec := s.operator.do(http.MethodPost, "updates/run", stackForceBody("stack", "shop", map[string]string{"shop_api": updDigest('b'), "shop_db": updDigest('b')}, true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update stack = %d %s, want 200", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRunAnswer](t, rec)
+	if job := s.f.awaitDeploy(t, got.JobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+	revs := s.f.revisions(t, s.st.ID)
+	if len(revs) != 2 {
+		t.Fatalf("revisions = %+v, want one new revision", revs)
+	}
+	old, now := pinsOf(t, revs[0]), pinsOf(t, revs[1])
+	if now["shop_web"] != old["shop_web"] || now["shop_api"] != "registry.test/team/api:1@"+updDigest('b') || now["shop_db"] != "registry.test/team/db:1@"+updDigest('b') {
+		t.Errorf("pins were %v and are %v, want api and db at b and web untouched", old, now)
+	}
+	run := s.f.runByJob(t, got.JobID)
+	var served []string
+	for _, it := range run.Items {
+		served = append(served, it.Service)
+	}
+	if strings.Join(served, ",") != "shop_api,shop_db" {
+		t.Errorf("run items = %v, want api and db", served)
+	}
+	if all, err := fs.ForEnv(context.Background(), s.e.ID); err != nil || len(all) != 1 {
+		t.Errorf("failures = %+v %v, want web's still remembered", all, err)
+	}
+
+	// With the others updated, the one that failed is all that is left, and Update stack has nothing to do for it.
+	rec = s.operator.do(http.MethodPost, "updates/run", stackForceBody("stack", "shop", nil, true))
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "nothing_to_update" {
+		t.Fatalf("update stack again = %d %s, want 409 nothing_to_update", rec.Code, rec.Body)
+	}
+	if revs := s.f.revisions(t, s.st.ID); len(revs) != 2 {
+		t.Errorf("revisions = %+v, want no third one", revs)
+	}
+}
+
+// The count of updates available leaves a rolled-back workload out, and takes it up again once the tag points at another digest
+// (plan 12-45, D-14).
+func TestRolledBackNeverCounted(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'), plainService("api", 'a'))
+	count := func() int {
+		t.Helper()
+		rec := f.checkNow(t, e)
+		if rec.code != http.StatusOK {
+			t.Fatalf("check now: %d %s", rec.code, rec.body)
+		}
+		return decode[struct {
+			Updates int `json:"updates"`
+		}](t, rec).Updates
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("updates = %d, want 2 before any failure", n)
+	}
+	remember(t, f.failureStoreOf(), e.ID, "service", "web", updDigest('b'), updates.ReasonUnhealthy, false)
+	if n := count(); n != 1 {
+		t.Errorf("updates = %d, want only api: web's version failed", n)
+	}
+	heads.mu.Lock()
+	heads.answers["team/web"] = headAnswer{digest: updDigest('c')}
+	heads.mu.Unlock()
+	if n := count(); n != 2 {
+		t.Errorf("updates = %d, want web offered again once the tag points at another digest", n)
+	}
+}
