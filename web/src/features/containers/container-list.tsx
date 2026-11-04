@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -242,7 +243,14 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
 
   const node = swarm ? search.node : undefined;
   const runner = useBulkRunner(envId);
-  const query = useQuery(containersQuery(envId, { node, q: search.q, status: search.status }));
+  const query = useQuery(
+    containersQuery(envId, {
+      node,
+      q: search.q,
+      status: search.status,
+      updates: search.updates,
+    }),
+  );
   const data = query.data;
 
   // Grouping by node means nothing on a standalone host, which has one.
@@ -405,9 +413,10 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
   const headed = groups.filter((g) => g.header).map((g) => g.key);
   const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
 
-  const filtered = Boolean(search.q || search.status);
+  const filtered = Boolean(search.q || search.status || search.updates);
   const anyFilter = filtered || node !== undefined;
-  const clearFilters = () => onSearchChange({ q: undefined, status: undefined, node: undefined });
+  const clearFilters = () =>
+    onSearchChange({ q: undefined, status: undefined, updates: undefined, node: undefined });
 
   function onSort(key: string) {
     const next = key as SortKey;
@@ -731,33 +740,44 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
           </Button>
         ) : null}
       </div>
-      <ToggleGroup
-        type="multiple"
-        // The chips are toggle buttons in a labelled group, not a toolbar.
-        role="group"
-        variant="outline"
-        size="sm"
-        spacing={2}
-        aria-label={t("containers.list.status.label")}
-        value={statuses}
-        onValueChange={(v) => onSearchChange({ status: statusParam(v as StatusValue[]) })}
-        className={STATUS_CHIP_ROW}
-      >
-        {STATUS_VALUES.map((v) => {
-          const label = t(`containers.list.status.${v}`);
-          return (
-            <ToggleGroupItem
-              key={v}
-              value={v}
-              className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
-            >
-              {data
-                ? t("containers.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
-                : label}
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
+      <div className="flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="multiple"
+          // The chips are toggle buttons in a labelled group, not a toolbar.
+          role="group"
+          variant="outline"
+          size="sm"
+          spacing={2}
+          aria-label={t("containers.list.status.label")}
+          value={statuses}
+          onValueChange={(v) => onSearchChange({ status: statusParam(v as StatusValue[]) })}
+          className={STATUS_CHIP_ROW}
+        >
+          {STATUS_VALUES.map((v) => {
+            const label = t(`containers.list.status.${v}`);
+            return (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+              >
+                {data
+                  ? t("containers.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
+                  : label}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+        <Toggle
+          variant="outline"
+          size="sm"
+          className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+          pressed={search.updates === "available"}
+          onPressedChange={(on) => onSearchChange({ updates: on ? "available" : undefined })}
+        >
+          {t("updates.list.filter")}
+        </Toggle>
+      </div>
     </div>
   );
 

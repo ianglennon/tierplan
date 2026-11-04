@@ -27,6 +27,7 @@ import { ContainerStateCell } from "@/features/containers/container-state-cell";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
+import { UpdateBadge } from "@/features/updates/update-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -178,6 +179,7 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
                   <TooltipContent className="break-all">{data.name}</TooltipContent>
                 </Tooltip>
                 <ContainerStateCell state={data.state} health={data.health} />
+                {data.update ? <UpdateBadge info={data.update} /> : null}
                 <RestartLoopBadge loop={data.restartLoop} muted={data.muted} kind="container" />
                 {isSwarm && data.node ? (
                   <Badge variant="outline" className="shrink-0">

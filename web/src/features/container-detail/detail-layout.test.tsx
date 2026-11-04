@@ -306,7 +306,8 @@ describe("the header shows the container's update state (12-08)", () => {
       );
     renderAt();
     await screen.findByRole("heading", { name: "<img src=x onerror=alert(1)>" });
-    expect(document.querySelector("img")).toBeNull();
+    // The app shell has its own logo image; only an image the registry's text made would carry these.
+    expect(document.querySelector("img[onerror], img[src='x'], img[src='y']")).toBeNull();
     expect(document.querySelector("b")).toBeNull();
   });
 });

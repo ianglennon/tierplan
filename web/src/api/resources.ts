@@ -52,6 +52,8 @@ export interface ContainerFilters {
   node?: string;
   q?: string;
   status?: string;
+  // available: only containers whose image has an update available.
+  updates?: "available";
 }
 
 // The part of a key that names the filters, or none when nothing is set, so the
@@ -61,6 +63,7 @@ function filterPart(filters: ContainerFilters & { usage?: string }) {
   if (filters.node) set.node = filters.node;
   if (filters.q) set.q = filters.q;
   if (filters.status) set.status = filters.status;
+  if (filters.updates) set.updates = filters.updates;
   if (filters.usage) set.usage = filters.usage;
   return Object.keys(set).length > 0 ? set : undefined;
 }
