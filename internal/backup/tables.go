@@ -146,6 +146,11 @@ var Tables = map[string]Class{
 	// a restore. It belongs to its environment and holds no credential.
 	"image_update_runs": Included,
 
+	// The digest an image update last failed with, per workload (Phase 12, D-14): so a badge keeps saying
+	// "Update failed, rolled back" for that exact digest and the update is not offered again until a newer
+	// one appears. It belongs to its environment and holds no credential.
+	"image_update_failures": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

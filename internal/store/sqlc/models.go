@@ -213,6 +213,17 @@ type ImageUpdateEnvPolicy struct {
 	UpdatedAt      int64
 }
 
+type ImageUpdateFailure struct {
+	EnvID          string
+	Kind           string
+	Workload       string
+	Digest         string
+	Reason         string
+	RunID          string
+	RollbackFailed int64
+	FailedAt       int64
+}
+
 type ImageUpdateIgnore struct {
 	ID     string
 	EnvID  string
