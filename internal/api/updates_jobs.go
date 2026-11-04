@@ -21,7 +21,7 @@ type ImageUpdateJobSummary struct {
 	EnvID     string `json:"envId" doc:"The environment the update runs on"`
 	EnvName   string `json:"envName" doc:"The environment's name when the update started"`
 	Workload  string `json:"workload" doc:"The service's, container's or stack's name"`
-	Kind      string `json:"kind" enum:"service,container,stack" doc:"What is updated"`
+	Kind      string `json:"kind" enum:"service,container,stack,bulk" doc:"What is updated; bulk for a bulk update of several workloads of the environment"`
 	State     string `json:"state" enum:"running,done,failed,cancelled" doc:"Where it is. A job that ended with some of its work done and some not reads failed"`
 	StartedAt string `json:"startedAt" doc:"When the job started, RFC 3339 UTC"`
 	EndedAt   string `json:"endedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`

@@ -8761,10 +8761,10 @@ export interface components {
             /** @description The job ID: follow it at GET /api/env/{envId}/update-jobs/{id} */
             id: string;
             /**
-             * @description What is updated
+             * @description What is updated; bulk for a bulk update of several workloads of the environment
              * @enum {string}
              */
-            kind: "service" | "container" | "stack";
+            kind: "service" | "container" | "stack" | "bulk";
             /** @description When the job started, RFC 3339 UTC */
             startedAt: string;
             /**

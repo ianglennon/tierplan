@@ -8163,11 +8163,12 @@
             "type": "string"
           },
           "kind": {
-            "description": "What is updated",
+            "description": "What is updated; bulk for a bulk update of several workloads of the environment",
             "enum": [
               "service",
               "container",
-              "stack"
+              "stack",
+              "bulk"
             ],
             "type": "string"
           },
