@@ -210,3 +210,47 @@ describe("UpdateBadge: a skipped version", () => {
     expect(descriptionOf("Version skipped")).toContain("<i>Ada</i> skipped");
   });
 });
+
+describe("UpdateBadge: ignored updates", () => {
+  const held = (extra: Partial<NonNullable<UpdateInfo["ignore"]>> = {}) => ({
+    mode: "ignore" as const,
+    scope: "workload" as const,
+    setBy: "Ada",
+    setAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    digest: "",
+    ...extra,
+  });
+
+  it("says who ignored updates for the workload, and when", () => {
+    show({ state: "ignored", ignore: held() });
+    expect(descriptionOf("Updates ignored")).toBe("Ada ignored updates for this workload 3 d ago.");
+  });
+
+  it("names the image when the ignore covers the image", () => {
+    show({ state: "ignored", ignore: held({ scope: "image" }), repository: "library/nginx" });
+    expect(descriptionOf("Updates ignored")).toBe("Ada ignored updates for nginx:1.4 3 d ago.");
+  });
+
+  it("says the label did it, with no person and no time", () => {
+    show({ state: "ignored", ignore: held({ scope: "label", setBy: "", setAt: "" }) });
+    expect(descriptionOf("Updates ignored")).toBe("Ignored by the tierplan.updates=ignore label.");
+  });
+
+  it("falls back to a plain sentence when the server names no ignore", () => {
+    show({ state: "ignored" });
+    expect(descriptionOf("Updates ignored")).toBe("Updates are ignored for this service.");
+  });
+
+  it("draws markup in a name or an image as literal text", () => {
+    const { container } = show({
+      state: "ignored",
+      ignore: held({ scope: "image", setBy: "<b>Ada</b>" }),
+      repository: "acme/<i>x</i>",
+    });
+    expect(container.querySelector("b")).toBeNull();
+    expect(container.querySelector("i")).toBeNull();
+    expect(descriptionOf("Updates ignored")).toContain(
+      "<b>Ada</b> ignored updates for acme/<i>x</i>:1.4",
+    );
+  });
+});

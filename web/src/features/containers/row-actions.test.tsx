@@ -681,3 +681,51 @@ describe("ContainerRowActions restart-loop mute", () => {
     expect(screen.queryByRole("menuitem", { name: /restart-loop alerts/ })).toBeNull();
   });
 });
+
+// The update items of the container menu (plan 12-14, IMG-08, D-10, D-15).
+describe("ContainerRowActions: update items", () => {
+  const withUpdate = (state: "update_available" | "up_to_date" = "update_available") =>
+    row({
+      update: {
+        state,
+        reason: "",
+        registry: "docker.io",
+        repository: "library/nginx",
+        tag: "1.27",
+        runningDigest: `sha256:${"a".repeat(64)}`,
+        remoteDigest: `sha256:${"b".repeat(64)}`,
+        changedPlatforms: [],
+        checkedAt: new Date().toISOString(),
+        successAt: "",
+        note: "",
+        task: false,
+      },
+    });
+
+  it("lets an Operator check but shows Skip and Ignore unavailable, naming the Admin role", async () => {
+    mount(withUpdate());
+    await openMenu();
+    const skip = await screen.findByRole("menuitem", { name: "Skip this version" });
+    await waitFor(() => expect(skip.getAttribute("aria-disabled")).toBe("true"));
+    expect(
+      screen.getByRole("menuitem", { name: "Ignore updates…" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("menuitem", { name: "Check now" }).getAttribute("aria-disabled"),
+    ).toBeNull();
+    expect(document.body.textContent).toContain("Needs Admin on");
+  });
+
+  it("opens the ignore dialog for the container, and Escape cancels it and sends nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    mount(withUpdate("up_to_date"));
+    const trigger = await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Ignore updates…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Ignore updates" });
+    expect(dialog.textContent).toContain("Only web");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(sent.filter((s) => s.path.endsWith("/updates/ignore"))).toEqual([]);
+  });
+});

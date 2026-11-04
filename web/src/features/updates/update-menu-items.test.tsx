@@ -209,3 +209,111 @@ describe("UpdateMenuItems: who may skip", () => {
     ).toBeNull();
   });
 });
+
+const held = (extra: Partial<NonNullable<UpdateInfo["ignore"]>> = {}) => ({
+  mode: "ignore" as const,
+  scope: "workload" as const,
+  setBy: "Ada",
+  setAt: new Date().toISOString(),
+  digest: "",
+  ...extra,
+});
+
+describe("UpdateMenuItems: ignore updates", () => {
+  it("asks the row to open the ignore dialog and sends nothing yet", async () => {
+    await mount(info({ state: "up_to_date" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Ignore updates…" }));
+    expect(onIgnore).toHaveBeenCalledTimes(1);
+    expect(writes()).toEqual([]);
+  });
+
+  it("offers Ignore updates beside Stop skipping for a skipped version", async () => {
+    await mount(info({ state: "skipped" }));
+    expect(screen.getByRole("menuitem", { name: "Ignore updates…" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Stop skipping" })).toBeTruthy();
+  });
+
+  it("offers no ignore for an image that is pinned or from no registry", async () => {
+    await mount(info({ state: "pinned_in_file" }));
+    expect(screen.queryByRole("menuitem", { name: "Ignore updates…" })).toBeNull();
+    cleanup();
+    await mount(info({ state: "not_from_registry" }));
+    expect(screen.queryByRole("menuitem", { name: "Ignore updates…" })).toBeNull();
+  });
+
+  it("stops ignoring one workload, with no confirm, and says it will show again", async () => {
+    await mount(info({ state: "ignored", ignore: held() }));
+    expect(screen.queryByRole("menuitem", { name: "Ignore updates…" })).toBeNull();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Stop ignoring updates" }));
+    await waitFor(() =>
+      expect(writes()).toEqual([
+        {
+          method: "DELETE",
+          path: `/api/env/${ENV}/updates/ignore`,
+          body: { scope: "workload", kind: "service", name: "web" },
+        },
+      ]),
+    );
+    expect(await screen.findByText("Updates for web will show again.")).toBeTruthy();
+  });
+
+  it("stops ignoring an image by the reference the server matches on", async () => {
+    await mount(info({ state: "ignored", ignore: held({ scope: "image" }) }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Stop ignoring updates" }));
+    await waitFor(() =>
+      expect(writes()).toEqual([
+        {
+          method: "DELETE",
+          path: `/api/env/${ENV}/updates/ignore`,
+          body: { scope: "image", image: "docker.io/library/nginx:1.27" },
+        },
+      ]),
+    );
+    expect(await screen.findByText("Updates for nginx:1.27 will show again.")).toBeTruthy();
+  });
+
+  it("says an ignore by the label cannot be stopped here, and sends nothing", async () => {
+    await mount(info({ state: "ignored", ignore: held({ scope: "label", setBy: "" }) }));
+    expect(screen.queryByRole("menuitem", { name: "Ignore updates…" })).toBeNull();
+    const item = await screen.findByRole("menuitem", { name: "Stop ignoring updates" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(document.body.textContent).toContain(
+      "Ignored by the tierplan.updates=ignore label on the object. Remove the label from your compose file to stop ignoring.",
+    );
+    fireEvent.click(item);
+    expect(writes()).toEqual([]);
+  });
+
+  it("makes Ignore and Stop ignoring unavailable below Admin with the reason", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ state: "up_to_date" }));
+    const ignore = await screen.findByRole("menuitem", { name: "Ignore updates…" });
+    await waitFor(() => expect(ignore.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("Needs Admin on Prod");
+    fireEvent.click(ignore);
+    expect(onIgnore).not.toHaveBeenCalled();
+    cleanup();
+    await mount(info({ state: "ignored", ignore: held() }));
+    const stop = await screen.findByRole("menuitem", { name: "Stop ignoring updates" });
+    await waitFor(() => expect(stop.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(stop);
+    expect(writes()).toEqual([]);
+  });
+
+  it("says it could not stop ignoring when the server refuses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/api/me") return Response.json(me);
+        if (path === "/api/environments") {
+          return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+        }
+        return Response.json({ status: 404, type: "ignore_not_found" }, { status: 404 });
+      }),
+    );
+    await mount(info({ state: "ignored", ignore: held() }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Stop ignoring updates" }));
+    expect(await screen.findByText("Couldn't stop ignoring updates for web.")).toBeTruthy();
+  });
+});

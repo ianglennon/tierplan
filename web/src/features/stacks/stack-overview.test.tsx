@@ -145,7 +145,15 @@ describe("StackOverview services card on a swarm", () => {
     const headers = within(table)
       .getAllByRole("columnheader")
       .map((h) => h.textContent);
-    expect(headers).toEqual(["Service", "State", "Updates", "Replicas", "Image", "Ports"]);
+    expect(headers).toEqual([
+      "Service",
+      "State",
+      "Updates",
+      "Replicas",
+      "Image",
+      "Ports",
+      "Actions",
+    ]);
     const link = within(table).getByRole("link", { name: "web" });
     expect(link.getAttribute("href")).toBe("/env/e1/services/svc-1");
     expect(within(table).getByText("2/3")).toBeTruthy();
@@ -202,6 +210,46 @@ describe("StackOverview services card on a swarm", () => {
     expect(within(rows[1] as HTMLElement).getByText("Update available")).toBeTruthy();
     expect(within(rows[2] as HTMLElement).queryByText(/update|Up to date/i)).toBeNull();
     expect(within(rows[2] as HTMLElement).getByText("—")).toBeTruthy();
+  });
+
+  it("gives a service with an update the skip and ignore items, unavailable below Admin, and a service without one no menu", async () => {
+    services = {
+      items: [
+        swarmService({
+          id: "a",
+          name: "tracer_a",
+          short: "a",
+          update: {
+            state: "update_available",
+            reason: "",
+            registry: "docker.io",
+            repository: "library/nginx",
+            tag: "1.27",
+            runningDigest: `sha256:${"a".repeat(64)}`,
+            remoteDigest: `sha256:${"b".repeat(64)}`,
+            changedPlatforms: [],
+            checkedAt: new Date().toISOString(),
+            successAt: "",
+            note: "",
+            task: false,
+          },
+        }),
+        swarmService({ id: "b", name: "tracer_b", short: "b" }),
+      ],
+    };
+    mount();
+
+    await screen.findByRole("table");
+    expect(screen.queryByRole("button", { name: "Actions for b" })).toBeNull();
+    await act(async () => {});
+    const trigger = await screen.findByRole("button", { name: "Actions for a" });
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+    const skip = await screen.findByRole("menuitem", { name: "Skip this version" });
+    await waitFor(() => expect(skip.getAttribute("aria-disabled")).toBe("true"));
+    expect(screen.getByRole("menuitem", { name: "Ignore updates…" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Check now" })).toBeTruthy();
   });
 
   it("marks an image with no digest New and an image from no registry with the warning in words", async () => {
