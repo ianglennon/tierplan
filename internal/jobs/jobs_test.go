@@ -748,7 +748,10 @@ func TestOutputOfAFinishedJobIsKeptAndALateLineIsDropped(t *testing.T) {
 func TestDetailIsTheRemoteWordsCleanedAndPublishedWithTheItem(t *testing.T) {
 	h := jobs.New(jobs.Options{})
 	t.Cleanup(h.Close)
+	// The body waits for the subscriber: a job that ends first would hand it the end and no item events.
+	subscribed := make(chan struct{})
 	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		<-subscribed
 		r.Detail("a", "rpc error:\x1b[1m code = InvalidArgument\n"+strings.Repeat("z", 3000))
 		r.Finish("a", jobs.ItemFailed, "service_rejected", "The swarm rejected the service.", nil)
 		r.Detail("a", "too late") // an item that has ended is not changed
@@ -761,6 +764,7 @@ func TestDetailIsTheRemoteWordsCleanedAndPublishedWithTheItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
+	close(subscribed)
 	evs := drain(t, ch)
 	got, _ := h.Get(job.ID)
 	detail := got.Items[0].Detail
