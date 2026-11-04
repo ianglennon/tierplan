@@ -60,7 +60,8 @@ func (h fixtureHeads) Index(ctx context.Context, _ string, ref registry.Ref, dig
 // pushing a tag again. The layer is a few bytes: a registry stores a blob without reading it, and nothing here pulls the image.
 func pushBuild(t *testing.T, base, repo, tag, build string) string {
 	t.Helper()
-	do := func(method, url, contentType string, body []byte) (*http.Response, []byte) {
+	// do makes one request and answers its status, its headers and its whole body, with the response closed.
+	do := func(method, url, contentType string, body []byte) (int, http.Header, []byte) {
 		req, err := http.NewRequestWithContext(testsupport.Context(t), method, url, bytes.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
@@ -74,15 +75,15 @@ func pushBuild(t *testing.T, base, repo, tag, build string) string {
 		}
 		defer func() { _ = resp.Body.Close() }()
 		out, _ := io.ReadAll(resp.Body)
-		return resp, out
+		return resp.StatusCode, resp.Header, out
 	}
 	blob := func(content []byte) (digest string, size int) {
 		sum := sha256.Sum256(content)
 		digest = "sha256:" + hex.EncodeToString(sum[:])
-		resp, _ := do(http.MethodPost, base+"/v2/"+repo+"/blobs/uploads/", "", nil)
-		loc := resp.Header.Get("Location")
-		if resp.StatusCode != http.StatusAccepted || loc == "" {
-			t.Fatalf("start a blob upload: %d", resp.StatusCode)
+		status, header, _ := do(http.MethodPost, base+"/v2/"+repo+"/blobs/uploads/", "", nil)
+		loc := header.Get("Location")
+		if status != http.StatusAccepted || loc == "" {
+			t.Fatalf("start a blob upload: %d", status)
 		}
 		if strings.HasPrefix(loc, "/") {
 			loc = base + loc
@@ -91,9 +92,9 @@ func pushBuild(t *testing.T, base, repo, tag, build string) string {
 		if strings.Contains(loc, "?") {
 			sep = "&"
 		}
-		resp, out := do(http.MethodPut, loc+sep+"digest="+digest, "application/octet-stream", content)
-		if resp.StatusCode != http.StatusCreated {
-			t.Fatalf("finish the blob upload: %d %s", resp.StatusCode, out)
+		status, _, out := do(http.MethodPut, loc+sep+"digest="+digest, "application/octet-stream", content)
+		if status != http.StatusCreated {
+			t.Fatalf("finish the blob upload: %d %s", status, out)
 		}
 		return digest, len(content)
 	}
@@ -103,13 +104,13 @@ func pushBuild(t *testing.T, base, repo, tag, build string) string {
 		`"config":{"mediaType":"application/vnd.docker.container.image.v1+json","size":%d,"digest":%q},`+
 		`"layers":[{"mediaType":"application/vnd.docker.image.rootfs.diff.tar.gzip","size":%d,"digest":%q}]}`,
 		cfgSize, cfgDigest, layerSize, layerDigest)
-	resp, out := do(http.MethodPut, base+"/v2/"+repo+"/manifests/"+tag, "application/vnd.docker.distribution.manifest.v2+json", []byte(manifest))
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("put the manifest of %s:%s: %d %s", repo, tag, resp.StatusCode, out)
+	status, header, out := do(http.MethodPut, base+"/v2/"+repo+"/manifests/"+tag, "application/vnd.docker.distribution.manifest.v2+json", []byte(manifest))
+	if status != http.StatusCreated {
+		t.Fatalf("put the manifest of %s:%s: %d %s", repo, tag, status, out)
 	}
 	sum := sha256.Sum256([]byte(manifest))
 	digest := "sha256:" + hex.EncodeToString(sum[:])
-	if got := resp.Header.Get("Docker-Content-Digest"); got != digest {
+	if got := header.Get("Docker-Content-Digest"); got != digest {
 		t.Fatalf("the registry answered the digest %s for a manifest of %s", got, digest)
 	}
 	return digest

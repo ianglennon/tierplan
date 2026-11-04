@@ -162,6 +162,7 @@ func (f *swarmFix) waitUpdateJob(t *testing.T, jobID string) (updateJob, time.Du
 		}
 		return job.State != "running", string(body)
 	})
+	// wall-clock: the time an update took is measured for the log (RESEARCH A2 and A5); nothing waits on it
 	return job, time.Since(began)
 }
 
