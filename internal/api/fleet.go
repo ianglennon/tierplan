@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
 
@@ -66,6 +67,8 @@ type FleetClusters interface {
 // FleetUpdates adds up an environment's image update verdicts (updates.Service).
 type FleetUpdates interface {
 	Tally(ctx context.Context, envID string) (updates.Tally, error)
+	// EnvVerdicts judges every checkable workload of an environment and says how far the checks reach.
+	EnvVerdicts(ctx context.Context, envID string) ([]updates.WorkloadVerdict, updates.Coverage, error)
 }
 
 // FleetAddresses reads an environment's address space (envs.AddressSpaces).
@@ -83,6 +86,9 @@ type FleetDeps struct {
 	AddressSpaces FleetAddresses
 	// Checker says which environments the caller may read.
 	Checker *rbac.Checker
+	// Store reads the stacks TierPlan manages, which decide whether a Compose container can be updated
+	// on its own. Nil means none is known, so a container of a Compose project is not selectable.
+	Store *store.Store
 	// EnvTimeout is how long one environment may take; zero means five seconds.
 	EnvTimeout time.Duration
 	// Now stamps the answer. Nil means time.Now.
@@ -455,7 +461,8 @@ func fleetSummary(results []fleetResult[fleetEnv], notIncluded []FleetNotInclude
 }
 
 // RegisterFleet registers the cross-environment views of the Overview (ENV-10, D-17): what is
-// failing across the fleet, and the four counts of its tiles. Each answers for the environments
+// failing across the fleet, the four counts of its tiles, and the pending updates and the pools
+// near exhaustion behind two of them. Each answers for the environments
 // the caller may read and nothing else; a caller with no environment gets empty lists and zeros.
 func RegisterFleet(r *httpx.Router, d FleetDeps) {
 	if d.Log == nil {
@@ -516,4 +523,6 @@ func RegisterFleet(r *httpx.Router, d FleetDeps) {
 		body.ReadAt = rfc3339(d.now())
 		return &FleetSummaryOutput{CacheControl: "no-store", Body: body}, nil
 	})
+
+	registerFleetUpdates(r, d, fail)
 }

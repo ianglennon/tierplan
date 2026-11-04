@@ -4,6 +4,7 @@
 package updates
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -326,6 +327,98 @@ func (s *Service) Tally(ctx context.Context, envID string) (Tally, error) {
 		}
 	}
 	return t, nil
+}
+
+// WorkloadVerdict is the verdict of one workload with the workload it is for.
+type WorkloadVerdict struct {
+	Workload Workload
+	Verdict  Verdict
+}
+
+// Coverage is how much of an environment's checkable workloads the checks have covered, which is what an
+// honest "no updates" needs (UI-SPEC "Honest empty states").
+type Coverage struct {
+	// Checkable is how many workloads have a tag the registry can be asked about. Checked is how many of
+	// them have been checked, whatever came of it, Failed how many read check_failed and NeverChecked how
+	// many read not_checked.
+	Checkable, Checked, Failed, NeverChecked int
+	// LastCheckedAt is the newest check of any of them, zero when none was checked.
+	LastCheckedAt time.Time
+	// NextCheckAt is when the schedule checks the environment next, nil when it will not.
+	NextCheckAt *time.Time
+}
+
+// EnvVerdicts judges every checkable workload of the environment: its swarm services, and its containers
+// that are not task containers (a task follows its service), sorted by kind and then name. The verdicts are
+// the live ones, so a workload with an update running reads updating and one under another operation's lock
+// reads busy. Coverage adds up how far the checks reach. A workload that cannot be checked (pinned in its
+// file, built locally) is in neither.
+func (s *Service) EnvVerdicts(ctx context.Context, envID string) ([]WorkloadVerdict, Coverage, error) {
+	var cov Coverage
+	if s.Aggregator == nil {
+		return nil, cov, errors.New("updates: no aggregator to read the containers with")
+	}
+	agg, _, err := s.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, cov, err
+	}
+	var out []WorkloadVerdict
+	if agg.Counts.Services != nil && s.Clusters != nil {
+		st, err := s.Clusters.State(ctx, envID)
+		if err != nil && st.FetchedAt.IsZero() {
+			return nil, cov, err
+		}
+		ws := s.withPlatforms(ctx, envID, ServiceWorkloads(st.Read.Services))
+		verdicts, err := s.judge(ctx, envID, ws)
+		if err != nil {
+			return nil, cov, err
+		}
+		for _, w := range ws {
+			if v, ok := verdicts[w.ID]; ok && w.Checkable() {
+				w.EnvID = envID
+				out = append(out, WorkloadVerdict{Workload: w, Verdict: v})
+			}
+		}
+	}
+	j, err := s.ContainerJudgements(ctx, envID, agg)
+	if err != nil {
+		return nil, cov, err
+	}
+	for id, w := range j.Workloads {
+		if w.Task || !w.Checkable() {
+			continue
+		}
+		if v, ok := j.Verdicts[id]; ok {
+			out = append(out, WorkloadVerdict{Workload: w, Verdict: v})
+		}
+	}
+	slices.SortFunc(out, func(a, b WorkloadVerdict) int {
+		return cmp.Or(strings.Compare(a.Workload.Kind, b.Workload.Kind),
+			strings.Compare(strings.TrimPrefix(a.Workload.Name, "/"), strings.TrimPrefix(b.Workload.Name, "/")),
+			strings.Compare(a.Workload.ID, b.Workload.ID))
+	})
+	for _, wv := range out {
+		cov.Checkable++
+		v := wv.Verdict
+		if !v.CheckedAt.IsZero() {
+			cov.Checked++
+		}
+		switch v.State {
+		case StateCheckFailed:
+			cov.Failed++
+		case StateNotChecked:
+			cov.NeverChecked++
+		}
+		if v.CheckedAt.After(cov.LastCheckedAt) {
+			cov.LastCheckedAt = v.CheckedAt
+		}
+	}
+	if s.NextCheck != nil {
+		if at, ok := s.NextCheck(envID); ok {
+			cov.NextCheckAt = &at
+		}
+	}
+	return out, cov, nil
 }
 
 // ServiceVerdict is the verdict of one service of a stack with the workload it is for, which names the image

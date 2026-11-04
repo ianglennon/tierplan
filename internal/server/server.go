@@ -1046,7 +1046,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
-		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Log: log},
+		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
 		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,

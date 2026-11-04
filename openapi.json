@@ -5344,6 +5344,278 @@
         ],
         "type": "object"
       },
+      "FleetUpdateCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "description": "All of them: updates, problems and ignored",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ignored": {
+            "description": "Skipped and ignored updates",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "problems": {
+            "description": "Failed checks and failed updates (check_failed, rolled_back, rollback_failed)",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updates": {
+            "description": "Updates available, queued, updating or held back by another operation",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updates",
+          "problems",
+          "ignored",
+          "all"
+        ],
+        "type": "object"
+      },
+      "FleetUpdateCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "checkable": {
+            "description": "Workloads that can be checked (they follow a tag), in the environments that were read",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checked": {
+            "description": "Of those, how many have been checked, whatever came of it",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "environments": {
+            "description": "How many environments were read",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "description": "Of those, how many have a failed check",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "firstCheckAt": {
+            "description": "When the schedule next checks an environment that has workloads never checked; empty when none has or no schedule will",
+            "format": "date-time",
+            "type": "string"
+          },
+          "lastCheckedAt": {
+            "description": "The newest check anywhere, whatever came of it; empty when none was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "neverChecked": {
+            "description": "Of those, how many have never been checked",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "How many updates are skipped or ignored",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checkable",
+          "checked",
+          "failed",
+          "neverChecked",
+          "skipped",
+          "environments",
+          "lastCheckedAt",
+          "firstCheckAt"
+        ],
+        "type": "object"
+      },
+      "FleetUpdateGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "checkFailed": {
+            "description": "Why a check of this environment's images failed, in TierPlan's words; null when none did",
+            "enum": [
+              "auth",
+              "rate_limited",
+              "unreachable",
+              "not_found",
+              "unsupported",
+              "other"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name",
+            "type": "string"
+          },
+          "items": {
+            "description": "The environment's items for the show filter, by name and then kind",
+            "items": {
+              "$ref": "#/components/schemas/FleetUpdateItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lastCheckedAt": {
+            "description": "When the newest check of an image the environment runs was made, whatever came of it; empty when none was",
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "description": "swarm for a Swarm cluster, standalone for a single Docker host",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "type",
+          "lastCheckedAt",
+          "checkFailed",
+          "items"
+        ],
+        "type": "object"
+      },
+      "FleetUpdateItem": {
+        "additionalProperties": false,
+        "properties": {
+          "changedPlatforms": {
+            "description": "For a multi-platform image, the platforms it runs on whose image changed. Empty when none is named",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "fromDigest": {
+            "description": "The digest it runs; empty when its spec names none",
+            "type": "string"
+          },
+          "id": {
+            "description": "The service or container ID",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image as written, without a digest",
+            "type": "string"
+          },
+          "kind": {
+            "description": "service for a swarm service, container for a standalone container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service or container name",
+            "type": "string"
+          },
+          "selectable": {
+            "description": "True when it can be updated now: an update is available, nothing runs or holds the environment, and it is not a container that must be adopted first. Skipped, ignored, rolled back and failed ones are never selectable",
+            "type": "boolean"
+          },
+          "stack": {
+            "description": "The stack or Compose project it belongs to; empty when it has none",
+            "type": "string"
+          },
+          "toDigest": {
+            "description": "The digest the tag pointed at when it was last checked successfully; empty before any check did",
+            "type": "string"
+          },
+          "update": {
+            "$ref": "#/components/schemas/UpdateInfoBody",
+            "description": "The same update object the services and containers lists carry: state, reason, checked and last-success times, skip or ignore and failure details"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "stack",
+          "image",
+          "fromDigest",
+          "toDigest",
+          "changedPlatforms",
+          "update",
+          "selectable"
+        ],
+        "type": "object"
+      },
+      "FleetUpdatesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/FleetUpdateCounts",
+            "description": "How many items each show value lists, over every environment that was read"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/FleetUpdateCoverage",
+            "description": "What the checks have covered"
+          },
+          "groups": {
+            "description": "The environments that have items for the show filter: those with a failed check first, then by name",
+            "items": {
+              "$ref": "#/components/schemas/FleetUpdateGroup"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notIncluded": {
+            "description": "The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named",
+            "items": {
+              "$ref": "#/components/schemas/FleetNotIncludedBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "readAt": {
+            "description": "When the answer was put together",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "groups",
+          "counts",
+          "coverage",
+          "notIncluded",
+          "readAt"
+        ],
+        "type": "object"
+      },
       "FleetUpdatesTile": {
         "additionalProperties": false,
         "properties": {
@@ -38243,6 +38515,81 @@
           }
         },
         "summary": "The four counts of the Overview's tiles",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/updates": {
+      "get": {
+        "description": "Every workload with an update available, a failed check or update, or a skipped or ignored update, in the environments the caller holds environments.read on, grouped by environment (those with a failed check first, then by name), each with its kind, name, stack, image, old and new digest, changed platforms, the update object the lists carry and whether it can be updated now. show picks updates (the default), problems, ignored or all; counts gives how many each lists, and coverage what the checks have covered, so an empty list can be worded honestly. An environment that could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.",
+        "operationId": "listFleetUpdates",
+        "parameters": [
+          {
+            "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+            "explode": true,
+            "in": "query",
+            "name": "env",
+            "schema": {
+              "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Which items to list: updates (available, queued, updating, held back), problems (failed checks and failed updates), ignored (skipped and ignored) or all of them",
+            "explode": false,
+            "in": "query",
+            "name": "show",
+            "schema": {
+              "default": "updates",
+              "description": "Which items to list: updates (available, queued, updating, held back), problems (failed checks and failed updates), ignored (skipped and ignored) or all of them",
+              "enum": [
+                "updates",
+                "problems",
+                "ignored",
+                "all"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetUpdatesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the pending image updates across the environments the caller may read",
         "tags": [
           "fleet"
         ]

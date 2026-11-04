@@ -3892,6 +3892,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the pending image updates across the environments the caller may read
+         * @description Every workload with an update available, a failed check or update, or a skipped or ignored update, in the environments the caller holds environments.read on, grouped by environment (those with a failed check first, then by name), each with its kind, name, stack, image, old and new digest, changed platforms, the update object the lists carry and whether it can be updated now. show picks updates (the default), problems, ignored or all; counts gives how many each lists, and coverage what the checks have covered, so an empty list can be worded honestly. An environment that could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.
+         */
+        get: operations["listFleetUpdates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/git/credentials": {
         parameters: {
             query?: never;
@@ -7580,6 +7600,133 @@ export interface components {
              */
             readAt: string;
             updates: components["schemas"]["FleetUpdatesTile"];
+        };
+        FleetUpdateCounts: {
+            /**
+             * Format: int64
+             * @description All of them: updates, problems and ignored
+             */
+            all: number;
+            /**
+             * Format: int64
+             * @description Skipped and ignored updates
+             */
+            ignored: number;
+            /**
+             * Format: int64
+             * @description Failed checks and failed updates (check_failed, rolled_back, rollback_failed)
+             */
+            problems: number;
+            /**
+             * Format: int64
+             * @description Updates available, queued, updating or held back by another operation
+             */
+            updates: number;
+        };
+        FleetUpdateCoverage: {
+            /**
+             * Format: int64
+             * @description Workloads that can be checked (they follow a tag), in the environments that were read
+             */
+            checkable: number;
+            /**
+             * Format: int64
+             * @description Of those, how many have been checked, whatever came of it
+             */
+            checked: number;
+            /**
+             * Format: int64
+             * @description How many environments were read
+             */
+            environments: number;
+            /**
+             * Format: int64
+             * @description Of those, how many have a failed check
+             */
+            failed: number;
+            /**
+             * Format: date-time
+             * @description When the schedule next checks an environment that has workloads never checked; empty when none has or no schedule will
+             */
+            firstCheckAt: string;
+            /**
+             * Format: date-time
+             * @description The newest check anywhere, whatever came of it; empty when none was made
+             */
+            lastCheckedAt: string;
+            /**
+             * Format: int64
+             * @description Of those, how many have never been checked
+             */
+            neverChecked: number;
+            /**
+             * Format: int64
+             * @description How many updates are skipped or ignored
+             */
+            skipped: number;
+        };
+        FleetUpdateGroup: {
+            /**
+             * @description Why a check of this environment's images failed, in TierPlan's words; null when none did
+             * @enum {string|null}
+             */
+            checkFailed: "auth" | "rate_limited" | "unreachable" | "not_found" | "unsupported" | "other" | null;
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /** @description The environment's items for the show filter, by name and then kind */
+            items: components["schemas"]["FleetUpdateItem"][] | null;
+            /**
+             * Format: date-time
+             * @description When the newest check of an image the environment runs was made, whatever came of it; empty when none was
+             */
+            lastCheckedAt: string;
+            /**
+             * @description swarm for a Swarm cluster, standalone for a single Docker host
+             * @enum {string}
+             */
+            type: "swarm" | "standalone";
+        };
+        FleetUpdateItem: {
+            /** @description For a multi-platform image, the platforms it runs on whose image changed. Empty when none is named */
+            changedPlatforms: string[] | null;
+            /** @description The digest it runs; empty when its spec names none */
+            fromDigest: string;
+            /** @description The service or container ID */
+            id: string;
+            /** @description The image as written, without a digest */
+            image: string;
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service or container name */
+            name: string;
+            /** @description True when it can be updated now: an update is available, nothing runs or holds the environment, and it is not a container that must be adopted first. Skipped, ignored, rolled back and failed ones are never selectable */
+            selectable: boolean;
+            /** @description The stack or Compose project it belongs to; empty when it has none */
+            stack: string;
+            /** @description The digest the tag pointed at when it was last checked successfully; empty before any check did */
+            toDigest: string;
+            /** @description The same update object the services and containers lists carry: state, reason, checked and last-success times, skip or ignore and failure details */
+            update: components["schemas"]["UpdateInfoBody"];
+        };
+        FleetUpdatesBody: {
+            /** @description How many items each show value lists, over every environment that was read */
+            counts: components["schemas"]["FleetUpdateCounts"];
+            /** @description What the checks have covered */
+            coverage: components["schemas"]["FleetUpdateCoverage"];
+            /** @description The environments that have items for the show filter: those with a failed check first, then by name */
+            groups: components["schemas"]["FleetUpdateGroup"][] | null;
+            /** @description The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
         };
         FleetUpdatesTile: {
             /** @description True only when every environment was read, no check failed and nothing is waiting for its first check */
@@ -23330,6 +23477,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetSummaryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listFleetUpdates: {
+        parameters: {
+            query?: {
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+                /** @description Which items to list: updates (available, queued, updating, held back), problems (failed checks and failed updates), ignored (skipped and ignored) or all of them */
+                show?: "updates" | "problems" | "ignored" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetUpdatesBody"];
                 };
             };
             /** @description Error */

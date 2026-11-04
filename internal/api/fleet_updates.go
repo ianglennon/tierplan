@@ -1,0 +1,277 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api
+
+import (
+	"cmp"
+	"context"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/updates"
+)
+
+// The fleet's pending image updates (plan 12-28, ENV-10, IMG-04, IMG-05, D-17): every update the
+// caller may see across the environments they may read, grouped by environment, with the counts and
+// the coverage the Updates tab needs to word its empty states honestly.
+
+// The values of the show query.
+const (
+	fleetShowUpdates  = "updates"
+	fleetShowProblems = "problems"
+	fleetShowIgnored  = "ignored"
+	fleetShowAll      = "all"
+)
+
+// FleetUpdateItem is one workload with an update, a problem or a skip or an ignore.
+type FleetUpdateItem struct {
+	Kind             string         `json:"kind" enum:"service,container" doc:"service for a swarm service, container for a standalone container"`
+	ID               string         `json:"id" doc:"The service or container ID"`
+	Name             string         `json:"name" doc:"The service or container name"`
+	Stack            string         `json:"stack" doc:"The stack or Compose project it belongs to; empty when it has none"`
+	Image            string         `json:"image" doc:"The image as written, without a digest"`
+	FromDigest       string         `json:"fromDigest" doc:"The digest it runs; empty when its spec names none"`
+	ToDigest         string         `json:"toDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
+	ChangedPlatforms []string       `json:"changedPlatforms" doc:"For a multi-platform image, the platforms it runs on whose image changed. Empty when none is named"`
+	Update           UpdateInfoBody `json:"update" doc:"The same update object the services and containers lists carry: state, reason, checked and last-success times, skip or ignore and failure details"`
+	Selectable       bool           `json:"selectable" doc:"True when it can be updated now: an update is available, nothing runs or holds the environment, and it is not a container that must be adopted first. Skipped, ignored, rolled back and failed ones are never selectable"`
+}
+
+// FleetUpdateGroup is the items of one environment.
+type FleetUpdateGroup struct {
+	EnvID         string            `json:"envId" doc:"The environment's ID"`
+	EnvName       string            `json:"envName" doc:"The environment's name"`
+	Type          string            `json:"type" enum:"swarm,standalone" doc:"swarm for a Swarm cluster, standalone for a single Docker host"`
+	LastCheckedAt string            `json:"lastCheckedAt" format:"date-time" doc:"When the newest check of an image the environment runs was made, whatever came of it; empty when none was"`
+	CheckFailed   *string           `json:"checkFailed" nullable:"true" enum:"auth,rate_limited,unreachable,not_found,unsupported,other" doc:"Why a check of this environment's images failed, in TierPlan's words; null when none did"`
+	Items         []FleetUpdateItem `json:"items" doc:"The environment's items for the show filter, by name and then kind"`
+}
+
+// FleetUpdateCounts is how many items each show filter lists.
+type FleetUpdateCounts struct {
+	Updates  int `json:"updates" minimum:"0" doc:"Updates available, queued, updating or held back by another operation"`
+	Problems int `json:"problems" minimum:"0" doc:"Failed checks and failed updates (check_failed, rolled_back, rollback_failed)"`
+	Ignored  int `json:"ignored" minimum:"0" doc:"Skipped and ignored updates"`
+	All      int `json:"all" minimum:"0" doc:"All of them: updates, problems and ignored"`
+}
+
+// FleetUpdateCoverage is what the checks have covered, for the honest empty states.
+type FleetUpdateCoverage struct {
+	Checkable     int    `json:"checkable" minimum:"0" doc:"Workloads that can be checked (they follow a tag), in the environments that were read"`
+	Checked       int    `json:"checked" minimum:"0" doc:"Of those, how many have been checked, whatever came of it"`
+	Failed        int    `json:"failed" minimum:"0" doc:"Of those, how many have a failed check"`
+	NeverChecked  int    `json:"neverChecked" minimum:"0" doc:"Of those, how many have never been checked"`
+	Skipped       int    `json:"skipped" minimum:"0" doc:"How many updates are skipped or ignored"`
+	Environments  int    `json:"environments" minimum:"0" doc:"How many environments were read"`
+	LastCheckedAt string `json:"lastCheckedAt" format:"date-time" doc:"The newest check anywhere, whatever came of it; empty when none was made"`
+	FirstCheckAt  string `json:"firstCheckAt" format:"date-time" doc:"When the schedule next checks an environment that has workloads never checked; empty when none has or no schedule will"`
+}
+
+// FleetUpdatesBody is the answer of GET /api/fleet/updates.
+type FleetUpdatesBody struct {
+	Groups      []FleetUpdateGroup     `json:"groups" doc:"The environments that have items for the show filter: those with a failed check first, then by name"`
+	Counts      FleetUpdateCounts      `json:"counts" doc:"How many items each show value lists, over every environment that was read"`
+	Coverage    FleetUpdateCoverage    `json:"coverage" doc:"What the checks have covered"`
+	NotIncluded []FleetNotIncludedBody `json:"notIncluded" doc:"The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named"`
+	ReadAt      string                 `json:"readAt" format:"date-time" doc:"When the answer was put together"`
+}
+
+// FleetUpdatesOutput wraps FleetUpdatesBody for huma.
+type FleetUpdatesOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         FleetUpdatesBody
+}
+
+// FleetUpdatesInput is the query of GET /api/fleet/updates.
+type FleetUpdatesInput struct {
+	Env  []string `query:"env,explode" maxItems:"100" doc:"Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read"`
+	Show string   `query:"show" enum:"updates,problems,ignored,all" default:"updates" doc:"Which items to list: updates (available, queued, updating, held back), problems (failed checks and failed updates), ignored (skipped and ignored) or all of them"`
+}
+
+// fleetUpdatesEnv is what the read of one environment gave.
+type fleetUpdatesEnv struct {
+	Swarm    bool
+	Verdicts []updates.WorkloadVerdict
+	Coverage updates.Coverage
+	Known    stackIDs
+}
+
+// readFleetUpdates reads the verdicts of one environment. It returns how many nodes did not report.
+func readFleetUpdates(ctx context.Context, d FleetDeps, env envs.Environment) (fleetUpdatesEnv, int, error) {
+	var v fleetUpdatesEnv
+	agg, _, err := d.Aggregator.Snapshot(ctx, env.ID)
+	if err != nil {
+		return v, 0, err
+	}
+	if v.Swarm, err = d.Clusters.IsSwarm(ctx, env.ID); err != nil {
+		return v, 0, err
+	}
+	if v.Verdicts, v.Coverage, err = d.Updates.EnvVerdicts(ctx, env.ID); err != nil {
+		return v, 0, err
+	}
+	v.Known = loadStackIDs(ctx, d.Store, env.ID, d.Log)
+	return v, len(agg.NotReporting), nil
+}
+
+// fleetShowOf is which show filter an item belongs to, empty when it belongs to none (up to date,
+// stale, not checked, pinned and the like are not listed).
+func fleetShowOf(s updates.State) string {
+	switch s {
+	case updates.StateUpdateAvailable, updates.StateUpdating, updates.StateBusy, updates.StateQueued:
+		return fleetShowUpdates
+	case updates.StateCheckFailed, updates.StateRolledBack, updates.StateRollbackFailed:
+		return fleetShowProblems
+	case updates.StateSkipped, updates.StateIgnored:
+		return fleetShowIgnored
+	}
+	return ""
+}
+
+// fleetImage is the image of a workload as written, the digest dropped.
+func fleetImage(w updates.Workload) string {
+	s, _, _ := strings.Cut(w.Written, "@")
+	if s == "" && w.Ref.Tag != "" {
+		s = w.Ref.Repo() + ":" + w.Ref.Tag
+	}
+	return s
+}
+
+// fleetUpdateItem builds the item of one workload.
+func fleetUpdateItem(wv updates.WorkloadVerdict, known stackIDs) FleetUpdateItem {
+	w, v := wv.Workload, wv.Verdict
+	info := updateInfoOf(v, w)
+	if w.Kind == fleetKindContainer {
+		info.Refusal = containerRefusal(w, known)
+	}
+	return FleetUpdateItem{
+		Kind: w.Kind, ID: w.ID, Name: strings.TrimPrefix(w.Name, "/"), Stack: w.Stack, Image: fleetImage(w),
+		FromDigest: v.RunningDigest, ToDigest: v.RemoteDigest,
+		ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
+		Update:           *info,
+		Selectable:       v.State == updates.StateUpdateAvailable && info.Refusal == "",
+	}
+}
+
+// fleetUpdates puts the answer together from the results that were read.
+func fleetUpdates(results []fleetResult[fleetUpdatesEnv], show string) FleetUpdatesBody {
+	b := FleetUpdatesBody{Groups: []FleetUpdateGroup{}}
+	var lastChecked time.Time
+	var firstCheck *time.Time
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		b.Coverage.Environments++
+		cov := r.Val.Coverage
+		b.Coverage.Checkable += cov.Checkable
+		b.Coverage.Checked += cov.Checked
+		b.Coverage.Failed += cov.Failed
+		b.Coverage.NeverChecked += cov.NeverChecked
+		if cov.LastCheckedAt.After(lastChecked) {
+			lastChecked = cov.LastCheckedAt
+		}
+		if cov.NeverChecked > 0 && cov.NextCheckAt != nil && (firstCheck == nil || cov.NextCheckAt.Before(*firstCheck)) {
+			at := *cov.NextCheckAt
+			firstCheck = &at
+		}
+		g := FleetUpdateGroup{
+			EnvID: r.Env.ID, EnvName: r.Env.Name, Type: "standalone", LastCheckedAt: rfc3339(cov.LastCheckedAt),
+			Items: []FleetUpdateItem{},
+		}
+		if r.Val.Swarm {
+			g.Type = "swarm"
+		}
+		for _, wv := range r.Val.Verdicts {
+			if wv.Verdict.State == updates.StateCheckFailed && g.CheckFailed == nil {
+				reason := string(wv.Verdict.Reason)
+				if reason == "" {
+					reason = string(updates.ReasonOther)
+				}
+				g.CheckFailed = &reason
+			}
+			which := fleetShowOf(wv.Verdict.State)
+			if which == "" {
+				continue
+			}
+			switch which {
+			case fleetShowUpdates:
+				b.Counts.Updates++
+			case fleetShowProblems:
+				b.Counts.Problems++
+			case fleetShowIgnored:
+				b.Counts.Ignored++
+				b.Coverage.Skipped++
+			}
+			b.Counts.All++
+			if show == fleetShowAll || show == which {
+				g.Items = append(g.Items, fleetUpdateItem(wv, r.Val.Known))
+			}
+		}
+		if len(g.Items) == 0 {
+			continue
+		}
+		slices.SortFunc(g.Items, func(a, b FleetUpdateItem) int {
+			return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Kind, b.Kind), strings.Compare(a.ID, b.ID))
+		})
+		b.Groups = append(b.Groups, g)
+	}
+	b.Coverage.LastCheckedAt = rfc3339(lastChecked)
+	if firstCheck != nil {
+		b.Coverage.FirstCheckAt = rfc3339(*firstCheck)
+	}
+	slices.SortFunc(b.Groups, func(a, b FleetUpdateGroup) int {
+		// A failed check first, then by name; the ID keeps two environments of one name in one order.
+		return cmp.Or(
+			cmp.Compare(boolRank(a.CheckFailed == nil), boolRank(b.CheckFailed == nil)),
+			strings.Compare(a.EnvName, b.EnvName), strings.Compare(a.EnvID, b.EnvID),
+		)
+	})
+	return b
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// registerFleetUpdates registers the fleet's update routes on r.
+func registerFleetUpdates(r *httpx.Router, d FleetDeps, fail func(what string, err error) error) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "listFleetUpdates",
+		Method:      http.MethodGet,
+		Path:        "/api/fleet/updates",
+		Summary:     "List the pending image updates across the environments the caller may read",
+		Description: "Every workload with an update available, a failed check or update, or a skipped or ignored update, in the environments the caller holds environments.read on, " +
+			"grouped by environment (those with a failed check first, then by name), each with its kind, name, stack, image, old and new digest, changed platforms, the update object the lists carry and whether it can be updated now. " +
+			"show picks updates (the default), problems, ignored or all; counts gives how many each lists, and coverage what the checks have covered, so an empty list can be worded honestly. " +
+			"An environment that could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.",
+		Tags: []string{"fleet"},
+	}, rbac.SelfService, func(ctx context.Context, in *FleetUpdatesInput) (*FleetUpdatesOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Updates == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available on this server.")
+		}
+		results, err := fleetFanOut(ctx, d, p, in.Env, func(ctx context.Context, env envs.Environment) (fleetUpdatesEnv, int, error) {
+			return readFleetUpdates(ctx, d, env)
+		})
+		if err != nil {
+			return nil, fail("read the fleet's updates", err)
+		}
+		body := fleetUpdates(results, cmp.Or(in.Show, fleetShowUpdates))
+		body.NotIncluded, body.ReadAt = fleetNotIncluded(results), rfc3339(d.now())
+		return &FleetUpdatesOutput{CacheControl: "no-store", Body: body}, nil
+	})
+}

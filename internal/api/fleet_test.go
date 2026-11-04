@@ -52,6 +52,7 @@ type fleetFake struct {
 	policies map[string]*envs.PolicyCache
 	tally    map[string]fleetTally
 	space    map[string]fleetSpace
+	verdicts map[string]fleetVerdicts
 	// wait, when set, is called by every Snapshot before it answers.
 	wait         func(ctx context.Context) error
 	active, peak int
@@ -60,7 +61,7 @@ type fleetFake struct {
 func newFleetFake() *fleetFake {
 	return &fleetFake{
 		read: map[string]int{}, snap: map[string]fleetSnap{}, swarm: map[string]bool{}, state: map[string]envs.ClusterState{},
-		policies: map[string]*envs.PolicyCache{}, tally: map[string]fleetTally{}, space: map[string]fleetSpace{},
+		policies: map[string]*envs.PolicyCache{}, tally: map[string]fleetTally{}, space: map[string]fleetSpace{}, verdicts: map[string]fleetVerdicts{},
 	}
 }
 
@@ -128,6 +129,12 @@ func (f *fleetFake) Tally(_ context.Context, id string) (updates.Tally, error) {
 	f.touch(id)
 	t := f.tally[id]
 	return t.t, t.err
+}
+
+func (f *fleetFake) EnvVerdicts(_ context.Context, id string) ([]updates.WorkloadVerdict, updates.Coverage, error) {
+	f.touch(id)
+	v := f.verdicts[id]
+	return v.list, v.cov, v.err
 }
 
 func (f *fleetFake) Read(_ context.Context, id string) (envs.AddressSpace, error) {
