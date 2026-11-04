@@ -549,3 +549,160 @@ func TestPlainContainerUpdateEndToEnd(t *testing.T) {
 		t.Errorf("the lock is held by %+v after the update", h)
 	}
 }
+
+// containerPreviewAnswer is the preview of a container as far as these tests read it.
+type containerPreviewAnswer struct {
+	Items []struct {
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+		FromDigest string `json:"fromDigest"`
+		ToDigest   string `json:"toDigest"`
+	} `json:"items"`
+	Warnings []struct {
+		Workload string `json:"workload"`
+		Code     string `json:"code"`
+	} `json:"warnings"`
+	Offered bool   `json:"offered"`
+	Refusal string `json:"refusal"`
+}
+
+func (p containerPreviewAnswer) codes() []string {
+	out := []string{}
+	for _, w := range p.Warnings {
+		out = append(out, w.Code)
+	}
+	return out
+}
+
+// containerUpdateList is the containers list as far as the update objects go.
+type containerUpdateList struct {
+	Items []struct {
+		Name   string `json:"name"`
+		Update *struct {
+			State   string `json:"state"`
+			Refusal string `json:"refusal"`
+		} `json:"update"`
+	} `json:"items"`
+}
+
+// The confirm of a container's update lists the digest change and what to know first: always that the container is recreated, that it
+// has no health check when it has none, and that it mounts a volume (D-05).
+func TestContainerPreviewWarnings(t *testing.T) {
+	t.Parallel()
+	withCheck := plainContainer()
+	withCheck.Names, withCheck.ID = []string{"/checked"}, strings.Repeat("d", 64)
+	withCheck.Inspect.Document.Config.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "true"}}
+	withCheck.Inspect.Document.Mounts = nil
+	withCheck.Mounts = nil
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvOf(t, heads, containerEngine(plainContainer(), withCheck))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+
+	got := answerOf[containerPreviewAnswer](t, viewer.do(http.MethodGet, "updates/preview?kind=container&name=app", ""))
+	if !got.Offered || len(got.Items) != 1 || got.Items[0].Kind != "container" || got.Items[0].Name != "app" ||
+		got.Items[0].FromDigest != updDigest('a') || got.Items[0].ToDigest != updDigest('b') {
+		t.Fatalf("preview = %+v, want app offered from a to b", got)
+	}
+	if want := []string{"container_downtime", "no_healthcheck", "volumes"}; !reflect.DeepEqual(got.codes(), want) {
+		t.Errorf("warnings = %v, want %v", got.codes(), want)
+	}
+	for _, w := range got.Warnings {
+		if w.Workload != "app" {
+			t.Errorf("warning %+v is about %q, want the container's name", w, w.Workload)
+		}
+	}
+	// A container with a health check and no volume is told only that it is recreated.
+	got = answerOf[containerPreviewAnswer](t, viewer.do(http.MethodGet, "updates/preview?kind=container&name=checked", ""))
+	if want := []string{"container_downtime"}; !got.Offered || !reflect.DeepEqual(got.codes(), want) {
+		t.Errorf("checked: offered %v warnings %v, want only %v", got.Offered, got.codes(), want)
+	}
+	if rec := viewer.do(http.MethodGet, "updates/preview?kind=container&name=nobody", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("preview of a container that is not there = %d %s, want 404", rec.Code, rec.Body)
+	}
+}
+
+// A container of a Compose project TierPlan does not manage gets no one-click update ("Adopt to update"), a task container of a swarm
+// service is refused with its own code, and both say so in the preview and in the containers list (D-21).
+func TestComposeContainerRouting(t *testing.T) {
+	t.Parallel()
+	compose := plainContainer()
+	compose.Names, compose.ID = []string{"/shop-web-1"}, strings.Repeat("e", 64)
+	compose.Labels = map[string]string{"com.docker.compose.project": "shop", "com.docker.compose.service": "web", "com.docker.compose.oneoff": "False"}
+	task := plainContainer()
+	task.Names, task.ID = []string{"/web.1.abc"}, strings.Repeat("f", 64)
+	task.Labels = map[string]string{"com.docker.swarm.service.id": "svc1", "com.docker.stack.namespace": "legacy"}
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvOf(t, heads, containerEngine(plainContainer(), compose, task))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	operator := f.caller(t, e, "operator-1", "operator")
+
+	for name, code := range map[string]string{"shop-web-1": "compose_unmanaged", "web.1.abc": "task_container"} {
+		rec := operator.do(http.MethodPost, "updates/run", containerRunBody(name, nil))
+		p := answerOf[updateProblem](t, rec)
+		if rec.Code != http.StatusConflict || p.Type != "not_updatable" || len(p.Errors) != 1 || p.Errors[0].Message != code {
+			t.Errorf("update of %s = %d %s, want 409 not_updatable %s", name, rec.Code, rec.Body, code)
+		}
+		pre := answerOf[containerPreviewAnswer](t, operator.do(http.MethodGet, "updates/preview?kind=container&name="+name, ""))
+		if pre.Offered || pre.Refusal != code {
+			t.Errorf("preview of %s = %+v, want it refused with %s", name, pre, code)
+		}
+	}
+	if got := writeKinds(f.fake.Writes()); len(got) != 0 {
+		t.Errorf("the engine was asked %v after refusals, want nothing", got)
+	}
+	list := decode[containerUpdateList](t, f.get(t, e, "containers"))
+	want := map[string]string{"app": "", "shop-web-1": "compose_unmanaged", "web.1.abc": "task_container"}
+	for _, it := range list.Items {
+		if it.Update == nil {
+			t.Errorf("container %s has no update object", it.Name)
+			continue
+		}
+		if w, ok := want[it.Name]; ok && it.Update.Refusal != w {
+			t.Errorf("container %s refusal = %q, want %q", it.Name, it.Update.Refusal, w)
+		}
+	}
+	if rec := operator.do(http.MethodPost, "updates/run", containerRunBody("nobody", nil)); rec.Code != http.StatusNotFound {
+		t.Errorf("update of a container that is not there = %d %s, want 404", rec.Code, rec.Body)
+	}
+	// A Viewer may read the preview and may not update.
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	if rec := viewer.do(http.MethodPost, "updates/run", containerRunBody("app", nil)); rec.Code != http.StatusForbidden {
+		t.Errorf("a Viewer's update = %d %s, want 403", rec.Code, rec.Body)
+	}
+}
+
+// A container of a stack TierPlan manages is updated as that stack's service: the answer is the stack's deploy job, a revision is
+// written, and no container is recreated by hand.
+func TestManagedStackContainerUpdatesThroughItsStack(t *testing.T) {
+	t.Parallel()
+	s, up := newStandaloneShop(t, "web", "db")
+	s.move(t, "web", 'b')
+	_, calls := up.lastProject()
+
+	rec := s.operator.do(http.MethodPost, "updates/run", containerRunBody("solo-web-1", map[string]string{"web": updDigest('b')}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update of the container: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRunAnswer](t, rec)
+	if got.StackID != s.st.ID || got.JobID == "" {
+		t.Fatalf("answer = %+v, want the deploy job of stack %s", got, s.st.ID)
+	}
+	if job := s.f.awaitDeploy(t, got.JobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+	project, after := up.lastProject()
+	if after != calls+1 || project.Services["web"].Image != "registry.test/team/web:1@"+updDigest('b') || project.Services["db"].Image != "registry.test/team/db:1@"+updDigest('a') {
+		t.Errorf("the Compose engine ran %d times (was %d) with %+v, want one more run with web at b and db at a", after, calls, project)
+	}
+	if n := len(s.f.fake.ContainerCreates()); n != 0 {
+		t.Errorf("containers created by hand = %d, want none: the stack's engine does it", n)
+	}
+	if run := s.f.runByJob(t, got.JobID); run.Kind != "stack" || run.State != updates.RunDone {
+		t.Errorf("run = %+v, want a done stack run", run)
+	}
+}
