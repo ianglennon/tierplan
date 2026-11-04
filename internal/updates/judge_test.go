@@ -335,3 +335,94 @@ func TestJudgeNeverUpToDateWithoutFreshSuccess(t *testing.T) {
 		}
 	}
 }
+
+// ownImage is a container workload of the image repo/app:1 that the registry would have to answer for.
+func ownImage(store string) updates.Workload {
+	return updates.Workload{
+		ID: "c1", Kind: "container", Ref: registry.Ref{Domain: "docker.io", Path: "acme/app", Tag: "1"},
+		RunningDigest: dg('1'), LocalStore: store,
+	}
+}
+
+func TestJudgeLocalBuildInference(t *testing.T) {
+	t.Parallel()
+	failed := func(r updates.Reason, cred string) *updates.Check {
+		return &updates.Check{Key: updates.Key{CredID: cred}, Error: r, CheckedAt: t0}
+	}
+	for _, tc := range []struct {
+		name   string
+		in     updates.JudgeInput
+		state  updates.State
+		reason updates.Reason
+	}{
+		{
+			name:  "containerd, pulled multi-arch image, the anonymous check found the same digest",
+			in:    updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: &updates.Check{Digest: dg('1'), CheckedAt: t0, SuccessAt: t0}},
+			state: updates.StateUpToDate,
+		},
+		{
+			name:  "containerd, never pushed, the anonymous check was not found",
+			in:    updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: failed(updates.ReasonNotFound, "")},
+			state: updates.StateNotFromRegistry,
+		},
+		{
+			name:  "containerd, never pushed, the anonymous check was refused",
+			in:    updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: failed(updates.ReasonAuth, "")},
+			state: updates.StateNotFromRegistry,
+		},
+		{
+			name:   "containerd, a credential matched and the check was refused: no inference",
+			in:     updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: failed(updates.ReasonAuth, "cred-1")},
+			state:  updates.StateCheckFailed,
+			reason: updates.ReasonAuth,
+		},
+		{
+			name:   "containerd, a credential matched and the name was not found: no inference",
+			in:     updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: failed(updates.ReasonNotFound, "cred-1")},
+			state:  updates.StateCheckFailed,
+			reason: updates.ReasonNotFound,
+		},
+		{
+			name:   "containerd, rate limited: only not_found and auth infer",
+			in:     updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: failed(updates.ReasonRateLimited, "")},
+			state:  updates.StateCheckFailed,
+			reason: updates.ReasonRateLimited,
+		},
+		{
+			name:   "containerd, unreachable",
+			in:     updates.JudgeInput{Workload: ownImage(updates.LocalContainerd), Check: failed(updates.ReasonUnreachable, "")},
+			state:  updates.StateCheckFailed,
+			reason: updates.ReasonUnreachable,
+		},
+		{
+			name:   "a repo digest alone never decides: no store hint, not found",
+			in:     updates.JudgeInput{Workload: ownImage(""), Check: failed(updates.ReasonNotFound, "")},
+			state:  updates.StateCheckFailed,
+			reason: updates.ReasonNotFound,
+		},
+		{
+			name:  "classic store, no repo digest at all, nothing was asked",
+			in:    updates.JudgeInput{Workload: ownImage(updates.LocalClassic)},
+			state: updates.StateNotFromRegistry,
+		},
+		{
+			name:  "classic store, no repo digest, even with a failed check on file",
+			in:    updates.JudgeInput{Workload: ownImage(updates.LocalClassic), Check: failed(updates.ReasonRateLimited, "")},
+			state: updates.StateNotFromRegistry,
+		},
+		{
+			name:  "classic store, pulled: compared on the repo digest and the same",
+			in:    updates.JudgeInput{Workload: ownImage(""), Check: &updates.Check{Digest: dg('1'), CheckedAt: t0, SuccessAt: t0}},
+			state: updates.StateUpToDate,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.in.Now, tc.in.StaleAfter = t0.Add(time.Minute), 24*time.Hour
+			v := updates.Judge(tc.in)
+			if v.State != tc.state || v.Reason != tc.reason {
+				t.Errorf("Judge = %s (%s), want %s (%s)", v.State, v.Reason, tc.state, tc.reason)
+			}
+		})
+	}
+}
