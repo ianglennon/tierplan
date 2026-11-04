@@ -72,6 +72,37 @@ func (q *Queries) GetImageUpdateRun(ctx context.Context, id string) (ImageUpdate
 	return i, err
 }
 
+const imageUpdateRevisionSeqs = `-- name: ImageUpdateRevisionSeqs :many
+SELECT revision_seq
+FROM image_update_runs
+WHERE stack_id = ? AND revision_seq > 0
+ORDER BY revision_seq
+`
+
+// The revisions of one stack that an image update made, oldest first. History labels them "Image update".
+func (q *Queries) ImageUpdateRevisionSeqs(ctx context.Context, stackID string) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, imageUpdateRevisionSeqs, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var revision_seq int64
+		if err := rows.Scan(&revision_seq); err != nil {
+			return nil, err
+		}
+		items = append(items, revision_seq)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertImageUpdateRun = `-- name: InsertImageUpdateRun :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The TierPlan Authors */

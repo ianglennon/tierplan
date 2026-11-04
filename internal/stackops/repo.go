@@ -1138,6 +1138,32 @@ func (r Repo) RebaseDraftAt(ctx context.Context, stackID string, version, seq in
 	return nil
 }
 
+// RebaseUneditedDraft rebases the stack's draft onto revision seq when the draft holds exactly the content of from, the
+// revision an image update copied, and reports whether it did. A draft that holds anything else is a person's edit: it is
+// left alone, so its review still shows the update as a deploy made since. So is a stack with no stored draft (the editor
+// then shows the newest good revision, which needs no rebase) and a draft saved between the read and the rebase (the
+// version no longer matches). The content is compared as a deploy would read it: the files, the variables and the compose
+// files the stack names.
+func (r Repo) RebaseUneditedDraft(ctx context.Context, stackID string, from Snapshot, seq int64) (bool, error) {
+	draft, err := r.Draft(ctx, stackID)
+	switch {
+	case errors.Is(err, ErrNoDraft):
+		return false, nil
+	case err != nil:
+		return false, err
+	case !draft.IsDraft || !sameContent(draft.Copy, from.Copy):
+		return false, nil
+	}
+	if err := r.RebaseDraftAt(ctx, stackID, draft.Version, seq); err != nil {
+		var conflict *DraftConflictError
+		if errors.As(err, &conflict) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // GoodRevisionInfo is who started the deploy of the stack's newest good revision, when, and its
 // number, without opening its content. It reports false when the stack has none.
 func (r Repo) GoodRevisionInfo(ctx context.Context, stackID string) (DeployedRevision, bool, error) {

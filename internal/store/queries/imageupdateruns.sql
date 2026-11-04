@@ -35,3 +35,10 @@ ORDER BY started_at, id;
 SELECT id, env_id, bulk_id, kind, workload, workload_id, stack_id, items, state, reason, actor, job_id, revision_seq, rollback_seq, old_container, started_at, finished_at
 FROM image_update_runs
 WHERE id = ?;
+
+-- name: ImageUpdateRevisionSeqs :many
+-- The revisions of one stack that an image update made, oldest first. History labels them "Image update".
+SELECT revision_seq
+FROM image_update_runs
+WHERE stack_id = ? AND revision_seq > 0
+ORDER BY revision_seq;

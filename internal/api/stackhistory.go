@@ -56,6 +56,7 @@ type StackRevisionItem struct {
 	Tree          string                     `json:"tree" doc:"The hash of the stack's folder at that commit; empty when commit is"`
 	Source        *StackRevisionSource       `json:"source,omitempty" doc:"Where the revision was read from; left out for a revision that was not made from a git repository"`
 	SyncTrigger   string                     `json:"syncTrigger" enum:",poll,webhook" doc:"What started the deploy of a revision no person started: poll for a check on a schedule, webhook for a push the repository announced. Empty for any other revision"`
+	ImageUpdate   bool                       `json:"imageUpdate" doc:"True for a revision a one-click image update made (origin update): History labels it Image update. A revision of the Update images deploy, which has the same origin, is false"`
 }
 
 // StackRevisionListBody is the History tab of a stack.
@@ -101,10 +102,27 @@ func listStackRevisions(ctx context.Context, d StacksDeps, in *StackPathInput) (
 		return nil, stackInternal(d, "list revisions", in.EnvID, err)
 	}
 	body := StackRevisionListBody{Items: make([]StackRevisionItem, 0, len(rows)), Capped: capped, Kept: d.revisionsKept()}
+	made := d.imageUpdateRevisions(ctx, st.ID)
 	for _, row := range rows {
-		body.Items = append(body.Items, revisionItem(st, row))
+		item := revisionItem(st, row)
+		item.ImageUpdate = made[row.Seq]
+		body.Items = append(body.Items, item)
 	}
 	return &StackRevisionListOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// imageUpdateRevisions are the revisions of the stack that a one-click image update made, from the update runs that recorded
+// them. A read that fails leaves none: History then shows those revisions as the Update images they have the origin of.
+func (d StacksDeps) imageUpdateRevisions(ctx context.Context, stackID string) map[int64]bool {
+	if d.Updates == nil || d.Updates.UpdateRuns == nil {
+		return nil
+	}
+	seqs, err := d.Updates.UpdateRuns.RevisionSeqs(ctx, stackID)
+	if err != nil {
+		d.Log.Warn("could not read which revisions image updates made", "stack", stackID, "error", err)
+		return nil
+	}
+	return seqs
 }
 
 // revisionItem is a revision of the stack as the list and the detail name it.
@@ -218,8 +236,10 @@ func getStackRevision(ctx context.Context, d StacksDeps, in *StackRevisionInput)
 	if err != nil {
 		return nil, stackInternal(d, "read revision", in.EnvID, err)
 	}
+	item := revisionItem(st, rev.Row)
+	item.ImageUpdate = d.imageUpdateRevisions(ctx, st.ID)[rev.Row.Seq]
 	body := StackRevisionDetailBody{
-		Item: revisionItem(st, rev.Row), DeployedSeq: rev.DeployedSeq, Rendered: string(rev.Rendered),
+		Item: item, DeployedSeq: rev.DeployedSeq, Rendered: string(rev.Rendered),
 		Files: make([]StackRevisionFileBody, 0, len(rev.Copy.Files)), Vars: make([]StackRevisionVarBody, 0, len(rev.Copy.Vars)),
 		Pins: make([]StackRevisionPinBody, 0, len(rev.Pins)), Subnets: map[string]string{}, YAML: textDiffBody(rev.YAML),
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -34,9 +35,9 @@ const (
 
 // UpdateRunRequest names the workload to update and what the person confirmed.
 type UpdateRunRequest struct {
-	Kind   string            `json:"kind" enum:"service" doc:"service for a swarm service. Containers and stacks follow in later versions"`
-	Name   string            `json:"name" minLength:"1" maxLength:"255" doc:"The service's name"`
-	Expect map[string]string `json:"expect,omitempty" maxProperties:"100" doc:"For each service name, the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request"`
+	Kind   string            `json:"kind" enum:"service,stack" doc:"service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones. Containers follow in a later version"`
+	Name   string            `json:"name" minLength:"1" maxLength:"255" doc:"The service's name, or the stack's name for kind stack"`
+	Expect map[string]string `json:"expect,omitempty" maxProperties:"100" doc:"For each service name (the compose service name on a standalone host), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request"`
 }
 
 // UpdateRunInput is the path and body of the update route.
@@ -49,7 +50,8 @@ type UpdateRunInput struct {
 
 // UpdateRunBody is the answer of an update that started.
 type UpdateRunBody struct {
-	JobID string `json:"jobId" doc:"The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream"`
+	JobID   string `json:"jobId" doc:"The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. For a stack, or a service of a stack TierPlan manages, the job is the stack's own deploy: follow it at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}"`
+	StackID string `json:"stackId,omitempty" doc:"Left out unless set: the stack whose new revision the update deploys. The job is then the stack's deploy job"`
 }
 
 // UpdateRunOutput wraps UpdateRunBody for huma.
@@ -175,6 +177,21 @@ func (d UpdatesDeps) hub() *jobs.Hub {
 func runImageUpdate(ctx context.Context, d UpdatesDeps, p *rbac.Principal, env *httpx.Env, in *UpdateRunInput) (UpdateRunBody, error) {
 	if d.Applier == nil {
 		return UpdateRunBody{}, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
+	}
+	// A stack, and a service of a stack TierPlan manages, are updated through a revision of that stack (plan 12-18).
+	switch in.Body.Kind {
+	case "stack":
+		return runStackUpdate(ctx, d, p, env, in, stackUpdateRun{Stack: in.Body.Name})
+	case "service":
+		stackID, err := d.Applier.ManagedStackOf(ctx, env.ID, in.Body.Name)
+		switch {
+		case errors.Is(err, updates.ErrWorkloadGone):
+			return UpdateRunBody{}, workloadGone("service")
+		case err != nil:
+			return UpdateRunBody{}, updateRunProblem(d, env, err)
+		case stackID != "":
+			return runStackUpdate(ctx, d, p, env, in, stackUpdateRun{StackID: stackID, Services: []string{strings.TrimPrefix(in.Body.Name, "/")}})
+		}
 	}
 	jobID, err := d.Applier.Start(ctx, updates.Request{
 		EnvID: env.ID, EnvName: env.Name, Kind: in.Body.Kind, Name: in.Body.Name, Expect: in.Body.Expect,

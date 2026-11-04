@@ -13,6 +13,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
 
@@ -22,14 +23,14 @@ import (
 // UpdatePreviewInput is the path and query of the preview route.
 type UpdatePreviewInput struct {
 	EnvironmentPathInput
-	Kind string `query:"kind" enum:"service" doc:"service for a swarm service. Containers and stacks follow in later versions"`
-	Name string `query:"name" minLength:"1" maxLength:"255" doc:"The service's name"`
+	Kind string `query:"kind" enum:"service,stack" doc:"service for a swarm service (a service of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages. Containers follow in a later version"`
+	Name string `query:"name" minLength:"1" maxLength:"255" doc:"The service's name, or the stack's name for kind stack"`
 }
 
 // UpdatePreviewItem is one workload the update would change.
 type UpdatePreviewItem struct {
 	Kind             string   `json:"kind" enum:"service" doc:"What it is"`
-	Name             string   `json:"name" doc:"The service's name"`
+	Name             string   `json:"name" doc:"The service's name; for a service of a stack on a standalone host, its name in the compose file"`
 	Stack            string   `json:"stack" doc:"The stack it belongs to; empty for a service made on its own"`
 	Image            string   `json:"image" doc:"The image it follows, without a digest (repository:tag)"`
 	FromDigest       string   `json:"fromDigest" doc:"The digest it runs"`
@@ -44,13 +45,20 @@ type UpdateWarningBody struct {
 	Code     string `json:"code" enum:"downtime,container_downtime,no_healthcheck,host_ports,volumes,previous_failure" doc:"downtime (the only replica stops before its replacement starts), container_downtime (a container is recreated), no_healthcheck (neither the service nor its image defines a health check), host_ports (a port is published in host mode), volumes (the service mounts a volume), previous_failure (an update to this version failed before)"`
 }
 
+// UpdateLeftOutBody is a service of a stack that an update of the stack leaves out.
+type UpdateLeftOutBody struct {
+	Name  string `json:"name" doc:"The service's name, as in items"`
+	State string `json:"state" enum:"skipped,ignored" doc:"Why it is left out: skipped (this version was skipped) or ignored (its image is ignored)"`
+}
+
 // UpdatePreviewBody is what the confirm shows.
 type UpdatePreviewBody struct {
 	Items    []UpdatePreviewItem `json:"items" doc:"The workloads the update would change, one for a service; empty when offered is false"`
 	Warnings []UpdateWarningBody `json:"warnings" doc:"Pre-flight warnings, worked out on the server; empty when offered is false"`
+	LeftOut  []UpdateLeftOutBody `json:"leftOut" doc:"For a stack: the services the update leaves out because they are skipped or ignored; empty otherwise"`
 	Lock     *UpdateHolderBody   `json:"lock,omitempty" doc:"Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked"`
 	Offered  bool                `json:"offered" doc:"True when an update would be offered for this service"`
-	Refusal  string              `json:"refusal" enum:",agent,job_mode,managed_by_stack,nothing_to_update,not_checked,check_failed,pinned_in_file,not_from_registry,offline" doc:"Why no update is offered; empty when one is"`
+	Refusal  string              `json:"refusal" enum:",agent,job_mode,managed_by_stack,nothing_to_update,not_checked,check_failed,pinned_in_file,not_from_registry,offline,adopt_first" doc:"Why no update is offered; empty when one is"`
 }
 
 // UpdatePreviewOutput wraps UpdatePreviewBody for huma.
@@ -87,22 +95,33 @@ func previewImageUpdate(ctx context.Context, d UpdatesDeps, envID string, in *Up
 	if d.Applier == nil {
 		return UpdatePreviewBody{}, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
 	}
+	if in.Kind == "stack" && d.Stacks.Store != nil {
+		// A stack that is only discovered has no revision to update: it is adopted first (D-09).
+		if _, err := managedStackByName(ctx, d.Stacks.repo(), envID, in.Name); errors.Is(err, stackops.ErrStackNotFound) {
+			return UpdatePreviewBody{Items: []UpdatePreviewItem{}, Warnings: []UpdateWarningBody{}, LeftOut: []UpdateLeftOutBody{}, Refusal: problemAdoptFirst}, nil
+		} else if err != nil {
+			return UpdatePreviewBody{}, snapshotProblem(d.log(), envID, err)
+		}
+	}
 	p, err := d.Applier.Preview(ctx, envID, in.Kind, in.Name)
 	if err != nil {
 		var down envs.ErrNotOnline
 		switch {
 		case errors.Is(err, updates.ErrWorkloadGone):
-			return UpdatePreviewBody{}, workloadGone("service")
+			return UpdatePreviewBody{}, workloadGone(in.Kind)
 		case errors.Is(err, updates.ErrUnsupportedKind):
 			return UpdatePreviewBody{}, httpx.Problem(http.StatusUnprocessableEntity, "", "That kind of workload can't be updated yet.")
 		case errors.As(envs.ClassifyDockerError(err), &down):
-			return UpdatePreviewBody{Items: []UpdatePreviewItem{}, Warnings: []UpdateWarningBody{}, Refusal: "offline"}, nil
+			return UpdatePreviewBody{Items: []UpdatePreviewItem{}, Warnings: []UpdateWarningBody{}, LeftOut: []UpdateLeftOutBody{}, Refusal: "offline"}, nil
 		}
 		return UpdatePreviewBody{}, snapshotProblem(d.log(), envID, err)
 	}
 	b := UpdatePreviewBody{
 		Items: make([]UpdatePreviewItem, 0, len(p.Items)), Warnings: make([]UpdateWarningBody, 0, len(p.Warnings)),
-		Offered: p.Offered, Refusal: p.Refusal,
+		LeftOut: make([]UpdateLeftOutBody, 0, len(p.LeftOut)), Offered: p.Offered, Refusal: p.Refusal,
+	}
+	for _, l := range p.LeftOut {
+		b.LeftOut = append(b.LeftOut, UpdateLeftOutBody{Name: l.Name, State: string(l.State)})
 	}
 	for _, it := range p.Items {
 		b.Items = append(b.Items, UpdatePreviewItem{

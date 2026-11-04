@@ -154,6 +154,20 @@ func (s RunStore) Running(ctx context.Context, envID string) ([]Run, error) {
 	return out, nil
 }
 
+// RevisionSeqs returns, for one stack, the sequence numbers of the revisions that image updates made, as a set. History
+// labels those revisions "Image update"; a revision of the older Update images deploy is not among them.
+func (s RunStore) RevisionSeqs(ctx context.Context, stackID string) (map[int64]bool, error) {
+	seqs, err := s.Q.ImageUpdateRevisionSeqs(ctx, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("read the revisions image updates made: %w", err)
+	}
+	out := make(map[int64]bool, len(seqs))
+	for _, q := range seqs {
+		out[q] = true
+	}
+	return out, nil
+}
+
 // Get returns one run by ID; sql.ErrNoRows (wrapped) when there is none.
 func (s RunStore) Get(ctx context.Context, id string) (Run, error) {
 	r, err := s.Q.GetImageUpdateRun(ctx, id)

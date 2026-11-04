@@ -44,6 +44,8 @@ type PreviewItem struct {
 type Preview struct {
 	Items    []PreviewItem
 	Warnings []Warning
+	// LeftOut are the services of a stack that an update of the stack leaves out because they are skipped or ignored.
+	LeftOut []StackLeftOut
 	// Lock is who holds the environment's operation lock, nil when nobody does.
 	Lock *stackops.Holder
 	// Offered is true when an update would be offered. Refusal says why not, empty when it is.
@@ -57,6 +59,13 @@ type Preview struct {
 func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Preview, error) {
 	if a.Service == nil || a.Locks == nil {
 		return Preview{}, errors.New("updates: the applier is not wired")
+	}
+	if kind == "stack" {
+		sp, err := a.PreviewStack(ctx, envID, name, nil)
+		if err != nil {
+			return Preview{}, err
+		}
+		return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
 	}
 	if kind != "service" {
 		return Preview{}, ErrUnsupportedKind
@@ -74,6 +83,15 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 	}
 	var nu *NotUpdatableError
 	if err := a.updatable(ctx, envID, row); errors.As(err, &nu) {
+		if nu.Code == NotUpdatableManaged {
+			// A service of a stack TierPlan manages is updated through a revision of that stack (plan 12-18): the preview is
+			// that of the stack, limited to this service.
+			sp, err := a.PreviewStack(ctx, envID, row.Stack, []string{row.Name})
+			if err != nil {
+				return Preview{}, err
+			}
+			return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
+		}
 		p.Refusal = nu.Code
 		return p, nil
 	} else if err != nil {

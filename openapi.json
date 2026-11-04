@@ -19673,6 +19673,10 @@
             "description": "The service a failed deploy stopped at; empty when it did not fail or the failure names none",
             "type": "string"
           },
+          "imageUpdate": {
+            "description": "True for a revision a one-click image update made (origin update): History labels it Image update. A revision of the Update images deploy, which has the same origin, is false",
+            "type": "boolean"
+          },
           "images": {
             "description": "The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with",
             "items": {
@@ -19755,7 +19759,8 @@
           "adoptedFrom",
           "commit",
           "tree",
-          "syncTrigger"
+          "syncTrigger",
+          "imageUpdate"
         ],
         "type": "object"
       },
@@ -22267,6 +22272,28 @@
         ],
         "type": "object"
       },
+      "UpdateLeftOutBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The service's name, as in items",
+            "type": "string"
+          },
+          "state": {
+            "description": "Why it is left out: skipped (this version was skipped) or ignored (its image is ignored)",
+            "enum": [
+              "skipped",
+              "ignored"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
       "UpdateMyProfileInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -22304,6 +22331,16 @@
               "null"
             ]
           },
+          "leftOut": {
+            "description": "For a stack: the services the update leaves out because they are skipped or ignored; empty otherwise",
+            "items": {
+              "$ref": "#/components/schemas/UpdateLeftOutBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "lock": {
             "$ref": "#/components/schemas/UpdateHolderBody",
             "description": "Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked"
@@ -22324,7 +22361,8 @@
               "check_failed",
               "pinned_in_file",
               "not_from_registry",
-              "offline"
+              "offline",
+              "adopt_first"
             ],
             "type": "string"
           },
@@ -22342,6 +22380,7 @@
         "required": [
           "items",
           "warnings",
+          "leftOut",
           "offered",
           "refusal"
         ],
@@ -22376,7 +22415,7 @@
             "type": "string"
           },
           "name": {
-            "description": "The service's name",
+            "description": "The service's name; for a service of a stack on a standalone host, its name in the compose file",
             "type": "string"
           },
           "platforms": {
@@ -22414,7 +22453,11 @@
         "additionalProperties": false,
         "properties": {
           "jobId": {
-            "description": "The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream",
+            "description": "The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. For a stack, or a service of a stack TierPlan manages, the job is the stack's own deploy: follow it at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}",
+            "type": "string"
+          },
+          "stackId": {
+            "description": "Left out unless set: the stack whose new revision the update deploys. The job is then the stack's deploy job",
             "type": "string"
           }
         },
@@ -22430,19 +22473,20 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "For each service name, the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request",
+            "description": "For each service name (the compose service name on a standalone host), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request",
             "maxProperties": 100,
             "type": "object"
           },
           "kind": {
-            "description": "service for a swarm service. Containers and stacks follow in later versions",
+            "description": "service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones. Containers follow in a later version",
             "enum": [
-              "service"
+              "service",
+              "stack"
             ],
             "type": "string"
           },
           "name": {
-            "description": "The service's name",
+            "description": "The service's name, or the stack's name for kind stack",
             "maxLength": 255,
             "minLength": 1,
             "type": "string"
@@ -36595,25 +36639,26 @@
             }
           },
           {
-            "description": "service for a swarm service. Containers and stacks follow in later versions",
+            "description": "service for a swarm service (a service of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages. Containers follow in a later version",
             "explode": false,
             "in": "query",
             "name": "kind",
             "schema": {
-              "description": "service for a swarm service. Containers and stacks follow in later versions",
+              "description": "service for a swarm service (a service of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages. Containers follow in a later version",
               "enum": [
-                "service"
+                "service",
+                "stack"
               ],
               "type": "string"
             }
           },
           {
-            "description": "The service's name",
+            "description": "The service's name, or the stack's name for kind stack",
             "explode": false,
             "in": "query",
             "name": "name",
             "schema": {
-              "description": "The service's name",
+              "description": "The service's name, or the stack's name for kind stack",
               "maxLength": 255,
               "minLength": 1,
               "type": "string"

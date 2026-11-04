@@ -496,10 +496,6 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 				f.updateApplier(applier)
 			}
 		}
-		api.RegisterUpdates(r, api.UpdatesDeps{
-			Updates: updateSvc, Checker: checker, Store: f.st, Audit: f.aud, Policies: &updates.PolicyStore{Q: f.st.Q, W: f.st.Write},
-			Scheduler: &updates.Scheduler{Loc: time.UTC}, Applier: applier, Now: f.clk.now, Log: log,
-		})
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
 		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})
@@ -541,6 +537,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
 		f.stackDeps = stackDeps
+		// The image update routes deploy a stack through the stack's own engine, so they hold the same deps and the same lock.
+		api.RegisterUpdates(r, api.UpdatesDeps{
+			Updates: updateSvc, Checker: checker, Store: f.st, Audit: f.aud, Policies: &updates.PolicyStore{Q: f.st.Q, W: f.st.Write},
+			Scheduler: &updates.Scheduler{Loc: time.UTC}, Applier: applier, Stacks: stackDeps, Now: f.clk.now, Log: log,
+		})
 		// A git stack with auto-deploy on deploys through the same deployer a background service would use.
 		gitDeps.Sync.SetDeployer(api.NewStackDeployer(stackDeps).GitDeployer())
 		api.RegisterStacks(r, stackDeps)

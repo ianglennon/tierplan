@@ -13306,6 +13306,8 @@ export interface components {
             deployed: boolean;
             /** @description The service a failed deploy stopped at; empty when it did not fail or the failure names none */
             failedService: string;
+            /** @description True for a revision a one-click image update made (origin update): History labels it Image update. A revision of the Update images deploy, which has the same origin, is false */
+            imageUpdate: boolean;
             /** @description The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with */
             images: components["schemas"]["StackRevisionImageChange"][] | null;
             /**
@@ -14424,6 +14426,15 @@ export interface components {
             /** @description The service's, container's or stack's name */
             workload: string;
         };
+        UpdateLeftOutBody: {
+            /** @description The service's name, as in items */
+            name: string;
+            /**
+             * @description Why it is left out: skipped (this version was skipped) or ignored (its image is ignored)
+             * @enum {string}
+             */
+            state: "skipped" | "ignored";
+        };
         UpdateMyProfileInputBody: {
             /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
             displayName?: string;
@@ -14438,6 +14449,8 @@ export interface components {
         UpdatePreviewBody: {
             /** @description The workloads the update would change, one for a service; empty when offered is false */
             items: components["schemas"]["UpdatePreviewItem"][] | null;
+            /** @description For a stack: the services the update leaves out because they are skipped or ignored; empty otherwise */
+            leftOut: components["schemas"]["UpdateLeftOutBody"][] | null;
             /** @description Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked */
             lock?: components["schemas"]["UpdateHolderBody"];
             /** @description True when an update would be offered for this service */
@@ -14446,7 +14459,7 @@ export interface components {
              * @description Why no update is offered; empty when one is
              * @enum {string}
              */
-            refusal: "" | "agent" | "job_mode" | "managed_by_stack" | "nothing_to_update" | "not_checked" | "check_failed" | "pinned_in_file" | "not_from_registry" | "offline";
+            refusal: "" | "agent" | "job_mode" | "managed_by_stack" | "nothing_to_update" | "not_checked" | "check_failed" | "pinned_in_file" | "not_from_registry" | "offline" | "adopt_first";
             /** @description Pre-flight warnings, worked out on the server; empty when offered is false */
             warnings: components["schemas"]["UpdateWarningBody"][] | null;
         };
@@ -14462,7 +14475,7 @@ export interface components {
              * @enum {string}
              */
             kind: "service";
-            /** @description The service's name */
+            /** @description The service's name; for a service of a stack on a standalone host, its name in the compose file */
             name: string;
             /** @description The platforms it runs on, for a multi-platform image; empty when none is known */
             platforms: string[] | null;
@@ -14472,20 +14485,22 @@ export interface components {
             toDigest: string;
         };
         UpdateRunBody: {
-            /** @description The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream */
+            /** @description The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. For a stack, or a service of a stack TierPlan manages, the job is the stack's own deploy: follow it at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId} */
             jobId: string;
+            /** @description Left out unless set: the stack whose new revision the update deploys. The job is then the stack's deploy job */
+            stackId?: string;
         };
         UpdateRunRequest: {
-            /** @description For each service name, the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request */
+            /** @description For each service name (the compose service name on a standalone host), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request */
             expect?: {
                 [key: string]: string;
             };
             /**
-             * @description service for a swarm service. Containers and stacks follow in later versions
+             * @description service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones. Containers follow in a later version
              * @enum {string}
              */
-            kind: "service";
-            /** @description The service's name */
+            kind: "service" | "stack";
+            /** @description The service's name, or the stack's name for kind stack */
             name: string;
         };
         UpdateSchedulePreviewBody: {
@@ -22350,9 +22365,9 @@ export interface operations {
     previewImageUpdate: {
         parameters: {
             query?: {
-                /** @description service for a swarm service. Containers and stacks follow in later versions */
-                kind?: "service";
-                /** @description The service's name */
+                /** @description service for a swarm service (a service of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages. Containers follow in a later version */
+                kind?: "service" | "stack";
+                /** @description The service's name, or the stack's name for kind stack */
                 name?: string;
             };
             header?: never;

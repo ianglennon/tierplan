@@ -21,7 +21,6 @@ import (
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stackops"
-	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // Applying an image update (plan 12-15, IMG-06). An update is a job: the digest is read from the registry at the moment of
@@ -321,17 +320,12 @@ func (a *Applier) updatable(ctx context.Context, envID string, row dockerx.Servi
 	case row.Mode == "replicated-job" || row.Mode == "global-job":
 		return &NotUpdatableError{Code: NotUpdatableJobMode}
 	}
-	if id := row.Labels[stacks.LabelStackID]; id != "" {
-		managed := true
-		if a.ManagedStack != nil {
-			var err error
-			if managed, err = a.ManagedStack(ctx, envID, id); err != nil {
-				return fmt.Errorf("look up the stack of %s: %w", row.Name, err)
-			}
-		}
-		if managed {
-			return &NotUpdatableError{Code: NotUpdatableManaged}
-		}
+	id, err := a.managedStackID(ctx, envID, row)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		return &NotUpdatableError{Code: NotUpdatableManaged}
 	}
 	return nil
 }

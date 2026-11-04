@@ -44,6 +44,9 @@ type UpdatesDeps struct {
 	Scheduler UpdateScheduler
 	// Applier updates workloads to their newer image (plan 12-15). Nil means the update routes answer 503.
 	Applier *updates.Applier
+	// Stacks are what a stack's update is deployed with (plan 12-18): the update is a revision of the stack, deployed by the
+	// stack's own engine, in its own job. Its Jobs must be the applier's hub and its Locks the applier's lock.
+	Stacks StacksDeps
 	// Heartbeat is how often an idle update stream gets a ping, MaxStreamsPerUser how many one person may hold open
 	// and MaxLifetime how long one may live. Zero takes the defaults.
 	Heartbeat, MaxLifetime time.Duration
