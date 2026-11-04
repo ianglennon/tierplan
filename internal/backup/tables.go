@@ -136,6 +136,11 @@ var Tables = map[string]Class{
 	"image_update_defaults":   Included,
 	"image_update_env_policy": Included,
 
+	// What a person asked TierPlan to stop offering image updates for (Phase 12, D-15, D-16): skips of one
+	// remote version of a workload and ignores of an image or a workload, each in one environment. They
+	// are a person's choices, not derived, and hold no secret.
+	"image_update_ignores": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

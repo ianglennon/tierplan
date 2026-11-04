@@ -213,6 +213,21 @@ type ImageUpdateEnvPolicy struct {
 	UpdatedAt      int64
 }
 
+type ImageUpdateIgnore struct {
+	ID     string
+	EnvID  string
+	Mode   string
+	Scope  string
+	Host   string
+	Repo   string
+	Tag    string
+	Kind   string
+	Name   string
+	Digest string
+	SetBy  string
+	SetAt  int64
+}
+
 type JanitorDefault struct {
 	ID                      int64
 	Enabled                 int64
