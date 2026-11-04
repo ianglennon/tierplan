@@ -15,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EnvFilter } from "@/features/fleet/env-filter";
 import { FleetCoverageAlert } from "@/features/fleet/fleet-coverage-alert";
+import { FleetEmptyUpdates } from "@/features/fleet/fleet-empty-updates";
 import { FLEET_SHOWS } from "@/features/fleet/fleet-search";
 import { UpdatesTable } from "@/features/fleet/updates-table";
 import { useT } from "@/i18n/use-t";
@@ -51,7 +52,8 @@ export function FleetUpdatesTab({ env, show, onEnvChange, onShowChange }: FleetU
 
   return (
     <>
-      <FleetCoverageAlert notIncluded={data?.notIncluded} />
+      {/* The empty state shows the alert itself, next to the words it qualifies. */}
+      {data && groups.length === 0 ? null : <FleetCoverageAlert notIncluded={data?.notIncluded} />}
       <div className="flex flex-wrap items-center gap-2">
         <EnvFilter
           value={env}
@@ -130,6 +132,14 @@ export function FleetUpdatesTab({ env, show, onEnvChange, onShowChange }: FleetU
         </div>
       ) : null}
       {data && groups.length > 0 ? <UpdatesTable groups={groups} show={show} /> : null}
+      {data && groups.length === 0 ? (
+        <FleetEmptyUpdates
+          coverage={data.coverage}
+          notIncluded={data.notIncluded}
+          show={show}
+          onShow={onShowChange}
+        />
+      ) : null}
     </>
   );
 }

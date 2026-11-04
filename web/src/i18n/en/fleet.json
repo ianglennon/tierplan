@@ -186,7 +186,9 @@
           "bodyAt_one": "{{count, number}} workload hasn't been checked. The first check runs {{when}}, or choose Check now.",
           "bodyAt_other": "{{count, number}} workloads haven't been checked. The first check runs {{when}}, or choose Check now.",
           "body_one": "{{count, number}} workload hasn't been checked. Choose Check now.",
-          "body_other": "{{count, number}} workloads haven't been checked. Choose Check now."
+          "body_other": "{{count, number}} workloads haven't been checked. Choose Check now.",
+          "soon": "in a moment",
+          "at": "at {{time}}"
         },
         "nothing": {
           "heading": "Nothing to check yet",

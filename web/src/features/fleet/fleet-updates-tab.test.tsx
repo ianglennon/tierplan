@@ -409,6 +409,29 @@ describe("FleetUpdatesTab", () => {
     expect(t.querySelectorAll("tbody tr").length).toBeLessThan(150);
   });
 
+  it("chooses the empty state from the coverage and shows the missing environments once", async () => {
+    answer = () =>
+      Response.json(
+        body([], {
+          coverage: { ...COVERAGE, failed: 2 },
+          notIncluded: [{ envId: "e3", envName: "lab", reason: "offline", nodes: 0 }],
+        }),
+      );
+    mount();
+    expect(await screen.findByText("No updates found, but 2 checks failed")).toBeTruthy();
+    expect(screen.queryByText("Everything is up to date")).toBeNull();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Show problems" }));
+    expect(showChanges).toEqual(["problems"]);
+  });
+
+  it("says Everything is up to date for a clean fleet", async () => {
+    answer = () => Response.json(body([]));
+    mount();
+    expect(await screen.findByText("Everything is up to date")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
   it("offers a retry when the tab cannot be read", async () => {
     answer = () => Response.json({}, { status: 500 });
     mount();
