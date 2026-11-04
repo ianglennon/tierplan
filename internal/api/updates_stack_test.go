@@ -581,3 +581,121 @@ func TestUpdateRemembersCheckedPlatforms(t *testing.T) {
 		t.Errorf("revision 2 platforms = %+v, want linux/amd64 and linux/arm64 as the check read them", rev.Platforms)
 	}
 }
+
+// draftBase is the revision the stack's stored draft starts from, and its version.
+func (f *envFix) draftBase(t *testing.T, stackID string) (base, version int64) {
+	t.Helper()
+	if err := f.st.Read.QueryRow(`SELECT base_seq, version FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft'`, stackID).Scan(&base, &version); err != nil {
+		t.Fatalf("read the draft of %s: %v", stackID, err)
+	}
+	return base, version
+}
+
+// The draft is never shipped (T-12-49): an unsaved edit stays in the draft, untouched, and the update deploys the content of the
+// newest good revision. The draft's review then shows the update as a deploy made since.
+func TestStackUpdateIgnoresDraftEdits(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web")
+	edited := shopCompose("web") + "# edited, not deployed\n"
+	v := saveCompose(t, s.operator, s.st.ID, edited, `[{"name":"EDITED","value":"yes","secret":false}]`)
+	s.move(t, "web", 'b')
+
+	s.updateStack(t, s.operator, "stack", "shop", nil)
+
+	rev, err := (stackops.Repo{Store: s.f.st, Vault: s.f.v}).Revision(context.Background(), s.st.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rev.Copy.Vars) != 0 || len(rev.Copy.Files) != 1 || string(rev.Copy.Files[0].Content) != shopCompose("web") {
+		t.Errorf("revision 2 holds %d variables and files %+v, want exactly revision 1's content without the edit", len(rev.Copy.Vars), rev.Copy.Files)
+	}
+	draft := answerOf[draftAnswer](t, s.operator.do(http.MethodGet, "stacks/"+s.st.ID+"/draft", ""))
+	if draft.Version != v || len(draft.Vars) != 1 || draft.Vars[0].Name != "EDITED" || len(draft.Files) != 1 || draft.Files[0].Content != edited {
+		t.Errorf("draft after = %+v, want version %d with the edit untouched", draft, v)
+	}
+	if base, _ := s.f.draftBase(t, s.st.ID); base != 1 {
+		t.Errorf("the edited draft starts from revision %d, want it left at 1 so its review shows the update", base)
+	}
+	rec := s.operator.deploy(s.st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "concurrent_unacknowledged" {
+		t.Errorf("deploying the edited draft = %d %s, want 409 concurrent_unacknowledged: the update is a deploy made since", rec.Code, rec.Body)
+	}
+}
+
+// A draft that holds what the update copied is rebased onto the update revision, so the next deploy of it asks for nothing.
+func TestUnEditedDraftRebased(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web")
+	if base, _ := s.f.draftBase(t, s.st.ID); base != 1 {
+		t.Fatalf("the draft starts from revision %d, want 1", base)
+	}
+	s.move(t, "web", 'b')
+	s.updateStack(t, s.operator, "stack", "shop", nil)
+
+	base, version := s.f.draftBase(t, s.st.ID)
+	if base != 2 {
+		t.Errorf("the draft starts from revision %d after a good update, want 2", base)
+	}
+	rec := s.operator.deploy(s.st.ID, `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploying the draft = %d %s, want it to need no acknowledgement", rec.Code, rec.Body)
+	}
+	if job := s.f.awaitDeploy(t, answerOf[stackRunAnswer](t, rec).JobID); job.State != "done" {
+		t.Fatalf("deploy = %+v, want done", job)
+	}
+}
+
+// A failed update leaves the draft where it was and says so in the run and the audit log.
+func TestFailedUpdateNoRebase(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web")
+	s.move(t, "web", 'b')
+	s.f.fake.SetTaskState("shop_web", "preparing", "")
+	rec := s.operator.do(http.MethodPost, "updates/run", stackRunBody("stack", "shop", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body)
+	}
+	jobID := answerOf[stackRunAnswer](t, rec).JobID
+	awaitStackJobItem(t, s.f, jobID, func(it jobs.Item) bool { return it.ID == "service:shop_web" && it.Unit == "tasks" })
+	if rec := s.operator.do(http.MethodPost, cancelPath(s.st.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	if job := s.f.awaitDeploy(t, jobID); job.State == "done" {
+		t.Fatalf("job = %+v, want it stopped", job)
+	}
+	s.f.fake.SetTaskState("shop_web", "", "")
+
+	if base, _ := s.f.draftBase(t, s.st.ID); base != 1 {
+		t.Errorf("the draft starts from revision %d after a failed update, want it left at 1", base)
+	}
+	revs := s.f.revisions(t, s.st.ID)
+	if len(revs) != 2 || revs[1].Outcome != "failed" {
+		t.Errorf("revisions = %+v, want revision 2 failed", revs)
+	}
+	run := s.f.runByJob(t, jobID)
+	if run.State != updates.RunFailed || run.Reason != updates.ReasonCancelled || run.RevisionSeq != 2 || run.FinishedAt.IsZero() {
+		t.Errorf("run = %+v, want a failed run that was cancelled and made revision 2", run)
+	}
+	if rows := s.f.auditRows(t, "image.update_failed"); len(rows) != 1 || rows[0].Details["workload"] != "shop_web" || rows[0].Result != "failure" {
+		t.Errorf("image.update_failed rows = %+v, want one for shop_web", rows)
+	}
+	if rows := s.f.auditRows(t, "image.updated"); len(rows) != 0 {
+		t.Errorf("image.updated rows = %+v, want none", rows)
+	}
+	if _, held := s.f.stackLocks.Held(s.e.ID); held {
+		t.Error("the lock is still held after the update ended")
+	}
+}
+
+// The revision's pins are the images that run, so the stack reads in sync afterwards.
+func TestNoDriftAfterUpdate(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web", "api")
+	s.move(t, "web", 'b')
+	s.updateStack(t, s.operator, "stack", "shop", nil)
+
+	got := answerOf[driftAnswer](t, s.operator.do(http.MethodGet, driftPath(s.st.ID, true), ""))
+	if got.State != "none" || got.Revision != 2 || got.Count != 0 {
+		t.Errorf("drift after the update = %+v, want none at revision 2", got)
+	}
+}
