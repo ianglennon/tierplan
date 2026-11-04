@@ -9,6 +9,37 @@ import (
 	"context"
 )
 
+const beginQueuedImageUpdateRun = `-- name: BeginQueuedImageUpdateRun :execrows
+UPDATE image_update_runs
+SET state = 'running', workload_id = ?, items = ?, revision_seq = ?, started_at = ?
+WHERE id = ? AND state = 'queued' AND finished_at = 0
+`
+
+type BeginQueuedImageUpdateRunParams struct {
+	WorkloadID  string
+	Items       string
+	RevisionSeq int64
+	StartedAt   int64
+	ID          string
+}
+
+// A run that waited in a bulk update starts: the ID of the workload and the items it now knows (the images and digests the registry gave), the revision a
+// stack's update wrote, and the time it began. Only a run that is still queued starts; one that has ended, or was started already,
+// is left as it is, so the answer says whether this caller began it.
+func (q *Queries) BeginQueuedImageUpdateRun(ctx context.Context, arg BeginQueuedImageUpdateRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, beginQueuedImageUpdateRun,
+		arg.WorkloadID,
+		arg.Items,
+		arg.RevisionSeq,
+		arg.StartedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const finishImageUpdateRun = `-- name: FinishImageUpdateRun :execrows
 UPDATE image_update_runs
 SET state = ?, reason = ?, finished_at = ?, revision_seq = ?, rollback_seq = ?

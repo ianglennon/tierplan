@@ -5065,6 +5065,247 @@
         ],
         "type": "object"
       },
+      "FleetBulkItem": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expect": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "For each service name (the compose service name for a container of a stack; the container's name otherwise), the digest the confirm showed. The server compares it with what the registry says now and skips the item as moved when they differ; it never deploys a digest from the request",
+            "maxProperties": 100,
+            "type": "object"
+          },
+          "kind": {
+            "description": "service for a swarm service, container for a standalone container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's or container's name",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "FleetBulkJob": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. Its items are the workloads, in the order they are updated, then a summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "jobId"
+        ],
+        "type": "object"
+      },
+      "FleetBulkRefused": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "For not_updatable, why in TierPlan's words (agent, job_mode, managed_by_stack, pinned_in_file, compose_unmanaged, task_container, workload_gone and the like)",
+            "type": "string"
+          },
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "kind": {
+            "description": "service or container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The workload's name",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was not taken",
+            "enum": [
+              "no_permission",
+              "not_selectable",
+              "offline",
+              "locked",
+              "moved",
+              "not_updatable",
+              "too_many_jobs"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "kind",
+          "name",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "FleetBulkRunBody": {
+        "additionalProperties": false,
+        "properties": {
+          "bulkId": {
+            "description": "The ID that ties every audit entry of the selection together (detail bulk)",
+            "type": "string"
+          },
+          "jobs": {
+            "description": "One job for each environment that had workloads to update",
+            "items": {
+              "$ref": "#/components/schemas/FleetBulkJob"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "skipped": {
+            "description": "The workloads that were not taken, and why. Items the caller may not update in an environment they may not read are named no_permission, as an environment that does not exist is",
+            "items": {
+              "$ref": "#/components/schemas/FleetBulkRefused"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bulkId",
+          "jobs",
+          "skipped"
+        ],
+        "type": "object"
+      },
+      "FleetBulkRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The workloads to update, at most 500",
+            "items": {
+              "$ref": "#/components/schemas/FleetBulkItem"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "FleetBulkSkipBody": {
+        "additionalProperties": false,
+        "properties": {
+          "bulkId": {
+            "description": "The ID that ties every audit entry of the selection together (detail bulk)",
+            "type": "string"
+          },
+          "refused": {
+            "description": "The workloads whose version was not skipped, and why",
+            "items": {
+              "$ref": "#/components/schemas/FleetBulkRefused"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "skipped": {
+            "description": "How many versions are skipped now, those that were skipped already included",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bulkId",
+          "skipped",
+          "refused"
+        ],
+        "type": "object"
+      },
+      "FleetBulkSkipItem": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "description": "service for a swarm service, container for a standalone container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's or container's name",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "FleetBulkSkipRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The workloads whose offered version is skipped, at most 500",
+            "items": {
+              "$ref": "#/components/schemas/FleetBulkSkipItem"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "FleetCheckBody": {
         "additionalProperties": false,
         "properties": {
@@ -23053,11 +23294,12 @@
             ]
           },
           "kind": {
-            "description": "What is updated",
+            "description": "What is updated; bulk for the job of a bulk update of several workloads of the environment, whose items are those workloads in order and a summary (see POST /api/fleet/updates/run)",
             "enum": [
               "service",
               "container",
-              "stack"
+              "stack",
+              "bulk"
             ],
             "type": "string"
           },
@@ -38898,6 +39140,104 @@
           }
         },
         "summary": "Check the images of the environments given, or of all the caller may read, for updates now",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/updates/run": {
+      "post": {
+        "description": "Updates the chosen services and containers to the newest version of their image, in one action: one job for each environment, which takes the environment's operation lock once and updates its workloads one at a time, so a workload whose update fails is put back by itself and the job goes on with the next. Every workload is judged by the server, for the caller, as it is now: the caller needs services.control on its environment (and containers.control for a container, and stacks.deploy for a service of a stack TierPlan manages, which is updated as its own 'update images' revision of that stack inside the job), and only a workload whose update is available now is taken (a skipped, ignored, rolled back, running or held back one is not_selectable, and a rolled back version is never retried here). Each workload's newest version is asked of the registry again when its turn comes, and one that moved since expect is skipped as moved. A workload that is not taken is named in skipped and the others go on. While a job waits, its workloads read queued, then updating. At most 500 workloads. One bulk ID ties together the audit entries image.updated, image.update_failed and image.update_rolled_back of every workload, and each job ends with one image.bulk_updated entry. Open to every signed-in person; what they may update is judged for each workload. Reasons: no_permission: the caller may not do this to that workload there (or may not see the environment). not_selectable: it is not an update that is available now (skipped, ignored, rolled back, up to date, running, gone). offline: the environment could not be read. locked: another operation holds the environment. moved: the newest version changed since it was confirmed. not_updatable: it is a kind of workload this does not update, with code saying why. too_many_jobs: the caller already has the most jobs running.",
+        "operationId": "runFleetUpdates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetBulkRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetBulkRunBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Update the selected workloads across environments",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/updates/skip": {
+      "post": {
+        "description": "Hides the version of its image each chosen service or container is offered now, until the tag points at a newer one, as skipping one does, for many at once. Needs updates.manage (an Environment Admin) on each environment: a workload in an environment where the caller lacks it is refused no_permission and the others are skipped. A workload that has no update available now is refused not_selectable. One audit entry image.update_skipped for each workload, all with the same bulk ID in the detail bulk. At most 500 workloads. Open to every signed-in person; what they may skip is judged for each workload. Reasons: no_permission: the caller may not do this to that workload there (or may not see the environment). not_selectable: it is not an update that is available now (skipped, ignored, rolled back, up to date, running, gone). offline: the environment could not be read. locked: another operation holds the environment. moved: the newest version changed since it was confirmed. not_updatable: it is a kind of workload this does not update, with code saying why. too_many_jobs: the caller already has the most jobs running.",
+        "operationId": "skipFleetUpdates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetBulkSkipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetBulkSkipBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Skip the offered version of the selected workloads across environments",
         "tags": [
           "fleet"
         ]

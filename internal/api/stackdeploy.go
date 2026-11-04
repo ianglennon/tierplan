@@ -924,6 +924,50 @@ type launch struct {
 	// release frees the environment's operation lock; owned is set once the job holds it.
 	release func()
 	owned   *bool
+	// deploy is the operation's row in stack_deploys, which runStackDeploy reads when the operation runs: launchStackDeploy fills it
+	// once the job has started, and a bulk update's item writes it itself.
+	deploy *stackops.DeployRow
+	// persist is the context the end of the operation is recorded with, which a cancel does not reach. Nil means the context the
+	// operation runs on, without its cancel.
+	persist context.Context
+}
+
+// errDeployNotRecorded is what runStackDeploy answers for an operation whose deploy row was not written: nothing was run.
+var errDeployNotRecorded = errors.New("the deploy was not recorded")
+
+// runStackDeploy is what the job of a stack operation does once its deploy row is written (l.deploy): it runs the operation on r and,
+// when it ends, records how it ended, undoes a failed one that changed a service (l.onFailed) and frees the environment's lock
+// (l.release), all before the job reads as finished. launchStackDeploy runs it in a job of its own; a bulk update runs it for a stack's
+// item in its own job, with a release that frees nothing.
+func runStackDeploy(ctx context.Context, d StacksDeps, l launch, r *jobs.Reporter) error {
+	if l.deploy == nil || l.deploy.ID == "" {
+		return errDeployNotRecorded
+	}
+	persist := l.persist
+	if persist == nil {
+		persist = context.WithoutCancel(ctx)
+	}
+	deploy := *l.deploy
+	actor, userAgent := l.p.AuditActor(), l.userAgent
+	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
+	onDone := func(res stackops.DeployResult) {
+		if l.record != nil {
+			l.record(persist, deploy, res)
+		} else {
+			recordDeployEnd(persist, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering, extra)
+		}
+		// What undoes a failed operation runs before the lock is free, in the same job.
+		if l.onFailed != nil && res.NeedsRestore() {
+			if err := l.onFailed(persist, r, l.rev, res.Code); err != nil {
+				d.Log.Error("a failed stack operation could not be undone", "stack", l.st.ID, "revision", l.rev.Seq, "error", err)
+			}
+		}
+		// The lock is free before the job reads as finished, so whoever sees it end can start the next
+		// operation at once. Freeing it again when the run returns changes nothing.
+		l.release()
+	}
+	l.run(ctx, r, onDone)
+	return nil
 }
 
 // launchStackDeploy starts the job of a deploy or a roll back and records it, answering 202 with the
@@ -934,24 +978,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	ready := make(chan struct{})
 	var deploy stackops.DeployRow
 	reqCtx := context.WithoutCancel(ctx)
-	actor, userAgent := l.p.AuditActor(), l.userAgent
-	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
-	onDone := func(r *jobs.Reporter, res stackops.DeployResult) {
-		if l.record != nil {
-			l.record(reqCtx, deploy, res)
-		} else {
-			recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering, extra)
-		}
-		// What undoes a failed operation runs before the lock is free, in the same job.
-		if l.onFailed != nil && res.NeedsRestore() {
-			if err := l.onFailed(reqCtx, r, l.rev, res.Code); err != nil {
-				d.Log.Error("a failed stack operation could not be undone", "stack", l.st.ID, "revision", l.rev.Seq, "error", err)
-			}
-		}
-		// The lock is free before the job reads as finished, so whoever sees it end can start the next
-		// operation at once. Freeing it again when the run returns changes nothing.
-		l.release()
-	}
+	l.deploy, l.persist = &deploy, reqCtx
 	kind := l.jobKind
 	if kind == "" {
 		kind = stackDeployJobKind
@@ -997,7 +1024,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		if deploy.ID == "" {
 			return // the row could not be written: the handler cancelled the job
 		}
-		l.run(jctx, r, func(res stackops.DeployResult) { onDone(r, res) })
+		_ = runStackDeploy(jctx, d, l, r)
 	})
 	if errors.Is(err, jobs.ErrTooMany) {
 		failRevision()

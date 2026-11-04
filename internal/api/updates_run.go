@@ -73,7 +73,7 @@ type UpdateJobPathInput struct {
 type UpdateJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
 	RunID      string               `json:"runId" doc:"The update's run, kept after the job leaves the server's history"`
-	Kind       string               `json:"kind" enum:"service,container,stack" doc:"What is updated"`
+	Kind       string               `json:"kind" enum:"service,container,stack,bulk" doc:"What is updated; bulk for the job of a bulk update of several workloads of the environment, whose items are those workloads in order and a summary (see POST /api/fleet/updates/run)"`
 	Workload   string               `json:"workload" doc:"The service's, container's or stack's name"`
 	FromDigest string               `json:"fromDigest" doc:"The digest it ran"`
 	ToDigest   string               `json:"toDigest" doc:"The digest it is updated to, as the server read it from the registry"`

@@ -621,6 +621,7 @@ func TestJudgeUpdatingAndBusy(t *testing.T) {
 		igs    updates.Ignores
 		holder *stackops.Holder
 		job    string
+		queued string
 		state  updates.State
 		jobID  string
 		kind   string
@@ -636,6 +637,12 @@ func TestJudgeUpdatingAndBusy(t *testing.T) {
 		{name: "pinned stays pinned under a lock", w: pinned, chk: moved, holder: janitor, state: updates.StatePinned},
 		{name: "ignored stays ignored under a lock", w: named("web"), chk: moved, igs: ignoreWeb, holder: janitor, state: updates.StateIgnored},
 		{name: "no lock and no run changes nothing", w: named("web"), chk: moved, state: updates.StateUpdateAvailable},
+		// A bulk update's queued items (plan 12-30, D-11, UI-SPEC "Queued"): the lock is the bulk job's own, so they are never busy.
+		{name: "waiting in a bulk update reads queued, with the bulk job, though the bulk job holds the lock", w: named("api"), chk: moved, holder: updateOfWeb, queued: "job-9", state: updates.StateQueued, jobID: "job-9"},
+		{name: "queued needs no lock to be held", w: named("api"), chk: moved, queued: "job-9", state: updates.StateQueued, jobID: "job-9"},
+		{name: "updating wins over queued", w: named("web"), chk: moved, holder: updateOfWeb, job: "job-7", queued: "job-9", state: updates.StateUpdating, jobID: "job-7"},
+		{name: "queued wins over a check that says up to date", w: named("api"), chk: same, queued: "job-9", state: updates.StateQueued, jobID: "job-9"},
+		{name: "queued wins over a skip or an ignore", w: named("web"), chk: moved, igs: ignoreWeb, queued: "job-9", state: updates.StateQueued, jobID: "job-9"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -645,7 +652,7 @@ func TestJudgeUpdatingAndBusy(t *testing.T) {
 			}
 			got := updates.Judge(updates.JudgeInput{
 				Workload: tc.w, Check: tc.chk, Now: t0, StaleAfter: time.Hour, Ignore: tc.igs.Match(tc.w, remote),
-				Holder: tc.holder, RunningJob: tc.job,
+				Holder: tc.holder, RunningJob: tc.job, QueuedJob: tc.queued,
 			})
 			if got.State != tc.state || got.JobID != tc.jobID {
 				t.Fatalf("verdict = %s job %q, want %s job %q", got.State, got.JobID, tc.state, tc.jobID)
@@ -657,6 +664,9 @@ func TestJudgeUpdatingAndBusy(t *testing.T) {
 				}
 			case got.Holder != nil:
 				t.Errorf("holder = %+v on a %s verdict, want none", got.Holder, got.State)
+			}
+			if tc.state == updates.StateQueued && got.Ignore != nil {
+				t.Errorf("a queued verdict still carries the ignore %+v", got.Ignore)
 			}
 			if tc.state == updates.StateUpdating && (got.Reason != "" || got.Note != "" || got.Ignore != nil) {
 				t.Errorf("an updating verdict carries %q %q %+v, want none of the old story", got.Reason, got.Note, got.Ignore)

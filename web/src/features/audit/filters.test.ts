@@ -269,6 +269,14 @@ describe("actionLabel (janitor)", () => {
     expect(actionLabel("image.update_rolled_back", real, {})).toBe(
       "An image update was rolled back",
     );
+    expect(
+      actionLabel("image.bulk_updated", real, {
+        done: "2",
+        total: "3",
+        bulk: "0195a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      }),
+    ).toBe("Updated 2 items (bulk 0195a1b2)");
+    expect(actionLabel("image.bulk_updated", real, {})).toBe("Updated image versions in bulk");
   });
 
   it("names the node whose janitor setting changed", () => {

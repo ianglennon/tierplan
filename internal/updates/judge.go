@@ -97,6 +97,9 @@ type JudgeInput struct {
 	// RunningJob is the job of an image update of this workload that is running now, empty when none is (IMG-06). The workload
 	// then reads updating, whatever else is known about it.
 	RunningJob string
+	// QueuedJob is the job of the bulk update this workload is waiting in, empty when it is in none (plan 12-30, D-11). The workload
+	// then reads queued, with the job. The bulk job holds the environment's lock itself, so a queued workload is not busy.
+	QueuedJob string
 	// Holder is who holds the operation lock of the workload's environment, nil when nobody does. A workload an update would
 	// be offered for then reads busy, because nothing can be started on the environment until the holder is done.
 	Holder *stackops.Holder
@@ -125,7 +128,8 @@ type Verdict struct {
 	NextCheckAt time.Time
 	// Ignore is the skip or ignore the state is skipped or ignored because of, with who set it and when.
 	Ignore *Ignore
-	// JobID is the job of the update that is running, set with StateUpdating.
+	// JobID is the job of the update that is running, set with StateUpdating, or of the bulk update that waits for its turn, set with
+	// StateQueued.
 	JobID string
 	// Holder is who holds the environment's lock, set with StateBusy.
 	Holder *stackops.Holder
@@ -168,9 +172,10 @@ type Verdict struct {
 // may_be_stale, unless it already carries the note running_index_gone. A not_checked verdict carries
 // NextCheckAt.
 //
-// What is happening now then overrides what was found, in this order (plan 12-16): a workload with an image update running
-// reads updating, with the job; while another operation holds the environment's lock, a workload that reads update_available
-// or rolled_back reads busy, with the holder. Every other state is information that stays true while the lock is held (up to
+// What is happening now then overrides what was found, in this order (plan 12-16, 12-30): a workload with an image update running
+// reads updating, with the job; one that waits for its turn in a bulk update reads queued, with the bulk job (the lock the job holds
+// is the bulk update's own, so it never makes its items busy); while another operation holds the environment's lock, a workload that
+// reads update_available or rolled_back reads busy, with the holder. Every other state is information that stays true while the lock is held (up to
 // date, a failed check, pinned, not from a registry, not checked, stale, skipped, ignored), so none is replaced by busy.
 func Judge(in JudgeInput) Verdict {
 	v := failed(in, hold(in, judge(in)))
@@ -183,6 +188,9 @@ func Judge(in JudgeInput) Verdict {
 	switch {
 	case in.RunningJob != "":
 		v.State, v.JobID = StateUpdating, in.RunningJob
+		v.Reason, v.Note, v.ChangedPlatforms, v.Ignore, v.NextCheckAt = "", "", nil, nil, time.Time{}
+	case in.QueuedJob != "":
+		v.State, v.JobID = StateQueued, in.QueuedJob
 		v.Reason, v.Note, v.ChangedPlatforms, v.Ignore, v.NextCheckAt = "", "", nil, nil, time.Time{}
 	case in.Holder != nil && (v.State == StateUpdateAvailable || v.State == StateRolledBack):
 		h := *in.Holder

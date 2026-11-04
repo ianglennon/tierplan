@@ -291,6 +291,10 @@ const (
 	// previous version runs again and failure when the restore failed too; the entry names the same keys as image.update_failed,
 	// the reason being why the update failed.
 	ActionImageUpdateRolledBack = "image.update_rolled_back"
+	// One environment's part of a bulk update ended (plan 12-30, IMG-06, D-11): the entry names the bulk ID that ties it to the
+	// image.updated, image.update_failed and image.update_rolled_back entries of the same selection, how many of the items were
+	// updated (done), how many were selected (total), how many were rolled back and how many were skipped.
+	ActionImageBulkUpdated = "image.bulk_updated"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

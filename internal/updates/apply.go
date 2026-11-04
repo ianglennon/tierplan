@@ -257,45 +257,10 @@ type target struct {
 // environment's operation lock, records the run, and starts the job that does the update. The job owns the lock and frees it
 // before it reads as finished. It answers the job's ID. jobs.ErrTooMany is passed on when the owner has the most jobs running.
 func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
-	if a.Service == nil || a.Runs == nil || a.Locks == nil || a.Jobs == nil || a.Aggregator == nil {
+	if !a.wired() {
 		return "", errors.New("updates: the applier is not wired")
 	}
-	var subject subject
-	switch req.Kind {
-	case "service":
-		row, found, err := a.serviceRow(ctx, req.EnvID, req.Name)
-		if err != nil {
-			return "", err
-		}
-		if !found {
-			return "", ErrWorkloadGone
-		}
-		if err := a.updatable(ctx, req.EnvID, row); err != nil {
-			return "", err
-		}
-		subject = serviceSubject(row)
-	case "container":
-		w, found, err := a.containerWorkload(ctx, req.EnvID, req.Name)
-		if err != nil {
-			return "", err
-		}
-		if !found {
-			return "", ErrWorkloadGone
-		}
-		if err := a.containerUpdatable(ctx, req.EnvID, w); err != nil {
-			return "", err
-		}
-		subject = containerSubject(w)
-	default:
-		return "", ErrUnsupportedKind
-	}
-	// A held lock is answered before the registry is asked: a second update of a workload that is being updated must
-	// read as locked, and not as already up to date because the first has written its spec.
-	if h, held := a.Locks.Held(req.EnvID); held {
-		return "", &LockedError{Holder: h}
-	}
-
-	t, err := a.recheck(ctx, req, subject)
+	t, err := a.prepare(ctx, req, false)
 	if err != nil {
 		return "", err
 	}
@@ -337,7 +302,7 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 		case <-jctx.Done():
 			return
 		}
-		a.execute(jctx, r, req, run, t, freeLock)
+		a.runOne(jctx, r, req, run, t, freeLock)
 	})
 	if err != nil {
 		freeLock()
@@ -352,6 +317,53 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 	}
 	close(ready)
 	return job.ID, nil
+}
+
+// wired reports whether the applier has what an update needs.
+func (a *Applier) wired() bool {
+	return a.Service != nil && a.Runs != nil && a.Locks != nil && a.Jobs != nil && a.Aggregator != nil
+}
+
+// prepare judges a request for one service or container against the live state and the registry, and answers the target it would
+// update. Nothing is written. A held lock is answered before the registry is asked: a second update of a workload that is being
+// updated must read as locked, and not as already up to date because the first has written its spec. lockHeld is true when the caller
+// holds the environment's lock itself, as a bulk update does between its items, so a held lock is then no reason to refuse.
+func (a *Applier) prepare(ctx context.Context, req Request, lockHeld bool) (target, error) {
+	var sub subject
+	switch req.Kind {
+	case "service":
+		row, found, err := a.serviceRow(ctx, req.EnvID, req.Name)
+		if err != nil {
+			return target{}, err
+		}
+		if !found {
+			return target{}, ErrWorkloadGone
+		}
+		if err := a.updatable(ctx, req.EnvID, row); err != nil {
+			return target{}, err
+		}
+		sub = serviceSubject(row)
+	case "container":
+		w, found, err := a.containerWorkload(ctx, req.EnvID, req.Name)
+		if err != nil {
+			return target{}, err
+		}
+		if !found {
+			return target{}, ErrWorkloadGone
+		}
+		if err := a.containerUpdatable(ctx, req.EnvID, w); err != nil {
+			return target{}, err
+		}
+		sub = containerSubject(w)
+	default:
+		return target{}, ErrUnsupportedKind
+	}
+	if !lockHeld {
+		if h, held := a.Locks.Held(req.EnvID); held {
+			return target{}, &LockedError{Holder: h}
+		}
+	}
+	return a.recheck(ctx, req, sub)
 }
 
 // actorKey is what the run keeps of who started it.
@@ -520,9 +532,11 @@ func (a *Applier) itemSpecs(t target) []jobs.ItemSpec {
 // when the restore failed too (the run then keeps restore_failed); for a run that did not fail it is empty.
 type endFunc func(st RunState, reason, cause string)
 
-// execute is the job of an update: it does the work of the kind, ends the run, writes the audit entry and frees the lock
-// before the job's last step ends, so whoever sees the job finished can start the next operation at once.
-func (a *Applier) execute(ctx context.Context, r *jobs.Reporter, req Request, run Run, t target, release func()) {
+// runOne is the work of one update whose run is on record and whose environment lock the caller holds: it does the work of the kind,
+// ends the run, writes the audit entry and calls release before the job's last step ends, so whoever sees the job finished can
+// start the next operation at once. The job of a single update calls it with the release of the lock; a bulk update calls it for
+// each of its items, with a release that frees nothing, and frees the lock itself after the last.
+func (a *Applier) runOne(ctx context.Context, r *jobs.Reporter, req Request, run Run, t target, release func()) {
 	end := a.newEnd(ctx, req, run, t, release)
 	// Whatever ends the function without ending the run (a panic included) ends it failed, and frees the lock.
 	defer end(RunFailed, ReasonInterrupted, ReasonInterrupted)

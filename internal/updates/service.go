@@ -114,10 +114,17 @@ func (s *Service) liveState(ctx context.Context, envID string) (*stackops.Holder
 
 // runningJob is the job of the image update that is running for w: a run of the service or container itself, or of the stack it
 // belongs to. Empty when none is.
-func runningJob(runs []Run, w Workload) string {
+func runningJob(runs []Run, w Workload) string { return jobOfRun(runs, w, RunRunning) }
+
+// queuedJob is the job of the bulk update w waits in: a run in state queued for the service or container itself, or for the stack
+// it belongs to. Empty when none is.
+func queuedJob(runs []Run, w Workload) string { return jobOfRun(runs, w, RunQueued) }
+
+// jobOfRun is the job of the first run in state st that is about w.
+func jobOfRun(runs []Run, w Workload, st RunState) string {
 	name := strings.TrimPrefix(w.Name, "/")
 	for _, r := range runs {
-		if r.JobID == "" {
+		if r.JobID == "" || r.State != st {
 			continue
 		}
 		switch {
@@ -194,7 +201,7 @@ func (s *Service) judgeWith(ctx context.Context, envID string, ws []Workload, li
 			remote = chk.Digest
 		}
 		in.Ignore = held.Match(w, remote)
-		in.Holder, in.RunningJob = holder, runningJob(running, w)
+		in.Holder, in.RunningJob, in.QueuedJob = holder, runningJob(running, w), queuedJob(running, w)
 		if f, ok := failures[FailureKey(w.Kind, strings.TrimPrefix(w.Name, "/"))]; ok {
 			in.Failure = &f
 		}

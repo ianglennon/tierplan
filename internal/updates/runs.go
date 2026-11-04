@@ -105,6 +105,31 @@ func (s RunStore) Insert(ctx context.Context, r Run) error {
 	return nil
 }
 
+// Begin starts a run that waited in a bulk update (plan 12-30): it is running from now, with the items it has now (the images and
+// digests the registry gave when its turn came) and the revision a stack's update wrote. It reports whether it did. A run that is
+// not queued any more (it ended, or was begun already) is left as it is and the answer is false.
+func (s RunStore) Begin(ctx context.Context, r Run) (bool, error) {
+	items := r.Items
+	if items == nil {
+		items = []RunItem{}
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return false, fmt.Errorf("encode the items of an image update run: %w", err)
+	}
+	started := r.StartedAt
+	if started.IsZero() {
+		started = s.now()
+	}
+	n, err := s.Q.BeginQueuedImageUpdateRun(ctx, sqlc.BeginQueuedImageUpdateRunParams{
+		WorkloadID: r.WorkloadID, Items: string(raw), RevisionSeq: r.RevisionSeq, StartedAt: started.UnixNano(), ID: r.ID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin a queued image update run: %w", err)
+	}
+	return n > 0, nil
+}
+
 // SetState moves a run that is not over to st and reports whether it did. A run that has ended is left
 // as it is and the answer is false.
 func (s RunStore) SetState(ctx context.Context, id string, st RunState) (bool, error) {

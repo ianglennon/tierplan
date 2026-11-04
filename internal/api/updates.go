@@ -221,6 +221,7 @@ func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
 	registerUpdatePolicy(r, d)
 	registerUpdateIgnores(r, d)
 	registerUpdateRun(r, d)
+	registerFleetBulk(r, d)
 	registerImageUpdatePreview(r, d)
 	registerUpdateJobs(r, d)
 }

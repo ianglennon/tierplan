@@ -116,6 +116,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "image.updated",
   "image.update_failed",
   "image.update_rolled_back",
+  "image.bulk_updated",
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",
@@ -475,6 +476,13 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     return t("audit.actions.image.update_rolled_back_named", {
       name: details.workload,
       digest: details.from_digest.replace(/^sha256:/, "").slice(0, 12),
+    });
+  }
+  // The summary of a bulk update says how many items it updated and which selection it was.
+  if (key === "image.bulk_updated" && details?.done && details.bulk) {
+    return t("audit.actions.image.bulk_updated_named", {
+      n: details.done,
+      id: details.bulk.slice(0, 8),
     });
   }
   if (key === "swarm.task_history_limit_changed" && details?.to) {

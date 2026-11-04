@@ -364,6 +364,17 @@ func (h *Hub) Start(spec Spec, run func(ctx context.Context, r *Reporter)) (Job,
 type Reporter struct {
 	h *Hub
 	e *entry
+	// scope is put before every item ID this reporter is given, and parent is the Parent of the items it adds that name none:
+	// a reporter made by Scoped, for code that reports a fixed set of item IDs on a job that holds several of its kind.
+	scope, parent string
+}
+
+// Scoped returns a reporter of the same job whose item IDs, and the parent IDs of the items it adds, are all prefixed with scope, and
+// whose added items belong to the item parent (an ID of the whole job, not prefixed) when they name no parent of their own. Code written for a job of one operation (check, pull, update) then runs unchanged
+// as one operation among several in a bigger job, such as a bulk update, each under an item of its own. The output log is the
+// job's, shared.
+func (r *Reporter) Scoped(scope, parent string) *Reporter {
+	return &Reporter{h: r.h, e: r.e, scope: r.scope + scope, parent: parent}
 }
 
 // JobID is the ID of the job the reporter reports on, known to the run as soon as it
@@ -384,6 +395,12 @@ func newItem(spec ItemSpec) Item {
 // last item that is already running finishes.
 func (r *Reporter) Add(spec ItemSpec) {
 	h, e := r.h, r.e
+	spec.ID = r.scope + spec.ID
+	if spec.Parent == "" {
+		spec.Parent = r.parent
+	} else {
+		spec.Parent = r.scope + spec.Parent
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if e.job.Finished() || e.item(spec.ID) != nil {
@@ -399,6 +416,7 @@ func (r *Reporter) Add(spec ItemSpec) {
 // finished is not changed.
 func (r *Reporter) Update(itemID string, fn func(*Item)) {
 	h, e := r.h, r.e
+	itemID = r.scope + itemID
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	it := e.item(itemID)
@@ -436,6 +454,7 @@ func (r *Reporter) Update(itemID string, fn func(*Item)) {
 // does. Finishing an item that already ended changes nothing.
 func (r *Reporter) Finish(itemID, state, code, message string, result map[string]string) {
 	h, e := r.h, r.e
+	itemID = r.scope + itemID
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	it := e.item(itemID)

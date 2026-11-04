@@ -123,6 +123,86 @@ func managedStackByName(ctx context.Context, repo stackops.Repo, envID, name str
 // job through launchStackDeploy, in the stack's console. The images are the revision's own, but for the chosen services, whose
 // pins carry the new digest and which the deploy checks like a reviewed deploy does (ReviewedPins).
 func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p *rbac.Principal, env *httpx.Env, st stackops.Stack, services []string, expect map[string]string, force bool, actor audit.Actor, bulk, userAgent string) (*StackDeployOutput, error) {
+	su, err := judgeStackUpdate(ctx, d, ap, p, env, st, services, expect, force, false)
+	if err != nil {
+		return nil, err
+	}
+	release, held, taken := d.Locks.TryAcquire(env.ID, stackops.Holder{
+		StackID: st.ID, StackName: st.Name, Kind: deployModeUpdate, By: p.Name, Started: time.Now().UTC(),
+	})
+	if !taken {
+		return nil, operationLocked(env.Name, held)
+	}
+	jobOwnsLock := false
+	defer func() {
+		if !jobOwnsLock {
+			release()
+		}
+	}()
+	l, err := su.revise(ctx, actor, bulk, userAgent, nil)
+	if err != nil {
+		return nil, err
+	}
+	l.release, l.owned = release, &jobOwnsLock
+	return launchStackDeploy(ctx, d, l)
+}
+
+// updateStackImagesInJob is updateStackImages for a stack's share of a bulk update (plan 12-30, D-06, D-11): it runs inside the bulk
+// job, under the environment's lock the job already holds, and reports on r, a reporter scoped to the item. The deploy is the same
+// one, with its own revision, its own automatic rollback and its own audit rows (carrying the bulk ID); only the job and the lock
+// are the bulk update's. queued is the run of the item, which the deploy begins and ends. A refusal before anything is written is
+// an error that refusalOfProblem names; the run is then still queued.
+func updateStackImagesInJob(ctx context.Context, d StacksDeps, ap *updates.Applier, p *rbac.Principal, env *httpx.Env, st stackops.Stack, in updates.StackItemInput, r *jobs.Reporter) error {
+	su, err := judgeStackUpdate(ctx, d, ap, p, env, st, in.Services, in.Expect, false, true)
+	if err != nil {
+		return err
+	}
+	run := in.Run
+	l, err := su.revise(ctx, in.Actor, in.BulkID, in.UserAgent, &run)
+	if err != nil {
+		return err
+	}
+	// The lock is the bulk job's and is freed by it: the deploy frees nothing.
+	owned := true
+	l.release, l.owned = func() {}, &owned
+	persist := context.WithoutCancel(ctx)
+	l.persist = persist
+	row, err := d.repo().StartDeploy(persist, st.ID, env.ID, l.kind, l.rev.Seq, r.JobID(), p.Name)
+	if err != nil {
+		_ = d.repo().SetOutcome(persist, l.rev.ID, stackops.OutcomeFailed, "", "")
+		return stackInternal(d, "record the deploy", env.ID, err)
+	}
+	l.deploy = &row
+	for _, spec := range l.items {
+		r.Add(spec)
+	}
+	return runStackDeploy(ctx, d, l, r)
+}
+
+// stackUpdate is the update of a stack's images once it has been judged: which services change and to what, the pins the deploy
+// is given, and what it needs to be prepared. Nothing has been written.
+type stackUpdate struct {
+	d          StacksDeps
+	ap         *updates.Applier
+	p          *rbac.Principal
+	env        *httpx.Env
+	st         stackops.Stack
+	plan       updates.StackPlan
+	good       stackops.Snapshot
+	goodPins   map[string]string
+	pins       map[string]string
+	update     map[string]bool
+	prep       stackops.RollbackPlan
+	masker     stacks.Masker
+	standalone bool
+	node       string
+	caller     stackops.Caller
+}
+
+// judgeStackUpdate judges an update of a stack's images: the services it changes, the newest good revision and the pins, the deploy
+// prepared and checked, and the policy of what it deploys judged for the caller (T-12-51). lockHeld is true when the caller holds the
+// environment's lock itself, as a bulk update does. Nothing is written.
+func judgeStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, p *rbac.Principal, env *httpx.Env, st stackops.Stack, services []string, expect map[string]string, force, lockHeld bool) (*stackUpdate, error) {
 	if d.Jobs == nil || ap == nil || ap.Runs == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Updates are not available right now.")
 	}
@@ -132,8 +212,10 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 	}
 	asUpdates := UpdatesDeps{Log: d.Log}
 	// A held lock is answered before the registry is asked, as a single update does.
-	if h, held := d.Locks.Held(env.ID); held {
-		return nil, operationLocked(env.Name, h)
+	if !lockHeld {
+		if h, held := d.Locks.Held(env.ID); held {
+			return nil, operationLocked(env.Name, h)
+		}
 	}
 	plan, err := ap.PlanStack(ctx, updates.StackRequest{EnvID: env.ID, Stack: st.Name, Services: services, Expect: expect, Recheck: true, Force: force})
 	if err != nil {
@@ -165,32 +247,32 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 		update[t.Key] = true
 	}
 
-	standalone := st.Target == stacks.TargetStandalone
-	masker := stacks.NewMasker(good.Copy.Vars, good.Copy.Files)
-	var prep stackops.RollbackPlan
-	node := ""
-	if standalone {
-		if prep, err = d.ops().PrepareRollbackStandalone(ctx, st, good, goodPins); err != nil {
-			return nil, rollbackPrepareProblem(err, masker)
+	su := &stackUpdate{
+		d: d, ap: ap, p: p, env: env, st: st, plan: plan, good: good, goodPins: goodPins, pins: pins, update: update,
+		standalone: st.Target == stacks.TargetStandalone, masker: stacks.NewMasker(good.Copy.Vars, good.Copy.Files),
+		caller: stackops.Caller{Principal: p, Actor: p.Name},
+	}
+	if su.standalone {
+		if su.prep, err = d.ops().PrepareRollbackStandalone(ctx, st, good, goodPins); err != nil {
+			return nil, rollbackPrepareProblem(err, su.masker)
 		}
-		if node, err = d.ops().StandaloneNode(ctx, env.ID); err != nil {
+		if su.node, err = d.ops().StandaloneNode(ctx, env.ID); err != nil {
 			return nil, snapshotProblem(d.Log, env.ID, err)
 		}
-		if err = d.ops().ValidateStandalonePins(ctx, env.ID, node, st, prep.Loaded.Project, repo, update, pins); err != nil {
+		if err = d.ops().ValidateStandalonePins(ctx, env.ID, su.node, st, su.prep.Loaded.Project, repo, update, pins); err != nil {
 			return nil, pinsProblem(d, env.ID, err)
 		}
 	} else {
-		if prep, err = d.ops().PrepareRollback(ctx, st, good, goodPins); err != nil {
-			return nil, rollbackPrepareProblem(err, masker)
+		if su.prep, err = d.ops().PrepareRollback(ctx, st, good, goodPins); err != nil {
+			return nil, rollbackPrepareProblem(err, su.masker)
 		}
-		if err = d.ops().ValidatePins(ctx, env.ID, st, prep.Plan.Services, repo, update, pins); err != nil {
+		if err = d.ops().ValidatePins(ctx, env.ID, st, su.prep.Plan.Services, repo, update, pins); err != nil {
 			return nil, pinsProblem(d, env.ID, err)
 		}
 	}
 	// What the stack needs to deploy is judged for the caller, as a deploy is (T-12-51): an Operator cannot update a stack
 	// only an Admin may deploy.
-	caller := stackops.Caller{Principal: p, Actor: p.Name}
-	pol, err := d.ops().Policy(ctx, caller, env.ID, good.Copy, prep.Plan)
+	pol, err := d.ops().Policy(ctx, su.caller, env.ID, good.Copy, su.prep.Plan)
 	if err != nil {
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
@@ -204,34 +286,28 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 	if foreign {
 		return nil, nameClashProblem(st.Name)
 	}
+	return su, nil
+}
 
-	release, held, taken := d.Locks.TryAcquire(env.ID, stackops.Holder{
-		StackID: st.ID, StackName: st.Name, Kind: deployModeUpdate, By: p.Name, Started: time.Now().UTC(),
-	})
-	if !taken {
-		return nil, operationLocked(env.Name, held)
-	}
-	jobOwnsLock := false
-	defer func() {
-		if !jobOwnsLock {
-			release()
-		}
-	}()
+// revise makes the revision of the update, with the lock held, and the operation that deploys it. queued is the run of a bulk
+// update's item, which the operation begins; nil for an update of its own, whose run it records.
+func (su *stackUpdate) revise(ctx context.Context, actor audit.Actor, bulk, userAgent string, queued *updates.Run) (launch, error) {
+	d, ap, p, env, st, plan, good, repo := su.d, su.ap, su.p, su.env, su.st, su.plan, su.good, su.d.repo()
 	// The content comes from the newest good revision. A deploy that ended while this request was judged took the lock off
 	// before the job read as finished, so the newest good revision is read again now, holding the lock: the answer no other
 	// operation can change.
 	if now, found, gerr := repo.GoodRevisionInfo(ctx, st.ID); gerr != nil {
-		return nil, stackInternal(d, "read the running revision", env.ID, gerr)
+		return launch{}, stackInternal(d, "read the running revision", env.ID, gerr)
 	} else if !found || now.Seq != good.Seq {
-		return nil, deployedChanged(st.Name, now.Seq)
+		return launch{}, deployedChanged(st.Name, now.Seq)
 	}
 
 	rev, err := repo.NewUpdateRevision(ctx, good, revisionCreator(ctx, repo, p))
 	if err != nil {
-		return nil, stackInternal(d, "revision", env.ID, err)
+		return launch{}, stackInternal(d, "revision", env.ID, err)
 	}
-	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: masker}
-	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
+	rendering := revisionRendering{repo: repo, loaded: su.prep.Loaded, masker: su.masker}
+	if err := rendering.store(ctx, rev.ID, stackops.LivePins(su.pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
 	// The platforms the check read are what the deploy sends, so a revision that predates the platform record needs no
@@ -240,14 +316,19 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 		d.Platforms.Remember(env.ID, t.Repo, t.To, t.Platforms)
 	}
 
-	runID, err := uuid.NewV7()
-	if err != nil {
-		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
-		return nil, stackInternal(d, "new run id", env.ID, err)
-	}
 	run := updates.Run{
-		ID: runID.String(), EnvID: env.ID, BulkID: bulk, Kind: "stack", Workload: st.Name, WorkloadID: st.ID, StackID: st.ID,
+		EnvID: env.ID, BulkID: bulk, Kind: "stack", Workload: st.Name, WorkloadID: st.ID, StackID: st.ID,
 		State: updates.RunRunning, Actor: updateActorKey(actor), RevisionSeq: rev.Seq, StartedAt: time.Now().UTC(),
+	}
+	if queued != nil {
+		run.ID, run.EnvID, run.BulkID, run.JobID, run.StartedAt = queued.ID, queued.EnvID, queued.BulkID, queued.JobID, queued.StartedAt
+	} else {
+		runID, err := uuid.NewV7()
+		if err != nil {
+			_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
+			return launch{}, stackInternal(d, "new run id", env.ID, err)
+		}
+		run.ID = runID.String()
 	}
 	for _, t := range plan.Targets {
 		run.Items = append(run.Items, updates.RunItem{Service: t.Key, Image: t.Image, FromDigest: t.From, ToDigest: t.To})
@@ -256,7 +337,7 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 	extra := deployOpts{}.auditExtras(p)
 	l := launch{
 		p: p, env: env, st: st, rev: rev, mode: deployModeUpdate, kind: stackops.DeployKindDeploy, userAgent: userAgent,
-		rendering: rendering, release: release, owned: &jobOwnsLock,
+		rendering: rendering,
 	}
 	// The stack's own record of the end of a deploy runs first, so the revision's outcome is stored; then the run, the audit
 	// rows and the draft. All of it is before the lock is freed and the job reads as finished.
@@ -270,16 +351,26 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 	}
 	// An update that fails after it changed a service is undone by TierPlan in the same job, holding the same lock (IMG-07, D-12).
 	rb := stackRollback{
-		d: d, ap: ap, p: p, env: env, st: st, good: good, goodPins: goodPins, failed: rev, run: run, plan: plan, actor: actor,
-		userAgent: userAgent, extra: extra, standalone: standalone, node: node,
+		d: d, ap: ap, p: p, env: env, st: st, good: good, goodPins: su.goodPins, failed: rev, run: run, plan: plan, actor: actor,
+		userAgent: userAgent, extra: extra, standalone: su.standalone, node: su.node,
 	}
 	l.onFailed = func(fctx context.Context, r *jobs.Reporter, _ stackops.Snapshot, code string) error {
 		return rollbackFailedUpdate(fctx, rb, r, code)
 	}
-	// The run is on record before the engine is touched: the job writes it first, with its own ID.
+	// The run is on record before the engine is touched: the job writes it first, with its own ID. A run that waited in a bulk
+	// update begins instead, with what it knows now.
 	begin := func(jctx context.Context, r *jobs.Reporter) bool {
 		run.JobID = r.JobID()
-		if err := ap.Runs.Insert(context.WithoutCancel(jctx), run); err != nil {
+		var err error
+		if queued != nil {
+			var begun bool
+			if begun, err = ap.Runs.Begin(context.WithoutCancel(jctx), run); err == nil && !begun {
+				err = errors.New("the run did not wait any more")
+			}
+		} else {
+			err = ap.Runs.Insert(context.WithoutCancel(jctx), run)
+		}
+		if err != nil {
 			d.Log.Error("an image update of a stack could not be recorded", "stack", st.ID, "error", err)
 			r.Output("The update could not be recorded, so nothing was changed.")
 			return false
@@ -287,10 +378,10 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 		return true
 	}
 	notRecorded := stackops.DeployResult{Code: stackops.CodeEngineError}
-	if standalone {
+	if su.standalone {
 		standaloneIn := stackops.StandaloneDeployInput{
-			EnvID: env.ID, NodeID: node, Stack: st, Copy: good.Copy, Reviewed: pins, Update: update,
-			Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker, Subnets: repo,
+			EnvID: env.ID, NodeID: su.node, Stack: st, Copy: good.Copy, Reviewed: su.pins, Update: su.update,
+			Pins: repo, RevisionID: rev.ID, Caller: su.caller, Masker: rendering.masker, Subnets: repo,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -301,12 +392,12 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 			standaloneIn.OnDone = onDone
 			d.ops().DeployStandalone(jctx, standaloneIn, r)
 		}
-		return launchStackDeploy(ctx, d, l)
+		return l, nil
 	}
 	swarmIn := stackops.SwarmDeployInput{
-		EnvID: env.ID, Stack: st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: good.Copy,
-		Caller: caller, Masker: rendering.masker,
-		Pins: repo, Subnets: repo, RevisionID: rev.ID, Update: update, Reviewed: pins,
+		EnvID: env.ID, Stack: st, Project: su.prep.Loaded.Project, Files: su.prep.Files, Vars: su.prep.Vars, Copy: good.Copy,
+		Caller: su.caller, Masker: rendering.masker,
+		Pins: repo, Subnets: repo, RevisionID: rev.ID, Update: su.update, Reviewed: su.pins,
 	}
 	l.items = stackops.DeployItemSpecs()
 	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -317,7 +408,7 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 		swarmIn.OnDone = onDone
 		d.ops().DeploySwarm(jctx, swarmIn, r)
 	}
-	return launchStackDeploy(ctx, d, l)
+	return l, nil
 }
 
 // updateActorKey is what a run keeps of who started it: the user's ID, else the name.

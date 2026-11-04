@@ -459,6 +459,8 @@ var phase12DetailKeys = map[string][]string{
 	audit.ActionImageUpdateFailed: {"kind", "workload", "image", "from_digest", "to_digest", "reason", "bulk"},
 	// A rollback after a failed update names the same keys (plan 12-22, IMG-07).
 	audit.ActionImageUpdateRolledBack: {"kind", "workload", "image", "from_digest", "to_digest", "reason", "bulk"},
+	// The summary of one environment's part of a bulk update names the bulk ID and the counts (plan 12-30, D-11).
+	audit.ActionImageBulkUpdated: {"bulk", "done", "total", "rolled_back", "skipped"},
 }
 
 func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -478,8 +480,8 @@ func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 			}
 		}
 	}
-	if len(phase12DetailKeys) != 9 {
-		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records, the 4 skip and ignore records and the 3 update records", len(phase12DetailKeys))
+	if len(phase12DetailKeys) != 10 {
+		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records, the 4 skip and ignore records, the 3 update records and the bulk summary", len(phase12DetailKeys))
 	}
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase12DetailKeys) {
 		t.Fatalf("verify = %+v", got)
@@ -494,6 +496,7 @@ func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 		"image.updated":            audit.ActionImageUpdated,
 		"image.update_failed":      audit.ActionImageUpdateFailed,
 		"image.update_rolled_back": audit.ActionImageUpdateRolledBack,
+		"image.bulk_updated":       audit.ActionImageBulkUpdated,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

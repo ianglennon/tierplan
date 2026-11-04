@@ -12,6 +12,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 UPDATE image_update_runs SET state = ?
 WHERE id = ? AND finished_at = 0;
 
+-- name: BeginQueuedImageUpdateRun :execrows
+-- A run that waited in a bulk update starts: the ID of the workload and the items it now knows (the images and digests the registry gave), the revision a
+-- stack's update wrote, and the time it began. Only a run that is still queued starts; one that has ended, or was started already,
+-- is left as it is, so the answer says whether this caller began it.
+UPDATE image_update_runs
+SET state = 'running', workload_id = ?, items = ?, revision_seq = ?, started_at = ?
+WHERE id = ? AND state = 'queued' AND finished_at = 0;
+
 -- name: SetImageUpdateRunOldContainer :execrows
 -- Records the ID of the container an update replaces, before it is stopped. Only while the run is not over.
 UPDATE image_update_runs SET old_container = ?

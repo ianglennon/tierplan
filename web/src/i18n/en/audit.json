@@ -214,6 +214,8 @@
         "update_failed_named": "Update of {{name}} failed: {{reason}}",
         "update_rolled_back": "An image update was rolled back",
         "update_rolled_back_named": "Rolled back {{name}} to {{digest}} after a failed update",
+        "bulk_updated": "Updated image versions in bulk",
+        "bulk_updated_named": "Updated {{n}} items (bulk {{id}})",
         "update_reason_pull_failed": "the image could not be pulled",
         "update_reason_didnt_start": "the new version did not start",
         "update_reason_timeout": "it did not finish updating in time",

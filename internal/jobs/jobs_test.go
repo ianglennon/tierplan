@@ -833,3 +833,53 @@ func TestASkippedItemIsFinalAndTheRunsEndLeavesItAlone(t *testing.T) {
 		t.Errorf("second item = %+v, want interrupted", got.Items[1])
 	}
 }
+
+// A scoped reporter lets code written for a job of one operation run as one of several in a bigger job (plan 12-30): its item IDs
+// and the parents it names are prefixed, its added items belong to the item the scope is for, and the job's items stay apart.
+func TestScopedReporterKeepsTheItemsOfEachScopeApart(t *testing.T) {
+	t.Parallel()
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	job, err := h.Start(jobs.Spec{
+		Kind: "image_update", Owner: "u",
+		Items: []jobs.ItemSpec{{ID: "i0", Label: "first"}, {ID: "i1", Label: "second"}},
+	}, func(ctx context.Context, r *jobs.Reporter) {
+		for i, id := range []string{"i0", "i1"} {
+			s := r.Scoped(id+"/", id)
+			s.Add(jobs.ItemSpec{ID: "pull", Label: "Pull"})
+			s.Add(jobs.ItemSpec{ID: "layer", Label: "Layer", Parent: "pull"})
+			s.Update("pull", func(it *jobs.Item) { it.State = jobs.ItemRunning })
+			s.Detail("pull", "detail "+id)
+			s.Finish("layer", jobs.ItemDone, "", "", nil)
+			state := jobs.ItemDone
+			if i == 1 {
+				state = jobs.ItemFailed
+			}
+			s.Finish("pull", state, "", "", nil)
+			r.Finish(id, state, "", "", nil)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.Wait(testsupport.Context(t), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ id, parent, state, detail string }
+	var rows []row
+	for _, it := range got.Items {
+		rows = append(rows, row{it.ID, it.Parent, it.State, it.Detail})
+	}
+	want := []row{
+		{"i0", "", jobs.ItemDone, ""}, {"i1", "", jobs.ItemFailed, ""},
+		{"i0/pull", "i0", jobs.ItemDone, "detail i0"}, {"i0/layer", "i0/pull", jobs.ItemDone, ""},
+		{"i1/pull", "i1", jobs.ItemFailed, "detail i1"}, {"i1/layer", "i1/pull", jobs.ItemDone, ""},
+	}
+	if !slices.Equal(rows, want) {
+		t.Errorf("items = %+v\nwant %+v", rows, want)
+	}
+	if got.State != jobs.JobPartial {
+		t.Errorf("job state = %q, want partial", got.State)
+	}
+}

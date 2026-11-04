@@ -3952,6 +3952,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/updates/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update the selected workloads across environments
+         * @description Updates the chosen services and containers to the newest version of their image, in one action: one job for each environment, which takes the environment's operation lock once and updates its workloads one at a time, so a workload whose update fails is put back by itself and the job goes on with the next. Every workload is judged by the server, for the caller, as it is now: the caller needs services.control on its environment (and containers.control for a container, and stacks.deploy for a service of a stack TierPlan manages, which is updated as its own 'update images' revision of that stack inside the job), and only a workload whose update is available now is taken (a skipped, ignored, rolled back, running or held back one is not_selectable, and a rolled back version is never retried here). Each workload's newest version is asked of the registry again when its turn comes, and one that moved since expect is skipped as moved. A workload that is not taken is named in skipped and the others go on. While a job waits, its workloads read queued, then updating. At most 500 workloads. One bulk ID ties together the audit entries image.updated, image.update_failed and image.update_rolled_back of every workload, and each job ends with one image.bulk_updated entry. Open to every signed-in person; what they may update is judged for each workload. Reasons: no_permission: the caller may not do this to that workload there (or may not see the environment). not_selectable: it is not an update that is available now (skipped, ignored, rolled back, up to date, running, gone). offline: the environment could not be read. locked: another operation holds the environment. moved: the newest version changed since it was confirmed. not_updatable: it is a kind of workload this does not update, with code saying why. too_many_jobs: the caller already has the most jobs running.
+         */
+        post: operations["runFleetUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/updates/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip the offered version of the selected workloads across environments
+         * @description Hides the version of its image each chosen service or container is offered now, until the tag points at a newer one, as skipping one does, for many at once. Needs updates.manage (an Environment Admin) on each environment: a workload in an environment where the caller lacks it is refused no_permission and the others are skipped. A workload that has no update available now is refused not_selectable. One audit entry image.update_skipped for each workload, all with the same bulk ID in the detail bulk. At most 500 workloads. Open to every signed-in person; what they may skip is judged for each workload. Reasons: no_permission: the caller may not do this to that workload there (or may not see the environment). not_selectable: it is not an update that is available now (skipped, ignored, rolled back, up to date, running, gone). offline: the environment could not be read. locked: another operation holds the environment. moved: the newest version changed since it was confirmed. not_updatable: it is a kind of workload this does not update, with code saying why. too_many_jobs: the caller already has the most jobs running.
+         */
+        post: operations["skipFleetUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/git/credentials": {
         parameters: {
             query?: never;
@@ -7524,6 +7564,83 @@ export interface components {
             envId: string;
             /** @description Its name */
             envName: string;
+        };
+        FleetBulkItem: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description For each service name (the compose service name for a container of a stack; the container's name otherwise), the digest the confirm showed. The server compares it with what the registry says now and skips the item as moved when they differ; it never deploys a digest from the request */
+            expect?: {
+                [key: string]: string;
+            };
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name */
+            name: string;
+        };
+        FleetBulkJob: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. Its items are the workloads, in the order they are updated, then a summary */
+            jobId: string;
+        };
+        FleetBulkRefused: {
+            /** @description For not_updatable, why in TierPlan's words (agent, job_mode, managed_by_stack, pinned_in_file, compose_unmanaged, task_container, workload_gone and the like) */
+            code?: string;
+            /** @description The environment's ID */
+            envId: string;
+            /**
+             * @description service or container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The workload's name */
+            name: string;
+            /**
+             * @description Why it was not taken
+             * @enum {string}
+             */
+            reason: "no_permission" | "not_selectable" | "offline" | "locked" | "moved" | "not_updatable" | "too_many_jobs";
+        };
+        FleetBulkRunBody: {
+            /** @description The ID that ties every audit entry of the selection together (detail bulk) */
+            bulkId: string;
+            /** @description One job for each environment that had workloads to update */
+            jobs: components["schemas"]["FleetBulkJob"][] | null;
+            /** @description The workloads that were not taken, and why. Items the caller may not update in an environment they may not read are named no_permission, as an environment that does not exist is */
+            skipped: components["schemas"]["FleetBulkRefused"][] | null;
+        };
+        FleetBulkRunRequest: {
+            /** @description The workloads to update, at most 500 */
+            items: components["schemas"]["FleetBulkItem"][] | null;
+        };
+        FleetBulkSkipBody: {
+            /** @description The ID that ties every audit entry of the selection together (detail bulk) */
+            bulkId: string;
+            /** @description The workloads whose version was not skipped, and why */
+            refused: components["schemas"]["FleetBulkRefused"][] | null;
+            /**
+             * Format: int64
+             * @description How many versions are skipped now, those that were skipped already included
+             */
+            skipped: number;
+        };
+        FleetBulkSkipItem: {
+            /** @description The environment's ID */
+            envId: string;
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name */
+            name: string;
+        };
+        FleetBulkSkipRequest: {
+            /** @description The workloads whose offered version is skipped, at most 500 */
+            items: components["schemas"]["FleetBulkSkipItem"][] | null;
         };
         FleetCheckBody: {
             /**
@@ -14879,10 +14996,10 @@ export interface components {
             /** @description The steps, in the order they run: check, pull, update, wait and, when the image has a health check, health */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What is updated
+             * @description What is updated; bulk for the job of a bulk update of several workloads of the environment, whose items are those workloads in order and a summary (see POST /api/fleet/updates/run)
              * @enum {string}
              */
-            kind: "service" | "container" | "stack";
+            kind: "service" | "container" | "stack" | "bulk";
             /** @description The output log, oldest first */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description The update's run, kept after the job leaves the server's history */
@@ -23706,6 +23823,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    runFleetUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FleetBulkRunRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetBulkRunBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    skipFleetUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FleetBulkSkipRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetBulkSkipBody"];
                 };
             };
             /** @description Error */
