@@ -24,6 +24,7 @@ import { useNow } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortDigest } from "@/features/tags/platform-chips";
+import { canBeNamed, imageTextOf } from "@/features/updates/image-ref";
 import { reasonText } from "@/features/updates/reasons";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
@@ -96,13 +97,47 @@ export function detailText(t: Translate, info: UpdateInfo, now: Date): string {
           : t("updates.detail.rolled_back_noDigest"),
       );
       break;
-    case "skipped":
-      parts.push(
-        info.remoteDigest
-          ? t("updates.detail.skipped_withDigest", { new: shortDigest(info.remoteDigest) })
-          : t("updates.detail.skipped"),
-      );
+    case "skipped": {
+      const by = info.ignore;
+      const digest = by?.digest || info.remoteDigest;
+      if (by) {
+        // Who skipped it and when (D-15); the server leaves the name empty when that person is gone.
+        parts.push(
+          t(digest ? "updates.detail.skipped_by" : "updates.detail.skipped_by_noDigest", {
+            user: by.setBy || t("updates.detail.someone"),
+            digest: digest ? shortDigest(digest) : "",
+            when: formatRelative(by.setAt, now, t),
+          }),
+        );
+      } else {
+        parts.push(
+          digest
+            ? t("updates.detail.skipped_withDigest", { new: shortDigest(digest) })
+            : t("updates.detail.skipped"),
+        );
+      }
       break;
+    }
+    case "ignored": {
+      const by = info.ignore;
+      if (by?.scope === "label") {
+        parts.push(t("updates.detail.ignored_label"));
+      } else if (by) {
+        parts.push(
+          t("updates.detail.ignored_by", {
+            user: by.setBy || t("updates.detail.someone"),
+            scope:
+              by.scope === "image" && canBeNamed(info)
+                ? imageTextOf(info)
+                : t("updates.detail.thisWorkload"),
+            when: formatRelative(by.setAt, now, t),
+          }),
+        );
+      } else {
+        parts.push(t("updates.detail.ignored"));
+      }
+      break;
+    }
     default:
       parts.push(t(`updates.detail.${info.state}`, { checked }));
   }

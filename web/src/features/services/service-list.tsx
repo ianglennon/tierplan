@@ -78,8 +78,9 @@ import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
-import { CheckNowItem } from "@/features/updates/check-now-item";
+import { IgnoreUpdatesDialog } from "@/features/updates/ignore-updates-dialog";
 import { UpdateBadge } from "@/features/updates/update-badge";
+import { UpdateMenuItems } from "@/features/updates/update-menu-items";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -144,90 +145,125 @@ function RowActions({
   // Set when an item was chosen, so the menu does not hand focus back to its button before
   // the dialog has opened.
   const chose = useRef(false);
+  // Ignore updates… opens a dialog that belongs to the row: the menu's content is gone once an
+  // item is chosen. While it is open the list holds still, as it does for an open menu, and when
+  // it closes focus goes back to the row's menu button.
+  const [ignoring, setIgnoring] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const report = useRef(onOpenChange);
+  report.current = onOpenChange;
+  useEffect(() => {
+    if (!ignoring) return;
+    report.current(true);
+    return () => report.current(false);
+  }, [ignoring]);
   return (
-    <DropdownMenu onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="max-md:size-11"
-          disabled={disabled}
-          aria-label={t("actions.menu.label", { name: service.name })}
+    <>
+      <DropdownMenu onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            ref={button}
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="max-md:size-11"
+            disabled={disabled}
+            aria-label={t("actions.menu.label", { name: service.name })}
+          >
+            <Ellipsis aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => {
+            if (!chose.current) return;
+            chose.current = false;
+            event.preventDefault();
+          }}
         >
-          <Ellipsis aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        onCloseAutoFocus={(event) => {
-          if (!chose.current) return;
-          chose.current = false;
-          event.preventDefault();
-        }}
-      >
-        <DropdownMenuItem asChild className="max-md:min-h-11">
-          <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId: service.id }}>
-            {t("actions.menu.open")}
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {canScale ? (
+          <DropdownMenuItem asChild className="max-md:min-h-11">
+            <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId: service.id }}>
+              {t("actions.menu.open")}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {canScale ? (
+            <NeedsTooltip reason={needs.reason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                disabled={!needs.allowed && !needs.reason}
+                onSelect={() => {
+                  chose.current = true;
+                  onScale(service);
+                }}
+              >
+                {t("services.list.menu.scale")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
           <NeedsTooltip reason={needs.reason}>
             <DropdownMenuItem
               className="max-md:min-h-11"
               disabled={!needs.allowed && !needs.reason}
               onSelect={() => {
+                if (!needs.allowed) return;
                 chose.current = true;
-                onScale(service);
+                onForceUpdate(service);
               }}
             >
-              {t("services.list.menu.scale")}
+              {t("services.list.menu.forceUpdate")}
             </DropdownMenuItem>
           </NeedsTooltip>
-        ) : null}
-        <NeedsTooltip reason={needs.reason}>
-          <DropdownMenuItem
-            className="max-md:min-h-11"
-            disabled={!needs.allowed && !needs.reason}
-            onSelect={() => {
-              if (!needs.allowed) return;
-              chose.current = true;
-              onForceUpdate(service);
-            }}
-          >
-            {t("services.list.menu.forceUpdate")}
-          </DropdownMenuItem>
-        </NeedsTooltip>
-        <RollbackMenuItem
-          hasPreviousSpec={service.hasPreviousSpec}
-          needs={needs}
-          onSelect={() => {
-            chose.current = true;
-            onRollback(service);
-          }}
-        />
-        {service.restartLoop ? (
-          <MuteMenuItem
-            envId={envId}
-            serviceId={service.id}
-            name={service.name}
-            muted={service.restartLoop.state === "muted"}
+          <RollbackMenuItem
+            hasPreviousSpec={service.hasPreviousSpec}
             needs={needs}
+            onSelect={() => {
+              chose.current = true;
+              onRollback(service);
+            }}
           />
-        ) : null}
-        <CheckNowItem envId={envId} />
-        <DropdownMenuSeparator />
-        <RemoveServiceMenuItem
-          stack={service.stack}
-          needs={manage}
-          onSelect={() => {
-            chose.current = true;
-            onRemove(service);
+          {service.restartLoop ? (
+            <MuteMenuItem
+              envId={envId}
+              serviceId={service.id}
+              name={service.name}
+              muted={service.restartLoop.state === "muted"}
+              needs={needs}
+            />
+          ) : null}
+          <UpdateMenuItems
+            envId={envId}
+            workload={{ kind: "service", name: service.name }}
+            update={service.update}
+            onChosen={() => {
+              chose.current = true;
+            }}
+            onIgnore={() => setIgnoring(true)}
+          />
+          <DropdownMenuSeparator />
+          <RemoveServiceMenuItem
+            stack={service.stack}
+            needs={manage}
+            onSelect={() => {
+              chose.current = true;
+              onRemove(service);
+            }}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {ignoring && service.update ? (
+        <IgnoreUpdatesDialog
+          envId={envId}
+          workload={{ kind: "service", name: service.name }}
+          update={service.update}
+          open
+          onOpenChange={(isOpen) => {
+            if (!isOpen) setIgnoring(false);
           }}
+          onClosed={() => button.current?.focus()}
         />
-      </DropdownMenuContent>
-    </DropdownMenu>
+      ) : null}
+    </>
   );
 }
 

@@ -13,8 +13,9 @@ import { useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
+import { shortDigest } from "@/features/tags/platform-chips";
 import { useT } from "@/i18n/use-t";
-import { toastError, toastSuccess } from "@/lib/toast";
+import { toastError, toastSuccess, toastSuccessWithAction } from "@/lib/toast";
 
 export type UpdateInfo = components["schemas"]["UpdateInfoBody"];
 export type UpdateState = UpdateInfo["state"];
@@ -282,5 +283,201 @@ export function useSaveUpdateCheckDefaults() {
       queryClient.invalidateQueries({
         predicate: (q) => q.queryKey[0] === "env" && q.queryKey[2] === "update-checks",
       }),
+  });
+}
+
+export type UpdateIgnore = components["schemas"]["UpdateIgnoreBody"];
+
+// A service or a container, as the skip and ignore routes name one.
+export interface UpdateWorkload {
+  kind: "service" | "container";
+  name: string;
+}
+
+// What an ignore covers, as the person chose it. text is how the toasts name it: the image
+// ("nginx:1.27") for an image, the workload's name for one workload.
+export type IgnoreTarget =
+  | { scope: "image"; image: string; text: string }
+  | { scope: "workload"; kind: UpdateWorkload["kind"]; name: string; text: string };
+
+// UpdateHoldError is a skip, an ignore or the taking back of one that the server refused or never
+// answered. status is 0 when the server could not be reached; type is the problem type it named
+// (nothing_to_skip, ignored_by_label, skip_not_found, ignore_not_found, invalid_image).
+export class UpdateHoldError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`skip or ignore request failed (${status})`);
+    this.name = "UpdateHoldError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+function holdFailure(res: { error?: unknown; response: Response }) {
+  const problem = readProblem(res.error, res.response);
+  return new UpdateHoldError(problem.status, problem.type);
+}
+
+// guarded turns whatever a request throws, a network failure included, into an UpdateHoldError.
+async function guarded<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    throw e instanceof UpdateHoldError ? e : new UpdateHoldError(0);
+  }
+}
+
+function ignoreBody(target: IgnoreTarget) {
+  return target.scope === "image"
+    ? ({ scope: "image", image: target.image } as const)
+    : ({ scope: "workload", kind: target.kind, name: target.name } as const);
+}
+
+async function skipRequest(envId: string, workload: UpdateWorkload) {
+  return guarded(async () => {
+    const res = await api.POST("/api/env/{envId}/updates/skip", {
+      params: { path: { envId } },
+      body: { kind: workload.kind, name: workload.name },
+    });
+    if (!res.data) throw holdFailure(res);
+    return res.data;
+  });
+}
+
+async function unskipRequest(envId: string, workload: UpdateWorkload) {
+  return guarded(async () => {
+    const res = await api.DELETE("/api/env/{envId}/updates/skip", {
+      params: { path: { envId } },
+      body: { kind: workload.kind, name: workload.name },
+    });
+    if (res.error !== undefined || !res.response.ok) throw holdFailure(res);
+  });
+}
+
+async function ignoreRequest(envId: string, target: IgnoreTarget) {
+  return guarded(async () => {
+    const res = await api.POST("/api/env/{envId}/updates/ignore", {
+      params: { path: { envId } },
+      body: ignoreBody(target),
+    });
+    if (!res.data) throw holdFailure(res);
+    return res.data;
+  });
+}
+
+async function unignoreRequest(envId: string, target: IgnoreTarget) {
+  return guarded(async () => {
+    const res = await api.DELETE("/api/env/{envId}/updates/ignore", {
+      params: { path: { envId } },
+      body: ignoreBody(target),
+    });
+    if (res.error !== undefined || !res.response.ok) throw holdFailure(res);
+  });
+}
+
+export interface SkipVariables extends UpdateWorkload {
+  // The version on offer when the person chose, for the toast should the answer not name it. The
+  // server skips the one it last found, whatever this says.
+  digest?: string;
+}
+
+// useSkipUpdate is "Skip this version": it hides the version the workload is offered until the tag
+// moves again. It is never retried (P2 D-42). The success toast carries "Undo", an explicit action
+// that calls the unskip route once; the toasts are part of the mutation because the menu that
+// started it closes and unmounts before the answer. Whatever the answer, the environment's lists
+// are read again.
+export function useSkipUpdate(envId: string) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["env", envId] });
+  return useMutation<components["schemas"]["UpdateHeldBody"], UpdateHoldError, SkipVariables>({
+    retry: false,
+    mutationFn: (vars) => skipRequest(envId, vars),
+    onSuccess: (held, vars) => {
+      const digest = held.update?.ignore?.digest || held.update?.remoteDigest || vars.digest || "";
+      toastSuccessWithAction(
+        t("updates.skip.done", { digest: digest ? shortDigest(digest) : "", name: vars.name }),
+        t("updates.undo"),
+        () => {
+          void unskipRequest(envId, vars)
+            .then(() => toastSuccess(t("updates.unskip.done", { scope: vars.name })))
+            .catch(() => toastError(t("updates.unskip.failed", { name: vars.name })))
+            .finally(() => void refresh());
+        },
+      );
+    },
+    onError: (_err, vars) => {
+      toastError(t("updates.skip.failed", { name: vars.name }));
+    },
+    onSettled: () => void refresh(),
+  });
+}
+
+// useUnskipUpdate is "Stop skipping": the skipped version shows as an update again. Never retried.
+export function useUnskipUpdate(envId: string) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  return useMutation<void, UpdateHoldError, UpdateWorkload>({
+    retry: false,
+    mutationFn: (vars) => unskipRequest(envId, vars),
+    onSuccess: (_void, vars) => {
+      toastSuccess(t("updates.unskip.done", { scope: vars.name }));
+    },
+    onError: (_err, vars) => {
+      toastError(t("updates.unskip.failed", { name: vars.name }));
+    },
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["env", envId] }),
+  });
+}
+
+// useIgnoreUpdates is the commit of the ignore dialog: updates of one image in this environment, or of
+// one workload, stay hidden until taken back. Never retried; "Undo" on the toast is an explicit action
+// that calls the unignore route once.
+export function useIgnoreUpdates(envId: string) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["env", envId] });
+  return useMutation<components["schemas"]["UpdateHeldBody"], UpdateHoldError, IgnoreTarget>({
+    retry: false,
+    mutationFn: (target) => ignoreRequest(envId, target),
+    onSuccess: (_held, target) => {
+      toastSuccessWithAction(
+        t("updates.ignore.done", { scope: target.text }),
+        t("updates.undo"),
+        () => {
+          void unignoreRequest(envId, target)
+            .then(() => toastSuccess(t("updates.unignore.done", { scope: target.text })))
+            .catch(() => toastError(t("updates.unignore.failed", { name: target.text })))
+            .finally(() => void refresh());
+        },
+      );
+    },
+    onError: (_err, target) => {
+      toastError(
+        t("updates.ignore.failed", {
+          name: target.scope === "workload" ? target.name : target.text,
+        }),
+      );
+    },
+    onSettled: () => void refresh(),
+  });
+}
+
+// useUnignoreUpdates is "Stop ignoring updates". Never retried. An ignore set by the compose label
+// cannot be removed here; the server answers 409 ignored_by_label and the menu does not offer it.
+export function useUnignoreUpdates(envId: string) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  return useMutation<void, UpdateHoldError, IgnoreTarget>({
+    retry: false,
+    mutationFn: (target) => unignoreRequest(envId, target),
+    onSuccess: (_void, target) => {
+      toastSuccess(t("updates.unignore.done", { scope: target.text }));
+    },
+    onError: (_err, target) => {
+      toastError(t("updates.unignore.failed", { name: target.text }));
+    },
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["env", envId] }),
   });
 }

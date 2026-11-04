@@ -181,3 +181,32 @@ describe("UpdateBadge: the vocabulary, accessibly", () => {
     expect(document.body.querySelector("b")).toBeNull();
   });
 });
+
+describe("UpdateBadge: a skipped version", () => {
+  const skip = (extra: Partial<NonNullable<UpdateInfo["ignore"]>> = {}) => ({
+    mode: "skip" as const,
+    scope: "workload" as const,
+    setBy: "Ada",
+    setAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+    digest: `sha256:${"c".repeat(64)}`,
+    ...extra,
+  });
+
+  it("says who skipped which version and when, and that a newer one will show", () => {
+    show({ state: "skipped", ignore: skip() });
+    expect(descriptionOf("Version skipped")).toBe(
+      "Ada skipped sha256:cccccccccccc 2 h ago. A newer version will show again.",
+    );
+  });
+
+  it("says Someone when the person is gone", () => {
+    show({ state: "skipped", ignore: skip({ setBy: "" }) });
+    expect(descriptionOf("Version skipped")).toContain("Someone skipped sha256:cccccccccccc");
+  });
+
+  it("draws markup in a name as literal text", () => {
+    const { container } = show({ state: "skipped", ignore: skip({ setBy: "<i>Ada</i>" }) });
+    expect(container.querySelector("i")).toBeNull();
+    expect(descriptionOf("Version skipped")).toContain("<i>Ada</i> skipped");
+  });
+});

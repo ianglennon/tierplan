@@ -50,7 +50,13 @@
       "not_checked": "No check has run for this image yet. The first check runs on schedule, or choose Check now.",
       "skipped": "This version was skipped. A newer version will show again.",
       "skipped_withDigest": "{{new}} was skipped. A newer version will show again.",
-      "ignored": "Updates are ignored for this service."
+      "ignored": "Updates are ignored for this service.",
+      "skipped_by": "{{user}} skipped {{digest}} {{when}}. A newer version will show again.",
+      "skipped_by_noDigest": "{{user}} skipped this version {{when}}. A newer version will show again.",
+      "ignored_by": "{{user}} ignored updates for {{scope}} {{when}}.",
+      "ignored_label": "Ignored by the tierplan.updates=ignore label.",
+      "someone": "Someone",
+      "thisWorkload": "this workload"
     },
     "reason": {
       "registryFallback": "The registry",
@@ -183,6 +189,49 @@
         "messageAnon": "The update check defaults were changed while you were editing. Reload to see them.",
         "reload": "Reload"
       }
+    },
+    "undo": "Undo",
+    "menu": {
+      "skip": "Skip this version",
+      "unskip": "Stop skipping",
+      "ignore": "Ignore updates…",
+      "unignore": "Stop ignoring updates",
+      "needs": "{{needs}} on {{environment}}",
+      "labelIgnored": "Ignored by the tierplan.updates=ignore label on the object. Remove the label from your compose file to stop ignoring."
+    },
+    "skip": {
+      "done": "Skipped {{digest}} for {{name}}. A newer version will show again.",
+      "failed": "Couldn't skip this version of {{name}}."
+    },
+    "unskip": {
+      "done": "Updates for {{scope}} will show again.",
+      "failed": "Couldn't stop skipping {{name}}."
+    },
+    "ignore": {
+      "title": "Ignore updates",
+      "description": "TierPlan stops showing updates for this until you turn it back on. It is left out of counts and out of Update stack.",
+      "scope": "Scope",
+      "image": {
+        "label": "This image in {{environment}}",
+        "hint_one": "{{image}}, for the {{count, number}} workload that uses it here.",
+        "hint_other": "{{image}}, for all {{count, number}} workloads that use it here.",
+        "hintUnknown": "{{image}}, for every workload that uses it here."
+      },
+      "workload": {
+        "label": "Only {{name}}",
+        "hint": "Other workloads that use the same image still show updates."
+      },
+      "labelHint": "To keep this in your compose file instead, add the label <code/> to the service.",
+      "labelCopy": "label",
+      "cancel": "Cancel",
+      "submit": "Ignore updates",
+      "pending": "Saving…",
+      "done": "Ignoring updates for {{scope}}.",
+      "failed": "Couldn't ignore updates for {{name}}."
+    },
+    "unignore": {
+      "done": "Updates for {{scope}} will show again.",
+      "failed": "Couldn't stop ignoring updates for {{name}}."
     }
   }
 }
