@@ -415,4 +415,249 @@ describe("EnvPalette search (D-18)", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/env/a/services/svc1"));
     await waitFor(() => expect(palette()).toBeNull());
   });
+
+  it("opens a managed stack by its ID and one TierPlan does not manage by its name", async () => {
+    searchReply = () =>
+      Response.json(
+        searchBody([
+          hit({
+            type: "stack",
+            name: "web-stack",
+            id: "st1",
+            managed: true,
+            envId: "b",
+            envName: "Beta",
+          }),
+          hit({ type: "stack", name: "web-loose", id: "", managed: false }),
+        ]),
+      );
+    const { router, dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    fireEvent.click(await within(dialog).findByRole("option", { name: /web-stack/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/b/stacks/st1"));
+    cleanup();
+    queryClient.clear();
+
+    const again = await openPalette();
+    fireEvent.change(again.input, { target: { value: "web" } });
+    fireEvent.click(await within(again.dialog).findByRole("option", { name: /web-loose/ }));
+    await waitFor(() =>
+      expect(again.router.state.location.pathname).toBe("/env/a/unmanaged-stacks/web-loose"),
+    );
+  });
+
+  it("opens a container by its node", async () => {
+    searchReply = () =>
+      Response.json(
+        searchBody([
+          hit({
+            type: "container",
+            name: "web-1",
+            id: "c1",
+            image: "nginx",
+            nodeId: "n1",
+            node: "w1",
+          }),
+        ]),
+      );
+    const { router, dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    fireEvent.click(await within(dialog).findByRole("option", { name: /web-1/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/a/containers/c1"));
+    expect(router.state.location.search).toMatchObject({ node: "n1" });
+  });
+
+  it("Enter on the top row opens the results page with the query", async () => {
+    searchReply = () => Response.json(searchBody(WEB_HITS));
+    const { router, dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    await within(dialog).findByRole("group", { name: "Services" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/search"));
+    expect(router.state.location.search).toEqual({ q: "web" });
+  });
+
+  it("keeps the environment list for one character and asks nothing", async () => {
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "w" } });
+    expect(within(dialog).getByRole("group", { name: "Environments" })).toBeTruthy();
+    await settled(queryClient);
+    expect(searchCalls).toHaveLength(0);
+  });
+
+  it("shows five hits of a type and 'Show all 7 services' that opens the results page for that type", async () => {
+    const services = Array.from({ length: 5 }, (_, i) =>
+      hit({ type: "service", name: `web-${i}`, id: `s${i}`, image: "nginx" }),
+    );
+    searchReply = () => Response.json(searchBody(services, { counts: { service: 7 } }));
+    const { router, dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    const group = await within(dialog).findByRole("group", { name: "Services" });
+    // Five hits and the last item; another type with five or fewer has none.
+    expect(within(group).getAllByRole("option")).toHaveLength(6);
+    fireEvent.click(within(group).getByRole("option", { name: "Show all 7 services" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/search"));
+    expect(router.state.location.search).toEqual({ q: "web", type: "service" });
+  });
+
+  it("has no 'Show all' when every hit of the type is shown", async () => {
+    searchReply = () => Response.json(searchBody(WEB_HITS));
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    await within(dialog).findByRole("group", { name: "Services" });
+    expect(within(dialog).queryByRole("option", { name: /Show all/ })).toBeNull();
+  });
+
+  it("says Searching 3 environments… in a polite status while the answer is on its way", async () => {
+    searchReply = () => new Promise<Response>(() => {});
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    const text = await within(dialog).findByText("Searching 3 environments…");
+    expect(text.closest('[role="status"]')).toBeTruthy();
+    // The top row is there while it waits.
+    expect(within(dialog).getAllByRole("option")[0]?.textContent).toContain("Search all results");
+  });
+
+  it("says it could not search and searches again on Retry search", async () => {
+    searchReply = () => Response.json({ status: 500, title: "boom" }, { status: 500 });
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    expect(await within(dialog).findByText("Couldn't search.")).toBeTruthy();
+    expect(within(dialog).getByText("Check the connection and try again.")).toBeTruthy();
+    expect(within(dialog).getAllByRole("option")[0]?.textContent).toContain("Search all results");
+
+    searchReply = () => Response.json(searchBody(WEB_HITS));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Retry search" }));
+    expect(await within(dialog).findByRole("group", { name: "Services" })).toBeTruthy();
+    expect(within(dialog).queryByText("Couldn't search.")).toBeNull();
+    expect(searchCalls).toHaveLength(2);
+  });
+
+  it("names the environments it could not search in a footer line that links nowhere", async () => {
+    searchReply = () =>
+      Response.json(
+        searchBody(WEB_HITS, {
+          notSearched: [{ envId: "p", envName: "prod", nodes: 0, reason: "offline" }],
+        }),
+      );
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    const line = await within(dialog).findByText("Couldn't search prod.");
+    expect(line.closest("a")).toBeNull();
+    expect(line.querySelector("a")).toBeNull();
+  });
+
+  it("says No matches and keeps the top row", async () => {
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    expect(await within(dialog).findByText("No matches for “web”")).toBeTruthy();
+    expect(within(dialog).getAllByRole("option")[0]?.textContent).toContain(
+      "Search all results for “web”",
+    );
+  });
+
+  it("cuts a 101-character paste to 100 before it asks", async () => {
+    const { input } = await openPalette();
+    fireEvent.change(input, { target: { value: "a".repeat(101) } });
+    await waitFor(() => expect(searchCalls).toHaveLength(1));
+    expect(searchCalls[0]?.searchParams.get("q")).toBe("a".repeat(100));
+    expect((input as HTMLInputElement).value).toBe("a".repeat(100));
+  });
+
+  it("renders a name as text, never as markup", async () => {
+    searchReply = () =>
+      Response.json(
+        searchBody([hit({ type: "service", name: "<b>web</b>", id: "x", image: "<i>img</i>" })]),
+      );
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    const option = await within(dialog).findByRole("option", { name: /<b>web<\/b>/ });
+    expect(option.querySelector("b")).toBeNull();
+    expect(option.querySelector("i")).toBeNull();
+    expect(option.querySelector("mark")?.textContent).toBe("web");
+  });
+
+  // Held-out: the longest answer the palette can hold, with names far wider than the dialog.
+  it("holds 25 hits with long names in a 400px list, the top row first, the highlighted item kept in view", async () => {
+    const long = "very-long-service-name-".repeat(12);
+    const kinds = ["stack", "service", "container", "image", "network"] as const;
+    const results = kinds.flatMap((type) =>
+      Array.from({ length: 5 }, (_, i) =>
+        hit({ type, name: `web-${long}${type}-${i}`, id: `${type}${i}`, managed: true }),
+      ),
+    );
+    searchReply = () => Response.json(searchBody(results));
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { dialog, input } = await openPalette();
+    fireEvent.change(input, { target: { value: "web" } });
+    await within(dialog).findByRole("group", { name: "Networks" });
+
+    const list = within(dialog).getByRole("listbox");
+    expect(list.className).toContain("max-h-[400px]");
+    expect(list.className).toContain("overflow-y-auto");
+    const options = within(dialog).getAllByRole("option");
+    expect(options).toHaveLength(26);
+    expect(options[0]?.textContent).toContain("Search all results");
+    expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+    // A long name is cut, not wrapped, so a row stays two lines high.
+    expect(within(options[1] as HTMLElement).getByTitle(/very-long/).className).toContain(
+      "truncate",
+    );
+
+    for (let i = 1; i <= 12; i++) {
+      scroll.mockClear();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const current = within(dialog)
+        .getAllByRole("option")
+        .find((o) => o.getAttribute("aria-selected") === "true");
+      expect(current).toBe(options[i]);
+      expect(scroll.mock.contexts).toContain(current);
+    }
+    scroll.mockRestore();
+  });
+});
+
+describe("SearchTrigger (D-18)", () => {
+  beforeEach(() => setUA(LINUX));
+
+  it("is a button named Search TierPlan with the word and the shortcut, and opens the palette", async () => {
+    await renderReady("/env/a");
+    const trigger = screen.getByRole("button", { name: "Search TierPlan" });
+    expect(trigger.textContent).toContain("Search");
+    expect(within(trigger).getByText("Ctrl K")).toBeTruthy();
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "Search TierPlan" })).toBeTruthy();
+  });
+
+  it("shows ⌘K on a Mac", async () => {
+    setUA(MAC);
+    await renderReady("/env/a");
+    expect(
+      within(screen.getByRole("button", { name: "Search TierPlan" })).getByText("⌘K"),
+    ).toBeTruthy();
+  });
+
+  it("gets focus back when Escape closes the palette", async () => {
+    await renderReady("/env/a");
+    const trigger = screen.getByRole("button", { name: "Search TierPlan" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "Search TierPlan" });
+    fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "Escape" });
+    await waitFor(() => expect(palette()).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("sits before the Jobs indicator in the header", async () => {
+    await renderReady("/env/a");
+    const trigger = screen.getByRole("button", { name: "Search TierPlan" });
+    const header = trigger.closest("header");
+    const buttons = Array.from(header?.querySelectorAll("button") ?? []);
+    const toggle = buttons.findIndex((b) => b.getAttribute("aria-label") === "Toggle sidebar");
+    const search = buttons.indexOf(trigger as HTMLButtonElement);
+    expect(toggle).toBeGreaterThanOrEqual(0);
+    expect(search).toBeGreaterThan(toggle);
+    const jobs = buttons.findIndex((b) => /job|update/i.test(b.getAttribute("aria-label") ?? ""));
+    if (jobs >= 0) expect(search).toBeLessThan(jobs);
+  });
 });
