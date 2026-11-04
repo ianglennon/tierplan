@@ -8,11 +8,13 @@ import { GeneralForm } from "@/features/settings/general-form";
 import { JanitorDefaultsCard } from "@/features/settings/janitor-defaults-card";
 import { ShellSettingsCard } from "@/features/settings/shell-settings-card";
 import { StackHistoryCard } from "@/features/settings/stack-history-card";
+import { UpdateChecksDefaultsCard } from "@/features/settings/update-checks-defaults-card";
 import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // Settings > General (D-03, D-04, D-60), the Container shells card (D-29, D-31), the Stack history
-// card (D-01) and the Janitor defaults card (anchor #janitor-defaults, Phase 11 D-04, D-16).
+// card (D-01), the Janitor defaults card (anchor #janitor-defaults, Phase 11 D-04, D-16) and the
+// Image update check defaults card (anchor #update-checks, Phase 12 D-01, D-22).
 // Reading needs settings.read; the form and the card are read-only without
 // settings.write, and the server checks both again.
 function GeneralTab() {
@@ -26,6 +28,7 @@ function GeneralTab() {
       <ShellSettingsCard />
       <StackHistoryCard />
       <JanitorDefaultsCard />
+      <UpdateChecksDefaultsCard />
     </div>
   );
 }
