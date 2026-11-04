@@ -301,3 +301,150 @@ describe("SearchResultsPage (D-18)", () => {
     expect(router.state.location.search).toMatchObject({ q: "nginx" });
   });
 });
+
+describe("SearchResultsPage states (D-18, UI-SPEC Search)", () => {
+  it("asks nothing and says to type at least 2 characters for one character", async () => {
+    await renderPage("/search?q=a");
+    expect(await screen.findByText("Type at least 2 characters")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Search finds stacks, services, containers, images and networks across your environments.",
+      ),
+    ).toBeTruthy();
+    // No chips, table or request for a query the server would refuse.
+    expect(screen.queryByRole("radiogroup", { name: "Type" })).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    await settled(queryClient);
+    expect(searchCalls).toHaveLength(0);
+  });
+
+  it("says nothing matched and how many environments it covers", async () => {
+    searchReply = server([]);
+    await renderPage("/search?q=web");
+    expect(await screen.findByText("No matches for “web”")).toBeTruthy();
+    expect(
+      screen.getByText("Try part of a name, an image, or a stack. Search covers 3 environments."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("names the environments that were not searched in a warning", async () => {
+    searchReply = server(WEB_HITS, {
+      notSearched: [
+        { envId: ENV_B, envName: "Beta", nodes: 0, reason: "offline" },
+        { envId: ENV_C, envName: "prod", nodes: 0, reason: "not_reporting" },
+      ],
+    });
+    await renderPage("/search?q=web");
+    const alert = (await screen.findByText("Some environments weren't searched")).closest(
+      '[role="status"]',
+    );
+    expect(alert?.textContent).toContain("Beta, prod. Results from them are missing.");
+    // The caption counts the environments that were searched.
+    expect(await screen.findByText(/4 results across 1 environment\./)).toBeTruthy();
+  });
+
+  it("says when the list is cut at 200", async () => {
+    const many = Array.from({ length: 200 }, (_, i) =>
+      hit({ type: "image", name: `web:${i}`, id: `img${i}`, size: 1024 }),
+    );
+    searchReply = server(many, { truncated: true });
+    await renderPage("/search?q=web");
+    expect(
+      await screen.findByText(
+        "Showing the first 200 results. Add more of the name to narrow them.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows a failed search with Retry search, and the retry shows the rows", async () => {
+    searchReply = () => Response.json({ title: "boom" }, { status: 500 });
+    await renderPage("/search?q=web");
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Couldn't search.")).toBeTruthy();
+    expect(within(alert).getByText("Check the connection and try again.")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+
+    searchReply = server(WEB_HITS);
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry search" }));
+    expect(await resultsTable()).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("asks again on Search again even though the answer is cached", async () => {
+    searchReply = server(WEB_HITS);
+    await renderPage("/search?q=web");
+    await resultsTable();
+    expect(searchCalls).toHaveLength(1);
+
+    searchReply = server([hit({ type: "stack", name: "web-new", id: "stk9", managed: true })]);
+    fireEvent.click(screen.getByRole("button", { name: "Search again" }));
+    await waitFor(() => expect(searchCalls).toHaveLength(2));
+    expect(await screen.findByRole("link", { name: "web-new" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "web-api" })).toBeNull();
+  });
+
+  it("treats a type it does not know as All and drops an environment that is not a UUID", async () => {
+    searchReply = server(WEB_HITS);
+    const router = await renderPage(`/search?q=web&type=bogus&env=nope&env=${ENV_B}`);
+    await resultsTable();
+    expect(searchCalls).toHaveLength(1);
+    const asked = searchCalls[0]?.searchParams;
+    expect(asked?.get("type")).toBeNull();
+    expect(asked?.getAll("env")).toEqual([ENV_B]);
+    expect(screen.getByRole("radio", { name: "All (4)" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    const search = router.state.location.search as Record<string, unknown>;
+    expect(search.type).toBeUndefined();
+    expect(search.env).toEqual([ENV_B]);
+
+    // No uuid at all: no env filter.
+    cleanup();
+    queryClient.clear();
+    searchCalls.length = 0;
+    await renderPage("/search?q=web&env=nope");
+    await resultsTable();
+    expect(searchCalls[0]?.searchParams.getAll("env")).toEqual([]);
+  });
+
+  it("cuts a query in the address to 100 characters and trims it", async () => {
+    const long = "x".repeat(150);
+    searchReply = server([]);
+    await renderPage(`/search?q=%20${long}%20`);
+    await screen.findByText(/No matches for/);
+    expect(searchCalls[0]?.searchParams.get("q")).toBe("x".repeat(100));
+  });
+
+  it("announces the new count politely when a filter changes", async () => {
+    searchReply = server(WEB_HITS);
+    await renderPage("/search?q=web");
+    await resultsTable();
+    const said = () =>
+      screen
+        .getAllByRole("status")
+        .map((s) => s.textContent)
+        .filter(Boolean);
+    await waitFor(() => expect(said()).toContain("4 results"));
+
+    fireEvent.click(screen.getByRole("radio", { name: "Services (2)" }));
+    await waitFor(() => expect(said()).toContain("2 results"));
+    expect(
+      screen.getAllByRole("status").find((s) => s.textContent === "2 results")?.className,
+    ).toContain("sr-only");
+  });
+
+  it("renders a name as text, never as markup, and keeps nothing in localStorage", async () => {
+    const before = localStorage.length;
+    searchReply = server([
+      hit({ type: "stack", name: "<img src=x onerror=alert(1)>web", id: "", managed: false }),
+    ]);
+    await renderPage("/search?q=web");
+    const table = await resultsTable();
+    expect(table.querySelector("img")).toBeNull();
+    expect(
+      within(table).getByRole("link", { name: "<img src=x onerror=alert(1)>web" }),
+    ).toBeTruthy();
+    expect(localStorage.length).toBe(before);
+  });
+});
