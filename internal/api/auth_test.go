@@ -178,6 +178,8 @@ type authFixture struct {
 	stackBeforeJob func(context.Context)
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
+	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
+	stackClock stackops.Clock
 	// stackUp replaces the Compose SDK's up in a standalone deploy (plan 07-20).
 	stackUp func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error
 	// stackStop and stackStart replace the Compose SDK's stop and start of a standalone stack (plan 07-26).
@@ -487,10 +489,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		var applier *updates.Applier
 		if updateSvc != nil {
 			updateSvc.Locks, updateSvc.UpdateRuns = f.stackLocks, &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+			// The digest an update failed with is remembered as a server does (IMG-07, D-14).
+			failures := &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+			updateSvc.Failures = failures
 			applier = &updates.Applier{
 				Service: updateSvc, Runs: &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}, Locks: f.stackLocks, Jobs: f.jobHub,
 				Aggregator: f.agg, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Audit: f.aud,
-				ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: f.st, Vault: f.v}), Log: log,
+				ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: f.st, Vault: f.v}), Failures: failures, Log: log,
 			}
 			if f.updateApplier != nil {
 				f.updateApplier(applier)
@@ -529,7 +534,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,
 			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Clock: f.stackClock, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		}
 		// The deployer of a background service shares the locks and the environment lookup of the routes.
 		if f.stackLocks == nil {

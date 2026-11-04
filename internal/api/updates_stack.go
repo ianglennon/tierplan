@@ -6,14 +6,17 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -256,7 +259,19 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 	// rows and the draft. All of it is before the lock is freed and the job reads as finished.
 	l.record = func(rctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult) {
 		recordDeployEnd(rctx, d, actor, userAgent, st, rev, deploy, deployModeUpdate, res, rendering, extra)
+		if res.NeedsRestore() {
+			// The rollback ends the run, with what became of the stack, before the lock is freed.
+			return
+		}
 		endStackUpdate(rctx, d, ap, actor, userAgent, st, good, rev, run, plan, res)
+	}
+	// An update that fails after it changed a service is undone by TierPlan in the same job, holding the same lock (IMG-07, D-12).
+	rb := stackRollback{
+		d: d, ap: ap, p: p, env: env, st: st, good: good, goodPins: goodPins, failed: rev, run: run, plan: plan, actor: actor,
+		userAgent: userAgent, extra: extra, standalone: standalone, node: node,
+	}
+	l.onFailed = func(fctx context.Context, r *jobs.Reporter, _ stackops.Snapshot, code string) error {
+		return rollbackFailedUpdate(fctx, rb, r, code)
 	}
 	// The run is on record before the engine is touched: the job writes it first, with its own ID.
 	begin := func(jctx context.Context, r *jobs.Reporter) bool {
@@ -310,50 +325,367 @@ func updateActorKey(a audit.Actor) string {
 	return a.Name
 }
 
-// endStackUpdate records the end of an update of a stack: the run, one audit row for each service, and, for an update that
-// ended good, the draft. An unedited draft is rebased onto the update revision so the next deploy of it asks for no
-// acknowledgement; an edited one is left alone, so its review shows the update as a deploy made since (RESEARCH Pitfall 9).
-// A failed update never touches the draft.
+// endStackUpdate records the end of an update of a stack that is not rolled back: the run, one audit row for each service, the
+// memory of the digest and, for an update that ended good, the draft. An unedited draft is rebased onto the update revision so the
+// next deploy of it asks for no acknowledgement; an edited one is left alone, so its review shows the update as a deploy made since
+// (RESEARCH Pitfall 9). A failed update never touches the draft.
 func endStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, actor audit.Actor, userAgent string, st stackops.Stack, from, rev stackops.Snapshot, run updates.Run, plan updates.StackPlan, res stackops.DeployResult) {
 	wctx, cancel := doneActionAuditContext(ctx)
 	defer cancel()
-	state, reason := updates.RunDone, ""
+	e := stackEnd{state: updates.RunDone, revision: rev.Seq}
 	if !res.OK() {
-		state, reason = updates.RunFailed, res.Code
+		e.state, e.reason = updates.RunFailed, res.Code
 		if res.Code == stackops.CodeCancelled {
-			reason = updates.ReasonCancelled
+			e.reason = updates.ReasonCancelled
 		}
+		e.cause = e.reason
 	}
-	if _, err := ap.Runs.Finish(wctx, run.ID, state, reason, rev.Seq, 0); err != nil {
+	endStackRun(wctx, d, ap, actor, userAgent, st, run, plan, e)
+	if e.state != updates.RunDone {
+		return
+	}
+	if _, err := d.repo().RebaseUneditedDraft(wctx, st.ID, from, rev.Seq); err != nil {
+		d.Log.Warn("could not rebase the draft of a stack after an image update", "stack", st.ID, "error", err)
+	}
+}
+
+// stackEnd is how the run of an update of a stack ended. reason is what the run keeps; cause is why the update failed, which differs
+// from reason only when the rollback failed too (the run then keeps restore_failed). revision is the update's revision and rollback
+// the revision of the automatic rollback, 0 for none.
+type stackEnd struct {
+	state          updates.RunState
+	reason, cause  string
+	revision, back int64
+}
+
+// endStackRun ends the run, remembers or forgets the digest of each service, and writes the audit rows of the end of an update of
+// a stack: image.updated for each service when it ended good, else image.update_failed and, when the stack was put back or that
+// was tried, image.update_rolled_back with the result of it (IMG-07, D-14, AUTH-08). A write that fails is logged and changes nothing
+// else.
+func endStackRun(ctx context.Context, d StacksDeps, ap *updates.Applier, actor audit.Actor, userAgent string, st stackops.Stack, run updates.Run, plan updates.StackPlan, e stackEnd) {
+	if _, err := ap.Runs.Finish(ctx, run.ID, e.state, e.reason, e.revision, e.back); err != nil {
 		d.Log.Error("an image update of a stack could not be finished on record", "run", run.ID, "error", err)
 	}
-	if d.Audit != nil {
-		for _, t := range plan.Targets {
-			e := audit.Entry{
-				Actor: actor, TargetType: "service", TargetID: t.Key, EnvID: st.EnvID, IP: httpx.ClientIP(wctx), UserAgent: userAgent,
+	rememberStackFailures(ctx, d, ap, st, run, plan, e)
+	if d.Audit == nil {
+		return
+	}
+	for _, t := range plan.Targets {
+		row := func(action string, result audit.Result, why string) audit.Entry {
+			en := audit.Entry{
+				Actor: actor, TargetType: "service", TargetID: t.Key, EnvID: st.EnvID, IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+				Action: action, Result: result, Reason: why,
 				// The documented detail keys of an image update. The stack and the revision are in the stack's own audit row.
 				Details: map[string]string{
 					"kind": "service", "workload": t.Key, "image": t.Image, "from_digest": t.From, "to_digest": t.To,
 				},
 			}
 			if run.BulkID != "" {
-				e.Details["bulk"] = run.BulkID
+				en.Details["bulk"] = run.BulkID
 			}
-			if state == updates.RunDone {
-				e.Action, e.Result = audit.ActionImageUpdated, audit.ResultSuccess
-			} else {
-				e.Action, e.Result, e.Reason = audit.ActionImageUpdateFailed, audit.ResultFailure, reason
-				e.Details["reason"] = reason
+			return en
+		}
+		var entries []audit.Entry
+		switch e.state {
+		case updates.RunDone:
+			entries = append(entries, row(audit.ActionImageUpdated, audit.ResultSuccess, ""))
+		case updates.RunRolledBack, updates.RunRollbackFailed:
+			failed := row(audit.ActionImageUpdateFailed, audit.ResultFailure, e.cause)
+			failed.Details["reason"] = e.cause
+			back := row(audit.ActionImageUpdateRolledBack, audit.ResultSuccess, "")
+			back.Details["reason"] = e.cause
+			if e.state == updates.RunRollbackFailed {
+				back.Result, back.Reason = audit.ResultFailure, e.reason
 			}
-			if err := d.Audit.Record(wctx, e); err != nil {
-				d.Log.Error("an image update of a stack could not be written to the audit log", "stack", st.ID, "service", t.Key, "error", err)
+			entries = append(entries, failed, back)
+		default:
+			failed := row(audit.ActionImageUpdateFailed, audit.ResultFailure, e.reason)
+			failed.Details["reason"] = e.reason
+			entries = append(entries, failed)
+		}
+		for _, en := range entries {
+			if err := d.Audit.Record(ctx, en); err != nil {
+				d.Log.Error("an image update of a stack could not be written to the audit log", "stack", st.ID, "service", t.Key, "action", en.Action, "error", err)
 			}
 		}
 	}
-	if state != updates.RunDone {
+}
+
+// rememberStackFailures keeps what the next judgement needs of an update of a stack, for each service it changed, as an update of
+// the service on its own does: a good update forgets the failure, a rolled-back or rollback-failed one and one whose pull failed
+// remember the digest that failed, and a cancelled one or one refused before anything changed says nothing about the version.
+func rememberStackFailures(ctx context.Context, d StacksDeps, ap *updates.Applier, st stackops.Stack, run updates.Run, plan updates.StackPlan, e stackEnd) {
+	if ap.Failures == nil {
 		return
 	}
-	if _, err := d.repo().RebaseUneditedDraft(wctx, st.ID, from, rev.Seq); err != nil {
-		d.Log.Warn("could not rebase the draft of a stack after an image update", "stack", st.ID, "error", err)
+	for _, t := range plan.Targets {
+		kind, name := "container", t.Name
+		if t.Swarm {
+			kind, name = "service", t.Key
+		}
+		if name == "" {
+			name = t.Key
+		}
+		var err error
+		switch {
+		case e.state == updates.RunDone:
+			_, err = ap.Failures.Clear(ctx, st.EnvID, kind, name)
+		case e.cause == updates.ReasonCancelled:
+			continue
+		case e.state == updates.RunRolledBack, e.state == updates.RunRollbackFailed:
+			err = ap.Failures.Record(ctx, updates.Failure{
+				EnvID: st.EnvID, Kind: kind, Workload: name, Digest: t.To, Reason: e.cause, RunID: run.ID,
+				RollbackFailed: e.state == updates.RunRollbackFailed,
+			})
+		case e.state == updates.RunFailed && isPullFailureCode(e.cause):
+			err = ap.Failures.Record(ctx, updates.Failure{
+				EnvID: st.EnvID, Kind: kind, Workload: name, Digest: t.To, Reason: updates.ReasonPullFailed, RunID: run.ID,
+			})
+		default:
+			continue
+		}
+		if err != nil {
+			d.Log.Error("the outcome of an image update of a stack could not be remembered", "stack", st.ID, "service", t.Key, "error", err)
+		}
 	}
+}
+
+// isPullFailureCode reports whether a deploy's code says the registry or the node's pull of an image failed, as against the node
+// being out of reach, read-only or refusing: only the first says something about the version.
+func isPullFailureCode(code string) bool {
+	switch code {
+	case "", stackops.CodeHostReadOnly, stackops.CodeNodeUnreachable, stackops.CodeAgentPolicyDenied, dockerx.PullCodeCancelled:
+		return false
+	}
+	_, ok := stackops.PullMessages[code]
+	return ok
+}
+
+// updateFailureReason words why an update's deploy failed after it had changed a service, in the reasons a run keeps.
+func updateFailureReason(code string) string {
+	switch code {
+	case stackops.CodeConvergeTimeout:
+		return updates.ReasonTimeout
+	case stackops.CodeTasksFailed, stackops.CodeUpdateStopped, stackops.CodeNetworkFull:
+		return updates.ReasonDidntStart
+	case stackops.CodeServiceRejected:
+		return updates.ReasonRejected
+	case stackops.CodeServiceChanged:
+		return updates.ReasonServiceChanged
+	}
+	return updates.ReasonEngine
+}
+
+// stackRollback is what the automatic rollback of a failed update of a stack needs, taken from the update that failed: who asked,
+// the stack, the newest good revision before the update and its pins, the update's own revision and run, and how the stack deploys.
+type stackRollback struct {
+	d          StacksDeps
+	ap         *updates.Applier
+	p          *rbac.Principal
+	env        *httpx.Env
+	st         stackops.Stack
+	good       stackops.Snapshot
+	goodPins   map[string]string
+	failed     stackops.Snapshot
+	run        updates.Run
+	plan       updates.StackPlan
+	actor      audit.Actor
+	userAgent  string
+	extra      map[string]string
+	standalone bool
+	node       string
+}
+
+// restoreWindow bounds the rollback: each service gets the converge timeout to run again, a few at a time, and the writes around
+// them a few minutes. The rollback does not end when the job is cancelled, so it ends here.
+func (rb stackRollback) restoreWindow() time.Duration {
+	t := rb.d.ConvergeTimeout
+	if t <= 0 {
+		t = stackops.DefaultConvergeTimeout
+	}
+	return 2*t + 5*time.Minute
+}
+
+// rollbackFailedUpdate puts a stack back after the deploy of an image update failed after it had changed a service (IMG-07, D-12). It
+// runs in the update's own job, before the environment's lock is freed, so no other operation can come between the failure and the
+// restore. The restore is a revision of its own, "rollback of #N", a copy of the newest good revision before the update, and it is
+// deployed with the revision's own images, platforms and subnets by the stack's engine, for every service of the stack together, so
+// the stack is never left half on the new version. A service the engine already rolled back by its own failure action is left as it
+// is by that deploy; the revision and the audit rows are written once all the same. It never calls the git roll-back hook, so a git
+// stack's automatic deploys stay on, and it never writes the services' update_config or any file of the stack.
+//
+// The run ends rolled_back, or rollback_failed when the previous version could not be put back; either way every updated service
+// remembers the digest that failed. The two steps "Roll back to revision #N" and "Wait for the previous version to run" are added to
+// the job. An error is returned only for the log: the run has been ended on record by then.
+func rollbackFailedUpdate(ctx context.Context, rb stackRollback, r *jobs.Reporter, code string) error {
+	d, repo := rb.d, rb.d.repo()
+	cause := updateFailureReason(code)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rb.restoreWindow())
+	defer cancel()
+
+	r.Add(jobs.ItemSpec{ID: updates.ItemRollback, Label: "Roll back to revision #" + itoa(rb.good.Seq), Kind: stackops.KindStep})
+	r.Add(jobs.ItemSpec{ID: updates.ItemRollbackWait, Label: "Wait for the previous version to run", Kind: stackops.KindStep})
+	r.Update(updates.ItemRollback, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	r.Output("The update failed. Putting the stack back to revision #" + itoa(rb.good.Seq))
+
+	// end is the one place the rollback finishes: the steps, the run, the memory and the audit rows.
+	end := func(rolled stackops.DeployResult, rollbackSeq int64, rollbackErr error) error {
+		e := stackEnd{state: updates.RunRolledBack, reason: cause, cause: cause, revision: rb.failed.Seq, back: rollbackSeq}
+		if rollbackErr != nil || !rolled.OK() {
+			e.state, e.reason = updates.RunRollbackFailed, updates.ReasonRestoreFailed
+		}
+		wctx, stop := doneActionAuditContext(ctx)
+		defer stop()
+		endStackRun(wctx, d, rb.ap, rb.actor, rb.userAgent, rb.st, rb.run, rb.plan, e)
+		return rollbackErr
+	}
+	// refused fails the steps for a rollback that never reached the engine.
+	refused := func(code string, err error) error {
+		r.Finish(updates.ItemRollback, jobs.ItemFailed, code, stackops.CodeMessage(code), nil)
+		r.Finish(updates.ItemRollbackWait, jobs.ItemSkipped, stackops.CodeNotRun, "", nil)
+		return err
+	}
+
+	masker := stacks.NewMasker(rb.good.Copy.Vars, rb.good.Copy.Files)
+	var prep stackops.RollbackPlan
+	var err error
+	if rb.standalone {
+		prep, err = d.ops().PrepareRollbackStandalone(ctx, rb.st, rb.good, rb.goodPins)
+	} else {
+		prep, err = d.ops().PrepareRollback(ctx, rb.st, rb.good, rb.goodPins)
+	}
+	if err != nil {
+		d.Log.Error("the revision before a failed image update cannot be redeployed", "stack", rb.st.ID, "revision", rb.good.Seq, "error", masker.Mask(err.Error()))
+		return end(stackops.DeployResult{}, 0, refused(stackops.CodeRevisionNotDeployable, errors.New("the previous revision cannot be redeployed")))
+	}
+	rev, err := repo.CopyRevision(ctx, rb.good, rb.p.Name, stackops.OriginRollback)
+	if err != nil {
+		return end(stackops.DeployResult{}, 0, refused(stackops.CodeEngineError, fmt.Errorf("write the rollback revision: %w", err)))
+	}
+	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: masker}
+	if err := rendering.store(ctx, rev.ID, stackops.LivePins(rb.goodPins)); err != nil {
+		d.Log.Warn("could not store the rendering of a revision", "stack", rb.st.ID, "revision", rev.Seq, "error", err)
+	}
+	row, err := repo.StartDeploy(ctx, rb.st.ID, rb.env.ID, stackops.DeployKindRollback, rev.Seq, r.JobID(), rb.p.Name)
+	if err != nil {
+		_ = repo.SetOutcome(ctx, rev.ID, stackops.OutcomeFailed, "", "")
+		return end(stackops.DeployResult{}, rev.Seq, refused(stackops.CodeEngineError, fmt.Errorf("record the rollback: %w", err)))
+	}
+
+	caller := stackops.Caller{Principal: rb.p, Actor: rb.p.Name}
+	var items []jobs.ItemSpec
+	var run func(jctx context.Context, rr *jobs.Reporter, onDone func(stackops.DeployResult))
+	if rb.standalone {
+		in := stackops.StandaloneDeployInput{
+			EnvID: rb.env.ID, NodeID: rb.node, Stack: rb.st, Copy: rb.good.Copy, Reviewed: rb.goodPins, Rollback: true,
+			Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: masker, Subnets: repo, RestoredSubnets: rb.good.Subnets,
+		}
+		items = stackops.StandaloneItemSpecs()
+		run = func(jctx context.Context, rr *jobs.Reporter, onDone func(stackops.DeployResult)) {
+			in.OnDone = onDone
+			d.ops().DeployStandalone(jctx, in, rr)
+		}
+	} else {
+		in := stackops.SwarmDeployInput{
+			EnvID: rb.env.ID, Stack: rb.st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: rb.good.Copy,
+			Caller: caller, Masker: masker,
+			Pins: repo, RevisionID: rev.ID, Reviewed: rb.goodPins, Rollback: true,
+			// The revision's own record of its platforms goes with its digests, so the rollback asks no registry for them.
+			RestoredPlatforms: rb.good.Platforms,
+			Subnets:           repo, RestoredSubnets: rb.good.Subnets,
+		}
+		items = stackops.DeployItemSpecs()
+		run = func(jctx context.Context, rr *jobs.Reporter, onDone func(stackops.DeployResult)) {
+			in.OnDone = onDone
+			d.ops().DeploySwarm(jctx, in, rr)
+		}
+	}
+	res, wrote := runRestoreDeploy(ctx, r, items, run)
+
+	// The revision, the deploy row and the stack's own audit row, as a roll back made by a person is recorded.
+	rctx, stop := doneActionAuditContext(ctx)
+	recordDeployEnd(rctx, d, rb.actor, rb.userAgent, rb.st, rev, row, deployModeRollback, res, rendering, rb.extra)
+	stop()
+
+	switch {
+	case res.OK():
+		r.Output("The stack runs revision #" + itoa(rb.good.Seq) + " again")
+		r.Finish(updates.ItemRollback, jobs.ItemDone, "", "", nil)
+		r.Update(updates.ItemRollbackWait, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+		r.Finish(updates.ItemRollbackWait, jobs.ItemDone, "", "", nil)
+	case wrote || isWaitCode(res.Code):
+		r.Finish(updates.ItemRollback, jobs.ItemDone, "", "", nil)
+		r.Finish(updates.ItemRollbackWait, jobs.ItemFailed, res.Code, stackops.CodeMessage(res.Code), nil)
+	default:
+		refused(res.Code, nil)
+	}
+	return end(res, rev.Seq, nil)
+}
+
+// isWaitCode reports whether a deploy's code is that of a service that was written and did not settle.
+func isWaitCode(code string) bool {
+	switch code {
+	case stackops.CodeConvergeTimeout, stackops.CodeUpdateStopped, stackops.CodeTasksFailed, stackops.CodeNetworkFull:
+		return true
+	}
+	return false
+}
+
+// runRestoreDeploy runs a deploy in a job of its own, which nobody lists, and shows it in the job r: its output lines as they are
+// written, and the moment every service has been written, which ends the step that writes and starts the step that waits. The
+// deploy has to run apart because the steps of the update's own deploy have all ended, and a step that ended cannot be reported
+// on again. ctx bounds it and a cancel of the stack's job does not reach it: a restore that began is finished. It answers what the
+// deploy ended with, failed when it never said, and whether every service had been written by then.
+func runRestoreDeploy(ctx context.Context, r *jobs.Reporter, items []jobs.ItemSpec, run func(jctx context.Context, rr *jobs.Reporter, onDone func(stackops.DeployResult))) (stackops.DeployResult, bool) {
+	hub := jobs.New(jobs.Options{})
+	defer hub.Close()
+	var result stackops.DeployResult
+	var said atomic.Bool
+	job, err := hub.Start(jobs.Spec{Kind: "stack.restore", Owner: "restore", Items: items}, func(_ context.Context, rr *jobs.Reporter) {
+		run(ctx, rr, func(x stackops.DeployResult) { result = x; said.Store(true) })
+	})
+	if err != nil {
+		return stackops.DeployResult{Code: stackops.CodeEngineError}, false
+	}
+	var wrote atomic.Bool
+	var last uint64
+	finished := make(chan struct{})
+	_, events, cancelSub, serr := hub.Subscribe(ctx, job.ID, 0)
+	go func() {
+		defer close(finished)
+		if serr != nil {
+			return
+		}
+		for ev := range events {
+			switch {
+			case ev.Type == jobs.EventOutput && ev.Output != nil:
+				r.Output(ev.Output.Text)
+				last = ev.Output.Seq
+			case ev.Item != nil && ev.Item.ID == stackops.ItemServices && ev.Item.Total > 0 && ev.Item.Current >= ev.Item.Total:
+				if wrote.CompareAndSwap(false, true) {
+					r.Finish(updates.ItemRollback, jobs.ItemDone, "", "", nil)
+					r.Update(updates.ItemRollbackWait, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+				}
+			}
+		}
+	}()
+	if _, err := hub.Wait(ctx, job.ID); err != nil {
+		cancelSub()
+		<-finished
+		return stackops.DeployResult{Code: stackops.CodeEngineError}, wrote.Load()
+	}
+	<-finished
+	cancelSub()
+	// Whatever the live reader did not carry over.
+	if lines, ok := hub.Output(job.ID); ok {
+		for _, l := range lines {
+			if l.Seq > last {
+				r.Output(l.Text)
+			}
+		}
+	}
+	if !said.Load() {
+		return stackops.DeployResult{Code: stackops.CodeEngineError}, wrote.Load()
+	}
+	return result, wrote.Load()
 }

@@ -45,6 +45,9 @@ type StackTarget struct {
 	Key string
 	// Short is the service's name in the compose file.
 	Short string
+	// Name is the workload the judgement and the memory of a failed update file the service under: the swarm service's name, or the
+	// name of the container a standalone host runs it in.
+	Name string
 	// Swarm is true for a swarm service and false for a service of a standalone host.
 	Swarm bool
 	// Image is the image the service follows, without a digest (repository:tag), and Repo its repository as the registry knows it.
@@ -143,7 +146,7 @@ func (a *Applier) PlanStack(ctx context.Context, req StackRequest) (StackPlan, e
 			return StackPlan{}, fmt.Errorf("the registry answered %s with something that is not a sha256 digest", w.Ref.Repo())
 		}
 		t := StackTarget{
-			Key: m.key, Short: m.short, Swarm: w.Kind == "service", Image: imageOf(w), Repo: w.Ref.Repo(), From: v.RunningDigest, To: remote,
+			Key: m.key, Short: m.short, Name: strings.TrimPrefix(w.Name, "/"), Swarm: w.Kind == "service", Image: imageOf(w), Repo: w.Ref.Repo(), From: v.RunningDigest, To: remote,
 			RunsOn: append([]string{}, w.Platforms...), ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
 		}
 		if t.Swarm {

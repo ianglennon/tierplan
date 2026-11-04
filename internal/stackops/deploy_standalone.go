@@ -409,6 +409,8 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	if d.subnetPlanHook != nil {
 		d.subnetPlanHook()
 	}
+	// The SDK's up may change containers as soon as it begins, so a deploy that fails from here on has written.
+	res.Wrote = true
 	err = d.Aggregator.WriteOnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
 		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout, ForceRecreate: diff.Forced}, events.on)
 	})

@@ -49,12 +49,18 @@ func shopCompose(names ...string) string {
 // still says a for each.
 func newShop(t *testing.T, services ...string) *shopFix {
 	t.Helper()
+	return newShopWith(t, func(*envFix) {}, services...)
+}
+
+// newShopWith is newShop with the fixture tuned before the server is built.
+func newShopWith(t *testing.T, tune func(*envFix), services ...string) *shopFix {
+	t.Helper()
 	answers := map[string]headAnswer{}
 	for _, s := range services {
 		answers["team/"+s] = headAnswer{digest: updDigest('a')}
 	}
 	heads := newScriptedHeads(answers)
-	f, e := stackEnvTuned(t, func(f *envFix) { f.updateHeads = heads })
+	f, e := stackEnvTuned(t, func(f *envFix) { f.updateHeads = heads; tune(f) })
 	for _, s := range services {
 		f.fake.SetDistributionDigest("registry.test/team/"+s+":1", updDigest('a'))
 	}

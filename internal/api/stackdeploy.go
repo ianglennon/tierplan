@@ -914,7 +914,12 @@ type launch struct {
 	run   func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult))
 	// record, when set, stores how the operation ended in place of recordDeployEnd, which is a deploy's: a stop
 	// and a start take no revision.
-	record    func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
+	record func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
+	// onFailed, when set, runs inside the job once the operation ended failed after it changed a service and not by a cancel
+	// (DeployResult.NeedsRestore), after record and before the lock is freed, so nobody else can write to the environment between
+	// the failure and what undoes it. It is given a context a cancel does not reach: a write that began is finished. An image
+	// update uses it to put the stack back by itself (plan 12-23, IMG-07, D-12). code is the failure's code.
+	onFailed  func(ctx context.Context, r *jobs.Reporter, rev stackops.Snapshot, code string) error
 	rendering revisionRendering
 	// release frees the environment's operation lock; owned is set once the job holds it.
 	release func()
@@ -931,11 +936,17 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	reqCtx := context.WithoutCancel(ctx)
 	actor, userAgent := l.p.AuditActor(), l.userAgent
 	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
-	onDone := func(res stackops.DeployResult) {
+	onDone := func(r *jobs.Reporter, res stackops.DeployResult) {
 		if l.record != nil {
 			l.record(reqCtx, deploy, res)
 		} else {
 			recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering, extra)
+		}
+		// What undoes a failed operation runs before the lock is free, in the same job.
+		if l.onFailed != nil && res.NeedsRestore() {
+			if err := l.onFailed(reqCtx, r, l.rev, res.Code); err != nil {
+				d.Log.Error("a failed stack operation could not be undone", "stack", l.st.ID, "revision", l.rev.Seq, "error", err)
+			}
 		}
 		// The lock is free before the job reads as finished, so whoever sees it end can start the next
 		// operation at once. Freeing it again when the run returns changes nothing.
@@ -986,7 +997,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		if deploy.ID == "" {
 			return // the row could not be written: the handler cancelled the job
 		}
-		l.run(jctx, r, onDone)
+		l.run(jctx, r, func(res stackops.DeployResult) { onDone(r, res) })
 	})
 	if errors.Is(err, jobs.ErrTooMany) {
 		failRevision()
