@@ -27,9 +27,6 @@ import (
 // now, and a workload that fails any test is named in the answer and does not stop the others. One job runs for each environment.
 
 const (
-	// bulkMaxItems is the most workloads one request may name (T-12-91).
-	bulkMaxItems = 500
-
 	// The reasons an item of a bulk request was not taken.
 	bulkNoPermission   = updates.BulkNoPermission
 	bulkNotSelectable  = "not_selectable"

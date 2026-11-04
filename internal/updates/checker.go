@@ -377,7 +377,7 @@ func (c *Checker) ask(ctx context.Context, u *unit, force bool, began time.Time)
 		if err != nil {
 			return nil, err
 		}
-		o = v.(*outcome) //nolint:forcetypeassert // checkKey returns nothing else
+		o = v.(*outcome) //nolint:errcheck,forcetypeassert // checkKey returns nothing else
 		// A forced check that joined one which left the key alone as recent enough was not given what it
 		// asked for: it asks once more, as the one that begins.
 		if !force || !o.skipped || c.fresh(o.chk, true, began) {

@@ -50,7 +50,7 @@ func plainService(name string, running byte) dockertest.FakeService {
 	spec := plainSpec(name, running)
 	return dockertest.FakeService{
 		ID: "svc-" + name, Name: name, Mode: "replicated", Running: 3, Desired: 3, Version: 1, Image: spec.TaskTemplate.ContainerSpec.Image,
-		Labels: spec.Annotations.Labels, Spec: &spec,
+		Labels: spec.Labels, Spec: &spec,
 	}
 }
 

@@ -68,7 +68,7 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 		if err != nil {
 			return Preview{}, err
 		}
-		return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
+		return Preview(sp), nil
 	}
 	if kind == "container" {
 		return a.previewContainer(ctx, envID, name)
@@ -96,7 +96,7 @@ func (a *Applier) Preview(ctx context.Context, envID, kind, name string) (Previe
 			if err != nil {
 				return Preview{}, err
 			}
-			return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
+			return Preview(sp), nil
 		}
 		p.Refusal = nu.Code
 		return p, nil
@@ -165,7 +165,7 @@ func (a *Applier) previewContainer(ctx context.Context, envID, name string) (Pre
 			if err != nil {
 				return Preview{}, err
 			}
-			return Preview{Items: sp.Items, Warnings: sp.Warnings, LeftOut: sp.LeftOut, Lock: sp.Lock, Offered: sp.Offered, Refusal: sp.Refusal}, nil
+			return Preview(sp), nil
 		}
 		p.Refusal = nu.Code
 		return p, nil

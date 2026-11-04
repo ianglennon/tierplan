@@ -54,7 +54,7 @@ func overlays(percents ...int) envs.AddressSpace {
 	for _, p := range percents {
 		v.Overlays = append(v.Overlays, envs.OverlayUsage{
 			Name: fmt.Sprintf("net%03d", p), Subnets: []string{fmt.Sprintf("10.0.%d.0/24", p)}, Measured: true,
-			Used: uint64(p), Capacity: 100, Percent: p, State: netspace.StateOf(uint64(p), 100),
+			Used: uint64(p), Capacity: 100, Percent: p, State: netspace.StateOf(uint64(p), 100), //nolint:gosec // a test's percent, never negative
 		})
 	}
 	return v
@@ -96,7 +96,7 @@ func TestFleetPoolsThresholds(t *testing.T) {
 	for _, it := range got.Items {
 		switch it.Kind {
 		case "overlay":
-			if it.Unit != "addresses" || it.Capacity != 100 || it.Used != uint64(it.Percent) || it.Subnet == "" {
+			if it.Unit != "addresses" || it.Capacity != 100 || it.Used != uint64(it.Percent) || it.Subnet == "" { //nolint:gosec // a test's percent, never negative
 				t.Errorf("overlay %+v", it)
 			}
 		case "pool":

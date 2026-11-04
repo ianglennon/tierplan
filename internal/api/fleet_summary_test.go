@@ -23,7 +23,7 @@ import (
 
 func meter(percent int) envs.AddressSpace {
 	return envs.AddressSpace{Swarm: true, Measured: true, Overlays: []envs.OverlayUsage{
-		{Name: fmt.Sprintf("net%d", percent), Measured: true, Used: uint64(percent), Capacity: 100, Percent: percent, State: netspace.StateNormal},
+		{Name: fmt.Sprintf("net%d", percent), Measured: true, Used: uint64(percent), Capacity: 100, Percent: percent, State: netspace.StateNormal}, //nolint:gosec // a test's percent, never negative
 	}}
 }
 

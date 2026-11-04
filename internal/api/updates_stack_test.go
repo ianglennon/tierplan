@@ -388,7 +388,7 @@ func TestUnmanagedStackAdoptFirst(t *testing.T) {
 	heads := newScriptedHeads(map[string]headAnswer{"team/legacy_web": {digest: updDigest('b')}})
 	web := plainService("legacy_web", 'a')
 	web.Labels = map[string]string{"com.docker.stack.namespace": "legacy"}
-	web.Spec.Annotations.Labels = web.Labels
+	web.Spec.Labels = web.Labels
 	f, e := updateEnvOf(t, heads, nil, web)
 	operator := f.caller(t, e, "operator-1", "operator")
 	if rec := f.checkNow(t, e); rec.code != http.StatusOK {

@@ -261,8 +261,8 @@ func TestBulkQueuesRunsBeforeTheirTurn(t *testing.T) {
 func TestBulkStackServiceNeedsTheStackDeployPermission(t *testing.T) {
 	t.Parallel()
 	managed := swarmService("managed", 'a')
-	managed.Spec.Annotations.Labels = map[string]string{stacks.LabelStackID: "stack-1"}
-	managed.Labels = managed.Spec.Annotations.Labels
+	managed.Spec.Labels = map[string]string{stacks.LabelStackID: "stack-1"}
+	managed.Labels = managed.Spec.Labels
 	r := newApplyRig(t, nil, managed, swarmService("web", 'a'))
 	r.applier.ManagedStack = func(_ context.Context, _, id string) (bool, error) { return id == "stack-1", nil }
 	r.offer("web", dg('b'))

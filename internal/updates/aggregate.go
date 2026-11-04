@@ -19,9 +19,6 @@ type StackVerdict struct {
 	NotCheckable []State
 }
 
-// uncheckable reports whether a verdict is about a workload no registry can be asked about.
-func uncheckable(s State) bool { return s == StatePinned || s == StateNotFromRegistry }
-
 // Aggregate rolls the verdicts of a stack's workloads up into one (UI-SPEC "Stack aggregate"). Only the
 // workloads that can be checked count. The first that applies answers:
 //

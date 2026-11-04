@@ -718,7 +718,7 @@ func rollbackFailedUpdate(ctx context.Context, rb stackRollback, r *jobs.Reporte
 		r.Finish(updates.ItemRollback, jobs.ItemDone, "", "", nil)
 		r.Finish(updates.ItemRollbackWait, jobs.ItemFailed, res.Code, stackops.CodeMessage(res.Code), nil)
 	default:
-		refused(res.Code, nil)
+		_ = refused(res.Code, nil)
 	}
 	return end(res, rev.Seq, nil)
 }

@@ -327,7 +327,7 @@ func (f *Fake) serveContainerCreate(w http.ResponseWriter, r *http.Request, p st
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
 		return true
 	}
-	if req.Config == nil || req.Config.Image == "" {
+	if req.Config == nil || req.Image == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Config.Image is required"})
 		return true
 	}
@@ -366,16 +366,16 @@ func (f *Fake) serveContainerCreate(w http.ResponseWriter, r *http.Request, p st
 		name = fmt.Sprintf("fake_container_%d", n)
 	}
 	fc := FakeContainer{
-		ID: id, Names: []string{"/" + strings.TrimPrefix(name, "/")}, Image: req.Config.Image,
+		ID: id, Names: []string{"/" + strings.TrimPrefix(name, "/")}, Image: req.Image,
 		State: "created", Status: "Created", Created: time.Now().Unix(),
-		Labels: req.Config.Labels, Networks: nets,
-		StopTimeout: req.Config.StopTimeout, StopSignal: req.Config.StopSignal,
+		Labels: req.Labels, Networks: nets,
+		StopTimeout: req.StopTimeout, StopSignal: req.StopSignal,
 		Inspect: FakeInspect{
-			Env: req.Config.Env, Cmd: req.Config.Cmd, Entrypoint: req.Config.Entrypoint,
-			WorkingDir: req.Config.WorkingDir, User: req.Config.User, Tty: req.Config.Tty, Healthcheck: req.Config.Healthcheck,
+			Env: req.Env, Cmd: req.Cmd, Entrypoint: req.Entrypoint,
+			WorkingDir: req.WorkingDir, User: req.User, Tty: req.Tty, Healthcheck: req.Healthcheck,
 		},
 	}
-	if req.Config.Env == nil {
+	if req.Env == nil {
 		fc.Inspect.Env = []string{}
 	}
 	if req.HostConfig != nil {

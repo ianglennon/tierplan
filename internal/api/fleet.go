@@ -34,8 +34,6 @@ const (
 	fleetParallel = 8
 	// fleetEnvTimeout is how long one environment may take before it is named not reporting.
 	fleetEnvTimeout = 5 * time.Second
-	// maxFleetEnvFilter is how many environment IDs a request may name.
-	maxFleetEnvFilter = 100
 
 	fleetKindService   = "service"
 	fleetKindContainer = "container"

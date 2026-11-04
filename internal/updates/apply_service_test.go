@@ -208,7 +208,7 @@ func swarmService(name string, running byte) dockertest.FakeService {
 	spec := swarmSpec(name, running)
 	return dockertest.FakeService{
 		ID: "svc-" + name, Name: name, Mode: "replicated", Running: 3, Desired: 3, Version: 1, Image: spec.TaskTemplate.ContainerSpec.Image,
-		Labels: spec.Annotations.Labels, Spec: &spec,
+		Labels: spec.Labels, Spec: &spec,
 	}
 }
 
@@ -536,8 +536,8 @@ func TestFailureReasons(t *testing.T) {
 func TestNotUpdatableKinds(t *testing.T) {
 	t.Parallel()
 	managed := swarmService("managed", 'a')
-	managed.Spec.Annotations.Labels = map[string]string{stacks.LabelStackID: "stack-1"}
-	managed.Labels = managed.Spec.Annotations.Labels
+	managed.Spec.Labels = map[string]string{stacks.LabelStackID: "stack-1"}
+	managed.Labels = managed.Spec.Labels
 	agent := dockertest.FakeService{
 		ID: "svc-agent", Name: "tierplan-agent", Mode: "global", Version: 1, Image: "registry.test/team/agent:1@" + dg('a'),
 	}
@@ -581,11 +581,11 @@ func TestNotUpdatableKinds(t *testing.T) {
 func TestUnmanagedStackServiceIsPlain(t *testing.T) {
 	t.Parallel()
 	discovered := swarmService("discovered", 'a')
-	discovered.Spec.Annotations.Labels = map[string]string{"com.docker.stack.namespace": "shop"}
-	discovered.Labels = discovered.Spec.Annotations.Labels
+	discovered.Spec.Labels = map[string]string{"com.docker.stack.namespace": "shop"}
+	discovered.Labels = discovered.Spec.Labels
 	orphan := swarmService("orphan", 'a')
-	orphan.Spec.Annotations.Labels = map[string]string{stacks.LabelStackID: "ghost"}
-	orphan.Labels = orphan.Spec.Annotations.Labels
+	orphan.Spec.Labels = map[string]string{stacks.LabelStackID: "ghost"}
+	orphan.Labels = orphan.Spec.Labels
 	r := newApplyRig(t, nil, discovered, orphan)
 	r.applier.ManagedStack = func(context.Context, string, string) (bool, error) { return false, nil }
 	for _, name := range []string{"discovered", "orphan"} {
