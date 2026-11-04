@@ -226,3 +226,123 @@ func TestFailingContainersWithoutAnInspectCountsNothing(t *testing.T) {
 		t.Fatalf("FailingContainers = %d of %d, want 0 of 0 while no policy is known", failing, total)
 	}
 }
+
+// The rows say which services and containers the counts count, and why (plan 12-26, ENV-10).
+
+func TestFailingServiceRowsAreTheServicesTheCountCounts(t *testing.T) {
+	grace := 2 * time.Minute
+	svcs := []dockerx.ServiceRow{
+		service("replicated", 2, 3, "", time.Hour),
+		service("replicated", 3, 3, "", time.Hour),
+		service("global", 3, 4, "", time.Hour),
+		service("replicated-job", 0, 1, "", time.Hour),
+		service("replicated", 1, 3, "updating", time.Hour),
+		service("replicated", 2, 3, "", 90*time.Second),
+	}
+	rows := FailingServiceRows(svcs, nil, t0, grace)
+	failing, _ := FailingServices(svcs, t0, grace)
+	if len(rows) != failing || failing != 2 {
+		t.Fatalf("FailingServiceRows = %d rows, FailingServices = %d, want both 2", len(rows), failing)
+	}
+	if rows[0].Running != 2 || rows[0].Desired != 3 || rows[1].Running != 3 || rows[1].Desired != 4 {
+		t.Errorf("rows = %+v, want 2 of 3 then 3 of 4", rows)
+	}
+}
+
+func TestFailingServiceRowsTakeSinceAndErrorFromTheNewestFailedTask(t *testing.T) {
+	s := service("replicated", 1, 2, "", time.Hour)
+	s.ID, s.Stack = "svc1", "shop"
+	other := service("replicated", 1, 2, "", time.Hour)
+	other.ID = "svc2"
+	failed := []dockerx.FailedTaskRow{
+		{ID: "t3", ServiceID: "svc1", At: t0.Add(-time.Minute), Err: "task: non-zero exit (1)\x1b[0m\n"},
+		{ID: "t2", ServiceID: "svc1", At: t0.Add(-time.Hour), Err: "an older error"},
+		{ID: "t1", ServiceID: "other", At: t0, Err: "someone else's"},
+	}
+	rows := FailingServiceRows([]dockerx.ServiceRow{s, other}, failed, t0, time.Minute)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows[0].Stack != "shop" || !rows[0].Since.Equal(t0.Add(-time.Minute)) || rows[0].LastError != "task: non-zero exit (1)[0m" {
+		t.Errorf("row with a failed task = %+v, want its newest task's time, and its error without control characters", rows[0])
+	}
+	if !rows[1].Since.Equal(other.UpdatedAt) || rows[1].LastError != "" {
+		t.Errorf("row without a failed task = %+v, want the update time and no error", rows[1])
+	}
+}
+
+func TestFailingServiceRowsCutALongError(t *testing.T) {
+	s := service("replicated", 0, 1, "", time.Hour)
+	s.ID = "x"
+	long := make([]byte, 5000)
+	for i := range long {
+		long[i] = 'e'
+	}
+	rows := FailingServiceRows([]dockerx.ServiceRow{s}, []dockerx.FailedTaskRow{{ServiceID: "x", At: t0, Err: string(long)}}, t0, time.Minute)
+	if n := len(rows[0].LastError); n != MaxFailingErrorLen {
+		t.Fatalf("error length = %d, want %d", n, MaxFailingErrorLen)
+	}
+}
+
+func TestFailingContainerRowsAreTheContainersTheCountCounts(t *testing.T) {
+	mk := func(id, state, status string) ContainerRow {
+		r := ctr(id, state, status)
+		r.Labels = map[string]string{"com.docker.compose.project": "shop"}
+		return ContainerRow{ContainerRow: r, Node: "node-1", NodeID: "n1"}
+	}
+	rows := []ContainerRow{
+		mk("restart", "restarting", "Restarting (1) 5 seconds ago"),
+		mk("exit", "exited", "Exited (137) 3 minutes ago"),
+		mk("sick", "running", "Up 2 hours (unhealthy)"),
+		mk("clean", "exited", "Exited (0) 2 hours ago"),
+		mk("nopolicy", "exited", "Exited (1) 2 hours ago"),
+		mk("unknown", "exited", "Exited (1) 2 hours ago"),
+	}
+	cache := NewPolicyCache()
+	pol := map[string]dockerx.RestartPolicy{
+		"restart": {Name: "always"}, "exit": {Name: "on-failure"}, "sick": {Name: "unless-stopped"},
+		"clean": {Name: "always"}, "nopolicy": {Name: "no"},
+	}
+	plain := make([]dockerx.ContainerRow, 0, len(rows))
+	for _, r := range rows {
+		plain = append(plain, r.ContainerRow)
+	}
+	failing, _ := FailingContainers(context.Background(), plain, cache, (&policies{table: pol}).inspect)
+
+	got := FailingContainerRows(rows, cache, t0)
+	if len(got) != failing || failing != 3 {
+		t.Fatalf("FailingContainerRows = %d rows, FailingContainers = %d, want both 3: %+v", len(got), failing, got)
+	}
+	want := []FailingContainerRow{
+		{ID: "restart", Name: "restart", Node: "node-1", NodeID: "n1", Stack: "shop", State: FailingRestarting, Since: t0.Add(-5 * time.Second), LastError: "Keeps restarting, last exit code 1"},
+		{ID: "exit", Name: "exit", Node: "node-1", NodeID: "n1", Stack: "shop", State: FailingExited, Since: t0.Add(-3 * time.Minute), LastError: "Exited with code 137"},
+		{ID: "sick", Name: "sick", Node: "node-1", NodeID: "n1", Stack: "shop", State: FailingUnhealthy, LastError: "Its health check says it is unhealthy"},
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if rows := FailingContainerRows(rows, nil, t0); len(rows) != 0 {
+		t.Errorf("with no cache = %+v, want none", rows)
+	}
+}
+
+func TestAgoOfReadsTheEnginesRoundedAges(t *testing.T) {
+	for status, want := range map[string]time.Duration{
+		"Exited (1) 5 seconds ago":          5 * time.Second,
+		"Exited (1) About a minute ago":     time.Minute,
+		"Exited (1) About an hour ago":      time.Hour,
+		"Exited (1) 3 days ago":             72 * time.Hour,
+		"Exited (1) Less than a second ago": time.Second,
+	} {
+		if got := agoOf(status, t0); !got.Equal(t0.Add(-want)) {
+			t.Errorf("agoOf(%q) = %v, want %v before", status, got, want)
+		}
+	}
+	for _, status := range []string{"Up 2 hours (unhealthy)", "Created", "", "Exited (1) 99999999999999999999 days ago"} {
+		if got := agoOf(status, t0); !got.IsZero() {
+			t.Errorf("agoOf(%q) = %v, want zero", status, got)
+		}
+	}
+}

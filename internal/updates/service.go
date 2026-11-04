@@ -261,45 +261,71 @@ func (s *Service) containerJudgements(ctx context.Context, envID string, agg env
 	return ContainerJudgement{Verdicts: verdicts, Workloads: byID}, nil
 }
 
+// Tally is what the verdicts of an environment's services and containers add up to.
+type Tally struct {
+	// Available is how many have an update available, Failed how many could not be checked and
+	// NotChecked how many have not been checked yet.
+	Available, Failed, NotChecked int
+	// CheckedAt is the newest time any of them was checked, whatever came of it; zero when none was.
+	CheckedAt time.Time
+}
+
 // Count is how many things in the environment have an update available: its swarm services, and its
 // containers that are not task containers (a task's update is its service's). It counts verdicts, so a
 // rebuild of a platform nobody runs, a skipped version or an ignored image is not counted (IMG-05). The verdicts are the
 // checks' own, not the live ones: an update that is running or an operation that holds the lock does not make an update vanish
 // from the count.
 func (s *Service) Count(ctx context.Context, envID string) (int, error) {
+	t, err := s.Tally(ctx, envID)
+	return t.Available, err
+}
+
+// Tally adds up the verdicts Count counts: the same services and containers, judged the same way.
+func (s *Service) Tally(ctx context.Context, envID string) (Tally, error) {
+	var t Tally
 	if s.Aggregator == nil {
-		return 0, errors.New("updates: no aggregator to read the containers with")
+		return t, errors.New("updates: no aggregator to read the containers with")
 	}
 	agg, _, err := s.Aggregator.Snapshot(ctx, envID)
 	if err != nil {
-		return 0, err
+		return t, err
 	}
-	n := 0
+	add := func(v Verdict) {
+		switch v.State {
+		case StateUpdateAvailable:
+			t.Available++
+		case StateCheckFailed:
+			t.Failed++
+		case StateNotChecked:
+			t.NotChecked++
+		}
+		if v.CheckedAt.After(t.CheckedAt) {
+			t.CheckedAt = v.CheckedAt
+		}
+	}
 	if agg.Counts.Services != nil && s.Clusters != nil {
 		st, err := s.Clusters.State(ctx, envID)
 		if err != nil && st.FetchedAt.IsZero() {
-			return 0, err
+			return Tally{}, err
 		}
 		verdicts, err := s.judgeWith(ctx, envID, s.withPlatforms(ctx, envID, ServiceWorkloads(st.Read.Services)), false)
 		if err != nil {
-			return 0, err
+			return Tally{}, err
 		}
 		for _, v := range verdicts {
-			if v.State == StateUpdateAvailable {
-				n++
-			}
+			add(v)
 		}
 	}
 	j, err := s.containerJudgements(ctx, envID, agg, false)
 	if err != nil {
-		return 0, err
+		return Tally{}, err
 	}
 	for id, v := range j.Verdicts {
-		if v.State == StateUpdateAvailable && !j.Workloads[id].Task {
-			n++
+		if !j.Workloads[id].Task {
+			add(v)
 		}
 	}
-	return n, nil
+	return t, nil
 }
 
 // ServiceVerdict is the verdict of one service of a stack with the workload it is for, which names the image

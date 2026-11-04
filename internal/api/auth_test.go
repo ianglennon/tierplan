@@ -112,6 +112,9 @@ type authFixture struct {
 	refusals *auth.RefusalCoalescer
 	// pwLimiter is the per-user throttle on POST /api/me/password; nil means none.
 	pwLimiter *auth.IPLimiter
+	// fleet, when set, is registered as the fleet routes with the environment registry and checker of the
+	// fixture (plan 12-26); a test sets it and calls build again.
+	fleet *api.FleetDeps
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
 	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
@@ -363,6 +366,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
 		TLSPin: func() string { return f.tlsPin }, AgentAllowInsecure: f.agentAllowInsecure, Checker: checker, Updater: f.updater, Log: log,
 	})
+	if f.fleet != nil && f.envSvc != nil {
+		fleetDeps := *f.fleet
+		fleetDeps.Envs, fleetDeps.Checker = f.envSvc, checker
+		api.RegisterFleet(r, fleetDeps)
+	}
 	agentSvc := f.agentSvc
 	if agentSvc == nil {
 		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)

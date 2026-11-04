@@ -3852,6 +3852,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/failing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List what is failing across the environments the caller may read
+         * @description Every failing swarm service (fewer tasks running than desired) and standalone container (restarting, exited with a non-zero code, or unhealthy, and with a restart policy) of the environments the caller holds environments.read on, each with its environment, stack, state, since and last error. An environment that could not be read, or only for some nodes, is named in notIncluded with its reason; an environment the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds, from the same short-lived snapshots the environment pages use.
+         */
+        get: operations["listFleetFailing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/git/credentials": {
         parameters: {
             query?: never;
@@ -7424,6 +7444,73 @@ export interface components {
             envId: string;
             /** @description Its name */
             envName: string;
+        };
+        FleetFailingBody: {
+            /** @description Every failing service and container of the environments that were read, newest first, then by environment name, then by name */
+            items: components["schemas"]["FleetFailingItem"][] | null;
+            /** @description The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
+        };
+        FleetFailingItem: {
+            /**
+             * Format: int64
+             * @description A service's desired tasks; null for a container
+             */
+            desired: number | null;
+            /** @description The environment it is in */
+            envId: string;
+            /** @description The name of that environment */
+            envName: string;
+            /** @description The service or container ID */
+            id: string;
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description A service: the error of its newest failed task. A container: why it is listed, with its exit code. Plain text with control characters removed, at most 200 characters; empty when there is none */
+            lastError: string;
+            /** @description The service or container name */
+            name: string;
+            /** @description The node a container runs on; empty for a service */
+            node: string;
+            /** @description The ID of that node, for the link to the container; empty for a service */
+            nodeId: string;
+            /**
+             * Format: int64
+             * @description A service's running tasks; null for a container
+             */
+            running: number | null;
+            /**
+             * Format: date-time
+             * @description A service: when its newest failed task failed, else when it was last updated. A container: when it reached its state, only about right because the engine rounds the age. Empty when not known
+             */
+            since: string;
+            /** @description The stack or Compose project it belongs to; empty when it has none */
+            stack: string;
+            /** @description A service: '{running} of {desired} running'. A container: restarting, exited or unhealthy */
+            state: string;
+        };
+        FleetNotIncludedBody: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /**
+             * Format: int64
+             * @description How many nodes did not report; 0 unless the reason is nodes_not_reporting
+             */
+            nodes: number;
+            /**
+             * @description offline: the environment cannot be reached. not_reporting: it did not answer in time or its cluster cannot be read. waiting_first_agent: no agent has enrolled yet. nodes_not_reporting: it was read, but the nodes in nodes did not answer, so what they run is missing
+             * @enum {string}
+             */
+            reason: "offline" | "not_reporting" | "waiting_first_agent" | "nodes_not_reporting";
         };
         GeneratedComposeBody: {
             /**
@@ -23093,6 +23180,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listFleetFailing: {
+        parameters: {
+            query?: {
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetFailingBody"];
+                };
             };
             /** @description Error */
             default: {

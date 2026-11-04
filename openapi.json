@@ -5065,6 +5065,166 @@
         ],
         "type": "object"
       },
+      "FleetFailingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Every failing service and container of the environments that were read, newest first, then by environment name, then by name",
+            "items": {
+              "$ref": "#/components/schemas/FleetFailingItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notIncluded": {
+            "description": "The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named",
+            "items": {
+              "$ref": "#/components/schemas/FleetNotIncludedBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "readAt": {
+            "description": "When the answer was put together",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "notIncluded",
+          "readAt"
+        ],
+        "type": "object"
+      },
+      "FleetFailingItem": {
+        "additionalProperties": false,
+        "properties": {
+          "desired": {
+            "description": "A service's desired tasks; null for a container",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "envId": {
+            "description": "The environment it is in",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The name of that environment",
+            "type": "string"
+          },
+          "id": {
+            "description": "The service or container ID",
+            "type": "string"
+          },
+          "kind": {
+            "description": "service for a swarm service, container for a standalone container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "lastError": {
+            "description": "A service: the error of its newest failed task. A container: why it is listed, with its exit code. Plain text with control characters removed, at most 200 characters; empty when there is none",
+            "type": "string"
+          },
+          "name": {
+            "description": "The service or container name",
+            "type": "string"
+          },
+          "node": {
+            "description": "The node a container runs on; empty for a service",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of that node, for the link to the container; empty for a service",
+            "type": "string"
+          },
+          "running": {
+            "description": "A service's running tasks; null for a container",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "A service: when its newest failed task failed, else when it was last updated. A container: when it reached its state, only about right because the engine rounds the age. Empty when not known",
+            "format": "date-time",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The stack or Compose project it belongs to; empty when it has none",
+            "type": "string"
+          },
+          "state": {
+            "description": "A service: '{running} of {desired} running'. A container: restarting, exited or unhealthy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "envId",
+          "envName",
+          "stack",
+          "node",
+          "nodeId",
+          "state",
+          "running",
+          "desired",
+          "since",
+          "lastError"
+        ],
+        "type": "object"
+      },
+      "FleetNotIncludedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envId": {
+            "description": "The environment's ID",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The environment's name",
+            "type": "string"
+          },
+          "nodes": {
+            "description": "How many nodes did not report; 0 unless the reason is nodes_not_reporting",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "offline: the environment cannot be reached. not_reporting: it did not answer in time or its cluster cannot be read. waiting_first_agent: no agent has enrolled yet. nodes_not_reporting: it was read, but the nodes in nodes did not answer, so what they run is missing",
+            "enum": [
+              "offline",
+              "not_reporting",
+              "waiting_first_agent",
+              "nodes_not_reporting"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "reason",
+          "nodes"
+        ],
+        "type": "object"
+      },
       "GeneratedComposeBody": {
         "additionalProperties": false,
         "properties": {
@@ -37830,6 +37990,64 @@
         "summary": "Rotate an environment's join token",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/fleet/failing": {
+      "get": {
+        "description": "Every failing swarm service (fewer tasks running than desired) and standalone container (restarting, exited with a non-zero code, or unhealthy, and with a restart policy) of the environments the caller holds environments.read on, each with its environment, stack, state, since and last error. An environment that could not be read, or only for some nodes, is named in notIncluded with its reason; an environment the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds, from the same short-lived snapshots the environment pages use.",
+        "operationId": "listFleetFailing",
+        "parameters": [
+          {
+            "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+            "explode": true,
+            "in": "query",
+            "name": "env",
+            "schema": {
+              "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetFailingBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List what is failing across the environments the caller may read",
+        "tags": [
+          "fleet"
         ]
       }
     },
