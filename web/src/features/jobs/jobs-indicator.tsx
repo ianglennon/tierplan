@@ -3,7 +3,15 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { BrushCleaning, Download, GitBranch, ListRestart, Rocket, Undo2 } from "lucide-react";
+import {
+  BrushCleaning,
+  CircleArrowUp,
+  Download,
+  GitBranch,
+  ListRestart,
+  Rocket,
+  Undo2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
@@ -15,6 +23,7 @@ import {
 } from "@/api/janitor";
 import { type PullSummary, pullsListQuery } from "@/api/pulls";
 import { type StackJobSummary, stackJobsListQuery } from "@/api/stacks";
+import { type ImageUpdateJobSummary, useImageUpdateJobs } from "@/api/updates";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,28 +43,32 @@ import { cn } from "@/lib/utils";
 // The badge reads "9+" past this many running jobs.
 const BADGE_CAP = 9;
 
-// A job of any of the three kinds, as one row of the list.
+// A job of any of the four kinds, as one row of the list. An image update is the job kind image_update
+// (an update of one service, container or stack by the Update button).
 type Job =
   | { type: "pull"; pull: PullSummary }
   | { type: "stack"; job: StackJobSummary }
-  | { type: "janitor"; job: JanitorJobSummary };
+  | { type: "janitor"; job: JanitorJobSummary }
+  | { type: "image_update"; job: ImageUpdateJobSummary };
 
 const startedOf = (j: Job): string => (j.type === "pull" ? j.pull.createdAt : j.job.startedAt);
 const runningOf = (j: Job): boolean =>
   j.type === "pull" ? j.pull.state === "running" : j.job.state === "running";
 const idOf = (j: Job): string =>
-  j.type === "pull" ? j.pull.id : j.type === "stack" ? j.job.id : j.job.jobId;
+  j.type === "pull" ? j.pull.id : j.type === "janitor" ? j.job.jobId : j.job.id;
 
-// jobsOf merges the three lists: running jobs first, then the newest first within each group.
+// jobsOf merges the four lists: running jobs first, then the newest first within each group.
 function jobsOf(
   pulls: PullSummary[],
   stack: StackJobSummary[],
   janitor: JanitorJobSummary[],
+  updates: ImageUpdateJobSummary[],
 ): Job[] {
   const all: Job[] = [
     ...pulls.map((pull): Job => ({ type: "pull", pull })),
     ...stack.map((job): Job => ({ type: "stack", job })),
     ...janitor.map((job): Job => ({ type: "janitor", job })),
+    ...updates.map((job): Job => ({ type: "image_update", job })),
   ];
   return all.sort((a, b) => {
     if (runningOf(a) !== runningOf(b)) return runningOf(a) ? -1 : 1;
@@ -173,12 +186,18 @@ export function JobsIndicator() {
   const pullsQuery = useQuery(pullsListQuery);
   const stackQuery = useQuery(stackJobsListQuery);
   const janitorQuery = useJanitorJobs();
+  const updateQuery = useImageUpdateJobs();
   const me = useMe();
   useStackJobToasts(stackQuery.data, me.data?.user.username);
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState<PullSummary | null>(null);
 
-  const jobs = jobsOf(pullsQuery.data ?? [], stackQuery.data ?? [], janitorQuery.data ?? []);
+  const jobs = jobsOf(
+    pullsQuery.data ?? [],
+    stackQuery.data ?? [],
+    janitorQuery.data ?? [],
+    updateQuery.data ?? [],
+  );
   const running = jobs.filter(runningOf).length;
 
   if (jobs.length === 0 && !opened) return null;
@@ -187,6 +206,7 @@ export function JobsIndicator() {
   const pullsStale = pullsQuery.isRefetchError;
   const stackStale = stackQuery.isRefetchError;
   const janitorStale = janitorQuery.isRefetchError;
+  const updateStale = updateQuery.isRefetchError;
 
   return (
     <>
@@ -247,6 +267,13 @@ export function JobsIndicator() {
                       stale={stackStale}
                       onOpen={() => setOpen(false)}
                     />
+                  ) : j.type === "image_update" ? (
+                    <UpdateJobRow
+                      key={`update:${idOf(j)}`}
+                      job={j.job}
+                      stale={updateStale}
+                      onOpen={() => setOpen(false)}
+                    />
                   ) : (
                     <JanitorJobRow
                       key={`janitor:${idOf(j)}`}
@@ -257,7 +284,10 @@ export function JobsIndicator() {
                   ),
                 )}
               </ul>
-              {pullsQuery.isPending || stackQuery.isPending || janitorQuery.isPending ? (
+              {pullsQuery.isPending ||
+              stackQuery.isPending ||
+              janitorQuery.isPending ||
+              updateQuery.isPending ? (
                 <LoadingRows />
               ) : null}
               {pullsQuery.isError && !pullsQuery.data ? (
@@ -276,6 +306,12 @@ export function JobsIndicator() {
                 <LoadError
                   message={t("jobs.indicator.error.janitor")}
                   onRetry={() => void janitorQuery.refetch()}
+                />
+              ) : null}
+              {updateQuery.isError && !updateQuery.data ? (
+                <LoadError
+                  message={t("jobs.indicator.error.update")}
+                  onRetry={() => void updateQuery.refetch()}
                 />
               ) : null}
             </ScrollArea>
@@ -445,6 +481,69 @@ function StackJobRow({
           to="/env/$envId/stacks/$stackId/deploys/$jobId"
           params={{ envId: job.envId, stackId: job.stackId, jobId: job.id }}
           aria-label={t("jobs.indicator.open.label", { name: job.stackName })}
+          onClick={onOpen}
+        >
+          {t("jobs.indicator.open.action")}
+        </Link>
+      </Button>
+    </li>
+  );
+}
+
+// updateStateKey is the words for where an image update stands: Updating…, Updated, Failed or
+// Cancelled. The summary carries what the job hub knows, so a rolled-back update reads as the job
+// ended, not as Rolled back.
+function updateStateKey(job: ImageUpdateJobSummary): string {
+  switch (job.state) {
+    case "running":
+      return "jobs.indicator.update.running";
+    case "done":
+      return "jobs.indicator.update.done";
+    case "failed":
+      return "jobs.indicator.update.failed";
+    default:
+      return "jobs.indicator.update.cancelled";
+  }
+}
+
+// UpdateJobRow is an image update: "Updating {name}", the environment, where it stands and when, and
+// Open, which goes to the update console. The workload's name is text, cut at the row's edge and given
+// whole in a tooltip.
+function UpdateJobRow({
+  job,
+  stale,
+  onOpen,
+}: {
+  job: ImageUpdateJobSummary;
+  stale: boolean;
+  onOpen: () => void;
+}) {
+  const t = useT();
+  const live = job.state === "running";
+  const title = t("jobs.indicator.update.title", { name: job.workload });
+  return (
+    <li className="flex min-w-0 items-center gap-2 rounded-md hover:bg-muted/50">
+      <CircleArrowUp aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="truncate text-sm">{title}</span>
+          </TooltipTrigger>
+          <TooltipContent className="break-all">{title}</TooltipContent>
+        </Tooltip>
+        <span className="truncate text-xs text-muted-foreground">{job.envName}</span>
+        <span className="flex flex-wrap items-center gap-x-2 text-xs">
+          <span>{stale && live ? t("jobs.indicator.reconnecting") : t(updateStateKey(job))}</span>
+          <span className="text-muted-foreground">
+            <RelativeTime value={job.endedAt || job.startedAt} />
+          </span>
+        </span>
+      </div>
+      <Button asChild variant="ghost" size="sm" className="shrink-0 max-md:h-11">
+        <Link
+          to="/env/$envId/update-jobs/$jobId"
+          params={{ envId: job.envId, jobId: job.id }}
+          aria-label={t("jobs.indicator.update.open", { name: job.workload })}
           onClick={onOpen}
         >
           {t("jobs.indicator.open.action")}

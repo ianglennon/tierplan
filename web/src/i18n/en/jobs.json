@@ -13,7 +13,8 @@
         "pulls": "Couldn't load the pulls.",
         "stack": "Couldn't load the stack jobs.",
         "janitor": "Couldn't load the cleanups.",
-        "retry": "Retry"
+        "retry": "Retry",
+        "update": "Couldn't load the updates."
       },
       "state": {
         "running_one": "Pulling on {{running}} of {{count}} node",
@@ -97,6 +98,15 @@
           "failed": "Failed",
           "cancelled": "Cancelled"
         }
+      },
+      "update": {
+        "title": "Updating {{name}}",
+        "running": "Updating…",
+        "done": "Updated",
+        "rolledBack": "Rolled back",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "open": "Open the update of {{name}}"
       }
     },
     "toast": {

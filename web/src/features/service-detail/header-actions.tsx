@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
 import { ForceUpdateDialog } from "@/features/services/force-update-dialog";
 import {
@@ -26,6 +27,8 @@ import {
 import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog } from "@/features/services/scale-dialog";
+import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
+import { useUpdateGate } from "@/features/updates/update-gate";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -80,6 +83,17 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
   const [forcing, setForcing] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  // Update opens the compact confirm of an image update (D-05). It is on the header only while the
+  // service has an update on offer, and not for a service a stack owns or TierPlan's own agent: those
+  // are updated another way.
+  const gate = useUpdateGate(envId, detail.update);
+  const envName = useEnvName(envId);
+  const canUpdate =
+    detail.update?.state === "update_available" &&
+    gate.shown &&
+    !detail.tierplanStackId &&
+    !detail.agent;
   const host = useRef<HTMLDivElement>(null);
   const editBlocked = !needs.allowed || detail.stack !== "";
   const editReason =
@@ -133,6 +147,19 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           {t("servicedetail.actions.forceUpdate")}
         </Button>
       </NeedsTooltip>
+      {canUpdate ? (
+        <NeedsTooltip reason={gate.reason}>
+          <Button
+            type="button"
+            variant="outline"
+            className="max-md:h-11"
+            disabled={pending || gate.unavailable}
+            onClick={gate.reason ? undefined : () => setUpdating(true)}
+          >
+            {t("updates.header.update")}
+          </Button>
+        </NeedsTooltip>
+      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -170,6 +197,14 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           />
         </DropdownMenuContent>
       </DropdownMenu>
+      {updating ? (
+        <UpdateConfirmDialog
+          envId={envId}
+          envName={envName}
+          workload={{ kind: "service", name: detail.name }}
+          onClose={() => setUpdating(false)}
+        />
+      ) : null}
       {needs.allowed ? (
         <>
           <ForceUpdateDialog

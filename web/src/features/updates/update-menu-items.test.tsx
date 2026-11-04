@@ -53,10 +53,15 @@ let me: ReturnType<typeof makeMe>;
 let client: QueryClient;
 let answerSkip: () => Response;
 let onIgnore: Mock<() => void>;
+let onUpdate: Mock<() => void>;
+// What the environments list says of the environment's health.
+let envStatus: { state: string } | undefined;
 
 beforeEach(() => {
   sent = [];
   onIgnore = vi.fn<() => void>();
+  onUpdate = vi.fn<() => void>();
+  envStatus = undefined;
   me = makeMe({ envs: { [ENV]: "admin" } });
   answerSkip = () => Response.json({ update: info({ state: "skipped" }) });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,7 +77,9 @@ beforeEach(() => {
       sent.push({ method: req.method, path, body });
       if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments") {
-        return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+        return Response.json({
+          items: [{ id: ENV, name: "Prod", envType: "swarm", status: envStatus }],
+        });
       }
       if (path === `/api/env/${ENV}/updates/skip` && req.method === "POST") return answerSkip();
       if (path === `/api/env/${ENV}/updates/skip` && req.method === "DELETE") {
@@ -95,7 +102,11 @@ afterEach(() => {
 
 const writes = () => sent.filter((s) => s.method !== "GET");
 
-async function mount(update: UpdateInfo | undefined, name = "web") {
+async function mount(
+  update: UpdateInfo | undefined,
+  name = "web",
+  extra: { kind?: "service" | "container"; withUpdate?: boolean } = {},
+) {
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -104,9 +115,10 @@ async function mount(update: UpdateInfo | undefined, name = "web") {
           <DropdownMenuContent>
             <UpdateMenuItems
               envId={ENV}
-              workload={{ kind: "service", name }}
+              workload={{ kind: extra.kind ?? "service", name }}
               update={update}
               onIgnore={onIgnore}
+              onUpdate={extra.withUpdate === false ? undefined : onUpdate}
             />
           </DropdownMenuContent>
         </DropdownMenu>
@@ -315,5 +327,91 @@ describe("UpdateMenuItems: ignore updates", () => {
     await mount(info({ state: "ignored", ignore: held() }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Stop ignoring updates" }));
     expect(await screen.findByText("Couldn't stop ignoring updates for web.")).toBeTruthy();
+  });
+});
+
+const disabledItem = async (reason: string) => {
+  const item = await screen.findByRole("menuitem", { name: "Update…" });
+  await waitFor(() => expect(item.getAttribute("aria-disabled")).toBe("true"));
+  expect(document.body.textContent).toContain(reason);
+  fireEvent.click(item);
+  expect(onUpdate).not.toHaveBeenCalled();
+  expect(writes()).toEqual([]);
+};
+
+describe("UpdateMenuItems: Update…", () => {
+  it("opens the confirm for an Operator when an update is on offer, and sends nothing itself", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info());
+    const item = await screen.findByRole("menuitem", { name: "Update…" });
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(item);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(writes()).toEqual([]);
+  });
+
+  it("is unavailable below Operator, with the reason", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    await mount(info());
+    await disabledItem("Needs Operator on Prod");
+  });
+
+  it("is unavailable while another operation holds the environment, and says which", async () => {
+    await mount(
+      info({
+        state: "busy",
+        holder: { kind: "deploy", by: "ada", stack: "shop", started: new Date().toISOString() },
+      }),
+    );
+    await disabledItem("Waiting for a deploy to finish. shop is deploying.");
+  });
+
+  it("is unavailable while this workload is updating, and points to the console", async () => {
+    await mount(info({ state: "updating", jobId: "j1" }));
+    await disabledItem("An update is already running. Open the console.");
+  });
+
+  it.each([
+    [
+      "pinned_in_file",
+      "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+    ],
+    [
+      "not_from_registry",
+      "This image didn't come from a registry, so there is nothing to update to.",
+    ],
+    ["not_checked", "TierPlan has no check result for this image yet. Choose Check now first."],
+  ] as const)("is unavailable for %s, with its reason", async (state, reason) => {
+    await mount(info({ state }));
+    await disabledItem(reason);
+  });
+
+  it("is unavailable after a failed check, and says why it failed", async () => {
+    await mount(info({ state: "check_failed", reason: "unreachable" }));
+    await disabledItem(
+      "The last check failed: TierPlan couldn't reach docker.io. Choose Check now to try again.",
+    );
+  });
+
+  it("is unavailable in an environment that is not reporting", async () => {
+    envStatus = { state: "offline" };
+    await mount(info());
+    await disabledItem("Prod isn't reporting, so TierPlan can't update it.");
+  });
+
+  it("is not offered for a version that is up to date, skipped or ignored", async () => {
+    for (const state of ["up_to_date", "skipped", "ignored"] as const) {
+      await mount(info({ state }));
+      expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("is not offered for a container, or where the row cannot be updated here", async () => {
+    await mount(info(), "web", { kind: "container" });
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+    cleanup();
+    await mount(info(), "web", { withUpdate: false });
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
   });
 });

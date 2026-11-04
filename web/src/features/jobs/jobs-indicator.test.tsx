@@ -11,6 +11,7 @@ import { setCsrfToken } from "@/api/client";
 import { type JanitorJobSummary, janitorJobsKey } from "@/api/janitor";
 import { PULLS_POLL_RUNNING_MS, type PullSummary } from "@/api/pulls";
 import { type StackJobSummary, stackJobsKey } from "@/api/stacks";
+import type { ImageUpdateJobSummary } from "@/api/updates";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
@@ -71,6 +72,7 @@ let stackJobs: StackJobRow[];
 let stackJobsStatus: number | "never";
 let janitorJobs: JanitorJobSummary[];
 let janitorJobsStatus: number;
+let updateJobs: ImageUpdateJobSummary[];
 let janitorRun: ReturnType<typeof run>;
 let listStatus: number;
 let client: QueryClient;
@@ -83,6 +85,7 @@ beforeEach(() => {
   stackJobsStatus = 200;
   janitorJobs = [];
   janitorJobsStatus = 200;
+  updateJobs = [];
   janitorRun = run({ state: "completed" });
   listStatus = 200;
   calls = [];
@@ -116,6 +119,7 @@ beforeEach(() => {
               { status: janitorJobsStatus },
             );
       }
+      if (path === "/api/update-jobs") return Response.json({ jobs: updateJobs });
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: "e1", name: "Home lab", envType: "swarm" }] });
       }
@@ -681,6 +685,68 @@ describe("JobsIndicator clean-ups", () => {
 });
 
 // A stack job the person started that ends while they are elsewhere raises one toast (D-13).
+describe("JobsIndicator image updates", () => {
+  const upd = (over: Partial<ImageUpdateJobSummary> = {}): ImageUpdateJobSummary => ({
+    id: "u1",
+    envId: "e1",
+    envName: "Home lab",
+    workload: "web",
+    kind: "service",
+    state: "running",
+    startedAt: "2026-10-11T10:00:00Z",
+    endedAt: "",
+    ...over,
+  });
+  const open = async (name: string | RegExp = "Jobs, 1 in progress") =>
+    fireEvent.click(await screen.findByRole("button", { name }));
+
+  it("lists a running update as Updating web with Updating…, and counts it", async () => {
+    updateJobs = [upd()];
+    mount();
+    await open();
+    const row = within(await screen.findByRole("list")).getAllByRole("listitem")[0] as HTMLElement;
+    expect(row.querySelector(".lucide-circle-arrow-up")).not.toBeNull();
+    expect(within(row).getByText("Updating web")).toBeTruthy();
+    expect(within(row).getByText("Home lab")).toBeTruthy();
+    expect(within(row).getByText("Updating…")).toBeTruthy();
+  });
+
+  it("words a finished update Updated and a failed one Failed, and counts neither", async () => {
+    updateJobs = [
+      upd({ id: "u1", state: "done", endedAt: "2026-10-11T10:02:00Z" }),
+      upd({ id: "u2", workload: "api", state: "failed", endedAt: "2026-10-11T10:03:00Z" }),
+    ];
+    mount();
+    await open("Jobs");
+    const rows = within(await screen.findByRole("list")).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0] as HTMLElement).getByText("Updated")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText("Failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Jobs" })).toBeTruthy();
+  });
+
+  it("opens the update console from its row and closes the list", async () => {
+    updateJobs = [upd({ id: "u7" })];
+    mount();
+    await open();
+    const link = await screen.findByRole("link", { name: "Open the update of web" });
+    expect(link.textContent).toBe("Open");
+    expect(link.getAttribute("href")).toBe("/env/e1/update-jobs/u7");
+    fireEvent.click(link);
+    await waitFor(() => expect(screen.queryByRole("list")).toBeNull());
+  });
+
+  it("lists updates with the other kinds, running first", async () => {
+    updateJobs = [upd({ startedAt: "2026-10-11T10:05:00Z" })];
+    stackJobs = [stackJob({ state: "done", finishedAt: "2026-10-11T10:09:00Z" })];
+    mount();
+    await open();
+    const rows = within(await screen.findByRole("list")).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0] as HTMLElement).getByText("Updating web")).toBeTruthy();
+  });
+});
+
 describe("JobsIndicator job toasts", () => {
   const refresh = () => client.invalidateQueries({ queryKey: stackJobsKey });
   const finish = async (over: Partial<StackJobRow>) => {
