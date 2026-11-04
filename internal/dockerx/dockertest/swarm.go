@@ -203,11 +203,19 @@ func StartSwarm(t testing.TB, engine string, managers, workers int) *Swarm {
 // in-process TierPlan is reachable on, which the CI dind service is not.
 func StartHost(t testing.TB, engine string) *Node {
 	t.Helper()
+	return StartHostWith(t, engine)
+}
+
+// StartHostWith is StartHost with extra flags for the daemon inside, such as "--storage-driver=overlay2" or
+// "--feature", "containerd-snapshotter=false" (each argument is one word of dockerd's command line). The dind image's
+// entrypoint passes them on to dockerd, after the ones it sets itself.
+func StartHostWith(t testing.TB, engine string, daemonArgs ...string) *Node {
+	t.Helper()
 	if engine == "" {
 		engine = EngineFromEnv()
 	}
 	plan := newNetwork(t)
-	n, err := startNode(t, engine, plan, plan.ip(), "tp-h1-"+randHex(2), false)
+	n, err := startNode(t, engine, plan, plan.ip(), "tp-h1-"+randHex(2), false, daemonArgs...)
 	if err != nil {
 		t.Fatalf("start the dind host: %v", err)
 	}
@@ -225,7 +233,7 @@ func randHex(n int) string {
 // each other. ghcr.io resolves to the node itself, so a swarm service that
 // names the release image fails to resolve its digest at once instead of
 // reaching out to a registry: the harness loads the image the tests run.
-func startNode(t testing.TB, engine string, plan *netPlan, ip netip.Addr, hostname string, manager bool) (*Node, error) {
+func startNode(t testing.TB, engine string, plan *netPlan, ip netip.Addr, hostname string, manager bool, daemonArgs ...string) (*Node, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -234,6 +242,7 @@ func startNode(t testing.TB, engine string, plan *netPlan, ip netip.Addr, hostna
 			Image:        "docker:" + engine + "-dind",
 			ExposedPorts: []string{dindPort},
 			Env:          map[string]string{"DOCKER_TLS_CERTDIR": ""},
+			Cmd:          daemonArgs,
 			Networks:     []string{plan.name},
 			ConfigModifier: func(c *container.Config) {
 				c.Hostname = hostname
