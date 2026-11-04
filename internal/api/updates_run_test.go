@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -163,5 +166,201 @@ func TestPlainServiceUpdateEndToEnd(t *testing.T) {
 	}
 	if rows := f.auditRows(t, "image.update_failed"); len(rows) != 0 {
 		t.Errorf("failure rows = %+v, want none", rows)
+	}
+}
+
+// updateProblem is the part of a problem the update tests read: its type, its detail and its errors with their values.
+type updateProblem struct {
+	Type   string `json:"type"`
+	Detail string `json:"detail"`
+	Errors []struct {
+		Location string          `json:"location"`
+		Message  string          `json:"message"`
+		Value    json.RawMessage `json:"value"`
+	} `json:"errors"`
+}
+
+// noRunsNoWrites asserts an update that was refused left no trace: no write to the engine, no lock held, no run on record and no
+// audit row of an update.
+func (f *envFix) noRunsNoWrites(t *testing.T, e envBody) {
+	t.Helper()
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d after a refusal, want none", n)
+	}
+	if h, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is held by %+v after a refusal", h)
+	}
+	if runs, err := (updates.RunStore{Q: f.st.Q, W: f.st.Write}).Running(context.Background(), e.ID); err != nil || len(runs) != 0 {
+		t.Errorf("runs = %+v %v after a refusal, want none", runs, err)
+	}
+	for _, a := range []string{"image.updated", "image.update_failed"} {
+		if rows := f.auditRows(t, a); len(rows) != 0 {
+			t.Errorf("%s audit rows = %+v after a refusal, want none", a, rows)
+		}
+	}
+}
+
+// A digest that moved since the confirm is refused with the refreshed one, before a lock, a run or a write (plan 12-15, D-05).
+func TestUpdateRefusesMovedDigest(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('c')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if rec.code != http.StatusConflict || rec.ptyp != "update_moved" {
+		t.Fatalf("update = %d %s %s, want 409 update_moved", rec.code, rec.ptyp, rec.body)
+	}
+	p := decode[updateProblem](t, rec)
+	if len(p.Errors) != 1 || p.Errors[0].Message != "web" {
+		t.Fatalf("errors = %+v, want the one service that moved", p.Errors)
+	}
+	var item struct {
+		Service, FromDigest, ToDigest string
+	}
+	if err := json.Unmarshal(p.Errors[0].Value, &item); err != nil || item.Service != "web" || item.ToDigest != updDigest('c') || item.FromDigest != updDigest('a') {
+		t.Errorf("item = %+v %v, want web moved from a to c", item, err)
+	}
+	f.noRunsNoWrites(t, e)
+
+	// Confirmed again at the refreshed digest, the update goes through and deploys that one.
+	rec = f.runUpdate(t, e, "web", map[string]string{"web": updDigest('c')})
+	if rec.code != http.StatusOK {
+		t.Fatalf("update after the refresh: %d %s", rec.code, rec.body)
+	}
+	if job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID); job.State != jobs.JobDone {
+		t.Fatalf("job = %s, want done", job.State)
+	}
+	if got := f.fake.ServiceUpdates()[0].Spec.TaskTemplate.ContainerSpec.Image; got != "registry.test/team/web:1@"+updDigest('c') {
+		t.Errorf("image deployed = %q, want the digest the server read", got)
+	}
+}
+
+// An update asked for while another operation holds the environment is refused and says who holds it (plan 12-15, IMG-06).
+func TestUpdateRefusesHeldLock(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	_, _, ok := f.stackLocks.TryAcquire(e.ID, stackops.Holder{StackID: "stk-1", StackName: "shop", Kind: "deploy", By: "ada", Started: time.Now()})
+	if !ok {
+		t.Fatal("could not take the lock for a stack deploy")
+	}
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if rec.code != http.StatusConflict || rec.ptyp != "operation_locked" {
+		t.Fatalf("update = %d %s %s, want 409 operation_locked", rec.code, rec.ptyp, rec.body)
+	}
+	if p := decode[updateProblem](t, rec); !strings.Contains(p.Detail, "shop") || len(p.Errors) == 0 || p.Errors[0].Location != "stack" || p.Errors[0].Message != "shop" {
+		t.Errorf("problem = %+v, want it to name the stack that holds the lock", p)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none", n)
+	}
+	if runs, err := (updates.RunStore{Q: f.st.Q, W: f.st.Write}).Running(context.Background(), e.ID); err != nil || len(runs) != 0 {
+		t.Errorf("runs = %+v %v, want none", runs, err)
+	}
+	if h, held := f.stackLocks.Held(e.ID); !held || h.Kind != "deploy" {
+		t.Errorf("holder = %+v %v, want the deploy still holding it", h, held)
+	}
+}
+
+// A second update of a workload that is being updated is refused as locked, naming the running update; it is not read as
+// already up to date (plan 12-15, IMG-06 idempotency).
+func TestUpdateTwiceIsRefused(t *testing.T) {
+	t.Parallel()
+	hold := make(chan struct{})
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, func(c *dockertest.FakeConfig) { c.PullHold = hold }, plainService("web", 'a'))
+
+	first := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if first.code != http.StatusOK {
+		t.Fatalf("first update: %d %s", first.code, first.body)
+	}
+	jobID := decode[updateRunAnswer](t, first).JobID
+	// The first update holds the lock from the moment it was answered, while its pull is held.
+	second := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if second.code != http.StatusConflict || second.ptyp != "operation_locked" {
+		t.Fatalf("second update = %d %s %s, want 409 operation_locked", second.code, second.ptyp, second.body)
+	}
+	p := decode[updateProblem](t, second)
+	if !strings.Contains(p.Detail, "image update of web") {
+		t.Errorf("detail = %q, want it to name the running update of web", p.Detail)
+	}
+	got := map[string]string{}
+	for _, d := range p.Errors {
+		got[d.Location] = d.Message
+	}
+	if got["kind"] != "image_update" || got["workload"] != "web" || got["job"] != jobID || got["started"] == "" {
+		t.Errorf("errors = %v, want the kind, the workload, the job and when it started", got)
+	}
+	close(hold)
+	if job := f.awaitUpdate(t, jobID); job.State != jobs.JobDone {
+		t.Fatalf("first job = %s %+v, want done", job.State, job.Items)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 1 {
+		t.Errorf("service updates = %d, want only the first update's", n)
+	}
+	if _, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is held after the job read as done")
+	}
+}
+
+// A workload that runs the digest the registry has is not updated (plan 12-15, IMG-06 idempotency).
+func TestNothingToUpdate(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('a')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('a')})
+	if rec.code != http.StatusConflict || rec.ptyp != "nothing_to_update" {
+		t.Fatalf("update = %d %s %s, want 409 nothing_to_update", rec.code, rec.ptyp, rec.body)
+	}
+	f.noRunsNoWrites(t, e)
+	if rec := f.runUpdate(t, e, "nobody", nil); rec.code != http.StatusNotFound {
+		t.Errorf("update of a service that is not there = %d %s, want 404", rec.code, rec.body)
+	}
+}
+
+// An Operator may update a service; a Viewer may not, and nothing is taken or written for the refusal (plan 12-15, D-10, T-12-38).
+func TestUpdateRoutePermissions(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	f.addUser(t, "vera", false)
+	f.addEnvRole(t, "vera", e.ID, "viewer")
+	f.addUser(t, "olive", false)
+	f.addEnvRole(t, "olive", e.ID, "operator")
+
+	path := "/api/env/" + e.ID + "/updates/run"
+	body := updateRunBody("web", map[string]string{"web": updDigest('b')})
+	cookie, csrf := f.signIn(t, "vera", false)
+	if rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's update = %d %s, want 403", rec.Code, rec.Body)
+	}
+	f.noRunsNoWrites(t, e)
+
+	cookie, csrf = f.signIn(t, "olive", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an operator's update = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var ans updateRunAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil {
+		t.Fatal(err)
+	}
+	job := f.awaitUpdate(t, ans.JobID)
+	if job.State != jobs.JobDone {
+		t.Fatalf("job = %s, want done", job.State)
+	}
+
+	// Anyone who may read the environment follows the job; another environment's job is not found.
+	get := func(user, id string) int {
+		c, s := f.signIn(t, user, false)
+		return f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/update-jobs/" + id, cookie: c, csrf: s}).Code
+	}
+	if got := get("vera", ans.JobID); got != http.StatusOK {
+		t.Errorf("a viewer reading the job = %d, want 200", got)
+	}
+	if got := get("vera", "no-such-job"); got != http.StatusNotFound {
+		t.Errorf("reading a job that is not there = %d, want 404", got)
 	}
 }
