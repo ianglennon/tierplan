@@ -264,6 +264,10 @@ func sharedImageUpdate(t *testing.T, f *swarmFix) {
 	f.removeUpdateFixture(t, made.ID, "upd-web", addr+"/upd/web")
 }
 
+// imageUpdateHealthCase is the name of the shared case that needs a server with the shortest converge timeout (sharedCaseOptions);
+// it is the name sharedSwarmCases lists the case by.
+const imageUpdateHealthCase = "ImageUpdateHealth"
+
 // goodBuild and badBuild are the Dockerfile instructions of a build that runs on and of one whose command exits at once. A
 // service that is to follow its image's command is made without a command of its own (imageSpec), so the build decides.
 const (

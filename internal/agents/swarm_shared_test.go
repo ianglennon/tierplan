@@ -85,7 +85,7 @@ var sharedCaseOptions = map[string]func(*servertest.Options){
 	},
 	// ImageUpdateHealth gives the server the shortest converge timeout it takes, so an update to a build that never becomes
 	// healthy is judged within a minute and the case measures that.
-	"ImageUpdateHealth": func(o *servertest.Options) {
+	imageUpdateHealthCase: func(o *servertest.Options) {
 		o.Env = map[string]string{"TIERPLAN_STACK_CONVERGE_TIMEOUT": "1m"}
 	},
 	// OrphanMatrix moves the address-space reader's clock a day and an hour on, so every
