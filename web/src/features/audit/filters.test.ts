@@ -224,6 +224,29 @@ describe("actionLabel (janitor)", () => {
     );
   });
 
+  it("names the image or workload a skip or an ignore of image updates was about", () => {
+    const digest = `sha256:${"b".repeat(64)}`;
+    expect(
+      actionLabel("image.update_skipped", real, { image: "docker.io/library/nginx:1.27", digest }),
+    ).toBe("Skipped version bbbbbbbbbbbb of docker.io/library/nginx:1.27");
+    expect(
+      actionLabel("image.update_unskipped", real, { image: "docker.io/library/nginx:1.27" }),
+    ).toBe("Stopped skipping a version of docker.io/library/nginx:1.27");
+    expect(
+      actionLabel("image.updates_ignored", real, { scope: "image", image: "nginx:1.27" }),
+    ).toBe("Ignored updates for nginx:1.27");
+    expect(actionLabel("image.updates_ignored", real, { scope: "workload", workload: "web" })).toBe(
+      "Ignored updates for web",
+    );
+    expect(
+      actionLabel("image.updates_unignored", real, { scope: "workload", workload: "web" }),
+    ).toBe("Stopped ignoring updates for web");
+    expect(actionLabel("image.update_skipped", real, {})).toBe("Skipped a version of an image");
+    expect(actionLabel("image.updates_unignored", real, { scope: "image" })).toBe(
+      "Stopped ignoring image updates",
+    );
+  });
+
   it("names the node whose janitor setting changed", () => {
     expect(actionLabel("janitor.node_policy_changed", real, { node: "worker-2" })).toBe(
       "Changed a node's janitor setting (worker-2)",

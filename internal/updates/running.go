@@ -4,6 +4,7 @@
 package updates
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -110,6 +111,10 @@ const labelSwarmServiceID = "com.docker.swarm.service.id"
 // of those nodes, sorted and distinct. A task container counts while it runs or is about to; the
 // exited ones a node keeps for a while are history.
 //
+// A service whose live task containers carry tierplan.updates=ignore (a compose file's `labels:` end up on the
+// containers, not on the service) also carries that label in its own Labels, a copy of the map so the row the
+// swarm cache holds is never written to, so Ignores.Match reads the label from one place (D-16).
+//
 // Platforms are left empty, and the verdict compares index digests, whenever the platforms the service
 // runs on cannot be told for certain: no task container is seen yet, a node it runs on has not
 // reported its architecture, or a node did not report at all and may be running tasks that are not
@@ -120,12 +125,16 @@ func WithPlatforms(ws []Workload, agg envs.Aggregate) []Workload {
 		arch[n.ID] = n.Arch
 	}
 	nodes := map[string][]string{} // service ID -> node IDs
+	ignoring := map[string]bool{}  // service ID -> a live task container asks for its updates to be ignored
 	for _, c := range agg.Containers {
 		id := c.Labels[labelSwarmServiceID]
 		if id == "" || !taskIsLive(c.State) {
 			continue
 		}
 		nodes[id] = append(nodes[id], c.NodeID)
+		if c.Labels[stacks.LabelUpdates] == labelIgnoreValue {
+			ignoring[id] = true
+		}
 	}
 	complete := len(agg.Unreachable) == 0 && len(agg.NotReporting) == 0
 	out := make([]Workload, len(ws))
@@ -133,6 +142,12 @@ func WithPlatforms(ws []Workload, agg envs.Aggregate) []Workload {
 	for i, w := range out {
 		if w.Kind != "service" {
 			continue
+		}
+		if ignoring[w.ID] && w.Labels[stacks.LabelUpdates] != labelIgnoreValue {
+			labels := make(map[string]string, len(w.Labels)+1)
+			maps.Copy(labels, w.Labels)
+			labels[stacks.LabelUpdates] = labelIgnoreValue
+			out[i].Labels = labels
 		}
 		ids := nodes[w.ID]
 		slices.Sort(ids)

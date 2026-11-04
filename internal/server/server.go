@@ -867,6 +867,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Checker: &updates.Checker{Heads: updates.NewHeads(resolver, registryClients), Store: updates.SQLStore{Q: st.Q, W: st.Write}, Runs: runIndex, Creds: resolver, Log: log},
 		// A container whose list row shows an image ID is named by an inspect, at most 50 new ones a read (RESEARCH Pitfall 7).
 		ImageTexts: &updates.ImageTextCache{Inspect: updates.InspectImageTexts(aggregator)},
+		// Skips and ignores people set, read with the checks (D-15, D-16).
+		Ignores: &updates.IgnoreStore{Q: st.Q, W: st.Write},
 	}
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,

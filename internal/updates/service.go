@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
@@ -36,6 +37,9 @@ type Service struct {
 	// Nil means such a container reads not_checked.
 	ImageTexts *ImageTextCache
 	Now        func() time.Time
+	// Ignores holds the skips and ignores people set (D-15, D-16). Nil means only the tierplan.updates=ignore
+	// label hides anything.
+	Ignores *IgnoreStore
 	// StaleAfter is how old a successful check may be before an unchanged digest reads check_stale, per
 	// environment. Nil means 24 hours.
 	StaleAfter func(envID string) time.Duration
@@ -106,6 +110,12 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 			nextCheck = at
 		}
 	}
+	var held Ignores
+	if s.Ignores != nil {
+		if held, err = s.Ignores.List(ctx, envID); err != nil {
+			return nil, err
+		}
+	}
 	out := make(map[string]Verdict, len(ws))
 	runs := map[runKey]runRead{}
 	for i, w := range ws {
@@ -115,6 +125,11 @@ func (s *Service) judge(ctx context.Context, envID string, ws []Workload) (map[s
 			chk = &c
 		}
 		in := JudgeInput{Workload: w, Check: chk, Now: now, StaleAfter: stale, NextCheckAt: nextCheck}
+		remote := ""
+		if chk != nil {
+			remote = chk.Digest
+		}
+		in.Ignore = held.Match(w, remote)
 		if chk != nil {
 			in.RunPlatforms, in.RunIndexGone = s.runPlatforms(ctx, envID, w, chk, runs)
 		}
@@ -320,6 +335,34 @@ func (s *Service) runPlatforms(ctx context.Context, envID string, w Workload, ch
 		runs[k] = r
 	}
 	return r.platforms, r.gone
+}
+
+// Find judges the one service or container of an environment that kind and name name, as the lists do. found is
+// false when the environment has no such workload. A container is named without a leading slash.
+func (s *Service) Find(ctx context.Context, envID, kind, name string) (ServiceVerdict, bool, error) {
+	ws, err := s.Workloads(ctx, envID)
+	if err != nil {
+		return ServiceVerdict{}, false, err
+	}
+	name = strings.TrimPrefix(name, "/")
+	for _, w := range ws {
+		if w.Kind != kind || strings.TrimPrefix(w.Name, "/") != name {
+			continue
+		}
+		if w.Kind == "service" {
+			w = s.withPlatforms(ctx, envID, []Workload{w})[0]
+		}
+		verdicts, err := s.judge(ctx, envID, []Workload{w})
+		if err != nil {
+			return ServiceVerdict{}, false, err
+		}
+		v, ok := verdicts[w.ID]
+		if !ok {
+			return ServiceVerdict{}, false, nil
+		}
+		return ServiceVerdict{Verdict: v, Workload: w}, true, nil
+	}
+	return ServiceVerdict{}, false, nil
 }
 
 // Workloads are the workloads of the environment's services and containers, with the environment set: what

@@ -4,6 +4,7 @@
 package updates
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -50,9 +51,10 @@ type Ignore struct {
 	Kind, Name string
 	// Digest is the remote digest a skip passes over; empty for an ignore.
 	Digest string
-	// SetBy is the user's ID; SetAt when it was set.
-	SetBy string
-	SetAt time.Time
+	// SetBy is the user's ID; SetAt when it was set. SetByName is that person's display name, read by List
+	// and empty when the person is gone.
+	SetBy, SetByName string
+	SetAt            time.Time
 	// ByLabel is true for the tierplan.updates=ignore label, which is not a stored row.
 	ByLabel bool
 }
@@ -70,10 +72,18 @@ func (s IgnoreStore) List(ctx context.Context, envID string) (Ignores, error) {
 		return nil, fmt.Errorf("read the image update ignores of an environment: %w", err)
 	}
 	out := make(Ignores, 0, len(rows))
+	names := map[string]string{}
 	for _, r := range rows {
+		name, ok := names[r.SetBy]
+		if !ok && r.SetBy != "" {
+			if u, err := s.Q.GetUserByID(ctx, r.SetBy); err == nil {
+				name = cmp.Or(u.DisplayName, u.Username)
+			}
+			names[r.SetBy] = name
+		}
 		out = append(out, Ignore{
 			ID: r.ID, EnvID: r.EnvID, Mode: r.Mode, Scope: r.Scope, Host: r.Host, Repo: r.Repo, Tag: r.Tag,
-			Kind: r.Kind, Name: r.Name, Digest: r.Digest, SetBy: r.SetBy, SetAt: fromNanos(r.SetAt),
+			Kind: r.Kind, Name: r.Name, Digest: r.Digest, SetBy: r.SetBy, SetByName: name, SetAt: fromNanos(r.SetAt),
 		})
 	}
 	return out, nil

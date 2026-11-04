@@ -408,6 +408,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Store: store, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Clusters: f.clusters, Aggregator: f.agg, Runs: runs,
 			Checker: &updates.Checker{Heads: f.updateHeads, Store: store, Runs: runs, Now: f.clk.now, Log: log}, Now: f.clk.now,
 			ImageTexts: &updates.ImageTextCache{Inspect: updates.InspectImageTexts(f.agg), Now: f.clk.now},
+			Ignores:    &updates.IgnoreStore{Q: f.st.Q, W: f.st.Write},
 		}
 		if f.updateInspect != nil {
 			updateSvc.ImageTexts.Inspect = f.updateInspect

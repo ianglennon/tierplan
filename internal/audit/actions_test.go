@@ -447,6 +447,12 @@ func TestEveryPhase11ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 var phase12DetailKeys = map[string][]string{
 	audit.ActionUpdatesPolicyChanged:   {"fields", "version"},
 	audit.ActionUpdatesDefaultsChanged: {"fields", "version"},
+	// A skip or an ignore of image updates names the workload (its kind and name), the scope, the image, the digest a
+	// skip passes over and whether it was one of several (plan 12-13, D-15, D-16).
+	audit.ActionImageUpdateSkipped:    {"kind", "workload", "image", "digest", "bulk"},
+	audit.ActionImageUpdateUnskipped:  {"kind", "workload", "image", "bulk"},
+	audit.ActionImageUpdatesIgnored:   {"kind", "workload", "scope", "image"},
+	audit.ActionImageUpdatesUnignored: {"kind", "workload", "scope", "image"},
 }
 
 func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -466,8 +472,8 @@ func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 			}
 		}
 	}
-	if len(phase12DetailKeys) != 2 {
-		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records", len(phase12DetailKeys))
+	if len(phase12DetailKeys) != 6 {
+		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records and the 4 skip and ignore records", len(phase12DetailKeys))
 	}
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase12DetailKeys) {
 		t.Fatalf("verify = %+v", got)
@@ -475,6 +481,10 @@ func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 	for key, constant := range map[string]string{
 		"updates.policy_changed":   audit.ActionUpdatesPolicyChanged,
 		"updates.defaults_changed": audit.ActionUpdatesDefaultsChanged,
+		"image.update_skipped":     audit.ActionImageUpdateSkipped,
+		"image.update_unskipped":   audit.ActionImageUpdateUnskipped,
+		"image.updates_ignored":    audit.ActionImageUpdatesIgnored,
+		"image.updates_unignored":  audit.ActionImageUpdatesUnignored,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

@@ -78,18 +78,19 @@ func (d UpdatesDeps) location() *time.Location {
 // UpdateInfoBody is what the page says about the image of one workload (D-03). It carries TierPlan's
 // words only: a state, a reason code and the digests, never the registry's own text.
 type UpdateInfoBody struct {
-	State            string   `json:"state" enum:"update_available,updating,busy,queued,up_to_date,check_stale,check_failed,rolled_back,rollback_failed,not_from_registry,pinned_in_file,not_checked,skipped,ignored" doc:"What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored"`
-	Reason           string   `json:"reason" enum:",auth,rate_limited,unreachable,not_found,unsupported,other" doc:"Why the last check failed, in TierPlan's words; empty unless state is check_failed"`
-	Registry         string   `json:"registry" doc:"The registry host the image is checked at; empty when the image cannot be checked"`
-	Repository       string   `json:"repository" doc:"The repository below the registry host; empty when the image cannot be checked"`
-	Tag              string   `json:"tag" doc:"The tag that is followed; empty for an image named by digest alone"`
-	RunningDigest    string   `json:"runningDigest" doc:"The digest the service runs, from its spec; empty when its spec names none"`
-	RemoteDigest     string   `json:"remoteDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
-	ChangedPlatforms []string `json:"changedPlatforms" doc:"For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named"`
-	CheckedAt        string   `json:"checkedAt" format:"date-time" doc:"When the tag was last checked, whatever came of it; empty when it never was"`
-	SuccessAt        string   `json:"successAt" format:"date-time" doc:"When a check of the tag last succeeded; empty when none did"`
-	Note             string   `json:"note" enum:",running_index_gone,may_be_stale" doc:"A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states"`
-	Task             bool     `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
+	State            string            `json:"state" enum:"update_available,updating,busy,queued,up_to_date,check_stale,check_failed,rolled_back,rollback_failed,not_from_registry,pinned_in_file,not_checked,skipped,ignored" doc:"What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored"`
+	Reason           string            `json:"reason" enum:",auth,rate_limited,unreachable,not_found,unsupported,other" doc:"Why the last check failed, in TierPlan's words; empty unless state is check_failed"`
+	Registry         string            `json:"registry" doc:"The registry host the image is checked at; empty when the image cannot be checked"`
+	Repository       string            `json:"repository" doc:"The repository below the registry host; empty when the image cannot be checked"`
+	Tag              string            `json:"tag" doc:"The tag that is followed; empty for an image named by digest alone"`
+	RunningDigest    string            `json:"runningDigest" doc:"The digest the service runs, from its spec; empty when its spec names none"`
+	RemoteDigest     string            `json:"remoteDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
+	ChangedPlatforms []string          `json:"changedPlatforms" doc:"For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named"`
+	CheckedAt        string            `json:"checkedAt" format:"date-time" doc:"When the tag was last checked, whatever came of it; empty when it never was"`
+	SuccessAt        string            `json:"successAt" format:"date-time" doc:"When a check of the tag last succeeded; empty when none did"`
+	Note             string            `json:"note" enum:",running_index_gone,may_be_stale" doc:"A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states"`
+	Ignore           *UpdateIgnoreBody `json:"ignore,omitempty" doc:"Set when the state is skipped or ignored: which, how far it reaches, who chose it and when"`
+	Task             bool              `json:"task" doc:"True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own"`
 }
 
 // updateInfoOf turns a verdict into its answer. w is the workload the verdict is for, which names the
@@ -100,7 +101,7 @@ func updateInfoOf(v updates.Verdict, w updates.Workload) *UpdateInfoBody {
 		RunningDigest: v.RunningDigest, RemoteDigest: v.RemoteDigest,
 		ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
 		CheckedAt:        rfc3339(v.CheckedAt), SuccessAt: rfc3339(v.SuccessAt),
-		Note: v.Note, Task: w.Task,
+		Note: v.Note, Task: w.Task, Ignore: updateIgnoreOf(v.Ignore),
 	}
 	if w.Checkable() {
 		b.Registry, b.Repository, b.Tag = w.Ref.Domain, w.Ref.Path, w.Ref.Tag
@@ -161,6 +162,7 @@ func RegisterUpdates(r *httpx.Router, d UpdatesDeps) {
 			return &CheckUpdatesOutput{CacheControl: "no-store", Body: body}, nil
 		})
 	registerUpdatePolicy(r, d)
+	registerUpdateIgnores(r, d)
 }
 
 // checkEnvironmentUpdates checks the images of an environment's services now and counts what it found.

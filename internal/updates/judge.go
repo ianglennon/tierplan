@@ -88,6 +88,9 @@ type JudgeInput struct {
 	// NextCheckAt is when the schedule will check the workload's environment next, zero when it will
 	// not. Only a workload that has not been checked carries it out.
 	NextCheckAt time.Time
+	// Ignore is the skip or ignore that applies to the workload, from Ignores.Match, nil when none does
+	// (D-15, D-16).
+	Ignore *Ignore
 }
 
 // Verdict is what Judge decides about one workload.
@@ -107,6 +110,8 @@ type Verdict struct {
 	// NextCheckAt is when the schedule will check the workload next, set with StateNotChecked when the
 	// environment has a schedule.
 	NextCheckAt time.Time
+	// Ignore is the skip or ignore the state is skipped or ignored because of, with who set it and when.
+	Ignore *Ignore
 }
 
 // Judge decides what to say about a workload's image. The rules run in this order, and the first that
@@ -129,17 +134,47 @@ type Verdict struct {
 //  6. The same digest, or none of the workload's platforms changed, found within StaleAfter:
 //     up_to_date; found longer ago: check_stale.
 //
+// A skip or an ignore (D-15, D-16) then holds back what rules 2 to 6 found: an ignore reads ignored for any
+// workload that can be checked, and a skip reads skipped when the verdict is update_available or check_failed and
+// the stored remote digest is the one the skip passes over. A workload pinned in its file or not from a registry
+// is never ignored or skipped: there is nothing to hide. The label, then an ignore, then a skip is the order
+// Ignores.Match answers in, so exactly one applies.
+//
 // An update_available verdict whose check is older than StaleAfter keeps its state and gains the note
 // may_be_stale, unless it already carries the note running_index_gone. A not_checked verdict carries
 // NextCheckAt.
 func Judge(in JudgeInput) Verdict {
-	v := judge(in)
+	v := hold(in, judge(in))
 	if v.State == StateNotChecked {
 		v.NextCheckAt = in.NextCheckAt
 	}
 	if v.State == StateUpdateAvailable && v.Note == "" && !v.SuccessAt.IsZero() && in.Now.Sub(v.SuccessAt) > in.StaleAfter {
 		v.Note = NoteMayBeStale
 	}
+	return v
+}
+
+// hold applies the skip or ignore of in to a verdict.
+func hold(in JudgeInput, v Verdict) Verdict {
+	ig := in.Ignore
+	if ig == nil || v.State == StatePinned || v.State == StateNotFromRegistry {
+		return v
+	}
+	switch ig.Mode {
+	case ModeIgnore:
+		v.State = StateIgnored
+	case ModeSkip:
+		// A skip passes over one remote digest and lifts itself when the tag points at another (D-15).
+		if in.Check == nil || in.Check.Digest == "" || in.Check.Digest != ig.Digest ||
+			(v.State != StateUpdateAvailable && v.State != StateCheckFailed) {
+			return v
+		}
+		v.State, v.RemoteDigest = StateSkipped, in.Check.Digest
+	default:
+		return v
+	}
+	v.Reason, v.Note, v.ChangedPlatforms = "", "", nil
+	v.Ignore = ig
 	return v
 }
 

@@ -3468,6 +3468,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/updates/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ignore the updates of an image or of a service or container
+         * @description Hides every update until the choice is removed. scope image covers an image and tag (named by image) for every service and container using it in this environment and no other; scope workload covers one service or container (kind and name, 404 not_found when it is not there). 422 invalid_image when the image is not a reference with a tag, 422 invalid_ignore_target when the scope's fields are missing. Choosing what is ignored already changes nothing. Audited as image.updates_ignored. Needs updates.manage (an Env Admin) on the environment.
+         */
+        post: operations["ignoreImageUpdates"];
+        /**
+         * Stop ignoring the updates of an image or of a service or container
+         * @description Takes back an ignore chosen through this API, so updates are offered again. 404 ignore_not_found when there is none. 409 ignored_by_label when the workload is ignored by the tierplan.updates=ignore label in its compose file, which only its owner can remove. Audited as image.updates_unignored. Needs updates.manage (an Env Admin) on the environment.
+         */
+        delete: operations["unignoreImageUpdates"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/updates/policy": {
         parameters: {
             query?: never;
@@ -3503,6 +3527,30 @@ export interface paths {
          */
         post: operations["previewUpdateCheckSchedule"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip the offered version of a service or container
+         * @description Hides the version of its image the service or container is offered now, until the tag points at a newer one. The version is the one the last check found, read on the server. 409 nothing_to_skip when the workload has no update available; 404 not_found when it is not there. Skipping a version that is skipped already changes nothing. Audited as image.update_skipped. Needs updates.manage (an Env Admin) on the environment.
+         */
+        post: operations["skipImageUpdate"];
+        /**
+         * Stop skipping a version of a service or container
+         * @description Takes back the skip of a service or container, so the update is offered again. 404 skip_not_found when it is not skipped. Audited as image.update_unskipped. Needs updates.manage (an Env Admin) on the environment.
+         */
+        delete: operations["unskipImageUpdate"];
         options?: never;
         head?: never;
         patch?: never;
@@ -14121,6 +14169,52 @@ export interface components {
             /** @description The new name, 1 to 64 characters */
             name?: string;
         };
+        UpdateHeldBody: {
+            /** @description What is known about the workload's image now. Absent for an ignore of an image, which covers many workloads */
+            update?: components["schemas"]["UpdateInfoBody"];
+        };
+        UpdateIgnoreBody: {
+            /** @description For a skip, the version it passes over; empty for an ignore */
+            digest: string;
+            /**
+             * @description skip passes over one version; ignore hides every update until it is removed
+             * @enum {string}
+             */
+            mode: "skip" | "ignore";
+            /**
+             * @description What the choice covers: image (this image in this environment, every service and container using it here), workload (this service or container alone) or label (the tierplan.updates=ignore label on it, which only its owner can remove). A skip is always workload
+             * @enum {string}
+             */
+            scope: "image" | "workload" | "label";
+            /**
+             * Format: date-time
+             * @description When it was chosen; empty for the label
+             */
+            setAt: string;
+            /** @description The display name of the person who chose it; empty for the label, or when that person is gone */
+            setBy: string;
+        };
+        UpdateIgnoreRequest: {
+            /**
+             * @description Set to true when this is one of several choices made together; it is only noted in the audit log
+             * @enum {string}
+             */
+            bulk?: "true";
+            /** @description For scope image: an image reference with a tag, such as nginx:1.27. The registry, repository and tag are matched exactly */
+            image?: string;
+            /**
+             * @description For scope workload: service for a swarm service, container for a container
+             * @enum {string}
+             */
+            kind?: "service" | "container";
+            /** @description For scope workload: the service's or container's name */
+            name?: string;
+            /**
+             * @description image: the image and tag named by image, every service and container using it in this environment. workload: the service or container named by kind and name
+             * @enum {string}
+             */
+            scope: "image" | "workload";
+        };
         UpdateInfoBody: {
             /** @description For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named */
             changedPlatforms: string[] | null;
@@ -14129,6 +14223,8 @@ export interface components {
              * @description When the tag was last checked, whatever came of it; empty when it never was
              */
             checkedAt: string;
+            /** @description Set when the state is skipped or ignored: which, how far it reaches, who chose it and when */
+            ignore?: components["schemas"]["UpdateIgnoreBody"];
             /**
              * @description A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states
              * @enum {string}
@@ -14209,6 +14305,20 @@ export interface components {
              * @description New per-person cap on open shells, 1 to 50
              */
             maxPerUser?: number;
+        };
+        UpdateSkipRequest: {
+            /**
+             * @description Set to true when this is one of several workloads chosen together; it is only noted in the audit log
+             * @enum {string}
+             */
+            bulk?: "true";
+            /**
+             * @description service for a swarm service, container for a container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name */
+            name: string;
         };
         UpdateStackHistorySettingsInputBody: {
             /**
@@ -21866,6 +21976,77 @@ export interface operations {
             };
         };
     };
+    ignoreImageUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIgnoreRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateHeldBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unignoreImageUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIgnoreRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     setUpdateCheckPolicy: {
         parameters: {
             query?: never;
@@ -21928,6 +22109,77 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UpdateSchedulePreviewBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    skipImageUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkipRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateHeldBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unskipImageUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkipRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

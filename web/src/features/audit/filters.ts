@@ -109,6 +109,10 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "image.pull_cancelled",
   "image.removed",
   "image.untagged",
+  "image.update_skipped",
+  "image.update_unskipped",
+  "image.updates_ignored",
+  "image.updates_unignored",
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",
@@ -418,6 +422,20 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     return t(`audit.actions.${key}_${details.kind}`, {
       name: details.name,
     });
+  }
+  // Skips and ignores of image updates name the image or the workload they are about.
+  if (key === "image.update_skipped" && details?.image && details.digest) {
+    return t("audit.actions.image.update_skipped_named", {
+      digest: details.digest.replace(/^sha256:/, "").slice(0, 12),
+      image: details.image,
+    });
+  }
+  if (key === "image.update_unskipped" && details?.image) {
+    return t("audit.actions.image.update_unskipped_named", { image: details.image });
+  }
+  if (key === "image.updates_ignored" || key === "image.updates_unignored") {
+    const scope = details?.scope === "image" ? details.image : details?.workload;
+    if (scope) return t(`audit.actions.${key}_named`, { scope });
   }
   if (key === "swarm.task_history_limit_changed" && details?.to) {
     return t("audit.actions.swarm.task_history_limit_changed_named", { limit: details.to });

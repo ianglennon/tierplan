@@ -21837,6 +21837,101 @@
         },
         "type": "object"
       },
+      "UpdateHeldBody": {
+        "additionalProperties": false,
+        "properties": {
+          "update": {
+            "$ref": "#/components/schemas/UpdateInfoBody",
+            "description": "What is known about the workload's image now. Absent for an ignore of an image, which covers many workloads"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateIgnoreBody": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "description": "For a skip, the version it passes over; empty for an ignore",
+            "type": "string"
+          },
+          "mode": {
+            "description": "skip passes over one version; ignore hides every update until it is removed",
+            "enum": [
+              "skip",
+              "ignore"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "description": "What the choice covers: image (this image in this environment, every service and container using it here), workload (this service or container alone) or label (the tierplan.updates=ignore label on it, which only its owner can remove). A skip is always workload",
+            "enum": [
+              "image",
+              "workload",
+              "label"
+            ],
+            "type": "string"
+          },
+          "setAt": {
+            "description": "When it was chosen; empty for the label",
+            "format": "date-time",
+            "type": "string"
+          },
+          "setBy": {
+            "description": "The display name of the person who chose it; empty for the label, or when that person is gone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "scope",
+          "setBy",
+          "setAt",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "UpdateIgnoreRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bulk": {
+            "description": "Set to true when this is one of several choices made together; it is only noted in the audit log",
+            "enum": [
+              "true"
+            ],
+            "type": "string"
+          },
+          "image": {
+            "description": "For scope image: an image reference with a tag, such as nginx:1.27. The registry, repository and tag are matched exactly",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "kind": {
+            "description": "For scope workload: service for a swarm service, container for a container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "For scope workload: the service's or container's name",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "scope": {
+            "description": "image: the image and tag named by image, every service and container using it in this environment. workload: the service or container named by kind and name",
+            "enum": [
+              "image",
+              "workload"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "type": "object"
+      },
       "UpdateInfoBody": {
         "additionalProperties": false,
         "properties": {
@@ -21854,6 +21949,10 @@
             "description": "When the tag was last checked, whatever came of it; empty when it never was",
             "format": "date-time",
             "type": "string"
+          },
+          "ignore": {
+            "$ref": "#/components/schemas/UpdateIgnoreBody",
+            "description": "Set when the state is skipped or ignored: which, how far it reaches, who chose it and when"
           },
           "note": {
             "description": "A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states",
@@ -22057,6 +22156,37 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "UpdateSkipRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bulk": {
+            "description": "Set to true when this is one of several workloads chosen together; it is only noted in the audit log",
+            "enum": [
+              "true"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "description": "service for a swarm service, container for a container",
+            "enum": [
+              "service",
+              "container"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The service's or container's name",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
         "type": "object"
       },
       "UpdateStackHistorySettingsInputBody": {
@@ -35807,6 +35937,112 @@
         ]
       }
     },
+    "/api/env/{envId}/updates/ignore": {
+      "delete": {
+        "description": "Takes back an ignore chosen through this API, so updates are offered again. 404 ignore_not_found when there is none. 409 ignored_by_label when the workload is ignored by the tierplan.updates=ignore label in its compose file, which only its owner can remove. Audited as image.updates_unignored. Needs updates.manage (an Env Admin) on the environment.",
+        "operationId": "unignoreImageUpdates",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIgnoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop ignoring the updates of an image or of a service or container",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Hides every update until the choice is removed. scope image covers an image and tag (named by image) for every service and container using it in this environment and no other; scope workload covers one service or container (kind and name, 404 not_found when it is not there). 422 invalid_image when the image is not a reference with a tag, 422 invalid_ignore_target when the scope's fields are missing. Choosing what is ignored already changes nothing. Audited as image.updates_ignored. Needs updates.manage (an Env Admin) on the environment.",
+        "operationId": "ignoreImageUpdates",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIgnoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateHeldBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Ignore the updates of an image or of a service or container",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
     "/api/env/{envId}/updates/policy": {
       "put": {
         "description": "Replaces the settings this environment sets itself: enabled and the schedule, each a value, or null to follow the instance default again. The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the status: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the checks off stops the scheduled ones at once; Check now still works. Needs updates.manage (an Env Admin) on the environment. A change is audited as updates.policy_changed, naming the fields that changed; scheduled checks and Check now are not audited.",
@@ -35924,6 +36160,112 @@
           }
         },
         "summary": "Preview an update check schedule",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/updates/skip": {
+      "delete": {
+        "description": "Takes back the skip of a service or container, so the update is offered again. 404 skip_not_found when it is not skipped. Audited as image.update_unskipped. Needs updates.manage (an Env Admin) on the environment.",
+        "operationId": "unskipImageUpdate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop skipping a version of a service or container",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "description": "Hides the version of its image the service or container is offered now, until the tag points at a newer one. The version is the one the last check found, read on the server. 409 nothing_to_skip when the workload has no update available; 404 not_found when it is not there. Skipping a version that is skipped already changes nothing. Audited as image.update_skipped. Needs updates.manage (an Env Admin) on the environment.",
+        "operationId": "skipImageUpdate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateHeldBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Skip the offered version of a service or container",
         "tags": [
           "environments"
         ]

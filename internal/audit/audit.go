@@ -272,6 +272,16 @@ const (
 	// An instance admin changed the update check defaults every environment inherits: the entry names the fields and the
 	// defaults' new version (D-01).
 	ActionUpdatesDefaultsChanged = "updates.defaults_changed"
+	// An Admin of the environment skipped the remote version of one service or container, or took the skip back (D-15).
+	// The entry names the kind, the workload, the image and, for a skip, the digest passed over; bulk when it was one of
+	// several ticked together.
+	ActionImageUpdateSkipped   = "image.update_skipped"
+	ActionImageUpdateUnskipped = "image.update_unskipped"
+	// An Admin of the environment ignored the updates of an image in the environment or of one service or container, or
+	// stopped ignoring them (D-15, D-16). The entry names the scope (image or workload), the image, and for a workload its
+	// kind and name.
+	ActionImageUpdatesIgnored   = "image.updates_ignored"
+	ActionImageUpdatesUnignored = "image.updates_unignored"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
