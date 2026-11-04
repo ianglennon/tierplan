@@ -5275,6 +5275,124 @@
         ],
         "type": "object"
       },
+      "FleetPoolItem": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "description": "What there is, in the unit given",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "envId": {
+            "description": "The environment it is in",
+            "type": "string"
+          },
+          "envName": {
+            "description": "The name of that environment",
+            "type": "string"
+          },
+          "estimated": {
+            "description": "True for a standalone host's pool, whose number is a guess from Docker's defaults",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "pool for an address pool, ingress for the swarm's routing mesh network, overlay for any other overlay network",
+            "enum": [
+              "pool",
+              "ingress",
+              "overlay"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The pool's CIDR, or the network's name",
+            "type": "string"
+          },
+          "percent": {
+            "description": "Whole percent used, rounded down",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "description": "getting_full from 70% up to 90%, almost_full from 90%",
+            "enum": [
+              "getting_full",
+              "almost_full"
+            ],
+            "type": "string"
+          },
+          "subnet": {
+            "description": "The pool's CIDR, or the network's IPv4 subnets, comma separated",
+            "type": "string"
+          },
+          "unit": {
+            "description": "subnets for a pool, addresses for a network",
+            "enum": [
+              "subnets",
+              "addresses"
+            ],
+            "type": "string"
+          },
+          "used": {
+            "description": "What is used, in the unit given",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "envId",
+          "envName",
+          "kind",
+          "name",
+          "subnet",
+          "used",
+          "capacity",
+          "percent",
+          "state",
+          "unit",
+          "estimated"
+        ],
+        "type": "object"
+      },
+      "FleetPoolsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Every pool and overlay network at 70% or more used in the environments that were read, fullest first, then by environment name, then by name",
+            "items": {
+              "$ref": "#/components/schemas/FleetPoolItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notIncluded": {
+            "description": "The environments the caller may read whose address space could not be read. Environments the caller may not read are never named",
+            "items": {
+              "$ref": "#/components/schemas/FleetNotIncludedBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "readAt": {
+            "description": "When the answer was put together",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "notIncluded",
+          "readAt"
+        ],
+        "type": "object"
+      },
       "FleetPoolsTile": {
         "additionalProperties": false,
         "properties": {
@@ -38476,6 +38594,64 @@
           }
         },
         "summary": "List what is failing across the environments the caller may read",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/pools": {
+      "get": {
+        "description": "Every address pool and overlay network at 70% or more used (getting_full up to 90%, almost_full from 90%, by the whole percent rounded down) in the environments the caller holds environments.read on, fullest first, then by environment name and network name. A standalone host's pool is a guess and says so (estimated). An environment whose address space could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.",
+        "operationId": "listFleetPools",
+        "parameters": [
+          {
+            "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+            "explode": true,
+            "in": "query",
+            "name": "env",
+            "schema": {
+              "description": "Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetPoolsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the address pools and overlay networks near exhaustion across the environments the caller may read",
         "tags": [
           "fleet"
         ]

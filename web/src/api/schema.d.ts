@@ -3872,6 +3872,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fleet/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the address pools and overlay networks near exhaustion across the environments the caller may read
+         * @description Every address pool and overlay network at 70% or more used (getting_full up to 90%, almost_full from 90%, by the whole percent rounded down) in the environments the caller holds environments.read on, fullest first, then by environment name and network name. A standalone host's pool is a guess and says so (estimated). An environment whose address space could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.
+         */
+        get: operations["listFleetPools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/fleet/summary": {
         parameters: {
             query?: never;
@@ -7575,6 +7595,59 @@ export interface components {
              * @enum {string}
              */
             reason: "offline" | "not_reporting" | "waiting_first_agent" | "nodes_not_reporting";
+        };
+        FleetPoolItem: {
+            /**
+             * Format: int64
+             * @description What there is, in the unit given
+             */
+            capacity: number;
+            /** @description The environment it is in */
+            envId: string;
+            /** @description The name of that environment */
+            envName: string;
+            /** @description True for a standalone host's pool, whose number is a guess from Docker's defaults */
+            estimated: boolean;
+            /**
+             * @description pool for an address pool, ingress for the swarm's routing mesh network, overlay for any other overlay network
+             * @enum {string}
+             */
+            kind: "pool" | "ingress" | "overlay";
+            /** @description The pool's CIDR, or the network's name */
+            name: string;
+            /**
+             * Format: int64
+             * @description Whole percent used, rounded down
+             */
+            percent: number;
+            /**
+             * @description getting_full from 70% up to 90%, almost_full from 90%
+             * @enum {string}
+             */
+            state: "getting_full" | "almost_full";
+            /** @description The pool's CIDR, or the network's IPv4 subnets, comma separated */
+            subnet: string;
+            /**
+             * @description subnets for a pool, addresses for a network
+             * @enum {string}
+             */
+            unit: "subnets" | "addresses";
+            /**
+             * Format: int64
+             * @description What is used, in the unit given
+             */
+            used: number;
+        };
+        FleetPoolsBody: {
+            /** @description Every pool and overlay network at 70% or more used in the environments that were read, fullest first, then by environment name, then by name */
+            items: components["schemas"]["FleetPoolItem"][] | null;
+            /** @description The environments the caller may read whose address space could not be read. Environments the caller may not read are never named */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
         };
         FleetPoolsTile: {
             /**
@@ -23447,6 +23520,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetFailingBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listFleetPools: {
+        parameters: {
+            query?: {
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetPoolsBody"];
                 };
             };
             /** @description Error */

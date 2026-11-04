@@ -525,4 +525,5 @@ func RegisterFleet(r *httpx.Router, d FleetDeps) {
 	})
 
 	registerFleetUpdates(r, d, fail)
+	registerFleetPools(r, d, fail)
 }
