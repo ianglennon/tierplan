@@ -71,7 +71,8 @@ interface UpdateMenuItemsProps {
 
 // UpdateMenuItems is the update part of a row menu on the services list, the containers list and a
 // stack's services (D-05, D-15, D-16): "Update…" where the row can be updated here (it opens the confirm;
-// it is unavailable with the reason when it cannot work yet, D-10), "Skip this version" for an update on offer, "Stop skipping" for a
+// it is unavailable with the reason when it cannot work yet, D-10; after a rollback it reads "Update
+// anyway…"), "Skip this version" for an update on offer, "Stop skipping" for a
 // skipped one, "Ignore updates…" unless the compose label already does, "Stop ignoring updates"
 // for an ignored one, and "Check now" always. Skip and ignore need Env Admin (updates.manage); below
 // it they are unavailable with the reason (D-10), and the server decides either way. An ignore set
@@ -116,6 +117,9 @@ export function UpdateMenuItems({
 
   const state = update?.state;
   const labelled = update?.ignore?.scope === "label";
+  // A version that failed before is retried on purpose: the item says so, and the confirm that opens is the
+  // Update anyway form.
+  const retry = state === "rolled_back" || state === "rollback_failed";
   const canSkip = state === "update_available";
   const canUnskip = state === "skipped";
   const canUnignore = state === "ignored";
@@ -155,7 +159,7 @@ export function UpdateMenuItems({
               onUpdate?.();
             }}
           >
-            {t("updates.menu.update")}
+            {t(retry ? "updates.menu.updateAnyway" : "updates.menu.update")}
           </DropdownMenuItem>
         </NeedsTooltip>
       ) : null}

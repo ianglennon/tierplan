@@ -607,3 +607,150 @@ describe("UpdateConfirmDialog: the container scope", () => {
     ).toBeTruthy();
   });
 });
+
+// Update anyway (plan 12-25, D-14): a version whose update failed before is tried again on purpose.
+describe("UpdateConfirmDialog: Update anyway", () => {
+  const failedBefore = (reason: string, extra: Record<string, unknown> = {}) => ({
+    code: "previous_failure" as const,
+    workload: "web",
+    reason,
+    at: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+    ...extra,
+  });
+  const anywayPreview = (reason: string, others: UpdatePreview["warnings"] = []) =>
+    preview({ warnings: [...(others ?? []), failedBefore(reason)] });
+  const anywayButton = async () => {
+    await waitFor(() => expect(document.querySelector("[data-slot=update-row]")).toBeTruthy());
+    return screen.findByRole("button", { name: "Update web anyway" });
+  };
+
+  it("leads with why this version failed before and when, and names the button for what it does", async () => {
+    answerPreview = () => Response.json(anywayPreview("timeout"));
+    mount();
+    expect(await screen.findByRole("heading", { name: "Update web anyway" })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "This version failed before: web didn't finish updating in time. It was rolled back 2 h ago.",
+      ),
+    ).toBeTruthy();
+    expect(await anywayButton()).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Update web" })).toBeNull();
+  });
+
+  it("shows the earlier failure open, ahead of every other warning, even when the rest fold", async () => {
+    answerPreview = () =>
+      Response.json(
+        anywayPreview("didnt_start", [
+          { code: "downtime", workload: "web" },
+          { code: "no_healthcheck", workload: "web" },
+          { code: "host_ports", workload: "web" },
+          { code: "volumes", workload: "web" },
+        ]),
+      );
+    mount();
+    const first = await screen.findByText(/This version failed before: web didn't start/);
+    const lines = Array.from(
+      document.querySelectorAll("section[aria-label='Before you update'] ul > li"),
+    ).map((li) => li.textContent ?? "");
+    expect(lines[0]).toBe(first.textContent);
+    expect(await screen.findByRole("button", { name: "Show 2 more warnings" })).toBeTruthy();
+  });
+
+  it("posts force true from this form, and only from this form", async () => {
+    answerPreview = () => Response.json(anywayPreview("unhealthy"));
+    mount();
+    fireEvent.click(await anywayButton());
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).toEqual({
+      kind: "service",
+      name: "web",
+      expect: { web: B },
+      force: true,
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe(`/env/${ENV}/update-jobs/j1`),
+    );
+  });
+
+  it("sends no force at all for an ordinary update", async () => {
+    mount();
+    fireEvent.click(await commit());
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).not.toHaveProperty("force");
+  });
+
+  it("works for a version whose image could not be pulled, and says nothing was changed, never that it was rolled back", async () => {
+    answerPreview = () => Response.json(anywayPreview("pull_failed"));
+    mount();
+    const text = await screen.findByText(
+      "This version failed before: TierPlan couldn't pull the image. Nothing was changed. That was 2 h ago.",
+    );
+    expect(text.textContent).not.toMatch(/rolled back/i);
+    expect(
+      document.querySelector("section[aria-label='Before you update']")?.textContent,
+    ).not.toMatch(/rolled back/i);
+    fireEvent.click(await anywayButton());
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).toMatchObject({ name: "web", force: true });
+  });
+
+  it("turns an ordinary Update the server refuses as failed before into the Update anyway form, with the warning", async () => {
+    answerRun = () =>
+      Response.json(
+        {
+          type: "previously_failed",
+          status: 409,
+          title: "Conflict",
+          errors: [{ location: "reason", message: "timeout" }],
+        },
+        { status: 409 },
+      );
+    // The preview reports the earlier failure only once the server has refused the press.
+    answerPreview = () => Response.json(runs().length > 0 ? anywayPreview("timeout") : preview());
+    mount();
+    fireEvent.click(await commit());
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).not.toHaveProperty("force");
+    expect(await screen.findByRole("heading", { name: "Update web anyway" })).toBeTruthy();
+    expect(
+      await screen.findByText(/This version failed before: web didn't finish updating/),
+    ).toBeTruthy();
+    // Nothing else is said about it: no error alert, and the dialog stays open.
+    expect(screen.queryByText("Couldn't start the update.")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    answerRun = () => Response.json({ jobId: "j2" });
+    fireEvent.click(await anywayButton());
+    await waitFor(() => expect(runs()).toHaveLength(2));
+    expect(runs()[1]?.body).toMatchObject({ force: true });
+  });
+
+  it("never offers it for a stack, which does not retry a failed version", async () => {
+    answerPreview = () =>
+      Response.json(
+        preview({
+          items: [item({ name: "web" }), item({ name: "db" })],
+          warnings: [failedBefore("timeout")],
+        }),
+      );
+    mount({ workload: { kind: "stack", name: "shop" } });
+    expect(await screen.findByRole("heading", { name: "Update stack shop" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /anyway/ })).toBeNull();
+    const button = await screen.findByRole("button", { name: "Update 2 services" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(button);
+    await waitFor(() => expect(runs()).toHaveLength(1));
+    expect(runs()[0]?.body).not.toHaveProperty("force");
+  });
+
+  it("draws a name with markup in the warning as text", async () => {
+    answerPreview = () =>
+      Response.json(
+        preview({ warnings: [failedBefore("didnt_start", { workload: "<b>web</b>" })] }),
+      );
+    mount();
+    expect(
+      await screen.findByText(/This version failed before: <b>web<\/b> didn't start/),
+    ).toBeTruthy();
+    expect(document.querySelector("section b")).toBeNull();
+  });
+});

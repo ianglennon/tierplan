@@ -16,7 +16,7 @@ import {
   useRunUpdate,
   useUpdatePreview,
 } from "@/api/updates";
-import { RelativeTime } from "@/components/relative-time";
+import { RelativeTime, useNow } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { DigestChip } from "@/features/stacks/digest-chip";
+import { rollbackReasonText } from "@/features/updates/reasons";
 import { keyExists, useT } from "@/i18n/use-t";
+import { formatRelative } from "@/lib/format";
 
 // How many warnings show before the rest fold into "Show {n} more warnings".
 const WARNINGS_SHOWN = 3;
@@ -179,9 +181,31 @@ export function UpdateRow({ item }: { item: UpdatePreviewItem }) {
   );
 }
 
-function warningText(t: ReturnType<typeof useT>, w: UpdateWarning): string {
+// previousFailureText is the warning that this version failed before (UI-SPEC "Pre-flight: previous
+// failure"): why, from our own table keyed by the code, and when. A pull that failed changed nothing, so
+// it never says anything was rolled back.
+function previousFailureText(t: ReturnType<typeof useT>, w: UpdateWarning, now: Date): string {
+  const when = w.at ? formatRelative(w.at, now, t) : "";
+  if (w.reason === "pull_failed") {
+    return t("updates.confirm.preflight.previous_failure_pull", { when });
+  }
+  const reason = rollbackReasonText(t, w.reason ?? "", { subject: w.workload });
+  return when
+    ? t("updates.confirm.preflight.previous_failure", { reason, when })
+    : t("updates.confirm.preflight.previous_failure_noWhen", { reason });
+}
+
+function warningText(t: ReturnType<typeof useT>, w: UpdateWarning, now: Date): string {
+  if (w.code === "previous_failure") return previousFailureText(t, w, now);
   const key = `updates.confirm.preflight.${w.code}`;
   return keyExists(key) ? t(key, { name: w.workload }) : "";
+}
+
+// The warnings that lead: what failed before, then a container's downtime. Both come before the rest and
+// before the fold, so neither is ever behind "Show more warnings".
+function leadRank(w: UpdateWarning): number {
+  if (w.code === "previous_failure") return 2;
+  return w.code === "container_downtime" ? 1 : 0;
 }
 
 // PreflightList is "Before you update": what an update can cost, one line for each warning the
@@ -189,15 +213,14 @@ function warningText(t: ReturnType<typeof useT>, w: UpdateWarning): string {
 // are the SPA's own and the names in them are text.
 export function PreflightList({ warnings }: { warnings: readonly UpdateWarning[] }) {
   const t = useT();
+  const now = new Date(useNow());
   const [open, setOpen] = useState(false);
-  // A container can't be replaced without stopping it, which is the first thing to know: it leads.
+  // That this version failed before is the first thing to know, then that a container can't be replaced
+  // without stopping it: they lead, and stay out of the fold.
   const lines = warnings
-    .map((w) => ({ w, text: warningText(t, w) }))
+    .map((w) => ({ w, text: warningText(t, w, now) }))
     .filter((l) => l.text !== "")
-    .sort(
-      (a, b) =>
-        Number(b.w.code === "container_downtime") - Number(a.w.code === "container_downtime"),
-    );
+    .sort((a, b) => leadRank(b.w) - leadRank(a.w));
   if (lines.length === 0) return null;
   const head = lines.slice(0, WARNINGS_SHOWN);
   const rest = lines.slice(WARNINGS_SHOWN);
@@ -290,6 +313,9 @@ export function UpdateConfirmDialog({
   const [locked, setLocked] = useState<LockView | null>(null);
   // The stack had nothing to update by the time of the press: the commit goes and the rows are stale.
   const [nothing, setNothing] = useState(false);
+  // The server refused a plain Update because this version failed before (409 previously_failed): the
+  // confirm becomes the Update anyway form, whose warning the preview is read again to show.
+  const [refusedAsFailed, setRefusedAsFailed] = useState(false);
   const stackScope = workload.kind === "stack";
   const stackName = stackScope ? workload.name : managedStack;
   const containerScope = workload.kind === "container";
@@ -303,6 +329,11 @@ export function UpdateConfirmDialog({
   const adoptFirst =
     (data !== undefined && !data.offered && data.refusal === "adopt_first") ||
     failure?.type === "adopt_first";
+  // This is the Update anyway form when the server says this version failed before, whichever way the
+  // person got here. It is the only form that sends force, and a stack's update never does.
+  const anyway =
+    !stackScope &&
+    (refusedAsFailed || (data?.warnings ?? []).some((w) => w.code === "previous_failure"));
   const lock = lockOfPreview(data?.lock) ?? locked ?? undefined;
   const pending = run.isPending;
   const blocked =
@@ -322,7 +353,7 @@ export function UpdateConfirmDialog({
     const expect: Record<string, string> = {};
     for (const item of items) expect[item.name] = item.toDigest;
     run.mutate(
-      { workload, expect },
+      { workload, expect, force: anyway },
       {
         onSettled: () => {
           sending.current = false;
@@ -346,6 +377,9 @@ export function UpdateConfirmDialog({
             setMoved({ names: names.length > 0 ? names : [workload.name], at: Date.now() });
           } else if (err.type === "operation_locked") {
             setLocked(lockOfRefusal(err));
+          } else if (err.type === "previously_failed") {
+            setRefusedAsFailed(true);
+            void preview.refetch();
           } else if (stackScope && err.type === "nothing_to_update") {
             setNothing(true);
           } else {
@@ -377,9 +411,14 @@ export function UpdateConfirmDialog({
       >
         <DialogHeader>
           <DialogTitle ref={title} tabIndex={-1} className="break-all outline-none">
-            {t(stackScope ? "updates.confirm.titleStack" : "updates.confirm.title", {
-              name: workload.name,
-            })}
+            {t(
+              stackScope
+                ? "updates.confirm.titleStack"
+                : anyway
+                  ? "updates.confirm.anywayTitle"
+                  : "updates.confirm.title",
+              { name: workload.name },
+            )}
           </DialogTitle>
           <DialogDescription className="break-words">
             {stackName
@@ -528,7 +567,9 @@ export function UpdateConfirmDialog({
               ) : stackScope ? (
                 t("updates.confirm.commitStack", { count: items.length })
               ) : (
-                t("updates.confirm.commit", { name: workload.name })
+                t(anyway ? "updates.confirm.commitAnyway" : "updates.confirm.commit", {
+                  name: workload.name,
+                })
               )}
             </Button>
           )}

@@ -11,9 +11,13 @@ import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 // The states an Update is shown for: the one it works in, and the ones that say why it cannot yet.
-// A workload that is up to date, skipped or ignored has nothing to update to and shows no Update.
+// A workload that is up to date, skipped or ignored has nothing to update to and shows no Update. One that
+// was rolled back (or whose rollback failed) shows it as "Update anyway…": the version on offer failed
+// before and is not offered again, so trying it again is the person's deliberate choice (D-14).
 const OFFERED: ReadonlySet<UpdateInfo["state"]> = new Set([
   "update_available",
+  "rolled_back",
+  "rollback_failed",
   "busy",
   "updating",
   "pinned_in_file",

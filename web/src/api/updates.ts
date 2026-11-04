@@ -609,6 +609,10 @@ export interface RunUpdateVariables {
   workload: UpdateTarget;
   // For each service, the digest the confirm showed. The server compares it with the registry's.
   expect: Record<string, string>;
+  // True only from the "Update anyway" form: a person's choice to try again, for this one workload, a
+  // version whose update failed before. Without it the server refuses such a workload with 409
+  // previously_failed and changes nothing. It is never sent by anything but that form.
+  force?: boolean;
 }
 
 // useRunUpdate is the commit of the confirm: the server asks the registry again, takes the lock and
@@ -626,7 +630,7 @@ export function useRunUpdate(envId: string) {
     RunUpdateVariables
   >({
     retry: false,
-    mutationFn: async ({ workload, expect }) => {
+    mutationFn: async ({ workload, expect, force }) => {
       try {
         const res = await api.POST("/api/env/{envId}/updates/run", {
           params: { path: { envId } },
@@ -634,6 +638,8 @@ export function useRunUpdate(envId: string) {
             kind: workload.kind,
             name: workload.name,
             expect,
+            // Left out unless chosen, so an ordinary update sends exactly what it always did.
+            ...(force ? { force: true } : {}),
           },
         });
         if (!res.data) throw updateFailure("POST", res);

@@ -91,6 +91,22 @@
           "body": "On {{env}}. Open each stack to resume or transfer it."
         },
         "open": "Open stacks"
+      },
+      "updateRolledBack": {
+        "title": "{{name}} was rolled back",
+        "body": "The update to {{digest}} failed and {{name}} runs the previous version. {{environment}}.",
+        "pullTitle": "{{name}} wasn't updated",
+        "pullBody": "The image for {{digest}} couldn't be pulled, so nothing was changed. {{environment}}.",
+        "open": "Open update",
+        "manyTitle_one": "{{count}} update failed and was rolled back",
+        "manyTitle_other": "{{count}} updates failed and were rolled back",
+        "manyBody": "Open the services of {{environment}} to see which.",
+        "manyOpen": "Open services"
+      },
+      "updateRollbackFailed": {
+        "title": "{{name}} may be partly updated",
+        "body": "The update to {{digest}} failed and TierPlan couldn't put the previous version back. {{environment}}.",
+        "open": "Open update"
       }
     },
     "refusalBurst": {

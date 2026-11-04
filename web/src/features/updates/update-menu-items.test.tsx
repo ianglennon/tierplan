@@ -423,6 +423,76 @@ describe("UpdateMenuItems: Update…", () => {
   });
 });
 
+describe("UpdateMenuItems: Update anyway… (D-14)", () => {
+  const failure = (extra: Partial<NonNullable<UpdateInfo["failure"]>> = {}) => ({
+    digest: NEW,
+    reason: "timeout",
+    at: new Date().toISOString(),
+    rollbackFailed: false,
+    jobId: "j1",
+    ...extra,
+  });
+  const anyway = () => screen.findByRole("menuitem", { name: "Update anyway…" });
+
+  it("replaces Update… after a rollback, and opens the confirm without sending anything", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ state: "rolled_back", failure: failure() }));
+    const item = await anyway();
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(item);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(writes()).toEqual([]);
+  });
+
+  it("is offered for a version whose image could not be pulled, since a registry glitch is recoverable", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ state: "rolled_back", failure: failure({ reason: "pull_failed" }) }));
+    const item = await anyway();
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(item);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("is offered after a rollback that failed too", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ state: "rollback_failed", failure: failure({ rollbackFailed: true }) }));
+    expect(await anyway()).toBeTruthy();
+  });
+
+  it("is offered for a container that was rolled back", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ state: "rolled_back", failure: failure() }), "cache", {
+      kind: "container",
+      project: "shop",
+      service: "",
+    });
+    fireEvent.click(await anyway());
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("is unavailable below Operator, with the reason", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    await mount(info({ state: "rolled_back", failure: failure() }));
+    const item = await anyway();
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("Needs Operator on Prod");
+    fireEvent.click(item);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("is not offered when the version is up to date, and plain Update… stays for an update on offer", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    await mount(info({ state: "up_to_date" }));
+    expect(screen.queryByRole("menuitem", { name: "Update anyway…" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+    cleanup();
+    await mount(info());
+    expect(await screen.findByRole("menuitem", { name: "Update…" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Update anyway…" })).toBeNull();
+  });
+});
+
 describe("UpdateMenuItems: a container", () => {
   const container = { kind: "container" as const, project: "shop", service: "" };
 

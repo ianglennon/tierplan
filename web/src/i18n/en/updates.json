@@ -292,7 +292,7 @@
         "more_one": "Show {{count}} more warning",
         "more_other": "Show {{count}} more warnings",
         "fewer": "Show fewer warnings",
-        "previous_failure_pull": "This version failed before: TierPlan couldn't pull the image. Nothing was changed, so nothing was rolled back. That was {{when}}.",
+        "previous_failure_pull": "This version failed before: TierPlan couldn't pull the image. Nothing was changed. That was {{when}}.",
         "previous_failure_noWhen": "This version failed before: {{reason}}. It was rolled back."
       },
       "note": "If the update fails, TierPlan puts the previous version back on its own and records both in the audit log.",
