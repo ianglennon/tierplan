@@ -141,6 +141,8 @@ type ServiceDetailBody struct {
 	UpdatePolicy  *ServiceUpdatePolicyBody  `json:"updatePolicy,omitempty" doc:"The update policy; absent when the spec sets none (the engine's defaults)"`
 	Labels        map[string]string         `json:"labels" doc:"The service's own labels, as Docker reports them"`
 
+	Update *UpdateInfoBody `json:"update,omitempty" doc:"Left out for a TierPlan agent, a job and when update checks are not available: what is known about the service's image, as the services list carries it"`
+
 	UpdateStatus    string `json:"updateStatus" doc:"The state of the last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none"`
 	UpdateMessage   string `json:"updateMessage" doc:"The swarm's message about the last update; empty when it has none"`
 	HasPreviousSpec bool   `json:"hasPreviousSpec" doc:"True when the swarm still holds the spec before the last update, so a rollback has something to go back to"`
@@ -311,6 +313,13 @@ func getService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, s
 		body.RestartLoop = restartLoopBody(*loop)
 	}
 	body.Muted = muted
+	if haveRow {
+		if verdicts, workloads := serviceUpdates(ctx, d, envID, []dockerx.ServiceRow{row}); verdicts != nil {
+			if v, ok := verdicts[row.ID]; ok {
+				body.Update = updateInfoOf(v, workloads[row.ID])
+			}
+		}
+	}
 	return body, nil
 }
 

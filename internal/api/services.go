@@ -177,6 +177,8 @@ type ServicesListInput struct {
 	EnvironmentPathInput
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
 	Status string `query:"status" maxLength:"64" doc:"Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
+	// Updates narrows the list to the services whose image has an update.
+	Updates string `query:"updates" enum:",available" doc:"available: only services whose image has an update available. Applied before the 500-row cap"`
 }
 
 // ServiceListOutput wraps ServiceListBody for huma.
@@ -450,13 +452,25 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 	all := st.Read.Services
 	loops := st.RestartLoops
 	rows := filterServices(all, strings.ToLower(strings.TrimSpace(in.Q)), statuses, loops)
+	// The filter by update reads the verdict of every row that passed the others, so it runs before the cap; without
+	// it only the rows shown are judged.
+	var verdicts map[string]updates.Verdict
+	var workloads map[string]updates.Workload
+	if in.Updates == "available" {
+		verdicts, workloads = serviceUpdates(ctx, d, envID, rows)
+		rows = slices.DeleteFunc(slices.Clone(rows), func(r dockerx.ServiceRow) bool {
+			return verdicts[r.ID].State != updates.StateUpdateAvailable
+		})
+	}
 	shown := rows[:min(len(rows), maxListRows)]
 	body := ServiceListBody{
 		Items: make([]ServiceItem, 0, len(shown)), Total: len(rows), UnfilteredTotal: len(all), Capped: len(rows) > maxListRows,
 		StatusCounts: serviceStatusCounts(all, loops), NoManager: noManager, FetchedAt: rfc3339(st.FetchedAt),
 	}
 	known := loadStackIDs(ctx, d.Store, envID, d.Log)
-	verdicts, workloads := serviceUpdates(ctx, d, envID, shown)
+	if verdicts == nil {
+		verdicts, workloads = serviceUpdates(ctx, d, envID, shown)
+	}
 	for _, row := range shown {
 		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,

@@ -10830,6 +10830,8 @@ export interface components {
             stack: string;
             /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
             tierplanStackId: string;
+            /** @description Left out for a TierPlan agent, a job and when update checks are not available: what is known about the service's image, as the services list carries it */
+            update?: components["schemas"]["UpdateInfoBody"];
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The update policy; absent when the spec sets none (the engine's defaults) */
@@ -19154,6 +19156,8 @@ export interface operations {
                 q?: string;
                 /** @description Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
+                /** @description available: only services whose image has an update available. Applied before the 500-row cap */
+                updates?: "" | "available";
             };
             header?: never;
             path: {
@@ -19859,6 +19863,8 @@ export interface operations {
                 status?: string;
                 /** @description Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
+                /** @description available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap */
+                updates?: "" | "available";
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
@@ -24070,6 +24076,8 @@ export interface operations {
                 status?: string;
                 /** @description Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
+                /** @description available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap */
+                updates?: "" | "available";
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
