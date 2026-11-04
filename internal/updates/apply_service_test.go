@@ -733,3 +733,321 @@ func TestServiceUpdateFailureRollsBack(t *testing.T) {
 		t.Errorf("the lock is still held after the job ended")
 	}
 }
+
+// failingTasks scripts the tasks of the service so those of any write whose image holds the digest are rejected.
+func (r *applyRig) failingTasks(name, digest, text string) {
+	var script []dockertest.FakeServiceTask
+	for slot := 1; slot <= 3; slot++ {
+		script = append(script, dockertest.FakeServiceTask{Slot: slot, State: "rejected", Desired: "shutdown", Err: text})
+	}
+	r.fake.SetServiceTasksWhileImage(name, digest, script...)
+}
+
+// A pull that fails has nothing to roll back: the run is failed, not rolled back, no write was made and no restore row exists, but
+// the digest that could not be fetched is remembered (plan 12-22, D-13, D-14).
+func TestPullFailureIsRecordedNotRolledBack(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, func(c *dockertest.FakeConfig) {
+		c.PullStatus = dockertest.FakePullStatus{Code: 500, Message: "registry exploded"}
+	}, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+
+	job := r.run(t, r.request("web", dg('b')))
+	run := r.runRow(t, job)
+	if run.State != updates.RunFailed || run.Reason != updates.ReasonPullFailed {
+		t.Fatalf("run = %s %q, want failed with pull_failed", run.State, run.Reason)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none: there was nothing to roll back", n)
+	}
+	f, ok := r.failureOf(t, "web")
+	if !ok || f.Digest != dg('b') || f.Reason != updates.ReasonPullFailed || f.RollbackFailed {
+		t.Errorf("failure = %+v %v, want the digest that failed to pull, not rollback_failed", f, ok)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonPullFailed {
+		t.Errorf("failure audit rows = %+v, want one with pull_failed", rows)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+		t.Errorf("rollback audit rows = %+v, want none", rows)
+	}
+	for _, it := range job.Items {
+		if it.ID == updates.ItemRollback || it.ID == updates.ItemRollbackWait {
+			t.Errorf("job has the step %s, want no rollback steps on a failed pull", it.ID)
+		}
+	}
+	if v := r.verdictOf(t, "web"); v.State != updates.StateRolledBack {
+		t.Errorf("verdict = %s, want the digest that failed not offered again", v.State)
+	}
+}
+
+// New tasks that never settle before the converge timeout are rolled back with the reason timeout, on a clock the test does not
+// have to move (plan 12-22, D-13).
+func TestTimeoutRollsBack(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+	r.fake.SetTaskStateWhileImage("web", dg('b'), "preparing", "")
+
+	job := r.run(t, r.request("web", dg('b')))
+	run := r.runRow(t, job)
+	if run.State != updates.RunRolledBack || run.Reason != updates.ReasonTimeout {
+		t.Fatalf("run = %s %q, want rolled_back with timeout", run.State, run.Reason)
+	}
+	if sent := r.fake.ServiceUpdates(); len(sent) != 2 || sent[1].Spec.TaskTemplate.ContainerSpec.Image != "registry.test/team/web:1@"+dg('a') {
+		t.Errorf("service updates = %+v, want the update and the previous digest written back", sent)
+	}
+	if f, ok := r.failureOf(t, "web"); !ok || f.Reason != updates.ReasonTimeout || f.Digest != dg('b') {
+		t.Errorf("failure = %+v %v, want the new digest with timeout", f, ok)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonTimeout {
+		t.Errorf("failure audit rows = %+v", rows)
+	}
+}
+
+// Where the image defines a health check, tasks that stay starting past the window are rolled back as unhealthy, and the health step
+// is the one that failed and counts the window in seconds (plan 12-22, D-13, RESEARCH A2).
+func TestUnhealthyRollsBack(t *testing.T) {
+	t.Parallel()
+	with := swarmService("checked", 'a')
+	with.Spec.TaskTemplate.ContainerSpec.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "true"}, Interval: time.Second}
+	r := newApplyRig(t, nil, with)
+	r.offer("checked", dg('b'))
+	r.fake.SetTaskStateWhileImage("checked", dg('b'), "starting", "")
+
+	job := r.run(t, r.request("checked", dg('b')))
+	run := r.runRow(t, job)
+	if run.State != updates.RunRolledBack || run.Reason != updates.ReasonUnhealthy {
+		t.Fatalf("run = %s %q, want rolled_back with unhealthy", run.State, run.Reason)
+	}
+	byID := map[string]jobs.Item{}
+	for _, it := range job.Items {
+		byID[it.ID] = it
+	}
+	if h := byID[updates.ItemHealth]; h.State != jobs.ItemFailed || h.Code != updates.ReasonUnhealthy || h.Unit != "seconds" || h.Total != 30 {
+		t.Errorf("health step = %+v, want failed unhealthy counting a window of 30 seconds", h)
+	}
+	if byID[updates.ItemRollback].State != jobs.ItemDone || byID[updates.ItemRollbackWait].State != jobs.ItemDone {
+		t.Errorf("rollback steps = %+v %+v, want both done", byID[updates.ItemRollback], byID[updates.ItemRollbackWait])
+	}
+	if f, ok := r.failureOf(t, "checked"); !ok || f.Reason != updates.ReasonUnhealthy {
+		t.Errorf("failure = %+v %v, want unhealthy", f, ok)
+	}
+
+	// Without a health check the same wait is a timeout, not unhealthy.
+	plain := newApplyRig(t, nil, swarmService("plain", 'a'))
+	plain.offer("plain", dg('b'))
+	plain.fake.SetTaskStateWhileImage("plain", dg('b'), "starting", "")
+	if got := plain.runRow(t, plain.run(t, plain.request("plain", dg('b')))); got.State != updates.RunRolledBack || got.Reason != updates.ReasonTimeout {
+		t.Errorf("a service with no health check whose tasks keep starting: run = %s %q, want rolled_back with timeout", got.State, got.Reason)
+	}
+}
+
+// The person's own failure action may roll the service back before TierPlan looks: the restore then writes nothing, waits for the
+// swarm's rollback, and the run still ends rolled back with its audit rows once (plan 12-22, D-12, RESEARCH Pitfall 10).
+func TestEngineRolledBackFirst(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+	r.clock.hold = true
+	r.fake.SetTaskStateWhileImage("web", dg('b'), "preparing", "")
+	t.Cleanup(func() { r.clock.mu.Lock(); r.clock.hold = false; r.clock.mu.Unlock() })
+
+	id, err := r.applier.Start(testsupport.Context(t), r.request("web", dg('b')))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// The first read found the new tasks starting; before the next, the swarm's failure action puts the previous spec back.
+	testsupport.Await(t, "the wait to arm its first poll", r.clock.armed)
+	if !r.fake.RollBackService("web") {
+		t.Fatal("the fake could not roll the service back")
+	}
+	r.clock.fire(stackops.PollInterval)
+	job, err := r.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := len(r.fake.ServiceUpdates()); n != 1 {
+		t.Errorf("service updates = %d, want only the update: the swarm already put the old image back", n)
+	}
+	run := r.runRow(t, job)
+	if run.State != updates.RunRolledBack || run.Reason != updates.ReasonDidntStart {
+		t.Errorf("run = %s %q, want rolled_back with didnt_start", run.State, run.Reason)
+	}
+	if f, ok := r.failureOf(t, "web"); !ok || f.Digest != dg('b') || f.RollbackFailed {
+		t.Errorf("failure = %+v %v, want the new digest, rolled back", f, ok)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 {
+		t.Errorf("failure audit rows = %+v, want one", rows)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "success" {
+		t.Errorf("rollback audit rows = %+v, want one success", rows)
+	}
+	for _, it := range job.Items {
+		if (it.ID == updates.ItemRollback || it.ID == updates.ItemRollbackWait) && it.State != jobs.ItemDone {
+			t.Errorf("step %s = %s, want done", it.ID, it.State)
+		}
+	}
+}
+
+// A restore the swarm refuses leaves the service as it is and says so: the run is rollback_failed, the failure is remembered as one,
+// the badge says so and the audit log says the rollback failed (plan 12-22, D-14).
+func TestRestoreRefusedIsRollbackFailed(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+	r.clock.hold = true
+	r.fake.SetTaskStateWhileImage("web", dg('b'), "preparing", "")
+	t.Cleanup(func() { r.clock.mu.Lock(); r.clock.hold = false; r.clock.mu.Unlock() })
+
+	id, err := r.applier.Start(testsupport.Context(t), r.request("web", dg('b')))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	testsupport.Await(t, "the wait to arm its first poll", r.clock.armed)
+	// The write of the new version was taken; the swarm now refuses every other, and pauses the update.
+	r.fake.RefuseServiceUpdates("web", "spec refused: engine words")
+	r.fake.SetUpdateState("web", "paused", "update paused due to failure or early termination of task")
+	r.clock.fire(stackops.PollInterval)
+	job, err := r.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := r.runRow(t, job)
+	if run.State != updates.RunRollbackFailed || run.Reason != updates.ReasonRestoreFailed {
+		t.Fatalf("run = %s %q, want rollback_failed with restore_failed", run.State, run.Reason)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 1 {
+		t.Errorf("service updates = %d, want only the update: the restore was refused", n)
+	}
+	f, ok := r.failureOf(t, "web")
+	if !ok || !f.RollbackFailed || f.Digest != dg('b') || f.Reason != updates.ReasonDidntStart {
+		t.Errorf("failure = %+v %v, want the new digest with rollback_failed and the reason the update failed", f, ok)
+	}
+	if v := r.verdictOf(t, "web"); v.State != updates.StateRollbackFailed {
+		t.Errorf("verdict = %s, want rollback_failed", v.State)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonDidntStart {
+		t.Errorf("failure audit rows = %+v, want one with the reason the update failed", rows)
+	}
+	rows := r.audits(t, "image.update_rolled_back")
+	if len(rows) != 1 || rows[0]["_result"] != "failure" || rows[0]["reason"] != updates.ReasonDidntStart {
+		t.Errorf("rollback audit rows = %+v, want one failure", rows)
+	}
+	byID := map[string]jobs.Item{}
+	for _, it := range job.Items {
+		byID[it.ID] = it
+	}
+	if rb := byID[updates.ItemRollback]; rb.State != jobs.ItemFailed || rb.Code != updates.CodeRestoreRefused || strings.Contains(rb.Message+rb.Detail, "engine words") {
+		t.Errorf("rollback step = %+v, want failed with TierPlan's own words", rb)
+	}
+	if byID[updates.ItemRollbackWait].State != jobs.ItemSkipped {
+		t.Errorf("rollback_wait = %s, want skipped", byID[updates.ItemRollbackWait].State)
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Errorf("the lock is still held after the job ended")
+	}
+}
+
+// Neither write touches the person's update_config (or any setting but the image): it is byte-equal before, after the update and
+// after the restore (plan 12-22, T-12-64).
+func TestUpdateConfigNeverOverwritten(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+	r.failingTasks("web", dg('b'), "No such image")
+	before, err := json.Marshal(swarmSpec("web", 'a').UpdateConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job := r.run(t, r.request("web", dg('b')))
+	if run := r.runRow(t, job); run.State != updates.RunRolledBack {
+		t.Fatalf("run = %s %q, want rolled_back", run.State, run.Reason)
+	}
+	sent := r.fake.ServiceUpdates()
+	if len(sent) != 2 {
+		t.Fatalf("service updates = %d, want 2", len(sent))
+	}
+	for i, u := range sent {
+		after, err := json.Marshal(u.Spec.UpdateConfig)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Errorf("write %d: update_config = %s, want %s", i+1, after, before)
+		}
+	}
+	// The restore changes the image and nothing else: it is the original spec, field for field.
+	if !reflect.DeepEqual(sent[1].Spec, swarmSpec("web", 'a')) {
+		t.Errorf("the restore differs from the original spec:\n got %+v\nwant %+v", sent[1].Spec, swarmSpec("web", 'a'))
+	}
+}
+
+// Somebody else changing the service while the update fails is left alone: the restore does not write an image over a third one
+// (plan 12-22, T-12-64).
+func TestRestoreLeavesAThirdImageAlone(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+	r.clock.hold = true
+	r.fake.SetTaskStateWhileImage("web", dg('b'), "preparing", "")
+	t.Cleanup(func() { r.clock.mu.Lock(); r.clock.hold = false; r.clock.mu.Unlock() })
+
+	id, err := r.applier.Start(testsupport.Context(t), r.request("web", dg('b')))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	testsupport.Await(t, "the wait to arm its first poll", r.clock.armed)
+	// A person puts a third image on the service by hand.
+	third := swarmSpec("web", 'a')
+	third.TaskTemplate.ContainerSpec.Image = "registry.test/team/web:1@" + dg('c')
+	if !r.fake.ReplaceServiceSpec("web", third) {
+		t.Fatal("the fake could not replace the spec")
+	}
+	r.fake.SetUpdateState("web", "paused", "update paused due to failure or early termination of task")
+	r.clock.fire(stackops.PollInterval)
+	job, err := r.hub.Wait(testsupport.Context(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 1 {
+		t.Errorf("service updates = %d, want only the update: the third image is not written over", n)
+	}
+	if run := r.runRow(t, job); run.State != updates.RunFailed || run.Reason != updates.ReasonDidntStart {
+		t.Errorf("run = %s %q, want failed with didnt_start: nothing was put back", run.State, run.Reason)
+	}
+	for _, it := range job.Items {
+		if it.ID == updates.ItemRollback && it.Code != updates.CodeRestoreChanged {
+			t.Errorf("rollback step = %+v, want %s", it, updates.CodeRestoreChanged)
+		}
+	}
+}
+
+// A good update forgets the failure the workload had, and the failure stops hiding anything once the tag points at another digest
+// (plan 12-22, D-14).
+func TestSuccessClearsFailure(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	if err := r.failures.Record(context.Background(), updates.Failure{
+		EnvID: r.envID, Kind: "service", Workload: "web", Digest: dg('b'), Reason: updates.ReasonUnhealthy, RunID: "old-run", FailedAt: t0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A failure of another workload of the same name and kind elsewhere is not touched.
+	if err := r.failures.Record(context.Background(), updates.Failure{
+		EnvID: r.envID, Kind: "service", Workload: "api", Digest: dg('b'), Reason: updates.ReasonUnhealthy, RunID: "old-run", FailedAt: t0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.offer("web", dg('c'))
+
+	job := r.run(t, r.request("web", dg('c')))
+	if run := r.runRow(t, job); run.State != updates.RunDone {
+		t.Fatalf("run = %s %q, want done", run.State, run.Reason)
+	}
+	if f, ok := r.failureOf(t, "web"); ok {
+		t.Errorf("failure = %+v, want it forgotten after a good update", f)
+	}
+	if _, ok := r.failureOf(t, "api"); !ok {
+		t.Errorf("the failure of another workload was forgotten")
+	}
+}

@@ -329,6 +329,30 @@ func (f *Fake) RollBackService(service string) bool {
 	return true
 }
 
+// ReplaceServiceSpec makes somebody else's write to the service of that name: the spec becomes this one and the version goes up by
+// one, without the write being kept for ServiceUpdates. A test uses it to change a service between two writes of the code under
+// test. It answers false for a service the swarm does not know.
+func (f *Fake) ReplaceServiceSpec(service string, spec swarm.ServiceSpec) bool {
+	cfg := f.config()
+	fs, ok := cfg.resolveService(service)
+	if !ok {
+		return false
+	}
+	var now swarm.ServiceSpec
+	for _, s := range cfg.serviceList(false) {
+		if s.ID == fs.ID {
+			now = s.Spec
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.svcState == nil {
+		f.svcState = map[string]fakeServiceState{}
+	}
+	f.svcState[fs.ID] = fakeServiceState{version: max(fs.Version, 1) + 1, spec: spec, previous: &now}
+	return true
+}
+
 // ServiceUpdates returns every service update the daemon accepted, in order.
 func (f *Fake) ServiceUpdates() []FakeServiceUpdate {
 	f.mu.Lock()

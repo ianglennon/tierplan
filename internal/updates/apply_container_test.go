@@ -572,3 +572,90 @@ func TestContainerWarnings(t *testing.T) {
 		})
 	}
 }
+
+// containerFailureOf is the failure remembered for a container, and whether there is one.
+func (r *applyRig) containerFailureOf(t *testing.T, name string) (updates.Failure, bool) {
+	t.Helper()
+	all, err := r.failures.ForEnv(context.Background(), r.envID)
+	if err != nil {
+		t.Fatalf("read the failures: %v", err)
+	}
+	f, ok := all[updates.FailureKey("container", name)]
+	return f, ok
+}
+
+// A container whose replacement failed is recorded the way a service is: the restore its recreate made ends the run rolled back, the
+// digest that failed is remembered and not offered again, and both the failure and the rollback are audited; a restore that failed
+// is rollback_failed all the way through (plan 12-22, IMG-07, D-12, D-14).
+func TestContainerFailureRecorded(t *testing.T) {
+	t.Parallel()
+	t.Run("restored", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, func(c *dockertest.FakeConfig) {
+			c.ExitOnStart = map[string]bool{pinnedApp(dg('b')): true}
+		}, appContainer("running"))
+		r.offer("app", dg('b'))
+
+		job := r.run(t, r.containerRequest("app", dg('b')))
+		if run := r.runRow(t, job); run.State != updates.RunRolledBack || run.Reason != updates.ReasonDidntStart {
+			t.Fatalf("run = %s %q, want rolled_back with didnt_start", run.State, run.Reason)
+		}
+		f, ok := r.containerFailureOf(t, "app")
+		if !ok || f.Digest != dg('b') || f.Reason != updates.ReasonDidntStart || f.RollbackFailed {
+			t.Errorf("failure = %+v %v, want the new digest with didnt_start, not rollback_failed", f, ok)
+		}
+		if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["kind"] != "container" || rows[0]["reason"] != updates.ReasonDidntStart {
+			t.Errorf("failure audit rows = %+v, want one for the container", rows)
+		}
+		if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "success" || rows[0]["kind"] != "container" || rows[0]["workload"] != "app" {
+			t.Errorf("rollback audit rows = %+v, want one success for the container", rows)
+		}
+		sv, found, err := r.applier.Service.Find(testsupport.Context(t), r.envID, "container", "app")
+		if err != nil || !found || sv.Verdict.State != updates.StateRolledBack || sv.Verdict.Failure == nil || sv.Verdict.Failure.Digest != dg('b') {
+			t.Errorf("verdict = %+v %v %v, want rolled_back for the digest that failed", sv.Verdict, found, err)
+		}
+	})
+
+	t.Run("restore failed", func(t *testing.T) {
+		t.Parallel()
+		firstNew := fmt.Sprintf("%064x", uint64(0xfa4ec0de00000001))
+		r := containerRig(t, func(c *dockertest.FakeConfig) {
+			c.ExitOnStart = map[string]bool{pinnedApp(dg('b')): true}
+			c.RefuseRemove = map[string]dockertest.FakeRefusal{firstNew: {Status: http.StatusInternalServerError, Message: "stuck"}}
+		}, appContainer("running"))
+		r.offer("app", dg('b'))
+
+		job := r.run(t, r.containerRequest("app", dg('b')))
+		if run := r.runRow(t, job); run.State != updates.RunRollbackFailed || run.Reason != updates.ReasonRestoreFailed {
+			t.Fatalf("run = %s %q, want rollback_failed with restore_failed", run.State, run.Reason)
+		}
+		f, ok := r.containerFailureOf(t, "app")
+		if !ok || !f.RollbackFailed || f.Digest != dg('b') || f.Reason != updates.ReasonDidntStart {
+			t.Errorf("failure = %+v %v, want the new digest with rollback_failed and the reason the update failed", f, ok)
+		}
+		if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonDidntStart {
+			t.Errorf("failure audit rows = %+v, want one with the reason the update failed", rows)
+		}
+		if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "failure" {
+			t.Errorf("rollback audit rows = %+v, want one failure", rows)
+		}
+	})
+
+	t.Run("a refusal at create is no rollback", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, func(c *dockertest.FakeConfig) {
+			c.RefuseCreate = map[string]dockertest.FakeRefusal{appNewName: {Status: http.StatusBadRequest, Message: "bad config"}}
+		}, appContainer("running"))
+		r.offer("app", dg('b'))
+		job := r.run(t, r.containerRequest("app", dg('b')))
+		if run := r.runRow(t, job); run.State != updates.RunFailed {
+			t.Fatalf("run = %s %q, want failed: nothing was changed, so nothing was rolled back", run.State, run.Reason)
+		}
+		if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+			t.Errorf("rollback audit rows = %+v, want none", rows)
+		}
+		if f, ok := r.containerFailureOf(t, "app"); ok {
+			t.Errorf("failure = %+v, want none: only a pull that failed or a rollback is remembered", f)
+		}
+	})
+}

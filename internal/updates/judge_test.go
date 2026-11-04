@@ -694,3 +694,105 @@ func TestHolderKinds(t *testing.T) {
 		}
 	}
 }
+
+// A digest that failed and was rolled back is not offered again: the badge reads rolled_back (rollback_failed when the restore
+// failed too) for exactly that digest, the counts leave it out, and the skip and the ignore a person set still win (plan 12-22,
+// IMG-07, D-14).
+func TestRolledBackDigestNotReoffered(t *testing.T) {
+	t.Parallel()
+	moved := &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}
+	failedWith := func(digest string, rollbackFailed bool) *updates.Failure {
+		return &updates.Failure{
+			EnvID: "env-a", Kind: "service", Workload: "web", Digest: digest, Reason: "didnt_start", RunID: "run-1",
+			RollbackFailed: rollbackFailed, FailedAt: t0,
+		}
+	}
+	judge := func(chk *updates.Check, f *updates.Failure, igs updates.Ignores) updates.Verdict {
+		w := held(nil)
+		remote := ""
+		if chk != nil {
+			remote = chk.Digest
+		}
+		return updates.Judge(updates.JudgeInput{
+			Workload: w, Check: chk, Now: t0, StaleAfter: time.Hour, Ignore: igs.Match(w, remote), Failure: f,
+		})
+	}
+
+	rolled := judge(moved, failedWith(dg('9'), false), nil)
+	if rolled.State != updates.StateRolledBack || rolled.Failure == nil || rolled.Failure.Digest != dg('9') || rolled.RemoteDigest != dg('9') {
+		t.Fatalf("verdict = %s %+v remote %q, want rolled_back for the digest that failed", rolled.State, rolled.Failure, rolled.RemoteDigest)
+	}
+	notRestored := judge(moved, failedWith(dg('9'), true), nil)
+	if notRestored.State != updates.StateRollbackFailed || notRestored.Failure == nil || !notRestored.Failure.RollbackFailed {
+		t.Fatalf("verdict = %s %+v, want rollback_failed when the restore failed too", notRestored.State, notRestored.Failure)
+	}
+
+	// Nothing that offers an update counts it: the stack roll-up reads the failure, not an update with a count.
+	other := judge(&updates.Check{Digest: dg('8'), CheckedAt: t0, SuccessAt: t0}, nil, nil)
+	if got := updates.Aggregate([]updates.Verdict{rolled}); got.State != updates.StateRolledBack || got.Count != 0 {
+		t.Errorf("stack of a rolled back workload = %+v, want rolled_back and no count", got)
+	}
+	if got := updates.Aggregate([]updates.Verdict{notRestored}); got.State != updates.StateRollbackFailed || got.Count != 0 {
+		t.Errorf("stack of a workload whose rollback failed = %+v, want rollback_failed and no count", got)
+	}
+	if got := updates.Aggregate([]updates.Verdict{rolled, other}); got.State != updates.StateUpdateAvailable || got.Count != 1 {
+		t.Errorf("stack with one rolled back and one real update = %+v, want only the real one counted", got)
+	}
+
+	// A skip or an ignore a person set takes precedence over the failure.
+	skip := updates.Ignores{{EnvID: "env-a", Mode: updates.ModeSkip, Scope: updates.ScopeWorkload, Kind: "service", Name: "web", Digest: dg('9')}}
+	ignore := updates.Ignores{{EnvID: "env-a", Mode: updates.ModeIgnore, Scope: updates.ScopeWorkload, Kind: "service", Name: "web"}}
+	if got := judge(moved, failedWith(dg('9'), false), skip); got.State != updates.StateSkipped || got.Failure != nil {
+		t.Errorf("a skipped, failed version = %s %+v, want skipped", got.State, got.Failure)
+	}
+	if got := judge(moved, failedWith(dg('9'), false), ignore); got.State != updates.StateIgnored || got.Failure != nil {
+		t.Errorf("an ignored, failed workload = %s %+v, want ignored", got.State, got.Failure)
+	}
+
+	// The failure only replaces an update: a workload that is up to date, or whose check failed, reads what it did.
+	same := &updates.Check{Digest: dg('1'), CheckedAt: t0, SuccessAt: t0}
+	if got := judge(same, failedWith(dg('1'), false), nil); got.State != updates.StateUpToDate {
+		t.Errorf("an up to date workload with an old failure = %s, want up_to_date", got.State)
+	}
+	checkFailed := &updates.Check{Digest: dg('9'), Error: updates.ReasonRateLimited, CheckedAt: t0, SuccessAt: t0.Add(-time.Minute)}
+	if got := judge(checkFailed, failedWith(dg('9'), false), nil); got.State != updates.StateCheckFailed {
+		t.Errorf("a failed check with an old failure = %s, want check_failed", got.State)
+	}
+}
+
+// A failure is about one digest: when the tag points at another, the update is offered again as usual (plan 12-22, D-14).
+func TestFailureLiftsOnNewerDigest(t *testing.T) {
+	t.Parallel()
+	f := &updates.Failure{EnvID: "env-a", Kind: "service", Workload: "web", Digest: dg('9'), Reason: "unhealthy", RunID: "run-1", FailedAt: t0}
+	for _, tc := range []struct {
+		name   string
+		remote string
+		state  updates.State
+	}{
+		{"the digest that failed", dg('9'), updates.StateRolledBack},
+		{"a newer digest", dg('8'), updates.StateUpdateAvailable},
+		{"the digest it ran again", dg('1'), updates.StateUpToDate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			chk := &updates.Check{Digest: tc.remote, CheckedAt: t0, SuccessAt: t0}
+			got := updates.Judge(updates.JudgeInput{Workload: held(nil), Check: chk, Now: t0, StaleAfter: time.Hour, Failure: f})
+			if got.State != tc.state {
+				t.Fatalf("verdict = %s, want %s", got.State, tc.state)
+			}
+			if tc.state != updates.StateRolledBack && got.Failure != nil {
+				t.Errorf("failure = %+v on a %s verdict, want none", got.Failure, got.State)
+			}
+		})
+	}
+
+	// Under another operation's lock the failed version waits like any offered update; the story is kept.
+	janitor := &stackops.Holder{Kind: stackops.HolderKindJanitor, RunID: "run-1", Started: t0}
+	busy := updates.Judge(updates.JudgeInput{
+		Workload: held(nil), Check: &updates.Check{Digest: dg('9'), CheckedAt: t0, SuccessAt: t0}, Now: t0, StaleAfter: time.Hour,
+		Failure: f, Holder: janitor,
+	})
+	if busy.State != updates.StateBusy {
+		t.Errorf("a rolled back workload under a lock = %s, want busy", busy.State)
+	}
+}
