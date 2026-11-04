@@ -34,6 +34,7 @@ var sharedSwarmCases = []struct {
 	{"Enrol", sharedEnrol},
 	{"HostRoutes", sharedHostRoutes},
 	{"ImagePullFanOut", sharedImagePullFanOut},
+	{"ImageUpdate", sharedImageUpdate},
 	{"Janitor", sharedJanitor},
 	{"NetworkConnect", sharedNetworkConnect},
 	{"Networks", sharedNetworks},
