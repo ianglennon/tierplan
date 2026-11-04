@@ -263,12 +263,13 @@ func updateOfContainer(j updates.ContainerJudgement, id string, known stackIDs) 
 // TierPlan manages: a task container is updated through its service, and a container of a Compose project TierPlan does not
 // manage is adopted first (D-21). A container of a managed stack carries that stack's ID and the stack states it.
 func containerRefusal(w updates.Workload, known stackIDs) string {
+	_, stackID, _ := stackOwner(w.Labels)
 	switch {
 	case w.Task:
 		return updates.NotUpdatableTaskContainer
 	case w.Labels[stacks.LabelComposeProject] == "":
 		return ""
-	case w.Labels[stacks.LabelStackID] != "" && known.confirmedFor(containerStack(w.Labels), w.Labels) != "":
+	case stackID != "" && known.confirmedFor(containerStack(w.Labels), w.Labels) != "":
 		return ""
 	}
 	return updates.NotUpdatableComposeUnmanaged
