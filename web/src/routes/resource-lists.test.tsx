@@ -287,16 +287,16 @@ describe("containers list", () => {
     await screen.findByRole("heading", { name: "Containers" });
     const headers = (await screen.findAllByRole("columnheader")).map((h) => h.textContent);
     // The last column is the row menu; its header is for assistive technology only.
-    expect(headers).toEqual(["", "Name", "State", "Image", "Ports", "Created", "Actions"]);
+    expect(headers).toEqual(["", "Name", "State", "Updates", "Image", "Ports", "Created", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
     // The rows sort by name: db, old-job, then tierplan (TierPlan's own container).
     const first = cellsOf(rows[2] as HTMLElement).slice(1);
     expect(first[0]).toContain("tierplan");
     expect(first[1]).toBe("Running");
-    expect(first[2]).toBe("ghcr.io/ianglennon/tierplan:latest");
-    expect(first[3]).toBe("0.0.0.0:7480->7480/tcp");
-    expect(first[4]).toBe("3 h ago");
+    expect(first[3]).toBe("ghcr.io/ianglennon/tierplan:latest");
+    expect(first[4]).toBe("0.0.0.0:7480->7480/tcp");
+    expect(first[5]).toBe("3 h ago");
     const names = rows.map((r) => cellsOf(r as HTMLElement)[1]);
     expect(names[0]).toContain("db");
     expect(names[1]).toContain("old-job");
@@ -320,9 +320,9 @@ describe("containers list", () => {
     expect(cellsOf(rows[0] as HTMLElement).slice(1)[1]).toBe("Restarting");
     const last = cellsOf(rows[1] as HTMLElement).slice(1);
     expect(last[1]).toBe("Exited");
+    expect(last[5]).toBe("—");
     expect(last[4]).toBe("—");
-    expect(last[3]).toBe("—");
-    expect(cellsOf(rows[0] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[4]).toBe("5432/tcp, 5433/tcp");
   });
 
   it("has a checkbox for each row and one for all, a link for each name, and its only other buttons are the closed row action menus (D-56, plan 04-08, 04-10)", async () => {
@@ -577,6 +577,8 @@ describe("dashboard tiles and the Resources nav group", () => {
     const main = screen.getByRole("region", { name: "Dashboard" });
     expect(within(main).getAllByRole("link")).toHaveLength(1);
     expect(within(main).getByRole("link", { name: /Images/ })).toBeTruthy();
+    // The server leaves the update count out for this person, which is not a failed read.
+    expect(within(main).queryByText("Updates available")).toBeNull();
   });
 
   it("lists Containers, Images, Volumes and Networks under Resources, marking the open one", async () => {
@@ -670,7 +672,7 @@ describe("swarm lists", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("web.1");
     const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
-    expect(headers).toEqual(["", "Name", "Node", "State", "Image", "Ports", "Created", "Actions"]);
+    expect(headers).toEqual(["", "Name", "Node", "State", "Updates", "Image", "Ports", "Created", "Actions"]);
     const rows = screen.getAllByRole("row").slice(1);
     // The page sorts by name, whatever order the server sent.
     expect(cellsOf(rows[0] as HTMLElement).slice(1, 3)).toEqual(["db", "n3"]);

@@ -328,6 +328,10 @@ describe("dashboard", () => {
   });
 
   it("ends the tiles with Updates available, from the summary's imageUpdates, linking to the Updates tab", async () => {
+    me = makeMe({
+      id: "u1",
+      permissions: { global: [], environments: { "*": ["environments.read", "containers.read"] } },
+    });
     summary = () => Response.json({ ...SUMMARY, imageUpdates: 3 });
     renderAt("/env/e1");
     await waitFor(() => expect(within(tile("Updates available")).getByText("3")).toBeTruthy());
@@ -340,13 +344,27 @@ describe("dashboard", () => {
     expect(el.getAttribute("href")).toContain("env=e1");
   });
 
+  it("leaves the Updates available tile out for a person who may not read containers", async () => {
+    renderAt("/env/e1");
+    await screen.findByRole("heading", { name: "Lab host" });
+    expect(screen.queryByText("Updates available")).toBeNull();
+  });
+
   it("shows a real zero as 0 on the Updates available tile", async () => {
+    me = makeMe({
+      id: "u1",
+      permissions: { global: [], environments: { "*": ["environments.read", "containers.read"] } },
+    });
     summary = () => Response.json({ ...SUMMARY, imageUpdates: 0 });
     renderAt("/env/e1");
     await waitFor(() => expect(within(tile("Updates available")).getByText("0")).toBeTruthy());
   });
 
   it("shows a dash and says it could not be read when imageUpdates is absent, never 0", async () => {
+    me = makeMe({
+      id: "u1",
+      permissions: { global: [], environments: { "*": ["environments.read", "containers.read"] } },
+    });
     renderAt("/env/e1");
     await waitFor(() => expect(within(tile("Containers")).getByText("7")).toBeTruthy());
     const el = tile("Updates available");

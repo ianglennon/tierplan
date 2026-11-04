@@ -219,7 +219,9 @@ function Dashboard() {
             />
           </>
         ) : null}
-        <UpdatesTile envId={envId} value={data?.imageUpdates} loading={loading} />
+        {canContainers && (!managerTiles || canServices) ? (
+          <UpdatesTile envId={envId} value={data?.imageUpdates} loading={loading} />
+        ) : null}
       </section>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_2fr]">
