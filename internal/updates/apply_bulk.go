@@ -294,13 +294,14 @@ func (a *Applier) bulkWorks(ctx context.Context, req BulkRequest) ([]*bulkWork, 
 			if err != nil {
 				return nil, nil, err
 			}
-			var w Workload
-			found := false
-			for _, c := range ws {
-				if c.Kind == "container" && strings.TrimPrefix(c.Name, "/") == it.Name {
-					w, found = c, true
-					break
-				}
+			w, found, err := containerNamed(ws, it.Name)
+			var nu *NotUpdatableError
+			if errors.As(err, &nu) {
+				// The name is on more than one node: this item is refused and the others go on.
+				skip(it, nu.Code)
+				continue
+			} else if err != nil {
+				return nil, nil, err
 			}
 			if !found {
 				skip(it, CodeWorkloadGone)
@@ -445,6 +446,7 @@ var itemSentences = map[string]string{
 	NotUpdatableComposeUnmanaged: "It belongs to a Compose project TierPlan does not manage. Adopt the stack first.",
 	NotUpdatablePinned:           "Its image is pinned to a digest in its file.",
 	NotUpdatableNotChecked:       "Its image has not been checked yet.",
+	NotUpdatableAmbiguousName:    "More than one node has a container of this name, so TierPlan cannot tell which to update. Rename one of them.",
 }
 
 // refuse ends the run of an item that was not updated, without anything having been written, and returns the sentence for the job.

@@ -330,7 +330,8 @@
         "adopt_first": "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to.",
         "stack_nothing": "Every service of {{name}} already runs the newest version, or its update is skipped or ignored.",
         "compose_unmanaged": "{{name}} belongs to a Compose project TierPlan doesn't manage. Adopt the project first so an update has a revision to roll back to.",
-        "task_container": "{{name}} is a task of a service. Update the service instead; its tasks are replaced for you."
+        "task_container": "{{name}} is a task of a service. Update the service instead; its tasks are replaced for you.",
+        "ambiguous_name": "{{name}} is the name of a container on more than one node, so TierPlan can't tell which one to update. Nothing was changed. Rename one of them and try again."
       },
       "failed": {
         "title": "Couldn't start the update.",
@@ -482,6 +483,7 @@
           "cancelled": "The update was cancelled before {{name}} was started.",
           "managed_by_stack": "{{name}} belongs to a stack, which is updated through a new revision of the stack.",
           "compose_unmanaged": "{{name}} belongs to a Compose project TierPlan does not manage. Adopt the stack first.",
+          "ambiguous_name": "{{name}} is the name of a container on more than one node, so it was skipped and nothing was changed. Rename one of them.",
           "pinned_in_file": "The image of {{name}} is pinned to a digest in its file.",
           "not_checked": "The image of {{name}} has not been checked yet.",
           "other": "{{name}} was not updated, and nothing was changed."

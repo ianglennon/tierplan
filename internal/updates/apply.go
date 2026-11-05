@@ -105,6 +105,9 @@ const (
 	// its config hash stale; it is adopted first (D-21). NotUpdatableTaskContainer: a task container is updated through its service.
 	NotUpdatableComposeUnmanaged = "compose_unmanaged"
 	NotUpdatableTaskContainer    = "task_container"
+	// NotUpdatableAmbiguousName: two or more nodes of the environment hold a container of that name, so the name does not say which
+	// one is meant. Nothing is written until one of them is renamed (WR-07).
+	NotUpdatableAmbiguousName = "ambiguous_name"
 )
 
 // digestGrammar is a digest as the image reference grammar writes one. Nothing else is ever put in a reference.
@@ -138,7 +141,11 @@ func (e *PreviouslyFailedError) Error() string { return ErrPreviouslyFailed.Erro
 func (e *PreviouslyFailedError) Is(target error) bool { return target == ErrPreviouslyFailed }
 
 // NotUpdatableError means the workload is one this path does not update, with the reason as a code.
-type NotUpdatableError struct{ Code string }
+type NotUpdatableError struct {
+	Code string
+	// Name is the workload the refusal is about, set where the sentence needs it (NotUpdatableAmbiguousName).
+	Name string
+}
 
 func (e *NotUpdatableError) Error() string {
 	return "updates: the workload cannot be updated: " + e.Code
@@ -455,7 +462,7 @@ func (a *Applier) updatable(ctx context.Context, envID string, row dockerx.Servi
 // the answer, and judges the service by it. It refuses what has nothing to update, what moved since the confirm, and
 // what cannot be checked.
 func (a *Applier) recheck(ctx context.Context, req Request, sub subject) (target, error) {
-	sv, found, err := a.Service.Find(ctx, req.EnvID, sub.kind, sub.name)
+	sv, found, err := a.Service.findForUpdate(ctx, req.EnvID, sub.kind, sub.name)
 	if err != nil {
 		return target{}, err
 	}
@@ -479,7 +486,7 @@ func (a *Applier) recheck(ctx context.Context, req Request, sub subject) (target
 		}
 		return target{}, fmt.Errorf("check the image of %s: %w", w.Name, err)
 	}
-	sv, found, err = a.Service.Find(ctx, req.EnvID, sub.kind, sub.name)
+	sv, found, err = a.Service.findForUpdate(ctx, req.EnvID, sub.kind, sub.name)
 	if err != nil {
 		return target{}, err
 	}

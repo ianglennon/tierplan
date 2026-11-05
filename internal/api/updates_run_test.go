@@ -438,11 +438,22 @@ func containerEngine(containers ...dockertest.FakeContainer) dockertest.FakeConf
 // containerEnvOf is a standalone host the caller configured, whose applier waits on an instant clock.
 func containerEnvOf(t *testing.T, heads *scriptedHeads, cfg dockertest.FakeConfig) (*envFix, envBody) {
 	t.Helper()
+	return containerEnvWith(t, heads, cfg, nil)
+}
+
+// containerEnvWith is containerEnvOf with a change to the applier before the routes are built.
+func containerEnvWith(t *testing.T, heads *scriptedHeads, cfg dockertest.FakeConfig, tune func(*updates.Applier)) (*envFix, envBody) {
+	t.Helper()
 	f := newEnvFix(t, cfg)
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
 	f.updateHeads = heads
-	f.updateApplier = func(a *updates.Applier) { a.Clock = &instantClock{now: time.Unix(1_700_000_000, 0)} }
+	f.updateApplier = func(a *updates.Applier) {
+		a.Clock = &instantClock{now: time.Unix(1_700_000_000, 0)}
+		if tune != nil {
+			tune(a)
+		}
+	}
 	f.h = f.build(t)
 	e := f.add(t)
 	awaitOnline(t, f.mon, e.ID)
@@ -673,6 +684,62 @@ func TestComposeContainerRouting(t *testing.T) {
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	if rec := viewer.do(http.MethodPost, "updates/run", containerRunBody("app", nil)); rec.Code != http.StatusForbidden {
 		t.Errorf("a Viewer's update = %d %s, want 403", rec.Code, rec.Body)
+	}
+}
+
+// twinSnapshots is the aggregate of an environment with a twin of the container "app" added on a second node.
+type twinSnapshots struct{ inner updates.Snapshotter }
+
+func (s twinSnapshots) Snapshot(ctx context.Context, envID string) (envs.Aggregate, envs.Health, error) {
+	agg, h, err := s.inner.Snapshot(ctx, envID)
+	if err != nil {
+		return agg, h, err
+	}
+	rows := append([]envs.ContainerRow{}, agg.Containers...)
+	for _, c := range agg.Containers {
+		if strings.TrimPrefix(c.Name, "/") == "app" {
+			twin := c
+			twin.ID, twin.Node, twin.NodeID = strings.Repeat("9", 64), "worker-2", "node-2"
+			rows = append(rows, twin)
+		}
+	}
+	agg.Containers = rows
+	return agg, h, nil
+}
+
+// A container name that two nodes hold is refused with its own code, in the update and in the preview, and nothing is written to any
+// node. A name only one node holds is offered as before (WR-07).
+func TestContainerNameOnTwoNodesIsRefused(t *testing.T) {
+	t.Parallel()
+	other := plainContainer()
+	other.Names, other.ID = []string{"/checked"}, strings.Repeat("d", 64)
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvWith(t, heads, containerEngine(plainContainer(), other), func(a *updates.Applier) {
+		a.Service.Aggregator = twinSnapshots{inner: a.Service.Aggregator}
+	})
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	operator := f.caller(t, e, "operator-1", "operator")
+
+	rec := operator.do(http.MethodPost, "updates/run", containerRunBody("app", nil))
+	p := answerOf[updateProblem](t, rec)
+	if rec.Code != http.StatusConflict || p.Type != "not_updatable" || len(p.Errors) != 1 || p.Errors[0].Message != "ambiguous_name" {
+		t.Fatalf("update of app = %d %s, want 409 not_updatable ambiguous_name", rec.Code, rec.Body)
+	}
+	if !strings.Contains(p.Detail, "app is the name of a container on more than one node") || !strings.Contains(p.Detail, "Rename one of them") {
+		t.Errorf("detail = %q, want the container named, and the way out", p.Detail)
+	}
+	pre := answerOf[containerPreviewAnswer](t, operator.do(http.MethodGet, "updates/preview?kind=container&name=app", ""))
+	if pre.Offered || pre.Refusal != "ambiguous_name" {
+		t.Errorf("preview of app = %+v, want it refused with ambiguous_name", pre)
+	}
+	if got := writeKinds(f.fake.Writes()); len(got) != 0 {
+		t.Errorf("the engine was asked %v after the refusals, want nothing", got)
+	}
+	one := answerOf[containerPreviewAnswer](t, operator.do(http.MethodGet, "updates/preview?kind=container&name=checked", ""))
+	if !one.Offered || one.Refusal != "" {
+		t.Errorf("preview of checked = %+v, want it offered: only one node holds the name", one)
 	}
 }
 

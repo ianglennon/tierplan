@@ -125,11 +125,11 @@ func registerUpdateRun(r *httpx.Router, d UpdatesDeps) {
 		Description: "Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, " +
 			"then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. " +
 			"The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, " +
-			"409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged or task_container), 409 update_check_failed when the registry could not be asked, 409 previously_failed when an update to this version failed before and the request does not carry force, 404 not_found when the service is not there. " +
+			"409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged, task_container or ambiguous_name), 409 update_check_failed when the registry could not be asked, 409 previously_failed when an update to this version failed before and the request does not carry force, 404 not_found when the service is not there. " +
 			"force true is a person's choice to try that version again, for this one service or container: it is ignored for a workload that has no failed update and for kind stack, and it needs the same permissions as any update. A forced update that works forgets the failure. A version whose pull failed (nothing was changed) is retried the same way. " +
 			"A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. " +
 			"The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. " +
-			"A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. " +
+			"A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container name that more than one node of the environment has is 409 not_updatable ambiguous_name (nothing is changed on any node; rename one of the containers); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. " +
 			"When a service or container update fails after the engine was changed, TierPlan puts the previous version back itself and the run ends rolled_back (or rollback_failed when that failed too); the digest that failed is then not offered again until the tag points at another. " +
 			"Audited as image.updated, or image.update_failed (and image.update_rolled_back when the previous version was put back) when it ends. Needs services.control (Operator) on the environment.",
 		Tags: []string{"environments"},
@@ -297,9 +297,13 @@ func updateRunProblem(d UpdatesDeps, env *httpx.Env, err error) error {
 	case errors.Is(err, updates.ErrNothingToUpdate):
 		return httpx.Problem(http.StatusConflict, problemNothingToUpdate, "It already runs the newest version.")
 	case errors.As(err, &notUpdate):
+		detail := "This can't be updated here."
+		if notUpdate.Code == updates.NotUpdatableAmbiguousName {
+			detail = ambiguousNameDetail(notUpdate.Name)
+		}
 		return &huma.ErrorModel{
 			Type: problemNotUpdatable, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-			Detail: "This can't be updated here.", Errors: []*huma.ErrorDetail{{Location: "code", Message: notUpdate.Code}},
+			Detail: detail, Errors: []*huma.ErrorDetail{{Location: "code", Message: notUpdate.Code}},
 		}
 	case errors.As(err, &failed):
 		return &huma.ErrorModel{
@@ -315,6 +319,11 @@ func updateRunProblem(d UpdatesDeps, env *httpx.Env, err error) error {
 		return httpx.Problem(http.StatusTooManyRequests, problemTooManyDeploys, "You already have 5 jobs running. Wait for one to finish.")
 	}
 	return snapshotProblem(d.log(), env.ID, err)
+}
+
+// ambiguousNameDetail is the sentence for a container name that more than one node has.
+func ambiguousNameDetail(name string) string {
+	return name + " is the name of a container on more than one node, so TierPlan can't tell which one to update. Nothing was changed. Rename one of them and try again."
 }
 
 // previouslyFailedProblem is the 409 for an update to a version that failed before, when the request did not ask for it again. The

@@ -147,18 +147,22 @@ func previewRefusal(v Verdict, w Workload) string {
 // previewContainer describes the update of the plain container name: the digest change and the warnings of recreating it, or the
 // reason it would not be offered. A container of a stack TierPlan manages is described through that stack, limited to its service.
 func (a *Applier) previewContainer(ctx context.Context, envID, name string) (Preview, error) {
-	w, found, err := a.containerWorkload(ctx, envID, name)
-	if err != nil {
-		return Preview{}, err
-	}
-	if !found {
-		return Preview{}, ErrWorkloadGone
-	}
 	var p Preview
 	if h, held := a.Locks.Held(envID); held {
 		p.Lock = &h
 	}
 	var nu *NotUpdatableError
+	w, found, err := a.containerWorkload(ctx, envID, name)
+	if errors.As(err, &nu) {
+		// The name is on more than one node: it is said, and no update is offered.
+		p.Refusal = nu.Code
+		return p, nil
+	} else if err != nil {
+		return Preview{}, err
+	}
+	if !found {
+		return Preview{}, ErrWorkloadGone
+	}
 	if err := a.containerUpdatable(ctx, envID, w); errors.As(err, &nu) {
 		if nu.Code == NotUpdatableManaged {
 			sp, err := a.PreviewStack(ctx, envID, w.Stack, []string{w.Labels[stacks.LabelComposeService]})
@@ -172,8 +176,11 @@ func (a *Applier) previewContainer(ctx context.Context, envID, name string) (Pre
 	} else if err != nil {
 		return Preview{}, err
 	}
-	sv, found, err := a.Service.Find(ctx, envID, "container", name)
-	if err != nil {
+	sv, found, err := a.Service.findForUpdate(ctx, envID, "container", name)
+	if errors.As(err, &nu) {
+		p.Refusal = nu.Code
+		return p, nil
+	} else if err != nil {
 		return Preview{}, err
 	}
 	if !found {

@@ -639,6 +639,44 @@ describe("UpdateConfirmDialog: the container scope", () => {
     );
   });
 
+  it("says a container name on more than one node is not updated, and cannot be pressed", async () => {
+    answerPreview = () =>
+      Response.json(containerPreview({ items: [], offered: false, refusal: "ambiguous_name" }));
+    mount(containerProps);
+    expect(
+      await screen.findByText(
+        "cache is the name of a container on more than one node, so TierPlan can't tell which one to update. Nothing was changed. Rename one of them and try again.",
+      ),
+    ).toBeTruthy();
+    // The commit button is there and cannot be pressed.
+    expect(screen.getByRole("button", { name: "Update cache" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+  });
+
+  it("words the same refusal when the press is refused 409 not_updatable ambiguous_name", async () => {
+    answerPreview = () => Response.json(containerPreview({ warnings: [] }));
+    answerRun = () =>
+      Response.json(
+        {
+          type: "not_updatable",
+          title: "Conflict",
+          status: 409,
+          detail: "cache is the name of a container on more than one node",
+          errors: [{ location: "code", message: "ambiguous_name" }],
+        },
+        { status: 409 },
+      );
+    mount(containerProps);
+    await rowShown();
+    fireEvent.click(await screen.findByRole("button", { name: "Update cache" }));
+    expect(
+      await screen.findByText(
+        /cache is the name of a container on more than one node, so TierPlan/,
+      ),
+    ).toBeTruthy();
+  });
+
   it("says a task container is updated through its service when the server refuses", async () => {
     answerPreview = () =>
       Response.json(containerPreview({ items: [], offered: false, refusal: "task_container" }));

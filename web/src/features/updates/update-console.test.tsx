@@ -889,6 +889,23 @@ describe("UpdateConsole: a bulk update", () => {
     expect(screen.queryByText("Partly done")).toBeNull();
   });
 
+  it("says a container refused for a name on more than one node was skipped, not failed", async () => {
+    bulk(
+      [
+        top("i0", "Update web", "done"),
+        top("i1", "Update cache", "skipped", { code: "ambiguous_name" }),
+        summary({ done: "1", total: "2", rolled_back: "0", skipped: "1" }),
+      ],
+      "done",
+    );
+    mount();
+    const rows = await screen.findByRole("list", { name: "Items of the update" });
+    expect(rows.textContent).toContain(
+      "cache is the name of a container on more than one node, so it was skipped and nothing was changed. Rename one of them.",
+    );
+    expect(rows.textContent).not.toContain("Failed");
+  });
+
   it("counts a failure that was not rolled back and names the one that was cancelled", async () => {
     bulk(
       [

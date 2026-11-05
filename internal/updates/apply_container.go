@@ -80,19 +80,39 @@ func containerSubject(w Workload) subject {
 }
 
 // containerWorkload finds the container of that name among the environment's workloads. A container is named without its leading
-// slash.
+// slash. Docker names are unique on a host and not across the nodes of a swarm, so a name that two or more nodes hold is refused with
+// a *NotUpdatableError (NotUpdatableAmbiguousName) and never resolved to the first of them.
 func (a *Applier) containerWorkload(ctx context.Context, envID, name string) (Workload, bool, error) {
 	ws, err := a.Service.Workloads(ctx, envID)
 	if err != nil {
 		return Workload{}, false, err
 	}
+	return containerNamed(ws, name)
+}
+
+// containerNamed finds the container of that name among ws, and refuses a name that is on more than one node. Task containers of a
+// swarm service do not count: their names carry the service, the slot and the task, so one is never the same name as another, and
+// they are refused on their own account. A node that did not report has no rows in ws and cannot be told from one that holds no
+// such container; the update is of the container read, by its ID on its node, so it is still the one the person was shown.
+func containerNamed(ws []Workload, name string) (Workload, bool, error) {
 	name = strings.TrimPrefix(name, "/")
+	var first Workload
+	found, plain := false, 0
 	for _, w := range ws {
-		if w.Kind == "container" && strings.TrimPrefix(w.Name, "/") == name {
-			return w, true, nil
+		if w.Kind != "container" || strings.TrimPrefix(w.Name, "/") != name {
+			continue
+		}
+		if !found {
+			first, found = w, true
+		}
+		if !w.Task {
+			plain++
 		}
 	}
-	return Workload{}, false, nil
+	if plain > 1 {
+		return Workload{}, false, &NotUpdatableError{Code: NotUpdatableAmbiguousName, Name: name}
+	}
+	return first, found, nil
 }
 
 // Container is a container of an environment as an update sees it.

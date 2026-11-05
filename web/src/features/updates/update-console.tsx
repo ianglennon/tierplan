@@ -591,6 +591,7 @@ const SKIP_CODES: ReadonlySet<string> = new Set([
   "cancelled",
   "managed_by_stack",
   "compose_unmanaged",
+  "ambiguous_name",
   "pinned_in_file",
   "not_checked",
 ]);

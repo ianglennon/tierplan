@@ -566,13 +566,29 @@ func (s *Service) runPlatforms(ctx context.Context, envID string, w Workload, ch
 }
 
 // Find judges the one service or container of an environment that kind and name name, as the lists do. found is
-// false when the environment has no such workload. A container is named without a leading slash.
+// false when the environment has no such workload. A container is named without a leading slash. A container name that more than
+// one node holds answers the first of them: Find is for reading, and an update goes through findForUpdate.
 func (s *Service) Find(ctx context.Context, envID, kind, name string) (ServiceVerdict, bool, error) {
+	return s.find(ctx, envID, kind, name, false)
+}
+
+// findForUpdate is Find for an update, which acts on what it finds: a container name that more than one node holds is refused with a
+// *NotUpdatableError (NotUpdatableAmbiguousName) instead of answering one of them.
+func (s *Service) findForUpdate(ctx context.Context, envID, kind, name string) (ServiceVerdict, bool, error) {
+	return s.find(ctx, envID, kind, name, true)
+}
+
+func (s *Service) find(ctx context.Context, envID, kind, name string, unique bool) (ServiceVerdict, bool, error) {
 	ws, err := s.Workloads(ctx, envID)
 	if err != nil {
 		return ServiceVerdict{}, false, err
 	}
 	name = strings.TrimPrefix(name, "/")
+	if unique && kind == "container" {
+		if _, _, err := containerNamed(ws, name); err != nil {
+			return ServiceVerdict{}, false, err
+		}
+	}
 	for _, w := range ws {
 		if w.Kind != kind || strings.TrimPrefix(w.Name, "/") != name {
 			continue

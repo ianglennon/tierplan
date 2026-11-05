@@ -75,7 +75,7 @@ type FleetBulkRefused struct {
 	Kind   string `json:"kind" enum:"service,container" doc:"service or container"`
 	Name   string `json:"name" doc:"The workload's name"`
 	Reason string `json:"reason" enum:"no_permission,not_selectable,offline,locked,moved,not_updatable,too_many_jobs" doc:"Why it was not taken"`
-	Code   string `json:"code,omitempty" doc:"For not_updatable, why in TierPlan's words (agent, job_mode, managed_by_stack, pinned_in_file, compose_unmanaged, task_container, workload_gone and the like)"`
+	Code   string `json:"code,omitempty" doc:"For not_updatable, why in TierPlan's words (agent, job_mode, managed_by_stack, pinned_in_file, compose_unmanaged, task_container, ambiguous_name, workload_gone and the like)"`
 }
 
 // FleetBulkRunBody is the answer of POST /api/fleet/updates/run.
