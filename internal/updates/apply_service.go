@@ -56,6 +56,9 @@ var itemMessages = map[string]string{
 	"auto_remove":          "A container started with automatic removal is removed when it stops, so it can't be put back if the update fails. Nothing was changed.",
 	"remove_old_failed":    "The new container is running. The old one could not be removed; it is stopped and keeps its temporary name.",
 
+	// The code of the wait of a service that a person cancelled once the swarm had taken the update (CR-01).
+	CodeWaitCancelled: "Cancelled while waiting for the new version to run. The update had been applied and is left as it is; it was not confirmed running.",
+
 	// The codes of the restore of a service (plan 12-22).
 	CodeRestoreRefused:   "The swarm would not take the previous version back.",
 	CodeRestoreUnsettled: "The previous version did not run in time.",
@@ -67,6 +70,7 @@ const (
 	CodeRestoreRefused   = "restore_refused"
 	CodeRestoreUnsettled = "restore_unsettled"
 	CodeRestoreChanged   = "restore_service_changed"
+	CodeWaitCancelled    = "wait_cancelled"
 
 	// updateRollbackCompleted is the UpdateStatus of a service the swarm rolled back by itself (the person's failure action).
 	updateRollbackCompleted = "rollback_completed"
@@ -100,7 +104,12 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 		}
 	}
 	fail := func(item, code, reason string) {
-		end(RunFailed, reason, reason)
+		if reason == ReasonCancelled && jobs.Closing(ctx) {
+			// The server is stopping, nobody cancelled: the run is left for recovery to find.
+			end(runLeftOpen, "", "")
+		} else {
+			end(RunFailed, reason, reason)
+		}
 		finish(item, code, reason)
 	}
 	if ctx.Err() != nil {
@@ -221,9 +230,15 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 		if hasHealth {
 			r.Finish(ItemHealth, jobs.ItemDone, "", "", nil)
 		}
+	case jobs.Closing(ctx):
+		// The server is stopping. The swarm took the new version and it was never confirmed, so the run is left running: recovery
+		// reads the service at the next start and puts the previous version back, as it does after a crash.
+		end(runLeftOpen, "", "")
 	case ctx.Err() != nil:
-		// A person who stopped watching has not said the version is bad: it is left as the swarm has it.
-		fail(ItemWait, ReasonCancelled, ReasonCancelled)
+		// A person who stopped watching has not said the version is bad: it is left as the swarm has it. The swarm took the update,
+		// so the run is not a failure: it ends done, with the cancel as its reason, and the step says the version was not confirmed.
+		end(RunDone, ReasonCancelled, "")
+		r.Finish(ItemWait, jobs.ItemCancelled, CodeWaitCancelled, itemMessages[CodeWaitCancelled], map[string]string{"running": strconv.Itoa(last.Running)})
 	default:
 		reason, code := convergeReason(werr, last, hasHealth && starting)
 		a.log().Warn("a service update did not settle", "environment", t.envID, "service", t.name, "reason", reason, "error", werr)

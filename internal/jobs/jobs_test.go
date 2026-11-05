@@ -360,6 +360,49 @@ func TestCloseCancelsRunningJobsAndClosesSubscriptions(t *testing.T) {
 	}
 }
 
+// A run can tell the server stopping from a person's Cancel by its context: Closing is true after Close and false after Cancel (CR-01).
+func TestClosingTellsTheServerStoppingFromAPersonsCancel(t *testing.T) {
+	seen := func(t *testing.T, stop func(h *jobs.Hub, id string)) (cancelled, closing bool) {
+		t.Helper()
+		h := jobs.New(jobs.Options{})
+		t.Cleanup(h.Close)
+		started := make(chan struct{})
+		ended := make(chan struct{})
+		job, err := h.Start(twoItems("u"), func(ctx context.Context, _ *jobs.Reporter) {
+			close(started)
+			<-ctx.Done()
+			cancelled, closing = ctx.Err() != nil, jobs.Closing(ctx)
+			close(ended)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-started
+		stop(h, job.ID)
+		<-ended
+		return cancelled, closing
+	}
+	t.Run("close", func(t *testing.T) {
+		cancelled, closing := seen(t, func(h *jobs.Hub, _ string) { h.Close() })
+		if !cancelled || !closing {
+			t.Errorf("after Close: cancelled = %v, closing = %v, want both true", cancelled, closing)
+		}
+	})
+	t.Run("cancel", func(t *testing.T) {
+		cancelled, closing := seen(t, func(h *jobs.Hub, id string) {
+			if err := h.Cancel(id); err != nil {
+				t.Error(err)
+			}
+		})
+		if !cancelled || closing {
+			t.Errorf("after Cancel: cancelled = %v, closing = %v, want cancelled and not closing", cancelled, closing)
+		}
+	})
+	if jobs.Closing(context.Background()) {
+		t.Error("a live context reads as closing")
+	}
+}
+
 // Cancel (plan 05-04, D-26): the items that have not finished end cancelled with a code, the
 // ones that have keep their result, and cancelling a job that has ended changes nothing.
 

@@ -111,6 +111,8 @@ export function outcomeOf(
 ): UpdateOutcome {
   if (job.state === "cancelled") return "cancelled";
   const items = job.items ?? [];
+  // A cancel after the swarm took the update is not a failure: the job read partial, with its wait cancelled.
+  if (items.some((i) => i.id === "wait" && i.state === "cancelled")) return "cancelled";
   const back = items.find((i) => i.id === "rollback");
   const wait = items.find((i) => i.id === "rollback_wait");
   if (back || wait) {
@@ -194,7 +196,7 @@ export function rowOf(job: UpdateJobView): StackJobItem {
   const failed = items.some((i) => i.state === "failed");
   let state: StackJobItem["state"] = "waiting";
   if (failed) state = "failed";
-  else if (job.state === "cancelled") state = "cancelled";
+  else if (job.state === "cancelled" || wait?.state === "cancelled") state = "cancelled";
   else if (wait?.state === "done" && (!health || health.state === "done")) state = "done";
   else if (update && update.state !== "waiting") state = "running";
   return {

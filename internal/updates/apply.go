@@ -532,6 +532,11 @@ func (a *Applier) itemSpecs(t target) []jobs.ItemSpec {
 // when the restore failed too (the run then keeps restore_failed); for a run that did not fail it is empty.
 type endFunc func(st RunState, reason, cause string)
 
+// runLeftOpen is the state a run hands to its endFunc when the server's shutdown cut it off, and not anything the update did: the
+// row is left as it is (running), nothing is remembered or audited, and only the lock is freed. Restart recovery finds the run and
+// puts right whatever the update had changed (CR-01). It is never stored.
+const runLeftOpen RunState = "left_open"
+
 // runOne is the work of one update whose run is on record and whose environment lock the caller holds: it does the work of the kind,
 // ends the run, writes the audit entry and calls release before the job's last step ends, so whoever sees the job finished can
 // start the next operation at once. The job of a single update calls it with the release of the lock; a bulk update calls it for
@@ -558,6 +563,10 @@ func (a *Applier) newEnd(ctx context.Context, req Request, run Run, t target, re
 	var once sync.Once
 	return func(st RunState, reason, cause string) {
 		once.Do(func() {
+			if st == runLeftOpen {
+				release()
+				return
+			}
 			wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
 			defer cancel()
 			if _, err := a.Runs.Finish(wctx, run.ID, st, reason, 0, 0); err != nil {
@@ -596,7 +605,8 @@ func (a *Applier) auditEnd(ctx context.Context, req Request, t target, st RunSta
 	var entries []audit.Entry
 	switch st {
 	case RunDone:
-		entries = append(entries, entry(audit.ActionImageUpdated, audit.ResultSuccess, "", ""))
+		// A good update has no reason. One whose wait was cancelled does, so the entry says the new version was not confirmed.
+		entries = append(entries, entry(audit.ActionImageUpdated, audit.ResultSuccess, "", reason))
 	case RunRolledBack:
 		entries = append(entries,
 			entry(audit.ActionImageUpdateFailed, audit.ResultFailure, cause, cause),

@@ -65,7 +65,7 @@ const wait = (state: Item["state"] = "waiting", over: Partial<Item> = {}): Item 
   ...over,
 });
 
-let state: "running" | "done" | "failed" | "cancelled";
+let state: "running" | "done" | "failed" | "cancelled" | "partial";
 let kind: "service" | "container" | "bulk";
 let workload: string;
 let items: Item[];
@@ -257,6 +257,29 @@ const restore = (back: Item["state"] = "done", waited: Item["state"] = "done"): 
   { id: "rollback", label: "Roll back to the previous version", state: back },
   { id: "rollback_wait", label: "Wait for the previous version to run", state: waited },
 ];
+
+describe("UpdateConsole: a cancel after the swarm took the update", () => {
+  it("reads as cancelled, not failed, though the job has finished steps", async () => {
+    state = "partial";
+    items = [
+      check,
+      pull,
+      update("done"),
+      wait("cancelled", {
+        code: "wait_cancelled",
+        message:
+          "Cancelled while waiting for the new version to run. The update had been applied and is left as it is; it was not confirmed running.",
+      }),
+    ];
+    mount();
+    expect(
+      await screen.findByText("The update was cancelled", { selector: "[data-slot=alert-title]" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("The update failed", { selector: "[data-slot=alert-title]" }),
+    ).toBeNull();
+  });
+});
 
 describe("UpdateConsole: a failed update that was rolled back (IMG-07, D-12)", () => {
   beforeEach(() => {

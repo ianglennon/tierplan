@@ -499,6 +499,10 @@ func (a *Applier) runBulk(ctx context.Context, r *jobs.Reporter, req BulkRequest
 
 // refuseQueuedStill ends the runs of the items whose run is still queued (Finish writes once, so an item that ended is untouched).
 func (a *Applier) refuseQueuedStill(ctx context.Context, works []*bulkWork) {
+	if jobs.Closing(ctx) {
+		// The server is stopping: the runs stay as they are and restart recovery ends each by what it finds (CR-01).
+		return
+	}
 	wctx := context.WithoutCancel(ctx)
 	for _, w := range works {
 		if _, err := a.Runs.Finish(wctx, w.run.ID, RunFailed, ReasonInterrupted, 0, 0); err != nil {
@@ -604,7 +608,10 @@ func (a *Applier) countEnd(ctx context.Context, r *jobs.Reporter, w *bulkWork, c
 	default:
 		// A run that has not ended is ended now, so nothing is left queued or running behind a finished item.
 		if state == RunQueued || state == RunRunning {
-			_, _ = a.Runs.Finish(context.WithoutCancel(ctx), w.run.ID, RunFailed, ReasonInterrupted, 0, 0)
+			// When the server is stopping the row stays as it is for restart recovery (CR-01); the item still reads as interrupted.
+			if !jobs.Closing(ctx) {
+				_, _ = a.Runs.Finish(context.WithoutCancel(ctx), w.run.ID, RunFailed, ReasonInterrupted, 0, 0)
+			}
 			reason = ReasonInterrupted
 		}
 		if state == RunRefused {
