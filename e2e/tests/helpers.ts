@@ -640,12 +640,21 @@ export async function createStack(page: Page, envId: string, name: string): Prom
 // typeInEditor replaces the whole content of the open file's editor with `text`. The editor is a
 // CodeMirror surface, so the text goes in as one insertion: typing it key by key would let the
 // editor indent each new line again and shift the YAML. `file` is the name the editor carries
-// ("compose.yaml, YAML").
+// ("compose.yaml, YAML"). A file just added is still mounting and can lose text sent to it, so the
+// insertion is repeated until the editor shows its last line, where the cursor leaves the view.
 export async function typeInEditor(page: Page, file: string, text: string): Promise<void> {
   const editor = page.getByRole("textbox", { name: file, exact: true });
-  await editor.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.insertText(text);
+  const last =
+    text
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .at(-1) ?? "";
+  await expect(async () => {
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.insertText(text);
+    await expect(editor).toContainText(last, { timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
 }
 
 // openReview presses Review and deploy (which saves the draft first) and waits for the review of
