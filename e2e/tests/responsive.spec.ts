@@ -342,7 +342,7 @@ test("the Containers, Volumes and Images lists keep every filter chip on a 375px
 test("the Overview's Updates tab and the search page keep every filter chip on a 375px screen", async ({
   page,
 }) => {
-  await page.goto(at("/?tab=updates"));
+  await page.goto(at("/environments?tab=updates"));
   const show = page.getByRole("radiogroup", { name: "Show" });
   // The counts arrive with the data and widen the chips, so the row is measured once the first has its.
   await expect(show.locator('[data-slot="toggle-group-item"]').first()).toHaveText(
