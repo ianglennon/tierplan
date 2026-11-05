@@ -23,7 +23,8 @@ interface FleetBulkBarProps {
 }
 
 // mayUpdate is whether the caller's grants let them update this workload: services.control for both kinds
-// and containers.control as well for a container. It only decides what to offer; the server decides.
+// and containers.control as well for a container. It only decides what to offer and what the confirm
+// counts; the server decides.
 function mayUpdate(me: Me | undefined, s: FleetSelected): boolean {
   return (
     hasPermission(me, "services.control", s.envId) &&
@@ -81,6 +82,14 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
     return out;
   }, [confirming, items, notReporting, jobs.data, me]);
 
+  // The ticked workloads in an environment that can run, which the caller may still not update (a
+  // service and a container need different grants). The confirm lists them as left out, so its count
+  // is what will be sent.
+  const refused = useMemo(
+    () => new Set((confirming ?? []).filter((s) => !unavailable.has(s.envId) && !mayUpdate(me, s))),
+    [confirming, unavailable, me],
+  );
+
   const firstEnv = items[0]?.envId;
   const updateReason =
     firstEnv !== undefined && !items.some((s) => mayUpdate(me, s))
@@ -120,6 +129,7 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
         <FleetUpdateConfirmDialog
           items={confirming}
           unavailable={unavailable}
+          refused={refused}
           onClose={() => setConfirming(null)}
           onStarted={onClear}
           onClosed={() => bar.current?.querySelector("button")?.focus()}

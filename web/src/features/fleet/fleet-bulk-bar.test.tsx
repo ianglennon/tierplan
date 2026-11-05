@@ -425,6 +425,43 @@ describe("FleetBulkBar", () => {
     fireEvent.click(update);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+
+  it("leaves out, by name, the ticked workloads the caller may not update in an environment that can run", async () => {
+    // Operator on both environments, but no right to control containers in prod.
+    me = makeMe({ envs: { e1: "operator", e2: "operator" } });
+    me.permissions.environments.e1 = (me.permissions.environments.e1 ?? []).filter(
+      (p) => p !== "containers.control",
+    );
+    answer = () =>
+      Response.json(
+        body([
+          group({
+            items: [
+              item({ id: "svc1", name: "web" }),
+              item({ id: "c9", kind: "container", name: "cache", image: "redis:7" }),
+            ],
+          }),
+        ]),
+      );
+    mount();
+    await table();
+    tick("Select web");
+    tick("Select cache");
+    fireEvent.click(screen.getByRole("button", { name: "Update 2 selected" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Update 1 item", { selector: "h2" })).toBeTruthy();
+    expect(
+      within(dialog).getByText("Skipped: you can't update these in prod: cache."),
+    ).toBeTruthy();
+    expect(within(dialog).queryByRole("listitem", { name: /cache/ })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update 1 item" }));
+    await waitFor(() => expect(runPosts()).toHaveLength(1));
+    expect(itemsOf(runPosts()[0])).toEqual([
+      { envId: "e1", kind: "service", name: "web", expect: { web: NEW } },
+    ]);
+  });
 });
 
 describe("Skip selected versions", () => {

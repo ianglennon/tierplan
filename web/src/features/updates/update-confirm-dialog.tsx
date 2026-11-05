@@ -660,6 +660,9 @@ interface FleetUpdateConfirmDialogProps {
   // The environments that cannot run an update now. Their workloads are listed with why and left out
   // of the count and of the request.
   unavailable: ReadonlyMap<string, FleetUnavailable>;
+  // Ticked workloads in an environment that can run which the caller may not update. They are named as
+  // left out, and are not counted or sent.
+  refused?: ReadonlySet<FleetSelected>;
   // Called when the dialog is to go: Cancel, Escape, or the updates have started.
   onClose: () => void;
   // Called when the updates have started, so the tab can clear its ticks.
@@ -677,6 +680,7 @@ interface FleetUpdateConfirmDialogProps {
 export function FleetUpdateConfirmDialog({
   items,
   unavailable,
+  refused,
   onClose,
   onStarted,
   onClosed,
@@ -686,8 +690,8 @@ export function FleetUpdateConfirmDialog({
   const run = useRunFleetUpdates();
   const groups = useMemo(() => groupByEnvironment(items), [items]);
   const runnable = useMemo(
-    () => items.filter((s) => !unavailable.has(s.envId)),
-    [items, unavailable],
+    () => items.filter((s) => !unavailable.has(s.envId) && !refused?.has(s)),
+    [items, unavailable, refused],
   );
   const count = runnable.length;
   const tooMany = count > FLEET_BULK_MAX;
@@ -748,6 +752,9 @@ export function FleetUpdateConfirmDialog({
 
         {groups.map((g) => {
           const off = unavailable.get(g.envId);
+          const left = g.items.filter((s) => refused?.has(s));
+          const rows =
+            left.length > 0 ? { ...g, items: g.items.filter((s) => !refused?.has(s)) } : g;
           return (
             <section
               key={g.envId}
@@ -759,7 +766,9 @@ export function FleetUpdateConfirmDialog({
                 <span className="min-w-0 break-all">{g.envName}</span>
                 <TypeBadge envType={g.type} />
                 <span className="text-xs font-normal text-muted-foreground tabular-nums">
-                  {t("updates.confirm.fleet.groupCount", { count: g.items.length })}
+                  {t("updates.confirm.fleet.groupCount", {
+                    count: off ? g.items.length : rows.items.length,
+                  })}
                 </span>
               </h3>
               {off?.kind === "locked" ? (
@@ -769,7 +778,20 @@ export function FleetUpdateConfirmDialog({
                   {t(`updates.confirm.fleet.skipped.${off.kind}`, { environment: g.envName })}
                 </p>
               ) : (
-                <FleetGroupRows group={g} />
+                <>
+                  <FleetGroupRows group={rows} />
+                  {left.length > 0 ? (
+                    <p
+                      className="text-sm break-words text-muted-foreground"
+                      data-slot="fleet-refused"
+                    >
+                      {t("updates.confirm.fleet.refused", {
+                        environment: g.envName,
+                        names: left.map((s) => s.item.name).join(", "),
+                      })}
+                    </p>
+                  ) : null}
+                </>
               )}
             </section>
           );

@@ -353,6 +353,7 @@
           "offline": "Skipped: {{environment}} isn't reporting.",
           "no_permission": "Skipped: you can't update anything in {{environment}}."
         },
+        "refused": "Skipped: you can't update these in {{environment}}: {{names}}.",
         "tooMany": "You can update at most {{max, number}} at a time. Clear some ticks and try again.",
         "checked": "Each item is checked again when its turn comes. One that has a newer version by then, or whose update failed before, is skipped and nothing is changed.",
         "commit_one": "Update {{count, number}} item",
