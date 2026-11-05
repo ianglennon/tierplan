@@ -915,6 +915,10 @@ type launch struct {
 	// record, when set, stores how the operation ended in place of recordDeployEnd, which is a deploy's: a stop
 	// and a start take no revision.
 	record func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
+	// stopped, when set, replaces record and onFailed for an operation the server's shutdown cut off (jobs.Closing): nobody
+	// cancelled it, so it is not a person's call to keep the stack as it is. It records what the stack's own deploy knows and leaves
+	// whatever else the operation tracks open for restart recovery to find, as it does after a crash.
+	stopped func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
 	// onFailed, when set, runs inside the job once the operation ended failed after it changed a service and not by a cancel
 	// (DeployResult.NeedsRestore), after record and before the lock is freed, so nobody else can write to the environment between
 	// the failure and what undoes it. It is given a context a cancel does not reach: a write that began is finished. An image
@@ -951,6 +955,11 @@ func runStackDeploy(ctx context.Context, d StacksDeps, l launch, r *jobs.Reporte
 	actor, userAgent := l.p.AuditActor(), l.userAgent
 	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
 	onDone := func(res stackops.DeployResult) {
+		if l.stopped != nil && res.Code == stackops.CodeCancelled && jobs.Closing(ctx) {
+			l.stopped(persist, deploy, res)
+			l.release()
+			return
+		}
 		if l.record != nil {
 			l.record(persist, deploy, res)
 		} else {

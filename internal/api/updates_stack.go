@@ -351,6 +351,11 @@ func (su *stackUpdate) revise(ctx context.Context, actor audit.Actor, bulk, user
 		}
 		endStackUpdate(rctx, d, ap, actor, userAgent, st, good, rev, run, plan, res)
 	}
+	// A server that stops during the update is not a person's Cancel: the stack may be half updated or on a version nobody confirmed.
+	// The stack's own record is made, and the run stays running for recovery, which puts the stack back as it does after a crash.
+	l.stopped = func(rctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult) {
+		recordDeployEnd(rctx, d, actor, userAgent, st, rev, deploy, deployModeUpdate, res, rendering, extra)
+	}
 	// An update that fails after it changed a service is undone by TierPlan in the same job, holding the same lock (IMG-07, D-12).
 	rb := stackRollback{
 		d: d, ap: ap, p: p, env: env, st: st, good: good, goodPins: su.goodPins, failed: rev, run: run, plan: plan, actor: actor,
