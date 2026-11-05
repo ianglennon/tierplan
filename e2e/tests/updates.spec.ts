@@ -7,7 +7,8 @@
 // new build is pushed under the same tag; the next check shows "Update available" on the stacks
 // list, the stack's services and the dashboard; "Update stack" updates it in one confirm; the
 // stack's History records an "Image update" and the badge returns to "Up to date" (IMG-04, IMG-05,
-// IMG-06).
+// IMG-06). The second test skips a version and takes the skip back, reads the Overview's tiles and
+// tabs, and finds the stack with Cmd/Ctrl+K (IMG-08, ENV-10, ENV-11).
 //
 // The engine reaches the registry through the dind service's --insecure-registry flag, and the
 // server through a registry credential marked insecure: both are test topology only.
@@ -170,6 +171,91 @@ test("a new build under the tag shows as an update on every surface and Update s
       await page.getByRole("tab", { name: "Overview" }).click();
       await expect(page.getByText("Up to date", { exact: true }).first()).toBeVisible();
       await shot(page, "6-history-and-badge");
+    });
+  } finally {
+    await removeStackIfPresent(page.context(), envId, NAME);
+    await deleteCredentialAs(page.context(), credential.id);
+    dropRegistryImage(IMAGE);
+  }
+});
+
+test("skip a version and take it back, read the Overview and find the stack with Cmd/Ctrl+K", async ({
+  page,
+}) => {
+  test.setTimeout(480_000);
+  const NAME = "e2e-upd-skip";
+  const CONTAINER = `${NAME}-web-1`;
+  const envId = await localEnvId(page);
+  await removeStackIfPresent(page.context(), envId, NAME);
+  seedRegistryImage(IMAGE);
+  const credential = await registryCredential(page.context(), "e2e-updates-registry-2");
+
+  try {
+    await test.step("an update is on offer for a deployed stack", async () => {
+      await deployStack(page, envId, NAME);
+      repushRegistryImage(IMAGE, "build-3");
+      await checkNow(page, envId, CONTAINER, /1 update available\./);
+      await page.goto(at(`/env/${envId}/containers`));
+      const row = page.getByRole("row").filter({ hasText: CONTAINER });
+      await expect(row.getByText("Update available")).toBeVisible();
+    });
+
+    await test.step("Skip this version reads Version skipped, and Undo brings the update back", async () => {
+      const row = page.getByRole("row").filter({ hasText: CONTAINER });
+      await row.getByRole("button", { name: `Actions for ${CONTAINER}` }).click();
+      await page.getByRole("menuitem", { name: "Skip this version" }).click();
+      await expect(row.getByText("Version skipped")).toBeVisible();
+      await expect(
+        page.getByText(`for ${CONTAINER}. A newer version will show again.`),
+      ).toBeVisible();
+      await shot(page, "7-skipped");
+      await page.getByRole("button", { name: "Undo" }).click();
+      await expect(row.getByText("Update available")).toBeVisible();
+    });
+
+    await test.step("the Overview shows its four tiles and the Updates tab lists the workload with its environment", async () => {
+      await page.goto(at("/environments"));
+      const tiles = page.getByRole("region", { name: "Fleet summary" });
+      for (const label of [
+        "Environments",
+        "Failing services",
+        "Updates available",
+        "Pools near full",
+      ]) {
+        await expect(tiles.getByRole("link", { name: new RegExp(`^${label}\\b`) })).toBeVisible();
+      }
+      await tiles.getByRole("link", { name: /^Updates available\b/ }).click();
+      await expect(page).toHaveURL(/[?&]tab=updates/);
+      const table = page.getByRole("table", { name: "Image updates" });
+      const row = table.getByRole("row").filter({ hasText: CONTAINER });
+      await expect(row).toBeVisible();
+      await expect(row.getByText("Update available")).toBeVisible();
+      await expect(row.getByText(`in ${NAME}`)).toBeVisible();
+      await shot(page, "8-overview-updates");
+    });
+
+    await test.step("the Failing services tab has an empty state of its own", async () => {
+      await page.getByRole("tab", { name: "Failing services" }).click();
+      await expect(page.getByText("Nothing is failing")).toBeVisible();
+    });
+
+    await test.step("Cmd/Ctrl+K finds the stack, highlighted, and Enter opens it", async () => {
+      await page.goto(at(`/env/${envId}`));
+      await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
+      await page.keyboard.press("ControlOrMeta+K");
+      const palette = page.getByRole("dialog", { name: "Search TierPlan" });
+      await palette.getByRole("combobox").fill(NAME);
+      const hit = palette.getByRole("option").filter({ has: page.locator("mark") });
+      await expect(hit.first()).toBeVisible();
+      await expect(palette.getByText("Stacks", { exact: true })).toBeVisible();
+      await expect(palette.locator("mark").first()).toHaveText(NAME);
+      await shot(page, "9-search");
+      // The first row is "Search all results"; the stack hit is the one below it.
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(new RegExp(`/tierplan/env/${envId}/stacks/[^/]+`));
+      await expect(page.getByRole("tab", { name: "History" })).toBeVisible();
+      await expect(page.getByText(NAME, { exact: true }).first()).toBeVisible();
     });
   } finally {
     await removeStackIfPresent(page.context(), envId, NAME);
