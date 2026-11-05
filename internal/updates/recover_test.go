@@ -58,6 +58,55 @@ func (r *applyRig) runOf(t *testing.T, id string) updates.Run {
 	return run
 }
 
+// withNewImage adds the image the replacement of an update to digest runs, to the engine the rig is built over.
+func withNewImage(digest string) func(*dockertest.FakeConfig) {
+	return func(c *dockertest.FakeConfig) {
+		c.Images = append(c.Images, dockertest.FakeImage{
+			ID: imgID('2'), RepoTags: []string{appImage}, RepoDigests: []string{"registry.test/team/app@" + digest},
+		})
+	}
+}
+
+// A restart after the update removed the old container but before it wrote its end leaves the replacement running under the name.
+// The update had finished, so recovery ends the run done and audits an update, and not a failure (WR-03). A container under the name
+// that does not run the new digest is not the replacement, and the run still ends failed by the restart.
+func TestRecoveryOfAContainerUpdateThatHadFinished(t *testing.T) {
+	t.Parallel()
+	t.Run("the replacement runs", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, withNewImage(dg('b')), replacementAs("app", "running"))
+		run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+		r.markStopped(t, run)
+
+		r.recoverNow(t, nil)
+
+		if got := r.runOf(t, run.ID); got.State != updates.RunDone || got.FinishedAt.IsZero() {
+			t.Fatalf("run = %s %q, want done", got.State, got.Reason)
+		}
+		if rows := r.audits(t, "image.updated"); len(rows) != 1 || rows[0]["_result"] != "success" {
+			t.Errorf("update audit rows = %+v, want one success", rows)
+		}
+		if rows := r.audits(t, "image.update_failed"); len(rows) != 0 {
+			t.Errorf("failure audit rows = %+v, want none", rows)
+		}
+		if n := len(r.fake.Writes()); n != 0 {
+			t.Errorf("the engine was written %d times, want none: the update had finished", n)
+		}
+	})
+	t.Run("another digest", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, withNewImage(dg('c')), replacementAs("app", "running"))
+		run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+		r.markStopped(t, run)
+
+		r.recoverNow(t, nil)
+
+		if got := r.runOf(t, run.ID); got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted {
+			t.Errorf("run = %s %q, want failed by the restart", got.State, got.Reason)
+		}
+	})
+}
+
 // A service whose update a restart interrupted, after the swarm had taken the new digest, gets the previous digest back: the run
 // reads rolled_back with the restart as its reason, the failure is remembered and audited, and the lock is free (plan 12-24).
 func TestRecoveryRollsBackInterruptedService(t *testing.T) {

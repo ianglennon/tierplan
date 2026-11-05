@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
@@ -485,6 +486,12 @@ func (r *Recovery) recoverContainer(ctx context.Context, run Run) tried {
 			// The node the container is on may be one of those that did not answer.
 			return triedOffline
 		}
+		if sc.named != nil && updateFinished(snap, *sc.named, run) {
+			// The restart came after the update brought the replacement up and removed the old container, before it wrote its end.
+			r.log().Info("an interrupted container update had finished: the replacement runs and the old container is gone", "run", run.ID, "container", run.Workload)
+			r.finish(ctx, run, RunDone, "", "")
+			return triedDone
+		}
 		r.log().Warn("the container of an interrupted image update is gone, so there is nothing to put back", "run", run.ID, "container", run.Workload)
 		r.finish(ctx, run, RunFailed, ReasonServerRestarted, ReasonServerRestarted)
 		return triedDone
@@ -494,6 +501,25 @@ func (r *Recovery) recoverContainer(ctx context.Context, run Run) tried {
 	return r.begin(ctx, run, t, items, func(jctx context.Context, rep *jobs.Reporter, end endFunc) {
 		r.restoreContainer(jctx, rep, run, t, sc, tempName, restartedEnd(end))
 	})
+}
+
+// updateFinished reports whether c, the container that holds the workload's name, is the replacement of an update that had done
+// its work: it runs, and the digest its image has for the repository the run names is the one the run was updating to.
+func updateFinished(snap envs.Aggregate, c envs.ContainerRow, run Run) bool {
+	if len(run.Items) == 0 || c.State != "running" {
+		return false
+	}
+	it := run.Items[0]
+	spec, err := registry.ParseRef(it.Image)
+	if err != nil || it.ToDigest == "" {
+		return false
+	}
+	for _, im := range snap.Images {
+		if im.NodeID == c.NodeID && im.ID == c.ImageID {
+			return runningDigest(im.RepoDigests, spec) == it.ToDigest
+		}
+	}
+	return false
 }
 
 // restoreContainer does the work of recoverContainer under the lock, on what the node holds now.
