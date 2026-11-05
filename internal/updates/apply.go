@@ -606,13 +606,40 @@ func (a *Applier) newEnd(ctx context.Context, req Request, run Run, t target, re
 			}
 			wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
 			defer cancel()
-			if _, err := a.Runs.Finish(wctx, run.ID, st, reason, 0, 0); err != nil {
-				a.log().Error("an image update run could not be finished on record", "run", run.ID, "error", err)
-			}
+			a.finishRun(wctx, run.ID, st, reason)
 			a.rememberFailure(wctx, run, t, st, cause)
 			a.auditEnd(wctx, req, t, st, reason, cause)
 			release()
 		})
+	}
+}
+
+// finishRetryDelay is the wait before the first retry of the write of a run's end; each retry waits twice as long.
+const finishRetryDelay = time.Second
+
+// finishAttempts is how many times the end of a run is written before it is given up on.
+const finishAttempts = 3
+
+// finishRun writes the end of a run, and writes it again after a short wait when the write failed (a busy database, say). A row that
+// is left running reads as an update in progress, and the next start's recovery would roll a finished update back, so the end is
+// worth a few tries within ctx before it is only logged.
+func (a *Applier) finishRun(ctx context.Context, id string, st RunState, reason string) {
+	delay := finishRetryDelay
+	for attempt := 1; ; attempt++ {
+		_, err := a.Runs.Finish(ctx, id, st, reason, 0, 0)
+		if err == nil {
+			return
+		}
+		if attempt == finishAttempts || ctx.Err() != nil {
+			a.log().Error("an image update run could not be finished on record, so it stays running until the next start finds it", "run", id, "attempts", attempt, "error", err)
+			return
+		}
+		a.log().Warn("an image update run could not be finished on record, trying again", "run", id, "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+		case <-a.clock().After(delay):
+		}
+		delay *= 2
 	}
 }
 

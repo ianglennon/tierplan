@@ -4,6 +4,8 @@
 package updates_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"slices"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -238,5 +241,62 @@ func TestAnUpdateJudgedBeforeAnotherFinishedIsRefused(t *testing.T) {
 	runs, rerr := r.runs.Running(testsupport.Context(t), r.envID)
 	if rerr != nil || len(runs) != 0 {
 		t.Errorf("running runs = %+v, %v, want none", runs, rerr)
+	}
+}
+
+// flakyFinish is the database of a run store whose write of a run's end fails the first n times, as a busy database does.
+type flakyFinish struct {
+	*sql.DB
+	mu       sync.Mutex
+	failures int
+	tried    int
+}
+
+func (f *flakyFinish) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	if strings.Contains(q, "UPDATE image_update_runs") && strings.Contains(q, "finished_at") {
+		f.mu.Lock()
+		f.tried++
+		fail := f.tried <= f.failures
+		f.mu.Unlock()
+		if fail {
+			return nil, errors.New("database is locked")
+		}
+	}
+	return f.DB.ExecContext(ctx, q, args...)
+}
+
+// The end of a run that cannot be written at once is written again, so a finished update does not stay running on record, where the
+// next start would roll it back (WR-05). When every try fails the row stays running, and that is logged, not hidden.
+func TestTheEndOfARunIsWrittenAgain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		failures int
+		want     updates.RunState
+	}{
+		{"once busy", 1, updates.RunDone},
+		{"busy twice", 2, updates.RunDone},
+		{"busy every time", 3, updates.RunRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newApplyRig(t, nil, swarmService("web", 'a'))
+			r.offer("web", dg('b'))
+			db := &flakyFinish{DB: r.st.Write, failures: tc.failures}
+			r.applier.Runs = &updates.RunStore{Q: sqlc.New(db), W: r.st.Write}
+
+			job := r.run(t, r.request("web", dg('b')))
+
+			run, err := r.runs.Get(testsupport.Context(t), job.Meta[updates.MetaRunID])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.State != tc.want {
+				t.Errorf("run = %s, want %s", run.State, tc.want)
+			}
+			if _, held := r.locks.Held(r.envID); held {
+				t.Error("the lock is still held after the job ended")
+			}
+		})
 	}
 }
