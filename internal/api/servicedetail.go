@@ -314,7 +314,7 @@ func getService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, s
 	}
 	body.Muted = muted
 	if haveRow {
-		if verdicts, workloads := serviceUpdates(ctx, d, envID, []dockerx.ServiceRow{row}); verdicts != nil {
+		if verdicts, workloads, err := serviceUpdates(ctx, d, envID, []dockerx.ServiceRow{row}); err == nil {
 			if v, ok := verdicts[row.ID]; ok {
 				body.Update = updateInfoOf(v, workloads[row.ID])
 			}

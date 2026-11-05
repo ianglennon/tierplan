@@ -178,7 +178,7 @@ type ServicesListInput struct {
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the service name, image, stack or any label key or value, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
 	Status string `query:"status" maxLength:"64" doc:"Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
 	// Updates narrows the list to the services whose image has an update.
-	Updates string `query:"updates" enum:",available" doc:"available: only services whose image has an update available. Applied before the 500-row cap"`
+	Updates string `query:"updates" enum:",available" doc:"available: only services whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list"`
 }
 
 // ServiceListOutput wraps ServiceListBody for huma.
@@ -457,7 +457,11 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 	var verdicts map[string]updates.Verdict
 	var workloads map[string]updates.Workload
 	if in.Updates == "available" {
-		verdicts, workloads = serviceUpdates(ctx, d, envID, rows)
+		var err error
+		verdicts, workloads, err = serviceUpdates(ctx, d, envID, rows)
+		if err != nil {
+			return ServiceListBody{}, updatesUnread()
+		}
 		rows = slices.DeleteFunc(slices.Clone(rows), func(r dockerx.ServiceRow) bool {
 			return verdicts[r.ID].State != updates.StateUpdateAvailable
 		})
@@ -469,7 +473,8 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 	}
 	known := loadStackIDs(ctx, d.Store, envID, d.Log)
 	if verdicts == nil {
-		verdicts, workloads = serviceUpdates(ctx, d, envID, shown)
+		// A failed read is already logged; the list shows no update objects for it.
+		verdicts, workloads, _ = serviceUpdates(ctx, d, envID, shown)
 	}
 	for _, row := range shown {
 		item := ServiceItem{
@@ -491,22 +496,23 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 }
 
 // serviceUpdates judges the images of the rows shown, keyed by service ID, with the workload each verdict
-// is for. A failure to read the verdicts is logged and answers none: the list never fails for it.
-func serviceUpdates(ctx context.Context, d ServicesDeps, envID string, rows []dockerx.ServiceRow) (map[string]updates.Verdict, map[string]updates.Workload) {
+// is for. A failure to read the verdicts is logged and returned with none: a list shows no update objects
+// for it, and the filter by update refuses, since "nothing judged" is not "nothing to update".
+func serviceUpdates(ctx context.Context, d ServicesDeps, envID string, rows []dockerx.ServiceRow) (map[string]updates.Verdict, map[string]updates.Workload, error) {
 	if d.Updates == nil {
-		return nil, nil
+		return nil, nil, errUpdatesUnread
 	}
 	verdicts, err := d.Updates.ServiceVerdicts(ctx, envID, rows)
 	if err != nil {
 		d.Log.Warn("could not judge the images of the services", "environment", envID, "error", err)
-		return nil, nil
+		return nil, nil, err
 	}
 	ws := updates.ServiceWorkloads(rows)
 	workloads := make(map[string]updates.Workload, len(ws))
 	for _, w := range ws {
 		workloads[w.ID] = w
 	}
-	return verdicts, workloads
+	return verdicts, workloads, nil
 }
 
 // scaleOutcome is what one target's write learned, beyond the ContainerActionResult the

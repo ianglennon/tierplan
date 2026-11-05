@@ -260,18 +260,28 @@ func countUpdates(ctx context.Context, d UpdatesDeps, envID string) int {
 	return n
 }
 
+// errUpdatesUnread says the stored verdicts could not be read, or there is nothing to read them with.
+var errUpdatesUnread = errors.New("the image update verdicts could not be read")
+
+// updatesUnread is what a list answers when it was asked to keep only the updates available and the verdicts
+// could not be read: an empty list would say nothing has an update, which nothing judged.
+func updatesUnread() error {
+	return httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available right now.")
+}
+
 // containerUpdates judges the images of the containers of agg, keyed by container ID, with the workload each
-// verdict is for. A failure to read the verdicts is logged and answers none: a list never fails for it.
-func containerUpdates(ctx context.Context, u *updates.Service, log *slog.Logger, envID string, agg envs.Aggregate) updates.ContainerJudgement {
+// verdict is for. A failure to read the verdicts is logged and returned with none: a list shows no update
+// objects for it, and the filter by update refuses.
+func containerUpdates(ctx context.Context, u *updates.Service, log *slog.Logger, envID string, agg envs.Aggregate) (updates.ContainerJudgement, error) {
 	if u == nil {
-		return updates.ContainerJudgement{}
+		return updates.ContainerJudgement{}, errUpdatesUnread
 	}
 	j, err := u.ContainerJudgements(ctx, envID, agg)
 	if err != nil {
 		log.Warn("could not judge the images of the containers", "environment", envID, "error", err)
-		return updates.ContainerJudgement{}
+		return updates.ContainerJudgement{}, err
 	}
-	return j
+	return j, nil
 }
 
 // updateOfContainer is the update object of one container, nil when it has none. known are the stacks TierPlan manages in its

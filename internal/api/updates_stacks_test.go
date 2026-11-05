@@ -388,6 +388,25 @@ func TestUpdatesAvailableFilters(t *testing.T) {
 	}
 }
 
+// A list filtered by update names an environment whose checks cannot be read as failed, where it would say that
+// the environment has no update available.
+func TestStacksUpdatesFilterNamesAnEnvironmentWithUnreadVerdictsAsFailed(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{})
+	f, e := stackEnvTuned(t, func(f *envFix) { f.updateHeads, f.updateStore = heads, failingChecks{} })
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	newStack(t, admin, "web")
+
+	got := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?updates=available"))
+	if len(got.Groups) != 0 || len(got.FailedEnvironments) != 1 || got.FailedEnvironments[0].EnvID != e.ID {
+		t.Errorf("updates=available = %+v, want the environment failed and no group", got)
+	}
+	got = answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, ""))
+	if len(got.Groups) != 1 || len(got.FailedEnvironments) != 0 {
+		t.Errorf("unfiltered = %+v, want the stack listed though the verdicts could not be read", got)
+	}
+}
+
 func equalNames(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

@@ -494,6 +494,9 @@ type stackReads struct {
 	// upd is what the update checks say about the stacks of the environment, read once.
 	upd     stackUpdates
 	updRead bool
+	// updOK is true when the verdicts were read: upd then holds what they say, and an empty upd means
+	// nothing has an update.
+	updOK bool
 }
 
 // stackUpdates are the roll-ups of the stacks of one environment and the verdict of each of their services.
@@ -518,7 +521,15 @@ func (r *stackReads) updates() stackUpdates {
 		return r.upd
 	}
 	r.upd = stackUpdates{stacks: agg, services: per}
+	r.updOK = true
 	return r.upd
+}
+
+// judged says whether the update checks could be read, so a filter by update can tell "none available" from
+// "nothing was judged".
+func (r *stackReads) judged() bool {
+	r.updates()
+	return r.updOK
 }
 
 // stackUpdate is the roll-up of one stack's images, nil when it has none.
@@ -613,7 +624,7 @@ func listStacks(ctx context.Context, d StacksDeps, in *StackListInput) (*StackLi
 	if err != nil {
 		return nil, stackInternal(d, "list: read the environment", in.EnvID, err)
 	}
-	read, err := d.stackRowsOf(ctx, in.EnvID, "", row.Kind == envs.KindLocal)
+	read, err := d.stackRowsOf(ctx, in.EnvID, "", row.Kind == envs.KindLocal, false)
 	if err != nil {
 		return nil, stackInternal(d, "list", in.EnvID, err)
 	}

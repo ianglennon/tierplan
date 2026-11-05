@@ -334,6 +334,32 @@ func TestVerdictFailureNeverFailsList(t *testing.T) {
 	}
 }
 
+// A filter by update that cannot read the verdicts refuses, where an empty list would say that nothing has an update.
+func TestUpdatesAvailableFilterRefusesUnreadVerdicts(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{})
+	f := newEnvFix(t, swarmManagerEngine(webService()))
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.updateHeads, f.updateStore = heads, failingChecks{}
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+
+	for _, route := range []string{"services?updates=available", "containers?updates=available"} {
+		rec := f.get(t, e, route)
+		if rec.code != http.StatusServiceUnavailable {
+			t.Errorf("%s = %d %s, want 503 and not an empty list", route, rec.code, rec.body)
+		}
+	}
+	// Without the filter the lists still answer.
+	for _, route := range []string{"services", "containers"} {
+		if rec := f.get(t, e, route); rec.code != http.StatusOK {
+			t.Errorf("%s = %d %s, want 200 though the verdicts could not be read", route, rec.code, rec.body)
+		}
+	}
+}
+
 // The containers list, the container detail and the dashboard count (plan 12-06, IMG-05, D-20): a
 // standalone host whose fake daemon holds the containers and their images; the registry is the scripted
 // Heads and Check now is the real route.

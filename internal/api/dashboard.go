@@ -292,7 +292,7 @@ type ContainerListInput struct {
 	NodeFilterInput
 	Q       string `query:"q" maxLength:"128" doc:"Search: a case-insensitive substring of the name, image, compose project, stack, service or any label key or value. Applied before the 500-row cap"`
 	Status  string `query:"status" maxLength:"64" doc:"Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status"`
-	Updates string `query:"updates" enum:",available" doc:"available: only containers whose image has an update available. Applied before the 500-row cap"`
+	Updates string `query:"updates" enum:",available" doc:"available: only containers whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list"`
 }
 
 // NetworkListInput is the networks list: the node filter and the search.
@@ -505,8 +505,11 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			}
 			onNode := filterNode(agg.Containers, in.Node, func(c envs.ContainerRow) string { return c.Node })
 			rows := filterContainers(onNode, in.Q, statuses)
-			judged := containerUpdates(ctx, d.Updates, d.Log, in.EnvID, agg)
+			judged, judgeErr := containerUpdates(ctx, d.Updates, d.Log, in.EnvID, agg)
 			if in.Updates == "available" {
+				if judgeErr != nil {
+					return nil, updatesUnread()
+				}
 				rows = slices.DeleteFunc(slices.Clone(rows), func(c envs.ContainerRow) bool {
 					return judged.Verdicts[c.ID].State != updates.StateUpdateAvailable
 				})

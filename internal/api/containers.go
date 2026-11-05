@@ -1016,5 +1016,6 @@ func detailUpdate(ctx context.Context, d ContainersDeps, envID, containerID stri
 		return nil
 	}
 	agg.Containers = slices.DeleteFunc(slices.Clone(agg.Containers), func(c envs.ContainerRow) bool { return c.ID != containerID })
-	return updateOfContainer(containerUpdates(ctx, d.Updates, d.Log, envID, agg), containerID, loadStackIDs(ctx, d.Store, envID, d.Log))
+	judged, _ := containerUpdates(ctx, d.Updates, d.Log, envID, agg)
+	return updateOfContainer(judged, containerID, loadStackIDs(ctx, d.Store, envID, d.Log))
 }

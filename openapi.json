@@ -27366,12 +27366,12 @@
             }
           },
           {
-            "description": "available: only containers whose image has an update available. Applied before the 500-row cap",
+            "description": "available: only containers whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list",
             "explode": false,
             "in": "query",
             "name": "updates",
             "schema": {
-              "description": "available: only containers whose image has an update available. Applied before the 500-row cap",
+              "description": "available: only containers whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list",
               "enum": [
                 "",
                 "available"
@@ -33147,12 +33147,12 @@
             }
           },
           {
-            "description": "available: only services whose image has an update available. Applied before the 500-row cap",
+            "description": "available: only services whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list",
             "explode": false,
             "in": "query",
             "name": "updates",
             "schema": {
-              "description": "available: only services whose image has an update available. Applied before the 500-row cap",
+              "description": "available: only services whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list",
               "enum": [
                 "",
                 "available"
@@ -34469,12 +34469,12 @@
             }
           },
           {
-            "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap",
+            "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none",
             "explode": false,
             "in": "query",
             "name": "updates",
             "schema": {
-              "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap",
+              "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none",
               "enum": [
                 "",
                 "available"
@@ -42428,12 +42428,12 @@
             }
           },
           {
-            "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap",
+            "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none",
             "explode": false,
             "in": "query",
             "name": "updates",
             "schema": {
-              "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap",
+              "description": "available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none",
               "enum": [
                 "",
                 "available"
