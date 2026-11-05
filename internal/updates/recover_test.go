@@ -91,6 +91,61 @@ func TestRecoveryRollsBackInterruptedService(t *testing.T) {
 	}
 }
 
+// A restart during the pull leaves the service as it was: it still runs the previous digest and has no earlier spec. Recovery has
+// nothing to put back, so the run reads failed by the restart, nothing is written, no rollback is audited and the digest is not
+// remembered as one that failed (CR-02). A user's "Update anyway" for a digest that could not be pulled is a different path.
+func TestRecoveryOfAnUpdateThatNeverWroteTheService(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	got := r.runOf(t, run.ID)
+	if got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted || got.FinishedAt.IsZero() {
+		t.Fatalf("run = %s %q, want failed by the restart", got.State, got.Reason)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none: the update never changed the service", n)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+		t.Errorf("rollback audit rows = %+v, want none: nothing was rolled back", rows)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonServerRestarted {
+		t.Errorf("failure audit rows = %+v, want one naming the restart", rows)
+	}
+	if f, ok := r.failureOf(t, "web"); ok {
+		t.Errorf("failure = %+v, want nothing remembered: the new digest was never tried", f)
+	}
+	if v := r.verdictOf(t, "web"); v.State == updates.StateRolledBack || v.State == updates.StateRollbackFailed {
+		t.Errorf("verdict = %s, want the update still on offer", v.State)
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Errorf("the lock is still held after recovery")
+	}
+}
+
+// The swarm may have rolled the service back by its own failure action before the restart: it runs the previous digest again, but
+// its previous spec names the new one, so the update did write it and the run still ends rolled back (CR-02).
+func TestRecoveryOfAServiceTheSwarmRolledBack(t *testing.T) {
+	t.Parallel()
+	svc := swarmService("web", 'a')
+	prev := swarmSpec("web", 'b')
+	svc.PreviousSpec = &prev
+	svc.UpdateState, svc.UpdateMessage = "rollback_completed", "rollback completed"
+	r := newApplyRig(t, nil, svc)
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+		t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none: the swarm had already put the previous version back", n)
+	}
+}
+
 // recordingClock is the rig's clock that notes every wait recovery itself asks for.
 type recordingClock struct {
 	*waitClock

@@ -340,7 +340,8 @@ func restartedEnd(end endFunc) endFunc {
 
 // recoverService puts a plain service back to the digest it ran before the update. It reads the service first: one that is gone is
 // ended, one that cannot be read is tried again later, and the rest is the rollback of a failed update (rollbackService), which
-// writes only when the service runs the new digest, waits when it already runs the old one and leaves a third image alone.
+// writes only when the service runs the new digest, waits when the swarm already put the old one back, ends the run failed when the
+// service never ran the new digest (the restart came before the write) and leaves a third image alone.
 func (r *Recovery) recoverService(ctx context.Context, run Run) tried {
 	a := r.Applier
 	t, ok := targetOf(run)

@@ -56,8 +56,10 @@ var itemMessages = map[string]string{
 	"auto_remove":          "A container started with automatic removal is removed when it stops, so it can't be put back if the update fails. Nothing was changed.",
 	"remove_old_failed":    "The new container is running. The old one could not be removed; it is stopped and keeps its temporary name.",
 
-	// The code of the wait of a service that a person cancelled once the swarm had taken the update (CR-01).
-	CodeWaitCancelled: "Cancelled while waiting for the new version to run. The update had been applied and is left as it is; it was not confirmed running.",
+	// The wait of a service that a person cancelled once the swarm had taken the update (CR-01), and the restore of a run whose update
+	// never changed its service (CR-02).
+	CodeNothingToPutBack: "The update had not changed the service, so nothing was put back.",
+	CodeWaitCancelled:    "Cancelled while waiting for the new version to run. The update had been applied and is left as it is; it was not confirmed running.",
 
 	// The codes of the restore of a service (plan 12-22).
 	CodeRestoreRefused:   "The swarm would not take the previous version back.",
@@ -71,6 +73,9 @@ const (
 	CodeRestoreUnsettled = "restore_unsettled"
 	CodeRestoreChanged   = "restore_service_changed"
 	CodeWaitCancelled    = "wait_cancelled"
+
+	// CodeNothingToPutBack is the code of the restore step of a run whose update never changed its service (CR-02).
+	CodeNothingToPutBack = "nothing_to_put_back"
 
 	// updateRollbackCompleted is the UpdateStatus of a service the swarm rolled back by itself (the person's failure action).
 	updateRollbackCompleted = "rollback_completed"
@@ -306,7 +311,8 @@ func (a *Applier) waitServiceSettled(ctx context.Context, t target, id string, p
 // rollbackService puts the previous image back after an update failed for cause, and ends the run: rolled_back when the previous
 // version runs again, rollback_failed when it does not (D-12). The service is read at its current version and only the image is
 // changed, so the person's own update_config and every other setting is kept. If the swarm already rolled the service back by its
-// own failure action, nothing is written and the wait is for that rollback. A service that now runs neither of the two images was
+// own failure action, nothing is written and the wait is for that rollback. A service that runs the previous version and never ran the
+// new one was not written by the update, so the run ends failed with nothing rolled back. A service that now runs neither of the two images was
 // changed by someone else and is left alone. The registry credential is chosen again and goes to the engine only.
 func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t target, previous, cause string, end endFunc) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.convergeTimeout()+restoreTimeout)
@@ -340,6 +346,15 @@ func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t targe
 	}
 	prior := detail.UpdateStatus
 	switch image := spec.TaskTemplate.ContainerSpec.Image; {
+	case strings.HasSuffix(image, "@"+t.from) && !previouslyRan(detail.PreviousSpec, t.to):
+		// The service runs the previous version and never ran the new one: the update was cut off before it wrote the service (a
+		// restart during the pull). Nothing was changed and nothing is put back, so nothing is claimed rolled back or remembered.
+		a.log().Info("an image update never changed its service, so there is nothing to put back", "environment", t.envID, "service", t.name, "cause", cause)
+		end(RunFailed, cause, cause)
+		r.Output(t.name + " still runs " + shortDigest(t.from) + ". The update had not changed it, so there is nothing to put back")
+		r.Finish(ItemRollback, jobs.ItemDone, CodeNothingToPutBack, itemMessages[CodeNothingToPutBack], nil)
+		r.Finish(ItemRollbackWait, jobs.ItemSkipped, stackops.CodeNotRun, "", nil)
+		return
 	case strings.HasSuffix(image, "@"+t.from):
 		// The swarm put the previous version back itself: its own rollback is what is waited for.
 		r.Output("The swarm has already put the previous version back")
@@ -400,6 +415,21 @@ func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t targe
 	end(RunRolledBack, cause, cause)
 	r.Output(t.name + " runs " + shortDigest(t.from) + " again")
 	r.Finish(ItemRollbackWait, jobs.ItemDone, "", "", nil)
+}
+
+// previouslyRan reports whether the spec a service had before its last update (a swarm's rollback swaps the two) names digest: the
+// service has run it. A service that has never been updated has no previous spec, and one whose previous image is another digest
+// did not run this one by this update. A document that cannot be read is taken to say yes, which is the answer that waits for the
+// service and rolls it back rather than claim it was never touched.
+func previouslyRan(raw json.RawMessage, digest string) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var prev swarm.ServiceSpec
+	if err := json.Unmarshal(raw, &prev); err != nil {
+		return true
+	}
+	return prev.TaskTemplate.ContainerSpec != nil && strings.HasSuffix(prev.TaskTemplate.ContainerSpec.Image, "@"+digest)
 }
 
 // rememberFailure keeps what the next judgement needs of an update that ended (IMG-07, D-14). A good update forgets the failure the

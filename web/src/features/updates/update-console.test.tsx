@@ -357,6 +357,24 @@ describe("UpdateConsole: a failed update that was rolled back (IMG-07, D-12)", (
     expect(screen.queryByText("Updated", { selector: "[data-slot=alert-title]" })).toBeNull();
   });
 
+  it("does not say rolled back when the recovery found the service as the update had never changed it", async () => {
+    state = "partial";
+    items = [
+      {
+        id: "rollback",
+        label: "Roll back to the previous version",
+        state: "done",
+        code: "nothing_to_put_back",
+        message: "The update had not changed the service, so nothing was put back.",
+      },
+      { id: "rollback_wait", label: "Wait for the previous version to run", state: "skipped" },
+    ];
+    mount();
+    await screen.findByText("The update failed", { selector: "[data-slot=alert-title]" });
+    expect(screen.queryByText(/rolled back/)).toBeNull();
+    expect(screen.queryByText(/put sha256/)).toBeNull();
+  });
+
   it("shows the destructive alert when the rollback itself failed, with why", async () => {
     items = [
       check,
