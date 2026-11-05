@@ -709,4 +709,15 @@ describe("GlobalStackList: the Updates available filter (12-10)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ updates: undefined }));
   });
+
+  it("names an environment whose checks could not be read, not as one with no update available", async () => {
+    answer = { groups: [], failedEnvironments: [{ envId: "e1", envName: "Prod" }] };
+    mount({ updates: "available" });
+    const notice = await screen.findByText("Couldn't load stacks on Prod.");
+    expect(
+      within(notice.closest('[role="alert"]') as HTMLElement).getByRole("button"),
+    ).toBeTruthy();
+    // The list does not say there are no stacks while an environment that may hold some is named.
+    expect(screen.queryByRole("heading", { name: "No stacks yet", level: 2 })).toBeNull();
+  });
 });

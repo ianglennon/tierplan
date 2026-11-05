@@ -260,13 +260,17 @@ func countUpdates(ctx context.Context, d UpdatesDeps, envID string) int {
 	return n
 }
 
+// problemUpdateChecksUnavail is the type of the 503 a list filtered by update answers when it cannot tell which workloads have one. It
+// is not environment_offline: the environment answered, its verdicts could not be read.
+const problemUpdateChecksUnavail = "update_checks_unavailable"
+
 // errUpdatesUnread says the stored verdicts could not be read, or there is nothing to read them with.
 var errUpdatesUnread = errors.New("the image update verdicts could not be read")
 
 // updatesUnread is what a list answers when it was asked to keep only the updates available and the verdicts
 // could not be read: an empty list would say nothing has an update, which nothing judged.
 func updatesUnread() error {
-	return httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available right now.")
+	return httpx.Problem(http.StatusServiceUnavailable, problemUpdateChecksUnavail, "Update checks are not available right now.")
 }
 
 // containerUpdates judges the images of the containers of agg, keyed by container ID, with the workload each

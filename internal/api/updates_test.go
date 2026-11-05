@@ -348,8 +348,8 @@ func TestUpdatesAvailableFilterRefusesUnreadVerdicts(t *testing.T) {
 
 	for _, route := range []string{"services?updates=available", "containers?updates=available"} {
 		rec := f.get(t, e, route)
-		if rec.code != http.StatusServiceUnavailable {
-			t.Errorf("%s = %d %s, want 503 and not an empty list", route, rec.code, rec.body)
+		if rec.code != http.StatusServiceUnavailable || rec.ptyp != "update_checks_unavailable" {
+			t.Errorf("%s = %d %q %s, want 503 update_checks_unavailable and not an empty list", route, rec.code, rec.ptyp, rec.body)
 		}
 	}
 	// Without the filter the lists still answer.

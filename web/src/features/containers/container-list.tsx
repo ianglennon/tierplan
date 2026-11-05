@@ -6,7 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, Search, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { type ContainerRow, containersQuery } from "@/api/resources";
+import { type ContainerRow, containersQuery, isUpdateChecksUnavailable } from "@/api/resources";
 import { NewItemsPill } from "@/components/new-items-pill";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
@@ -828,6 +828,9 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
         }
         empty={empty}
         capNote={data ? t("containers.list.cap", { total: data.total }) : undefined}
+        errorBody={
+          isUpdateChecksUnavailable(query.error) ? t("updates.list.checksUnavailable") : undefined
+        }
         captionExtra={
           <NewItemsPill
             count={changesWaiting}

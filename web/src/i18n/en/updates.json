@@ -2,7 +2,8 @@
   "updates": {
     "list": {
       "column": "Updates",
-      "filter": "Updates available"
+      "filter": "Updates available",
+      "checksUnavailable": "Update checks can't be read right now, so this list can't be narrowed to the updates available. It isn't empty, it is unknown. Turn off Updates available, or try again."
     },
     "tile": {
       "label": "Updates available",

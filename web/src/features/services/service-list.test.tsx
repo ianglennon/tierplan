@@ -912,6 +912,23 @@ describe("the services list: states", () => {
     expect(screen.queryByText("Couldn't load services.")).toBeNull();
   });
 
+  it("says the update checks cannot be read when the filter by update is refused, not that Docker is unreachable", async () => {
+    answerList = (url) =>
+      url.searchParams.get("updates")
+        ? Response.json(
+            { type: "update_checks_unavailable", title: "Service Unavailable", status: 503 },
+            { status: 503 },
+          )
+        : Response.json(listBody(items, listExtra));
+    mount({ updates: "available" });
+    expect(await screen.findByText("Couldn't load services.")).toBeTruthy();
+    expect(screen.getByText(/Update checks can't be read right now/)).toBeTruthy();
+    expect(screen.queryByText("Docker may be unreachable. Try again.")).toBeNull();
+    // It is not an empty list: no "nothing matches" state stands beside the notice.
+    expect(screen.queryByText(/No services/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry loading services" })).toBeTruthy();
+  });
+
   it("shows the no-manager banner above the rows last read", async () => {
     noManager = true;
     mount();

@@ -335,7 +335,8 @@ export function GlobalStackList({
           onClearSearch={() => onSearchChange({ q: undefined })}
           onClear={clearFilters}
         />
-      ) : (
+      ) : failed.length > 0 ? null : (
+        // An environment that could not be read may hold stacks, so "none yet" is not said while one is named.
         <Empty className="min-h-[30svh] border">
           <EmptyHeader>
             <EmptyTitle role="heading" aria-level={2} className="text-base">

@@ -566,6 +566,24 @@ describe("container list: empty states", () => {
   });
 });
 
+describe("container list: the filter by update is refused", () => {
+  it("says the update checks cannot be read, not that Docker is unreachable, and shows no empty list", async () => {
+    answer = (url) =>
+      url.searchParams.get("updates")
+        ? Response.json(
+            { type: "update_checks_unavailable", title: "Service Unavailable", status: 503 },
+            { status: 503 },
+          )
+        : Response.json(body(ROWS));
+    mount({ updates: "available" });
+    await screen.findByText("Couldn't load containers.");
+    expect(screen.getByText(/Update checks can't be read right now/)).toBeTruthy();
+    expect(screen.queryByText("Docker may be unreachable. Try again.")).toBeNull();
+    expect(screen.queryByText(/No containers/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});
+
 describe("container list: caption", () => {
   it("counts the containers, plural-aware", async () => {
     answer = () => Response.json(body([row("a")]));

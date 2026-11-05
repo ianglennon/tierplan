@@ -6,6 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, Ellipsis, Plus, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
+import { isUpdateChecksUnavailable } from "@/api/resources";
 import { isNotASwarm, type ServiceItem, servicesQuery } from "@/api/services";
 import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -925,6 +926,9 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
         empty={empty}
         actions={<div className="ml-auto">{createControl}</div>}
         capNote={data ? t("services.list.cap", { total: data.total }) : undefined}
+        errorBody={
+          isUpdateChecksUnavailable(query.error) ? t("updates.list.checksUnavailable") : undefined
+        }
         retryLabel={t("services.list.errorRetry")}
         captionExtra={
           <NewItemsPill
