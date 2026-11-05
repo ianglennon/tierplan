@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -702,6 +704,64 @@ func TestFleetSkipSelected(t *testing.T) {
 	}
 	if u := f.localContainerUpdate(t, local.ID, "app"); u != "update_available" {
 		t.Errorf("app reads %s, want update_available: it was refused", u)
+	}
+}
+
+// brokenRepo is an update store whose reads of one repository fail while armed, the way a database error on one item would.
+type brokenRepo struct {
+	updates.Store
+	repo  string
+	armed atomic.Bool
+}
+
+func (b *brokenRepo) Checks(ctx context.Context, keys []updates.Key) (map[updates.Key]updates.Check, error) {
+	if b.armed.Load() && slices.ContainsFunc(keys, func(k updates.Key) bool { return k.Repo == b.repo }) {
+		return nil, errors.New("disk I/O error")
+	}
+	return b.Store.Checks(ctx, keys)
+}
+
+// An item of a bulk skip that fails on the server's side does not take the answer with it (WR-09): the skips made before it are saved
+// and audited under the bulk ID, so the answer carries that ID, counts them and names the failed item, and the items after it go on.
+func TestFleetSkipKeepsGoingAfterAServerError(t *testing.T) {
+	t.Parallel()
+	cfg := swarmManagerEngine(threeServices()...)
+	cfg.TasksFollowWrites, cfg.SwarmNodeID = true, "node-1"
+	f := newEnvFix(t, cfg)
+	broken := &brokenRepo{Store: updates.SQLStore{Q: f.st.Q, W: f.st.Write}, repo: "team/api"}
+	f.updateStore = broken
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.updateHeads = newScriptedHeads(threeAnswers('b'))
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+
+	broken.armed.Store(true)
+	rec := f.req(t, http.MethodPost, "/api/fleet/updates/skip", skipBulkBody(
+		bulkItem(e.ID, "service", "web", nil), bulkItem(e.ID, "service", "api", nil), bulkItem(e.ID, "service", "db", nil),
+	))
+	broken.armed.Store(false)
+	if rec.code != http.StatusOK {
+		t.Fatalf("skip: %d %s, want 200 with the progress that was made", rec.code, rec.body)
+	}
+	ans := decode[bulkSkipAnswer](t, rec)
+	if ans.BulkID == "" || ans.Skipped != 2 || len(ans.Refused) != 1 || ans.Refused[0].Name != "api" || ans.Refused[0].Reason != "offline" {
+		t.Fatalf("answer = %+v, want a bulk ID, web and db skipped and api refused offline", ans)
+	}
+	rows := f.auditRows(t, "image.update_skipped")
+	got := map[string]bool{}
+	for _, r := range rows {
+		if r.Details["bulk"] != ans.BulkID {
+			t.Errorf("row %+v, want the bulk ID %s", r, ans.BulkID)
+		}
+		got[r.Details["workload"]] = true
+	}
+	if len(rows) != 2 || !got["web"] || !got["db"] {
+		t.Errorf("image.update_skipped rows = %+v, want web and db", rows)
 	}
 }
 

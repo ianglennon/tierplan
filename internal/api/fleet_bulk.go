@@ -417,7 +417,8 @@ func bulkRefusalOf(err error) error {
 	return &updates.BulkRefusal{Reason: bulkNotUpdatable, Code: he.Type}
 }
 
-// skipFleetUpdates skips the offered version of each item the caller may, with one bulk ID on every audit entry.
+// skipFleetUpdates skips the offered version of each item the caller may, with one bulk ID on every audit entry. Each skip is its
+// own transaction, so an item that fails on the server's side is refused as offline and the others go on.
 func skipFleetUpdates(ctx context.Context, d UpdatesDeps, p *rbac.Principal, in *FleetBulkSkipInput) (FleetBulkSkipBody, error) {
 	if d.Checker == nil {
 		return FleetBulkSkipBody{}, httpx.Problem(http.StatusServiceUnavailable, "", "Update checks are not available on this server.")
@@ -466,17 +467,17 @@ func skipFleetUpdates(ctx context.Context, d UpdatesDeps, p *rbac.Principal, in 
 				body.Skipped++
 				continue
 			}
+			// Earlier items are saved already, each with its own audit row under this bulk ID: a failure of this one is
+			// reported beside the others, never as the failure of the whole request.
 			var he *huma.ErrorModel
-			if !errors.As(err, &he) {
-				return FleetBulkSkipBody{}, err
-			}
 			switch {
-			case he.Type == problemOperationLocked:
+			case errors.As(err, &he) && he.Type == problemOperationLocked:
 				refuse(envID, it, bulkLocked)
-			case he.Status < http.StatusInternalServerError:
+			case errors.As(err, &he) && he.Status < http.StatusInternalServerError:
 				refuse(envID, it, bulkNotSelectable)
 			default:
-				return FleetBulkSkipBody{}, err
+				d.log().Warn("could not skip a workload of a bulk skip", "environment", envID, "kind", it.Kind, "workload", it.Name, "error", err)
+				refuse(envID, it, bulkOffline)
 			}
 		}
 	}
