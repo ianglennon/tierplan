@@ -41,7 +41,10 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
   const me = useMe().data;
   const jobs = useImageUpdateJobs();
   const skip = useSkipFleetUpdates();
-  const [confirming, setConfirming] = useState(false);
+  // The workloads the confirm is showing, as they were when it opened. The tab reads again every few
+  // seconds, and a row that changes under an open confirm would change what the person is about to send,
+  // digests included.
+  const [confirming, setConfirming] = useState<readonly FleetSelected[] | null>(null);
   const bar = useRef<HTMLDivElement>(null);
 
   // The environments that cannot run an update now, and why: not reporting, nothing the caller may
@@ -50,7 +53,7 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
   const unavailable = useMemo(() => {
     const out = new Map<string, FleetUnavailable>();
     const byEnv = new Map<string, FleetSelected[]>();
-    for (const s of items) byEnv.set(s.envId, [...(byEnv.get(s.envId) ?? []), s]);
+    for (const s of confirming ?? items) byEnv.set(s.envId, [...(byEnv.get(s.envId) ?? []), s]);
     for (const [envId, list] of byEnv) {
       if (notReporting.has(envId)) {
         out.set(envId, { kind: "offline" });
@@ -76,7 +79,7 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
       }
     }
     return out;
-  }, [items, notReporting, jobs.data, me]);
+  }, [confirming, items, notReporting, jobs.data, me]);
 
   const firstEnv = items[0]?.envId;
   const updateReason =
@@ -97,7 +100,7 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
       label: t("fleet.bulk.update", { count: items.length }),
       primary: true,
       reason: updateReason,
-      onClick: () => setConfirming(true),
+      onClick: () => setConfirming(items),
     },
     {
       id: "skip",
@@ -115,9 +118,9 @@ export function FleetBulkBar({ items, notReporting, onClear }: FleetBulkBarProps
       <BulkBar count={items.length} actions={actions} onClear={onClear} />
       {confirming ? (
         <FleetUpdateConfirmDialog
-          items={items}
+          items={confirming}
           unavailable={unavailable}
-          onClose={() => setConfirming(false)}
+          onClose={() => setConfirming(null)}
           onStarted={onClear}
           onClosed={() => bar.current?.querySelector("button")?.focus()}
         />

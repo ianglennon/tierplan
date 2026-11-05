@@ -307,6 +307,53 @@ describe("FleetBulkBar", () => {
     );
   });
 
+  it("sends what the person read when the rows change under the open confirm", async () => {
+    mount();
+    await tickAll3();
+    fireEvent.click(screen.getByRole("button", { name: "Update 3 selected" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Update 3 items", { selector: "h2" })).toBeTruthy();
+
+    // A check lands while the confirm is open: web moves to a newer version and api stops being
+    // updatable.
+    const NEWER = `sha256:${"c".repeat(64)}`;
+    answer = () =>
+      Response.json(
+        body([
+          group({
+            items: [
+              item({ id: "svc1", name: "web", toDigest: NEWER }),
+              item({ id: "svc2", name: "api", image: "api:2", selectable: false }),
+            ],
+          }),
+          group({
+            envId: "e2",
+            envName: "edge",
+            type: "standalone",
+            items: [item({ id: "c9", kind: "container", name: "cache", image: "redis:7" })],
+          }),
+        ]),
+      );
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["fleet"] });
+    });
+    // The page behind the confirm has the new rows: api has lost its tick box.
+    await waitFor(() =>
+      expect(screen.queryByRole("checkbox", { name: "Select api", hidden: true })).toBeNull(),
+    );
+
+    expect(within(dialog).getByText("Update 3 items", { selector: "h2" })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update 3 items" }));
+    await waitFor(() => expect(runPosts()).toHaveLength(1));
+    expect(itemsOf(runPosts()[0])).toEqual(
+      expect.arrayContaining([
+        { envId: "e1", kind: "service", name: "web", expect: { web: NEW } },
+        { envId: "e1", kind: "service", name: "api", expect: { api: NEW } },
+        { envId: "e2", kind: "container", name: "cache", expect: { cache: NEW } },
+      ]),
+    );
+  });
+
   it("keeps the dialog open and the ticks when the server refuses to start", async () => {
     answerRun = () => Response.json({ title: "no" }, { status: 500 });
     mount();
