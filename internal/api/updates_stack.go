@@ -153,6 +153,8 @@ func updateStackImages(ctx context.Context, d StacksDeps, ap *updates.Applier, p
 // are the bulk update's. queued is the run of the item, which the deploy begins and ends. A refusal before anything is written is
 // an error that refusalOfProblem names; the run is then still queued.
 func updateStackImagesInJob(ctx context.Context, d StacksDeps, ap *updates.Applier, p *rbac.Principal, env *httpx.Env, st stackops.Stack, in updates.StackItemInput, r *jobs.Reporter) error {
+	// The job's context never saw the request: the audit rows of the deploy take the caller's address from the item.
+	ctx = httpx.WithClientIP(ctx, in.IP)
 	su, err := judgeStackUpdate(ctx, d, ap, p, env, st, in.Services, in.Expect, false, true)
 	if err != nil {
 		return err

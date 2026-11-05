@@ -586,6 +586,26 @@ func TestBulkStackItemInJob(t *testing.T) {
 			t.Errorf("the lock is still held by %+v", h)
 		}
 	})
+	t.Run("the audit rows of a stack in a job carry the caller's address", func(t *testing.T) {
+		t.Parallel()
+		s := shopQuick(t, "web", "api")
+		s.move(t, "web", 'b')
+		s.rejectNewVersion("web", 'b')
+
+		ans := bulkAs(t, s, bulkItem(s.e.ID, "service", "shop_web", nil))
+		s.f.awaitUpdate(t, ans.jobOf(t, s.e.ID))
+		for _, action := range []string{"image.update_failed", "image.update_rolled_back", "stack.deployed"} {
+			ips := s.f.auditIPs(t, action)
+			if len(ips) == 0 {
+				t.Errorf("no %s row, want the failed update and its rollback audited", action)
+			}
+			for _, ip := range ips {
+				if ip != authIP {
+					t.Errorf("%s recorded the address %q, want the caller's %s", action, ip, authIP)
+				}
+			}
+		}
+	})
 	t.Run("a failing deploy puts the stack back inside the job", func(t *testing.T) {
 		t.Parallel()
 		s := shopQuick(t, "web", "api")
@@ -763,6 +783,28 @@ func TestFleetSkipKeepsGoingAfterAServerError(t *testing.T) {
 	if len(rows) != 2 || !got["web"] || !got["db"] {
 		t.Errorf("image.update_skipped rows = %+v, want web and db", rows)
 	}
+}
+
+// auditIPs are the client addresses of the audit rows of one action, oldest first.
+func (f *envFix) auditIPs(t *testing.T, action string) []string {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT ip FROM audit_log WHERE action = ? ORDER BY seq`, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, ip)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // swarmServiceUpdate is the state the services list of the environment gives the service.
