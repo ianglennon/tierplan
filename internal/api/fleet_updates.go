@@ -79,6 +79,7 @@ type FleetUpdateItem struct {
 	ID               string         `json:"id" doc:"The service or container ID"`
 	Name             string         `json:"name" doc:"The service or container name"`
 	Stack            string         `json:"stack" doc:"The stack or Compose project it belongs to; empty when it has none"`
+	TierPlanStackID  string         `json:"tierplanStackId" doc:"The ID of the TierPlan stack it belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
 	Image            string         `json:"image" doc:"The image as written, without a digest"`
 	FromDigest       string         `json:"fromDigest" doc:"The digest it runs; empty when its spec names none"`
 	ToDigest         string         `json:"toDigest" doc:"The digest the tag pointed at when it was last checked successfully; empty before any check did"`
@@ -197,7 +198,8 @@ func fleetUpdateItem(wv updates.WorkloadVerdict, known stackIDs) FleetUpdateItem
 		info.Refusal = containerRefusal(w, known)
 	}
 	return FleetUpdateItem{
-		Kind: w.Kind, ID: w.ID, Name: strings.TrimPrefix(w.Name, "/"), Stack: w.Stack, Image: fleetImage(w),
+		Kind: w.Kind, ID: w.ID, Name: strings.TrimPrefix(w.Name, "/"), Stack: w.Stack, TierPlanStackID: known.confirmedFor(w.Stack, w.Labels),
+		Image:      fleetImage(w),
 		FromDigest: v.RunningDigest, ToDigest: v.RemoteDigest,
 		ChangedPlatforms: append([]string{}, v.ChangedPlatforms...),
 		Update:           *info,

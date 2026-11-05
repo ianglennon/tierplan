@@ -771,6 +771,7 @@ describe("FleetUpdateConfirmDialog", () => {
       id: `${envId}-${name}`,
       name,
       stack: "",
+      tierplanStackId: "",
       image: "nginx:1.27",
       fromDigest: A,
       toDigest: B,

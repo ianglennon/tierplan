@@ -396,7 +396,12 @@ function UpdateRow({ group, item, selection, selectable }: UpdateRowProps) {
         <Change item={item} />
       </TableCell>
       <TableCell className={cn(CELL, "w-48 whitespace-nowrap")}>
-        <UpdateBadge info={item.update} name={item.name} envId={group.envId} />
+        <UpdateBadge
+          info={item.update}
+          name={item.name}
+          envId={group.envId}
+          stackId={item.tierplanStackId || undefined}
+        />
       </TableCell>
       <TableCell className={cn(CELL, "w-32 whitespace-nowrap")}>
         {item.update.successAt ? (
@@ -511,6 +516,7 @@ function UpdateRowActions({ group, item }: { group: FleetUpdateGroup; item: Flee
           envId={group.envId}
           envName={group.envName}
           workload={workload}
+          managedStack={item.tierplanStackId ? item.stack : undefined}
           onClose={() => setUpdating(false)}
           onClosed={() => button.current?.focus()}
         />

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"sync/atomic"
@@ -69,14 +70,15 @@ type fleetUpdatesResp struct {
 		LastCheckedAt string  `json:"lastCheckedAt"`
 		CheckFailed   *string `json:"checkFailed"`
 		Items         []struct {
-			Kind       string `json:"kind"`
-			ID         string `json:"id"`
-			Name       string `json:"name"`
-			Stack      string `json:"stack"`
-			Image      string `json:"image"`
-			FromDigest string `json:"fromDigest"`
-			ToDigest   string `json:"toDigest"`
-			Update     struct {
+			Kind            string `json:"kind"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			Stack           string `json:"stack"`
+			TierPlanStackID string `json:"tierplanStackId"`
+			Image           string `json:"image"`
+			FromDigest      string `json:"fromDigest"`
+			ToDigest        string `json:"toDigest"`
+			Update          struct {
 				State string `json:"state"`
 			} `json:"update"`
 			Selectable bool `json:"selectable"`
@@ -194,6 +196,44 @@ func TestFleetUpdatesGroupsAndCounts(t *testing.T) {
 	}
 	if rec := f.fleetGet(t, "", "/api/fleet/updates?show=nonsense"); rec.code != http.StatusUnprocessableEntity {
 		t.Errorf("show=nonsense = %d, want 422", rec.code)
+	}
+}
+
+// An item of a stack TierPlan manages carries the stack's ID, so the SPA can open the stack's update console and say the update
+// is a new revision of the stack (WR-18). A label that names a stack the environment does not hold, or holds under another name,
+// links nothing.
+func TestFleetUpdatesItemsCarryTheirManagedStack(t *testing.T) {
+	t.Parallel()
+	f := newFleetFix(t, "Alpha")
+	alpha := f.id("Alpha")
+	f.fake.swarmWith(alpha, nil)
+	owned := func(name, stack, id string) updates.WorkloadVerdict {
+		v := verdictOf(t, "service", name, stack, updates.StateUpdateAvailable)
+		v.Workload.Labels = map[string]string{"com.docker.stack.namespace": stack}
+		if id != "" {
+			v.Workload.Labels["tierplan.stack.id"] = id
+		}
+		return v
+	}
+	f.fake.verdicts[alpha] = fleetVerdicts{list: []updates.WorkloadVerdict{
+		owned("own", "shop", "stk-shop"),
+		owned("ghost", "gone", "stk-gone"),
+		owned("forged", "other", "stk-shop"),
+		owned("foreign", "legacy", ""),
+	}}
+	f.insertStackRow(t, alpha, "stk-shop", "shop")
+	f.fleet.Store = f.st
+	f.rebuild(t)
+
+	got := map[string]string{}
+	for _, g := range f.updatesList(t, "", "").Groups {
+		for _, it := range g.Items {
+			got[it.Name] = it.TierPlanStackID
+		}
+	}
+	want := map[string]string{"own": "stk-shop", "ghost": "", "forged": "", "foreign": ""}
+	if !maps.Equal(got, want) {
+		t.Errorf("tierplanStackId by item = %v, want %v", got, want)
 	}
 }
 

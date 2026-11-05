@@ -55,6 +55,7 @@ function item(extra: Partial<FleetUpdateItem> = {}): FleetUpdateItem {
     fromDigest: OLD,
     toDigest: NEW,
     changedPlatforms: [],
+    tierplanStackId: "",
     selectable: true,
     update: info(),
     ...extra,

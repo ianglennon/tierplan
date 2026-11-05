@@ -5990,6 +5990,10 @@
             "description": "The stack or Compose project it belongs to; empty when it has none",
             "type": "string"
           },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack it belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
+            "type": "string"
+          },
           "toDigest": {
             "description": "The digest the tag pointed at when it was last checked successfully; empty before any check did",
             "type": "string"
@@ -6004,6 +6008,7 @@
           "id",
           "name",
           "stack",
+          "tierplanStackId",
           "image",
           "fromDigest",
           "toDigest",

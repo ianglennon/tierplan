@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useRouterState } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +57,7 @@ function item(extra: Partial<FleetUpdateItem> = {}): FleetUpdateItem {
     fromDigest: OLD,
     toDigest: NEW,
     changedPlatforms: [],
+    tierplanStackId: "",
     selectable: true,
     update: info(),
     ...extra,
@@ -168,6 +170,26 @@ beforeEach(() => {
         return answer(url.searchParams);
       }
       if (url.pathname === "/api/fleet/updates/check") return answerCheck();
+      if (url.pathname === "/api/env/e1/updates/preview") {
+        return Response.json({
+          items: [
+            {
+              kind: "service",
+              name: "web",
+              image: "nginx:1.27",
+              stack: "shop",
+              fromDigest: OLD,
+              toDigest: NEW,
+              platforms: [],
+              changedPlatforms: [],
+            },
+          ],
+          warnings: [],
+          leftOut: [],
+          offered: true,
+          refusal: "",
+        });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -179,6 +201,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   setCsrfToken(null);
 });
+
+function Where() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return <span data-testid="where">{pathname}</span>;
+}
 
 function mount(props: Partial<React.ComponentProps<typeof FleetUpdatesTab>> = {}) {
   render(
@@ -193,6 +220,7 @@ function mount(props: Partial<React.ComponentProps<typeof FleetUpdatesTab>> = {}
             {...props}
           />
           <Toaster />
+          <Where />
         </TestRouter>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -450,5 +478,55 @@ describe("FleetUpdatesTab", () => {
     mount();
     await table();
     expect(screen.getByRole("status", { name: "" }).textContent).toContain("lab (offline)");
+  });
+});
+
+// A workload a TierPlan stack owns is updated through the stack (WR-18): the fleet row gets the same
+// console and the same wording as the services and containers lists.
+describe("FleetUpdatesTab: a workload of a managed stack", () => {
+  it("opens the stack's console from a rolled-back badge, not a job that does not exist", async () => {
+    answer = () =>
+      Response.json(
+        body([
+          group({
+            items: [
+              item({
+                tierplanStackId: "stk-1",
+                selectable: false,
+                update: info({
+                  state: "rolled_back",
+                  failure: {
+                    digest: NEW,
+                    reason: "didnt_start",
+                    at: NOW,
+                    rollbackFailed: false,
+                    jobId: "j9",
+                  },
+                }),
+              }),
+            ],
+          }),
+        ]),
+      );
+    mount({ show: "problems" });
+    await table();
+    fireEvent.click(screen.getByRole("button", { name: /Update failed, rolled back/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/stk-1/deploys/j9"),
+    );
+  });
+
+  it("says in the row's Update confirm that the update is a new revision of the stack", async () => {
+    answer = () => Response.json(body([group({ items: [item({ tierplanStackId: "stk-1" })] })]));
+    mount();
+    await table();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for web" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Update…" }));
+    expect(
+      await screen.findByText(/This is saved as a new revision of shop, so you can roll back/),
+    ).toBeTruthy();
   });
 });

@@ -7972,6 +7972,8 @@ export interface components {
             selectable: boolean;
             /** @description The stack or Compose project it belongs to; empty when it has none */
             stack: string;
+            /** @description The ID of the TierPlan stack it belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /** @description The digest the tag pointed at when it was last checked successfully; empty before any check did */
             toDigest: string;
             /** @description The same update object the services and containers lists carry: state, reason, checked and last-success times, skip or ignore and failure details */
