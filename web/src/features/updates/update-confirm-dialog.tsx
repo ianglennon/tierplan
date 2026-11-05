@@ -337,6 +337,13 @@ export function UpdateConfirmDialog({
     !stackScope &&
     (refusedAsFailed || (data?.warnings ?? []).some((w) => w.code === "previous_failure"));
   const lock = lockOfPreview(data?.lock) ?? locked ?? undefined;
+  // A refusal for a held lock stands only until a preview read after it says the lock is gone: the
+  // press is refused while blocked, so nothing else would clear it, and the person would have to close
+  // the dialog and open it again.
+  const lockGone = data !== undefined && !data.lock && !preview.isFetching;
+  useEffect(() => {
+    if (locked && lockGone) setLocked(null);
+  }, [locked, lockGone]);
   const pending = run.isPending;
   const blocked =
     loading || loadFailed || refused || nothing || lock !== undefined || items.length === 0;

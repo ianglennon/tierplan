@@ -346,22 +346,33 @@ describe("UpdateConfirmDialog: the commit", () => {
     );
   });
 
+  // The 409 a press gets when another operation holds the environment.
+  const lockedAnswer = () =>
+    Response.json(
+      {
+        type: "operation_locked",
+        status: 409,
+        title: "Conflict",
+        errors: [
+          { location: "stack", message: "shop" },
+          { location: "job", message: "d1" },
+          { location: "started", message: new Date().toISOString() },
+          { location: "stackId", message: "s1" },
+        ],
+      },
+      { status: 409 },
+    );
+  const held = () =>
+    preview({
+      lock: { kind: "deploy", by: "ana", stack: "shop", started: new Date().toISOString() },
+    });
+
   it("shows the lock and the toast when it was taken between the confirm and the click", async () => {
-    answerRun = () =>
-      Response.json(
-        {
-          type: "operation_locked",
-          status: 409,
-          title: "Conflict",
-          errors: [
-            { location: "stack", message: "shop" },
-            { location: "job", message: "d1" },
-            { location: "started", message: new Date().toISOString() },
-            { location: "stackId", message: "s1" },
-          ],
-        },
-        { status: 409 },
-      );
+    answerRun = () => {
+      // The read that follows the refusal still finds the lock held.
+      answerPreview = () => Response.json(held());
+      return lockedAnswer();
+    };
     mount();
     fireEvent.click(await commit());
     expect(
@@ -372,6 +383,33 @@ describe("UpdateConfirmDialog: the commit", () => {
     ).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
     expect((await commit()).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("lets the person press again once a fresh read shows the lock is gone", async () => {
+    // The refusal came while the other operation ran. The read that follows is held until the test
+    // says the operation has finished, so the refusal is on screen first.
+    let finished: (r: Response) => void = () => {};
+    const read = new Promise<Response>((resolve) => (finished = resolve));
+    answerRun = () => {
+      answerPreview = () => read;
+      return lockedAnswer();
+    };
+    mount();
+    fireEvent.click(await commit());
+    expect(
+      await screen.findByText(/Another stack operation is running on Prod: shop/),
+    ).toBeTruthy();
+
+    finished(Response.json(preview()));
+    await waitFor(() =>
+      expect(screen.queryByText(/Another stack operation is running on Prod/)).toBeNull(),
+    );
+    answerRun = () => Response.json({ jobId: "j2" });
+    fireEvent.click(await commit());
+    await waitFor(() => expect(runs()).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe(`/env/${ENV}/update-jobs/j2`),
+    );
   });
 
   it("says nothing was changed when the server cannot be reached, and does not retry by itself", async () => {
