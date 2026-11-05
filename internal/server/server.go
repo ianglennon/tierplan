@@ -970,6 +970,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// once the stack operations are marked interrupted and the environments are being watched.
 	updateRecovery := &updates.Recovery{
 		Runs: updateApplier.Runs, Applier: updateApplier, Log: log,
+		// Taken here, before any listener serves a request, so a run a user starts later is never mistaken for an interrupted one.
+		Boot: time.Now(),
 		ActorOf: func(ctx context.Context, key string) audit.Actor {
 			if strings.HasPrefix(key, "system:") {
 				return audit.Actor{Type: audit.ActorSystem, ID: key, Name: key}

@@ -5,9 +5,11 @@ package updates
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +59,9 @@ type Recovery struct {
 	// the stack was put back (it ends the run itself, which Run leaves as it is), a *LockedError when the environment's lock is
 	// held (Run waits and calls it again), and any other error when the stack could not be put back.
 	Stack func(ctx context.Context, run Run) error
+	// Boot is when this process started serving, taken before anything could start an update. A run that started at or after it is this
+	// process's own and is never recovered, however late the list of unfinished runs is read. Zero recovers every unfinished run.
+	Boot time.Time
 	// Clock is the time every wait is on. Nil means the Applier's.
 	Clock stackops.Clock
 	// ActorOf names who a run was started by, as the audit log has them. Nil reads a system name as the system and anything else as a
@@ -103,6 +108,9 @@ func (r *Recovery) Run(ctx context.Context) {
 		r.log().Error("the image updates that a restart interrupted could not be read", "error", err)
 		return
 	}
+	if !r.Boot.IsZero() {
+		runs = slices.DeleteFunc(runs, func(run Run) bool { return !run.StartedAt.Before(r.Boot) })
+	}
 	if len(runs) == 0 {
 		return
 	}
@@ -133,6 +141,22 @@ func (r *Recovery) Run(ctx context.Context) {
 
 // recoverRun deals with one run: a try, and, while the environment's lock is held or the environment is out of reach, another.
 func (r *Recovery) recoverRun(ctx context.Context, run Run) {
+	// reread takes the run as it is on record now: a try that waits can be long, and the run may have ended meanwhile (its own job was
+	// not gone after all, or a stack's seam ended it). It reports false when there is nothing left to recover.
+	reread := func() bool {
+		fresh, err := r.Runs.Get(ctx, run.ID)
+		if err != nil {
+			return ctx.Err() == nil && !errors.Is(err, sql.ErrNoRows)
+		}
+		if fresh.State != RunQueued && fresh.State != RunRunning {
+			return false
+		}
+		run = fresh
+		return true
+	}
+	if !reread() {
+		return
+	}
 	if run.State == RunQueued {
 		// A run that never started has touched nothing.
 		r.finish(ctx, run, RunFailed, ReasonServerRestarted, ReasonServerRestarted)
@@ -145,7 +169,7 @@ func (r *Recovery) recoverRun(ctx context.Context, run Run) {
 		case triedDone:
 			return
 		case triedLocked:
-			if !r.wait(ctx, LockPoll) {
+			if !r.wait(ctx, LockPoll) || !reread() {
 				return
 			}
 		case triedOffline:
@@ -154,7 +178,7 @@ func (r *Recovery) recoverRun(ctx context.Context, run Run) {
 				r.finish(ctx, run, RunRollbackFailed, ReasonEnvironmentOffline, ReasonServerRestarted)
 				return
 			}
-			if !r.wait(ctx, delay) {
+			if !r.wait(ctx, delay) || !reread() {
 				return
 			}
 			delay = min(delay*2, OfflineBackoffMax)

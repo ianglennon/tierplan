@@ -476,6 +476,81 @@ func TestRecoveryWaitsForLock(t *testing.T) {
 	}
 }
 
+// A run that started at or after the boot cutoff belongs to the process that is running, whatever the time of the read that listed it:
+// it is not recovered, and the engine is not written (WR-06). A run from before the cutoff is.
+func TestRecoveryLeavesTheRunsOfThisProcess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		boot time.Time
+		want updates.RunState
+	}{
+		{"started after boot", t0.Add(-time.Hour), updates.RunRunning},
+		{"started at boot", t0, updates.RunRunning},
+		{"started before boot", t0.Add(time.Hour), updates.RunRolledBack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newApplyRig(t, nil, swarmService("web", 'b'))
+			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			rec := r.recovery(nil)
+			rec.Boot = tc.boot
+
+			rec.Run(testsupport.Context(t))
+
+			if got := r.runOf(t, run.ID); got.State != tc.want {
+				t.Errorf("run = %s, want %s", got.State, tc.want)
+			}
+			if tc.want == updates.RunRunning && len(r.fake.Writes()) != 0 {
+				t.Errorf("the engine was written %d times for a run of this process, want none", len(r.fake.Writes()))
+			}
+		})
+	}
+}
+
+// A run that ends while recovery waits for the environment's lock is not recovered when the lock is free: the row is read again at each
+// try, and the update that ended it is not rolled back (WR-06).
+func TestRecoveryReadsTheRunAgainAfterWaiting(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'b'))
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+	release, _, ok := r.locks.TryAcquire(r.envID, stackops.Holder{Kind: "deploy", By: "someone", Started: t0})
+	if !ok {
+		t.Fatal("could not take the lock")
+	}
+	r.clock.mu.Lock()
+	r.clock.hold = true
+	r.clock.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.recoverNow(t, nil)
+	}()
+	testsupport.Await(t, "recovery to wait for the lock", r.clock.armed)
+
+	// The update's own job was not gone after all, and ends the run while recovery waits.
+	if ok, err := r.runs.Finish(testsupport.Context(t), run.ID, updates.RunDone, "", 0, 0); err != nil || !ok {
+		t.Fatalf("end the run: %v %v", ok, err)
+	}
+	release()
+	r.clock.mu.Lock()
+	r.clock.hold = false
+	r.clock.mu.Unlock()
+	r.clock.fire(updates.LockPoll)
+	testsupport.Await(t, "recovery to return", done)
+
+	if got := r.runOf(t, run.ID); got.State != updates.RunDone {
+		t.Errorf("run = %s, want the done it ended with", got.State)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none: the update had ended and must not be rolled back", n)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+		t.Errorf("rollback audit rows = %+v, want none", rows)
+	}
+}
+
 // An environment that cannot be reached is tried again after 1 minute, doubling to 15, and given up after 2 hours as rollback_failed
 // with the reason environment_offline (plan 12-24, RESEARCH Pitfall 13).
 func TestRecoveryOfflineBackoff(t *testing.T) {
