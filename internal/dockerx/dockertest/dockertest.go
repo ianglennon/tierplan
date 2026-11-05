@@ -180,6 +180,10 @@ type FakeConfig struct {
 	// as the engine does when the container it is stopping is the one that serves the
 	// caller (TierPlan's own server or an agent). The write is still recorded.
 	DropWrites bool
+	// DropServiceWrites makes the create and the update of a service close the connection without answering, as a manager's
+	// tunnel does when it drops after the spec was sent: the caller cannot tell whether the write happened. The write is
+	// recorded but not applied. Other writes, networks included, are answered.
+	DropServiceWrites bool
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string

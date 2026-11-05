@@ -192,8 +192,9 @@ type DeployResult struct {
 	CleanedUp []string
 	// FailedService names the service, network, secret or config the failure is about.
 	FailedService, Code string
-	// Wrote says the deploy changed a service on the engine: a swarm service was created or updated, or a standalone host's
-	// Compose up began. A deploy that failed without writing left every service as it was, so an automatic rollback of an image
+	// Wrote says the deploy may have changed a service on the engine: a swarm service was created or updated, or a write of
+	// one failed with an answer that may have been lost, or a standalone host's Compose up was handed to the host. A deploy that
+	// failed before that, or whose write the engine refused, left every service as it was, so an automatic rollback of an image
 	// update has nothing to put back (plan 12-23, D-12).
 	Wrote bool
 	// Pins are the images the services were deployed with, by swarm service name, and Problems
@@ -561,6 +562,10 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		})
 		if err != nil {
 			d.log().Warn("could not write a stack service", "environment", in.EnvID, "stack", in.Stack.Name, "service", sp.Name, "update", update, "error", err)
+			// A write whose answer was lost may have happened (dockerx.ServiceUpdate): only a refusal leaves the service as it was.
+			if !writeRefused(err) {
+				res.Wrote = true
+			}
 			return failErr(ItemServices, codeOf(ctx, err), sp.Name, err)
 		}
 		action := "created"
@@ -797,6 +802,24 @@ func codeOf(ctx context.Context, err error) string {
 		return CodeServiceRejected
 	}
 	return CodeEngineError
+}
+
+// writeRefused reports whether err says a write to the engine was refused and changed nothing: it never reached the engine (no
+// manager to send it to, a read-only host, a spec that does not decode), or the engine or the node's agent answered that it would
+// not take it. Any other error is an answer that may have been lost (a dropped connection, a timeout), and the write may have
+// happened.
+func writeRefused(err error) bool {
+	err = envs.ClassifyDockerError(err)
+	var denied *envs.AgentPolicyDeniedError
+	var rejected *dockerx.SpecRejectedError
+	switch {
+	case errors.Is(err, envs.ErrHostReadOnly), errors.Is(err, envs.ErrNodeUnavailable),
+		errors.As(err, &denied), errors.As(err, &rejected),
+		errors.Is(err, dockerx.ErrServiceChanged), errors.Is(err, dockerx.ErrServiceNotFound),
+		errors.Is(err, dockerx.ErrServiceNameTaken), errors.Is(err, dockerx.ErrServiceSpecInvalid):
+		return true
+	}
+	return false
 }
 
 // isConflict reports whether a network create was refused because the name exists.

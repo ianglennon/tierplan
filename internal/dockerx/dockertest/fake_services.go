@@ -203,7 +203,7 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 	// A held write is judged against the service as it is when the hold ends, as a real
 	// manager judges the version when it gets to the update.
 	cfg = f.config()
-	if cfg.DropWrites && dropConnection(w) {
+	if (cfg.DropWrites || cfg.DropServiceWrites) && dropConnection(w) {
 		return true
 	}
 	if cfg.PolicyDeny {
@@ -469,7 +469,7 @@ func (f *Fake) serveServiceCreate(w http.ResponseWriter, r *http.Request, p stri
 	f.recordWrite(r)
 	defer f.beginWrite(cfg.WriteDelay)()
 	cfg = f.config()
-	if cfg.DropWrites && dropConnection(w) {
+	if (cfg.DropWrites || cfg.DropServiceWrites) && dropConnection(w) {
 		return true
 	}
 	if cfg.PolicyDeny {

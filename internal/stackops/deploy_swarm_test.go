@@ -44,6 +44,8 @@ type swarmRig struct {
 	store *store.Store
 	// addr is the environment's address reader, which a deploy reads the small stack subnet setting through.
 	addr *envs.AddressSpaces
+	// mon is the monitor of the environment, which a test stops to make the engine unreachable.
+	mon *envs.Monitor
 }
 
 func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...dockertest.FakeService) *swarmRig {
@@ -94,7 +96,7 @@ func newRigOver(t *testing.T, socket string) *swarmRig {
 	t.Cleanup(hub.Close)
 	addr := envs.NewAddressSpaces(svc, agg, clusters, envs.AddressSpaceOptions{Now: time.Now})
 	return &swarmRig{
-		envID: env.ID, hub: hub, store: st, addr: addr,
+		envID: env.ID, hub: hub, store: st, addr: addr, mon: mon,
 		deps: stackops.Deps{
 			Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), AddressSpaces: addr, Log: slog.New(slog.DiscardHandler),
 			// The read-back of a swarm network waits on no clock: each wait ends at once.
@@ -316,6 +318,30 @@ func TestDeploySwarmStopsAtTheFirstServiceTheManagerRejects(t *testing.T) {
 		if strings.Contains(it.Message, "db-password") {
 			t.Errorf("item %s message %q holds the manager's own words", it.ID, it.Message)
 		}
+	}
+}
+
+// Whether a failed deploy wrote decides whether an image update puts the stack back (WR-13). A manager that refuses the spec has
+// changed nothing, so there is nothing to restore; one whose answer was lost may have taken it, so the stack is restored.
+func TestDeploySwarmWhoseServiceWriteWasRefusedHasNotWritten(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "secret not found: db-password" })
+	_, in := starterPlan(t, "tracer")
+	res, _ := rig.deploy(t, in)
+
+	if res.Code != stackops.CodeServiceRejected || res.Wrote || res.NeedsRestore() {
+		t.Errorf("result = %+v, want service_rejected with nothing written and nothing to restore", res)
+	}
+}
+
+func TestDeploySwarmWhoseServiceWriteLostItsAnswerMayHaveWritten(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.DropServiceWrites = true })
+	_, in := starterPlan(t, "tracer")
+	res, _ := rig.deploy(t, in)
+
+	if res.OK() || res.Code == stackops.CodeServiceRejected || !res.Wrote || !res.NeedsRestore() {
+		t.Errorf("result = %+v, want an engine failure that may have written and needs a restore", res)
 	}
 }
 
