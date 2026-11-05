@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import {
+  type QueryClient,
   queryOptions,
   useIsMutating,
   useMutation,
@@ -14,6 +15,7 @@ import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 import type { StackJob } from "@/api/stacks";
+import { FLEET_KEY, imageUpdateJobsKey } from "@/api/update-keys";
 import { useEnvName } from "@/features/resources/use-env-name";
 import {
   initialStackStream,
@@ -28,6 +30,15 @@ import { apiUrl } from "@/lib/base-path";
 import { toastError, toastInfo, toastSuccess, toastSuccessWithAction } from "@/lib/toast";
 
 export type UpdateInfo = components["schemas"]["UpdateInfoBody"];
+
+// refreshUpdates reads the environment's lists and the fleet's tiles and tabs again. The Updates tab
+// and the Overview tiles sit on the same page as the menus that skip, ignore and check, so they must
+// not keep showing what the action just changed.
+function refreshUpdates(queryClient: QueryClient, envId: string) {
+  void queryClient.invalidateQueries({ queryKey: ["env", envId] });
+  void queryClient.invalidateQueries({ queryKey: FLEET_KEY });
+}
+
 export type UpdateState = UpdateInfo["state"];
 export type UpdateReason = UpdateInfo["reason"];
 export type CheckUpdatesResult = components["schemas"]["CheckUpdatesBody"];
@@ -103,9 +114,7 @@ export function useCheckUpdates(envId: string) {
       }
       toastError(t("updates.check.failed"));
     },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ["env", envId] });
-    },
+    onSettled: () => refreshUpdates(queryClient, envId),
   });
 }
 
@@ -410,7 +419,7 @@ export interface SkipVariables extends UpdateWorkload {
 export function useSkipUpdate(envId: string) {
   const t = useT();
   const queryClient = useQueryClient();
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["env", envId] });
+  const refresh = () => refreshUpdates(queryClient, envId);
   return useMutation<components["schemas"]["UpdateHeldBody"], UpdateHoldError, SkipVariables>({
     retry: false,
     mutationFn: (vars) => skipRequest(envId, vars),
@@ -447,7 +456,7 @@ export function useUnskipUpdate(envId: string) {
     onError: (_err, vars) => {
       toastError(t("updates.unskip.failed", { name: vars.name }));
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["env", envId] }),
+    onSettled: () => refreshUpdates(queryClient, envId),
   });
 }
 
@@ -457,7 +466,7 @@ export function useUnskipUpdate(envId: string) {
 export function useIgnoreUpdates(envId: string) {
   const t = useT();
   const queryClient = useQueryClient();
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["env", envId] });
+  const refresh = () => refreshUpdates(queryClient, envId);
   return useMutation<components["schemas"]["UpdateHeldBody"], UpdateHoldError, IgnoreTarget>({
     retry: false,
     mutationFn: (target) => ignoreRequest(envId, target),
@@ -498,7 +507,7 @@ export function useUnignoreUpdates(envId: string) {
     onError: (_err, target) => {
       toastError(t("updates.unignore.failed", { name: target.text }));
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["env", envId] }),
+    onSettled: () => refreshUpdates(queryClient, envId),
   });
 }
 
@@ -659,14 +668,13 @@ export function useRunUpdate(envId: string) {
         toastError(t("updates.confirm.lockedToast", { environment: envName }));
       }
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["env", envId] }),
+    onSettled: () => refreshUpdates(queryClient, envId),
   });
 }
 
 // useImageUpdateJobs lists the image updates running or ended in the last ten minutes on the
 // environments the caller may read, for the Jobs indicator. Polled as the other job lists are; a
 // poll that fails keeps the last list.
-export const imageUpdateJobsKey = ["update-jobs"] as const;
 export const UPDATE_JOBS_POLL_RUNNING_MS = 3_000;
 export const UPDATE_JOBS_POLL_IDLE_MS = 30_000;
 

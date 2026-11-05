@@ -555,3 +555,22 @@ describe("UpdateMenuItems: a container", () => {
     await disabledItem("Update the service web instead. Its tasks are replaced for you.");
   });
 });
+
+describe("UpdateMenuItems: the fleet is read again", () => {
+  // The Updates tab and the Overview tiles sit on the same page as the row menu. Nothing observes
+  // the fleet key here, so a read that is marked invalid is a read the page would make again.
+  const fleetKey = ["fleet", "updates", "updates", []];
+
+  it.each([
+    ["Skip this version", () => info()],
+    ["Stop skipping", () => info({ state: "skipped" })],
+    ["Stop ignoring updates", () => info({ state: "ignored", ignore: held() })],
+    ["Check now", () => info()],
+  ])("marks the fleet's reads stale after %s", async (item, update) => {
+    client.setQueryData(fleetKey, { groups: [] });
+    await mount(update());
+    expect(client.getQueryState(fleetKey)?.isInvalidated).toBe(false);
+    fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+    await waitFor(() => expect(client.getQueryState(fleetKey)?.isInvalidated).toBe(true));
+  });
+});

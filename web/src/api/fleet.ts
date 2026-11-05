@@ -12,7 +12,7 @@ import {
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
-import { imageUpdateJobsKey } from "@/api/updates";
+import { FLEET_KEY, imageUpdateJobsKey } from "@/api/update-keys";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 
@@ -36,9 +36,6 @@ export type FleetBulkRefused = components["schemas"]["FleetBulkRefused"];
 // Which items the Updates tab lists (the Show chips). "updates" is the default and is left out of
 // the address.
 export type FleetShowValue = "updates" | "problems" | "ignored" | "all";
-
-// Every fleet read hangs under this key, so the health stream can read them all again at once.
-export const FLEET_KEY = ["fleet"] as const;
 
 // The fleet tabs and tiles are read again every minute while the page is visible, and on any
 // health event (UI-SPEC "Polling cadence"). A hidden tab stops: react-query does not poll one.

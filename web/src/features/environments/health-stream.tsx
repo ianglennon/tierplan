@@ -14,7 +14,7 @@ import {
 } from "react";
 
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
-import { FLEET_KEY } from "@/api/fleet";
+import { FLEET_KEY } from "@/api/update-keys";
 import { ENV_WARNINGS_KEY, WARNINGS_KEY } from "@/api/warnings";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import { apiUrl } from "@/lib/base-path";

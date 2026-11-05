@@ -15,7 +15,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
-import { FLEET_KEY, takeFollowedBulkJob } from "@/api/fleet";
+import { takeFollowedBulkJob } from "@/api/fleet";
 import {
   type JanitorJobSummary,
   type JanitorRun,
@@ -24,6 +24,7 @@ import {
 } from "@/api/janitor";
 import { type PullSummary, pullsListQuery } from "@/api/pulls";
 import { type StackJobSummary, stackJobsListQuery } from "@/api/stacks";
+import { FLEET_KEY } from "@/api/update-keys";
 import {
   type ImageUpdateJobSummary,
   imageUpdateJobQuery,
