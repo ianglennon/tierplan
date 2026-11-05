@@ -364,6 +364,67 @@ func sharedImageUpdateRollback(t *testing.T, f *swarmFix) {
 	f.removeUpdateFixture(t, made.ID, "upd-rb", addr+"/upd/rb")
 }
 
+// sharedImageUpdateAutoRollback updates a service whose own failure action is rollback onto a build whose command exits at once,
+// on a real swarm (CR-02, D-12, D-14): the swarm rolls the update back by itself, which leaves the service on the old spec with no
+// previous spec at all and rollback_completed as its update status. TierPlan reads that as its update having been rolled back, not
+// as an update that never changed the service: the run ends rolled back, the failure is remembered against the new digest, the
+// rollback is audited and the old digest runs on both tasks.
+func sharedImageUpdateAutoRollback(t *testing.T, f *swarmFix) {
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	dockertest.ForwardRegistry(t, mgr)
+	ref := addr + "/upd/ar:1"
+	digestA := dockertest.PushVariantWith(t, mgr, dockertest.ServiceTestImage, ref, "A", nil, goodBuild)
+	f.install(t)
+	f.waitSwarmOnline(t, 4)
+	addFixtureCredential(t, f.srv, addr, "upd")
+
+	spec := imageSpec("upd-ar", ref, 2)
+	spec.UpdateConfig = &swarm.UpdateConfig{Parallelism: 1, FailureAction: swarm.UpdateFailureActionRollback, Monitor: 3 * time.Second}
+	spec.RollbackConfig = &swarm.UpdateConfig{Parallelism: 2, Monitor: time.Second}
+	code, body := f.createService(t, spec)
+	var made createdService
+	if code != http.StatusCreated || json.Unmarshal(body, &made) != nil || made.Digest != digestA {
+		t.Fatalf("POST services = %d %s, want 201 pinned to %s", code, body, digestA)
+	}
+	f.waitTasksOn(t, made.ID, digestA, 2, taskWait)
+
+	// The tag moves to a build that exits at once.
+	digestC := dockertest.PushVariantWith(t, mgr, dockertest.ServiceTestImage, ref, "C", nil, badBuild)
+	f.checkNow(t)
+	f.waitUpdateState(t, "upd-ar", "update_available", time.Minute)
+
+	code, body = f.startUpdate(t, "service", "upd-ar", "upd-ar", digestC, false)
+	jobID := updateJobID(t, code, body)
+	job, took := f.waitUpdateJob(t, jobID)
+	raw, _ := json.Marshal(job)
+	t.Logf("the failing update of upd-ar to %s ended %s after %s: %s", digestC, job.State, took.Round(time.Second), raw)
+	if job.State == "done" {
+		t.Fatalf("an update to a build that exits at once ended done: %s", raw)
+	}
+
+	// The swarm's own rollback is what put the old digest back: no previous spec is left, and the status says it was rolled back.
+	if got := strings.TrimSpace(sh(t, mgr, "docker service inspect -f '{{.UpdateStatus.State}}|{{if .PreviousSpec}}previous{{else}}none{{end}}' upd-ar")); got != "rollback_completed|none" {
+		t.Errorf("the swarm's own record of upd-ar = %q, want rollback_completed with no previous spec: the case does not measure what it is for", got)
+	}
+	if got := f.serviceImage(t, "upd-ar"); got != ref+"@"+digestA {
+		t.Errorf("after the rollback the service runs %q, want %s@%s", got, ref, digestA)
+	}
+	f.waitTasksOn(t, made.ID, digestA, 2, updateWait)
+	u := f.waitUpdateState(t, "upd-ar", "rolled_back", time.Minute)
+	if u.RunningDigest != digestA || u.RemoteDigest != digestC || u.Failure == nil || u.Failure.Digest != digestC || u.Failure.RollbackFailed {
+		b, _ := json.Marshal(u)
+		t.Errorf("the badge after the rollback = %s, want rolled_back, running %s, the tag at %s and a failure of %s", b, digestA, digestC, digestC)
+	}
+	if n := f.auditCount("image.update_failed", "failure"); n != 1 {
+		t.Errorf("image.update_failed failure rows = %d, want one", n)
+	}
+	if n := f.auditCount("image.update_rolled_back", "success"); n != 1 {
+		t.Errorf("image.update_rolled_back success rows = %d, want one", n)
+	}
+	f.removeUpdateFixture(t, made.ID, "upd-ar", addr+"/upd/ar")
+}
+
 // sharedImageUpdateHealth updates a service whose image has a health check onto a build whose check never passes (plan 12-35,
 // IMG-06, IMG-07, RESEARCH A2 and A5): the swarm keeps the new task starting, so the wait for the service to settle does not
 // end well, and TierPlan judges the update a failure within the window the server is given, puts the previous digest back and

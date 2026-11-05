@@ -252,6 +252,9 @@ type target struct {
 	// pullRef is that reference as the engine pulls it.
 	pullRef  string
 	from, to string
+	// runStart is, for a run that recovery takes up after a restart, when the run began; zero for an update that is running now. It
+	// is what tells a service the run wrote from one it never touched (CR-02).
+	runStart time.Time
 }
 
 // Start updates one workload. It judges the request against the live state and the registry (refusing with a

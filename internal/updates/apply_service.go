@@ -311,9 +311,10 @@ func (a *Applier) waitServiceSettled(ctx context.Context, t target, id string, p
 // rollbackService puts the previous image back after an update failed for cause, and ends the run: rolled_back when the previous
 // version runs again, rollback_failed when it does not (D-12). The service is read at its current version and only the image is
 // changed, so the person's own update_config and every other setting is kept. If the swarm already rolled the service back by its
-// own failure action, nothing is written and the wait is for that rollback. A service that runs the previous version and never ran the
-// new one was not written by the update, so the run ends failed with nothing rolled back. A service that now runs neither of the two images was
-// changed by someone else and is left alone. The registry credential is chosen again and goes to the engine only.
+// own failure action, nothing is written and the wait is for that rollback. After a restart (t.runStart set) a service that runs the
+// previous version and shows no update since the run began was never written by it, so the run ends failed with nothing rolled back.
+// A service that now runs neither of the two images was changed by someone else and is left alone. The registry credential is chosen
+// again and goes to the engine only.
 func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t target, previous, cause string, end endFunc) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.convergeTimeout()+restoreTimeout)
 	defer cancel()
@@ -346,9 +347,10 @@ func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t targe
 	}
 	prior := detail.UpdateStatus
 	switch image := spec.TaskTemplate.ContainerSpec.Image; {
-	case strings.HasSuffix(image, "@"+t.from) && !previouslyRan(detail.PreviousSpec, t.to):
-		// The service runs the previous version and never ran the new one: the update was cut off before it wrote the service (a
-		// restart during the pull). Nothing was changed and nothing is put back, so nothing is claimed rolled back or remembered.
+	case strings.HasSuffix(image, "@"+t.from) && !t.runStart.IsZero() && !updatedSince(detail.UpdateStatus, t.runStart):
+		// The service runs the previous version and no update has touched it since the run began: the update was cut off before it
+		// wrote the service (a restart during the pull). Nothing was changed and nothing is put back, so nothing is claimed rolled back
+		// or remembered. This is only a question for a run recovery takes up: an update that is running has written the service.
 		a.log().Info("an image update never changed its service, so there is nothing to put back", "environment", t.envID, "service", t.name, "cause", cause)
 		end(RunFailed, cause, cause)
 		r.Output(t.name + " still runs " + shortDigest(t.from) + ". The update had not changed it, so there is nothing to put back")
@@ -417,19 +419,22 @@ func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t targe
 	r.Finish(ItemRollbackWait, jobs.ItemDone, "", "", nil)
 }
 
-// previouslyRan reports whether the spec a service had before its last update (a swarm's rollback swaps the two) names digest: the
-// service has run it. A service that has never been updated has no previous spec, and one whose previous image is another digest
-// did not run this one by this update. A document that cannot be read is taken to say yes, which is the answer that waits for the
-// service and rolls it back rather than claim it was never touched.
-func previouslyRan(raw json.RawMessage, digest string) bool {
-	if len(raw) == 0 {
+// updatedSince reports whether a service's update status shows an update or rollback that began or ended at or after since. The swarm
+// stamps the status with its own clock: an update, the swarm's rollback of it (which keeps the update's start) and a rollback by hand
+// each leave a time at or after the write that began them, and an earlier update leaves an earlier one. The previous spec and the
+// state cannot say this: an automatic rollback leaves no previous spec, and the status of an earlier failed update reads the same as
+// this one's. A status with no time, or none, says no. The two clocks can differ, so a write within their difference after the run
+// began may read as no write. That answer ends the run failed with nothing remembered, so the update is offered again, where the
+// other would hide it as one that failed.
+func updatedSince(st *dockerx.ServiceUpdateStatus, since time.Time) bool {
+	if st == nil {
 		return false
 	}
-	var prev swarm.ServiceSpec
-	if err := json.Unmarshal(raw, &prev); err != nil {
-		return true
+	at := st.StartedAt
+	if st.CompletedAt.After(at) {
+		at = st.CompletedAt
 	}
-	return prev.TaskTemplate.ContainerSpec != nil && strings.HasSuffix(prev.TaskTemplate.ContainerSpec.Image, "@"+digest)
+	return !at.IsZero() && !at.Before(since)
 }
 
 // rememberFailure keeps what the next judgement needs of an update that ended (IMG-07, D-14). A good update forgets the failure the

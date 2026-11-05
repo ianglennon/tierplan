@@ -35,6 +35,7 @@ var sharedSwarmCases = []struct {
 	{"HostRoutes", sharedHostRoutes},
 	{"ImagePullFanOut", sharedImagePullFanOut},
 	{"ImageUpdate", sharedImageUpdate},
+	{"ImageUpdateAutoRollback", sharedImageUpdateAutoRollback},
 	{"ImageUpdateHealth", sharedImageUpdateHealth},
 	{"ImageUpdateRollback", sharedImageUpdateRollback},
 	{"Janitor", sharedJanitor},

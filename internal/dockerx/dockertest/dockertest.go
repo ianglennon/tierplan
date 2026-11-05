@@ -415,6 +415,8 @@ type FakeService struct {
 	Ports []swarm.PortConfig
 	// UpdateMessage is the UpdateStatus message, empty for none.
 	UpdateMessage string
+	// UpdateStartedAt and UpdateCompletedAt are the times the UpdateStatus carries; zero leaves the time out.
+	UpdateStartedAt, UpdateCompletedAt time.Time
 	// PreviousSpec, when set, is the spec the service had before its last update.
 	PreviousSpec *swarm.ServiceSpec
 	// CreatedAt is when the service was created; zero is the Unix epoch.
@@ -1694,6 +1696,14 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 func (fs FakeService) decorate(s *swarm.Service) {
 	if fs.UpdateState != "" || fs.UpdateMessage != "" {
 		s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState), Message: fs.UpdateMessage}
+		if !fs.UpdateStartedAt.IsZero() {
+			started := fs.UpdateStartedAt
+			s.UpdateStatus.StartedAt = &started
+		}
+		if !fs.UpdateCompletedAt.IsZero() {
+			completed := fs.UpdateCompletedAt
+			s.UpdateStatus.CompletedAt = &completed
+		}
 	}
 	if len(fs.Ports) > 0 {
 		s.Endpoint.Ports = slices.Clone(fs.Ports)
