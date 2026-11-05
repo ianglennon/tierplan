@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -143,6 +144,52 @@ func TestRecoveryOfAServiceTheSwarmRolledBack(t *testing.T) {
 	}
 	if n := len(r.fake.ServiceUpdates()); n != 0 {
 		t.Errorf("service updates = %d, want none: the swarm had already put the previous version back", n)
+	}
+}
+
+// orderedLocks are the rig's locks noting when a job is attached to the lock and when the lock is freed.
+type orderedLocks struct {
+	*stackops.Locks
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *orderedLocks) note(e string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, e)
+}
+
+func (l *orderedLocks) TryAcquire(envID string, h stackops.Holder) (func(), stackops.Holder, bool) {
+	release, held, ok := l.Locks.TryAcquire(envID, h)
+	if !ok {
+		return nil, held, false
+	}
+	return func() { l.note("release"); release() }, held, true
+}
+
+func (l *orderedLocks) Attach(envID, jobID string) {
+	l.note("attach")
+	l.Locks.Attach(envID, jobID)
+}
+
+// The job of a recovery is attached to the environment's lock before its body does anything, as an update's is. A body that ended
+// first would free the lock, and the attach, which goes by the environment, would then write the finished job's ID into the holder of
+// whatever took the lock next (WR-02). The service here is untouched, so the body ends at once: the shortest body there is. The
+// race this guards is a few instructions wide, so the test can fail without the gate only when the body wins it.
+func TestRecoveryAttachesItsJobBeforeTheBodyRuns(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	locks := &orderedLocks{Locks: r.locks}
+	r.applier.Locks = locks
+	r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	locks.mu.Lock()
+	defer locks.mu.Unlock()
+	if !slices.Equal(locks.events, []string{"attach", "release"}) {
+		t.Errorf("lock events = %v, want the job attached and only then the lock freed", locks.events)
 	}
 }
 

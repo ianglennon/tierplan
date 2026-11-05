@@ -303,11 +303,22 @@ func (r *Recovery) begin(ctx context.Context, run Run, t target, items []jobs.It
 	if run.BulkID != "" {
 		meta[MetaBulk] = run.BulkID
 	}
+	// The body waits on ready until the job is attached to the lock: a body that ended first would free the lock, another operation
+	// could take the environment, and Attach (which goes by the environment) would write this finished job into its holder.
+	ready := make(chan struct{})
 	job, err := a.Jobs.Start(jobs.Spec{Kind: JobKind, EnvID: run.EnvID, Owner: req.Owner, Meta: meta, Items: items},
 		func(jctx context.Context, rep *jobs.Reporter) {
 			end := a.newEnd(jctx, req, run, t, release)
 			// Whatever ends the body without ending the run (a panic included) ends it failed, and frees the lock.
 			defer end(RunFailed, ReasonServerRestarted, ReasonServerRestarted)
+			select {
+			case <-ready:
+			case <-jctx.Done():
+				if jobs.Closing(jctx) {
+					end(runLeftOpen, "", "")
+				}
+				return
+			}
 			rep.Output("TierPlan restarted during this update. Putting " + t.name + " back to " + shortDigest(t.from))
 			body(jctx, rep, end)
 		})
@@ -321,6 +332,7 @@ func (r *Recovery) begin(ctx context.Context, run Run, t target, items []jobs.It
 		return triedDone
 	}
 	a.Locks.Attach(run.EnvID, job.ID)
+	close(ready)
 	if _, err := a.Jobs.Wait(ctx, job.ID); err != nil && ctx.Err() == nil {
 		r.log().Warn("the rollback of an interrupted image update could not be waited for", "run", run.ID, "error", err)
 	}
