@@ -59,6 +59,7 @@ var itemMessages = map[string]string{
 	// The wait of a service that a person cancelled once the swarm had taken the update (CR-01), and the restore of a run whose update
 	// never changed its service (CR-02).
 	CodeNothingToPutBack: "The update had not changed the service, so nothing was put back.",
+	CodeNotRecorded:      "The update could not be recorded, so nothing was changed.",
 	CodeWaitCancelled:    "Cancelled while waiting for the new version to run. The update had been applied and is left as it is; it was not confirmed running.",
 
 	// The codes of the restore of a service (plan 12-22).
@@ -74,6 +75,9 @@ const (
 	CodeRestoreChanged   = "restore_service_changed"
 	CodeWaitCancelled    = "wait_cancelled"
 
+	// CodeNotRecorded is the code of the update step of a run that could not record the version of its write, and so did not make it.
+	CodeNotRecorded = "run_not_recorded"
+
 	// CodeNothingToPutBack is the code of the restore step of a run whose update never changed its service (CR-02).
 	CodeNothingToPutBack = "nothing_to_put_back"
 
@@ -84,7 +88,7 @@ const (
 // updateService does the update of one plain service and ends the run through end. end is called once, before the last step of
 // the job is finished, and frees the environment's lock. A failure before the swarm was written ends the run failed. A failure
 // after it puts the previous image back (rollbackService) and ends the run rolled_back, or rollback_failed.
-func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target, end endFunc) {
+func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, run Run, t target, end endFunc) {
 	// order is the steps still to come, so a failure can end the rest as skipped.
 	order := []string{ItemPull, ItemUpdate, ItemWait}
 	// finish ends the failing step and skips the rest, without ending the run.
@@ -179,6 +183,15 @@ func (a *Applier) updateService(ctx context.Context, r *jobs.Reporter, t target,
 	if err != nil {
 		a.log().Error("could not resolve the registry credential of a service update", "environment", t.envID, "service", t.name, "error", err)
 		fail(ItemUpdate, stackops.CodeRegistryUnresolved, ReasonEngine)
+		return
+	}
+
+	// The version the write is made at goes on the run first. A write moves the service's version, so after a restart this is what
+	// tells a service the run wrote from one it never touched. A write that could not be marked is not made: recovery could not tell
+	// whether it had happened.
+	if err := a.recordWriteVersion(ctx, run, detail.Version); err != nil {
+		a.log().Error("the version of a service an update is about to write could not be recorded", "environment", t.envID, "service", t.name, "error", err)
+		fail(ItemUpdate, CodeNotRecorded, ReasonEngine)
 		return
 	}
 	werr := a.Aggregator.WriteOnManager(context.WithoutCancel(ctx), t.envID, func(c *dockerx.Client) error {
@@ -311,10 +324,10 @@ func (a *Applier) waitServiceSettled(ctx context.Context, t target, id string, p
 // rollbackService puts the previous image back after an update failed for cause, and ends the run: rolled_back when the previous
 // version runs again, rollback_failed when it does not (D-12). The service is read at its current version and only the image is
 // changed, so the person's own update_config and every other setting is kept. If the swarm already rolled the service back by its
-// own failure action, nothing is written and the wait is for that rollback. After a restart (t.runStart set) a service that runs the
-// previous version and shows no update since the run began was never written by it, so the run ends failed with nothing rolled back.
-// A service that now runs neither of the two images was changed by someone else and is left alone. The registry credential is chosen
-// again and goes to the engine only.
+// own failure action, nothing is written and the wait is for that rollback. After a restart (t.resumed) a service that runs the
+// previous version and that the run did not write, because the run recorded no version for its write or the service is still at it,
+// is left as it is, and the run ends failed with nothing rolled back. A service that now runs neither of the two images was changed by
+// someone else and is left alone. The registry credential is chosen again and goes to the engine only.
 func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t target, previous, cause string, end endFunc) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.convergeTimeout()+restoreTimeout)
 	defer cancel()
@@ -347,10 +360,11 @@ func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t targe
 	}
 	prior := detail.UpdateStatus
 	switch image := spec.TaskTemplate.ContainerSpec.Image; {
-	case strings.HasSuffix(image, "@"+t.from) && !t.runStart.IsZero() && !updatedSince(detail.UpdateStatus, t.runStart):
-		// The service runs the previous version and no update has touched it since the run began: the update was cut off before it
-		// wrote the service (a restart during the pull). Nothing was changed and nothing is put back, so nothing is claimed rolled back
-		// or remembered. This is only a question for a run recovery takes up: an update that is running has written the service.
+	case strings.HasSuffix(image, "@"+t.from) && t.resumed && (t.writeVersion == nil || *t.writeVersion == detail.Version):
+		// The service runs the previous version and the run did not write it: it never recorded the version of its write (the restart
+		// came during the pull), or the service is still at that version, which any write moves. Nothing was changed and nothing is
+		// put back, so nothing is claimed rolled back or remembered. This is only a question for a run recovery takes up: an update
+		// that is running has written the service.
 		a.log().Info("an image update never changed its service, so there is nothing to put back", "environment", t.envID, "service", t.name, "cause", cause)
 		end(RunFailed, cause, cause)
 		r.Output(t.name + " still runs " + shortDigest(t.from) + ". The update had not changed it, so there is nothing to put back")
@@ -419,22 +433,24 @@ func (a *Applier) rollbackService(ctx context.Context, r *jobs.Reporter, t targe
 	r.Finish(ItemRollbackWait, jobs.ItemDone, "", "", nil)
 }
 
-// updatedSince reports whether a service's update status shows an update or rollback that began or ended at or after since. The swarm
-// stamps the status with its own clock: an update, the swarm's rollback of it (which keeps the update's start) and a rollback by hand
-// each leave a time at or after the write that began them, and an earlier update leaves an earlier one. The previous spec and the
-// state cannot say this: an automatic rollback leaves no previous spec, and the status of an earlier failed update reads the same as
-// this one's. A status with no time, or none, says no. The two clocks can differ, so a write within their difference after the run
-// began may read as no write. That answer ends the run failed with nothing remembered, so the update is offered again, where the
-// other would hide it as one that failed.
-func updatedSince(st *dockerx.ServiceUpdateStatus, since time.Time) bool {
-	if st == nil {
-		return false
+// recordWriteVersion puts the version a write to the service will be made at on the run, before the write. A run that has ended, or
+// that has no item to put it on, is an error: the write must not be made.
+func (a *Applier) recordWriteVersion(ctx context.Context, run Run, version uint64) error {
+	if len(run.Items) == 0 {
+		return errors.New("the run has no item to record the version on")
 	}
-	at := st.StartedAt
-	if st.CompletedAt.After(at) {
-		at = st.CompletedAt
+	items := slices.Clone(run.Items)
+	items[0].WriteVersion = &version
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+	defer cancel()
+	ok, err := a.Runs.SetItems(wctx, run.ID, items)
+	if err != nil {
+		return err
 	}
-	return !at.IsZero() && !at.Before(since)
+	if !ok {
+		return errors.New("the run is over")
+	}
+	return nil
 }
 
 // rememberFailure keeps what the next judgement needs of an update that ended (IMG-07, D-14). A good update forgets the failure the

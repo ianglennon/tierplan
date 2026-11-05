@@ -259,9 +259,11 @@ type target struct {
 	// pullRef is that reference as the engine pulls it.
 	pullRef  string
 	from, to string
-	// runStart is, for a run that recovery takes up after a restart, when the run began; zero for an update that is running now. It
-	// is what tells a service the run wrote from one it never touched (CR-02).
-	runStart time.Time
+	// resumed is set for a run that recovery takes up after a restart; an update that is running now has written its service.
+	// writeVersion is then the version of the service as the run read it for its write, nil when the run never recorded one. It is
+	// what tells a service the run wrote from one it never touched (CR-02).
+	resumed      bool
+	writeVersion *uint64
 }
 
 // Start updates one workload. It judges the request against the live state and the registry (refusing with a
@@ -601,7 +603,7 @@ func (a *Applier) runOne(ctx context.Context, r *jobs.Reporter, req Request, run
 		a.updateContainer(ctx, r, run, t, end)
 		return
 	}
-	a.updateService(ctx, r, t, end)
+	a.updateService(ctx, r, run, t, end)
 }
 
 // newEnd is the one place the run of a plain workload's update ends: the run on record, the memory of the digest, the audit entries

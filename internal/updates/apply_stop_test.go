@@ -253,7 +253,7 @@ type flakyFinish struct {
 }
 
 func (f *flakyFinish) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
-	if strings.Contains(q, "UPDATE image_update_runs") && strings.Contains(q, "finished_at") {
+	if strings.Contains(q, "UPDATE image_update_runs") && strings.Contains(q, "finished_at = ?") {
 		f.mu.Lock()
 		f.tried++
 		fail := f.tried <= f.failures

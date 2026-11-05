@@ -243,7 +243,7 @@ func targetOf(run Run) (target, bool) {
 	it := run.Items[0]
 	t := target{
 		kind: run.Kind, envID: run.EnvID, name: run.Workload, id: run.WorkloadID, image: it.Image, from: it.FromDigest, to: it.ToDigest,
-		runStart: run.StartedAt,
+		resumed: true, writeVersion: it.WriteVersion,
 	}
 	if it.Image != "" {
 		t.ref = it.Image + "@" + it.ToDigest
@@ -379,7 +379,7 @@ func restartedEnd(end endFunc) endFunc {
 // recoverService puts a plain service back to the digest it ran before the update. It reads the service first: one that is gone is
 // ended, one that cannot be read is tried again later, and the rest is the rollback of a failed update (rollbackService), which
 // writes only when the service runs the new digest, waits when the service runs the old one again after the run wrote it, ends the run
-// failed when the service shows no write since the run began (the restart came before it) and leaves a third image alone.
+// failed when the run did not write the service (the restart came before the write) and leaves a third image alone.
 func (r *Recovery) recoverService(ctx context.Context, run Run) tried {
 	a := r.Applier
 	t, ok := targetOf(run)

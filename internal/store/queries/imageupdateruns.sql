@@ -25,6 +25,12 @@ WHERE id = ? AND state = 'queued' AND finished_at = 0;
 UPDATE image_update_runs SET old_container = ?
 WHERE id = ? AND finished_at = 0;
 
+-- name: SetImageUpdateRunItems :execrows
+-- Rewrites the items of a run before it writes a service: the version the write is made at goes on record first. Only while the
+-- run is not over.
+UPDATE image_update_runs SET items = ?
+WHERE id = ? AND finished_at = 0;
+
 -- name: FinishImageUpdateRun :execrows
 -- The end of a run: its final state, why, when and the revisions it wrote. It is written once: a run that
 -- has ended is not changed, so a late writer cannot overwrite a terminal state. A revision of 0 keeps the one the run

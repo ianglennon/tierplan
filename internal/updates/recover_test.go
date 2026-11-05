@@ -175,36 +175,47 @@ func TestRecoveryOfAnUpdateThatNeverWroteTheService(t *testing.T) {
 	}
 }
 
-// A service that runs the previous digest after the run began, with an update status stamped after the run began, was written by the
-// run: the swarm rolled it back by its own failure action (which leaves no previous spec), or somebody rolled it back by hand
-// (which swaps the two specs), or a restore of recovery's own was cut off by a second restart. Each ends rolled back, writes nothing
-// and remembers the failure (CR-02). The statuses are the ones measured on a real engine.
+// marked records on the run the version of the service its write was made at, as the update does just before it writes.
+func (r *applyRig) marked(t *testing.T, run updates.Run, version uint64) updates.Run {
+	t.Helper()
+	run.Items = slices.Clone(run.Items)
+	run.Items[0].WriteVersion = &version
+	if ok, err := r.runs.SetItems(context.Background(), run.ID, run.Items); err != nil || !ok {
+		t.Fatalf("record the version of the write: %v %v", ok, err)
+	}
+	return run
+}
+
+// A service that runs the previous digest at a version other than the one the run wrote it at, was written since: by the run, whose
+// update the swarm rolled back by its own failure action (which leaves no previous spec), or somebody rolled back by hand (which
+// swaps the two specs), or a restore of recovery's own that a second restart cut off. Each ends rolled back, writes nothing and
+// remembers the failure (CR-02). The statuses are the ones measured on a real engine. The times they carry are the swarm's own clock
+// and play no part: each case is given one far from the run's, on either side.
 func TestRecoveryOfAServiceTheRunWrote(t *testing.T) {
 	t.Parallel()
-	after := t0.Add(time.Minute)
 	prev := swarmSpec("web", 'b')
 	for name, tune := range map[string]func(*dockertest.FakeService){
 		"the swarm rolled it back by itself": func(s *dockertest.FakeService) {
 			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
-			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Second), after
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(-time.Hour), t0.Add(-time.Hour+time.Minute)
 		},
 		"it was rolled back by hand": func(s *dockertest.FakeService) {
 			s.PreviousSpec = &prev
 			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
-			s.UpdateStartedAt, s.UpdateCompletedAt = after, after.Add(time.Second)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Hour), t0.Add(time.Hour+time.Second)
 		},
 		"a restore of recovery's own was cut off": func(s *dockertest.FakeService) {
 			s.PreviousSpec = &prev
 			s.UpdateState, s.UpdateMessage = "completed", "update completed"
-			s.UpdateStartedAt, s.UpdateCompletedAt = after, after.Add(time.Second)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			svc := swarmService("web", 'a')
+			svc.Version = 9
 			tune(&svc)
 			r := newApplyRig(t, nil, svc)
-			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			run := r.marked(t, r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b')), 4)
 
 			r.recoverNow(t, nil)
 
@@ -224,34 +235,51 @@ func TestRecoveryOfAServiceTheRunWrote(t *testing.T) {
 	}
 }
 
-// A status the service already had when the run began is not the run's, whatever it says: an earlier update that the swarm rolled
-// back leaves rollback_completed and no previous spec (or, rolled back by hand, the digest this run was to move to), and a status the
-// engine stamped with no time cannot be placed. A run cut off during its pull on such a service never wrote it, so it ends failed
-// with nothing rolled back, audited or remembered (CR-02).
-func TestRecoveryOfAServiceWhoseStatusIsOlderThanTheRun(t *testing.T) {
+// A service the run did not write is left as it is, whatever its update status says: the run recorded no version for a write (the
+// restart came during its pull), or the service is still at the version the write was to be made at, which any write moves. A status
+// the service had before the run, whether of a rollback by the swarm, of one by hand of the same digest, or stamped with no time,
+// is not the run's, and neither is one the swarm's clock puts after the run began. The run ends failed with nothing rolled back,
+// audited or remembered (CR-02).
+func TestRecoveryOfAServiceTheRunDidNotWrite(t *testing.T) {
 	t.Parallel()
-	before := t0.Add(-time.Hour)
 	prev := swarmSpec("web", 'b')
-	for name, tune := range map[string]func(*dockertest.FakeService){
-		"an earlier rollback by the swarm": func(s *dockertest.FakeService) {
-			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
-			s.UpdateStartedAt, s.UpdateCompletedAt = before.Add(-time.Minute), before
-		},
-		"an earlier rollback by hand of the same digest": func(s *dockertest.FakeService) {
+	stale := func(s *dockertest.FakeService) {
+		s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
+	}
+	for name, c := range map[string]struct {
+		version *uint64
+		tune    func(*dockertest.FakeService)
+	}{
+		"no version recorded, no status": {nil, func(*dockertest.FakeService) {}},
+		"no version recorded, a stale status": {nil, func(s *dockertest.FakeService) {
+			stale(s)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Hour), t0.Add(time.Hour)
+		}},
+		"still at the version, an earlier rollback by the swarm": {ptr(uint64(9)), func(s *dockertest.FakeService) {
+			stale(s)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(-2*time.Hour), t0.Add(-time.Hour)
+		}},
+		"still at the version, an earlier rollback by hand of the same digest": {ptr(uint64(9)), func(s *dockertest.FakeService) {
+			stale(s)
 			s.PreviousSpec = &prev
-			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
-			s.UpdateStartedAt, s.UpdateCompletedAt = before.Add(-time.Minute), before
-		},
-		"a status with no time": func(s *dockertest.FakeService) {
-			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
-		},
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(-2*time.Hour), t0.Add(-time.Hour)
+		}},
+		"still at the version, a status the swarm's clock puts after the run began": {ptr(uint64(9)), func(s *dockertest.FakeService) {
+			stale(s)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Hour), t0.Add(time.Hour+time.Minute)
+		}},
+		"still at the version, a status with no time": {ptr(uint64(9)), stale},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			svc := swarmService("web", 'a')
-			tune(&svc)
+			svc.Version = 9
+			c.tune(&svc)
 			r := newApplyRig(t, nil, svc)
 			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			if c.version != nil {
+				run = r.marked(t, run, *c.version)
+			}
 
 			r.recoverNow(t, nil)
 
@@ -266,6 +294,32 @@ func TestRecoveryOfAServiceWhoseStatusIsOlderThanTheRun(t *testing.T) {
 			}
 			if f, ok := r.failureOf(t, "web"); ok {
 				t.Errorf("failure = %+v, want nothing remembered: the new digest was never tried", f)
+			}
+		})
+	}
+}
+
+// A service that runs the new digest is put back whatever version it is at: the version only tells a service on the previous digest
+// that the run wrote from one it never touched. Recovery's own restore moves the version, so a second restart during that restore
+// finds the service at another version again and waits for it, as one the run wrote (CR-02).
+func TestRecoveryOfAServiceThatRunsTheNewDigestWritesWhateverItsVersion(t *testing.T) {
+	t.Parallel()
+	for name, version := range map[string]*uint64{"no version recorded": nil, "the version of the write": ptr(uint64(1))} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newApplyRig(t, nil, swarmService("web", 'b'))
+			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			if version != nil {
+				run = r.marked(t, run, *version)
+			}
+
+			r.recoverNow(t, nil)
+
+			if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+				t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+			}
+			if n := len(r.fake.ServiceUpdates()); n != 1 {
+				t.Errorf("service updates = %d, want the one that puts the previous digest back", n)
 			}
 		})
 	}

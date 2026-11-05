@@ -238,6 +238,26 @@ func (q *Queries) RunningImageUpdateRuns(ctx context.Context, envID string) ([]I
 	return items, nil
 }
 
+const setImageUpdateRunItems = `-- name: SetImageUpdateRunItems :execrows
+UPDATE image_update_runs SET items = ?
+WHERE id = ? AND finished_at = 0
+`
+
+type SetImageUpdateRunItemsParams struct {
+	Items string
+	ID    string
+}
+
+// Rewrites the items of a run before it writes a service: the version the write is made at goes on record first. Only while the
+// run is not over.
+func (q *Queries) SetImageUpdateRunItems(ctx context.Context, arg SetImageUpdateRunItemsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setImageUpdateRunItems, arg.Items, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setImageUpdateRunOldContainer = `-- name: SetImageUpdateRunOldContainer :execrows
 UPDATE image_update_runs SET old_container = ?
 WHERE id = ? AND finished_at = 0

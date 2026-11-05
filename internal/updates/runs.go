@@ -38,6 +38,10 @@ type RunItem struct {
 	Image      string `json:"image"`
 	FromDigest string `json:"from_digest"`
 	ToDigest   string `json:"to_digest"`
+	// WriteVersion is, for a plain service, the version of the service (the swarm's Meta.Version index) as the run read it for its
+	// write, recorded before the write is made. A write made at a version moves it, so a service still at this version was not
+	// written, and a run without one never reached the write. Nil for a run that has not recorded one, and for the other kinds.
+	WriteVersion *uint64 `json:"write_version,omitempty"`
 }
 
 // Run is one image update.
@@ -126,6 +130,19 @@ func (s RunStore) Begin(ctx context.Context, r Run) (bool, error) {
 	})
 	if err != nil {
 		return false, fmt.Errorf("begin a queued image update run: %w", err)
+	}
+	return n > 0, nil
+}
+
+// SetItems replaces the items of a run that is not over and reports whether it did. A run that has ended is left as it is.
+func (s RunStore) SetItems(ctx context.Context, id string, items []RunItem) (bool, error) {
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return false, fmt.Errorf("encode the items of an image update run: %w", err)
+	}
+	n, err := s.Q.SetImageUpdateRunItems(ctx, sqlc.SetImageUpdateRunItemsParams{Items: string(raw), ID: id})
+	if err != nil {
+		return false, fmt.Errorf("record the items of an image update run: %w", err)
 	}
 	return n > 0, nil
 }
