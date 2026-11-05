@@ -165,11 +165,12 @@ type StackUpdateBody struct {
 	State        string   `json:"state" enum:"update_available,updating,busy,queued,up_to_date,check_stale,check_failed,rolled_back,rollback_failed,not_checked,skipped,ignored,none" doc:"The first that applies of: updating, busy, queued, update_available, rollback_failed, rolled_back, check_failed, not_checked, ignored or skipped (when every other checkable workload is one), check_stale, up_to_date. up_to_date only when every checkable workload is up to date. none when no workload of the stack can be checked (see notCheckable): never read as up to date"`
 	Count        int      `json:"count" minimum:"0" doc:"How many workloads have an update available; set when state is update_available, 0 otherwise"`
 	NotCheckable []string `json:"notCheckable" enum:"pinned_in_file,not_from_registry" doc:"Why some workloads of the stack are not part of the state: pinned_in_file (the file names a digest, not a tag) or not_from_registry (the image has no registry to ask). With state none these are the reasons nothing can be checked"`
+	PullFailed   bool     `json:"pullFailed,omitempty" doc:"Left out unless true: with state rolled_back, every workload that reads rolled back failed at the pull of its image, so the update changed nothing and nothing was rolled back. False for a stack where a workload really was put back"`
 }
 
 // stackUpdateOf turns a stack's roll-up into its answer.
 func stackUpdateOf(v updates.StackVerdict) *StackUpdateBody {
-	b := &StackUpdateBody{State: string(v.State), Count: v.Count, NotCheckable: make([]string, 0, len(v.NotCheckable))}
+	b := &StackUpdateBody{State: string(v.State), Count: v.Count, PullFailed: v.PullFailed, NotCheckable: make([]string, 0, len(v.NotCheckable))}
 	for _, s := range v.NotCheckable {
 		b.NotCheckable = append(b.NotCheckable, string(s))
 	}

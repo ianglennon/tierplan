@@ -106,6 +106,7 @@
         "check_stale": "A service of this stack was last checked a while ago. Checks may be off or failing for this environment.",
         "check_failed": "The check failed for a service of this stack. Open the stack to see which.",
         "rolled_back": "TierPlan rolled a service of this stack back because its update failed.",
+        "pull_failed": "TierPlan couldn't pull the image for the update of this stack, so nothing was changed. Open the stack to see which service.",
         "rollback_failed": "TierPlan couldn't restore the previous version of a service of this stack. Open the console.",
         "not_checked": "No check has run for a service of this stack yet. The first check runs on schedule, or choose Check now.",
         "skipped": "The new version of each service that can be checked was skipped. A newer version will show again.",

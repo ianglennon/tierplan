@@ -18,7 +18,7 @@ const NOT_CHECKABLE = ["pinned_in_file", "not_from_registry"] as const;
 
 // The image-shaped object UpdateBadge draws from. A stack has no image of its own: only its state
 // is real, and the badge's Tooltip is given the stack's own words in its place.
-function infoOf(state: Exclude<StackUpdate["state"], "none">): UpdateInfo {
+function infoOf(update: StackUpdate, state: Exclude<StackUpdate["state"], "none">): UpdateInfo {
   return {
     state,
     reason: "",
@@ -32,6 +32,12 @@ function infoOf(state: Exclude<StackUpdate["state"], "none">): UpdateInfo {
     successAt: "",
     note: "",
     task: false,
+    // A roll-up of services whose image could not be pulled changed nothing: the badge then reads that, never
+    // "rolled back". The failure carries only the reason, since the Tooltip has the stack's own words.
+    failure:
+      state === "rolled_back" && update.pullFailed
+        ? { digest: "", reason: "pull_failed", at: "", rollbackFailed: false }
+        : undefined,
   };
 }
 
@@ -75,11 +81,14 @@ export function StackUpdateCell({ update }: StackUpdateCellProps) {
     );
   }
 
+  const pullFailed = update.state === "rolled_back" && update.pullFailed;
   return (
     <UpdateBadge
-      info={infoOf(update.state)}
+      info={infoOf(update, update.state)}
       count={update.state === "update_available" ? update.count : undefined}
-      detail={t(`updates.stack.detail.${update.state}`, { count: update.count })}
+      detail={t(`updates.stack.detail.${pullFailed ? "pull_failed" : update.state}`, {
+        count: update.count,
+      })}
     />
   );
 }

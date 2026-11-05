@@ -87,4 +87,28 @@ describe("StackUpdateCell: the stack aggregate (12-10, UI-SPEC 'Stack aggregate'
     show(stackUpdate({ state }));
     expect(screen.getByText(word)).toBeTruthy();
   });
+
+  it("reads that the image could not be pulled, never 'rolled back', when nothing was changed", () => {
+    show(stackUpdate({ state: "rolled_back", pullFailed: true }));
+    expect(screen.getByText("Couldn't pull the image")).toBeTruthy();
+    expect(screen.queryByText(/rolled back/i)).toBeNull();
+    expect(
+      screen.getByText(
+        /couldn't pull the image for the update of this stack, so nothing was changed/,
+        {
+          selector: "span",
+        },
+      ),
+    ).toBeTruthy();
+  });
+
+  it("still reads rolled back when a service of the stack really was put back", () => {
+    show(stackUpdate({ state: "rolled_back", pullFailed: false }));
+    expect(screen.getByText("Update failed, rolled back")).toBeTruthy();
+    expect(
+      screen.getByText("TierPlan rolled a service of this stack back because its update failed.", {
+        selector: "span",
+      }),
+    ).toBeTruthy();
+  });
 });

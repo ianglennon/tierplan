@@ -11,6 +11,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -24,6 +25,7 @@ type stackUpdateAnswer struct {
 	State        string   `json:"state"`
 	Count        int      `json:"count"`
 	NotCheckable []string `json:"notCheckable"`
+	PullFailed   bool     `json:"pullFailed"`
 }
 
 // stackRowUpdate is a stack row as far as its update goes.
@@ -421,4 +423,91 @@ func equalNames(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// A stack whose update failed at the pull changed nothing, so its roll-up says so on every surface that carries it and never
+// reads as a rollback; a stack where an update really was put back still does. The same holds for a swarm stack and for a
+// Compose project on a standalone host.
+func TestStackRollUpSaysPullFailedWhenNothingWasRolledBack(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{
+		"team/a": {digest: updDigest('b')},
+		"team/c": {digest: updDigest('c')},
+	})
+	want := func(t *testing.T, what string, got *stackUpdateAnswer, pullFailed bool) {
+		t.Helper()
+		if got == nil || got.State != "rolled_back" || got.PullFailed != pullFailed {
+			t.Errorf("%s = %+v, want rolled_back with pullFailed %v", what, got, pullFailed)
+		}
+	}
+
+	t.Run("a swarm stack", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnvTuned(t, func(f *envFix) { f.updateHeads = heads })
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := deployedSwarmStack(t, f, e, admin, "shop")
+		reconfigureSwarm(t, f, e, stackImageService(st, "web", "a", 'a'), stackImageService(st, "db", "c", 'c'))
+		if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+			t.Fatalf("check now: %d %s", rec.code, rec.body)
+		}
+		fs := &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+		surfaces := func(t *testing.T, pullFailed bool) {
+			t.Helper()
+			want(t, "stack list", answerOf[stackRowsUpdate](t, admin.do(http.MethodGet, "stacks", "")).of(t, "shop"), pullFailed)
+			detail := answerOf[stackRowUpdate](t, admin.do(http.MethodGet, "stacks/"+st.ID, ""))
+			want(t, "stack detail", detail.Update, pullFailed)
+			all := answerOf[struct {
+				Groups []struct {
+					Stacks []stackRowUpdate `json:"stacks"`
+				} `json:"groups"`
+			}](t, admin.f.call(t, authReq{method: http.MethodGet, path: "/api/stacks", cookie: admin.cookie, csrf: admin.csrf}))
+			for _, g := range all.Groups {
+				for _, s := range g.Stacks {
+					if s.Name == "shop" {
+						want(t, "all-stacks list", s.Update, pullFailed)
+						return
+					}
+				}
+			}
+			t.Errorf("no stack shop in the all-stacks list")
+		}
+
+		remember(t, fs, e.ID, "service", "shop_web", updDigest('b'), updates.ReasonPullFailed, false)
+		surfaces(t, true)
+		// The same service put back after it was changed is a rollback, and the roll-up says that.
+		remember(t, fs, e.ID, "service", "shop_web", updDigest('b'), updates.ReasonUnhealthy, false)
+		surfaces(t, false)
+	})
+
+	t.Run("a Compose project on a standalone host", func(t *testing.T) {
+		t.Parallel()
+		compose := func(service string) map[string]string {
+			return map[string]string{"com.docker.compose.project": "shop", "com.docker.compose.service": service}
+		}
+		f, e := hostWithContainers(t, heads, nil,
+			[]dockertest.FakeContainer{
+				appContainer("shop-web-1", "registry.test/team/a:1", updImage('1'), compose("web")),
+				appContainer("shop-db-1", "registry.test/team/c:1", updImage('2'), compose("db")),
+			},
+			[]dockertest.FakeImage{
+				{ID: updImage('1'), RepoTags: []string{"registry.test/team/a:1"}, RepoDigests: []string{"registry.test/team/a@" + updDigest('a')}},
+				{ID: updImage('2'), RepoTags: []string{"registry.test/team/c:1"}, RepoDigests: []string{"registry.test/team/c@" + updDigest('c')}},
+			})
+		if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+			t.Fatalf("check now: %d %s", rec.code, rec.body)
+		}
+		fs := &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+		page := func(t *testing.T, pullFailed bool) {
+			t.Helper()
+			rec := f.get(t, e, "unmanaged-stacks/shop")
+			if rec.code != http.StatusOK {
+				t.Fatalf("unmanaged: %d %s", rec.code, rec.body)
+			}
+			want(t, "stack page", decode[unmanagedUpdateAnswer](t, rec).Update, pullFailed)
+		}
+		remember(t, fs, e.ID, "container", "shop-web-1", updDigest('b'), updates.ReasonPullFailed, false)
+		page(t, true)
+		remember(t, fs, e.ID, "container", "shop-web-1", updDigest('b'), updates.ReasonTimeout, false)
+		page(t, false)
+	})
 }

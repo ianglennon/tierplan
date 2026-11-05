@@ -116,3 +116,40 @@ func TestAggregateNeverUpToDateUnlessAll(t *testing.T) {
 	}
 	walk(nil, 3)
 }
+
+// A stack reads as pull-failed, and not as rolled back, only when every workload that is rolled back failed at the pull of its
+// image: nothing was changed. One workload that really was put back makes it a rollback.
+func TestAggregatePullFailed(t *testing.T) {
+	t.Parallel()
+	pull := updates.Verdict{State: updates.StateRolledBack, Failure: &updates.Failure{Reason: updates.ReasonPullFailed}}
+	back := updates.Verdict{State: updates.StateRolledBack, Failure: &updates.Failure{Reason: updates.ReasonUnhealthy}}
+	bare := updates.Verdict{State: updates.StateRolledBack}
+	ok := updates.Verdict{State: updates.StateUpToDate}
+	cases := []struct {
+		name string
+		in   []updates.Verdict
+		want bool
+	}{
+		{"one failed pull", []updates.Verdict{pull}, true},
+		{"a failed pull beside an up to date one", []updates.Verdict{pull, ok}, true},
+		{"two failed pulls", []updates.Verdict{pull, pull}, true},
+		{"a failed pull and a real rollback", []updates.Verdict{pull, back}, false},
+		{"a real rollback", []updates.Verdict{back}, false},
+		{"a rollback with no failure at hand", []updates.Verdict{bare}, false},
+		{"a failed pull and a rollback with no failure at hand", []updates.Verdict{pull, bare}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := updates.Aggregate(c.in)
+			if got.State != updates.StateRolledBack || got.PullFailed != c.want {
+				t.Errorf("Aggregate = %+v, want rolled_back with PullFailed %v", got, c.want)
+			}
+		})
+	}
+	// Only a rolled_back roll-up can be pull-failed: a failed pull that something else outranks says nothing.
+	upd := updates.Verdict{State: updates.StateUpdateAvailable}
+	if got := updates.Aggregate([]updates.Verdict{pull, upd}); got.State != updates.StateUpdateAvailable || got.PullFailed {
+		t.Errorf("Aggregate(pull, update) = %+v, want update_available, not PullFailed", got)
+	}
+}

@@ -17,6 +17,10 @@ type StackVerdict struct {
 	// NotCheckable are the states (pinned_in_file, not_from_registry) of the workloads that cannot be
 	// checked, each once, in that order. They explain a StateNone and never change the state.
 	NotCheckable []State
+	// PullFailed is set with StateRolledBack when every workload that reads rolled back failed at the pull of its image: the
+	// update changed nothing, so nothing was rolled back. A stack with one workload that really was put back is not
+	// PullFailed.
+	PullFailed bool
 }
 
 // Aggregate rolls the verdicts of a stack's workloads up into one (UI-SPEC "Stack aggregate"). Only the
@@ -25,7 +29,8 @@ type StackVerdict struct {
 //  1. none: no workload can be checked.
 //  2. updating, busy, queued: an update is under way or waiting.
 //  3. update_available, with how many.
-//  4. rollback_failed, rolled_back, check_failed, not_checked.
+//  4. rollback_failed, rolled_back, check_failed, not_checked. A rolled_back that is only workloads whose image could not
+//     be pulled is PullFailed: nothing was changed.
 //  5. When every remaining workload is skipped or ignored: ignored if any is, else skipped.
 //  6. check_stale when any remaining workload is.
 //  7. A mix of skipped or ignored workloads with up to date ones reads skipped or ignored as well: not
@@ -37,7 +42,7 @@ func Aggregate(vs []Verdict) StackVerdict {
 	var out StackVerdict
 	var pinned, local bool
 	count := map[State]int{}
-	checkable := 0
+	checkable, pulled := 0, 0
 	for _, v := range vs {
 		switch v.State {
 		case StatePinned:
@@ -49,6 +54,9 @@ func Aggregate(vs []Verdict) StackVerdict {
 		}
 		checkable++
 		count[v.State]++
+		if v.State == StateRolledBack && v.Failure != nil && v.Failure.Reason == ReasonPullFailed {
+			pulled++
+		}
 	}
 	if pinned {
 		out.NotCheckable = append(out.NotCheckable, StatePinned)
@@ -69,6 +77,7 @@ func Aggregate(vs []Verdict) StackVerdict {
 			if s == StateUpdateAvailable {
 				out.Count = count[s]
 			}
+			out.PullFailed = s == StateRolledBack && pulled == count[s]
 			return out
 		}
 	}

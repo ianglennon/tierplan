@@ -14205,6 +14205,8 @@ export interface components {
             count: number;
             /** @description Why some workloads of the stack are not part of the state: pinned_in_file (the file names a digest, not a tag) or not_from_registry (the image has no registry to ask). With state none these are the reasons nothing can be checked */
             notCheckable: ("pinned_in_file" | "not_from_registry")[] | null;
+            /** @description Left out unless true: with state rolled_back, every workload that reads rolled back failed at the pull of its image, so the update changed nothing and nothing was rolled back. False for a stack where a workload really was put back */
+            pullFailed?: boolean;
             /**
              * @description The first that applies of: updating, busy, queued, update_available, rollback_failed, rolled_back, check_failed, not_checked, ignored or skipped (when every other checkable workload is one), check_stale, up_to_date. up_to_date only when every checkable workload is up to date. none when no workload of the stack can be checked (see notCheckable): never read as up to date
              * @enum {string}
