@@ -162,6 +162,16 @@ describe("StackOverview services card on a swarm", () => {
     expect(within(table).getByText("8080->80/tcp")).toBeTruthy();
   });
 
+  it("keeps the Service column narrow, so the Updates badge is whole in a card half a page wide", async () => {
+    mount();
+    const card = await screen.findByRole("region", { name: "Services" });
+    const cell = (await within(card).findByRole("link", { name: "web" })).closest("td");
+    // At 1280px the card holds 428px. A 192px minimum for a name that truncates pushed the Updates column
+    // to the card's edge, where the badge was cut off (Phase 12 UAT).
+    expect(cell?.classList.contains("min-w-24")).toBe(true);
+    expect(cell?.classList.contains("min-w-48")).toBe(false);
+  });
+
   it("reads the state of a swarm service with the service list's own words", async () => {
     services = {
       items: [

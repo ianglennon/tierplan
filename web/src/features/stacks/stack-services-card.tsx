@@ -196,7 +196,7 @@ function ServiceRows({ envId, stackId, row, swarm, open, onToggle }: RowProps) {
   return (
     <Fragment>
       <TableRow>
-        <TableCell className="max-w-64 min-w-48 align-middle">
+        <TableCell className="max-w-64 min-w-24 align-middle">
           {swarm ? (
             <Link
               to="/env/$envId/services/$serviceId"
