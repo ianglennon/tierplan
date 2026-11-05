@@ -206,9 +206,20 @@ type StacksDeps struct {
 	// (stackops.Deps.DownProject), for the same reason.
 	DownProject func(ctx context.Context, c *dockerx.Client, project string) error
 
-	// cancels remembers who cancelled which deploy until the deploy ends and is audited. RegisterStacks
-	// makes it; every copy of the deps shares it.
+	// cancels remembers who cancelled which deploy until the deploy ends and is audited. It is a pointer, so the
+	// copies of the deps made after WithDeployCancels share it: the cancel route and the deploys that end
+	// elsewhere (the image update routes, the git deployer, the restart recovery) must hold the same one.
 	cancels *deployCancels
+}
+
+// WithDeployCancels returns d with the record of who cancelled which deploy made, when it has none. Build the deps with it before
+// they are copied into the routes and services that deploy a stack, so a deploy cancelled through the stack's cancel route is
+// audited with the person who cancelled it wherever it was started.
+func (d StacksDeps) WithDeployCancels() StacksDeps {
+	if d.cancels == nil {
+		d.cancels = &deployCancels{by: map[string]string{}}
+	}
+	return d
 }
 
 func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, Vault: d.Vault} }
@@ -404,9 +415,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	if d.Locks == nil {
 		d.Locks = stackops.NewLocks()
 	}
-	if d.cancels == nil {
-		d.cancels = &deployCancels{by: map[string]string{}}
-	}
+	d = d.WithDeployCancels()
 	if d.Drift == nil {
 		d.Drift = stackops.NewDriftStore()
 	}

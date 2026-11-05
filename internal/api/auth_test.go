@@ -553,6 +553,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			f.stackLocks = stackops.NewLocks()
 		}
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
+		stackDeps = stackDeps.WithDeployCancels() // as the server does, before the deps are copied
 		f.stackDeps = stackDeps
 		// The image update routes deploy a stack through the stack's own engine, so they hold the same deps and the same lock.
 		api.RegisterUpdates(r, api.UpdatesDeps{

@@ -657,6 +657,33 @@ func TestUnEditedDraftRebased(t *testing.T) {
 	}
 }
 
+// A person who cancels the image update of a stack is named in the audit row of the end of its deploy (WR-11). The update routes and the
+// cancel route are registered from copies of the stack deps, so the record of who cancelled has to be one the copies share.
+func TestCancelledUpdateNamesWhoCancelled(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web")
+	s.move(t, "web", 'b')
+	s.f.fake.SetTaskState("shop_web", "preparing", "")
+	rec := s.operator.do(http.MethodPost, "updates/run", stackRunBody("stack", "shop", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body)
+	}
+	jobID := answerOf[stackRunAnswer](t, rec).JobID
+	awaitStackJobItem(t, s.f, jobID, func(it jobs.Item) bool { return it.ID == "service:shop_web" && it.Unit == "tasks" })
+	other := s.f.caller(t, s.e, "operator-2", "operator")
+	if rec := other.do(http.MethodPost, cancelPath(s.st.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	if job := s.f.awaitDeploy(t, jobID); job.State == "done" {
+		t.Fatalf("job = %+v, want it stopped", job)
+	}
+	rows := s.f.auditRows(t, "stack.deployed")
+	last := rows[len(rows)-1]
+	if last.Details["result"] != "cancelled" || last.Details["cancelledBy"] != "operator-2" {
+		t.Errorf("stack.deployed = %+v, want result cancelled by operator-2", last)
+	}
+}
+
 // A failed update leaves the draft where it was and says so in the run and the audit log.
 func TestFailedUpdateNoRebase(t *testing.T) {
 	t.Parallel()
