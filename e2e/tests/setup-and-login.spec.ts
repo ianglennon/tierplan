@@ -96,7 +96,7 @@ base("/welcome offers the dind host and managing it opens the dashboard", async 
   await page.getByRole("button", { name: "Manage this host" }).click();
   // Nothing has been opened yet, so home is the overview (D-31), with the one
   // host it just added; its dashboard is a click away.
-  await expect(page).toHaveURL(/\/tierplan\/environments$/);
+  await expect(page).toHaveURL(/\/tierplan\/environments(\?tab=environments)?$/);
   await page.getByRole("main").locator("a[title]").first().click();
   await expect(page).toHaveURL(/\/tierplan\/env\/[^/]+$/);
   await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
@@ -137,7 +137,7 @@ base("the right password signs in with Keep me signed in and a refresh keeps the
 
   // Home is the environment this admin last opened, else the overview (D-31);
   // either way the signed-in shell is up.
-  const home = /\/tierplan\/(environments|env\/[^/]+)$/;
+  const home = /\/tierplan\/(environments(\?tab=environments)?|env\/[^/]+)$/;
   await expect(page).toHaveURL(home);
   await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
 

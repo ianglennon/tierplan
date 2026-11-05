@@ -163,7 +163,7 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
   await test.step("the overview and the switcher show it online", async () => {
     await page.getByRole("button", { name: "Switch environment" }).click();
     await page.getByRole("option", { name: "All environments" }).click();
-    await expect(page).toHaveURL(/\/tierplan\/environments$/);
+    await expect(page).toHaveURL(/\/tierplan\/environments(\?tab=environments)?$/);
 
     const row = page.getByRole("row").filter({ hasText: REMOTE });
     await expect(row).toBeVisible();
