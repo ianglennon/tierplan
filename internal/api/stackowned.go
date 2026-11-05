@@ -64,10 +64,7 @@ func knownStacks(list []stackops.Stack) stackIDs {
 // loadStackIDs reads the stacks of an environment once, for the rows of one request. A store that is
 // missing or cannot be read yields none: no link is drawn and nothing else changes.
 func loadStackIDs(ctx context.Context, st *store.Store, envID string, log *slog.Logger) stackIDs {
-	if st == nil {
-		return nil
-	}
-	list, err := stackops.Repo{Store: st}.Stacks(ctx, envID)
+	known, err := readStackIDs(ctx, st, envID)
 	if err != nil {
 		if log == nil {
 			log = slog.Default()
@@ -75,7 +72,20 @@ func loadStackIDs(ctx context.Context, st *store.Store, envID string, log *slog.
 		log.Error("reading the stacks for their links failed", "environment", envID, "error", err)
 		return nil
 	}
-	return knownStacks(list)
+	return known
+}
+
+// readStackIDs is loadStackIDs that says when the store cannot be read. A caller that decides something from the answer, such as
+// whether a container can be updated, fails with it: no stacks read is not "no stacks managed". A store that is missing holds none.
+func readStackIDs(ctx context.Context, st *store.Store, envID string) (stackIDs, error) {
+	if st == nil {
+		return nil, nil
+	}
+	list, err := stackops.Repo{Store: st}.Stacks(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	return knownStacks(list), nil
 }
 
 // confirm returns the ID of the stack of this environment that the object is linked to, else empty (T-07-146): the object

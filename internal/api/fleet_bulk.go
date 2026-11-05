@@ -354,7 +354,11 @@ func bulkSelectable(ctx context.Context, d UpdatesDeps, envID string) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	known := loadStackIDs(ctx, d.Store, envID, d.log())
+	// A container of a managed stack reads "adopt first" without the stacks, so a failed read refuses the environment's items.
+	known, err := readStackIDs(ctx, d.Store, envID)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]string, len(list))
 	for _, wv := range list {
 		item := fleetUpdateItem(wv, known)

@@ -807,6 +807,52 @@ func (f *envFix) auditIPs(t *testing.T, action string) []string {
 	return out
 }
 
+// With the stacks of an environment unreadable, a container of a managed stack cannot be told from one TierPlan does not manage, and
+// the bulk update must not guess (WR-14): its items are refused as offline and nothing is written.
+func TestBulkWithUnreadableStacksRefusesTheEnvironmentsItems(t *testing.T) {
+	t.Parallel()
+	f, e := bulkSwarm(t, newScriptedHeads(threeAnswers('b')), nil, threeServices()...)
+	if _, err := f.st.Write.Exec(`ALTER TABLE stacks RENAME TO stacks_unreadable`); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.bulkRun(t, bulkItem(e.ID, "service", "web", nil), bulkItem(e.ID, "service", "api", nil))
+	if rec.code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.code, rec.body)
+	}
+	ans := decode[bulkAnswer](t, rec)
+	if len(ans.Jobs) != 0 || len(ans.Skipped) != 2 || ans.Skipped[0].Reason != "offline" || ans.Skipped[1].Reason != "offline" {
+		t.Errorf("answer = %+v, want no job and both items refused offline", ans)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want nothing written", n)
+	}
+}
+
+// The Updates tab names an environment whose stacks cannot be read as not read, where it would list its managed containers as
+// "adopt first" and not selectable (WR-14).
+func TestFleetUpdatesWithUnreadableStacksNameTheEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newFleetFix(t, "Alpha")
+	alpha := f.id("Alpha")
+	f.fake.online(alpha)
+	f.fake.verdicts[alpha] = fleetVerdicts{list: []updates.WorkloadVerdict{verdictOf(t, "container", "cache", "", updates.StateUpdateAvailable)}}
+	f.fleet.Store = f.st
+	f.rebuild(t)
+	if got := f.updatesList(t, "", ""); len(got.Groups) != 1 || len(got.NotIncluded) != 0 {
+		t.Fatalf("answer = %+v, want Alpha listed while its stacks can be read", got)
+	}
+	if _, err := f.st.Write.Exec(`ALTER TABLE stacks RENAME TO stacks_unreadable`); err != nil {
+		t.Fatal(err)
+	}
+
+	got := f.updatesList(t, "", "")
+	want := []fleetNotIncluded{{EnvID: alpha, EnvName: "Alpha", Reason: "not_reporting"}}
+	if len(got.Groups) != 0 || !slices.Equal(got.NotIncluded, want) {
+		t.Errorf("answer = %+v, want Alpha named in notIncluded and no items", got)
+	}
+}
+
 // swarmServiceUpdate is the state the services list of the environment gives the service.
 func (f *agentFix) swarmServiceUpdate(t *testing.T, envID, name string) string {
 	t.Helper()

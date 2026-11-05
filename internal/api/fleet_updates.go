@@ -159,7 +159,10 @@ func readFleetUpdates(ctx context.Context, d FleetDeps, env envs.Environment) (f
 	if v.Verdicts, v.Coverage, err = d.Updates.EnvVerdicts(ctx, env.ID); err != nil {
 		return v, 0, err
 	}
-	v.Known = loadStackIDs(ctx, d.Store, env.ID, d.Log)
+	// A container of a managed stack reads "adopt first" without the stacks, so a failed read fails the environment.
+	if v.Known, err = readStackIDs(ctx, d.Store, env.ID); err != nil {
+		return v, 0, err
+	}
 	return v, len(agg.NotReporting), nil
 }
 
