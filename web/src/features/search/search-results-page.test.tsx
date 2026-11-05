@@ -215,6 +215,9 @@ describe("SearchResultsPage (D-18)", () => {
     expect(within(chips).getByRole("radio", { name: "All (4)" }).getAttribute("aria-checked")).toBe(
       "true",
     );
+    // The chips wrap onto further rows, so the page does not scroll sideways at 390px.
+    expect(chips.classList.contains("flex-wrap")).toBe(true);
+    expect(chips.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
 
     // The input is labelled Search with the page's placeholder and holds the query.
     expect(box().getAttribute("placeholder")).toBe("Search by name, image or stack");

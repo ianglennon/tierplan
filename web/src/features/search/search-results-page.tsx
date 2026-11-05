@@ -39,6 +39,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/compon
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EnvFilter } from "@/features/fleet/env-filter";
 import { VirtualRows } from "@/features/fleet/virtual-rows";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { MatchText } from "@/features/search/match-text";
 import { hitKey, hitTarget, ICONS, useDetail } from "@/features/search/search-hits";
 import type { SearchPageSearch } from "@/features/search/search-params";
@@ -203,6 +204,7 @@ export function SearchResultsPage({ search, onSearchChange }: SearchResultsPageP
             size="sm"
             value={type ?? "all"}
             aria-label={t("search.page.chips.label")}
+            className={STATUS_CHIP_ROW}
             onValueChange={(next) => {
               // Pressing the chip that is on turns it off; one chip is always on.
               if (next === "all") onSearchChange({ type: undefined });

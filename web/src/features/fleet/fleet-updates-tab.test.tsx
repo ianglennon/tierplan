@@ -315,6 +315,14 @@ describe("FleetUpdatesTab", () => {
     expect(showChanges).toEqual(["problems"]);
   });
 
+  it("lets the Show chips wrap onto further rows, so the page does not scroll sideways at 390px", async () => {
+    mount();
+    await table();
+    const group = screen.getByRole("radiogroup", { name: "Show" });
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.className).not.toMatch(/overflow-x-auto|flex-nowrap/);
+  });
+
   it("asks the server for the show value and the environments chosen", async () => {
     mount({ env: ["e1"], show: "problems" });
     await table();

@@ -28,6 +28,7 @@ import { FleetEmptyUpdates } from "@/features/fleet/fleet-empty-updates";
 import { FLEET_SHOWS } from "@/features/fleet/fleet-search";
 import { itemKey, UpdatesTable } from "@/features/fleet/updates-table";
 import { useChosenKeys } from "@/features/resources/selection";
+import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { useT } from "@/i18n/use-t";
 
 interface FleetUpdatesTabProps {
@@ -107,6 +108,7 @@ export function FleetUpdatesTab({ env, show, onEnvChange, onShowChange }: FleetU
           size="sm"
           value={show}
           aria-label={t("fleet.updates.show.label")}
+          className={STATUS_CHIP_ROW}
           onValueChange={(next) => {
             // Pressing the chip that is on turns it off; one chip is always on.
             const known = FLEET_SHOWS.find((s) => s === next);
