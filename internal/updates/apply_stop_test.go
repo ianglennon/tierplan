@@ -4,12 +4,15 @@
 package updates_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -188,5 +191,52 @@ func TestShutdownDuringABulkLeavesItsRunsForRecovery(t *testing.T) {
 	}
 	if _, held := r.locks.Held(r.envID); held {
 		t.Error("the lock is still held after the job ended")
+	}
+}
+
+// beforeAcquire is the rig's locks running a function once, just before the first TryAcquire takes the lock: the moment between a
+// request being judged and the environment being locked.
+type beforeAcquire struct {
+	*stackops.Locks
+	once sync.Once
+	fn   func()
+}
+
+func (l *beforeAcquire) TryAcquire(envID string, h stackops.Holder) (func(), stackops.Holder, bool) {
+	l.once.Do(l.fn)
+	return l.Locks.TryAcquire(envID, h)
+}
+
+// A request that was judged while the lock was free, and reaches the lock after another update of the same service has run and
+// finished, is refused as having nothing to update: the service already has the image. It does not write the same spec again or
+// record an update the service did not make (WR-04).
+func TestAnUpdateJudgedBeforeAnotherFinishedIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	r.offer("web", dg('b'))
+	var first jobs.Job
+	r.applier.Locks = &beforeAcquire{Locks: r.locks, fn: func() {
+		// The first update runs to its end inside the gap, through the same applier: its own lock is taken from the real locks.
+		r.applier.Locks = r.locks
+		first = r.run(t, r.request("web", dg('b')))
+	}}
+
+	_, err := r.applier.Start(testsupport.Context(t), r.request("web", dg('b')))
+
+	if first.State != jobs.JobDone {
+		t.Fatalf("first update = %s, want done", first.State)
+	}
+	if !errors.Is(err, updates.ErrNothingToUpdate) {
+		t.Errorf("second Start = %v, want ErrNothingToUpdate", err)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 1 {
+		t.Errorf("service updates = %d, want only the first update's", n)
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Error("the lock is still held after the refusal")
+	}
+	runs, rerr := r.runs.Running(testsupport.Context(t), r.envID)
+	if rerr != nil || len(runs) != 0 {
+		t.Errorf("running runs = %+v, %v, want none", runs, rerr)
 	}
 }

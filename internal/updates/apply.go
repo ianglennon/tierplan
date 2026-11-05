@@ -5,6 +5,7 @@ package updates
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
@@ -273,6 +275,13 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 	}
 	freeLock := release
 
+	// The request was judged before the lock was held. An update that held the lock meanwhile and has finished is behind the
+	// judgement, so the service is read again, live, now that nothing else can change it.
+	if err := a.stillToUpdate(ctx, t); err != nil {
+		freeLock()
+		return "", err
+	}
+
 	rid, err := uuid.NewV7()
 	if err != nil {
 		freeLock()
@@ -317,6 +326,34 @@ func (a *Applier) Start(ctx context.Context, req Request) (string, error) {
 	}
 	close(ready)
 	return job.ID, nil
+}
+
+// stillToUpdate refuses, with ErrNothingToUpdate, a service that already has the image the update would give it: another update took
+// the lock after the request was judged, finished, and freed it before this one took it. Without the refusal this one would write the
+// same spec and record a from-to update the service did not make. A service that cannot be read now is not refused: the job reads it
+// again and ends the run if it is gone. A container is not in question, since an update is of the container's ID and a container the
+// first update replaced is gone.
+func (a *Applier) stillToUpdate(ctx context.Context, t target) error {
+	if t.kind != "service" || a.Service == nil || a.Service.Clusters == nil {
+		return nil
+	}
+	var detail dockerx.ServiceDetail
+	err := a.Service.Clusters.ClusterRead(ctx, t.envID, func(c *dockerx.Client) error {
+		var e error
+		detail, _, e = c.ServiceInspect(ctx, t.id)
+		return e
+	})
+	switch {
+	case errors.Is(err, dockerx.ErrServiceNotFound):
+		return ErrWorkloadGone
+	case err != nil:
+		return nil
+	}
+	var spec swarm.ServiceSpec
+	if json.Unmarshal(detail.Spec, &spec) == nil && spec.TaskTemplate.ContainerSpec != nil && strings.HasSuffix(spec.TaskTemplate.ContainerSpec.Image, "@"+t.to) {
+		return ErrNothingToUpdate
+	}
+	return nil
 }
 
 // wired reports whether the applier has what an update needs.
