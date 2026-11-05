@@ -388,6 +388,7 @@
         "start": "Start the new container",
         "remove_old": "Remove the old container",
         "rollback": "Roll back to the previous version",
+        "rollbackNothing": "Check what the update changed",
         "rollback_wait": "Wait for the previous version to run"
       },
       "success": {
@@ -398,7 +399,8 @@
       "failed": {
         "title": "The update failed",
         "body": "{{reason}} Open {{name}} to see what it runs now.",
-        "bodyNoReason": "Open {{name}} to see what it runs now."
+        "bodyNoReason": "Open {{name}} to see what it runs now.",
+        "restarted": "TierPlan restarted during this update."
       },
       "cancelled": {
         "title": "The update was cancelled",

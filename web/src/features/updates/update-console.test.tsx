@@ -73,6 +73,9 @@ let status: number;
 let role: "viewer" | "operator";
 let lines: string[];
 let from: string;
+// How the server says the update's run ended, when it says: absent for a server that does not.
+let runState: string | undefined;
+let runReason: string | undefined;
 let client: QueryClient;
 
 function jobBody() {
@@ -89,6 +92,8 @@ function jobBody() {
     finishedAt: state === "running" ? "" : "2026-11-04T12:00:09Z",
     items: items.map(item),
     output: lines.map((text, i) => ({ seq: i + 1, at: "2026-11-04T12:00:01Z", text })),
+    ...(runState ? { runState } : {}),
+    ...(runReason ? { runReason } : {}),
   };
 }
 
@@ -101,6 +106,8 @@ beforeEach(() => {
   role = "viewer";
   lines = ["Pulled nginx on 2 nodes"];
   from = A;
+  runState = undefined;
+  runReason = undefined;
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
@@ -575,6 +582,75 @@ describe("UpdateConsole: a container that failed after the old one was touched",
     mount();
     await screen.findByText("The update failed", { selector: "[data-slot=alert-title]" });
     expect(screen.queryByText(/rolled back/)).toBeNull();
+  });
+});
+
+// A recovery after a restart runs one restore step, and that step reads done whether it put the old
+// container back or found nothing to put back. The run's record says which (runState).
+describe("UpdateConsole: a recovery after a restart reads the run, not the steps", () => {
+  const restoreStep = (over: Partial<Item> = {}): Item => ({
+    id: "rollback",
+    label: "Put the old container back",
+    state: "done",
+    ...over,
+  });
+
+  beforeEach(() => {
+    kind = "container";
+    workload = "cache";
+    state = "done";
+    runReason = "server_restarted";
+    lines = [
+      "TierPlan restarted during this update. Putting cache back to sha256:aaaaaaaaaaaa",
+      "cache runs the version it ran before the update",
+    ];
+  });
+
+  it("does not say rolled back or updated for a container the update never touched", async () => {
+    runState = "failed";
+    items = [restoreStep()];
+    mount();
+    await screen.findByText("The update failed", { selector: "[data-slot=alert-title]" });
+    expect(screen.getByText(/TierPlan restarted during this update\. Open cache/)).toBeTruthy();
+    expect(screen.queryByText(/rolled back/i)).toBeNull();
+    expect(screen.queryByText(/put sha256/)).toBeNull();
+    expect(screen.queryByText("Updated", { selector: "[data-slot=alert-title]" })).toBeNull();
+    // The step list does not call the restore a rollback, nor tick the update's end.
+    expect(screen.queryByText("Roll back to the previous version")).toBeNull();
+    expect(screen.getByText("Check what the update changed")).toBeTruthy();
+    const steps = within(screen.getByRole("list", { name: "Steps of the deploy" })).getAllByRole(
+      "listitem",
+    );
+    expect(steps.at(-1)?.textContent).toBe("DoneSkipped");
+  });
+
+  it("says rolled back when the old container really was put back", async () => {
+    runState = "rolled_back";
+    items = [restoreStep()];
+    mount();
+    await screen.findByText("The update failed and was rolled back");
+    expect(screen.getByText(/TierPlan restarted during this update\. TierPlan put/)).toBeTruthy();
+  });
+
+  it("reads a service the update never wrote the same way", async () => {
+    kind = "service";
+    workload = "web";
+    state = "partial";
+    runState = "failed";
+    items = [
+      {
+        id: "rollback",
+        label: "Roll back to the previous version",
+        state: "done",
+        code: "nothing_to_put_back",
+        message: "The update had not changed the service, so nothing was put back.",
+      },
+      { id: "rollback_wait", label: "Wait for the previous version to run", state: "skipped" },
+    ];
+    mount();
+    await screen.findByText("The update failed", { selector: "[data-slot=alert-title]" });
+    expect(screen.getByText(/TierPlan restarted during this update\. Open web/)).toBeTruthy();
+    expect(screen.queryByText(/rolled back/i)).toBeNull();
   });
 });
 

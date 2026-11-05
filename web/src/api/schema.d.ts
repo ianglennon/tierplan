@@ -15097,6 +15097,13 @@ export interface components {
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description The update's run, kept after the job leaves the server's history */
             runId: string;
+            /** @description Left out unless set: why the run ended as it did, in TierPlan's codes (for example server_restarted) */
+            runReason?: string;
+            /**
+             * @description Left out unless the run can be read: how the update's run stands. The steps cannot tell a rollback that happened from a restore that found nothing to put back; this does. rolled_back means the previous version was put back, failed that it was not (the update failed before it changed anything, or was cut off by a restart that left the workload as it was)
+             * @enum {string}
+             */
+            runState?: "queued" | "running" | "done" | "failed" | "rolled_back" | "rollback_failed";
             /** @description Who started the update, as a name */
             startedBy: string;
             /**

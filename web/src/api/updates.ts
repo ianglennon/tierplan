@@ -699,7 +699,10 @@ export function useImageUpdateJobs() {
 // An update job as the deploy console's parts read it: the stack job's shape, with what an update
 // adds. The server's body has no mode or stack, so they are filled in.
 export type UpdateJobView = StackJob &
-  Pick<UpdateJob, "workload" | "fromDigest" | "toDigest" | "kind" | "runId">;
+  Pick<
+    UpdateJob,
+    "workload" | "fromDigest" | "toDigest" | "kind" | "runId" | "runState" | "runReason"
+  >;
 
 function asStackJob(job: UpdateJob): UpdateJobView {
   return { ...job, mode: "update", stackId: "" };

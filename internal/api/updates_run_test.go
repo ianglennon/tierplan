@@ -1046,3 +1046,65 @@ func TestRolledBackNeverCounted(t *testing.T) {
 		t.Errorf("updates = %d, want web offered again once the tag points at another digest", n)
 	}
 }
+
+// The job of an update says how its run ended, because the steps cannot: a container update that a restart cut off before it touched
+// the old container ends its restore step done, and the console must not read that as a rollback (the run is failed, not rolled_back).
+func TestUpdateJobSaysHowItsRunEnded(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	runs := updates.RunStore{Q: f.st.Q, W: f.st.Write}
+
+	for _, tc := range []struct {
+		name   string
+		state  updates.RunState
+		reason string
+	}{
+		{"cut-off", updates.RunFailed, updates.ReasonServerRestarted},
+		{"put-back", updates.RunRolledBack, updates.ReasonServerRestarted},
+		{"restore-failed", updates.RunRollbackFailed, updates.ReasonRestoreFailed},
+		{"done", updates.RunDone, ""},
+	} {
+		run := updates.Run{ID: "run-" + tc.name, EnvID: e.ID, Kind: "container", Workload: "cache", State: updates.RunRunning, Actor: "u1"}
+		if err := runs.Insert(testsupport.Context(t), run); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := runs.Finish(testsupport.Context(t), run.ID, tc.state, tc.reason, 0, 0); err != nil || !ok {
+			t.Fatalf("finish %s: %v %v", tc.name, ok, err)
+		}
+		job, err := f.jobHub.Start(jobs.Spec{
+			Kind: updates.JobKind, EnvID: e.ID, Owner: "user:u1",
+			Meta:  map[string]string{updates.MetaRunID: run.ID, updates.MetaKind: "container", updates.MetaWorkload: "cache"},
+			Items: []jobs.ItemSpec{{ID: updates.ItemRollback, Label: "Put the old container back", Kind: stackops.KindStep}},
+		}, func(context.Context, *jobs.Reporter) {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.awaitUpdate(t, job.ID)
+
+		rec := f.req(t, http.MethodGet, "/api/env/"+e.ID+"/update-jobs/"+job.ID, "")
+		if rec.code != http.StatusOK {
+			t.Fatalf("%s: GET job = %d %s", tc.name, rec.code, rec.body)
+		}
+		got := decode[struct {
+			RunState  string `json:"runState"`
+			RunReason string `json:"runReason"`
+		}](t, rec)
+		if got.RunState != string(tc.state) || got.RunReason != tc.reason {
+			t.Errorf("%s: runState %q and runReason %q, want %q and %q", tc.name, got.RunState, got.RunReason, tc.state, tc.reason)
+		}
+	}
+
+	// A job whose run is not on record says nothing of it.
+	job, err := f.jobHub.Start(jobs.Spec{
+		Kind: updates.JobKind, EnvID: e.ID, Owner: "user:u1", Meta: map[string]string{updates.MetaRunID: "run-gone"},
+	}, func(context.Context, *jobs.Reporter) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.awaitUpdate(t, job.ID)
+	rec := f.req(t, http.MethodGet, "/api/env/"+e.ID+"/update-jobs/"+job.ID, "")
+	if got := decode[map[string]any](t, rec); rec.code != http.StatusOK || got["runState"] != nil {
+		t.Errorf("a job whose run is gone = %d %v, want 200 without a runState", rec.code, got)
+	}
+}

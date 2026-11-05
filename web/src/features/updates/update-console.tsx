@@ -98,6 +98,18 @@ export type UpdateOutcome =
 
 const isRestoreStep = (i: StackJobItem) => i.id === "rollback" || i.id === "rollback_wait";
 
+// updateFinished is whether the update itself finished well. A job that recovery ran after a restart
+// has only a restore step, and its steps read done whether the restore put something back or found
+// nothing to put back, so the job's state alone cannot tell. The run's record can: a run that ended
+// failed, rolled back or rollback_failed did not finish the update. A run the server could not read
+// leaves the steps to say.
+function updateFinished(job: UpdateJobView): boolean {
+  const run = job.runState;
+  return (
+    job.state === "done" && run !== "failed" && run !== "rolled_back" && run !== "rollback_failed"
+  );
+}
+
 // failedStepOf is the step that stopped the update itself, not the restore that followed it.
 export function failedStepOf(job: UpdateJobView): StackJobItem | undefined {
   return (job.items ?? []).find((i) => i.state === "failed" && !isRestoreStep(i));
@@ -113,6 +125,11 @@ export function outcomeOf(
   const items = job.items ?? [];
   // A cancel after the swarm took the update is not a failure: the job read partial, with its wait cancelled.
   if (items.some((i) => i.id === "wait" && i.state === "cancelled")) return "cancelled";
+  // The run's record is the truth about a rollback, where the server gave it. "failed" is a run that
+  // put nothing back: the update failed before it changed anything, or a restart cut it off and the
+  // workload was found as it had been. The steps cannot tell that from a rollback, so they are not asked.
+  if (job.runState === "rolled_back" || job.runState === "rollback_failed") return job.runState;
+  if (job.runState === "failed") return failedStepOf(job)?.id === "pull" ? "pull_failed" : "failed";
   const back = items.find((i) => i.id === "rollback");
   const wait = items.find((i) => i.id === "rollback_wait");
   if (back || wait) {
@@ -158,15 +175,16 @@ export function consoleStepsOf(t: Translate, job: UpdateJobView): StackJobItem[]
   const items = (job.items ?? []).map((it): StackJobItem => {
     if (!(STEP_IDS as readonly string[]).includes(it.id)) return it;
     const nodes = Number(it.result?.nodes);
+    // A restore step of a run that put nothing back is not called a rollback.
+    const nothingPutBack = it.id === "rollback" && it.state === "done" && job.runState === "failed";
     const label =
       it.id === "pull" && Number.isFinite(nodes) && it.result?.nodes
         ? t("updates.console.steps.pullNodes", { count: nodes })
-        : t(`updates.console.steps.${it.id}`);
+        : t(`updates.console.steps.${nothingPutBack ? "rollbackNothing" : it.id}`);
     return { ...it, label };
   });
   const ended = job.state !== "running";
-  const state: StackJobItem["state"] =
-    job.state === "done" ? "done" : ended ? "skipped" : "waiting";
+  const state: StackJobItem["state"] = updateFinished(job) ? "done" : ended ? "skipped" : "waiting";
   items.push({
     id: "done",
     kind: "step",
@@ -216,7 +234,8 @@ export function rowOf(job: UpdateJobView): StackJobItem {
 }
 
 // containerRowOf is the container being replaced as one row: working once it is pulled and the new one
-// is being made, done when the update has finished well, failed when a step did.
+// is being made, done when the update has finished well, failed when a step did or when a recovery job
+// ended without the update having finished.
 function containerRowOf(job: UpdateJobView): StackJobItem {
   const items = job.items ?? [];
   const failed = items.some((i) => i.state === "failed");
@@ -224,7 +243,7 @@ function containerRowOf(job: UpdateJobView): StackJobItem {
   let state: StackJobItem["state"] = "waiting";
   if (failed) state = "failed";
   else if (job.state === "cancelled") state = "cancelled";
-  else if (job.state === "done") state = "done";
+  else if (job.state === "done") state = updateFinished(job) ? "done" : "failed";
   else if (started) state = "running";
   return {
     id: `container:${job.workload}`,
@@ -526,7 +545,10 @@ function Result({
   const restoreChanged = (job.items ?? []).find(
     (i) => i.id === "rollback" && i.code === "restore_service_changed",
   );
-  const reason = (restoreChanged ?? failedStepOf(job))?.message ?? "";
+  const reason =
+    (restoreChanged ?? failedStepOf(job))?.message ??
+    // A run a restart cut off, with nothing to put back, has no step that failed.
+    (job.runReason === "server_restarted" ? t("updates.console.failed.restarted") : "");
   return (
     <Alert variant="destructive" role="alert" data-slot="update-result">
       <CircleX aria-hidden="true" />

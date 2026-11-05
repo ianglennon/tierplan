@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -84,6 +85,8 @@ type UpdateJobBody struct {
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
 	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: check, pull, update, wait and, when the image has a health check, health"`
 	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first"`
+	RunState   string               `json:"runState,omitempty" enum:"queued,running,done,failed,rolled_back,rollback_failed" doc:"Left out unless the run can be read: how the update's run stands. The steps cannot tell a rollback that happened from a restore that found nothing to put back; this does. rolled_back means the previous version was put back, failed that it was not (the update failed before it changed anything, or was cut off by a restart that left the workload as it was)"`
+	RunReason  string               `json:"runReason,omitempty" doc:"Left out unless set: why the run ended as it did, in TierPlan's codes (for example server_restarted)"`
 }
 
 // UpdateJobOutput wraps UpdateJobBody for huma.
@@ -162,7 +165,7 @@ func registerUpdateRun(r *httpx.Router, d UpdatesDeps) {
 			if !ok || job.Kind != updates.JobKind || job.EnvID != env.ID {
 				return nil, httpx.Problem(http.StatusNotFound, problemUpdateJobNotFound, updateJobGone)
 			}
-			return &UpdateJobOutput{CacheControl: "no-store", Body: updateJobBody(job, outputOf(hub, job.ID))}, nil
+			return &UpdateJobOutput{CacheControl: "no-store", Body: d.withRun(ctx, updateJobBody(job, outputOf(hub, job.ID)))}, nil
 		})
 
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
@@ -330,6 +333,23 @@ func previouslyFailedProblem(e *updates.PreviouslyFailedError) error {
 	}
 }
 
+// withRun adds how the job's run stands, read from the run's record. A run that cannot be read leaves the body as it is, and the
+// console goes by the steps.
+func (d UpdatesDeps) withRun(ctx context.Context, b UpdateJobBody) UpdateJobBody {
+	if b.RunID == "" || d.Applier == nil || d.Applier.Runs == nil {
+		return b
+	}
+	run, err := d.Applier.Runs.Get(ctx, b.RunID)
+	if err != nil {
+		if ctx.Err() == nil && !errors.Is(err, sql.ErrNoRows) {
+			d.log().Error("reading the run of an update job failed", "job", b.ID, "run", b.RunID, "error", err)
+		}
+		return b
+	}
+	b.RunState, b.RunReason = string(run.State), run.Reason
+	return b
+}
+
 // updateJobBody turns a job of the hub into its body.
 func updateJobBody(j jobs.Job, output []jobs.Output) UpdateJobBody {
 	b := UpdateJobBody{
@@ -371,7 +391,7 @@ func serveUpdateJobStream(w http.ResponseWriter, req *http.Request, d UpdatesDep
 		Hub: hub, JobID: jobID, Key: string(p.Type) + ":" + p.ID, Limiter: lim, What: "update",
 		GoneType: problemUpdateJobNotFound, GoneDetail: updateJobGone, TooManyType: problemTooManyStreams,
 		Heartbeat: d.Heartbeat, MaxLifetime: d.MaxLifetime, Log: d.log(),
-		Snapshot: func(j jobs.Job) any { return updateJobBody(j, outputOf(hub, j.ID)) },
+		Snapshot: func(j jobs.Job) any { return d.withRun(ctx, updateJobBody(j, outputOf(hub, j.ID))) },
 		Encode: func(ev jobs.Event) (any, bool) {
 			switch {
 			case ev.Type == jobs.EventItem && ev.Item != nil:
@@ -379,7 +399,7 @@ func serveUpdateJobStream(w http.ResponseWriter, req *http.Request, d UpdatesDep
 			case ev.Type == jobs.EventOutput && ev.Output != nil:
 				return stackJobOutputLine(*ev.Output), true
 			case ev.Type == jobs.EventDone && ev.Job != nil:
-				return updateJobBody(*ev.Job, outputOf(hub, ev.Job.ID)), true
+				return d.withRun(ctx, updateJobBody(*ev.Job, outputOf(hub, ev.Job.ID))), true
 			}
 			return nil, false
 		},
