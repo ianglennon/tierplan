@@ -466,6 +466,35 @@ type containerScene struct {
 	named, temp *envs.ContainerRow
 }
 
+// containerSceneOf finds, among the containers of the environment, the old container of the run and what stands beside it. Docker
+// names are unique per host and not per environment, so the container that has the old one's name now and the replacement under
+// its temporary name are only those on the old container's own node: a container of the same name on another node is not part of
+// this update. When the old container is gone there is no node to go by, and the container holding the name is taken as it is.
+func containerSceneOf(snap envs.Aggregate, run Run, tempName string) (containerScene, bool) {
+	var sc containerScene
+	var haveOld bool
+	for _, c := range snap.Containers {
+		if c.ID == run.WorkloadID {
+			sc.old, haveOld = c, true
+			break
+		}
+	}
+	for i := range snap.Containers {
+		c := snap.Containers[i]
+		if c.ID == run.WorkloadID || (haveOld && c.NodeID != sc.old.NodeID) {
+			continue
+		}
+		switch name := strings.TrimPrefix(c.Name, "/"); name {
+		case run.Workload:
+			sc.named = &c
+		case tempName:
+			sc.temp = &c
+		}
+	}
+	sc.node = sc.old.NodeID
+	return sc, haveOld
+}
+
 // recoverContainer puts the old container of an interrupted update back. It looks at what the node holds, and puts back only what
 // the update displaced: the replacement is removed, the old container is given its name back and, if the update stopped it, started.
 func (r *Recovery) recoverContainer(ctx context.Context, run Run) tried {
@@ -492,19 +521,7 @@ func (r *Recovery) recoverContainer(ctx context.Context, run Run) tried {
 		short = short[:shortIDLen]
 	}
 	tempName := run.Workload + "-tierplan-new-" + short
-	var sc containerScene
-	var haveOld bool
-	for i := range snap.Containers {
-		c := snap.Containers[i]
-		switch name := strings.TrimPrefix(c.Name, "/"); {
-		case c.ID == run.WorkloadID:
-			sc.old, haveOld = c, true
-		case name == run.Workload:
-			sc.named = &c
-		case name == tempName:
-			sc.temp = &c
-		}
-	}
+	sc, haveOld := containerSceneOf(snap, run, tempName)
 	if !haveOld {
 		if len(snap.NotReporting) > 0 {
 			// The node the container is on may be one of those that did not answer.
@@ -520,7 +537,6 @@ func (r *Recovery) recoverContainer(ctx context.Context, run Run) tried {
 		r.finish(ctx, run, RunFailed, ReasonServerRestarted, ReasonServerRestarted)
 		return triedDone
 	}
-	sc.node = sc.old.NodeID
 	items := []jobs.ItemSpec{{ID: ItemRollback, Label: "Put the old container back", Kind: stackops.KindStep}}
 	return r.begin(ctx, run, t, items, func(jctx context.Context, rep *jobs.Reporter, end endFunc) {
 		r.restoreContainer(jctx, rep, run, t, sc, tempName, restartedEnd(end))
