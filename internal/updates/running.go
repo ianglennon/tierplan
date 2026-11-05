@@ -201,10 +201,11 @@ func isImageID(s string) bool {
 	return true
 }
 
-// needsImageText reports whether the reference of c is only to be had from an inspect: no label says
-// what was written, and the list shows an image ID.
+// needsImageText reports whether what c was created from is only to be had from an inspect: the list shows
+// an image ID, so the tag moved. It gives the reference when no label does, and the digest when the store
+// dropped the image.
 func needsImageText(c envs.ContainerRow) bool {
-	return c.Labels[stacks.LabelStackImage] == "" && isImageID(c.Image) && !isAgent(c)
+	return isImageID(c.Image) && !isAgent(c)
 }
 
 func isAgent(c envs.ContainerRow) bool { return c.Labels[labelAgent] == "true" }
@@ -286,6 +287,15 @@ func ContainerWorkloads(agg envs.Aggregate, text func(containerID string) (strin
 		}
 		w.Written, w.Ref = written, ref
 		w.RunningDigest = runningDigest(im.RepoDigests, spec)
+		if w.RunningDigest == "" && !haveImage && isImageID(c.Image) && text != nil {
+			// The tag moved on this host and the store dropped the image the container still runs: the digest
+			// it was started from is in the text it was created with.
+			if t, ok := text(c.ID); ok {
+				if r, err := registry.ParseRef(t); err == nil && r.Repo() == spec.Repo() {
+					w.RunningDigest = r.Digest
+				}
+			}
+		}
 		out = append(out, w)
 	}
 	return out

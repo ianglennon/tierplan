@@ -132,6 +132,28 @@ func TestContainerWorkloadsBothStores(t *testing.T) {
 
 const labelSvcID = "com.docker.swarm.service.id"
 
+// A stack's container whose tag moved on its own host: the store no longer lists the image it runs, and the
+// list shows only an ID, but the text it was created with still names the digest.
+func TestContainerWhoseImageTheStoreDroppedKeepsItsDigest(t *testing.T) {
+	t.Parallel()
+	labels := map[string]string{stacks.LabelStackImage: "127.0.0.1:5000/probe:1"}
+	agg := aggOf(nil,
+		ctr("kept", dg('a'), dg('a'), labels),
+		ctr("other-repo", dg('b'), dg('b'), labels),
+	)
+	texts := map[string]string{
+		"kept":       "127.0.0.1:5000/probe:1@" + dg('a'),
+		"other-repo": "127.0.0.1:5000/else:1@" + dg('b'),
+	}
+	ws := updates.ContainerWorkloads(agg, func(id string) (string, bool) { t, ok := texts[id]; return t, ok })
+	if got := workloadOf(t, ws, "kept"); got.RunningDigest != dg('a') || !got.Checkable() {
+		t.Errorf("kept = %+v, want the digest of the text it was created with", got)
+	}
+	if got := workloadOf(t, ws, "other-repo"); got.RunningDigest != "" {
+		t.Errorf("other repo = %+v, want no digest from a text of another repository", got)
+	}
+}
+
 func TestContainerVerdictsFromStoredChecks(t *testing.T) {
 	t.Parallel()
 	ctx := testsupport.Context(t)
