@@ -41,10 +41,28 @@ services:
       # path DOCKER_HOST names, and the docker CLI in the healthcheck uses it too.
       DOCKER_TLS_CERTDIR: ""
       DOCKER_HOST: unix:///shared/docker.sock
+    # registry:5000 is the registry service below, which the engine reaches by name over
+    # plain HTTP: a stack of the updates spec pulls its image from there.
+    # Test topology only: the flag is not in any shipped image or install document.
+    command: ["--insecure-registry=registry:5000"]
     volumes:
       - sock:/shared
     healthcheck:
       test: ["CMD", "docker", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 2s
+
+  # A registry on the e2e network for the updates spec (plan 12-36). TierPlan's server asks
+  # it for the digest a tag holds now (the HEAD check, D-01) and the dind engine pushes to
+  # it and pulls from it, both by the name registry:5000, over plain HTTP: the server
+  # through a registry credential marked insecure, the engine through the flag above. No
+  # port is published, so nothing outside this network reaches it.
+  registry:
+    image: registry:2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/v2/"]
       interval: 2s
       timeout: 5s
       retries: 60
@@ -60,6 +78,10 @@ services:
     privileged: true
     environment:
       DOCKER_TLS_CERTDIR: ""
+    # The updates spec builds and pushes its images from this engine, not from the one TierPlan
+    # manages, so a new build under a tag reaches the managed engine only by a pull, as a release
+    # does. Test topology only, like the same flag on dind.
+    command: ["--insecure-registry=registry:5000"]
     healthcheck:
       test: ["CMD", "docker", "info"]
       interval: 2s

@@ -530,6 +530,84 @@ export function dropStackImage(host: StackHost, ...refs: string[]): void {
   );
 }
 
+// The registry the updates spec uses (plan 12-36): the `registry` service of the e2e topology,
+// on the network the TierPlan server and the dind engines share, reached by name over plain
+// HTTP. Unlike the registry inside the engine above, the server can ask it for the digest a
+// tag holds now, which is what an update check is. The engines reach it through the
+// --insecure-registry flag of their services, the server through a registry credential marked
+// insecure (registryCredential below).
+export const E2E_REGISTRY = "registry:5000";
+
+// pushRegistryImage makes an image from the agent host engine's own busybox (a shell and sleep,
+// which is all a stack of the updates spec runs), tags it `ref` and pushes it to the e2e
+// registry. It is built and pushed on the agent host, not on the engine TierPlan manages, so a
+// stack on the managed engine holds the image only by pulling it, and a later build under the
+// same tag changes nothing there until the stack is updated, as a release on a registry does.
+// A marker puts one more file in the image, so the same tag holds a different digest than
+// before. The registry service is healthy before the suite starts, so nothing waits on the
+// clock here. The local copy is removed once it is pushed.
+function pushRegistryImage(ref: string, marker?: string): void {
+  if (!ref.startsWith(`${E2E_REGISTRY}/`)) throw new Error(`${ref} is not on ${E2E_REGISTRY}`);
+  dockerExec(
+    "agenthost",
+    [
+      "root=$(mktemp -d)",
+      'mkdir -p "$root/bin" "$root/lib" "$root/tmp"',
+      'cp /bin/busybox "$root/bin/busybox"',
+      'cp /lib/ld-musl-*.so.1 "$root/lib/"',
+      'chmod 1777 "$root/tmp"',
+      'for c in sh echo sleep touch ls cat printf; do ln -s busybox "$root/bin/$c"; done',
+      ...(marker ? [`echo '${marker}' > "$root/marker"`] : []),
+      `tar -C "$root" -c . | docker import - ${ref} >/dev/null`,
+      'rm -rf "$root"',
+      `docker push ${ref} >/dev/null`,
+      `docker rmi -f ${ref} >/dev/null`,
+    ].join("; "),
+  );
+}
+
+// seedRegistryImage pushes the first build of `ref` (a registry:5000/... reference) to the e2e
+// registry. A second call pushes a new build of the same tag.
+export function seedRegistryImage(ref: string): void {
+  pushRegistryImage(ref);
+}
+
+// repushRegistryImage pushes a new build of `ref` under the same tag, so the registry now holds
+// a different digest for it, as a maintainer pushing a new release would. The marker names the
+// build.
+export function repushRegistryImage(ref: string, marker: string): void {
+  pushRegistryImage(ref, marker);
+}
+
+// dropRegistryImage removes the builds of the repository of `ref` from the dind engine TierPlan
+// manages (the tag and the builds a pull left without one), so the specs after the updates spec
+// find the engine as they expect it. It is safe when none is there. The registry service keeps
+// what it was pushed until the stack goes down with its volumes.
+export function dropRegistryImage(ref: string): void {
+  const repository = ref.replace(/:[^/:]+$/, "");
+  dind(
+    `docker image ls -q ${repository} | sort -u | xargs -r docker rmi -f >/dev/null 2>&1; docker image prune -f >/dev/null 2>&1; true`,
+  );
+}
+
+// registryCredential stores the instance credential TierPlan's own calls to the e2e registry use:
+// the registry answers plain HTTP and asks for no sign-in, so the credential carries an
+// arbitrary throwaway secret and the insecure switch that lets the server speak plain HTTP to
+// it. It returns the credential's id for deleteCredentialAs.
+export async function registryCredential(
+  context: BrowserContext,
+  name: string,
+): Promise<{ id: string; name: string }> {
+  return createCredentialAs(context, {
+    name,
+    type: "generic",
+    host: E2E_REGISTRY,
+    username: "e2e",
+    secret: "e2e-throwaway-secret-1",
+    insecure: true,
+  });
+}
+
 // enginePs lists the ids of the containers, networks, volumes or secrets of an engine that carry a
 // label (docker <kind> ls), one per line, as an array: how a spec proves a removal left nothing.
 export function engineIds(
