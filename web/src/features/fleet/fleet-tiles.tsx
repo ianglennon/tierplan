@@ -53,8 +53,11 @@ export function FleetTiles({ summary, loading, failed, env }: FleetTilesProps) {
 
   let failingLine: string | undefined;
   if (failing !== undefined) {
-    failingLine =
-      failing > 0 && summary?.failing.environments
+    // With an environment unread the count is a lower bound, so the line says that, not where the
+    // failures are.
+    failingLine = missing
+      ? t("fleet.tiles.partial")
+      : failing > 0 && summary?.failing.environments
         ? t("fleet.tiles.failing.in", { count: summary.failing.environments })
         : t("fleet.tiles.failing.none");
   }
@@ -76,12 +79,15 @@ export function FleetTiles({ summary, loading, failed, env }: FleetTilesProps) {
   let poolsLine: string | undefined;
   if (pools !== undefined && summary) {
     const almost = summary.pools.almostFull ?? 0;
+    // "None almost full" would be a fact about environments the page did not read.
     poolsLine =
       almost > 0
         ? t("fleet.tiles.pools.almostFull", { count: almost })
-        : pools === 0
-          ? t("fleet.tiles.pools.allUnder")
-          : t("fleet.tiles.pools.noneAlmost");
+        : missing
+          ? t("fleet.tiles.partial")
+          : pools === 0
+            ? t("fleet.tiles.pools.allUnder")
+            : t("fleet.tiles.pools.noneAlmost");
   }
 
   return (

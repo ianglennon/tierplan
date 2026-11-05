@@ -153,6 +153,33 @@ describe("FleetTiles", () => {
     expect(failing.textContent).toBe("Failing services—Some environments aren't included");
   });
 
+  it("does not call pools none almost full, or say where failures are, while an environment was not read", async () => {
+    mount({
+      summary: {
+        ...SUMMARY,
+        pools: { nearFull: 4, almostFull: 0 },
+        notIncluded: [{ envId: "x", envName: "prod", reason: "offline", nodes: 0 }],
+      },
+    });
+    // The counts that were read stand, with the note that they are not the whole fleet.
+    expect((await tile("Pools near full")).textContent).toBe(
+      "Pools near full4Some environments aren't included",
+    );
+    expect((await tile("Failing services")).textContent).toBe(
+      "Failing services3Some environments aren't included",
+    );
+  });
+
+  it("still says how many pools are almost full while an environment was not read", async () => {
+    mount({
+      summary: {
+        ...SUMMARY,
+        notIncluded: [{ envId: "x", envName: "prod", reason: "offline", nodes: 0 }],
+      },
+    });
+    expect((await tile("Pools near full")).textContent).toBe("Pools near full41 almost full");
+  });
+
   it("shows a dash on every tile when the summary could not be read", async () => {
     mount({ failed: true });
     for (const label of [
