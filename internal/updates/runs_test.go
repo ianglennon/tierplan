@@ -70,6 +70,35 @@ func TestRunRecordedFoundAndFinishedOnce(t *testing.T) {
 	}
 }
 
+// An end that does not know the revisions a stack update wrote (a bulk update's clean-up passes 0, 0) leaves them on the run, so the
+// revision stays labelled as an image update and the rollback target is not lost (WR-01).
+func TestRunFinishWithNoRevisionKeepsTheStoredOnes(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	r := newRig(t)
+	r.addEnvironment(t, "env-a")
+	s := runStore(r)
+	run := sampleRun("run-1", "env-a")
+	run.Kind, run.StackID, run.RevisionSeq, run.RollbackSeq = "stack", "stack-1", 5, 6
+	if err := s.Insert(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Finish(ctx, "run-1", updates.RunFailed, updates.ReasonInterrupted, 0, 0); err != nil || !ok {
+		t.Fatalf("Finish = %v, %v, want true", ok, err)
+	}
+	got, err := s.Get(ctx, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != updates.RunFailed || got.RevisionSeq != 5 || got.RollbackSeq != 6 {
+		t.Errorf("run = %s revision %d rollback %d, want failed with revision 5 and rollback 6 kept", got.State, got.RevisionSeq, got.RollbackSeq)
+	}
+	seqs, err := s.RevisionSeqs(ctx, "stack-1")
+	if err != nil || !seqs[5] {
+		t.Errorf("revisions of image updates = %v, %v, want 5 still among them", seqs, err)
+	}
+}
+
 func TestRunFinishIsTerminal(t *testing.T) {
 	t.Parallel()
 	ctx := testsupport.Context(t)

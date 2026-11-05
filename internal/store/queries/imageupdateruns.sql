@@ -27,10 +27,13 @@ WHERE id = ? AND finished_at = 0;
 
 -- name: FinishImageUpdateRun :execrows
 -- The end of a run: its final state, why, when and the revisions it wrote. It is written once: a run that
--- has ended is not changed, so a late writer cannot overwrite a terminal state.
+-- has ended is not changed, so a late writer cannot overwrite a terminal state. A revision of 0 keeps the one the run
+-- has, so an end that does not know the revision (a bulk update's clean-up) cannot erase the one a stack update wrote.
 UPDATE image_update_runs
-SET state = ?, reason = ?, finished_at = ?, revision_seq = ?, rollback_seq = ?
-WHERE id = ? AND finished_at = 0;
+SET state = sqlc.arg(state), reason = sqlc.arg(reason), finished_at = sqlc.arg(finished_at),
+    revision_seq = CASE WHEN CAST(sqlc.arg(revision_seq) AS INTEGER) = 0 THEN revision_seq ELSE CAST(sqlc.arg(revision_seq) AS INTEGER) END,
+    rollback_seq = CASE WHEN CAST(sqlc.arg(rollback_seq) AS INTEGER) = 0 THEN rollback_seq ELSE CAST(sqlc.arg(rollback_seq) AS INTEGER) END
+WHERE id = sqlc.arg(id) AND finished_at = 0;
 
 -- name: RunningImageUpdateRuns :many
 -- The runs of one environment that are queued or running, oldest first.

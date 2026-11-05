@@ -151,7 +151,8 @@ func (s RunStore) SetOldContainer(ctx context.Context, id, containerID string) (
 }
 
 // Finish ends a run in st with the reason and the revisions it wrote, and reports whether it did. It
-// writes once: a run that has already ended is left as it is and the answer is false.
+// writes once: a run that has already ended is left as it is and the answer is false. A revision of 0 leaves the one the run has, so an
+// end that does not know it cannot erase the revision a stack update wrote.
 func (s RunStore) Finish(ctx context.Context, id string, st RunState, reason string, revisionSeq, rollbackSeq int64) (bool, error) {
 	n, err := s.Q.FinishImageUpdateRun(ctx, sqlc.FinishImageUpdateRunParams{
 		State: string(st), Reason: reason, FinishedAt: s.now().UnixNano(), RevisionSeq: revisionSeq, RollbackSeq: rollbackSeq, ID: id,

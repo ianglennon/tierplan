@@ -42,8 +42,10 @@ func (q *Queries) BeginQueuedImageUpdateRun(ctx context.Context, arg BeginQueued
 
 const finishImageUpdateRun = `-- name: FinishImageUpdateRun :execrows
 UPDATE image_update_runs
-SET state = ?, reason = ?, finished_at = ?, revision_seq = ?, rollback_seq = ?
-WHERE id = ? AND finished_at = 0
+SET state = ?1, reason = ?2, finished_at = ?3,
+    revision_seq = CASE WHEN CAST(?4 AS INTEGER) = 0 THEN revision_seq ELSE CAST(?4 AS INTEGER) END,
+    rollback_seq = CASE WHEN CAST(?5 AS INTEGER) = 0 THEN rollback_seq ELSE CAST(?5 AS INTEGER) END
+WHERE id = ?6 AND finished_at = 0
 `
 
 type FinishImageUpdateRunParams struct {
@@ -56,7 +58,8 @@ type FinishImageUpdateRunParams struct {
 }
 
 // The end of a run: its final state, why, when and the revisions it wrote. It is written once: a run that
-// has ended is not changed, so a late writer cannot overwrite a terminal state.
+// has ended is not changed, so a late writer cannot overwrite a terminal state. A revision of 0 keeps the one the run
+// has, so an end that does not know the revision (a bulk update's clean-up) cannot erase the one a stack update wrote.
 func (q *Queries) FinishImageUpdateRun(ctx context.Context, arg FinishImageUpdateRunParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, finishImageUpdateRun,
 		arg.State,
