@@ -27,12 +27,12 @@ import (
 // creating its own table, so a test can stage "a newer binary".
 func plus(t *testing.T, n int) fstest.MapFS {
 	t.Helper()
-	base, err := os.ReadFile("migrations/00001_baseline.sql")
+	base, err := os.ReadFile("migrations/00036_baseline.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := fstest.MapFS{"00001_baseline.sql": {Data: base}}
-	for i := 2; i < 2+n; i++ {
+	m := fstest.MapFS{"00036_baseline.sql": {Data: base}}
+	for i := 37; i < 37+n; i++ {
 		m[fmt.Sprintf("%05d_extra%d.sql", i, i)] = &fstest.MapFile{Data: []byte(
 			fmt.Sprintf("-- +goose Up\nCREATE TABLE extra%d (id INTEGER PRIMARY KEY);\n", i))}
 	}
@@ -127,8 +127,8 @@ func TestMigrateSnapshotsBeforePendingMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if res.From != 1 || res.To != 2 {
-		t.Errorf("From, To = %d, %d; want 1, 2", res.From, res.To)
+	if res.From != 36 || res.To != 37 {
+		t.Errorf("From, To = %d, %d; want 36, 37", res.From, res.To)
 	}
 	files := snapshots(t, dir)
 	if len(files) != 1 {
@@ -140,7 +140,7 @@ func TestMigrateSnapshotsBeforePendingMigration(t *testing.T) {
 	if st, err := os.Stat(files[0]); err != nil || st.Size() == 0 || st.Mode().Perm() != 0o600 {
 		t.Errorf("snapshot stat = %v, %v; want a non-empty 0600 file", st, err)
 	}
-	if _, err := s.Write.ExecContext(ctx, "INSERT INTO extra2 (id) VALUES (1)"); err != nil {
+	if _, err := s.Write.ExecContext(ctx, "INSERT INTO extra37 (id) VALUES (1)"); err != nil {
 		t.Errorf("the pending migration was not applied: %v", err)
 	}
 }
@@ -205,8 +205,8 @@ func TestMigrateRefusesWhenFreeSpaceIsLow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SkipBackup should proceed: %v", err)
 	}
-	if res.To != 2 || res.SnapshotPath != "" || len(snapshots(t, dir)) != 0 {
-		t.Errorf("SkipBackup result = %+v, want To 2 and no snapshot", res)
+	if res.To != 37 || res.SnapshotPath != "" || len(snapshots(t, dir)) != 0 {
+		t.Errorf("SkipBackup result = %+v, want To 37 and no snapshot", res)
 	}
 }
 
@@ -222,12 +222,12 @@ func TestMigrateRefusesDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// An older binary (migrations up to 1) meets the schema at version 2.
+	// An older binary (migrations up to 36) meets the schema at version 37.
 	_, err = store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v1", DataDir: dir, Migrations: plus(t, 0)})
 	if !errors.Is(err, store.ErrDowngrade) {
 		t.Fatalf("error = %v, want ErrDowngrade", err)
 	}
-	for _, want := range []string{"version 2", "version 1", up.SnapshotPath} {
+	for _, want := range []string{"version 37", "version 36", up.SnapshotPath} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not contain %q", err, want)
 		}
@@ -332,7 +332,7 @@ func TestFailedMigrationNamesSnapshotAndRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := plus(t, 1)
-	bad["00002_extra2.sql"] = &fstest.MapFile{Data: []byte(
+	bad["00037_extra37.sql"] = &fstest.MapFile{Data: []byte(
 		"-- +goose Up\nCREATE TABLE half (id INTEGER PRIMARY KEY);\nINSERT INTO no_such_table VALUES (1);\n")}
 
 	_, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v2", DataDir: dir, Migrations: bad})
