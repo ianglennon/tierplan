@@ -141,8 +141,10 @@ func sharedJanitor(t *testing.T, f *swarmFix) {
 
 	// Two services whose tasks exit at once and restart after two seconds, so each slot soon holds several exited
 	// containers. The two seconds keep the containers of one slot in distinct seconds, which is how they are ranked.
+	// The labelled service stops by itself after four tasks, under Docker's history limit of 5 and with no scale down, so
+	// the swarm removes none of its containers and any that goes was the janitor's doing.
 	sh(t, mgr, "docker service create --detach --name jn-crash --replicas 2 --restart-condition any --restart-delay 2s busybox sh -c 'exit 1'")
-	sh(t, mgr, "docker service create --detach --name jn-keep --replicas 1 --restart-condition any --restart-delay 2s --container-label tierplan.keep=true busybox sh -c 'exit 1'")
+	sh(t, mgr, "docker service create --detach --name jn-keep --replicas 1 --restart-condition any --restart-max-attempts 3 --restart-delay 2s --container-label tierplan.keep=true busybox sh -c 'exit 1'")
 	crashID := strings.TrimSpace(sh(t, mgr, "docker service inspect --format '{{.ID}}' jn-crash"))
 	keepID := strings.TrimSpace(sh(t, mgr, "docker service inspect --format '{{.ID}}' jn-keep"))
 	goneID := createOverlay(t, f, map[string]any{
@@ -151,7 +153,7 @@ func sharedJanitor(t *testing.T, f *swarmFix) {
 	})
 
 	// Every slot of the crashing service holds at least three exited containers, so the newest two leave one beyond.
-	f.srv.WaitFor("every slot of jn-crash to hold three exited containers and jn-keep one", 4*time.Minute, func() (bool, string) {
+	f.srv.WaitFor("every slot of jn-crash to hold three exited containers and jn-keep four", 4*time.Minute, func() (bool, string) {
 		crash, err := taskBoxes(t, f, "jn-crash")
 		if err != nil {
 			return false, err.Error()
@@ -162,7 +164,7 @@ func sharedJanitor(t *testing.T, f *swarmFix) {
 		}
 		slots := exitedBySlot(crash)
 		seen := fmt.Sprintf("jn-crash slots %v, jn-keep %d containers", countBySlot(slots), len(keep))
-		if len(slots) < 2 || len(exitedBySlot(keep)) < 1 {
+		if len(slots) < 2 || len(keep) < 4 {
 			return false, seen
 		}
 		for _, s := range slots {
@@ -176,7 +178,6 @@ func sharedJanitor(t *testing.T, f *swarmFix) {
 	// Stop the churn: with no task wanted running, the set of exited containers can only shrink as the swarm
 	// reaps tasks past its history limit.
 	sh(t, mgr, "docker service update --detach --replicas 0 jn-crash")
-	sh(t, mgr, "docker service update --detach --replicas 0 jn-keep")
 
 	// RESEARCH A2: the labels the planner groups task containers by are on the containers the engine made.
 	var want []swarmTaskBox // the containers the janitor must list: beyond the newest two of their slot

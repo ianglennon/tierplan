@@ -6,6 +6,7 @@ package dockertest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -89,14 +90,33 @@ func LoadImage(t testing.TB, ref string, nodes ...*Node) {
 	loadImage(t, ref, "", nodes)
 }
 
-// loadImage saves src once and loads it into each node, tagging it as also when
-// that is not empty. Only this machine's platform is saved: on a containerd image store a plain save is an index that names
-// the platforms never pulled here too, and Engine 24's containerd store refuses such a tar for the blobs it lacks.
+// loadImage saves src once and loads it into each node, tagging it as also when that is not empty. The save is the image as
+// this machine holds it. On a containerd image store that is an index naming platforms never pulled here, which Engine 24's
+// containerd store refuses for the blobs it lacks, so a node that refuses it is given this machine's platform alone. Only then:
+// what a node runs and pushes is an index elsewhere, as an image pulled from a registry is.
 func loadImage(t testing.TB, src, also string, nodes []*Node) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	saved, err := hostClient(t).ImageSave(ctx, []string{src}, client.ImageSaveWithPlatforms(ocispec.Platform{OS: "linux", Architecture: runtime.GOARCH}))
+	tarball := saveImage(ctx, t, src)
+	var onePlatform []byte
+	for _, n := range nodes {
+		err := loadInto(ctx, n.Client(t), tarball, src, also)
+		if err != nil {
+			if onePlatform == nil {
+				onePlatform = saveImage(ctx, t, src, client.ImageSaveWithPlatforms(ocispec.Platform{OS: "linux", Architecture: runtime.GOARCH}))
+			}
+			err = loadInto(ctx, n.Client(t), onePlatform, src, also)
+		}
+		if err != nil {
+			t.Fatalf("load %s into %s: %v", src, n.Hostname, err)
+		}
+	}
+}
+
+func saveImage(ctx context.Context, t testing.TB, src string, opts ...client.ImageSaveOption) []byte {
+	t.Helper()
+	saved, err := hostClient(t).ImageSave(ctx, []string{src}, opts...)
 	if err != nil {
 		t.Fatalf("docker save %s: %v", src, err)
 	}
@@ -105,11 +125,7 @@ func loadImage(t testing.TB, src, also string, nodes []*Node) {
 	if err != nil {
 		t.Fatalf("read docker save %s: %v", src, err)
 	}
-	for _, n := range nodes {
-		if err := loadInto(ctx, n.Client(t), tarball, src, also); err != nil {
-			t.Fatalf("load %s into %s: %v", src, n.Hostname, err)
-		}
-	}
+	return tarball
 }
 
 func loadInto(ctx context.Context, cli *client.Client, tarball []byte, src, also string) error {
@@ -117,9 +133,27 @@ func loadInto(ctx context.Context, cli *client.Client, tarball []byte, src, also
 	if err != nil {
 		return err
 	}
-	_, drain := io.Copy(io.Discard, res)
+	output, drain := io.ReadAll(res)
 	if err := errors.Join(drain, res.Close()); err != nil {
 		return err
+	}
+	// An engine that refuses the tar still answers 200: the refusal is a message in the stream.
+	for dec := json.NewDecoder(bytes.NewReader(output)); ; {
+		var msg struct {
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if dec.Decode(&msg) != nil {
+			break
+		}
+		if msg.Error != "" {
+			return errors.New(msg.Error)
+		}
+		if msg.ErrorDetail.Message != "" {
+			return errors.New(msg.ErrorDetail.Message)
+		}
 	}
 	if also != "" {
 		if _, err := cli.ImageTag(ctx, client.ImageTagOptions{Source: src, Target: also}); err != nil {

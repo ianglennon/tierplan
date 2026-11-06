@@ -198,14 +198,16 @@ func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 // nodes' engines know it by, for the rest of the test. TierPlan's server asks registries itself (an image update check
 // is a manifest HEAD from the server, not from a node), and the name in a fixture service's image is the nodes' loopback:
 // without this the server would be asking its own machine, where no registry is. The registry is the one StartRegistry
-// published on the node's address, or the swarm's, which the ingress publishes on every node. The test fails when this
-// machine's port 5000 is taken, since the name cannot be moved.
+// published on the node's address, or the swarm's, which the ingress publishes on every node. The name cannot be moved, so
+// when this machine's port 5000 is taken this waits for it: CI runs two jobs at a time on one machine, and the other may hold it.
 func ForwardRegistry(t testing.TB, node *Node) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:5000")
-	if err != nil {
-		t.Fatalf("listen on 127.0.0.1:5000 to forward the fixture registry (is another registry or test using the port?): %v", err)
-	}
+	var l net.Listener
+	Wait(t, 10*time.Minute, "127.0.0.1:5000 to be free to forward the fixture registry (is another registry or test using the port?)", func() (bool, string) {
+		var err error
+		l, err = net.Listen("tcp", "127.0.0.1:5000")
+		return err == nil, fmt.Sprint(err)
+	})
 	target := net.JoinHostPort(node.IP, "5000")
 	var mu sync.Mutex
 	conns := map[net.Conn]struct{}{}

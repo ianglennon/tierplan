@@ -74,10 +74,10 @@ test: test-go test-web
 # pass gets -timeout <the time left in the budget>, so the passes cannot add up past
 # the job's timeout-minutes. scripts/timeouts-check.sh reads the budget from
 # `make -n` and keeps it 10 minutes below the job; it refuses a looped go test with
-# no budget. TEST_GO_BUDGET is the budget of the test job (40 minutes). go test
+# no budget. TEST_GO_BUDGET is the budget of the test job (50 minutes). go test
 # applies -timeout to each package's test binary, so see docs/testing.md for the
 # per-binary caveat.
-TEST_GO_BUDGET := 30m
+TEST_GO_BUDGET := 40m
 
 # gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
 # failing module does not stop the next one, so one red run reports them all. A
