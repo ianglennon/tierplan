@@ -141,42 +141,12 @@ func TestRestoreIntoAFreshDataDirectoryRewrapsSecretsAndVerifiesTheChainUnderThe
 // buildOpts shapes a backup written by hand, the way an older or hostile TierPlan
 // could have written one.
 type buildOpts struct {
-	// maxMigration limits the schema to migrations 1..n; 0 is the embedded set.
-	maxMigration int64
 	// headerSchema overrides the schema the header and manifest claim; 0 keeps the database's.
 	headerSchema int64
 	appVersion   string
 	username     string
 	// sealUnder seals the CA key with this vault instead of the backup's export key.
 	sealUnder *vault.Vault
-}
-
-// migrationsUpTo is the embedded migrations 1..max, so a database can be built
-// as an older release left it.
-func migrationsUpTo(t *testing.T, max int64) fstest.MapFS {
-	t.Helper()
-	dir := os.DirFS("../store/migrations")
-	names, err := fs.Glob(dir, "*.sql")
-	if err != nil || len(names) == 0 {
-		t.Fatalf("no migrations: %v", err)
-	}
-	m := fstest.MapFS{}
-	for _, name := range names {
-		prefix, _, _ := strings.Cut(name, "_")
-		v, err := strconv.ParseInt(prefix, 10, 64)
-		if err != nil {
-			t.Fatalf("migration %s has no numeric prefix", name)
-		}
-		if v > max {
-			continue
-		}
-		b, err := fs.ReadFile(dir, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		m[name] = &fstest.MapFile{Data: b}
-	}
-	return m
 }
 
 const builtCA = "the CA key of env-b"
@@ -195,9 +165,6 @@ func buildBackup(t *testing.T, o buildOpts) []byte {
 	}
 	defer func() { _ = st.Close() }()
 	mo := store.MigrateOptions{AppVersion: "fixture", DataDir: dir, SkipBackup: true}
-	if o.maxMigration > 0 {
-		mo.Migrations = migrationsUpTo(t, o.maxMigration)
-	}
 	res, err := store.Migrate(ctx, st, mo)
 	if err != nil {
 		t.Fatalf("migrate the fixture: %v", err)
@@ -234,12 +201,6 @@ func buildBackup(t *testing.T, o buildOpts) []byte {
 	exec(`INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES ('u-b', ?, 'x', 1, 1, 1)`, o.username)
 	exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type) VALUES ('env-b', 'agent', 'Prod', '', 1, 1, 1, 'standalone')`)
 	exec(`INSERT INTO env_cas (env_id, cert_pem, key_sealed, created_at) VALUES ('env-b', 'pem', ?, 1)`, sealed)
-	if o.maxMigration == 11 {
-		// A Phase 2 install: the first admin holds the global admin role.
-		exec(`INSERT INTO roles (id, name, builtin) VALUES ('admin','admin',1)`)
-		exec(`INSERT INTO role_permissions (role_id, permission) VALUES ('admin','environments.read')`)
-		exec(`INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at) VALUES ('ra-admin','user','u-b','admin',NULL,1)`)
-	}
 	source, err := vault.New(bytes.Repeat([]byte{3}, 32), "source")
 	if err != nil {
 		t.Fatal(err)
@@ -390,43 +351,6 @@ func TestRestoreNewerBackupNamesTheVersionBeforeAnyKeyDerivation(t *testing.T) {
 	}
 }
 
-func TestRestoreMigrateForwardFromSchemaVersion11(t *testing.T) {
-	file := buildBackup(t, buildOpts{maxMigration: 11})
-	dir := t.TempDir()
-	target := targetVault(t)
-	if _, err := restoreInto(t, file, dir, target); err != nil {
-		t.Fatalf("restore a version 11 backup: %v", err)
-	}
-	st, err := store.Open(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
-	got, err := st.SchemaVersion(context.Background())
-	if err != nil || got != schemaOfBinary(t) {
-		t.Fatalf("restored schema = %d, %v; want %d", got, err, schemaOfBinary(t))
-	}
-	var admin int
-	if err := st.Read.QueryRow(`SELECT instance_admin FROM users WHERE id = 'u-b'`).Scan(&admin); err != nil || admin != 1 {
-		t.Fatalf("the former global admin: instance_admin = %d, %v; want 1", admin, err)
-	}
-	var left int
-	if err := st.Read.QueryRow(`SELECT COUNT(*) FROM role_assignments`).Scan(&left); err != nil || left != 0 {
-		t.Fatalf("role assignments left = %d, %v; want the global admin row gone", left, err)
-	}
-	var sealed string
-	if err := st.Read.QueryRow(`SELECT key_sealed FROM env_cas WHERE env_id = 'env-b'`).Scan(&sealed); err != nil {
-		t.Fatal(err)
-	}
-	if plain, err := target.Open(vault.ContextAgentCA+"env-b", sealed); err != nil || string(plain) != builtCA {
-		t.Fatalf("CA key = %q, %v", plain, err)
-	}
-	res, err := audit.Verify(context.Background(), st, target)
-	if err != nil || res.Broken != nil || res.Entries != 5 {
-		t.Fatalf("Verify = %+v, %v; want 5 entries (3 + reanchored + restored) and no break", res, err)
-	}
-}
-
 func TestRestorePrepareFailureLeavesTheLiveDatabaseAndNoStagingDirectory(t *testing.T) {
 	dir, target, before := liveInstall(t)
 	// The CA key is sealed under a key that is not the backup's export key, so it
@@ -512,6 +436,27 @@ func TestSwapOverAnExistingDatabaseWritesAPreRestoreSnapshotFirst(t *testing.T) 
 	}
 }
 
+// withOneMoreMigration is the embedded migrations plus one, so a database at the
+// binary's schema has a migration pending.
+func withOneMoreMigration(t *testing.T) fstest.MapFS {
+	t.Helper()
+	dir := os.DirFS("../store/migrations")
+	names, err := fs.Glob(dir, "*.sql")
+	if err != nil || len(names) == 0 {
+		t.Fatalf("no migrations: %v", err)
+	}
+	m := fstest.MapFS{}
+	for _, name := range names {
+		b, err := fs.ReadFile(dir, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m[name] = &fstest.MapFile{Data: b}
+	}
+	m["99999_more.sql"] = &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE fixture_more (id INTEGER);\n")}
+	return m
+}
+
 func TestMigrationPrunerLeavesPreRestoreSnapshotsAlone(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -520,7 +465,7 @@ func TestMigrationPrunerLeavesPreRestoreSnapshotsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
-	if _, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "v0.1.0", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 11)}); err != nil {
+	if _, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "v0.1.0", DataDir: dir, SkipBackup: true}); err != nil {
 		t.Fatal(err)
 	}
 	backups := filepath.Join(dir, "backups")
@@ -541,8 +486,8 @@ func TestMigrationPrunerLeavesPreRestoreSnapshotsAlone(t *testing.T) {
 		}
 	}
 
-	// Migrating to the head takes a snapshot and prunes the migration snapshots.
-	if res, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "v0.2.0", DataDir: dir}); err != nil || res.SnapshotPath == "" {
+	// A pending migration takes a snapshot and prunes the migration snapshots.
+	if res, err := store.Migrate(ctx, st, store.MigrateOptions{AppVersion: "v0.2.0", DataDir: dir, Migrations: withOneMoreMigration(t)}); err != nil || res.SnapshotPath == "" {
 		t.Fatalf("Migrate = %+v, %v; want a snapshot", res, err)
 	}
 	entries, err := os.ReadDir(backups)

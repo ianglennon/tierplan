@@ -162,7 +162,7 @@ works from a one-off container on the same volume:
 
 ```sh
 docker stop tierplan
-docker run --rm -i -v tierplan-data:/data ghcr.io/ianglennon/tierplan:edge \
+docker run --rm -i -v tierplan-data:/data ghcr.io/ianglennon/tierplan:0.1 \
   restore --yes /data/backups/tierplan-backup-20261001-0300.tierplan
 docker start tierplan
 ```
@@ -209,7 +209,7 @@ leaked, or as routine. Rotation runs with TierPlan **stopped**, as a one-off con
 
 ```sh
 docker stop tierplan
-docker run --rm -v tierplan-data:/data ghcr.io/ianglennon/tierplan:edge key rotate
+docker run --rm -v tierplan-data:/data ghcr.io/ianglennon/tierplan:0.1 key rotate
 docker start tierplan
 ```
 

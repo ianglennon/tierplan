@@ -6,7 +6,7 @@ Work through this in order for every release. No release has been cut yet; the f
 
 - [ ] **The repository is public.** The running application links to its source at `https://github.com/ianglennon/tierplan/tree/<commit>` (Settings > About and `/api/version`), and AGPL section 13 requires that offer to work for everyone who uses a modified or unmodified network service. While the repository is private that link answers 404 to outsiders. Make the repository public **before** the first public image is pushed, and check the link from a signed-out browser. (RESEARCH Pitfall 25.)
 - [ ] The planning files (`.planning/`, `.claude/`, `CLAUDE.md`) are not in the repository history. They are git-ignored and must never be committed or pushed. Check with `git log --all --stat -- .planning .claude CLAUDE.md`.
-- [ ] **Decide whether to squash the pre-v0.1.0 migrations into one baseline before the first tag** (D-85). Once a tagged release ships a migration, users' databases depend on it and it is never edited again, so this choice is one-way. The current migrations are `internal/store/migrations/00001` to `00006`; record the decision (squash, or keep as is) in the release notes of v0.1.0.
+- [x] **The pre-v0.1.0 migrations were squashed into one baseline** (D-85), `internal/store/migrations/00036_baseline.sql`, recorded in the release notes of v0.1.0. It keeps the number of the last development migration, so the next one is 00037. From this release on, a migration that has shipped is never edited again.
 - [ ] GitHub Security Advisories are enabled on the repository, so SECURITY.md's reporting route works.
 
 ## Every release

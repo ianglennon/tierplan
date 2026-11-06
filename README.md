@@ -25,7 +25,7 @@ docker run -d --name tierplan --restart unless-stopped \
   -v tierplan-data:/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /proc/1/net/route:/host/route:ro \
-  ghcr.io/ianglennon/tierplan:edge
+  ghcr.io/ianglennon/tierplan:0.1
 ```
 
 The last `-v` is optional: it lets the subnet picker check TierPlan's own host's routes against a subnet you choose; without it that check is skipped and says so.
@@ -35,7 +35,7 @@ The same thing as a Compose file:
 ```yaml
 services:
   tierplan:
-    image: ghcr.io/ianglennon/tierplan:edge
+    image: ghcr.io/ianglennon/tierplan:0.1
     container_name: tierplan
     restart: unless-stopped
     ports:
@@ -51,7 +51,7 @@ volumes:
 
 Image tags:
 
-- `:edge` is built from the `main` branch. Use it until v0.1.0 is released.
+- `:edge` is built from the `main` branch and is not a supported release.
 - From a release on, `X.Y.Z` is that exact version and `X.Y` follows the patch releases of one minor line. Use `:X.Y` (for example `:0.1`).
 - There is **no `:latest` tag** while TierPlan is 0.x. Every 0.x minor may break the one before it, so a command you copy must name the line it was written for. The in-app "no Docker socket" screens show the same command, with the tag that matches the running build.
 
@@ -93,7 +93,7 @@ Anyone who can read the container log or `/data` can read the setup token until 
     --publish 7480:7480 \
     --mount type=volume,source=tierplan-data,target=/data \
     --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
-    ghcr.io/ianglennon/tierplan:edge
+    ghcr.io/ianglennon/tierplan:0.1
   ```
 
   A named volume lives on one node, so pin the service to that node as well as to the managers.
