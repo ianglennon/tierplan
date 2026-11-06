@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 const (
@@ -88,12 +90,13 @@ func LoadImage(t testing.TB, ref string, nodes ...*Node) {
 }
 
 // loadImage saves src once and loads it into each node, tagging it as also when
-// that is not empty.
+// that is not empty. Only this machine's platform is saved: on a containerd image store a plain save is an index that names
+// the platforms never pulled here too, and Engine 24's containerd store refuses such a tar for the blobs it lacks.
 func loadImage(t testing.TB, src, also string, nodes []*Node) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	saved, err := hostClient(t).ImageSave(ctx, []string{src})
+	saved, err := hostClient(t).ImageSave(ctx, []string{src}, client.ImageSaveWithPlatforms(ocispec.Platform{OS: "linux", Architecture: runtime.GOARCH}))
 	if err != nil {
 		t.Fatalf("docker save %s: %v", src, err)
 	}

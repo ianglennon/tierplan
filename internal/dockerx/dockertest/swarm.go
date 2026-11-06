@@ -156,7 +156,7 @@ func StartSwarm(t testing.TB, engine string, managers, workers int) *Swarm {
 			if i >= managers {
 				role, idx = "w", i-managers+1
 			}
-			nodes[i], errs[i] = startNode(t, engine, plan, ips[i], fmt.Sprintf("tp-%s%d-%s", role, idx, randHex(2)), i < managers)
+			nodes[i], errs[i] = startNode(t, engine, plan, ips[i], fmt.Sprintf("tp-%s%d-%s", role, idx, randHex(2)), i < managers, "")
 		}()
 	}
 	wg.Wait()
@@ -203,19 +203,18 @@ func StartSwarm(t testing.TB, engine string, managers, workers int) *Swarm {
 // in-process TierPlan is reachable on, which the CI dind service is not.
 func StartHost(t testing.TB, engine string) *Node {
 	t.Helper()
-	return StartHostWith(t, engine)
+	return StartHostWith(t, engine, "")
 }
 
-// StartHostWith is StartHost with extra flags for the daemon inside, such as "--storage-driver=overlay2" or
-// "--feature", "containerd-snapshotter=false" (each argument is one word of dockerd's command line). The dind image's
-// entrypoint passes them on to dockerd, after the ones it sets itself.
-func StartHostWith(t testing.TB, engine string, daemonArgs ...string) *Node {
+// StartHostWith is StartHost with a daemon.json for the daemon inside, such as {"features":{"containerd-snapshotter":false}}.
+// A config file rather than flags because every engine reads it: dockerd has no --feature flag before Engine 27.
+func StartHostWith(t testing.TB, engine, daemonConfig string) *Node {
 	t.Helper()
 	if engine == "" {
 		engine = EngineFromEnv()
 	}
 	plan := newNetwork(t)
-	n, err := startNode(t, engine, plan, plan.ip(), "tp-h1-"+randHex(2), false, daemonArgs...)
+	n, err := startNode(t, engine, plan, plan.ip(), "tp-h1-"+randHex(2), false, daemonConfig)
 	if err != nil {
 		t.Fatalf("start the dind host: %v", err)
 	}
@@ -232,17 +231,27 @@ func randHex(n int) string {
 // daemon. Registering the cleanup here lets concurrent starts clean up after
 // each other. ghcr.io resolves to the node itself, so a swarm service that
 // names the release image fails to resolve its digest at once instead of
-// reaching out to a registry: the harness loads the image the tests run.
-func startNode(t testing.TB, engine string, plan *netPlan, ip netip.Addr, hostname string, manager bool, daemonArgs ...string) (*Node, error) {
+// reaching out to a registry: the harness loads the image the tests run. A
+// daemonConfig that is not empty is the daemon's daemon.json; the image's
+// entrypoint hands the flag naming it to dockerd.
+func startNode(t testing.TB, engine string, plan *netPlan, ip netip.Addr, hostname string, manager bool, daemonConfig string) (*Node, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	var daemonArgs []string
+	var files []testcontainers.ContainerFile
+	if daemonConfig != "" {
+		const path = "/tp-daemon.json"
+		daemonArgs = []string{"--config-file=" + path}
+		files = []testcontainers.ContainerFile{{Reader: strings.NewReader(daemonConfig), ContainerFilePath: path, FileMode: 0o644}}
+	}
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "docker:" + engine + "-dind",
 			ExposedPorts: []string{dindPort},
 			Env:          map[string]string{"DOCKER_TLS_CERTDIR": ""},
 			Cmd:          daemonArgs,
+			Files:        files,
 			Networks:     []string{plan.name},
 			ConfigModifier: func(c *container.Config) {
 				c.Hostname = hostname

@@ -17,32 +17,23 @@ import (
 )
 
 // TestImageStoresLocalBuild shows that "not from a registry" is honest on both of Docker's image stores (plan 12-35, D-20,
-// RESEARCH Pitfall 1). On each of two standalone hosts with a TierPlan agent, one on the containerd image store (the default
-// of Engine 29; switched on with a flag on older engines) and one on the classic store (started with the containerd snapshotter
-// off), a container runs an image that was never pushed or pulled, and another runs an image that was pulled from the fixture
+// RESEARCH Pitfall 1). On each of two standalone hosts with a TierPlan agent, one on the containerd image store and one on the
+// classic store, each chosen with the daemon's config file so the test means the same on every engine, a container runs an image that was never pushed or pulled, and another runs an image that was pulled from the fixture
 // registry. The registry is asked by the server, as in production. The local image reads not_from_registry on both stores (on
 // the containerd store because its only digest is its own ID and Docker Hub, asked anonymously, has no such repository or wants
 // a sign-in; on the classic store because it has no repo digest, so nobody is asked) and the pulled image reads up_to_date on
 // both.
 func TestImageStoresLocalBuild(t *testing.T) {
-	older := func() bool {
-		n, err := strconv.Atoi(strings.SplitN(dockertest.EngineFromEnv(), ".", 2)[0])
-		return err != nil || n < 29
-	}()
-	containerdArgs := []string(nil)
-	if older {
-		containerdArgs = []string{"--feature", "containerd-snapshotter=true"}
-	}
 	for _, store := range []struct {
 		name   string
-		args   []string
+		config string // the daemon's daemon.json
 		driver string // what docker info reports as the storage driver type
 	}{
-		{"containerd", containerdArgs, "io.containerd.snapshotter.v1"},
-		{"classic", []string{"--storage-driver=overlay2", "--feature", "containerd-snapshotter=false"}, "overlay2"},
+		{"containerd", `{"features":{"containerd-snapshotter":true}}`, "io.containerd.snapshotter.v1"},
+		{"classic", `{"features":{"containerd-snapshotter":false}}`, "overlay2"},
 	} {
 		t.Run(store.name, func(t *testing.T) {
-			host := dockertest.StartHostWith(t, "", store.args...)
+			host := dockertest.StartHostWith(t, "", store.config)
 			dockertest.LoadAgentImage(t, host)
 			dumpOnFailure(t, host)
 			info := strings.TrimSpace(sh(t, host, "docker info -f '{{.Driver}}|{{.DriverStatus}}'"))

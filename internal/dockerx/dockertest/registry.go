@@ -284,7 +284,18 @@ func pushTagged(t testing.TB, node *Node, target string, login *Login) string {
 			return f
 		}
 	}
-	t.Fatalf("push %s printed no digest:\n%s", target, out)
+	// Engine 24 prints no digest for a push from its containerd image store, but the image records it.
+	repo := target[:strings.LastIndex(target, ":")] + "@"
+	digests, err := node.Exec(ctx, "docker", "image", "inspect", "-f", `{{join .RepoDigests " "}}`, target)
+	if err != nil {
+		t.Fatalf("read the digest of %s on %s: %v\n%s", target, node.Hostname, err, digests)
+	}
+	for _, f := range strings.Fields(digests) {
+		if d, ok := strings.CutPrefix(f, repo); ok {
+			return d
+		}
+	}
+	t.Fatalf("push %s printed no digest and the image records none:\n%s\n%s", target, out, digests)
 	return ""
 }
 
