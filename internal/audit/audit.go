@@ -266,6 +266,35 @@ const (
 	// An Admin set the swarm task history limit through the agent: the entry names the value it replaced and the one it
 	// set (D-21).
 	ActionSwarmTaskHistoryChanged = "swarm.task_history_limit_changed"
+	// An Admin changed an environment's image update check schedule: the entry names the fields that changed and the
+	// policy's new version (D-01). Scheduled checks and Check now are not audited.
+	ActionUpdatesPolicyChanged = "updates.policy_changed"
+	// An instance admin changed the update check defaults every environment inherits: the entry names the fields and the
+	// defaults' new version (D-01).
+	ActionUpdatesDefaultsChanged = "updates.defaults_changed"
+	// An Admin of the environment skipped the remote version of one service or container, or took the skip back (D-15).
+	// The entry names the kind, the workload, the image and, for a skip, the digest passed over; bulk when it was one of
+	// several ticked together.
+	ActionImageUpdateSkipped   = "image.update_skipped"
+	ActionImageUpdateUnskipped = "image.update_unskipped"
+	// An Admin of the environment ignored the updates of an image in the environment or of one service or container, or
+	// stopped ignoring them (D-15, D-16). The entry names the scope (image or workload), the image, and for a workload its
+	// kind and name.
+	ActionImageUpdatesIgnored   = "image.updates_ignored"
+	ActionImageUpdatesUnignored = "image.updates_unignored"
+	// An image update ended (plan 12-15, IMG-06). image.updated is one that finished well: the entry names the kind, the
+	// workload, the image and the digest it ran and now runs. image.update_failed is one that did not, with the reason
+	// in TierPlan's words; bulk is set when it was one of several updated together.
+	ActionImageUpdated      = "image.updated"
+	ActionImageUpdateFailed = "image.update_failed"
+	// TierPlan put the previous version back after a failed update (plan 12-22, IMG-07, D-12). The result is success when the
+	// previous version runs again and failure when the restore failed too; the entry names the same keys as image.update_failed,
+	// the reason being why the update failed.
+	ActionImageUpdateRolledBack = "image.update_rolled_back"
+	// One environment's part of a bulk update ended (plan 12-30, IMG-06, D-11): the entry names the bulk ID that ties it to the
+	// image.updated, image.update_failed and image.update_rolled_back entries of the same selection, how many of the items were
+	// updated (done), how many were selected (total), how many were rolled back and how many were skipped.
+	ActionImageBulkUpdated = "image.bulk_updated"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

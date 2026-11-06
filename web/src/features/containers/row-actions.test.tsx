@@ -400,33 +400,33 @@ describe("Restart, Pause and Unpause", () => {
     mount(row({ state: "running" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Pause", "Kill…", "Remove…"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Pause", "Check now", "Kill…", "Remove…"]);
   });
 
   it("offers Start and Restart on an exited row", async () => {
     mount(row({ state: "exited" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Start", "Restart", "Remove…"]);
+    expect(itemNames()).toEqual(["Start", "Restart", "Check now", "Remove…"]);
   });
 
   it("offers Stop, Restart and Unpause on a paused row", async () => {
     mount(row({ state: "paused" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Unpause" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause", "Kill…", "Remove…"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Unpause", "Check now", "Kill…", "Remove…"]);
   });
 
   it("offers Stop and Restart on a restarting row, and only Start on a created one", async () => {
     mount(row({ state: "restarting" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Restart" });
-    expect(itemNames()).toEqual(["Stop", "Restart", "Kill…", "Remove…"]);
+    expect(itemNames()).toEqual(["Stop", "Restart", "Check now", "Kill…", "Remove…"]);
     cleanup();
     mount(row({ state: "created" }));
     await openMenu();
     await screen.findByRole("menuitem", { name: "Start" });
-    expect(itemNames()).toEqual(["Start", "Remove…"]);
+    expect(itemNames()).toEqual(["Start", "Check now", "Remove…"]);
   });
 
   it.each([
@@ -679,5 +679,107 @@ describe("ContainerRowActions restart-loop mute", () => {
     await openMenu();
     await screen.findByRole("menuitem", { name: "Stop" });
     expect(screen.queryByRole("menuitem", { name: /restart-loop alerts/ })).toBeNull();
+  });
+});
+
+// The update items of the container menu (plan 12-14, IMG-08, D-10, D-15).
+describe("ContainerRowActions: update items", () => {
+  const withUpdate = (state: "update_available" | "up_to_date" = "update_available") =>
+    row({
+      update: {
+        state,
+        reason: "",
+        registry: "docker.io",
+        repository: "library/nginx",
+        tag: "1.27",
+        runningDigest: `sha256:${"a".repeat(64)}`,
+        remoteDigest: `sha256:${"b".repeat(64)}`,
+        changedPlatforms: [],
+        checkedAt: new Date().toISOString(),
+        successAt: "",
+        note: "",
+        task: false,
+      },
+    });
+
+  it("lets an Operator check but shows Skip and Ignore unavailable, naming the Admin role", async () => {
+    mount(withUpdate());
+    await openMenu();
+    const skip = await screen.findByRole("menuitem", { name: "Skip this version" });
+    await waitFor(() => expect(skip.getAttribute("aria-disabled")).toBe("true"));
+    expect(
+      screen.getByRole("menuitem", { name: "Ignore updates…" }).getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("menuitem", { name: "Check now" }).getAttribute("aria-disabled"),
+    ).toBeNull();
+    expect(document.body.textContent).toContain("Needs Admin on");
+  });
+
+  it("opens the ignore dialog for the container, and Escape cancels it and sends nothing", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    mount(withUpdate("up_to_date"));
+    const trigger = await openMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Ignore updates…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Ignore updates" });
+    expect(dialog.textContent).toContain("Only web");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(sent.filter((s) => s.path.endsWith("/updates/ignore"))).toEqual([]);
+  });
+  it("offers Update… to an Operator and opens the recreate confirm, which holds the list still", async () => {
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <ContainerRowActions envId={ENV} row={withUpdate()} onOpenChange={onOpenChange} />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+    await openMenu();
+    const item = await screen.findByRole("menuitem", { name: "Update…" });
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(item);
+    const dialog = await screen.findByRole("dialog", { name: "Update web" });
+    expect(dialog.textContent).toContain("TierPlan recreates web with the same settings");
+    await waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(true));
+    expect(posts()).toEqual([]);
+  });
+
+  it("offers no Update… for TierPlan's own container", async () => {
+    mount({ ...withUpdate(), isSelf: true, selfKind: "server" });
+    await openMenu();
+    await screen.findByRole("menuitem", { name: "Check now" });
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+  });
+
+  it("reads Adopt to update… for a container of a Compose project TierPlan does not manage", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    const r = withUpdate();
+    mount({
+      ...r,
+      project: "shop",
+      update: r.update && { ...r.update, refusal: "compose_unmanaged" },
+    });
+    await openMenu();
+    const link = await screen.findByRole("menuitem", { name: "Adopt to update…" });
+    await waitFor(() =>
+      expect(link.getAttribute("href")).toBe(`/env/${ENV}/unmanaged-stacks/shop/adopt`),
+    );
+    expect(screen.queryByRole("menuitem", { name: "Update…" })).toBeNull();
+  });
+
+  it("makes Update… of a task container unavailable and names its service", async () => {
+    const r = withUpdate();
+    mount({ ...r, service: "web", update: r.update && { ...r.update, refusal: "task_container" } });
+    await openMenu();
+    const item = await screen.findByRole("menuitem", { name: "Update…" });
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain(
+      "Update the service web instead. Its tasks are replaced for you.",
+    );
   });
 });

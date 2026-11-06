@@ -817,9 +817,9 @@ func (a AddressSummary) clone() AddressSummary {
 	return a
 }
 
-// metersOf are the meters of a read that have a number: the pools, then the ingress network, then
+// MetersOf are the meters of a read that have a number: the pools, then the ingress network, then
 // the other overlays in the order of the read. Ties go to the earlier one.
-func metersOf(v AddressSpace) []WorstMeter {
+func MetersOf(v AddressSpace) []WorstMeter {
 	var out []WorstMeter
 	for _, p := range v.Pools {
 		if p.State == netspace.StateUnknown || p.Capacity == 0 {
@@ -868,7 +868,7 @@ func (m WorstMeter) atLeast(pct uint64) bool { return m.Used*100 >= m.Capacity*p
 // measures nothing, or finds that meter gone, is not a reason to turn it off by itself, but a
 // measurement below fullLeave always is.
 func summarise(prev AddressSummary, v AddressSpace, now time.Time) AddressSummary {
-	ms := metersOf(v)
+	ms := MetersOf(v)
 	sum := AddressSummary{Orphaned: prev.Orphaned, At: now, Measured: len(ms) > 0}
 	var worst, decisive *WorstMeter
 	for i := range ms {

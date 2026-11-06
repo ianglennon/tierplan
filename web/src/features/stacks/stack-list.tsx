@@ -69,6 +69,7 @@ export function StackList({
       q: search.q,
       status: search.status,
       kind: search.kind,
+      updates: search.updates,
       sort: search.sort,
       dir: search.dir,
     }),
@@ -95,8 +96,9 @@ export function StackList({
 
   const columns = stackColumns(t);
   const unmanagedCount = data?.kindCounts?.unmanaged ?? 0;
-  const filtered = Boolean(search.q || search.status || search.kind);
-  const clearFilters = () => onSearchChange({ q: undefined, status: undefined, kind: undefined });
+  const filtered = Boolean(search.q || search.status || search.kind || search.updates);
+  const clearFilters = () =>
+    onSearchChange({ q: undefined, status: undefined, kind: undefined, updates: undefined });
 
   function onSort(key: string) {
     const next = key as StackSortKey;
@@ -113,6 +115,7 @@ export function StackList({
     search.kind !== undefined &&
     !search.q &&
     !search.status &&
+    !search.updates &&
     (search.kind === "unmanaged" || (data?.kindCounts?.unmanaged ?? 0) > 0);
   const empty = !noneAtAll ? (
     kindOnly && search.kind ? (
@@ -120,7 +123,7 @@ export function StackList({
     ) : (
       <StackNoMatch
         q={search.q}
-        moreThanSearch={Boolean(search.status || search.kind)}
+        moreThanSearch={Boolean(search.status || search.kind || search.updates)}
         onClearSearch={() => onSearchChange({ q: undefined })}
         onClear={clearFilters}
       />
@@ -152,6 +155,8 @@ export function StackList({
       filtered={filtered}
       onSearch={(q) => onSearchChange({ q })}
       onStatus={(status) => onSearchChange({ status })}
+      updates={search.updates}
+      onUpdates={(updates) => onSearchChange({ updates })}
       onClear={clearFilters}
       chipRowClassName={STATUS_CHIP_ROW}
     />

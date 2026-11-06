@@ -1,0 +1,862 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package updates_test
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/updates"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+)
+
+// Recovery after a restart (plan 12-24, IMG-07, D-12, D-14, RESEARCH Pitfall 13). A run row that is still running belongs to a process
+// that is gone: the rig writes one, as an update that was interrupted would have left it, sets the engine to the state the
+// interruption left, and runs the recovery. Every wait is on the rig's clock.
+
+// interrupted writes the run row an interrupted update left: running, by user-1, with the one workload from a to b.
+func (r *applyRig) interrupted(t *testing.T, kind, name, id, image string, from, to string) updates.Run {
+	t.Helper()
+	run := updates.Run{
+		ID: "run-" + name, EnvID: r.envID, Kind: kind, Workload: name, WorkloadID: id,
+		Items: []updates.RunItem{{Service: name, Image: image, FromDigest: from, ToDigest: to}},
+		State: updates.RunRunning, Actor: "user-1", JobID: "job-gone", StartedAt: t0,
+	}
+	if err := r.runs.Insert(context.Background(), run); err != nil {
+		t.Fatalf("write the interrupted run: %v", err)
+	}
+	return run
+}
+
+// recovery is the recovery over the rig's applier, on the rig's clock.
+func (r *applyRig) recovery(stack func(ctx context.Context, run updates.Run) error) *updates.Recovery {
+	return &updates.Recovery{Runs: &r.runs, Applier: r.applier, Stack: stack, Clock: r.clock}
+}
+
+// recoverNow runs the recovery and waits for it to return.
+func (r *applyRig) recoverNow(t *testing.T, stack func(ctx context.Context, run updates.Run) error) {
+	t.Helper()
+	r.recovery(stack).Run(testsupport.Context(t))
+}
+
+// runOf reads a run by its ID.
+func (r *applyRig) runOf(t *testing.T, id string) updates.Run {
+	t.Helper()
+	run, err := r.runs.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("read run %s: %v", id, err)
+	}
+	return run
+}
+
+// withNewImage adds the image the replacement of an update to digest runs, to the engine the rig is built over.
+func withNewImage(digest string) func(*dockertest.FakeConfig) {
+	return func(c *dockertest.FakeConfig) {
+		c.Images = append(c.Images, dockertest.FakeImage{
+			ID: imgID('2'), RepoTags: []string{appImage}, RepoDigests: []string{"registry.test/team/app@" + digest},
+		})
+	}
+}
+
+// A restart after the update removed the old container but before it wrote its end leaves the replacement running under the name.
+// The update had finished, so recovery ends the run done and audits an update, and not a failure (WR-03). A container under the name
+// that does not run the new digest is not the replacement, and the run still ends failed by the restart.
+func TestRecoveryOfAContainerUpdateThatHadFinished(t *testing.T) {
+	t.Parallel()
+	t.Run("the replacement runs", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, withNewImage(dg('b')), replacementAs("app", "running"))
+		run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+		r.markStopped(t, run)
+
+		r.recoverNow(t, nil)
+
+		if got := r.runOf(t, run.ID); got.State != updates.RunDone || got.FinishedAt.IsZero() {
+			t.Fatalf("run = %s %q, want done", got.State, got.Reason)
+		}
+		if rows := r.audits(t, "image.updated"); len(rows) != 1 || rows[0]["_result"] != "success" {
+			t.Errorf("update audit rows = %+v, want one success", rows)
+		}
+		if rows := r.audits(t, "image.update_failed"); len(rows) != 0 {
+			t.Errorf("failure audit rows = %+v, want none", rows)
+		}
+		if n := len(r.fake.Writes()); n != 0 {
+			t.Errorf("the engine was written %d times, want none: the update had finished", n)
+		}
+	})
+	t.Run("another digest", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, withNewImage(dg('c')), replacementAs("app", "running"))
+		run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+		r.markStopped(t, run)
+
+		r.recoverNow(t, nil)
+
+		if got := r.runOf(t, run.ID); got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted {
+			t.Errorf("run = %s %q, want failed by the restart", got.State, got.Reason)
+		}
+	})
+}
+
+// A service whose update a restart interrupted, after the swarm had taken the new digest, gets the previous digest back: the run
+// reads rolled_back with the restart as its reason, the failure is remembered and audited, and the lock is free (plan 12-24).
+func TestRecoveryRollsBackInterruptedService(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'b'))
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	got := r.runOf(t, run.ID)
+	if got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted || got.FinishedAt.IsZero() {
+		t.Fatalf("run = %s %q, want rolled_back with server_restarted", got.State, got.Reason)
+	}
+	sent := r.fake.ServiceUpdates()
+	if len(sent) != 1 {
+		t.Fatalf("service updates = %d, want the one that puts the previous digest back", len(sent))
+	}
+	if image := sent[0].Spec.TaskTemplate.ContainerSpec.Image; image != "registry.test/team/web:1@"+dg('a') {
+		t.Errorf("image written = %q, want the previous digest", image)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "success" || rows[0]["reason"] != updates.ReasonServerRestarted || rows[0]["workload"] != "web" {
+		t.Errorf("rollback audit rows = %+v, want one success naming the restart", rows)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonServerRestarted {
+		t.Errorf("failure audit rows = %+v, want one naming the restart", rows)
+	}
+	if f, ok := r.failureOf(t, "web"); !ok || f.Digest != dg('b') || f.Reason != updates.ReasonServerRestarted || f.RollbackFailed {
+		t.Errorf("failure = %+v %v, want the new digest remembered with the restart as the reason", f, ok)
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Errorf("the lock is still held after recovery")
+	}
+}
+
+// A restart during the pull leaves the service as it was: it still runs the previous digest and has no earlier spec. Recovery has
+// nothing to put back, so the run reads failed by the restart, nothing is written, no rollback is audited and the digest is not
+// remembered as one that failed (CR-02). A user's "Update anyway" for a digest that could not be pulled is a different path.
+func TestRecoveryOfAnUpdateThatNeverWroteTheService(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	got := r.runOf(t, run.ID)
+	if got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted || got.FinishedAt.IsZero() {
+		t.Fatalf("run = %s %q, want failed by the restart", got.State, got.Reason)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none: the update never changed the service", n)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+		t.Errorf("rollback audit rows = %+v, want none: nothing was rolled back", rows)
+	}
+	if rows := r.audits(t, "image.update_failed"); len(rows) != 1 || rows[0]["reason"] != updates.ReasonServerRestarted {
+		t.Errorf("failure audit rows = %+v, want one naming the restart", rows)
+	}
+	if f, ok := r.failureOf(t, "web"); ok {
+		t.Errorf("failure = %+v, want nothing remembered: the new digest was never tried", f)
+	}
+	if v := r.verdictOf(t, "web"); v.State == updates.StateRolledBack || v.State == updates.StateRollbackFailed {
+		t.Errorf("verdict = %s, want the update still on offer", v.State)
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Errorf("the lock is still held after recovery")
+	}
+}
+
+// marked records on the run the version of the service its write was made at, as the update does just before it writes.
+func (r *applyRig) marked(t *testing.T, run updates.Run, version uint64) updates.Run {
+	t.Helper()
+	run.Items = slices.Clone(run.Items)
+	run.Items[0].WriteVersion = &version
+	if ok, err := r.runs.SetItems(context.Background(), run.ID, run.Items); err != nil || !ok {
+		t.Fatalf("record the version of the write: %v %v", ok, err)
+	}
+	return run
+}
+
+// A service that runs the previous digest at a version other than the one the run wrote it at, was written since: by the run, whose
+// update the swarm rolled back by its own failure action (which leaves no previous spec), or somebody rolled back by hand (which
+// swaps the two specs), or a restore of recovery's own that a second restart cut off. Each ends rolled back, writes nothing and
+// remembers the failure (CR-02). The statuses are the ones measured on a real engine. The times they carry are the swarm's own clock
+// and play no part: each case is given one far from the run's, on either side.
+func TestRecoveryOfAServiceTheRunWrote(t *testing.T) {
+	t.Parallel()
+	prev := swarmSpec("web", 'b')
+	for name, tune := range map[string]func(*dockertest.FakeService){
+		"the swarm rolled it back by itself": func(s *dockertest.FakeService) {
+			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(-time.Hour), t0.Add(-time.Hour+time.Minute)
+		},
+		"it was rolled back by hand": func(s *dockertest.FakeService) {
+			s.PreviousSpec = &prev
+			s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Hour), t0.Add(time.Hour+time.Second)
+		},
+		"a restore of recovery's own was cut off": func(s *dockertest.FakeService) {
+			s.PreviousSpec = &prev
+			s.UpdateState, s.UpdateMessage = "completed", "update completed"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			svc := swarmService("web", 'a')
+			svc.Version = 9
+			tune(&svc)
+			r := newApplyRig(t, nil, svc)
+			run := r.marked(t, r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b')), 4)
+
+			r.recoverNow(t, nil)
+
+			if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+				t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+			}
+			if n := len(r.fake.ServiceUpdates()); n != 0 {
+				t.Errorf("service updates = %d, want none: the previous version already runs", n)
+			}
+			if f, ok := r.failureOf(t, "web"); !ok || f.Digest != dg('b') || f.RollbackFailed {
+				t.Errorf("failure = %+v %v, want the new digest remembered, rolled back", f, ok)
+			}
+			if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 {
+				t.Errorf("rollback audit rows = %+v, want one", rows)
+			}
+		})
+	}
+}
+
+// A service the run did not write is left as it is, whatever its update status says: the run recorded no version for a write (the
+// restart came during its pull), or the service is still at the version the write was to be made at, which any write moves. A status
+// the service had before the run, whether of a rollback by the swarm, of one by hand of the same digest, or stamped with no time,
+// is not the run's, and neither is one the swarm's clock puts after the run began. The run ends failed with nothing rolled back,
+// audited or remembered (CR-02).
+func TestRecoveryOfAServiceTheRunDidNotWrite(t *testing.T) {
+	t.Parallel()
+	prev := swarmSpec("web", 'b')
+	stale := func(s *dockertest.FakeService) {
+		s.UpdateState, s.UpdateMessage = "rollback_completed", "rollback completed"
+	}
+	for name, c := range map[string]struct {
+		version *uint64
+		tune    func(*dockertest.FakeService)
+	}{
+		"no version recorded, no status": {nil, func(*dockertest.FakeService) {}},
+		"no version recorded, a stale status": {nil, func(s *dockertest.FakeService) {
+			stale(s)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Hour), t0.Add(time.Hour)
+		}},
+		"still at the version, an earlier rollback by the swarm": {ptr(uint64(9)), func(s *dockertest.FakeService) {
+			stale(s)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(-2*time.Hour), t0.Add(-time.Hour)
+		}},
+		"still at the version, an earlier rollback by hand of the same digest": {ptr(uint64(9)), func(s *dockertest.FakeService) {
+			stale(s)
+			s.PreviousSpec = &prev
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(-2*time.Hour), t0.Add(-time.Hour)
+		}},
+		"still at the version, a status the swarm's clock puts after the run began": {ptr(uint64(9)), func(s *dockertest.FakeService) {
+			stale(s)
+			s.UpdateStartedAt, s.UpdateCompletedAt = t0.Add(time.Hour), t0.Add(time.Hour+time.Minute)
+		}},
+		"still at the version, a status with no time": {ptr(uint64(9)), stale},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			svc := swarmService("web", 'a')
+			svc.Version = 9
+			c.tune(&svc)
+			r := newApplyRig(t, nil, svc)
+			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			if c.version != nil {
+				run = r.marked(t, run, *c.version)
+			}
+
+			r.recoverNow(t, nil)
+
+			if got := r.runOf(t, run.ID); got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted {
+				t.Errorf("run = %s %q, want failed by the restart", got.State, got.Reason)
+			}
+			if n := len(r.fake.ServiceUpdates()); n != 0 {
+				t.Errorf("service updates = %d, want none", n)
+			}
+			if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+				t.Errorf("rollback audit rows = %+v, want none: nothing was rolled back", rows)
+			}
+			if f, ok := r.failureOf(t, "web"); ok {
+				t.Errorf("failure = %+v, want nothing remembered: the new digest was never tried", f)
+			}
+		})
+	}
+}
+
+// A service that runs the new digest is put back whatever version it is at: the version only tells a service on the previous digest
+// that the run wrote from one it never touched. Recovery's own restore moves the version, so a second restart during that restore
+// finds the service at another version again and waits for it, as one the run wrote (CR-02).
+func TestRecoveryOfAServiceThatRunsTheNewDigestWritesWhateverItsVersion(t *testing.T) {
+	t.Parallel()
+	for name, version := range map[string]*uint64{"no version recorded": nil, "the version of the write": ptr(uint64(1))} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newApplyRig(t, nil, swarmService("web", 'b'))
+			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			if version != nil {
+				run = r.marked(t, run, *version)
+			}
+
+			r.recoverNow(t, nil)
+
+			if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+				t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+			}
+			if n := len(r.fake.ServiceUpdates()); n != 1 {
+				t.Errorf("service updates = %d, want the one that puts the previous digest back", n)
+			}
+		})
+	}
+}
+
+// orderedLocks are the rig's locks noting when a job is attached to the lock and when the lock is freed.
+type orderedLocks struct {
+	*stackops.Locks
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *orderedLocks) note(e string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, e)
+}
+
+func (l *orderedLocks) TryAcquire(envID string, h stackops.Holder) (func(), stackops.Holder, bool) {
+	release, held, ok := l.Locks.TryAcquire(envID, h)
+	if !ok {
+		return nil, held, false
+	}
+	return func() { l.note("release"); release() }, held, true
+}
+
+func (l *orderedLocks) Attach(envID, jobID string) {
+	l.note("attach")
+	l.Locks.Attach(envID, jobID)
+}
+
+// The job of a recovery is attached to the environment's lock before its body does anything, as an update's is. A body that ended
+// first would free the lock, and the attach, which goes by the environment, would then write the finished job's ID into the holder of
+// whatever took the lock next (WR-02). The service here is untouched, so the body ends at once: the shortest body there is. The
+// race this guards is a few instructions wide, so the test can fail without the gate only when the body wins it.
+func TestRecoveryAttachesItsJobBeforeTheBodyRuns(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'a'))
+	locks := &orderedLocks{Locks: r.locks}
+	r.applier.Locks = locks
+	r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	locks.mu.Lock()
+	defer locks.mu.Unlock()
+	if !slices.Equal(locks.events, []string{"attach", "release"}) {
+		t.Errorf("lock events = %v, want the job attached and only then the lock freed", locks.events)
+	}
+}
+
+// recordingClock is the rig's clock that notes every wait recovery itself asks for.
+type recordingClock struct {
+	*waitClock
+	mu    sync.Mutex
+	waits []time.Duration
+	// onWait, when set, is called with the number of waits asked for so far, before the wait is answered.
+	onWait func(n int)
+}
+
+func (c *recordingClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	c.waits = append(c.waits, d)
+	n, hook := len(c.waits), c.onWait
+	c.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
+	return c.waitClock.After(d)
+}
+
+func (c *recordingClock) asked() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.waits...)
+}
+
+// oldContainerAs is the container of appContainer as an interrupted update leaves it: stopped at finished, under the name an update
+// gives it to make way, so the replacement can take the real one.
+func oldContainerAs(finished time.Time) dockertest.FakeContainer {
+	c := appContainer("exited")
+	c.Names = []string{"/" + appOldName}
+	c.Created = t0.Add(-time.Hour).Unix()
+	c.Inspect.FinishedAt = finished.UTC().Format(time.RFC3339Nano)
+	return c
+}
+
+// replacementAs is the container an update created for the new digest, named name, in state.
+func replacementAs(name, state string) dockertest.FakeContainer {
+	return dockertest.FakeContainer{
+		ID: strings.Repeat("d", 64), Names: []string{"/" + name}, Image: pinnedApp(dg('b')), ImageID: imgID('2'), State: state,
+		Created: t0.Unix(), Inspect: dockertest.FakeInspect{ImageID: imgID('2')},
+	}
+}
+
+// markStopped records the old container the way the update does before it stops it.
+func (r *applyRig) markStopped(t *testing.T, run updates.Run) {
+	t.Helper()
+	if ok, err := r.runs.SetOldContainer(context.Background(), run.ID, appID); err != nil || !ok {
+		t.Fatalf("record the old container: %v %v", ok, err)
+	}
+}
+
+// An update of a container cut off after the swap: the replacement holds the name, the old container is stopped under its temporary
+// name. Recovery removes the replacement, gives the old container its name back and starts it, because the update had stopped it
+// (plan 12-24, D-12, T-12-72).
+func TestRecoveryRestoresContainer(t *testing.T) {
+	t.Parallel()
+	r := containerRig(t, nil, oldContainerAs(t0.Add(2*time.Minute)), replacementAs("app", "running"))
+	run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+	r.markStopped(t, run)
+
+	r.recoverNow(t, nil)
+
+	if got, want := writeKinds(r.fake.Writes()), []string{"remove", "rename", "start"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the engine was asked %v, want %v: the replacement removed, the old one renamed back and started", got, want)
+	}
+	if now := r.containersNow(t); !reflect.DeepEqual(now, map[string]string{"app": "running " + appID}) {
+		t.Errorf("containers = %v, want only the old container, back under its name and running", now)
+	}
+	got := r.runOf(t, run.ID)
+	if got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+		t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "success" || rows[0]["reason"] != updates.ReasonServerRestarted {
+		t.Errorf("rollback audit rows = %+v, want one success naming the restart", rows)
+	}
+	all, err := r.failures.ForEnv(context.Background(), r.envID)
+	if f := all[updates.FailureKey("container", "app")]; err != nil || f.Digest != dg('b') || f.Reason != updates.ReasonServerRestarted {
+		t.Errorf("failure = %+v %v, want the new digest remembered with the restart as the reason", f, err)
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Errorf("the lock is still held after recovery")
+	}
+}
+
+// An update cut off before the old container was stopped (nothing recorded): the old one was never touched. The temporary
+// replacement is removed and the run is failed by the restart, with nothing to restore.
+func TestRecoveryBeforeStop(t *testing.T) {
+	t.Parallel()
+	r := containerRig(t, nil, appContainer("running"), replacementAs(appNewName, "created"))
+	run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+
+	r.recoverNow(t, nil)
+
+	if got, want := writeKinds(r.fake.Writes()), []string{"remove"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the engine was asked %v, want only the removal of the temporary replacement", got)
+	}
+	if now := r.containersNow(t); !reflect.DeepEqual(now, map[string]string{"app": "running " + appID}) {
+		t.Errorf("containers = %v, want only the old container, still running", now)
+	}
+	got := r.runOf(t, run.ID)
+	if got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted {
+		t.Errorf("run = %s %q, want failed by the restart", got.State, got.Reason)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+		t.Errorf("rollback audit rows = %+v, want none: nothing was rolled back", rows)
+	}
+}
+
+// An update of a stack goes through the seam of the api package, once; what the seam leaves open is ended, what it ended is left, and
+// a lock that is held is waited for (plan 12-24).
+func TestRecoveryStackSeam(t *testing.T) {
+	t.Parallel()
+	stackRun := func(r *applyRig, id string) updates.Run {
+		run := updates.Run{
+			ID: id, EnvID: r.envID, Kind: "stack", Workload: "shop", WorkloadID: "stack-1", StackID: "stack-1",
+			Items:       []updates.RunItem{{Service: "shop_web", Image: "registry.test/team/web:1", FromDigest: dg('a'), ToDigest: dg('b')}},
+			State:       updates.RunRunning,
+			Actor:       "user-1",
+			RevisionSeq: 2, StartedAt: t0,
+		}
+		if err := r.runs.Insert(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+
+	t.Run("the seam ends the run", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil)
+		run := stackRun(r, "run-stack-a")
+		calls := 0
+		r.recoverNow(t, func(ctx context.Context, got updates.Run) error {
+			calls++
+			if got.ID != run.ID {
+				t.Errorf("the seam was given run %s, want %s", got.ID, run.ID)
+			}
+			_, err := r.runs.Finish(ctx, got.ID, updates.RunRolledBack, updates.ReasonServerRestarted, 2, 3)
+			return err
+		})
+		if calls != 1 {
+			t.Errorf("the seam was called %d times, want once", calls)
+		}
+		if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.RollbackSeq != 3 || got.RevisionSeq != 2 {
+			t.Errorf("run = %s revision %d rollback %d, want the seam's end kept", got.State, got.RevisionSeq, got.RollbackSeq)
+		}
+		// Recovery asks for nothing more of a run that ended.
+		r.recoverNow(t, func(context.Context, updates.Run) error {
+			t.Error("the seam was called for a run that ended")
+			return nil
+		})
+	})
+
+	t.Run("the seam fails", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil)
+		run := stackRun(r, "run-stack-b")
+		r.recoverNow(t, func(context.Context, updates.Run) error { return errors.New("the rollback could not be made") })
+		got := r.runOf(t, run.ID)
+		if got.State != updates.RunRollbackFailed || got.Reason != updates.ReasonServerRestarted || got.RevisionSeq != 2 {
+			t.Errorf("run = %s %q revision %d, want rollback_failed by the restart, its revision kept", got.State, got.Reason, got.RevisionSeq)
+		}
+		if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "failure" || rows[0]["workload"] != "shop_web" {
+			t.Errorf("rollback audit rows = %+v, want one failure for shop_web", rows)
+		}
+	})
+
+	t.Run("the lock is held", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil)
+		run := stackRun(r, "run-stack-c")
+		calls := 0
+		r.recoverNow(t, func(ctx context.Context, got updates.Run) error {
+			if calls++; calls == 1 {
+				return &updates.LockedError{Holder: stackops.Holder{Kind: "deploy"}}
+			}
+			_, err := r.runs.Finish(ctx, got.ID, updates.RunRolledBack, updates.ReasonServerRestarted, 2, 3)
+			return err
+		})
+		if calls != 2 {
+			t.Errorf("the seam was called %d times, want it asked again after the lock", calls)
+		}
+		if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack {
+			t.Errorf("run = %s, want rolled_back", got.State)
+		}
+	})
+}
+
+// A lock held by a deploy at startup is waited for on the clock, not taken over and not skipped: nothing is written until it is free,
+// and then the update is rolled back (plan 12-24).
+func TestRecoveryWaitsForLock(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'b'))
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+	release, _, ok := r.locks.TryAcquire(r.envID, stackops.Holder{Kind: "deploy", By: "someone", Started: t0})
+	if !ok {
+		t.Fatal("could not take the lock")
+	}
+	r.clock.mu.Lock()
+	r.clock.hold = true
+	r.clock.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.recoverNow(t, nil)
+	}()
+	select {
+	case <-r.clock.armed:
+	case <-testsupport.Context(t).Done():
+		t.Fatal("recovery did not wait for the lock")
+	}
+	if n := len(r.fake.Writes()); n != 0 {
+		t.Errorf("the engine was written %d times while the lock was held, want none", n)
+	}
+	if got := r.runOf(t, run.ID); got.State != updates.RunRunning {
+		t.Errorf("run = %s while the lock was held, want it left running", got.State)
+	}
+
+	release()
+	r.clock.mu.Lock()
+	r.clock.hold = false
+	r.clock.mu.Unlock()
+	r.clock.fire(updates.LockPoll)
+	select {
+	case <-done:
+	case <-testsupport.Context(t).Done():
+		t.Fatal("recovery did not go on once the lock was free")
+	}
+	if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+		t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+	}
+}
+
+// A run that started at or after the boot cutoff belongs to the process that is running, whatever the time of the read that listed it:
+// it is not recovered, and the engine is not written (WR-06). A run from before the cutoff is.
+func TestRecoveryLeavesTheRunsOfThisProcess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		boot time.Time
+		want updates.RunState
+	}{
+		{"started after boot", t0.Add(-time.Hour), updates.RunRunning},
+		{"started at boot", t0, updates.RunRunning},
+		{"started before boot", t0.Add(time.Hour), updates.RunRolledBack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newApplyRig(t, nil, swarmService("web", 'b'))
+			run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+			rec := r.recovery(nil)
+			rec.Boot = tc.boot
+
+			rec.Run(testsupport.Context(t))
+
+			if got := r.runOf(t, run.ID); got.State != tc.want {
+				t.Errorf("run = %s, want %s", got.State, tc.want)
+			}
+			if tc.want == updates.RunRunning && len(r.fake.Writes()) != 0 {
+				t.Errorf("the engine was written %d times for a run of this process, want none", len(r.fake.Writes()))
+			}
+		})
+	}
+}
+
+// A run that ends while recovery waits for the environment's lock is not recovered when the lock is free: the row is read again at each
+// try, and the update that ended it is not rolled back (WR-06).
+func TestRecoveryReadsTheRunAgainAfterWaiting(t *testing.T) {
+	t.Parallel()
+	r := newApplyRig(t, nil, swarmService("web", 'b'))
+	run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+	release, _, ok := r.locks.TryAcquire(r.envID, stackops.Holder{Kind: "deploy", By: "someone", Started: t0})
+	if !ok {
+		t.Fatal("could not take the lock")
+	}
+	r.clock.mu.Lock()
+	r.clock.hold = true
+	r.clock.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.recoverNow(t, nil)
+	}()
+	testsupport.Await(t, "recovery to wait for the lock", r.clock.armed)
+
+	// The update's own job was not gone after all, and ends the run while recovery waits.
+	if ok, err := r.runs.Finish(testsupport.Context(t), run.ID, updates.RunDone, "", 0, 0); err != nil || !ok {
+		t.Fatalf("end the run: %v %v", ok, err)
+	}
+	release()
+	r.clock.mu.Lock()
+	r.clock.hold = false
+	r.clock.mu.Unlock()
+	r.clock.fire(updates.LockPoll)
+	testsupport.Await(t, "recovery to return", done)
+
+	if got := r.runOf(t, run.ID); got.State != updates.RunDone {
+		t.Errorf("run = %s, want the done it ended with", got.State)
+	}
+	if n := len(r.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none: the update had ended and must not be rolled back", n)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+		t.Errorf("rollback audit rows = %+v, want none", rows)
+	}
+}
+
+// An environment that cannot be reached is tried again after 1 minute, doubling to 15, and given up after 2 hours as rollback_failed
+// with the reason environment_offline (plan 12-24, RESEARCH Pitfall 13).
+func TestRecoveryOfflineBackoff(t *testing.T) {
+	t.Parallel()
+	r := containerRig(t, nil, appContainer("running"))
+	clk := &recordingClock{waitClock: r.clock}
+	run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+	// The host goes away: every read of it fails, however often it is tried.
+	r.fake.Stop()
+
+	(&updates.Recovery{Runs: &r.runs, Applier: r.applier, Clock: clk}).Run(testsupport.Context(t))
+
+	waits := clk.asked()
+	if len(waits) < 5 {
+		t.Fatalf("recovery waited %v, want a backoff", waits)
+	}
+	want := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute}
+	if !reflect.DeepEqual(waits[:5], want) {
+		t.Errorf("first waits = %v, want %v", waits[:5], want)
+	}
+	var total time.Duration
+	for _, w := range waits[5:] {
+		if w != 15*time.Minute {
+			t.Errorf("a later wait = %v, want it held at 15 minutes", w)
+		}
+	}
+	for _, w := range waits {
+		total += w
+	}
+	if total < updates.OfflineGiveUp || total > updates.OfflineGiveUp+updates.OfflineBackoffMax {
+		t.Errorf("recovery waited %v in all, want it to give up after about %v", total, updates.OfflineGiveUp)
+	}
+	got := r.runOf(t, run.ID)
+	if got.State != updates.RunRollbackFailed || got.Reason != updates.ReasonEnvironmentOffline {
+		t.Errorf("run = %s %q, want rollback_failed with environment_offline", got.State, got.Reason)
+	}
+	if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 || rows[0]["_result"] != "failure" || rows[0]["reason"] != updates.ReasonServerRestarted {
+		t.Errorf("rollback audit rows = %+v, want one failure naming the restart", rows)
+	}
+}
+
+// An environment that comes back while recovery is backing off is rolled back at the next try, not given up on.
+func TestRecoveryOfflineThenBack(t *testing.T) {
+	t.Parallel()
+	r := containerRig(t, nil, oldContainerAs(t0.Add(2*time.Minute)), replacementAs("app", "running"))
+	run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+	r.markStopped(t, run)
+	r.fake.Stop()
+	clk := &recordingClock{waitClock: r.clock}
+	clk.onWait = func(n int) {
+		if n == 2 {
+			r.fake.Restart(t)
+			// The monitor notices the host again on its next probe.
+			testsupport.WaitFor(t, "the environment to be read again", func() bool { // testsupport: external, the monitor probes the host on its own schedule
+				_, _, err := r.applier.Aggregator.FreshSnapshot(testsupport.Context(t), r.envID)
+				return err == nil
+			})
+		}
+	}
+
+	(&updates.Recovery{Runs: &r.runs, Applier: r.applier, Clock: clk}).Run(testsupport.Context(t))
+
+	if waits := clk.asked(); len(waits) != 2 {
+		t.Errorf("recovery waited %v, want two waits and then the rollback", waits)
+	}
+	if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack || got.Reason != updates.ReasonServerRestarted {
+		t.Errorf("run = %s %q, want rolled_back by the restart", got.State, got.Reason)
+	}
+}
+
+// A run that something else has ended is not rolled back again: recovery of the same run twice writes to the engine once, and a run a
+// late writer ended while recovery was at it keeps that end (the terminal guard of the run store).
+func TestRecoveryOnce(t *testing.T) {
+	t.Parallel()
+	t.Run("twice", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil, swarmService("web", 'b'))
+		run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+		r.recoverNow(t, nil)
+		r.recoverNow(t, nil)
+		if n := len(r.fake.ServiceUpdates()); n != 1 {
+			t.Errorf("service updates = %d, want one: the second recovery finds nothing to do", n)
+		}
+		if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 1 {
+			t.Errorf("rollback audit rows = %d, want one", len(rows))
+		}
+		if got := r.runOf(t, run.ID); got.State != updates.RunRolledBack {
+			t.Errorf("run = %s, want rolled_back", got.State)
+		}
+	})
+
+	t.Run("a late writer", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil)
+		run := updates.Run{
+			ID: "run-late", EnvID: r.envID, Kind: "stack", Workload: "shop", WorkloadID: "stack-1", StackID: "stack-1",
+			Items: []updates.RunItem{{Service: "shop_web", Image: "registry.test/team/web:1", FromDigest: dg('a'), ToDigest: dg('b')}},
+			State: updates.RunRunning, Actor: "user-1", StartedAt: t0,
+		}
+		if err := r.runs.Insert(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		r.recoverNow(t, func(ctx context.Context, got updates.Run) error {
+			// The update's own job, which was not gone after all, finishes it first.
+			_, err := r.runs.Finish(ctx, got.ID, updates.RunDone, "", 2, 0)
+			return err
+		})
+		if got := r.runOf(t, run.ID); got.State != updates.RunDone {
+			t.Errorf("run = %s, want the late writer's done kept", got.State)
+		}
+		if rows := r.audits(t, "image.update_rolled_back"); len(rows) != 0 {
+			t.Errorf("rollback audit rows = %+v, want none: recovery did not end this run", rows)
+		}
+	})
+}
+
+// Recovery never starts or finishes an update (IMG-06, T-12-71): a service is only ever written at the digest it ran, a container is
+// only removed, renamed and started, and nothing is pulled or created.
+func TestRecoveryOnlyRollsBack(t *testing.T) {
+	t.Parallel()
+	t.Run("service", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil, swarmService("web", 'b'))
+		r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+		r.offer("web", dg('c')) // the registry has something newer still: recovery must not look at it
+		r.recoverNow(t, nil)
+		sent := r.fake.ServiceUpdates()
+		if len(sent) == 0 {
+			t.Fatal("recovery wrote nothing")
+		}
+		for _, u := range sent {
+			if image := u.Spec.TaskTemplate.ContainerSpec.Image; !strings.HasSuffix(image, "@"+dg('a')) {
+				t.Errorf("a service was written as %q, want only the digest it ran before", image)
+			}
+		}
+		for _, w := range r.fake.Writes() {
+			if strings.Contains(w, "/images/create") {
+				t.Errorf("recovery pulled an image: %s", w)
+			}
+		}
+	})
+
+	t.Run("container", func(t *testing.T) {
+		t.Parallel()
+		r := containerRig(t, nil, oldContainerAs(t0.Add(2*time.Minute)), replacementAs("app", "running"))
+		run := r.interrupted(t, "container", "app", appID, appImage, dg('a'), dg('b'))
+		r.markStopped(t, run)
+		r.offer("app", dg('c'))
+		r.recoverNow(t, nil)
+		for _, k := range writeKinds(r.fake.Writes()) {
+			if k != "remove" && k != "rename" && k != "start" {
+				t.Errorf("recovery asked the engine to %s, want only remove, rename and start", k)
+			}
+		}
+		if n := len(r.fake.ContainerCreates()); n != 0 {
+			t.Errorf("recovery created %d containers, want none", n)
+		}
+		for _, w := range r.fake.Writes() {
+			if strings.Contains(w, "/images/create") {
+				t.Errorf("recovery pulled an image: %s", w)
+			}
+		}
+	})
+
+	t.Run("queued", func(t *testing.T) {
+		t.Parallel()
+		r := newApplyRig(t, nil, swarmService("web", 'a'))
+		run := r.interrupted(t, "service", "web", "svc-web", "registry.test/team/web:1", dg('a'), dg('b'))
+		if _, err := r.runs.SetState(context.Background(), run.ID, updates.RunQueued); err != nil {
+			t.Fatal(err)
+		}
+		r.recoverNow(t, nil)
+		if n := len(r.fake.Writes()); n != 0 {
+			t.Errorf("the engine was written %d times for a run that never started, want none", n)
+		}
+		if got := r.runOf(t, run.ID); got.State != updates.RunFailed || got.Reason != updates.ReasonServerRestarted {
+			t.Errorf("run = %s %q, want failed by the restart", got.State, got.Reason)
+		}
+	})
+}

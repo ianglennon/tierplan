@@ -34,6 +34,10 @@ var sharedSwarmCases = []struct {
 	{"Enrol", sharedEnrol},
 	{"HostRoutes", sharedHostRoutes},
 	{"ImagePullFanOut", sharedImagePullFanOut},
+	{"ImageUpdate", sharedImageUpdate},
+	{"ImageUpdateAutoRollback", sharedImageUpdateAutoRollback},
+	{"ImageUpdateHealth", sharedImageUpdateHealth},
+	{"ImageUpdateRollback", sharedImageUpdateRollback},
 	{"Janitor", sharedJanitor},
 	{"NetworkConnect", sharedNetworkConnect},
 	{"Networks", sharedNetworks},
@@ -57,6 +61,7 @@ var sharedSwarmCases = []struct {
 	{"StackDeployTasksFailed", sharedStackDeployTasksFailed},
 	{"StackDrift", sharedStackDrift},
 	{"StackHistoryRollback", sharedStackHistoryRollback},
+	{"StackImageUpdate", sharedStackImageUpdate},
 	{"StackLifecycle", sharedStackLifecycle},
 	{"StackPin", sharedStackPin},
 	{"StackRedeployIdempotent", sharedStackRedeployIdempotent},
@@ -78,6 +83,11 @@ var sharedCaseOptions = map[string]func(*servertest.Options){
 	"Janitor": func(o *servertest.Options) {
 		o.JanitorClock = func() *janitorShift { c := &janitorShift{}; c.by.Store(int64(janitorSwarmShift)); return c }()
 		o.AddressSpaceClock = func() time.Time { return time.Now().Add(janitorSwarmShift) }
+	},
+	// ImageUpdateHealth gives the server the shortest converge timeout it takes, so an update to a build that never becomes
+	// healthy is judged within a minute and the case measures that.
+	imageUpdateHealthCase: func(o *servertest.Options) {
+		o.Env = map[string]string{"TIERPLAN_STACK_CONVERGE_TIMEOUT": "1m"}
 	},
 	// OrphanMatrix moves the address-space reader's clock a day and an hour on, so every
 	// network it makes is past the 24-hour orphan grace period at once.

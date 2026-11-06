@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import { type EnvironmentItem, environmentsQuery } from "@/api/environments";
+import { FLEET_KEY } from "@/api/update-keys";
 import { ENV_WARNINGS_KEY, WARNINGS_KEY } from "@/api/warnings";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import { apiUrl } from "@/lib/base-path";
@@ -192,6 +193,8 @@ export function EnvHealthStreamProvider({ children, createSource }: ProviderProp
       }
       lastWarnings = Date.now();
       void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
+      // The Overview's fleet tiles and tabs count what the same changes move (D-17).
+      void queryClient.invalidateQueries({ queryKey: FLEET_KEY });
     }
 
     // A server restarts its ids from 1, so the same id alone does not make a

@@ -534,11 +534,24 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // flag, sends no key but the version, and is never retried.
 // SystemTime (Phase 11, JAN-02) is a read: one engine info call, from which the time the engine says it is is taken; it takes
 // no options. The janitor compares it with the server's to refuse to judge ages on a node whose clock is wrong.
-var allowedMethods = []string{"AddressPools", "Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerDetail", "ContainerEnd", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkCreate", "NetworkCreateAllocated", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServicesWithLabel", "SetTaskHistoryLimit", "Snapshot", "StartExec", "SwarmNetworkNames", "SwarmSettings", "SystemTime", "TaskHistoryLimit", "TaskLogs", "TaskNetworkRefs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
+// ContainerInspectFull, ContainerCreate, ContainerRename and NetworkConnectEndpoint (Phase 12, IMG-06, D-07, D-12) are the
+// building blocks of a plain container's recreate: the first reads one container's whole inspect document, ContainerCreate
+// creates one container from a configuration derived from it (never started, never retried, no pull), ContainerRename gives
+// one container a new name and NetworkConnectEndpoint connects one container to one network with endpoint settings copied
+// from the old container. Each takes an ID or a name and, for the two that carry a document, the engine's own configuration
+// types, so they are listed in methodsWithMobyTypes; the update path that calls them (internal/updates) is the only caller.
+// ServiceUpdateAuthFromSpec (Phase 12, IMG-06, D-07) is ServiceUpdate for a write with no registry credential to send: the same
+// strictly decoded spec, once, never retried, with registryAuthFrom=spec instead of an X-Registry-Auth header. It takes no engine type.
+var allowedMethods = []string{"AddressPools", "Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerCreate", "ContainerDetail", "ContainerEnd", "ContainerInspectFull", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerRename", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkConnectEndpoint", "NetworkCreate", "NetworkCreateAllocated", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServiceUpdateAuthFromSpec", "ServicesWithLabel", "SetTaskHistoryLimit", "Snapshot", "StartExec", "SwarmNetworkNames", "SwarmSettings", "SystemTime", "TaskHistoryLimit", "TaskLogs", "TaskNetworkRefs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
-var typedMethodsWithForbiddenWords = []string{"ComposeStart", "ComposeStop", "ServiceCreate", "ServiceForceUpdate", "ServiceUpdate", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkCreateAllocated", "NetworkRemove", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
+var typedMethodsWithForbiddenWords = []string{"ComposeStart", "ComposeStop", "ServiceCreate", "ServiceForceUpdate", "ServiceUpdate", "ServiceUpdateAuthFromSpec", "ServiceRemove", "StartExec", "ContainerRemove", "NetworkCreate", "NetworkCreateAllocated", "NetworkRemove", "ContainerCreate", "VolumeCreate", "VolumeRemove", "ImageRemove", "NodeRemove", "NodeUpdate", "SecretCreate", "SecretRemove", "ConfigCreate", "ConfigRemove"}
+
+// methodsWithMobyTypes are the methods that may take or return the engine's own configuration types, each reviewed one
+// by one: the recreate copies a container's whole inspect document, which no hand-made mirror type could keep complete
+// (RESEARCH Pitfall 11). Every other method keeps the engine's types inside dockerx.
+var methodsWithMobyTypes = []string{"ContainerInspectFull", "ContainerCreate", "NetworkConnectEndpoint"}
 
 var forbiddenName = regexp.MustCompile(`Plugin|Swarm(Init|Join|Leave|Unlock)|Create|Remove|Start|Stop|Kill|Exec|Update|Prune|Raw|Do$|Passthrough`)
 
@@ -568,6 +581,9 @@ func TestNoExportedMethodTakesOrReturnsAMobyType(t *testing.T) {
 	typ := reflect.TypeOf(&dockerx.Client{})
 	for i := range typ.NumMethod() {
 		m := typ.Method(i)
+		if slices.Contains(methodsWithMobyTypes, m.Name) {
+			continue
+		}
 		for j := range m.Type.NumIn() {
 			if pkg := m.Type.In(j).PkgPath(); strings.Contains(pkg, "moby") {
 				t.Errorf("%s takes a type from %s", m.Name, pkg)

@@ -3,13 +3,18 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { CircleArrowUp } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { type UnmanagedStack, unmanagedStackQuery } from "@/api/unmanaged-stacks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { StackServicesTable } from "@/features/stacks/stack-services-card";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 interface UnmanagedOverviewProps {
@@ -66,6 +71,55 @@ function UnmanagedDetails({ envId, stack }: { envId: string; stack: UnmanagedSta
   );
 }
 
+// AdoptToUpdate stands where Update stack stands on a stack TierPlan manages (D-09): a stack found on the engine
+// has no revision to roll an update back to, so its stack-level action reads "Adopt to update…" and opens the Adopt
+// page. It follows Adopt stack's rules: an Env Admin gets the link, anyone else sees it off with the role it takes,
+// and a stack that cannot be adopted with the server's reason; a user whose permissions are not known yet sees
+// nothing. Its services keep their own Update.
+function AdoptToUpdate({
+  envId,
+  stack,
+}: {
+  envId: string;
+  stack: Pick<UnmanagedStack, "name" | "adoptable" | "reason">;
+}) {
+  const t = useT();
+  const needs = useNeeds("stacks.create", envId);
+  if (!needs.allowed && !needs.reason) return null;
+  const label = (
+    <>
+      <CircleArrowUp aria-hidden="true" />
+      {t("updates.stack.action.adopt")}
+    </>
+  );
+  if (needs.allowed && stack.adoptable) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button asChild variant="outline" className="max-md:h-11">
+            <Link
+              to="/env/$envId/unmanaged-stacks/$name/adopt"
+              params={{ envId, name: stack.name }}
+            >
+              {label}
+            </Link>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-sm">
+          {t("updates.stack.action.adoptTooltip")}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <NeedsTooltip reason={needs.allowed ? stack.reason || undefined : needs.reason}>
+      <Button type="button" variant="outline" className="max-md:h-11" aria-disabled="true">
+        {label}
+      </Button>
+    </NeedsTooltip>
+  );
+}
+
 // UnmanagedOverview is the Overview tab of an unmanaged stack (UI-SPEC "Unmanaged stack page"): the services
 // found by label beside the Details card, in two columns above 1024px and one below. The per-object actions stay
 // on the service and container pages the names link to (D-09). The layout owns the header, the notes and the
@@ -82,16 +136,26 @@ export function UnmanagedOverview({ envId, name }: UnmanagedOverviewProps) {
     );
   }
   const rows = data.services ?? [];
+  const updatable = data.update?.state === "update_available";
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-      <SettingsCard title={t("stackOverview.services.title")}>
-        {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("stackUnmanagedPage.services.empty")}</p>
-        ) : (
-          <StackServicesTable envId={envId} rows={rows} swarm={data.target === "swarm"} />
-        )}
-      </SettingsCard>
-      <UnmanagedDetails envId={envId} stack={data} />
+    <div className="flex flex-col gap-6">
+      {updatable ? (
+        <div className="flex justify-end max-md:[&>*]:w-full">
+          <AdoptToUpdate envId={envId} stack={data} />
+        </div>
+      ) : null}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        <SettingsCard title={t("stackOverview.services.title")}>
+          {rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("stackUnmanagedPage.services.empty")}
+            </p>
+          ) : (
+            <StackServicesTable envId={envId} rows={rows} swarm={data.target === "swarm"} />
+          )}
+        </SettingsCard>
+        <UnmanagedDetails envId={envId} stack={data} />
+      </div>
     </div>
   );
 }

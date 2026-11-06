@@ -13,6 +13,8 @@ import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { EnvPalette } from "@/features/environments/env-palette";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { JobsIndicator } from "@/features/jobs/jobs-indicator";
+import { SearchPaletteProvider } from "@/features/search/palette-context";
+import { SearchTrigger } from "@/features/search/search-trigger";
 import { useAccessRefetch } from "@/hooks/use-access-refetch";
 import { useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -42,6 +44,7 @@ function ShellBody() {
         <SidebarTrigger aria-label={t("shell.toggleSidebar")} className="max-md:size-11" />
         {/* The page title goes here: breadcrumbs or a heading, set by each page. */}
         <div id="header-title" className="min-w-0 flex-1 truncate text-sm font-medium" />
+        {me ? <SearchTrigger /> : null}
         {me ? <JobsIndicator /> : null}
         {canSeeBell ? <HealthBell /> : null}
         {me ? <UserMenu username={me.user.username} instanceAdmin={me.user.instanceAdmin} /> : null}
@@ -81,20 +84,22 @@ function AppLayout() {
       {/* One health stream for the whole signed-in app (D-36): the overview,
           the switcher and the bell all read what it keeps current. */}
       <EnvHealthStreamProvider>
-        <SidebarProvider
-          open={open}
-          onOpenChange={(next) => {
-            setOpen(next);
-            setSidebarOpen(next);
-          }}
-        >
-          <AppSidebar />
-          <ShellBody />
-          {/* Cmd/Ctrl+K from any signed-in page (D-35). A code editor added
+        <SearchPaletteProvider>
+          <SidebarProvider
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next);
+              setSidebarOpen(next);
+            }}
+          >
+            <AppSidebar />
+            <ShellBody />
+            {/* Cmd/Ctrl+K from any signed-in page (D-35). A code editor added
               later must set data-code-editor on its root, or the shortcut
               will open this over the editor's own use of the key. */}
-          <EnvPalette />
-        </SidebarProvider>
+            <EnvPalette />
+          </SidebarProvider>
+        </SearchPaletteProvider>
       </EnvHealthStreamProvider>
     </TooltipProvider>
   );

@@ -39,6 +39,10 @@ const chromium = {
 // The git-stacks project makes a stack from a repository on the git service of this topology and
 // deploys it to the engine TierPlan manages, so it follows the stacks project and, like it, comes
 // before the services project, which turns that engine into a swarm.
+// The updates project deploys a stack of an image on the registry service of this topology to the
+// engine TierPlan manages, pushes a new build of the tag and updates the stack; like the stacks
+// projects it assumes a standalone host and leaves the engine as it found it, so it sits before the
+// services project.
 const order = [
   "setup-and-login",
   "dashboard",
@@ -52,6 +56,7 @@ const order = [
   "responsive",
   "stacks",
   "git-stacks",
+  "updates",
   "services",
   "backup",
 ] as const;

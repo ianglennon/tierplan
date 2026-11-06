@@ -190,6 +190,19 @@ func (m *PlatformMemo) remember(envID, text, digest string, platforms []swarm.Pl
 	m.byKey[key] = append([]swarm.Platform{}, platforms...)
 }
 
+// Remember records that the digest of the image written as text, looked up from the environment envID, carries
+// platforms, so a deploy that follows an image update's check needs no daemon call of its own for it (a revision that
+// predates the Phase 8 platform record has none to carry over). An empty list records nothing: a digest that names no
+// platform is a single-manifest image, and the deploy keeps its own one lookup for it. It is remember for a caller
+// outside the package, with the same keying, the same refusal of a key that is not usable and the same disagreement
+// rule; a nil memo remembers nothing.
+func (m *PlatformMemo) Remember(envID, text, digest string, platforms []swarm.Platform) {
+	if len(platforms) == 0 {
+		return
+	}
+	m.remember(envID, text, digest, platforms)
+}
+
 // recall returns the platforms remembered for a digest in the repository of text, as looked up from the environment envID.
 func (m *PlatformMemo) recall(envID, text, digest string) ([]swarm.Platform, bool) {
 	key := memoKey(envID, text, digest)

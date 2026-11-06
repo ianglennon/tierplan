@@ -89,7 +89,16 @@ var (
 	ErrNotFound = errors.New("jobs: no such job")
 	// ErrFinished means the job has ended, so there is nothing to cancel.
 	ErrFinished = errors.New("jobs: the job has finished")
+	// ErrHubClosed means the hub was closed. It is the cause of the context of every job that Close cancelled, so a run can tell
+	// the server stopping (context.Cause(ctx) is ErrHubClosed) from a person's Cancel (context.Canceled); see Closing.
+	ErrHubClosed = errors.New("jobs: the hub is closed")
 )
+
+// Closing reports whether ctx, the context of a job's run, was cancelled because the hub is closing: the server is stopping and the
+// job did not end by its own doing or by a person's Cancel. It is false for a context that is still live.
+func Closing(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), ErrHubClosed)
+}
 
 // ItemSpec names one item of a job.
 type ItemSpec struct {
@@ -242,7 +251,7 @@ func (o Options) withDefaults() Options {
 type Hub struct {
 	opt    Options
 	ctx    context.Context
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 	wg     sync.WaitGroup
 
 	mu     sync.Mutex
@@ -252,7 +261,7 @@ type Hub struct {
 
 // New builds a hub.
 func New(o Options) *Hub {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	return &Hub{opt: o.withDefaults(), ctx: ctx, cancel: cancel, jobs: map[string]*entry{}}
 }
 
@@ -298,7 +307,7 @@ func (h *Hub) Start(spec Spec, run func(ctx context.Context, r *Reporter)) (Job,
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return Job{}, errors.New("jobs: the hub is closed")
+		return Job{}, ErrHubClosed
 	}
 	now := h.opt.Now()
 	h.sweepLocked(now)
@@ -364,6 +373,17 @@ func (h *Hub) Start(spec Spec, run func(ctx context.Context, r *Reporter)) (Job,
 type Reporter struct {
 	h *Hub
 	e *entry
+	// scope is put before every item ID this reporter is given, and parent is the Parent of the items it adds that name none:
+	// a reporter made by Scoped, for code that reports a fixed set of item IDs on a job that holds several of its kind.
+	scope, parent string
+}
+
+// Scoped returns a reporter of the same job whose item IDs, and the parent IDs of the items it adds, are all prefixed with scope, and
+// whose added items belong to the item parent (an ID of the whole job, not prefixed) when they name no parent of their own. Code written for a job of one operation (check, pull, update) then runs unchanged
+// as one operation among several in a bigger job, such as a bulk update, each under an item of its own. The output log is the
+// job's, shared.
+func (r *Reporter) Scoped(scope, parent string) *Reporter {
+	return &Reporter{h: r.h, e: r.e, scope: r.scope + scope, parent: parent}
 }
 
 // JobID is the ID of the job the reporter reports on, known to the run as soon as it
@@ -384,6 +404,12 @@ func newItem(spec ItemSpec) Item {
 // last item that is already running finishes.
 func (r *Reporter) Add(spec ItemSpec) {
 	h, e := r.h, r.e
+	spec.ID = r.scope + spec.ID
+	if spec.Parent == "" {
+		spec.Parent = r.parent
+	} else {
+		spec.Parent = r.scope + spec.Parent
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if e.job.Finished() || e.item(spec.ID) != nil {
@@ -399,6 +425,7 @@ func (r *Reporter) Add(spec ItemSpec) {
 // finished is not changed.
 func (r *Reporter) Update(itemID string, fn func(*Item)) {
 	h, e := r.h, r.e
+	itemID = r.scope + itemID
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	it := e.item(itemID)
@@ -436,6 +463,7 @@ func (r *Reporter) Update(itemID string, fn func(*Item)) {
 // does. Finishing an item that already ended changes nothing.
 func (r *Reporter) Finish(itemID, state, code, message string, result map[string]string) {
 	h, e := r.h, r.e
+	itemID = r.scope + itemID
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	it := e.item(itemID)
@@ -815,7 +843,7 @@ func (h *Hub) Close() {
 	h.mu.Lock()
 	h.closed = true
 	h.mu.Unlock()
-	h.cancel()
+	h.cancel(ErrHubClosed)
 	h.wg.Wait()
 	h.mu.Lock()
 	defer h.mu.Unlock()

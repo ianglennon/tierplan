@@ -192,6 +192,14 @@ func ClientIP(ctx context.Context) string {
 	return c.ip
 }
 
+// WithClientIP returns ctx with the client address set to ip. Work that outlives a request, such as a bulk job, starts from a
+// context that never saw the request, and records the address the request carried through this.
+func WithClientIP(ctx context.Context, ip string) context.Context {
+	c, _ := ctx.Value(clientKey{}).(client)
+	c.ip = ip
+	return context.WithValue(ctx, clientKey{}, c)
+}
+
 // EffectiveScheme is the scheme the caller used to reach TierPlan: https for a
 // request that arrived over TLS, the scheme a trusted proxy reports in
 // X-Forwarded-Proto, and http for everything else. The header of a peer that is

@@ -4,6 +4,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
+import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 
 export type ContainerRow = components["schemas"]["ContainerItem"];
@@ -45,6 +46,35 @@ function keepForSameEnv(envId: string) {
     previousQuery?.queryKey[1] === envId ? previous : undefined;
 }
 
+// The type of the 503 a list filtered by update answers when the checks cannot be read. It is not an
+// offline environment: the list is not empty, it is unknown.
+export const UPDATE_CHECKS_UNAVAILABLE = "update_checks_unavailable";
+
+// ContainersLoadError is a containers list the server refused or could not answer. The type is the
+// problem type it named.
+export class ContainersLoadError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`GET containers failed (${status})`);
+    this.name = "ContainersLoadError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// isUpdateChecksUnavailable says whether a list failed because it was narrowed to the updates available
+// and the checks could not be read, so it could not say which workloads have one.
+export function isUpdateChecksUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "type" in error &&
+    error.type === UPDATE_CHECKS_UNAVAILABLE &&
+    "status" in error &&
+    error.status === 503
+  );
+}
+
 // What narrows the containers list on the server, before its 500-row cap: the
 // node, the search text and the comma list of statuses (UI-SPEC "Shared list
 // behaviour"). Each is left out when it is not set.
@@ -52,6 +82,8 @@ export interface ContainerFilters {
   node?: string;
   q?: string;
   status?: string;
+  // available: only containers whose image has an update available.
+  updates?: "available";
 }
 
 // The part of a key that names the filters, or none when nothing is set, so the
@@ -61,6 +93,7 @@ function filterPart(filters: ContainerFilters & { usage?: string }) {
   if (filters.node) set.node = filters.node;
   if (filters.q) set.q = filters.q;
   if (filters.status) set.status = filters.status;
+  if (filters.updates) set.updates = filters.updates;
   if (filters.usage) set.usage = filters.usage;
   return Object.keys(set).length > 0 ? set : undefined;
 }
@@ -72,10 +105,13 @@ export function containersQuery(envId: string, filters: ContainerFilters = {}) {
       ? ([...listKey(envId, "containers"), set] as const)
       : listKey(envId, "containers"),
     queryFn: async () => {
-      const { data } = await api.GET("/api/env/{envId}/containers", {
+      const { data, error, response } = await api.GET("/api/env/{envId}/containers", {
         params: { path: { envId }, query: set },
       });
-      if (!data) throw new Error("GET containers failed");
+      if (!data) {
+        const problem = readProblem(error, response);
+        throw new ContainersLoadError(problem.status, problem.type);
+      }
       return data;
     },
     placeholderData: keepForSameEnv(envId),

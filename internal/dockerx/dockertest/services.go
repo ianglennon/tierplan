@@ -143,11 +143,38 @@ func WaitRunningTasks(t testing.TB, manager *Node, serviceID string, want int, t
 // base differ. It returns the digest the registry answered with.
 func PushVariant(t testing.TB, node *Node, base, target, marker string, login *Login) string {
 	t.Helper()
+	return PushVariantCmd(t, node, base, target, marker, "", login)
+}
+
+// PushVariantCmd is PushVariant with the image's default command set to cmd, a JSON array such as
+// ["sleep","3600"]; empty keeps the command the variant is made with, which writes the marker and exits.
+// Two variants of one base with a command that runs on and one that exits are a good and a bad version of
+// the same tag.
+func PushVariantCmd(t testing.TB, node *Node, base, target, marker, cmd string, login *Login) string {
+	t.Helper()
+	if cmd == "" {
+		return PushVariantWith(t, node, base, target, marker, login)
+	}
+	return PushVariantWith(t, node, base, target, marker, login, "CMD "+cmd)
+}
+
+// PushVariantWith is PushVariant with Dockerfile instructions applied to the committed image (docker commit --change), such as
+// `CMD ["sleep","3600"]` or `HEALTHCHECK --interval=2s --retries=1 CMD false`. Each instruction is one argument and must not
+// hold a single quote.
+func PushVariantWith(t testing.TB, node *Node, base, target, marker string, login *Login, changes ...string) string {
+	t.Helper()
 	LoadImage(t, base, node)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	name := "tp-variant-" + randHex(3)
-	if out, err := node.Sh(ctx, fmt.Sprintf("docker run --name %s %s sh -c 'echo %s > /tp-marker' && docker commit %s %s && docker rm %s", name, base, marker, name, target, name)); err != nil {
+	change := ""
+	for _, c := range changes {
+		if strings.Contains(c, "'") {
+			t.Fatalf("the instruction %q holds a single quote", c)
+		}
+		change += fmt.Sprintf("--change '%s' ", c)
+	}
+	if out, err := node.Sh(ctx, fmt.Sprintf("docker run --name %s %s sh -c 'echo %s > /tp-marker' && docker commit %s%s %s && docker rm %s", name, base, marker, change, name, target, name)); err != nil {
 		t.Fatalf("make a variant of %s on %s: %v\n%s", base, node.Hostname, err, out)
 	}
 	return pushTagged(t, node, target, login)

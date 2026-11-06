@@ -199,7 +199,35 @@
         "pulled": "Image pulled",
         "pull_cancelled": "Image pull cancelled",
         "removed": "Image removed",
-        "untagged": "Image name removed"
+        "untagged": "Image name removed",
+        "update_skipped": "Skipped a version of an image",
+        "update_skipped_named": "Skipped version {{digest}} of {{image}}",
+        "update_unskipped": "Stopped skipping a version of an image",
+        "update_unskipped_named": "Stopped skipping a version of {{image}}",
+        "updates_ignored": "Ignored image updates",
+        "updates_ignored_named": "Ignored updates for {{scope}}",
+        "updates_unignored": "Stopped ignoring image updates",
+        "updates_unignored_named": "Stopped ignoring updates for {{scope}}",
+        "updated": "Updated an image",
+        "updated_named": "Updated {{name}} to {{digest}}",
+        "update_failed": "An image update failed",
+        "update_failed_named": "Update of {{name}} failed: {{reason}}",
+        "update_rolled_back": "An image update was rolled back",
+        "update_rolled_back_named": "Rolled back {{name}} to {{digest}} after a failed update",
+        "bulk_updated": "Updated image versions in bulk",
+        "bulk_updated_named": "Updated {{n}} items (bulk {{id}})",
+        "update_reason_pull_failed": "the image could not be pulled",
+        "update_reason_didnt_start": "the new version did not start",
+        "update_reason_timeout": "it did not finish updating in time",
+        "update_reason_unhealthy": "the new version did not become healthy",
+        "update_reason_service_rejected": "the swarm refused the change",
+        "update_reason_service_changed": "the service was changed by someone else",
+        "update_reason_engine_error": "the engine could not be reached",
+        "update_reason_cancelled": "it was cancelled",
+        "update_reason_interrupted": "TierPlan stopped during the update",
+        "update_reason_server_restarted": "TierPlan restarted during this update",
+        "update_reason_environment_offline": "the environment could not be reached to put the previous version back",
+        "update_reason_other": "see the update's record"
       },
       "registry": {
         "credential_created": "Registry credential added",
@@ -291,6 +319,10 @@
         "created": "Config created",
         "removed": "Config deleted",
         "rotated": "Config rotated"
+      },
+      "updates": {
+        "policy_changed": "Changed the update check schedule",
+        "defaults_changed": "Changed the update check defaults"
       },
       "janitor": {
         "cleaned": "Cleaned up the environment",

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 )
@@ -45,8 +46,11 @@ type fakeServiceState struct {
 	version  uint64
 	spec     swarm.ServiceSpec
 	previous *swarm.ServiceSpec
-	// updateState and updateMessage are the UpdateStatus a rollback started, empty for none.
+	// noPrevious is set when the service has no previous spec any more: the swarm's own rollback takes it.
+	noPrevious bool
+	// updateState and updateMessage are the UpdateStatus a rollback started, empty for none, and updateAt the time it carries.
 	updateState, updateMessage string
+	updateAt                   time.Time
 }
 
 // rollbackMessage is the message a manager gives the update status of a rollback an operator
@@ -85,9 +89,16 @@ func (c FakeConfig) withServices(state map[string]fakeServiceState) FakeConfig {
 		if st.previous != nil {
 			prev := *st.previous
 			fs.PreviousSpec = &prev
+		} else if st.noPrevious {
+			fs.PreviousSpec = nil
 		}
 		if st.updateState != "" {
 			fs.UpdateState, fs.UpdateMessage = st.updateState, st.updateMessage
+			// The time is the start of every state and the end of a finished one.
+			fs.UpdateStartedAt = st.updateAt
+			if st.updateState == "rollback_completed" {
+				fs.UpdateCompletedAt = st.updateAt
+			}
 		}
 		if r := spec.Mode.Replicated; r != nil && r.Replicas != nil {
 			fs.Desired, fs.Running = *r.Replicas, *r.Replicas
@@ -203,7 +214,7 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 	// A held write is judged against the service as it is when the hold ends, as a real
 	// manager judges the version when it gets to the update.
 	cfg = f.config()
-	if cfg.DropWrites && dropConnection(w) {
+	if (cfg.DropWrites || cfg.DropServiceWrites) && dropConnection(w) {
 		return true
 	}
 	if cfg.PolicyDeny {
@@ -237,6 +248,13 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": fs.UpdateError})
 		return true
 	}
+	f.mu.Lock()
+	refused := f.svcRefuse[fs.ID]
+	f.mu.Unlock()
+	if refused != "" && q.Get("rollback") != "previous" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": refused})
+		return true
+	}
 	var now swarm.ServiceSpec
 	for _, s := range cfg.serviceList(false) {
 		if s.ID == fs.ID {
@@ -260,7 +278,7 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 			return true
 		}
 		next.spec = *fs.PreviousSpec
-		next.updateState, next.updateMessage = "rollback_started", rollbackMessage
+		next.updateState, next.updateMessage, next.updateAt = "rollback_started", rollbackMessage, time.Now()
 	}
 	f.mu.Lock()
 	if f.svcState == nil {
@@ -272,6 +290,72 @@ func (f *Fake) serveServiceUpdate(w http.ResponseWriter, r *http.Request, p stri
 	})
 	f.mu.Unlock()
 	writeJSON(w, http.StatusOK, swarm.ServiceUpdateResponse{Warnings: fs.UpdateWarnings})
+	return true
+}
+
+// RefuseServiceUpdates makes the service of that name refuse every update from now on with this message, as a swarm does a spec it
+// will not take; "" takes the refusal away. A test uses it to refuse the write that puts a previous version back after the
+// write of the new one was accepted.
+func (f *Fake) RefuseServiceUpdates(service, message string) bool {
+	fs, ok := f.config().resolveService(service)
+	if !ok {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.svcRefuse == nil {
+		f.svcRefuse = map[string]string{}
+	}
+	if message == "" {
+		delete(f.svcRefuse, fs.ID)
+	} else {
+		f.svcRefuse[fs.ID] = message
+	}
+	return true
+}
+
+// RollBackService makes the swarm roll the service back by itself, as its own update_config failure action does: the previous spec
+// becomes the service's, the service has no previous spec any more (a manual rollback, by the API, swaps the two instead), and its
+// update status reads rollback_completed, stamped now. It answers false for a service never updated.
+func (f *Fake) RollBackService(service string) bool {
+	cfg := f.config()
+	fs, ok := cfg.resolveService(service)
+	if !ok || fs.PreviousSpec == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.svcState == nil {
+		f.svcState = map[string]fakeServiceState{}
+	}
+	f.svcState[fs.ID] = fakeServiceState{
+		version: max(fs.Version, 1) + 1, spec: *fs.PreviousSpec, noPrevious: true,
+		updateState: "rollback_completed", updateMessage: "rollback completed", updateAt: time.Now(),
+	}
+	return true
+}
+
+// ReplaceServiceSpec makes somebody else's write to the service of that name: the spec becomes this one and the version goes up by
+// one, without the write being kept for ServiceUpdates. A test uses it to change a service between two writes of the code under
+// test. It answers false for a service the swarm does not know.
+func (f *Fake) ReplaceServiceSpec(service string, spec swarm.ServiceSpec) bool {
+	cfg := f.config()
+	fs, ok := cfg.resolveService(service)
+	if !ok {
+		return false
+	}
+	var now swarm.ServiceSpec
+	for _, s := range cfg.serviceList(false) {
+		if s.ID == fs.ID {
+			now = s.Spec
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.svcState == nil {
+		f.svcState = map[string]fakeServiceState{}
+	}
+	f.svcState[fs.ID] = fakeServiceState{version: max(fs.Version, 1) + 1, spec: spec, previous: &now}
 	return true
 }
 
@@ -391,7 +475,7 @@ func (f *Fake) serveServiceCreate(w http.ResponseWriter, r *http.Request, p stri
 	f.recordWrite(r)
 	defer f.beginWrite(cfg.WriteDelay)()
 	cfg = f.config()
-	if cfg.DropWrites && dropConnection(w) {
+	if (cfg.DropWrites || cfg.DropServiceWrites) && dropConnection(w) {
 		return true
 	}
 	if cfg.PolicyDeny {

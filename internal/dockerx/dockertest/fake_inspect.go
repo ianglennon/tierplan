@@ -31,6 +31,8 @@ type FakeInspect struct {
 	WorkingDir string
 	User       string
 	Tty        bool
+	// Healthcheck is Config.Healthcheck of the inspect: the container's health check, nil for none.
+	Healthcheck *container.HealthConfig
 	// ExitCode, StartedAt, FinishedAt, OOMKilled, Error and RestartCount are State and
 	// RestartCount of the inspect document.
 	ExitCode     int
@@ -113,6 +115,7 @@ func (f *Fake) serveInspect(w http.ResponseWriter, r *http.Request, p string, cf
 		}
 		resp.Config.Cmd, resp.Config.Entrypoint = in.Cmd, in.Entrypoint
 		resp.Config.WorkingDir, resp.Config.User, resp.Config.Tty = in.WorkingDir, in.User, in.Tty
+		resp.Config.Healthcheck = in.Healthcheck
 		resp.RestartCount = in.RestartCount
 		resp.State.Running = found.State == "running"
 		resp.State.Paused = found.State == "paused"

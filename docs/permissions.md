@@ -70,6 +70,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `stacks.read` | environment | yes | yes | yes | yes | no | View stacks, their files, reviews, deploys and logs |
 | `stacks.update` | environment | no | yes | yes | yes | no | Save and discard a stack's draft |
 | `teams.manage` | global | no | no | no | yes | no | Create teams and change their members |
+| `updates.check` | environment | no | yes | yes | yes | no | Check an environment's images for updates now |
+| `updates.manage` | environment | no | no | yes | yes | no | Change an environment's image update checks, and skip or ignore its image updates |
 | `users.manage` | global | no | no | no | yes | no | Create, change, disable and delete users |
 | `volumes.create` | environment | no | no | yes | yes | no | Create volumes |
 | `volumes.delete` | environment | no | extra | yes | yes | yes | Delete volumes |

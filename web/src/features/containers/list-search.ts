@@ -17,6 +17,11 @@ export type SortKey = (typeof SORT_VALUES)[number];
 
 export type SortDir = "asc" | "desc";
 
+// The one value the Updates available toggle writes: only containers whose image has an update
+// available. Anything else in the URL is dropped, and the server refuses any other value (T-12-18).
+export const UPDATES_VALUES = ["available"] as const;
+export type UpdatesValue = (typeof UPDATES_VALUES)[number];
+
 // What the server accepts as a search: 128 characters (T-04-31).
 export const MAX_QUERY = 128;
 
@@ -51,6 +56,8 @@ export const containerSearchSchema = nodeSearchSchema.extend({
   group: z.enum(GROUP_VALUES).optional().catch(undefined),
   sort: z.enum(SORT_VALUES).optional().catch(undefined),
   dir: z.enum(["asc", "desc"]).optional().catch(undefined),
+  // The Updates available toggle: updates=available, or nothing.
+  updates: z.enum(UPDATES_VALUES).optional().catch(undefined),
   // The live-stats switch: stats=1 adds the CPU, Memory and Network columns.
   stats: z.literal(1).optional().catch(undefined),
 });

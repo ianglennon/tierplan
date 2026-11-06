@@ -99,6 +99,25 @@ async function openMore() {
   });
 }
 
+// An update object for a service with a newer image on offer.
+function updateInfo(extra: Partial<NonNullable<ServiceDetailBody["update"]>> = {}) {
+  return {
+    state: "update_available" as const,
+    reason: "" as const,
+    registry: "docker.io",
+    repository: "library/nginx",
+    tag: "1.4",
+    runningDigest: `sha256:${"a".repeat(64)}`,
+    remoteDigest: `sha256:${"b".repeat(64)}`,
+    changedPlatforms: [],
+    checkedAt: "2026-11-04T10:00:00Z",
+    successAt: "2026-11-04T10:00:00Z",
+    note: "" as const,
+    task: false,
+    ...extra,
+  };
+}
+
 function answerWith(body: ServiceDetailBody) {
   state.detail = () => Response.json(body);
 }
@@ -121,6 +140,36 @@ describe("the page frame", () => {
     expect(chip.textContent).toBe(DIGEST.slice(0, 19));
     expect(within(headerOf()).getByText(/Updated/)).toBeTruthy();
     expect(document.title).toBe("api · Lab");
+  });
+
+  it("shows the service's update badge in the header beside its name, and none when the server sent no update object", async () => {
+    answerWith(
+      serviceDetail({
+        update: {
+          state: "update_available",
+          reason: "",
+          registry: "registry.example.com",
+          repository: "shop/api",
+          tag: "1.4",
+          runningDigest: DIGEST,
+          remoteDigest: `sha256:${"b".repeat(64)}`,
+          changedPlatforms: [],
+          checkedAt: new Date().toISOString(),
+          successAt: "",
+          note: "",
+          task: false,
+        },
+      }),
+    );
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).getByText("Update available")).toBeTruthy();
+  });
+
+  it("shows no update badge in the header without an update object", async () => {
+    renderAt();
+    await screen.findByRole("heading", { name: "api" });
+    expect(within(headerOf()).queryByText(/Update available|Up to date|Check failed/)).toBeNull();
   });
 
   it("shows the Restart loop badge in the header beside the state, and the alert under it, only for a service in a loop", async () => {
@@ -384,6 +433,50 @@ describe("the header actions", () => {
     expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
     fireEvent.click(force);
     expect(screen.queryByRole("dialog", { name: "Force update api?" })).toBeNull();
+  });
+
+  it("offers an outline Update only while an update is on offer, and it opens the confirm", async () => {
+    answerWith(serviceDetail({ update: updateInfo() }));
+    renderAt();
+    const update = await screen.findByRole("button", { name: "Update" });
+    expect(update.getAttribute("data-variant")).toBe("outline");
+    expect(update.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(update);
+    expect(await screen.findByRole("dialog", { name: "Update api" })).toBeTruthy();
+  });
+
+  it("offers Update for a service of a stack TierPlan manages, and the confirm says it is a revision of the stack", async () => {
+    answerWith(serviceDetail({ update: updateInfo(), tierplanStackId: "s1", stack: "shop" }));
+    renderAt();
+    fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+    expect(await screen.findByRole("dialog", { name: "Update api" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "TierPlan pulls the new image and updates the service in place. This is saved as a new revision of shop, so you can roll back from History.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows no Update for a version that is current, or when nothing was checked", async () => {
+    for (const extra of [{ update: updateInfo({ state: "up_to_date" }) }, { update: undefined }]) {
+      answerWith(serviceDetail(extra));
+      renderAt();
+      await screen.findByRole("button", { name: "Force update…" });
+      expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+      cleanup();
+      queryClient.clear();
+    }
+  });
+
+  it("shows Update to a Viewer unavailable, with the reason, and opens nothing", async () => {
+    state.me = makeMe({ envs: { [SERVICE_ENV]: "viewer" } });
+    answerWith(serviceDetail({ update: updateInfo() }));
+    renderAt();
+    const update = await screen.findByRole("button", { name: "Update" });
+    await waitFor(() => expect(update.getAttribute("aria-disabled")).toBe("true"));
+    expect(document.body.textContent).toContain("Needs Operator on");
+    fireEvent.click(update);
+    expect(screen.queryByRole("dialog", { name: "Update api" })).toBeNull();
   });
 
   it("keeps Force update… and Roll back… on a global service, a job and a stack-owned service", async () => {

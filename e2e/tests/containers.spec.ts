@@ -179,6 +179,8 @@ test("the Logs tab streams stdout and stderr, searches, downloads, and pops out 
   page,
   context,
 }, info) => {
+  // The test waits up to 20 s twice for new log lines, so Playwright's default 30 s is too short on a busy runner (Phase 12 carry-in).
+  test.setTimeout(120_000);
   // Watched from the first request, so the streams the app keeps open on every page
   // (health, events) are counted along with the log's own.
   const probe = await probeNetwork(page);

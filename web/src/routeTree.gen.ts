@@ -19,6 +19,7 @@ import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
 import { Route as AppGitRouteImport } from './routes/_app/git'
 import { Route as AppRegistriesRouteImport } from './routes/_app/registries'
+import { Route as AppSearchRouteImport } from './routes/_app/search'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppStacksRouteImport } from './routes/_app/stacks'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
@@ -60,6 +61,7 @@ import { Route as AppEnvEnvIdServicesServiceIdRouteImport } from './routes/_app/
 import { Route as AppEnvEnvIdServicesNewRouteImport } from './routes/_app/env/$envId/services_.new'
 import { Route as AppEnvEnvIdStacksStackIdRouteImport } from './routes/_app/env/$envId/stacks_.$stackId'
 import { Route as AppEnvEnvIdUnmanagedStacksNameRouteImport } from './routes/_app/env/$envId/unmanaged-stacks.$name'
+import { Route as AppEnvEnvIdUpdateJobsJobIdRouteImport } from './routes/_app/env/$envId/update-jobs.$jobId'
 import { Route as AppEnvEnvIdVolumesVolumeNameRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName'
 import { Route as AppSettingsAccessTeamsTeamIdRouteImport } from './routes/_app/settings/access/teams_.$teamId'
 import { Route as AppSettingsAccessUsersUserIdRouteImport } from './routes/_app/settings/access/users_.$userId'
@@ -166,6 +168,11 @@ const AppGitRoute = AppGitRouteImport.update({
 const AppRegistriesRoute = AppRegistriesRouteImport.update({
   id: '/registries',
   path: '/registries',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSearchRoute = AppSearchRouteImport.update({
+  id: '/search',
+  path: '/search',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
@@ -381,6 +388,12 @@ const AppEnvEnvIdUnmanagedStacksNameRoute =
   AppEnvEnvIdUnmanagedStacksNameRouteImport.update({
     id: '/unmanaged-stacks/$name',
     path: '/unmanaged-stacks/$name',
+    getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
+const AppEnvEnvIdUpdateJobsJobIdRoute =
+  AppEnvEnvIdUpdateJobsJobIdRouteImport.update({
+    id: '/update-jobs/$jobId',
+    path: '/update-jobs/$jobId',
     getParentRoute: () => AppEnvEnvIdRoute,
   } as any)
 const AppEnvEnvIdVolumesVolumeNameRoute =
@@ -742,6 +755,7 @@ export interface FileRoutesByFullPath {
   '/environments': typeof AppEnvironmentsRoute
   '/git': typeof AppGitRoute
   '/registries': typeof AppRegistriesRoute
+  '/search': typeof AppSearchRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/stacks': typeof AppStacksRoute
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
@@ -783,6 +797,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/env/$envId/stacks/$stackId': typeof AppEnvEnvIdStacksStackIdRouteWithChildren
   '/env/$envId/unmanaged-stacks/$name': typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
+  '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/env/$envId/volumes/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -851,6 +866,7 @@ export interface FileRoutesByTo {
   '/environments': typeof AppEnvironmentsRoute
   '/git': typeof AppGitRoute
   '/registries': typeof AppRegistriesRoute
+  '/search': typeof AppSearchRoute
   '/stacks': typeof AppStacksRoute
   '/': typeof AppIndexRoute
   '/git/credentials': typeof AppGitCredentialsRoute
@@ -880,6 +896,7 @@ export interface FileRoutesByTo {
   '/env/$envId/address-space/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
+  '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
   '/settings/environments/$envId/access': typeof AppSettingsEnvironmentsEnvIdAccessRoute
@@ -949,6 +966,7 @@ export interface FileRoutesById {
   '/_app/environments': typeof AppEnvironmentsRoute
   '/_app/git': typeof AppGitRoute
   '/_app/registries': typeof AppRegistriesRoute
+  '/_app/search': typeof AppSearchRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/stacks': typeof AppStacksRoute
   '/_app/': typeof AppIndexRoute
@@ -991,6 +1009,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/services_/new': typeof AppEnvEnvIdServicesNewRoute
   '/_app/env/$envId/stacks_/$stackId': typeof AppEnvEnvIdStacksStackIdRouteWithChildren
   '/_app/env/$envId/unmanaged-stacks/$name': typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
+  '/_app/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/_app/env/$envId/volumes_/$volumeName': typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   '/_app/settings/access/teams_/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/_app/settings/access/users_/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -1062,6 +1081,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/git'
     | '/registries'
+    | '/search'
     | '/settings'
     | '/stacks'
     | '/env/$envId'
@@ -1103,6 +1123,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/new'
     | '/env/$envId/stacks/$stackId'
     | '/env/$envId/unmanaged-stacks/$name'
+    | '/env/$envId/update-jobs/$jobId'
     | '/env/$envId/volumes/$volumeName'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
@@ -1171,6 +1192,7 @@ export interface FileRouteTypes {
     | '/environments'
     | '/git'
     | '/registries'
+    | '/search'
     | '/stacks'
     | '/'
     | '/git/credentials'
@@ -1200,6 +1222,7 @@ export interface FileRouteTypes {
     | '/env/$envId/address-space/guide'
     | '/env/$envId/git-stacks/new'
     | '/env/$envId/services/new'
+    | '/env/$envId/update-jobs/$jobId'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
     | '/settings/environments/$envId/access'
@@ -1268,6 +1291,7 @@ export interface FileRouteTypes {
     | '/_app/environments'
     | '/_app/git'
     | '/_app/registries'
+    | '/_app/search'
     | '/_app/settings'
     | '/_app/stacks'
     | '/_app/'
@@ -1310,6 +1334,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/services_/new'
     | '/_app/env/$envId/stacks_/$stackId'
     | '/_app/env/$envId/unmanaged-stacks/$name'
+    | '/_app/env/$envId/update-jobs/$jobId'
     | '/_app/env/$envId/volumes_/$volumeName'
     | '/_app/settings/access/teams_/$teamId'
     | '/_app/settings/access/users_/$userId'
@@ -1452,6 +1477,13 @@ declare module '@tanstack/react-router' {
       path: '/registries'
       fullPath: '/registries'
       preLoaderRoute: typeof AppRegistriesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/search': {
+      id: '/_app/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof AppSearchRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings': {
@@ -1739,6 +1771,13 @@ declare module '@tanstack/react-router' {
       path: '/unmanaged-stacks/$name'
       fullPath: '/env/$envId/unmanaged-stacks/$name'
       preLoaderRoute: typeof AppEnvEnvIdUnmanagedStacksNameRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/update-jobs/$jobId': {
+      id: '/_app/env/$envId/update-jobs/$jobId'
+      path: '/update-jobs/$jobId'
+      fullPath: '/env/$envId/update-jobs/$jobId'
+      preLoaderRoute: typeof AppEnvEnvIdUpdateJobsJobIdRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/volumes_/$volumeName': {
@@ -2479,6 +2518,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdServicesNewRoute: typeof AppEnvEnvIdServicesNewRoute
   AppEnvEnvIdStacksStackIdRoute: typeof AppEnvEnvIdStacksStackIdRouteWithChildren
   AppEnvEnvIdUnmanagedStacksNameRoute: typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
+  AppEnvEnvIdUpdateJobsJobIdRoute: typeof AppEnvEnvIdUpdateJobsJobIdRoute
   AppEnvEnvIdVolumesVolumeNameRoute: typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   AppEnvEnvIdJanitorRunsRunIdRoute: typeof AppEnvEnvIdJanitorRunsRunIdRoute
   AppEnvEnvIdServicesServiceIdEditRoute: typeof AppEnvEnvIdServicesServiceIdEditRoute
@@ -2516,6 +2556,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdStacksStackIdRoute: AppEnvEnvIdStacksStackIdRouteWithChildren,
   AppEnvEnvIdUnmanagedStacksNameRoute:
     AppEnvEnvIdUnmanagedStacksNameRouteWithChildren,
+  AppEnvEnvIdUpdateJobsJobIdRoute: AppEnvEnvIdUpdateJobsJobIdRoute,
   AppEnvEnvIdVolumesVolumeNameRoute:
     AppEnvEnvIdVolumesVolumeNameRouteWithChildren,
   AppEnvEnvIdJanitorRunsRunIdRoute: AppEnvEnvIdJanitorRunsRunIdRoute,
@@ -2533,6 +2574,7 @@ interface AppRouteChildren {
   AppEnvironmentsRoute: typeof AppEnvironmentsRoute
   AppGitRoute: typeof AppGitRoute
   AppRegistriesRoute: typeof AppRegistriesRoute
+  AppSearchRoute: typeof AppSearchRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppStacksRoute: typeof AppStacksRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -2546,6 +2588,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppEnvironmentsRoute: AppEnvironmentsRoute,
   AppGitRoute: AppGitRoute,
   AppRegistriesRoute: AppRegistriesRoute,
+  AppSearchRoute: AppSearchRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppStacksRoute: AppStacksRoute,
   AppIndexRoute: AppIndexRoute,

@@ -914,11 +914,69 @@ type launch struct {
 	run   func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult))
 	// record, when set, stores how the operation ended in place of recordDeployEnd, which is a deploy's: a stop
 	// and a start take no revision.
-	record    func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
+	record func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
+	// stopped, when set, replaces record and onFailed for an operation the server's shutdown cut off (jobs.Closing): nobody
+	// cancelled it, so it is not a person's call to keep the stack as it is. It records what the stack's own deploy knows and leaves
+	// whatever else the operation tracks open for restart recovery to find, as it does after a crash.
+	stopped func(ctx context.Context, deploy stackops.DeployRow, res stackops.DeployResult)
+	// onFailed, when set, runs inside the job once the operation ended failed after it changed a service and not by a cancel
+	// (DeployResult.NeedsRestore), after record and before the lock is freed, so nobody else can write to the environment between
+	// the failure and what undoes it. It is given a context a cancel does not reach: a write that began is finished. An image
+	// update uses it to put the stack back by itself (plan 12-23, IMG-07, D-12). code is the failure's code.
+	onFailed  func(ctx context.Context, r *jobs.Reporter, rev stackops.Snapshot, code string) error
 	rendering revisionRendering
 	// release frees the environment's operation lock; owned is set once the job holds it.
 	release func()
 	owned   *bool
+	// deploy is the operation's row in stack_deploys, which runStackDeploy reads when the operation runs: launchStackDeploy fills it
+	// once the job has started, and a bulk update's item writes it itself.
+	deploy *stackops.DeployRow
+	// persist is the context the end of the operation is recorded with, which a cancel does not reach. Nil means the context the
+	// operation runs on, without its cancel.
+	persist context.Context
+}
+
+// errDeployNotRecorded is what runStackDeploy answers for an operation whose deploy row was not written: nothing was run.
+var errDeployNotRecorded = errors.New("the deploy was not recorded")
+
+// runStackDeploy is what the job of a stack operation does once its deploy row is written (l.deploy): it runs the operation on r and,
+// when it ends, records how it ended, undoes a failed one that changed a service (l.onFailed) and frees the environment's lock
+// (l.release), all before the job reads as finished. launchStackDeploy runs it in a job of its own; a bulk update runs it for a stack's
+// item in its own job, with a release that frees nothing.
+func runStackDeploy(ctx context.Context, d StacksDeps, l launch, r *jobs.Reporter) error {
+	if l.deploy == nil || l.deploy.ID == "" {
+		return errDeployNotRecorded
+	}
+	persist := l.persist
+	if persist == nil {
+		persist = context.WithoutCancel(ctx)
+	}
+	deploy := *l.deploy
+	actor, userAgent := l.p.AuditActor(), l.userAgent
+	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
+	onDone := func(res stackops.DeployResult) {
+		if l.stopped != nil && res.Code == stackops.CodeCancelled && jobs.Closing(ctx) {
+			l.stopped(persist, deploy, res)
+			l.release()
+			return
+		}
+		if l.record != nil {
+			l.record(persist, deploy, res)
+		} else {
+			recordDeployEnd(persist, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering, extra)
+		}
+		// What undoes a failed operation runs before the lock is free, in the same job.
+		if l.onFailed != nil && res.NeedsRestore() {
+			if err := l.onFailed(persist, r, l.rev, res.Code); err != nil {
+				d.Log.Error("a failed stack operation could not be undone", "stack", l.st.ID, "revision", l.rev.Seq, "error", err)
+			}
+		}
+		// The lock is free before the job reads as finished, so whoever sees it end can start the next
+		// operation at once. Freeing it again when the run returns changes nothing.
+		l.release()
+	}
+	l.run(ctx, r, onDone)
+	return nil
 }
 
 // launchStackDeploy starts the job of a deploy or a roll back and records it, answering 202 with the
@@ -929,18 +987,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	ready := make(chan struct{})
 	var deploy stackops.DeployRow
 	reqCtx := context.WithoutCancel(ctx)
-	actor, userAgent := l.p.AuditActor(), l.userAgent
-	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
-	onDone := func(res stackops.DeployResult) {
-		if l.record != nil {
-			l.record(reqCtx, deploy, res)
-		} else {
-			recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering, extra)
-		}
-		// The lock is free before the job reads as finished, so whoever sees it end can start the next
-		// operation at once. Freeing it again when the run returns changes nothing.
-		l.release()
-	}
+	l.deploy, l.persist = &deploy, reqCtx
 	kind := l.jobKind
 	if kind == "" {
 		kind = stackDeployJobKind
@@ -986,7 +1033,7 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		if deploy.ID == "" {
 			return // the row could not be written: the handler cancelled the job
 		}
-		l.run(jctx, r, onDone)
+		_ = runStackDeploy(jctx, d, l, r)
 	})
 	if errors.Is(err, jobs.ErrTooMany) {
 		failRevision()
@@ -1185,13 +1232,16 @@ func holderSentence(envName string, h stackops.Holder) string {
 	if h.Kind == stackops.HolderKindJanitor {
 		return "The janitor is cleaning " + envName
 	}
+	if h.Kind == stackops.HolderKindImageUpdate {
+		return "An image update of " + h.Workload + " is running on " + envName
+	}
 	return "Another stack operation is running on " + envName + ": " + h.StackName
 }
 
 // operationLocked is the 409 for an operation asked for while another holds the environment: it names
 // the stack, the job and when it started, so the page can say who to wait for and open it. The
 // janitor's hold names no stack: it names its kind and the run, and says the janitor is cleaning the
-// environment.
+// environment. An image update's hold names its kind, the workload and the job.
 func operationLocked(envName string, h stackops.Holder) error {
 	started := rfc3339(h.Started)
 	details := []*huma.ErrorDetail{
@@ -1204,6 +1254,14 @@ func operationLocked(envName string, h stackops.Holder) error {
 		details = []*huma.ErrorDetail{
 			{Location: "kind", Message: h.Kind},
 			{Location: "runId", Message: h.RunID},
+			{Location: "job", Message: h.JobID},
+			{Location: "started", Message: started},
+		}
+	}
+	if h.Kind == stackops.HolderKindImageUpdate {
+		details = []*huma.ErrorDetail{
+			{Location: "kind", Message: h.Kind},
+			{Location: "workload", Message: h.Workload},
 			{Location: "job", Message: h.JobID},
 			{Location: "started", Message: started},
 		}

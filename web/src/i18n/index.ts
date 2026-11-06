@@ -21,6 +21,7 @@ import env from "./en/env.json";
 import envaccess from "./en/envaccess.json";
 import envsettings from "./en/envsettings.json";
 import events from "./en/events.json";
+import fleet from "./en/fleet.json";
 import fullpage from "./en/fullpage.json";
 import git from "./en/git.json";
 import gitsource from "./en/gitsource.json";
@@ -51,6 +52,7 @@ import registries from "./en/registries.json";
 import restartloop from "./en/restartloop.json";
 import restore from "./en/restore.json";
 import schedule from "./en/schedule.json";
+import search from "./en/search.json";
 import secrets from "./en/secrets.json";
 import servicedetail from "./en/servicedetail.json";
 import serviceform from "./en/serviceform.json";
@@ -106,6 +108,7 @@ import tags from "./en/tags.json";
 import tasks from "./en/tasks.json";
 import teams from "./en/teams.json";
 import terminal from "./en/terminal.json";
+import updates from "./en/updates.json";
 import usedby from "./en/usedby.json";
 import userpage from "./en/userpage.json";
 import users from "./en/users.json";
@@ -114,9 +117,9 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, addressSpace, subnetPicker, poolGuide, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff, gitSource, stackGit, janitor, janitorDefaults, janitorKeep, janitorNodes, janitorPolicy, janitorRun, janitorStatus) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, addressSpace, subnetPicker, poolGuide, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff, gitSource, stackGit, janitor, janitorDefaults, janitorKeep, janitorNodes, janitorPolicy, janitorRun, janitorStatus, search) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
-// holds the containers list copy, and the "terminal" namespace the browser shell's
+// holds the containers list copy, the "search" namespace the header search and palette copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
 // area.screen.element. Plural keys use the i18next _one and _other suffixes.
 export const resources = {
@@ -138,6 +141,7 @@ export const resources = {
     envaccess,
     envsettings,
     events,
+    fleet,
     fullpage,
     git,
     gitSource: gitsource,
@@ -168,6 +172,7 @@ export const resources = {
     restartLoop: restartloop,
     restore,
     schedule,
+    search,
     secrets,
     servicedetail,
     serviceForm: serviceform,
@@ -223,6 +228,7 @@ export const resources = {
     tasks,
     teams,
     terminal,
+    updates,
     usedBy: usedby,
     userpage,
     users,

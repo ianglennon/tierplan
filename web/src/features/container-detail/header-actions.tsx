@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { Link } from "@tanstack/react-router";
 import { ChevronDown } from "lucide-react";
 import { Fragment, type ReactNode, useRef, useState } from "react";
 
@@ -18,7 +19,10 @@ import {
 import { ActionDialog, type DialogVerb } from "@/features/containers/action-dialog";
 import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { type ImmediateAction, useImmediateAction } from "@/features/containers/row-actions";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
+import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
+import { useUpdateGate } from "@/features/updates/update-gate";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -84,6 +88,16 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
   // closes, since the item that opened the dialog is gone.
   const chose = useRef(false);
   const [fromMenu, setFromMenu] = useState(false);
+  // Update opens the compact confirm of an image update (D-05, D-07): the container is recreated with
+  // the same settings and the new image. It is on the header only while an update is on offer. A task
+  // container says to update its service; one of a Compose project TierPlan does not manage reads
+  // "Adopt to update…" and goes to that project's adopt flow (D-21).
+  const [updating, setUpdating] = useState(false);
+  const gate = useUpdateGate(envId, detail.update, { kind: "container", service: detail.service });
+  const envName = useEnvName(envId);
+  const canUpdate =
+    detail.update?.state === "update_available" && gate.shown && ownKind(row) === "";
+  const canAdopt = canUpdate && gate.adopt === true && !!detail.project;
 
   const can = (verb: Parameters<typeof eligibleFor>[0]) => eligibleFor(verb, row);
   const own = ownKind(row) !== "";
@@ -138,7 +152,7 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
       destructive: true,
     });
   }
-  if (primary.length === 0 && secondary.length === 0) return null;
+  if (primary.length === 0 && secondary.length === 0 && !canUpdate) return null;
 
   // Unavailable: the reason when the caller's role is short or the host is
   // read-only, and just unavailable while the role is not yet known.
@@ -180,6 +194,41 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
             </Button>,
           ),
         )}
+        {canAdopt ? (
+          <NeedsTooltip reason={gate.reason}>
+            {gate.reason || gate.unavailable ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="max-md:h-11"
+                disabled={gate.unavailable}
+              >
+                {t("updates.stack.action.adopt")}
+              </Button>
+            ) : (
+              <Button asChild variant="outline" className="max-md:h-11">
+                <Link
+                  to="/env/$envId/unmanaged-stacks/$name/adopt"
+                  params={{ envId, name: detail.project }}
+                >
+                  {t("updates.stack.action.adopt")}
+                </Link>
+              </Button>
+            )}
+          </NeedsTooltip>
+        ) : canUpdate ? (
+          <NeedsTooltip reason={gate.reason}>
+            <Button
+              type="button"
+              variant="outline"
+              className="max-md:h-11"
+              disabled={busy || gate.unavailable}
+              onClick={gate.reason ? undefined : () => setUpdating(true)}
+            >
+              {t("updates.header.update")}
+            </Button>
+          </NeedsTooltip>
+        ) : null}
         {secondary.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -243,6 +292,15 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
           </DropdownMenu>
         ) : null}
       </div>
+      {updating ? (
+        <UpdateConfirmDialog
+          envId={envId}
+          envName={envName}
+          workload={{ kind: "container", name: detail.name }}
+          managedStack={detail.tierplanStackId ? detail.project || detail.stack : undefined}
+          onClose={() => setUpdating(false)}
+        />
+      ) : null}
       <ActionDialog
         envId={envId}
         verb={dialogVerb}

@@ -509,7 +509,7 @@ func TestGitConnAudit(t *testing.T) {
 	envAdmin := f.asRoleOn(t, "admina", a.ID, "admin")
 
 	cred := f.mustCreate(t, admin, "/api/git/credentials", httpsCred("gitea"))
-	const rotated = "glpat-ROTATEDtoken9876543210" //nolint:gosec // G101: a made-up token for the test
+	const rotated = "glpat-ROTATEDtoken98765VUTS" //nolint:gosec // G101: a made-up token for the test
 	if rec := f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+cred,
 		gitJSON(map[string]any{"name": "gitea", "type": "https", "username": "bot", "secret": rotated})); rec.Code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", rec.Code, rec.Body)
@@ -565,7 +565,7 @@ func TestGitConnAudit(t *testing.T) {
 		if err := rows.Scan(&text); err != nil {
 			t.Fatal(err)
 		}
-		for _, secret := range []string{"SECRETtoken", "ROTATEDtoken", "3210", "WXYZ"} {
+		for _, secret := range []string{"SECRETtoken", "ROTATEDtoken", "VUTS", "WXYZ"} {
 			if strings.Contains(text, secret) {
 				t.Errorf("an audit row carries %q: %s", secret, text)
 			}

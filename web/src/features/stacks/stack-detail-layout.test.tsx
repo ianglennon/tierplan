@@ -152,6 +152,23 @@ describe("StackDetailLayout", () => {
     expect(screen.getAllByText(/by bob/).length).toBeGreaterThan(0);
   });
 
+  it("shows the stack's update roll-up in the header", async () => {
+    detail = { ...detail, update: { state: "update_available", count: 2, notCheckable: null } };
+    mount();
+    const heading = await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(within(heading.closest("header") as HTMLElement).getByText("2 updates")).toBeTruthy();
+  });
+
+  it("shows no update badge in the header when the server sent no roll-up", async () => {
+    mount();
+    const heading = await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(
+      within(heading.closest("header") as HTMLElement).queryByText(
+        /^[\d,]+ updates?$|^Up to date$/,
+      ),
+    ).toBeNull();
+  });
+
   it("renders a name with markup in it as text", async () => {
     detail = { ...detail, name: "<b>bold</b>" };
     mount();

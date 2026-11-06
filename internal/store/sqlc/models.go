@@ -173,11 +173,90 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type ImageCheck struct {
+	Host      string
+	Repo      string
+	Tag       string
+	CredID    string
+	Digest    string
+	IsIndex   int64
+	Platforms string
+	CheckedAt int64
+	SuccessAt int64
+	ErrorCode string
+}
+
 type ImageDanglingSeen struct {
 	EnvID       string
 	NodeID      string
 	ImageID     string
 	FirstSeenAt int64
+}
+
+type ImageUpdateDefault struct {
+	ID             int64
+	Enabled        int64
+	Schedule       string
+	SchedulePreset string
+	Version        int64
+	UpdatedBy      string
+	UpdatedAt      int64
+}
+
+type ImageUpdateEnvPolicy struct {
+	EnvID          string
+	Enabled        sql.NullInt64
+	Schedule       sql.NullString
+	SchedulePreset sql.NullString
+	Version        int64
+	UpdatedBy      string
+	UpdatedAt      int64
+}
+
+type ImageUpdateFailure struct {
+	EnvID          string
+	Kind           string
+	Workload       string
+	Digest         string
+	Reason         string
+	RunID          string
+	RollbackFailed int64
+	FailedAt       int64
+}
+
+type ImageUpdateIgnore struct {
+	ID     string
+	EnvID  string
+	Mode   string
+	Scope  string
+	Host   string
+	Repo   string
+	Tag    string
+	Kind   string
+	Name   string
+	Digest string
+	SetBy  string
+	SetAt  int64
+}
+
+type ImageUpdateRun struct {
+	ID           string
+	EnvID        string
+	BulkID       string
+	Kind         string
+	Workload     string
+	WorkloadID   string
+	StackID      string
+	Items        string
+	State        string
+	Reason       string
+	Actor        string
+	JobID        string
+	RevisionSeq  int64
+	RollbackSeq  int64
+	OldContainer string
+	StartedAt    int64
+	FinishedAt   int64
 }
 
 type JanitorDefault struct {

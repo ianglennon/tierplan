@@ -223,7 +223,8 @@ describe("GlobalStackList", () => {
     const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
     await screen.findByRole("link", { name: "alpha" });
     expect(within(row("alpha")).getByText("1/3")).toBeTruthy();
-    expect(within(row("beta")).getByText("—")).toBeTruthy();
+    // Updates and Services both read a dash for a stack that is not deployed and has no roll-up.
+    expect(within(row("beta")).getAllByText("—")).toHaveLength(2);
     expect(within(row("beta")).getByText("Never")).toBeTruthy();
   });
 
@@ -685,5 +686,38 @@ describe("GlobalStackList: Managed and Unmanaged", () => {
     expect(
       await screen.findByRole("heading", { name: "No managed stacks", level: 2 }),
     ).toBeTruthy();
+  });
+});
+
+describe("GlobalStackList: the Updates available filter (12-10)", () => {
+  it("puts updates=available in the search and asks the server for it", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Updates available" }));
+    expect(onChange).toHaveBeenLastCalledWith({ updates: "available" });
+    await waitFor(() =>
+      expect(requests.some((r) => searchOf(r).get("updates") === "available")).toBe(true),
+    );
+  });
+
+  it("counts as a filter: Clear filters shows and resets it", async () => {
+    const { onChange } = mount({ updates: "available" });
+    await screen.findByRole("link", { name: "alpha" });
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ updates: undefined }));
+  });
+
+  it("names an environment whose checks could not be read, not as one with no update available", async () => {
+    answer = { groups: [], failedEnvironments: [{ envId: "e1", envName: "Prod" }] };
+    mount({ updates: "available" });
+    const notice = await screen.findByText("Couldn't load stacks on Prod.");
+    expect(
+      within(notice.closest('[role="alert"]') as HTMLElement).getByRole("button"),
+    ).toBeTruthy();
+    // The list does not say there are no stacks while an environment that may hold some is named.
+    expect(screen.queryByRole("heading", { name: "No stacks yet", level: 2 })).toBeNull();
   });
 });

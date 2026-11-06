@@ -73,7 +73,7 @@ function useSecond(on: boolean): number {
   return now;
 }
 
-function Elapsed({ job }: { job: StackJob }) {
+export function Elapsed({ job }: { job: StackJob }) {
   const t = useT();
   const running = job.state === "running";
   const now = useSecond(running);

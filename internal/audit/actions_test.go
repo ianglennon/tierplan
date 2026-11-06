@@ -440,6 +440,70 @@ func TestEveryPhase11ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 	}
 }
 
+// phase12DetailKeys maps every Phase 12 action to the detail keys the plans that record it must use. A change of an
+// environment's image update check schedule names the fields that changed and the policy's new version; a change of the
+// instance defaults names the fields and the defaults' new version (plan 12-11, D-01). Scheduled checks and Check now
+// are not audited.
+var phase12DetailKeys = map[string][]string{
+	audit.ActionUpdatesPolicyChanged:   {"fields", "version"},
+	audit.ActionUpdatesDefaultsChanged: {"fields", "version"},
+	// A skip or an ignore of image updates names the workload (its kind and name), the scope, the image, the digest a
+	// skip passes over and whether it was one of several (plan 12-13, D-15, D-16).
+	audit.ActionImageUpdateSkipped:    {"kind", "workload", "image", "digest", "bulk"},
+	audit.ActionImageUpdateUnskipped:  {"kind", "workload", "image", "bulk"},
+	audit.ActionImageUpdatesIgnored:   {"kind", "workload", "scope", "image"},
+	audit.ActionImageUpdatesUnignored: {"kind", "workload", "scope", "image"},
+	// An update names the workload, the image, the digest it ran and the one it runs now, and for a failure the reason
+	// (plan 12-15, IMG-06).
+	audit.ActionImageUpdated:      {"kind", "workload", "image", "from_digest", "to_digest", "bulk"},
+	audit.ActionImageUpdateFailed: {"kind", "workload", "image", "from_digest", "to_digest", "reason", "bulk"},
+	// A rollback after a failed update names the same keys (plan 12-22, IMG-07).
+	audit.ActionImageUpdateRolledBack: {"kind", "workload", "image", "from_digest", "to_digest", "reason", "bulk"},
+	// The summary of one environment's part of a bulk update names the bulk ID and the counts (plan 12-30, D-11).
+	audit.ActionImageBulkUpdated: {"bulk", "done", "total", "rolled_back", "skipped"},
+}
+
+func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase12DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if len(phase12DetailKeys) != 10 {
+		t.Fatalf("phase12DetailKeys pins %d actions, want the 2 update check records, the 4 skip and ignore records, the 3 update records and the bulk summary", len(phase12DetailKeys))
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase12DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"updates.policy_changed":   audit.ActionUpdatesPolicyChanged,
+		"updates.defaults_changed": audit.ActionUpdatesDefaultsChanged,
+		"image.update_skipped":     audit.ActionImageUpdateSkipped,
+		"image.update_unskipped":   audit.ActionImageUpdateUnskipped,
+		"image.updates_ignored":    audit.ActionImageUpdatesIgnored,
+		"image.updates_unignored":  audit.ActionImageUpdatesUnignored,
+		"image.updated":            audit.ActionImageUpdated,
+		"image.update_failed":      audit.ActionImageUpdateFailed,
+		"image.update_rolled_back": audit.ActionImageUpdateRolledBack,
+		"image.bulk_updated":       audit.ActionImageBulkUpdated,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 // phase9DetailKeys maps every Phase 9 action to the detail keys the plans that record it must use, for the same
 // reason as phase3DetailKeys. A credential row names what was stored and never the token or the private key, nor
 // any part of it: the name, the layer (instance or environment), the type (https or ssh) and the username; an

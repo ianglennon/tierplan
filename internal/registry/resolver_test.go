@@ -202,3 +202,67 @@ func TestAResolvedCredentialNeverPrintsItsSecret(t *testing.T) {
 		}
 	}
 }
+
+// Which credential a check is keyed by (plan 12-02, D-19, T-12-03).
+
+func TestCredentialForMatchesForBrowse(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a", "Alpha")
+	inst := create(t, s, func(in *registry.CreateInput) { in.Name = "inst"; in.Prefix = "acme" })
+	inA := create(t, s, func(in *registry.CreateInput) { in.Name = "in-a"; in.Prefix = "acme/team"; in.EnvID = "env-a" })
+	r := registry.NewResolver(s)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name, env, ref, want string
+	}{
+		{"an instance credential", "", "ghcr.io/acme/other/app:1", inst.ID},
+		{"an instance credential seen from an environment", "env-a", "ghcr.io/acme/other/app:1", inst.ID},
+		{"an environment credential, the more specific prefix", "env-a", "ghcr.io/acme/team/app:1", inA.ID},
+		{"an environment's credential is not another's", "", "ghcr.io/acme/team/app:1", inst.ID},
+		{"no match is anonymous", "env-a", "ghcr.io/other/app:1", ""},
+	} {
+		ref, err := registry.ParseRef(c.ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := r.CredentialFor(ctx, c.env, ref)
+		if err != nil {
+			t.Fatalf("%s: CredentialFor: %v", c.name, err)
+		}
+		browse, err := r.ForBrowse(ctx, c.env, nil, ref)
+		if err != nil {
+			t.Fatalf("%s: ForBrowse: %v", c.name, err)
+		}
+		bid := ""
+		if browse != nil {
+			bid = browse.ID
+		}
+		if got != c.want || got != bid {
+			t.Errorf("%s: CredentialFor = %q, ForBrowse = %q, want %q", c.name, got, bid, c.want)
+		}
+	}
+}
+
+func TestCredentialForNeverOpensSecret(t *testing.T) {
+	s, st, _ := newStore(t)
+	c := create(t, s, nil)
+	// A secret sealed for another credential does not open under this one's ID.
+	other, _ := vault.New(make([]byte, 32), "other")
+	bad, err := other.Seal(vault.ContextRegistryCred+c.ID, []byte(longSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Write.Exec(`UPDATE registry_credentials SET secret_sealed = ? WHERE id = ?`, bad, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := registry.ParseRef("ghcr.io/acme/app:1")
+	r := registry.NewResolver(s)
+	if _, err := r.ForBrowse(context.Background(), "env-1", nil, ref); err == nil {
+		t.Fatal("ForBrowse opened a secret that cannot be opened: the test would prove nothing")
+	}
+	got, err := r.CredentialFor(context.Background(), "env-1", ref)
+	if err != nil || got != c.ID {
+		t.Errorf("CredentialFor = %q, %v, want %q: it names the credential without opening its secret", got, err, c.ID)
+	}
+}

@@ -32,6 +32,7 @@
     "kind": {
       "deploy": "Deploy",
       "update": "Update images",
+      "imageUpdate": "Image update",
       "rollback": "Roll back",
       "adopted": "Adopted",
       "from": "from {{name}}",

@@ -27,7 +27,11 @@ import {
 import type { BulkReport } from "@/features/containers/bulk-result-dialog";
 import { eligibleFor, ownKind } from "@/features/containers/eligibility";
 import { pendingFingerprint, pendingKey, usePendingApi } from "@/features/containers/pending";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
+import { IgnoreUpdatesDialog } from "@/features/updates/ignore-updates-dialog";
+import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
+import { UpdateMenuItems } from "@/features/updates/update-menu-items";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
@@ -118,10 +122,15 @@ export function ContainerRowActions({
   const [dialogVerb, setDialogVerb] = useState<DialogVerb>("stop");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Ignore updates… opens a dialog of its own, which also holds the list still.
+  const [ignoring, setIgnoring] = useState(false);
+  // Update… opens the compact confirm of an image update (D-05), which holds the list still as well.
+  const [updating, setUpdating] = useState(false);
+  const envName = useEnvName(envId);
   const button = useRef<HTMLButtonElement>(null);
   const report = useRef(onOpenChange);
   report.current = onOpenChange;
-  const open = menuOpen || dialogOpen;
+  const open = menuOpen || dialogOpen || ignoring || updating;
   useEffect(() => {
     report.current?.(open);
   }, [open]);
@@ -250,6 +259,18 @@ export function ContainerRowActions({
               needs={needs}
             />
           ) : null}
+          <UpdateMenuItems
+            envId={envId}
+            workload={{ kind: "container", name: row.name }}
+            update={row.update}
+            onChosen={() => {
+              chose.current = true;
+            }}
+            onIgnore={() => setIgnoring(true)}
+            onUpdate={own ? undefined : () => setUpdating(true)}
+            project={row.project}
+            service={row.service}
+          />
           {(canKill || canRemove) &&
           (canStart || canStop || canRestart || canPause || canUnpause) ? (
             <DropdownMenuSeparator />
@@ -278,6 +299,28 @@ export function ContainerRowActions({
         onClosed={() => button.current?.focus()}
         onDetails={onDetails}
       />
+      {updating ? (
+        <UpdateConfirmDialog
+          envId={envId}
+          envName={envName}
+          workload={{ kind: "container", name: row.name }}
+          managedStack={row.tierplanStackId ? row.project || row.stack : undefined}
+          onClose={() => setUpdating(false)}
+          onClosed={() => button.current?.focus()}
+        />
+      ) : null}
+      {ignoring && row.update ? (
+        <IgnoreUpdatesDialog
+          envId={envId}
+          workload={{ kind: "container", name: row.name }}
+          update={row.update}
+          open
+          onOpenChange={(isOpen) => {
+            if (!isOpen) setIgnoring(false);
+          }}
+          onClosed={() => button.current?.focus()}
+        />
+      ) : null}
     </>
   );
 }

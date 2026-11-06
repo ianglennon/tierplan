@@ -336,6 +336,30 @@ test("the Containers, Volumes and Images lists keep every filter chip on a 375px
   await expectNoSidewaysScroll(page, "Images list");
 });
 
+// Phase 12 UAT: the Overview's Updates tab (Updates, Problems, Skipped and ignored, All) and the search
+// page (All, Stacks, Services, Containers, Images, Networks) held their chips in a row that did not
+// wrap, so the page was 436px and 584px wide at 390px. The rows wrap now, like the lists' above.
+test("the Overview's Updates tab and the search page keep every filter chip on a 375px screen", async ({
+  page,
+}) => {
+  await page.goto(at("/environments?tab=updates"));
+  const show = page.getByRole("radiogroup", { name: "Show" });
+  // The counts arrive with the data and widen the chips, so the row is measured once the first has its.
+  await expect(show.locator('[data-slot="toggle-group-item"]').first()).toHaveText(
+    /^Updates \([\d,]+\)$/,
+  );
+  await expectChipsInsideScreen(page, show, "Overview Updates tab");
+  await expectNoSidewaysScroll(page, "Overview Updates tab");
+
+  await page.goto(at("/search?q=web"));
+  const type = page.getByRole("radiogroup", { name: "Type" });
+  await expect(type.locator('[data-slot="toggle-group-item"]').last()).toHaveText(
+    /^Networks \([\d,]+\)$/,
+  );
+  await expectChipsInsideScreen(page, type, "Search page");
+  await expectNoSidewaysScroll(page, "Search page");
+});
+
 // G-09-10 (.planning/debug/stack-editor-footer-overlap-375.md): the editor's footer bar was one
 // non-wrapping row of a fixed height, with the save status and three buttons that cannot shrink in
 // it. At 375px the buttons alone needed 368px of a 343px bar, so the status box collapsed to 0px,

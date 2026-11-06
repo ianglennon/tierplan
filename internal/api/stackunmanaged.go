@@ -61,6 +61,7 @@ type UnmanagedStackBody struct {
 	Owner           string               `json:"owner" enum:",tierplan,agent" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other"`
 	Adoptable       bool                 `json:"adoptable" doc:"False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason          string               `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
+	Update          *StackUpdateBody     `json:"update,omitempty" doc:"Left out when update checks are not available or no service is judged: the states of the stack's services rolled up, as on the stack lists"`
 	Fingerprint     string               `json:"fingerprint" doc:"A digest of what runs: each service's ID and version on a swarm, each container's ID, config hash and image ID on a standalone host. The adopt request sends it back, and when what runs has changed since, the adoption is refused 409 adopt_stale and stores nothing. Empty when the stack cannot be adopted"`
 }
 
@@ -246,9 +247,11 @@ func getUnmanagedStack(ctx context.Context, d StacksDeps, in *UnmanagedStackPath
 		return nil, err
 	}
 	u := f.found
+	reads := newStackReads(ctx, d, in.EnvID)
 	body := UnmanagedStackBody{
-		Name: u.Name, Target: string(u.Target), State: string(u.State),
-		ServicesRunning: u.Running, ServicesTotal: u.Total, Services: stackServiceBodies(u.Rows),
+		Update: reads.stackUpdate(u.Name),
+		Name:   u.Name, Target: string(u.Target), State: string(u.State),
+		ServicesRunning: u.Running, ServicesTotal: u.Total, Services: stackServiceBodies(u.Rows, reads.updates().services[u.Name]),
 		FoundBy: UnmanagedFoundByBody{Label: stacks.LabelComposeProject, Value: u.Name},
 		Orphan:  u.OrphanID != "", Portainer: u.Portainer, Owner: u.Owner, Adoptable: u.Adoptable(), Reason: notAdoptableReason(u),
 	}

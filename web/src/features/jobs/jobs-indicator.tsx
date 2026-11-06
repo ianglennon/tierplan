@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { BrushCleaning, Download, GitBranch, ListRestart, Rocket, Undo2 } from "lucide-react";
+import {
+  BrushCleaning,
+  CircleArrowUp,
+  Download,
+  GitBranch,
+  ListRestart,
+  Rocket,
+  Undo2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
+import { takeFollowedBulkJob } from "@/api/fleet";
 import {
   type JanitorJobSummary,
   type JanitorRun,
@@ -15,6 +24,13 @@ import {
 } from "@/api/janitor";
 import { type PullSummary, pullsListQuery } from "@/api/pulls";
 import { type StackJobSummary, stackJobsListQuery } from "@/api/stacks";
+import { FLEET_KEY } from "@/api/update-keys";
+import {
+  type ImageUpdateJobSummary,
+  imageUpdateJobQuery,
+  isBulkJob,
+  useImageUpdateJobs,
+} from "@/api/updates";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,28 +50,32 @@ import { cn } from "@/lib/utils";
 // The badge reads "9+" past this many running jobs.
 const BADGE_CAP = 9;
 
-// A job of any of the three kinds, as one row of the list.
+// A job of any of the four kinds, as one row of the list. An image update is the job kind image_update
+// (an update of one service, container or stack by the Update button).
 type Job =
   | { type: "pull"; pull: PullSummary }
   | { type: "stack"; job: StackJobSummary }
-  | { type: "janitor"; job: JanitorJobSummary };
+  | { type: "janitor"; job: JanitorJobSummary }
+  | { type: "image_update"; job: ImageUpdateJobSummary };
 
 const startedOf = (j: Job): string => (j.type === "pull" ? j.pull.createdAt : j.job.startedAt);
 const runningOf = (j: Job): boolean =>
   j.type === "pull" ? j.pull.state === "running" : j.job.state === "running";
 const idOf = (j: Job): string =>
-  j.type === "pull" ? j.pull.id : j.type === "stack" ? j.job.id : j.job.jobId;
+  j.type === "pull" ? j.pull.id : j.type === "janitor" ? j.job.jobId : j.job.id;
 
-// jobsOf merges the three lists: running jobs first, then the newest first within each group.
+// jobsOf merges the four lists: running jobs first, then the newest first within each group.
 function jobsOf(
   pulls: PullSummary[],
   stack: StackJobSummary[],
   janitor: JanitorJobSummary[],
+  updates: ImageUpdateJobSummary[],
 ): Job[] {
   const all: Job[] = [
     ...pulls.map((pull): Job => ({ type: "pull", pull })),
     ...stack.map((job): Job => ({ type: "stack", job })),
     ...janitor.map((job): Job => ({ type: "janitor", job })),
+    ...updates.map((job): Job => ({ type: "image_update", job })),
   ];
   return all.sort((a, b) => {
     if (runningOf(a) !== runningOf(b)) return runningOf(a) ? -1 : 1;
@@ -161,6 +181,61 @@ function useStackJobToasts(jobs: StackJobSummary[] | undefined, username: string
   }, [jobs, username, pathname, navigate, t]);
 }
 
+// useBulkJobToasts tells a person, once for each environment, how a bulk update they started ended while
+// they were elsewhere (D-11): "Updated {done} of {total} in {environment}." with "Open console", and
+// "{n} rolled back." added when any were. It speaks only of the bulk updates this browser started (the
+// ones "Update {n} selected" named), and of each once. The numbers are the ones the job's summary item
+// ended with; when they cannot be read it says only that the updates ended. The tab and the lists read
+// again as it does, since the rows have changed.
+function useBulkJobToasts(jobs: ImageUpdateJobSummary[] | undefined) {
+  const t = useT();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!jobs) return;
+    for (const job of jobs) {
+      if (job.state === "running" || !isBulkJob(job)) continue;
+      const followed = takeFollowedBulkJob(job.id);
+      if (!followed) continue;
+      const environment = job.envName || followed.envName;
+      const open = () =>
+        void navigate({
+          to: "/env/$envId/update-jobs/$jobId",
+          params: { envId: job.envId, jobId: job.id },
+        });
+      void queryClient.invalidateQueries({ queryKey: FLEET_KEY });
+      void queryClient.invalidateQueries({ queryKey: ["env", job.envId] });
+      void queryClient
+        .fetchQuery({ ...imageUpdateJobQuery(job.envId, job.id), retry: false, staleTime: 0 })
+        .then((body) => {
+          const result = body.items?.find((i) => i.id === "summary")?.result;
+          const total = Number(result?.total);
+          if (!result || result.total === undefined || !Number.isFinite(total)) return undefined;
+          const done = Number(result.done) || 0;
+          const rolledBack = Number(result.rolled_back) || 0;
+          const base = t("jobs.toast.bulk.done", { done, total, environment });
+          const text =
+            rolledBack > 0
+              ? `${base} ${t("jobs.toast.bulk.rolledBack", { count: rolledBack })}`
+              : base;
+          if (done >= total) toastSuccessWithAction(text, t("jobs.toast.openConsole"), open);
+          else toastErrorWithAction(text, t("jobs.toast.openConsole"), open);
+          return true;
+        })
+        .catch(() => undefined)
+        .then((told) => {
+          if (!told) {
+            toastErrorWithAction(
+              t("jobs.toast.bulk.ended", { environment }),
+              t("jobs.toast.openConsole"),
+              open,
+            );
+          }
+        });
+    }
+  }, [jobs, navigate, queryClient, t]);
+}
+
 // JobsIndicator (the Pulls indicator of Phase 5, now for every kind of job) is the header button for
 // the work the person can follow (D-26): pulls, the deploys, updates and roll backs of stacks, and
 // the clean-ups of the janitor, a scheduled one included. It lists the jobs running and those that
@@ -173,12 +248,19 @@ export function JobsIndicator() {
   const pullsQuery = useQuery(pullsListQuery);
   const stackQuery = useQuery(stackJobsListQuery);
   const janitorQuery = useJanitorJobs();
+  const updateQuery = useImageUpdateJobs();
   const me = useMe();
   useStackJobToasts(stackQuery.data, me.data?.user.username);
+  useBulkJobToasts(updateQuery.data);
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState<PullSummary | null>(null);
 
-  const jobs = jobsOf(pullsQuery.data ?? [], stackQuery.data ?? [], janitorQuery.data ?? []);
+  const jobs = jobsOf(
+    pullsQuery.data ?? [],
+    stackQuery.data ?? [],
+    janitorQuery.data ?? [],
+    updateQuery.data ?? [],
+  );
   const running = jobs.filter(runningOf).length;
 
   if (jobs.length === 0 && !opened) return null;
@@ -187,6 +269,7 @@ export function JobsIndicator() {
   const pullsStale = pullsQuery.isRefetchError;
   const stackStale = stackQuery.isRefetchError;
   const janitorStale = janitorQuery.isRefetchError;
+  const updateStale = updateQuery.isRefetchError;
 
   return (
     <>
@@ -247,6 +330,13 @@ export function JobsIndicator() {
                       stale={stackStale}
                       onOpen={() => setOpen(false)}
                     />
+                  ) : j.type === "image_update" ? (
+                    <UpdateJobRow
+                      key={`update:${idOf(j)}`}
+                      job={j.job}
+                      stale={updateStale}
+                      onOpen={() => setOpen(false)}
+                    />
                   ) : (
                     <JanitorJobRow
                       key={`janitor:${idOf(j)}`}
@@ -257,7 +347,10 @@ export function JobsIndicator() {
                   ),
                 )}
               </ul>
-              {pullsQuery.isPending || stackQuery.isPending || janitorQuery.isPending ? (
+              {pullsQuery.isPending ||
+              stackQuery.isPending ||
+              janitorQuery.isPending ||
+              updateQuery.isPending ? (
                 <LoadingRows />
               ) : null}
               {pullsQuery.isError && !pullsQuery.data ? (
@@ -276,6 +369,12 @@ export function JobsIndicator() {
                 <LoadError
                   message={t("jobs.indicator.error.janitor")}
                   onRetry={() => void janitorQuery.refetch()}
+                />
+              ) : null}
+              {updateQuery.isError && !updateQuery.data ? (
+                <LoadError
+                  message={t("jobs.indicator.error.update")}
+                  onRetry={() => void updateQuery.refetch()}
                 />
               ) : null}
             </ScrollArea>
@@ -445,6 +544,89 @@ function StackJobRow({
           to="/env/$envId/stacks/$stackId/deploys/$jobId"
           params={{ envId: job.envId, stackId: job.stackId, jobId: job.id }}
           aria-label={t("jobs.indicator.open.label", { name: job.stackName })}
+          onClick={onOpen}
+        >
+          {t("jobs.indicator.open.action")}
+        </Link>
+      </Button>
+    </li>
+  );
+}
+
+// updateStateKey is the words for where an image update stands: Updating…, Updated, Failed or
+// Cancelled. The summary carries what the job hub knows, so a rolled-back update reads as the job
+// ended, not as Rolled back.
+function updateStateKey(job: ImageUpdateJobSummary): string {
+  switch (job.state) {
+    case "running":
+      return "jobs.indicator.update.running";
+    case "done":
+      return "jobs.indicator.update.done";
+    case "failed":
+      // A bulk job reads failed when any of its items was not updated, which is not the job failing.
+      return isBulkJob(job) ? "jobs.indicator.update.bulkPartial" : "jobs.indicator.update.failed";
+    default:
+      return "jobs.indicator.update.cancelled";
+  }
+}
+
+// UpdateJobRow is an image update: "Updating {name}", the environment, where it stands and when, and
+// Open, which goes to the update console. The workload's name is text, cut at the row's edge and given
+// whole in a tooltip.
+function UpdateJobRow({
+  job,
+  stale,
+  onOpen,
+}: {
+  job: ImageUpdateJobSummary;
+  stale: boolean;
+  onOpen: () => void;
+}) {
+  const t = useT();
+  const live = job.state === "running";
+  const bulk = isBulkJob(job);
+  // A bulk job is named by how many workloads it holds, which only its own items say: they are read once.
+  const detail = useQuery({
+    ...imageUpdateJobQuery(job.envId, job.id),
+    enabled: bulk,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const items = detail.data?.items?.filter((i) => !i.parent && i.id !== "summary").length;
+  const title = bulk
+    ? items === undefined
+      ? t("jobs.indicator.update.bulkUnknown", { environment: job.envName })
+      : t("jobs.indicator.update.bulk", { count: items, environment: job.envName })
+    : t("jobs.indicator.update.title", { name: job.workload });
+  return (
+    <li className="flex min-w-0 items-center gap-2 rounded-md hover:bg-muted/50">
+      <CircleArrowUp aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="truncate text-sm">{title}</span>
+          </TooltipTrigger>
+          <TooltipContent className="break-all">{title}</TooltipContent>
+        </Tooltip>
+        {bulk ? null : (
+          <span className="truncate text-xs text-muted-foreground">{job.envName}</span>
+        )}
+        <span className="flex flex-wrap items-center gap-x-2 text-xs">
+          <span>{stale && live ? t("jobs.indicator.reconnecting") : t(updateStateKey(job))}</span>
+          <span className="text-muted-foreground">
+            <RelativeTime value={job.endedAt || job.startedAt} />
+          </span>
+        </span>
+      </div>
+      <Button asChild variant="ghost" size="sm" className="shrink-0 max-md:h-11">
+        <Link
+          to="/env/$envId/update-jobs/$jobId"
+          params={{ envId: job.envId, jobId: job.id }}
+          aria-label={
+            bulk
+              ? t("jobs.indicator.update.bulkOpen", { environment: job.envName })
+              : t("jobs.indicator.update.open", { name: job.workload })
+          }
           onClick={onOpen}
         >
           {t("jobs.indicator.open.action")}

@@ -24,6 +24,8 @@ export interface BulkAction {
   reason?: string;
   // Kill and Remove read in destructive text.
   destructive?: boolean;
+  // The one accent button of the bar (UI-SPEC: one accent per surface).
+  primary?: boolean;
 }
 
 interface BulkBarProps {
@@ -59,7 +61,7 @@ export function BulkBar({ count, actions, onClear, selectAll }: BulkBarProps) {
         <NeedsTooltip key={a.id} reason={a.reason}>
           <Button
             type="button"
-            variant="outline"
+            variant={a.primary ? "default" : "outline"}
             size="sm"
             className={cn(
               "max-md:h-11",

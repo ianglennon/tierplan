@@ -109,6 +109,14 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "image.pull_cancelled",
   "image.removed",
   "image.untagged",
+  "image.update_skipped",
+  "image.update_unskipped",
+  "image.updates_ignored",
+  "image.updates_unignored",
+  "image.updated",
+  "image.update_failed",
+  "image.update_rolled_back",
+  "image.bulk_updated",
   "registry.credential_created",
   "registry.credential_updated",
   "registry.credential_deleted",
@@ -180,6 +188,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "stack.janitor_excluded",
   "stack.janitor_included",
   "swarm.task_history_limit_changed",
+  "updates.policy_changed",
+  "updates.defaults_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -211,9 +221,10 @@ const ENV_SCOPED_PREFIXES = [
   "git.",
   "janitor.",
   "swarm.",
+  "updates.",
 ];
-// The janitor's defaults are the one janitor change that belongs to the instance, not to an environment.
-const INSTANCE_LEVEL_ACTIONS = ["janitor.defaults_changed"];
+// The janitor's and the update checks' defaults are the changes that belong to the instance, not to an environment.
+const INSTANCE_LEVEL_ACTIONS = ["janitor.defaults_changed", "updates.defaults_changed"];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) =>
     key === "permission.denied" ||
@@ -277,6 +288,21 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 // The kinds of item a person keeps out of cleanup, and what a run reports removing. Both come from the details of an
 // entry, so only these words ever become part of a copy key.
 const KEPT_KINDS: readonly string[] = ["container", "image", "network"];
+
+/** The reasons an image update can fail with that the audit page words; any other reads "other". */
+const UPDATE_FAILURE_REASONS: readonly string[] = [
+  "pull_failed",
+  "didnt_start",
+  "timeout",
+  "unhealthy",
+  "service_rejected",
+  "service_changed",
+  "engine_error",
+  "cancelled",
+  "interrupted",
+  "server_restarted",
+  "environment_offline",
+];
 const REMOVED_KINDS = ["containers", "images", "networks"] as const;
 
 const HOUR_MS = 3_600_000;
@@ -414,6 +440,49 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   ) {
     return t(`audit.actions.${key}_${details.kind}`, {
       name: details.name,
+    });
+  }
+  // Skips and ignores of image updates name the image or the workload they are about.
+  if (key === "image.update_skipped" && details?.image && details.digest) {
+    return t("audit.actions.image.update_skipped_named", {
+      digest: details.digest.replace(/^sha256:/, "").slice(0, 12),
+      image: details.image,
+    });
+  }
+  if (key === "image.update_unskipped" && details?.image) {
+    return t("audit.actions.image.update_unskipped_named", { image: details.image });
+  }
+  if (key === "image.updates_ignored" || key === "image.updates_unignored") {
+    const scope = details?.scope === "image" ? details.image : details?.workload;
+    if (scope) return t(`audit.actions.${key}_named`, { scope });
+  }
+  // An update names the workload and the version it now runs, or why it did not finish.
+  if (key === "image.updated" && details?.workload && details.to_digest) {
+    return t("audit.actions.image.updated_named", {
+      name: details.workload,
+      digest: details.to_digest.replace(/^sha256:/, "").slice(0, 12),
+    });
+  }
+  if (key === "image.update_failed" && details?.workload) {
+    const reason =
+      details.reason && UPDATE_FAILURE_REASONS.includes(details.reason) ? details.reason : "other";
+    return t("audit.actions.image.update_failed_named", {
+      name: details.workload,
+      reason: t(`audit.actions.image.update_reason_${reason}`),
+    });
+  }
+  // A rollback names the workload and the version that was put back.
+  if (key === "image.update_rolled_back" && details?.workload && details.from_digest) {
+    return t("audit.actions.image.update_rolled_back_named", {
+      name: details.workload,
+      digest: details.from_digest.replace(/^sha256:/, "").slice(0, 12),
+    });
+  }
+  // The summary of a bulk update says how many items it updated and which selection it was.
+  if (key === "image.bulk_updated" && details?.done && details.bulk) {
+    return t("audit.actions.image.bulk_updated_named", {
+      n: details.done,
+      id: details.bulk.slice(0, 8),
     });
   }
   if (key === "swarm.task_history_limit_changed" && details?.to) {

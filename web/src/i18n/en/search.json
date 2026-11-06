@@ -1,0 +1,110 @@
+{
+  "search": {
+    "trigger": {
+      "label": "Search TierPlan",
+      "text": "Search"
+    },
+    "palette": {
+      "title": "Search TierPlan",
+      "description": "Type to search stacks, services, containers, images and networks in every environment, or choose an environment to open.",
+      "placeholder": "Search stacks, services, containers, images, networks…",
+      "hint": "Type to search everything. Press Esc to close.",
+      "all": "Search all results for “{{q}}”",
+      "enter": "Enter",
+      "searching_one": "Searching {{count}} environment…",
+      "searching_other": "Searching {{count}} environments…",
+      "found_one": "{{count}} result",
+      "found_other": "{{count}} results",
+      "none": "No matches for “{{q}}”",
+      "partial": "Couldn't search {{names}}.",
+      "showAll": "Show all {{count}} {{type}}"
+    },
+    "error": {
+      "title": "Couldn't search.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry search"
+    },
+    "type": {
+      "stack": {
+        "heading": "Stacks",
+        "noun": "stacks"
+      },
+      "service": {
+        "heading": "Services",
+        "noun": "services"
+      },
+      "container": {
+        "heading": "Containers",
+        "noun": "containers"
+      },
+      "image": {
+        "heading": "Images",
+        "noun": "images"
+      },
+      "network": {
+        "heading": "Networks",
+        "noun": "networks"
+      }
+    },
+    "hit": {
+      "stack_one": "{{count}} service, {{env}}",
+      "stack_other": "{{count}} services, {{env}}",
+      "service": "{{image}} in {{where}}",
+      "container": "{{image}} on {{env}}",
+      "image": "{{size}}, {{env}}",
+      "network": "{{driver}}, {{subnet}}, {{env}}",
+      "networkNoSubnet": "{{driver}}, {{env}}"
+    },
+    "page": {
+      "title": "Search",
+      "caption_one": "{{count, number}} result across {{environments}}. Searched <time/>.",
+      "caption_other": "{{count, number}} results across {{environments}}. Searched <time/>.",
+      "environments_one": "{{count, number}} environment",
+      "environments_other": "{{count, number}} environments",
+      "input": {
+        "label": "Search",
+        "placeholder": "Search by name, image or stack",
+        "clear": "Clear search"
+      },
+      "chips": {
+        "label": "Type",
+        "all": "All",
+        "counted": "{{label}} ({{count, number}})"
+      },
+      "table": {
+        "caption": "Search results",
+        "loading": "Searching"
+      },
+      "columns": {
+        "type": "Type",
+        "name": "Name",
+        "environment": "Environment",
+        "details": "Details"
+      },
+      "typeWord": {
+        "stack": "Stack",
+        "service": "Service",
+        "container": "Container",
+        "image": "Image",
+        "network": "Network"
+      },
+      "short": {
+        "title": "Type at least 2 characters",
+        "body": "Search finds stacks, services, containers, images and networks across your environments."
+      },
+      "none": {
+        "title": "No matches for “{{q}}”",
+        "body_one": "Try part of a name, an image, or a stack. Search covers {{count, number}} environment.",
+        "body_other": "Try part of a name, an image, or a stack. Search covers {{count, number}} environments."
+      },
+      "notSearched": {
+        "title": "Some environments weren't searched",
+        "body": "{{names}}. Results from them are missing."
+      },
+      "truncated": "Showing the first {{count, number}} results. Add more of the name to narrow them.",
+      "again": "Search again",
+      "announce_one": "{{count, number}} result",
+      "announce_other": "{{count, number}} results"
+    }
+  }
+}

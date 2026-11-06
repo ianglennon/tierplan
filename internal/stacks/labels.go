@@ -36,6 +36,12 @@ const (
 	// It is an on-host contract users write into their compose files, so a rename needs a dual read
 	// for as long as labelled objects live.
 	LabelKeep = "tierplan.keep"
+	// LabelUpdates is the user's label that hides image update offers: the exact value "ignore" on a
+	// service or a container means TierPlan shows no update for that object and says it is ignored by the
+	// label (IMG-08, D-16). It protects only the object that carries it. Like LabelKeep it is an on-host
+	// contract users write into their compose files, so a rename needs a dual read for as long as
+	// labelled objects live.
+	LabelUpdates = "tierplan.updates"
 
 	// LabelSwarmNamespace is the label docker stack deploy puts on every object of a stack.
 	LabelSwarmNamespace = "com.docker.stack.namespace"
@@ -62,8 +68,9 @@ const (
 // who made an object and how, such as LabelStackID). Every place that removes TierPlan's labels before it compares or
 // rebuilds a definition (drift, adoption, rebuild) asks it. LabelKeep is not one of them: tierplan.keep is the user's
 // label (JAN-07, D-09), put there to protect an object from the janitor, so no site may drop it or hide its removal.
+// LabelUpdates is the user's too (IMG-08, D-16): drift, adoption and rebuild keep it as the user wrote it.
 func IsOwnershipLabel(key string) bool {
-	return key != LabelKeep && strings.HasPrefix(key, "tierplan.")
+	return key != LabelKeep && key != LabelUpdates && strings.HasPrefix(key, "tierplan.")
 }
 
 // The neutral values of the two labels that record where a project was loaded from (RESEARCH Q2,

@@ -33,6 +33,10 @@ let jobState: string;
 let jobItems: Array<{ id: string; state: string; message: string }>;
 let services: Array<Record<string, unknown>>;
 let answer: { status: number; body: unknown };
+// What the update routes answer, and what the run was sent.
+let updatePreview: Record<string, unknown>;
+let runAnswer: { status: number; body: unknown };
+let runs: unknown[];
 let client: QueryClient;
 
 function stack(over: Partial<StackDetail> = {}) {
@@ -57,6 +61,37 @@ beforeEach(() => {
     { name: "tracer_agent", mode: "global" },
   ];
   answer = { status: 202, body: { jobId: "j1", recreates: false } };
+  const digest = (c: string) => `sha256:${c.repeat(64)}`;
+  updatePreview = {
+    items: [
+      {
+        kind: "service",
+        name: "tracer_web",
+        image: "nginx:1.27",
+        stack: "tracer",
+        fromDigest: digest("a"),
+        toDigest: digest("b"),
+        platforms: [],
+        changedPlatforms: [],
+      },
+      {
+        kind: "service",
+        name: "tracer_api",
+        image: "ghcr.io/acme/api:2",
+        stack: "tracer",
+        fromDigest: digest("c"),
+        toDigest: digest("d"),
+        platforms: [],
+        changedPlatforms: [],
+      },
+    ],
+    warnings: [],
+    leftOut: [{ name: "tracer_db", state: "skipped" }],
+    offered: true,
+    refusal: "",
+  };
+  runAnswer = { status: 202, body: { jobId: "j9", stackId: "s1" } };
+  runs = [];
   toasts.success.mockReset();
   toasts.error.mockReset();
   toasts.info.mockReset();
@@ -86,6 +121,14 @@ beforeEach(() => {
       if (req.method === "POST" && /\/stacks\/s1\/(stop|start)$/.test(path)) {
         posts.push(path);
         return Response.json(answer.body, { status: answer.status });
+      }
+      if (path === "/api/environments") {
+        return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+      }
+      if (path === `/api/env/${ENV}/updates/preview`) return Response.json(updatePreview);
+      if (path === `/api/env/${ENV}/updates/run` && req.method === "POST") {
+        runs.push(await req.clone().json());
+        return Response.json(runAnswer.body, { status: runAnswer.status });
       }
       if (path === `/api/env/${ENV}/stacks/s1/deploys/j1`) {
         return Response.json({ id: "j1", state: jobState, items: jobItems });
@@ -345,5 +388,142 @@ describe("StackActions: the More menu", () => {
 
     const remove = await screen.findByRole("menuitem", { name: "Remove…" });
     expect(remove.getAttribute("data-disabled")).not.toBeNull();
+  });
+});
+
+describe("StackActions: Update stack", () => {
+  const withUpdates = (count: number, over: Partial<StackDetail> = {}) =>
+    stack({ update: { state: "update_available", count, notCheckable: [] }, ...over });
+
+  it("reads Update stack (2), opens the confirm with a row each and the left-out line, and sends nothing", async () => {
+    mount(withUpdates(2));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Update stack (2)" }));
+
+    expect(await screen.findByRole("heading", { name: "Update stack tracer" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "TierPlan pulls the new image and updates the service in place. This is saved as a new revision of tracer, so you can roll back from History.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(document.querySelectorAll("[data-slot=update-row]").length).toBe(2));
+    expect(screen.getByText("1 is skipped or ignored and won't change.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Update 2 services" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review everything first" })).toBeTruthy();
+    expect(runs).toEqual([]);
+  });
+
+  it("posts kind stack with the digests shown, and lands on the stack's deploy console", async () => {
+    mount(withUpdates(2));
+    fireEvent.click(await screen.findByRole("button", { name: "Update stack (2)" }));
+    await waitFor(() => expect(document.querySelectorAll("[data-slot=update-row]").length).toBe(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "Update 2 services" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/deploys/j9"),
+    );
+    expect(runs).toEqual([
+      {
+        kind: "stack",
+        name: "tracer",
+        expect: { tracer_web: `sha256:${"b".repeat(64)}`, tracer_api: `sha256:${"d".repeat(64)}` },
+      },
+    ]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens the full review of Update images… from Review everything first, and closes the confirm", async () => {
+    services = [
+      {
+        name: "tracer_web",
+        short: "web",
+        mode: "replicated",
+        image: "nginx:1.27",
+        pinned: `nginx:1.27@sha256:${"a".repeat(64)}`,
+        pinState: "pinned",
+      },
+    ];
+    mount(withUpdates(2));
+    fireEvent.click(await screen.findByRole("button", { name: "Update stack (2)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review everything first" }));
+
+    expect(await screen.findByRole("heading", { name: "Update images in tracer" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Update stack tracer" })).toBeNull();
+    expect(runs).toEqual([]);
+  });
+
+  it("says Update 1 service for one, and hides the left-out line when nothing is left out", async () => {
+    updatePreview = {
+      ...updatePreview,
+      items: (updatePreview.items as unknown[]).slice(0, 1),
+      leftOut: [],
+    };
+    mount(withUpdates(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Update stack (1)" }));
+
+    expect(await screen.findByRole("button", { name: "Update 1 service" })).toBeTruthy();
+    expect(screen.queryByText(/skipped or ignored/)).toBeNull();
+  });
+
+  it("says are for several left out", async () => {
+    updatePreview = {
+      ...updatePreview,
+      leftOut: [
+        { name: "tracer_db", state: "skipped" },
+        { name: "tracer_cache", state: "ignored" },
+      ],
+    };
+    mount(withUpdates(2));
+    fireEvent.click(await screen.findByRole("button", { name: "Update stack (2)" }));
+
+    expect(await screen.findByText("2 are skipped or ignored and won't change.")).toBeTruthy();
+  });
+
+  it("is not there with no update to apply, for a stack under an operation, or on a stack TierPlan does not manage", async () => {
+    mount(stack({ update: { state: "up_to_date", count: 0, notCheckable: [] } }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /Update stack/ })).toBeNull();
+    cleanup();
+    mount(withUpdates(0));
+    expect(screen.queryByRole("button", { name: /Update stack/ })).toBeNull();
+    cleanup();
+    mount(withUpdates(2, { state: "deploying" }));
+    expect(screen.queryByRole("button", { name: /Update stack/ })).toBeNull();
+    cleanup();
+    mount(withUpdates(2, { source: "unmanaged" }));
+    expect(screen.queryByRole("button", { name: /Update stack/ })).toBeNull();
+  });
+
+  it("shows a viewer Update stack off with the role it takes, and opens nothing", async () => {
+    role = "viewer";
+    mount(withUpdates(2));
+
+    const button = await screen.findByRole("button", { name: "Update stack (2)" });
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(button);
+
+    expect(toasts.info).toHaveBeenCalledWith("Needs Operator");
+    expect(screen.queryByRole("heading", { name: "Update stack tracer" })).toBeNull();
+  });
+
+  it("shows a stack name with markup as text", async () => {
+    updatePreview = {
+      ...updatePreview,
+      items: [
+        {
+          ...(updatePreview.items as Array<Record<string, unknown>>)[0],
+          name: "<img src=x onerror=alert(1)>",
+        },
+      ],
+    };
+    mount(withUpdates(2, { name: "<b>evil</b>" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update stack (2)" }));
+
+    expect(await screen.findByRole("heading", { name: "Update stack <b>evil</b>" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeTruthy());
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("b")).toBeNull();
   });
 });

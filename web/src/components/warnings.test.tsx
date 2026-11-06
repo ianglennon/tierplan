@@ -990,6 +990,136 @@ describe("HealthBell container restart-loop items", () => {
   });
 });
 
+// Failed image updates (plan 12-25, IMG-07, D-12): one item for an update that was put back, one for a
+// put-back that failed too, one with a count past five, and wording that never calls a pull failure a
+// rollback.
+
+const rolledBack = (
+  service: string,
+  extra: Record<string, unknown> = {},
+  envId = "e1",
+  envName = "Lab",
+) => ({
+  id: "update_rolled_back",
+  severity: "warning",
+  envId,
+  envName,
+  service,
+  serviceId: `svc-${service}`,
+  digest: "bbbbbbbbbbbb",
+  reason: "timeout",
+  since: "2026-11-04T14:05:00Z",
+  ...extra,
+});
+
+describe("HealthBell failed image updates", () => {
+  beforeEach(() => {
+    me = READER;
+  });
+
+  it("names the rolled-back service, the digest that failed and the environment, with a link to it", async () => {
+    envItems = [rolledBack("web")];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("web was rolled back")).toBeTruthy();
+    expect(
+      screen.getByText("The update to bbbbbbbbbbbb failed and web runs the previous version. Lab."),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open update" }).getAttribute("href")).toBe(
+      "/env/e1/services/svc-web",
+    );
+    expect(listed()[0]?.[0]).toBe("update_rolled_back");
+  });
+
+  it("links a container's update to the container, on its node", async () => {
+    envItems = [
+      rolledBack("", {
+        service: undefined,
+        serviceId: undefined,
+        container: "cache",
+        containerId: "id-cache",
+        nodeId: "n1",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("cache was rolled back")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open update" }).getAttribute("href")).toBe(
+      "/env/e1/containers/id-cache?node=n1",
+    );
+  });
+
+  it("says a failed rollback means the workload may be partly updated, as an error ahead of warnings", async () => {
+    envItems = [
+      rolledBack("api"),
+      rolledBack("web", { id: "update_rollback_failed", severity: "error" }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(await screen.findByText("web may be partly updated")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The update to bbbbbbbbbbbb failed and TierPlan couldn't put the previous version back. Lab.",
+      ),
+    ).toBeTruthy();
+    expect(listed().map(([kind]) => kind)).toEqual([
+      "update_rollback_failed",
+      "update_rolled_back",
+    ]);
+  });
+
+  it("folds more than five put-back updates of one environment into one item with the count", async () => {
+    envItems = [
+      {
+        id: "update_rolled_back",
+        severity: "warning",
+        envId: "e1",
+        envName: "Lab",
+        count: 6,
+        since: "2026-11-04T14:05:00Z",
+      },
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("6 updates failed and were rolled back")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open services" }).getAttribute("href")).toBe(
+      "/env/e1/services",
+    );
+  });
+
+  it("counts each item once in the bell's badge", async () => {
+    envItems = [rolledBack("web"), rolledBack("api"), rolledBack("db", {}, "e2", "Edge")];
+    renderWarnings();
+    expect(await screen.findByRole("button", { name: "Warnings, 3 items" })).toBeTruthy();
+  });
+
+  it("says the image could not be pulled and nothing was changed, and never that it was rolled back (user decision)", async () => {
+    envItems = [rolledBack("web", { reason: "pull_failed" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("web wasn't updated")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The image for bbbbbbbbbbbb couldn't be pulled, so nothing was changed. Lab.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open update" })).toBeTruthy();
+    const popover = document.querySelector("[data-warning=update_rolled_back]");
+    expect(popover?.textContent).not.toMatch(/rolled back/i);
+  });
+
+  it("draws a hostile name as text and keeps a long title to one line with the whole text on hover", async () => {
+    const long = "n".repeat(120);
+    envItems = [rolledBack(`<b>${long}</b>`)];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    const title = await screen.findByText(`<b>${long}</b> was rolled back`);
+    expect(title.className).toContain("truncate");
+    expect(title.getAttribute("title")).toBe(`<b>${long}</b> was rolled back`);
+    expect(document.querySelector("b")).toBeNull();
+  });
+});
+
 describe("HealthBell refusal bursts", () => {
   it("lists a burst for an instance admin with the user, the count and a link to the audit log", async () => {
     items = [{ id: "refusal_burst", subject: "mallory", count: 12 }];

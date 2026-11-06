@@ -224,6 +224,61 @@ describe("actionLabel (janitor)", () => {
     );
   });
 
+  it("names the image or workload a skip or an ignore of image updates was about", () => {
+    const digest = `sha256:${"b".repeat(64)}`;
+    expect(
+      actionLabel("image.update_skipped", real, { image: "docker.io/library/nginx:1.27", digest }),
+    ).toBe("Skipped version bbbbbbbbbbbb of docker.io/library/nginx:1.27");
+    expect(
+      actionLabel("image.update_unskipped", real, { image: "docker.io/library/nginx:1.27" }),
+    ).toBe("Stopped skipping a version of docker.io/library/nginx:1.27");
+    expect(
+      actionLabel("image.updates_ignored", real, { scope: "image", image: "nginx:1.27" }),
+    ).toBe("Ignored updates for nginx:1.27");
+    expect(actionLabel("image.updates_ignored", real, { scope: "workload", workload: "web" })).toBe(
+      "Ignored updates for web",
+    );
+    expect(
+      actionLabel("image.updates_unignored", real, { scope: "workload", workload: "web" }),
+    ).toBe("Stopped ignoring updates for web");
+    expect(actionLabel("image.update_skipped", real, {})).toBe("Skipped a version of an image");
+    expect(actionLabel("image.updates_unignored", real, { scope: "image" })).toBe(
+      "Stopped ignoring image updates",
+    );
+  });
+
+  it("names the workload an image update finished or failed for", () => {
+    const digest = `sha256:${"b".repeat(64)}`;
+    expect(actionLabel("image.updated", real, { workload: "web", to_digest: digest })).toBe(
+      "Updated web to bbbbbbbbbbbb",
+    );
+    expect(
+      actionLabel("image.update_failed", real, { workload: "web", reason: "pull_failed" }),
+    ).toBe("Update of web failed: the image could not be pulled");
+    expect(actionLabel("image.update_failed", real, { workload: "web", reason: "mystery" })).toBe(
+      "Update of web failed: see the update's record",
+    );
+    expect(
+      actionLabel("image.update_failed", real, { workload: "web", reason: "server_restarted" }),
+    ).toBe("Update of web failed: TierPlan restarted during this update");
+    expect(actionLabel("image.updated", real, {})).toBe("Updated an image");
+    expect(actionLabel("image.update_failed", real, {})).toBe("An image update failed");
+    expect(
+      actionLabel("image.update_rolled_back", real, { workload: "web", from_digest: digest }),
+    ).toBe("Rolled back web to bbbbbbbbbbbb after a failed update");
+    expect(actionLabel("image.update_rolled_back", real, {})).toBe(
+      "An image update was rolled back",
+    );
+    expect(
+      actionLabel("image.bulk_updated", real, {
+        done: "2",
+        total: "3",
+        bulk: "0195a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      }),
+    ).toBe("Updated 2 items (bulk 0195a1b2)");
+    expect(actionLabel("image.bulk_updated", real, {})).toBe("Updated image versions in bulk");
+  });
+
   it("names the node whose janitor setting changed", () => {
     expect(actionLabel("janitor.node_policy_changed", real, { node: "worker-2" })).toBe(
       "Changed a node's janitor setting (worker-2)",

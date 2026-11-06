@@ -619,3 +619,53 @@ describe("the Unmanaged stack page: states", () => {
     expect(table.parentElement?.className).toContain("overflow-x-auto");
   });
 });
+
+describe("the Unmanaged stack page: Adopt to update…", () => {
+  const withUpdates = () => ({ update: { state: "update_available", count: 2, notCheckable: [] } });
+
+  it("offers Adopt to update… to an Env Admin, linking to the adopt flow, and no Update stack", async () => {
+    role = "admin";
+    body = { ...body, ...withUpdates() };
+    mount();
+
+    const adopt = await screen.findByRole("link", { name: "Adopt to update…" });
+    expect(adopt.getAttribute("href")).toBe("/env/e1/unmanaged-stacks/legacy/adopt");
+    expect(screen.queryByRole("button", { name: /Update stack/ })).toBeNull();
+
+    fireEvent.focus(adopt);
+    expect(
+      (
+        await screen.findAllByText(
+          "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("shows it off with the role it takes below Admin, and with the server's reason for a stack that cannot be adopted", async () => {
+    role = "operator";
+    body = { ...body, ...withUpdates() };
+    mount();
+    const off = await screen.findByRole("button", { name: "Adopt to update…" });
+    await waitFor(() => expect(off.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(off);
+    expect(toasts.info).toHaveBeenCalledWith("Needs Admin");
+    cleanup();
+
+    role = "admin";
+    body = { ...body, ...withUpdates(), adoptable: false, reason: "This is TierPlan's own stack." };
+    client.clear();
+    mount();
+    const blocked = await screen.findByRole("button", { name: "Adopt to update…" });
+    fireEvent.click(blocked);
+    await waitFor(() => expect(toasts.info).toHaveBeenCalledWith("This is TierPlan's own stack."));
+  });
+
+  it("is not there when no service has an update on offer", async () => {
+    role = "admin";
+    mount();
+    await screen.findByRole("link", { name: "Adopt stack" });
+    expect(screen.queryByRole("link", { name: "Adopt to update…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Adopt to update…" })).toBeNull();
+  });
+});

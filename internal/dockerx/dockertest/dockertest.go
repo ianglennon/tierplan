@@ -180,6 +180,10 @@ type FakeConfig struct {
 	// as the engine does when the container it is stopping is the one that serves the
 	// caller (TierPlan's own server or an agent). The write is still recorded.
 	DropWrites bool
+	// DropServiceWrites makes the create and the update of a service close the connection without answering, as a manager's
+	// tunnel does when it drops after the spec was sent: the caller cannot tell whether the write happened. The write is
+	// recorded but not applied. Other writes, networks included, are answered.
+	DropServiceWrites bool
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string
@@ -188,6 +192,16 @@ type FakeConfig struct {
 	// cannot be removed (500), or as an agent does when its policy refuses (403 with the agent_policy_denied
 	// marker). The write is recorded whatever the answer.
 	RefuseRemove map[string]FakeRefusal
+	// RefuseCreate makes the create of the container of that name answer the status and message given, as
+	// an engine does for a bad configuration (400), or an agent for a refusal by its policy (403 with the
+	// agent_policy_denied marker). The write is recorded whatever the answer.
+	RefuseCreate map[string]FakeRefusal
+	// ExitOnStart makes a start of a container whose image reference (Config.Image) is a key leave it exited, as a
+	// container whose command fails at once does. The start itself is answered as usual (204).
+	ExitOnStart map[string]bool
+	// HealthOnStart makes a container whose image reference is a key report that health status (starting, healthy
+	// or unhealthy) once it is started, as an image with a HEALTHCHECK does.
+	HealthOnStart map[string]string
 	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
 	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
 	RemoveErrors map[string]string
@@ -401,6 +415,8 @@ type FakeService struct {
 	Ports []swarm.PortConfig
 	// UpdateMessage is the UpdateStatus message, empty for none.
 	UpdateMessage string
+	// UpdateStartedAt and UpdateCompletedAt are the times the UpdateStatus carries; zero leaves the time out.
+	UpdateStartedAt, UpdateCompletedAt time.Time
 	// PreviousSpec, when set, is the spec the service had before its last update.
 	PreviousSpec *swarm.ServiceSpec
 	// CreatedAt is when the service was created; zero is the Unix epoch.
@@ -624,6 +640,8 @@ type Fake struct {
 	// writes is every write served, in order (fake_writes.go).
 	states map[string]fakeState
 	writes []string
+	// ctr is what container creates and renames left (fake_writes.go).
+	ctr fakeContainerWrites
 	// inflight is how many container writes are being served now, and maxInflight
 	// the most there have been at once (fake_writes.go).
 	inflight, maxInflight int
@@ -678,6 +696,8 @@ type Fake struct {
 	// svcUpdates the updates themselves (fake_services.go).
 	svcState   map[string]fakeServiceState
 	svcUpdates []FakeServiceUpdate
+	// svcRefuse are the messages RefuseServiceUpdates gave services, by ID.
+	svcRefuse map[string]string
 	// svcCreated are the services created through the fake, listed after the configured ones, and
 	// svcCreates the creates themselves (fake_services.go).
 	svcCreated []FakeService
@@ -922,7 +942,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withSwarm(f.swarmState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
+	return f.cfg.withContainerWrites(&f.ctr).withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withSwarm(f.swarmState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -1676,6 +1696,14 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 func (fs FakeService) decorate(s *swarm.Service) {
 	if fs.UpdateState != "" || fs.UpdateMessage != "" {
 		s.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(fs.UpdateState), Message: fs.UpdateMessage}
+		if !fs.UpdateStartedAt.IsZero() {
+			started := fs.UpdateStartedAt
+			s.UpdateStatus.StartedAt = &started
+		}
+		if !fs.UpdateCompletedAt.IsZero() {
+			completed := fs.UpdateCompletedAt
+			s.UpdateStatus.CompletedAt = &completed
+		}
 	}
 	if len(fs.Ports) > 0 {
 		s.Endpoint.Ports = slices.Clone(fs.Ports)

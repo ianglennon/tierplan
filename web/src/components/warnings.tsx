@@ -774,6 +774,68 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
         </BellItem>
       );
     }
+    case "update_rolled_back":
+    case "update_rollback_failed": {
+      // An image update that failed (IMG-07): one put back, one whose put-back failed too, or, past five
+      // put back in one environment, one item with a count. The server withdraws the item when a newer
+      // version appears or a good update clears it. An update whose image could not be pulled changed
+      // nothing, so it says that and never that anything was rolled back. Names and digests are text.
+      const failed = w.id === "update_rollback_failed";
+      const key = failed ? "updateRollbackFailed" : "updateRolledBack";
+      const workload = w.service ?? w.container ?? "";
+      if (!failed && w.count !== undefined && !workload) {
+        return (
+          <BellItem id={w.id} title={t("bell.env.updateRolledBack.manyTitle", { count: w.count })}>
+            <ItemDescription className="line-clamp-none wrap-anywhere">
+              {t("bell.env.updateRolledBack.manyBody", { environment: name })}
+            </ItemDescription>
+            <Link
+              to="/env/$envId/services"
+              params={{ envId }}
+              className={`${linkClass} text-sm ${touchLink}`}
+              onClick={close}
+            >
+              {t("bell.env.updateRolledBack.manyOpen")}
+            </Link>
+          </BellItem>
+        );
+      }
+      const pulled = !failed && w.reason === "pull_failed";
+      const params = { name: workload, digest: w.digest ?? "", environment: name };
+      return (
+        <BellItem
+          id={w.id}
+          title={t(
+            pulled ? "bell.env.updateRolledBack.pullTitle" : `bell.env.${key}.title`,
+            params,
+          )}
+        >
+          <ItemDescription className="line-clamp-none wrap-anywhere">
+            {t(pulled ? "bell.env.updateRolledBack.pullBody" : `bell.env.${key}.body`, params)}
+          </ItemDescription>
+          {w.container ? (
+            <Link
+              to="/env/$envId/containers/$containerId"
+              params={{ envId, containerId: w.containerId ?? w.container }}
+              search={{ node: w.nodeId }}
+              className={`${linkClass} text-sm ${touchLink}`}
+              onClick={close}
+            >
+              {t(`bell.env.${key}.open`)}
+            </Link>
+          ) : (
+            <Link
+              to="/env/$envId/services/$serviceId"
+              params={{ envId, serviceId: w.serviceId ?? w.service ?? "" }}
+              className={`${linkClass} text-sm ${touchLink}`}
+              onClick={close}
+            >
+              {t(`bell.env.${key}.open`)}
+            </Link>
+          )}
+        </BellItem>
+      );
+    }
     case "clock_skew":
       return (
         <BellItem id={w.id} title={t("bell.env.clock.title", { node })}>

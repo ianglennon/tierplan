@@ -280,16 +280,18 @@ describe("/settings/environments/$envId", () => {
       "Join token",
       "Agent updates",
       "Restart-loop detection",
+      "Image update checks",
       "Remove environment",
     ]);
   });
 
-  it("puts Default stack subnets after Restart-loop detection for someone who holds networks.read", async () => {
+  it("puts Default stack subnets after Image update checks for someone who holds networks.read", async () => {
     current = me([...ALL, "networks.read", "networks.addressing"]);
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "Default stack subnets" });
     const list = headings();
-    expect(list.indexOf("Default stack subnets")).toBe(list.indexOf("Restart-loop detection") + 1);
+    expect(list.indexOf("Image update checks")).toBe(list.indexOf("Restart-loop detection") + 1);
+    expect(list.indexOf("Default stack subnets")).toBe(list.indexOf("Image update checks") + 1);
     expect(list.indexOf("Remove environment")).toBe(list.indexOf("Default stack subnets") + 1);
     expect(
       screen.getByRole("heading", { level: 3, name: "Default stack subnets" }).closest("section")
@@ -407,6 +409,7 @@ describe("/settings/environments/$envId", () => {
       "Nodes and agents",
       "Agent updates",
       "Restart-loop detection",
+      "Image update checks",
       "Default stack subnets",
     ]);
     // The token is never read, the settings page's URL is left out, and the node table acts.
@@ -544,6 +547,7 @@ describe("/settings/environments/$envId", () => {
       "Nodes and agents",
       "Agent updates",
       "Restart-loop detection",
+      "Image update checks",
     ]);
     expect(seen).not.toContain("GET /api/environments/e2/token");
   });
@@ -615,6 +619,7 @@ describe("/settings/environments/$envId", () => {
       "Connection",
       "Nodes and agents",
       "Restart-loop detection",
+      "Image update checks",
       "Remove environment",
     ]);
     expect(screen.queryByText("Connects to")).toBeNull();
@@ -650,6 +655,7 @@ describe("/settings/environments/$envId", () => {
       "Join token",
       "Agent updates",
       "Restart-loop detection",
+      "Image update checks",
       "Local host",
       "Remove environment",
     ]);

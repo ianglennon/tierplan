@@ -43,6 +43,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/internal/vault"
 )
 
@@ -111,6 +112,9 @@ type authFixture struct {
 	refusals *auth.RefusalCoalescer
 	// pwLimiter is the per-user throttle on POST /api/me/password; nil means none.
 	pwLimiter *auth.IPLimiter
+	// fleet, when set, is registered as the fleet routes with the environment registry and checker of the
+	// fixture (plan 12-26); a test sets it and calls build again.
+	fleet *api.FleetDeps
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
 	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
@@ -134,6 +138,16 @@ type authFixture struct {
 	// addressSpaces is the address reader build made for the routes; nil before build or
 	// without an aggregator.
 	addressSpaces *envs.AddressSpaces
+	// updateHeads, when set, is the registry the image update checks ask (plan 12-37); without it the routes
+	// are built with no update checks. updateStore replaces the SQLite store the checks are kept in.
+	updateHeads updates.Heads
+	updateStore updates.Store
+	// updateInspect replaces how the image text of a container whose list row shows an image ID is read
+	// (plan 12-06).
+	updateInspect func(ctx context.Context, envID string, ids []string) (map[string]string, error)
+	// updateApplier, when set, changes the applier of image updates the routes are built with (plan 12-15): a test
+	// sets its clock, its convergence timeout or the stacks it reads as managed.
+	updateApplier func(*updates.Applier)
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18); agg is the aggregator over it that the routes read
 	// through (plan 02-11).
@@ -167,6 +181,8 @@ type authFixture struct {
 	stackBeforeJob func(context.Context)
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
+	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
+	stackClock stackops.Clock
 	// stackUp replaces the Compose SDK's up in a standalone deploy (plan 07-20).
 	stackUp func(context.Context, *dockerx.Client, *types.Project, dockerx.ComposeUpOptions, func(dockerx.ComposeEvent)) error
 	// stackStop and stackStart replace the Compose SDK's stop and start of a standalone stack (plan 07-26).
@@ -350,6 +366,15 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
 		TLSPin: func() string { return f.tlsPin }, AgentAllowInsecure: f.agentAllowInsecure, Checker: checker, Updater: f.updater, Log: log,
 	})
+	if f.fleet != nil && f.envSvc != nil {
+		fleetDeps := *f.fleet
+		fleetDeps.Envs = f.envSvc
+		if fleetDeps.Checker == nil {
+			// A test may bring a checker of its own, to hold the permissions apart in a way the default roles do not.
+			fleetDeps.Checker = checker
+		}
+		api.RegisterFleet(r, fleetDeps)
+	}
 	agentSvc := f.agentSvc
 	if agentSvc == nil {
 		agentSvc = agents.NewService(f.st, f.v, f.aud, f.clk.now)
@@ -379,9 +404,26 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	gitsync.RegisterOwnedKinds()
 	f.gitSync = gitDeps.Sync
+	var updateSvc *updates.Service
+	if f.updateHeads != nil {
+		var store updates.Store = updates.SQLStore{Q: f.st.Q, W: f.st.Write}
+		if f.updateStore != nil {
+			store = f.updateStore
+		}
+		runs := updates.NewRunIndex()
+		updateSvc = &updates.Service{
+			Store: store, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Clusters: f.clusters, Aggregator: f.agg, Runs: runs,
+			Checker: &updates.Checker{Heads: f.updateHeads, Store: store, Runs: runs, Now: f.clk.now, Log: log}, Now: f.clk.now,
+			ImageTexts: &updates.ImageTextCache{Inspect: updates.InspectImageTexts(f.agg), Now: f.clk.now},
+			Ignores:    &updates.IgnoreStore{Q: f.st.Q, W: f.st.Write},
+		}
+		if f.updateInspect != nil {
+			updateSvc.ImageTexts.Inspect = f.updateInspect
+		}
+	}
 	if f.envSvc != nil {
 		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
-			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Now: f.envWarningsNow, Log: log,
+			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, Log: log,
 			Agents: api.AgentsDeps{
 				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
 				AgentAllowInsecure: f.agentAllowInsecure,
@@ -390,7 +432,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Log: log})
+		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Updates: updateSvc, Log: log})
 		// The address reader of a real server. A fixture of one standalone engine has no cluster
 		// reader; the reader needs one to tell a swarm from a host, so it gets a bare one.
 		addrClusters := f.clusters
@@ -408,7 +450,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			routeSrc = src
 		}
 		hostRoutes := envs.NewHostRoutes(f.envSvc, routeSrc, envs.HostRoutesOptions{Now: f.clk.now, LocalRouteFile: f.hostRouteFile, Log: log})
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, AddressSpaces: addressSpaces, Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, AddressSpaces: addressSpaces, Updates: updateSvc, Log: log})
 		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
 			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
 		})
@@ -453,8 +495,24 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
-			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Log: log,
+			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Updates: updateSvc, Log: log,
 		})
+		// Schedules are read in UTC so that a test's expected time does not depend on the zone of the machine.
+		var applier *updates.Applier
+		if updateSvc != nil {
+			updateSvc.Locks, updateSvc.UpdateRuns = f.stackLocks, &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+			// The digest an update failed with is remembered as a server does (IMG-07, D-14).
+			failures := &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+			updateSvc.Failures = failures
+			applier = &updates.Applier{
+				Service: updateSvc, Runs: &updates.RunStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}, Locks: f.stackLocks, Jobs: f.jobHub,
+				Aggregator: f.agg, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)), Audit: f.aud,
+				ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: f.st, Vault: f.v}), Failures: failures, Log: log,
+			}
+			if f.updateApplier != nil {
+				f.updateApplier(applier)
+			}
+		}
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
 		api.RegisterSecrets(r, api.SecretsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})
@@ -483,18 +541,25 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
+			Updates:   updateSvc,
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,
 			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Clock: f.stackClock, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		}
 		// The deployer of a background service shares the locks and the environment lookup of the routes.
 		if f.stackLocks == nil {
 			f.stackLocks = stackops.NewLocks()
 		}
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
+		stackDeps = stackDeps.WithDeployCancels() // as the server does, before the deps are copied
 		f.stackDeps = stackDeps
+		// The image update routes deploy a stack through the stack's own engine, so they hold the same deps and the same lock.
+		api.RegisterUpdates(r, api.UpdatesDeps{
+			Updates: updateSvc, Checker: checker, Store: f.st, Audit: f.aud, Policies: &updates.PolicyStore{Q: f.st.Q, W: f.st.Write},
+			Scheduler: &updates.Scheduler{Loc: time.UTC}, Applier: applier, Stacks: stackDeps, Now: f.clk.now, Log: log,
+		})
 		// A git stack with auto-deploy on deploys through the same deployer a background service would use.
 		gitDeps.Sync.SetDeployer(api.NewStackDeployer(stackDeps).GitDeployer())
 		api.RegisterStacks(r, stackDeps)

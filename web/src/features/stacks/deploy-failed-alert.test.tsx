@@ -264,6 +264,68 @@ describe("DeployFailedAlert", () => {
     ).toBeNull();
   });
 
+  it("says a deploy that stopped at the pull could not pull the image and changed nothing, and offers no roll back", async () => {
+    mount(withOperation({ code: "pull_failed", failedService: "web" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("The last deploy failed")).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "TierPlan couldn't pull the image for web, so nothing was changed. The pull failed.",
+      ),
+    ).toBeTruthy();
+    expect(within(alert).queryByText(/didn't finish/)).toBeNull();
+    // The Open console link stays; the roll back offer is gone, whatever the stack could roll back to.
+    expect(within(alert).getByRole("link", { name: "Open console" })).toBeTruthy();
+    await waitFor(() => expect(within(alert).queryByRole("button")).toBeNull());
+    expect(within(alert).queryByText(/Roll back/)).toBeNull();
+  });
+
+  it.each([
+    ["pull_denied", "The registry refused the pull."],
+    ["image_not_found", "The registry has no such image."],
+    ["rate_limited", "The registry is limiting pulls. Try again later."],
+    ["registry_unreachable", "A registry could not be reached."],
+  ])("words a pull that stopped with %s", async (code, reason) => {
+    mount(withOperation({ code, failedService: "web", kind: "update" }));
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        `TierPlan couldn't pull the image for web, so nothing was changed. ${reason}`,
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(within(alert).queryByRole("button")).toBeNull());
+  });
+
+  it("names no service when a pull stopped before any", async () => {
+    mount(withOperation({ code: "pull_failed", failedService: "" }));
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "TierPlan couldn't pull an image, so nothing was changed. The pull failed.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("keeps the roll back offer for a deploy that failed after it changed something", async () => {
+    mount(withOperation({ code: "converge_timeout", failedService: "web" }));
+    const alert = await screen.findByRole("alert");
+    expect(
+      await within(alert).findByRole("button", { name: "Roll back to previous version" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps Retry roll back for a roll back that stopped at the pull", async () => {
+    mount(withOperation({ kind: "rollback", code: "pull_failed", failedService: "web" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("The last roll back failed")).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "TierPlan couldn't pull the image for web, so nothing was changed. The pull failed.",
+      ),
+    ).toBeTruthy();
+    expect(await within(alert).findByRole("button", { name: "Retry roll back" })).toBeTruthy();
+  });
+
   it("has no Open console when the job is not known", async () => {
     mount(withOperation({ jobId: "" }));
     const alert = await screen.findByRole("alert");

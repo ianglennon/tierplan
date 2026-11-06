@@ -463,6 +463,17 @@ func (e *SpecRejectedError) Error() string { return "service spec rejected: " + 
 // a service that went away ErrServiceNotFound, and a spec the manager refuses a
 // *SpecRejectedError. The write is never retried: whoever asked for it asks again (P2 D-42).
 func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, spec json.RawMessage, encodedAuth string) ([]string, error) {
+	return c.serviceUpdate(ctx, id, version, spec, encodedAuth, "")
+}
+
+// ServiceUpdateAuthFromSpec is ServiceUpdate for a write that has no registry credential of its own to send: it
+// says so with registryAuthFrom=spec, so the manager uses the credential the service's spec was last written with
+// for the nodes that pull the new image, and a credential is never invented.
+func (c *Client) ServiceUpdateAuthFromSpec(ctx context.Context, id string, version uint64, spec json.RawMessage) ([]string, error) {
+	return c.serviceUpdate(ctx, id, version, spec, "", swarm.RegistryAuthFromSpec)
+}
+
+func (c *Client) serviceUpdate(ctx context.Context, id string, version uint64, spec json.RawMessage, encodedAuth string, authFrom swarm.RegistryAuthSource) ([]string, error) {
 	s, err := decodeServiceSpec(spec)
 	if err != nil {
 		return nil, err
@@ -471,6 +482,7 @@ func (c *Client) ServiceUpdate(ctx context.Context, id string, version uint64, s
 		Version:             swarm.Version{Index: version},
 		Spec:                s,
 		EncodedRegistryAuth: encodedAuth,
+		RegistryAuthFrom:    authFrom,
 		QueryRegistry:       false,
 	})
 	if err != nil {

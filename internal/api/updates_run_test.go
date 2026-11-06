@@ -1,0 +1,1177 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
+
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/updates"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+)
+
+// Updating a service in one click (plan 12-15, IMG-06, D-05, D-07, D-10, D-13). Docker is a fake daemon behind the real monitor,
+// aggregator and cluster reader; the registry is a scripted Heads; the applier, its run store, the job hub, the operation lock,
+// the router and the permission checks are the real ones.
+
+// plainSpec is the spec of a service the tests update: replicas, environment, labels and an update configuration the update
+// must keep, running digest a of registry.test/team/<name>:1.
+func plainSpec(name string, running byte) swarm.ServiceSpec {
+	replicas := uint64(3)
+	return swarm.ServiceSpec{
+		Annotations: swarm.Annotations{Name: name, Labels: map[string]string{"team": "core", "tier": "web"}},
+		TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
+			Image: fmt.Sprintf("registry.test/team/%s:1@%s", name, updDigest(running)), Env: []string{"MODE=prod", "WORKERS=4"},
+		}},
+		Mode:         swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &replicas}},
+		UpdateConfig: &swarm.UpdateConfig{Parallelism: 2, Order: swarm.UpdateOrderStartFirst, FailureAction: swarm.UpdateFailureActionRollback},
+	}
+}
+
+// plainService is a service made of plainSpec.
+func plainService(name string, running byte) dockertest.FakeService {
+	spec := plainSpec(name, running)
+	return dockertest.FakeService{
+		ID: "svc-" + name, Name: name, Mode: "replicated", Running: 3, Desired: 3, Version: 1, Image: spec.TaskTemplate.ContainerSpec.Image,
+		Labels: spec.Labels, Spec: &spec,
+	}
+}
+
+// updateEnvOf is an environment of one swarm manager whose tasks follow the writes made to it.
+func updateEnvOf(t *testing.T, heads *scriptedHeads, tune func(*dockertest.FakeConfig), services ...dockertest.FakeService) (*envFix, envBody) {
+	t.Helper()
+	cfg := swarmManagerEngine(services...)
+	cfg.TasksFollowWrites = true
+	cfg.SwarmNodeID = "node-1"
+	if tune != nil {
+		tune(&cfg)
+	}
+	return updatesEnvOf(t, heads, cfg)
+}
+
+type updateRunAnswer struct {
+	JobID string `json:"jobId"`
+}
+
+func updateRunBody(name string, expect map[string]string) string {
+	body := map[string]any{"kind": "service", "name": name}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+// runUpdate asks for the update of a service.
+func (f *envFix) runUpdate(t *testing.T, e envBody, name string, expect map[string]string) *envRec {
+	t.Helper()
+	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/updates/run", updateRunBody(name, expect))
+}
+
+// awaitUpdate waits for the update's job to end and answers it as the hub holds it.
+func (f *envFix) awaitUpdate(t *testing.T, jobID string) jobs.Job {
+	t.Helper()
+	job, err := f.jobHub.Wait(testsupport.Context(t), jobID)
+	if err != nil {
+		t.Fatalf("waiting for the update job: %v", err)
+	}
+	return job
+}
+
+// runOf is the run row the update's job recorded.
+func (f *envFix) runOf(t *testing.T, job jobs.Job) updates.Run {
+	t.Helper()
+	run, err := (updates.RunStore{Q: f.st.Q, W: f.st.Write}).Get(context.Background(), job.Meta[updates.MetaRunID])
+	if err != nil {
+		t.Fatalf("read the run of job %s: %v", job.ID, err)
+	}
+	return run
+}
+
+// stepStates are the states of a job's steps by ID.
+func stepStates(job jobs.Job) map[string]string {
+	out := map[string]string{}
+	for _, it := range job.Items {
+		out[it.ID] = it.State
+	}
+	return out
+}
+
+// jsonOf encodes a spec the way the fake decodes it, to compare two of them.
+func jsonOf(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// The tracer (plan 12-15, IMG-06): an Operator updates a plain service to the digest the registry has, the job reports it done,
+// the run is on record and one audit row says who updated what.
+func TestPlainServiceUpdateEndToEnd(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if rec.code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.code, rec.body)
+	}
+	job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID)
+	if job.State != jobs.JobDone || job.Kind != updates.JobKind || job.EnvID != e.ID {
+		t.Fatalf("job = %s %s %s, want a done update job of this environment: %+v", job.State, job.Kind, job.EnvID, job.Items)
+	}
+
+	sent := f.fake.ServiceUpdates()
+	if len(sent) != 1 {
+		t.Fatalf("service updates = %d, want 1", len(sent))
+	}
+	want := plainSpec("web", 'a')
+	want.TaskTemplate.ContainerSpec.Image = "registry.test/team/web:1@" + updDigest('b')
+	if got := sent[0].Spec; jsonOf(t, got) != jsonOf(t, want) {
+		t.Errorf("the spec sent = %s\nwant the old spec with only the image changed: %s", jsonOf(t, got), jsonOf(t, want))
+	}
+	if sent[0].Version != "1" {
+		t.Errorf("the update carried version %q, want the version it read, 1", sent[0].Version)
+	}
+
+	run := f.runOf(t, job)
+	if run.State != updates.RunDone || run.Kind != "service" || run.Workload != "web" || run.EnvID != e.ID || run.JobID != job.ID ||
+		len(run.Items) != 1 || run.Items[0].FromDigest != updDigest('a') || run.Items[0].ToDigest != updDigest('b') || run.FinishedAt.IsZero() {
+		t.Errorf("run = %+v, want a done run of web from a to b, on this environment and job", run)
+	}
+	if s := stepStates(job); !reflect.DeepEqual(s, map[string]string{"check": "done", "pull": "done", "update": "done", "wait": "done"}) {
+		t.Errorf("steps = %v, want every step done", s)
+	}
+	rows := f.auditRows(t, "image.updated")
+	if len(rows) != 1 || rows[0].EnvID != e.ID || rows[0].Result != "success" || rows[0].Details["workload"] != "web" || rows[0].Details["kind"] != "service" ||
+		rows[0].Details["from_digest"] != updDigest('a') || rows[0].Details["to_digest"] != updDigest('b') || rows[0].Details["image"] != "registry.test/team/web:1" {
+		t.Errorf("audit rows = %+v, want one naming the workload, the image and both digests", rows)
+	}
+	if rows := f.auditRows(t, "image.update_failed"); len(rows) != 0 {
+		t.Errorf("failure rows = %+v, want none", rows)
+	}
+}
+
+// updateProblem is the part of a problem the update tests read: its type, its detail and its errors with their values.
+type updateProblem struct {
+	Type   string `json:"type"`
+	Detail string `json:"detail"`
+	Errors []struct {
+		Location string          `json:"location"`
+		Message  string          `json:"message"`
+		Value    json.RawMessage `json:"value"`
+	} `json:"errors"`
+}
+
+// noRunsNoWrites asserts an update that was refused left no trace: no write to the engine, no lock held, no run on record and no
+// audit row of an update.
+func (f *envFix) noRunsNoWrites(t *testing.T, e envBody) {
+	t.Helper()
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d after a refusal, want none", n)
+	}
+	if h, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is held by %+v after a refusal", h)
+	}
+	if runs, err := (updates.RunStore{Q: f.st.Q, W: f.st.Write}).Running(context.Background(), e.ID); err != nil || len(runs) != 0 {
+		t.Errorf("runs = %+v %v after a refusal, want none", runs, err)
+	}
+	for _, a := range []string{"image.updated", "image.update_failed"} {
+		if rows := f.auditRows(t, a); len(rows) != 0 {
+			t.Errorf("%s audit rows = %+v after a refusal, want none", a, rows)
+		}
+	}
+}
+
+// A digest that moved since the confirm is refused with the refreshed one, before a lock, a run or a write (plan 12-15, D-05).
+func TestUpdateRefusesMovedDigest(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('c')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if rec.code != http.StatusConflict || rec.ptyp != "update_moved" {
+		t.Fatalf("update = %d %s %s, want 409 update_moved", rec.code, rec.ptyp, rec.body)
+	}
+	p := decode[updateProblem](t, rec)
+	if len(p.Errors) != 1 || p.Errors[0].Message != "web" {
+		t.Fatalf("errors = %+v, want the one service that moved", p.Errors)
+	}
+	var item struct {
+		Service, FromDigest, ToDigest string
+	}
+	if err := json.Unmarshal(p.Errors[0].Value, &item); err != nil || item.Service != "web" || item.ToDigest != updDigest('c') || item.FromDigest != updDigest('a') {
+		t.Errorf("item = %+v %v, want web moved from a to c", item, err)
+	}
+	f.noRunsNoWrites(t, e)
+
+	// Confirmed again at the refreshed digest, the update goes through and deploys that one.
+	rec = f.runUpdate(t, e, "web", map[string]string{"web": updDigest('c')})
+	if rec.code != http.StatusOK {
+		t.Fatalf("update after the refresh: %d %s", rec.code, rec.body)
+	}
+	if job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID); job.State != jobs.JobDone {
+		t.Fatalf("job = %s, want done", job.State)
+	}
+	if got := f.fake.ServiceUpdates()[0].Spec.TaskTemplate.ContainerSpec.Image; got != "registry.test/team/web:1@"+updDigest('c') {
+		t.Errorf("image deployed = %q, want the digest the server read", got)
+	}
+}
+
+// An update asked for while another operation holds the environment is refused and says who holds it (plan 12-15, IMG-06).
+func TestUpdateRefusesHeldLock(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	_, _, ok := f.stackLocks.TryAcquire(e.ID, stackops.Holder{StackID: "stk-1", StackName: "shop", Kind: "deploy", By: "ada", Started: time.Now()})
+	if !ok {
+		t.Fatal("could not take the lock for a stack deploy")
+	}
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if rec.code != http.StatusConflict || rec.ptyp != "operation_locked" {
+		t.Fatalf("update = %d %s %s, want 409 operation_locked", rec.code, rec.ptyp, rec.body)
+	}
+	if p := decode[updateProblem](t, rec); !strings.Contains(p.Detail, "shop") || len(p.Errors) == 0 || p.Errors[0].Location != "stack" || p.Errors[0].Message != "shop" {
+		t.Errorf("problem = %+v, want it to name the stack that holds the lock", p)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 0 {
+		t.Errorf("service updates = %d, want none", n)
+	}
+	if runs, err := (updates.RunStore{Q: f.st.Q, W: f.st.Write}).Running(context.Background(), e.ID); err != nil || len(runs) != 0 {
+		t.Errorf("runs = %+v %v, want none", runs, err)
+	}
+	if h, held := f.stackLocks.Held(e.ID); !held || h.Kind != "deploy" {
+		t.Errorf("holder = %+v %v, want the deploy still holding it", h, held)
+	}
+}
+
+// A second update of a workload that is being updated is refused as locked, naming the running update; it is not read as
+// already up to date (plan 12-15, IMG-06 idempotency).
+func TestUpdateTwiceIsRefused(t *testing.T) {
+	t.Parallel()
+	hold := make(chan struct{})
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, func(c *dockertest.FakeConfig) { c.PullHold = hold }, plainService("web", 'a'))
+
+	first := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if first.code != http.StatusOK {
+		t.Fatalf("first update: %d %s", first.code, first.body)
+	}
+	jobID := decode[updateRunAnswer](t, first).JobID
+	// The first update holds the lock from the moment it was answered, while its pull is held.
+	second := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('b')})
+	if second.code != http.StatusConflict || second.ptyp != "operation_locked" {
+		t.Fatalf("second update = %d %s %s, want 409 operation_locked", second.code, second.ptyp, second.body)
+	}
+	p := decode[updateProblem](t, second)
+	if !strings.Contains(p.Detail, "image update of web") {
+		t.Errorf("detail = %q, want it to name the running update of web", p.Detail)
+	}
+	got := map[string]string{}
+	for _, d := range p.Errors {
+		got[d.Location] = d.Message
+	}
+	if got["kind"] != "image_update" || got["workload"] != "web" || got["job"] != jobID || got["started"] == "" {
+		t.Errorf("errors = %v, want the kind, the workload, the job and when it started", got)
+	}
+	close(hold)
+	if job := f.awaitUpdate(t, jobID); job.State != jobs.JobDone {
+		t.Fatalf("first job = %s %+v, want done", job.State, job.Items)
+	}
+	if n := len(f.fake.ServiceUpdates()); n != 1 {
+		t.Errorf("service updates = %d, want only the first update's", n)
+	}
+	if _, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is held after the job read as done")
+	}
+}
+
+// A workload that runs the digest the registry has is not updated (plan 12-15, IMG-06 idempotency).
+func TestNothingToUpdate(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('a')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+
+	rec := f.runUpdate(t, e, "web", map[string]string{"web": updDigest('a')})
+	if rec.code != http.StatusConflict || rec.ptyp != "nothing_to_update" {
+		t.Fatalf("update = %d %s %s, want 409 nothing_to_update", rec.code, rec.ptyp, rec.body)
+	}
+	f.noRunsNoWrites(t, e)
+	if rec := f.runUpdate(t, e, "nobody", nil); rec.code != http.StatusNotFound {
+		t.Errorf("update of a service that is not there = %d %s, want 404", rec.code, rec.body)
+	}
+}
+
+// An Operator may update a service; a Viewer may not, and nothing is taken or written for the refusal (plan 12-15, D-10, T-12-38).
+func TestUpdateRoutePermissions(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	f.addUser(t, "vera", false)
+	f.addEnvRole(t, "vera", e.ID, "viewer")
+	f.addUser(t, "olive", false)
+	f.addEnvRole(t, "olive", e.ID, "operator")
+
+	path := "/api/env/" + e.ID + "/updates/run"
+	body := updateRunBody("web", map[string]string{"web": updDigest('b')})
+	cookie, csrf := f.signIn(t, "vera", false)
+	if rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's update = %d %s, want 403", rec.Code, rec.Body)
+	}
+	f.noRunsNoWrites(t, e)
+
+	cookie, csrf = f.signIn(t, "olive", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an operator's update = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var ans updateRunAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil {
+		t.Fatal(err)
+	}
+	job := f.awaitUpdate(t, ans.JobID)
+	if job.State != jobs.JobDone {
+		t.Fatalf("job = %s, want done", job.State)
+	}
+
+	// Anyone who may read the environment follows the job; another environment's job is not found.
+	get := func(user, id string) int {
+		c, s := f.signIn(t, user, false)
+		return f.call(t, authReq{method: http.MethodGet, path: "/api/env/" + e.ID + "/update-jobs/" + id, cookie: c, csrf: s}).Code
+	}
+	if got := get("vera", ans.JobID); got != http.StatusOK {
+		t.Errorf("a viewer reading the job = %d, want 200", got)
+	}
+	if got := get("vera", "no-such-job"); got != http.StatusNotFound {
+		t.Errorf("reading a job that is not there = %d, want 404", got)
+	}
+}
+
+// The update of a plain container (plan 12-20, IMG-06, D-07, D-12, D-13, D-21, RESEARCH Pitfall 11). Docker is a fake standalone host
+// behind the real monitor, aggregator and cluster reader; the registry is a scripted Heads; the applier, its run store, the job hub,
+// the operation lock, the router and the permission checks are the real ones. The applier waits on a clock that answers at once,
+// so the wait for a container to run costs no time.
+
+const (
+	appRef = "registry.test/team/app:1"
+	appID  = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
+
+// instantClock answers every wait at once and moves its time on by what was asked, so a window is reached without sleeping.
+type instantClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *instantClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *instantClock) After(d time.Duration) <-chan time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	ch := make(chan time.Time, 1)
+	ch <- c.now
+	return ch
+}
+
+// plainContainer is a container somebody made with docker run: an environment, a command, a label, a restart policy, a network
+// with an alias and the old container's short ID as another, and a volume.
+func plainContainer() dockertest.FakeContainer {
+	doc := container.InspectResponse{
+		Config: &container.Config{
+			Image: appRef, Hostname: appID[:12], Env: []string{"MODE=prod"}, Cmd: []string{"serve"}, Labels: map[string]string{"team": "core"},
+			Volumes: map[string]struct{}{"/cache": {}},
+		},
+		HostConfig: &container.HostConfig{NetworkMode: "appnet", RestartPolicy: container.RestartPolicy{Name: "always"}, Binds: []string{"appdata:/data"}},
+		Mounts: []container.MountPoint{
+			{Type: mount.TypeVolume, Name: "appdata", Destination: "/data", RW: true},
+			{Type: mount.TypeVolume, Name: "anon0123", Destination: "/cache", RW: true},
+		},
+		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
+			"appnet": {NetworkID: "net-app", Aliases: []string{"app", "web", appID[:12]}},
+		}},
+	}
+	return dockertest.FakeContainer{
+		ID: appID, Names: []string{"/app"}, Image: appRef, ImageID: updImage('1'), State: "running", Status: "Up 1 hour",
+		Labels: map[string]string{"team": "core"}, Mounts: []string{"appdata", "anon0123"},
+		Networks: map[string]dockertest.FakeEndpoint{"appnet": {NetworkID: "net-app", Aliases: []string{"app", "web"}}},
+		Inspect:  dockertest.FakeInspect{Document: &doc, ImageID: updImage('1')},
+	}
+}
+
+// containerEngine is a standalone host running containers, with the image of appRef at digest a and the network appnet.
+func containerEngine(containers ...dockertest.FakeContainer) dockertest.FakeConfig {
+	return dockertest.FakeConfig{
+		Hostname: "host-1", Version: "29.1.0", Containers: containers,
+		Images:   []dockertest.FakeImage{{ID: updImage('1'), RepoTags: []string{appRef}, RepoDigests: []string{"registry.test/team/app@" + updDigest('a')}}},
+		Networks: []dockertest.FakeNetwork{{ID: "net-app", Name: "appnet", Driver: "bridge", Scope: "local"}},
+	}
+}
+
+// containerEnvOf is a standalone host the caller configured, whose applier waits on an instant clock.
+func containerEnvOf(t *testing.T, heads *scriptedHeads, cfg dockertest.FakeConfig) (*envFix, envBody) {
+	t.Helper()
+	return containerEnvWith(t, heads, cfg, nil)
+}
+
+// containerEnvWith is containerEnvOf with a change to the applier before the routes are built.
+func containerEnvWith(t *testing.T, heads *scriptedHeads, cfg dockertest.FakeConfig, tune func(*updates.Applier)) (*envFix, envBody) {
+	t.Helper()
+	f := newEnvFix(t, cfg)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.updateHeads = heads
+	f.updateApplier = func(a *updates.Applier) {
+		a.Clock = &instantClock{now: time.Unix(1_700_000_000, 0)}
+		if tune != nil {
+			tune(a)
+		}
+	}
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	return f, e
+}
+
+func containerRunBody(name string, expect map[string]string) string {
+	body := map[string]any{"kind": "container", "name": name}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+// writeKinds names the writes the engine served in a word each, leaving out the ones a test does not care about.
+func writeKinds(writes []string) []string {
+	var out []string
+	for _, w := range writes {
+		method, path, _ := strings.Cut(w, " ")
+		path, _, _ = strings.Cut(path, "?")
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		switch {
+		case path == "/images/create":
+			out = append(out, "pull")
+		case path == "/containers/create":
+			out = append(out, "create")
+		case method == http.MethodDelete && len(parts) == 2 && parts[0] == "containers":
+			out = append(out, "remove")
+		case len(parts) == 3 && parts[0] == "containers":
+			out = append(out, parts[2])
+		}
+	}
+	return out
+}
+
+// An Operator updates a plain docker run container in one click: the replacement is created beside it, the old one is stopped and
+// renamed, the replacement takes its name and starts, and only then is the old one removed, without its volumes (D-07, D-13).
+func TestPlainContainerUpdateEndToEnd(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvOf(t, heads, containerEngine(plainContainer()))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+
+	rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/updates/run", containerRunBody("app", map[string]string{"app": updDigest('b')}))
+	if rec.code != http.StatusOK {
+		t.Fatalf("update: %d %s", rec.code, rec.body)
+	}
+	job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID)
+	if job.State != jobs.JobDone || job.Kind != updates.JobKind || job.EnvID != e.ID {
+		t.Fatalf("job = %s %s %s, want a done update job of this environment: %+v", job.State, job.Kind, job.EnvID, job.Items)
+	}
+
+	if got, want := writeKinds(f.fake.Writes()), []string{"pull", "create", "stop", "rename", "rename", "start", "remove"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the engine was asked %v, want %v: the replacement before anything stops, the old container last", got, want)
+	}
+	creates := f.fake.ContainerCreates()
+	if len(creates) != 1 {
+		t.Fatalf("creates = %d, want 1", len(creates))
+	}
+	c := creates[0]
+	if c.Name != "app-tierplan-new-"+appID[:12] || c.Config.Image != appRef+"@"+updDigest('b') {
+		t.Errorf("created %q from %q, want a temporary name and the image pinned to the new digest", c.Name, c.Config.Image)
+	}
+	if !reflect.DeepEqual(c.Config.Env, []string{"MODE=prod"}) || !reflect.DeepEqual(c.Config.Cmd, []string{"serve"}) || c.Config.Labels["team"] != "core" ||
+		c.HostConfig.RestartPolicy.Name != "always" || c.Config.Hostname != "" {
+		t.Errorf("replacement config = %+v host %+v, want the environment, command, label and restart policy kept and the hostname reset", c.Config, c.HostConfig)
+	}
+	ep := c.NetworkingConfig.EndpointsConfig["appnet"]
+	if ep == nil || !reflect.DeepEqual(ep.Aliases, []string{"app", "web"}) {
+		t.Errorf("replacement endpoint = %+v, want appnet with its aliases but not the old short ID", ep)
+	}
+	if !reflect.DeepEqual(c.HostConfig.Binds, []string{"appdata:/data"}) ||
+		!reflect.DeepEqual(c.HostConfig.Mounts, []mount.Mount{{Type: mount.TypeVolume, Source: "anon0123", Target: "/cache"}}) || len(c.Config.Volumes) != 0 {
+		t.Errorf("volumes: binds %v mounts %+v config volumes %v, want the named volume kept and the anonymous one attached again by name, not asked for as a new one", c.HostConfig.Binds, c.HostConfig.Mounts, c.Config.Volumes)
+	}
+	if got, want := f.fake.ContainerRenames(), []dockertest.FakeRename{
+		{ID: appID, From: "app", To: "app-tierplan-old-" + appID[:12]}, {ID: c.ID, From: c.Name, To: "app"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("renames = %+v, want %+v", got, want)
+	}
+	for _, w := range f.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE ") && strings.Contains(w, "v=") {
+			t.Errorf("the old container was removed with %q, want its volumes left", w)
+		}
+	}
+
+	run := f.runOf(t, job)
+	if run.State != updates.RunDone || run.Kind != "container" || run.Workload != "app" || run.WorkloadID != appID || run.OldContainer != appID ||
+		len(run.Items) != 1 || run.Items[0].FromDigest != updDigest('a') || run.Items[0].ToDigest != updDigest('b') || run.FinishedAt.IsZero() {
+		t.Errorf("run = %+v, want a done run of app from a to b that recorded the old container", run)
+	}
+	if s := stepStates(job); !reflect.DeepEqual(s, map[string]string{"check": "done", "pull": "done", "create": "done", "swap": "done", "start": "done", "remove_old": "done"}) {
+		t.Errorf("steps = %v, want every step done", s)
+	}
+	rows := f.auditRows(t, "image.updated")
+	if len(rows) != 1 || rows[0].TargetType != "container" || rows[0].Result != "success" || rows[0].Details["workload"] != "app" || rows[0].Details["kind"] != "container" ||
+		rows[0].Details["from_digest"] != updDigest('a') || rows[0].Details["to_digest"] != updDigest('b') || rows[0].Details["image"] != appRef {
+		t.Errorf("audit rows = %+v, want one naming the container, the image and both digests", rows)
+	}
+	if h, held := f.stackLocks.Held(e.ID); held {
+		t.Errorf("the lock is held by %+v after the update", h)
+	}
+}
+
+// containerPreviewAnswer is the preview of a container as far as these tests read it.
+type containerPreviewAnswer struct {
+	Items []struct {
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+		FromDigest string `json:"fromDigest"`
+		ToDigest   string `json:"toDigest"`
+	} `json:"items"`
+	Warnings []struct {
+		Workload string `json:"workload"`
+		Code     string `json:"code"`
+	} `json:"warnings"`
+	Offered bool   `json:"offered"`
+	Refusal string `json:"refusal"`
+}
+
+func (p containerPreviewAnswer) codes() []string {
+	out := []string{}
+	for _, w := range p.Warnings {
+		out = append(out, w.Code)
+	}
+	return out
+}
+
+// containerUpdateList is the containers list as far as the update objects go.
+type containerUpdateList struct {
+	Items []struct {
+		Name   string `json:"name"`
+		Update *struct {
+			State   string `json:"state"`
+			Refusal string `json:"refusal"`
+		} `json:"update"`
+	} `json:"items"`
+}
+
+// The confirm of a container's update lists the digest change and what to know first: always that the container is recreated, that it
+// has no health check when it has none, and that it mounts a volume (D-05).
+func TestContainerPreviewWarnings(t *testing.T) {
+	t.Parallel()
+	withCheck := plainContainer()
+	withCheck.Names, withCheck.ID = []string{"/checked"}, strings.Repeat("d", 64)
+	withCheck.Inspect.Document.Config.Healthcheck = &container.HealthConfig{Test: []string{"CMD", "true"}}
+	withCheck.Inspect.Document.Mounts = nil
+	withCheck.Mounts = nil
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvOf(t, heads, containerEngine(plainContainer(), withCheck))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+
+	got := answerOf[containerPreviewAnswer](t, viewer.do(http.MethodGet, "updates/preview?kind=container&name=app", ""))
+	if !got.Offered || len(got.Items) != 1 || got.Items[0].Kind != "container" || got.Items[0].Name != "app" ||
+		got.Items[0].FromDigest != updDigest('a') || got.Items[0].ToDigest != updDigest('b') {
+		t.Fatalf("preview = %+v, want app offered from a to b", got)
+	}
+	if want := []string{"container_downtime", "no_healthcheck", "volumes"}; !reflect.DeepEqual(got.codes(), want) {
+		t.Errorf("warnings = %v, want %v", got.codes(), want)
+	}
+	for _, w := range got.Warnings {
+		if w.Workload != "app" {
+			t.Errorf("warning %+v is about %q, want the container's name", w, w.Workload)
+		}
+	}
+	// A container with a health check and no volume is told only that it is recreated.
+	got = answerOf[containerPreviewAnswer](t, viewer.do(http.MethodGet, "updates/preview?kind=container&name=checked", ""))
+	if want := []string{"container_downtime"}; !got.Offered || !reflect.DeepEqual(got.codes(), want) {
+		t.Errorf("checked: offered %v warnings %v, want only %v", got.Offered, got.codes(), want)
+	}
+	if rec := viewer.do(http.MethodGet, "updates/preview?kind=container&name=nobody", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("preview of a container that is not there = %d %s, want 404", rec.Code, rec.Body)
+	}
+}
+
+// A container of a Compose project TierPlan does not manage gets no one-click update ("Adopt to update"), a task container of a swarm
+// service is refused with its own code, and both say so in the preview and in the containers list (D-21).
+func TestComposeContainerRouting(t *testing.T) {
+	t.Parallel()
+	compose := plainContainer()
+	compose.Names, compose.ID = []string{"/shop-web-1"}, strings.Repeat("e", 64)
+	compose.Labels = map[string]string{"com.docker.compose.project": "shop", "com.docker.compose.service": "web", "com.docker.compose.oneoff": "False"}
+	task := plainContainer()
+	task.Names, task.ID = []string{"/web.1.abc"}, strings.Repeat("f", 64)
+	task.Labels = map[string]string{"com.docker.swarm.service.id": "svc1", "com.docker.stack.namespace": "legacy"}
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvOf(t, heads, containerEngine(plainContainer(), compose, task))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	operator := f.caller(t, e, "operator-1", "operator")
+
+	for name, code := range map[string]string{"shop-web-1": "compose_unmanaged", "web.1.abc": "task_container"} {
+		rec := operator.do(http.MethodPost, "updates/run", containerRunBody(name, nil))
+		p := answerOf[updateProblem](t, rec)
+		if rec.Code != http.StatusConflict || p.Type != "not_updatable" || len(p.Errors) != 1 || p.Errors[0].Message != code {
+			t.Errorf("update of %s = %d %s, want 409 not_updatable %s", name, rec.Code, rec.Body, code)
+		}
+		pre := answerOf[containerPreviewAnswer](t, operator.do(http.MethodGet, "updates/preview?kind=container&name="+name, ""))
+		if pre.Offered || pre.Refusal != code {
+			t.Errorf("preview of %s = %+v, want it refused with %s", name, pre, code)
+		}
+	}
+	if got := writeKinds(f.fake.Writes()); len(got) != 0 {
+		t.Errorf("the engine was asked %v after refusals, want nothing", got)
+	}
+	list := decode[containerUpdateList](t, f.get(t, e, "containers"))
+	want := map[string]string{"app": "", "shop-web-1": "compose_unmanaged", "web.1.abc": "task_container"}
+	for _, it := range list.Items {
+		if it.Update == nil {
+			t.Errorf("container %s has no update object", it.Name)
+			continue
+		}
+		if w, ok := want[it.Name]; ok && it.Update.Refusal != w {
+			t.Errorf("container %s refusal = %q, want %q", it.Name, it.Update.Refusal, w)
+		}
+	}
+	if rec := operator.do(http.MethodPost, "updates/run", containerRunBody("nobody", nil)); rec.Code != http.StatusNotFound {
+		t.Errorf("update of a container that is not there = %d %s, want 404", rec.Code, rec.Body)
+	}
+	// A Viewer may read the preview and may not update.
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	if rec := viewer.do(http.MethodPost, "updates/run", containerRunBody("app", nil)); rec.Code != http.StatusForbidden {
+		t.Errorf("a Viewer's update = %d %s, want 403", rec.Code, rec.Body)
+	}
+}
+
+// twinSnapshots is the aggregate of an environment with a twin of the container "app" added on a second node.
+type twinSnapshots struct{ inner updates.Snapshotter }
+
+func (s twinSnapshots) Snapshot(ctx context.Context, envID string) (envs.Aggregate, envs.Health, error) {
+	agg, h, err := s.inner.Snapshot(ctx, envID)
+	if err != nil {
+		return agg, h, err
+	}
+	rows := append([]envs.ContainerRow{}, agg.Containers...)
+	for _, c := range agg.Containers {
+		if strings.TrimPrefix(c.Name, "/") == "app" {
+			twin := c
+			twin.ID, twin.Node, twin.NodeID = strings.Repeat("9", 64), "worker-2", "node-2"
+			rows = append(rows, twin)
+		}
+	}
+	agg.Containers = rows
+	return agg, h, nil
+}
+
+// A container name that two nodes hold is refused with its own code, in the update and in the preview, and nothing is written to any
+// node. A name only one node holds is offered as before (WR-07).
+func TestContainerNameOnTwoNodesIsRefused(t *testing.T) {
+	t.Parallel()
+	other := plainContainer()
+	other.Names, other.ID = []string{"/checked"}, strings.Repeat("d", 64)
+	heads := newScriptedHeads(map[string]headAnswer{"team/app": {digest: updDigest('b')}})
+	f, e := containerEnvWith(t, heads, containerEngine(plainContainer(), other), func(a *updates.Applier) {
+		a.Service.Aggregator = twinSnapshots{inner: a.Service.Aggregator}
+	})
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	operator := f.caller(t, e, "operator-1", "operator")
+
+	rec := operator.do(http.MethodPost, "updates/run", containerRunBody("app", nil))
+	p := answerOf[updateProblem](t, rec)
+	if rec.Code != http.StatusConflict || p.Type != "not_updatable" || len(p.Errors) != 1 || p.Errors[0].Message != "ambiguous_name" {
+		t.Fatalf("update of app = %d %s, want 409 not_updatable ambiguous_name", rec.Code, rec.Body)
+	}
+	if !strings.Contains(p.Detail, "app is the name of a container on more than one node") || !strings.Contains(p.Detail, "Rename one of them") {
+		t.Errorf("detail = %q, want the container named, and the way out", p.Detail)
+	}
+	pre := answerOf[containerPreviewAnswer](t, operator.do(http.MethodGet, "updates/preview?kind=container&name=app", ""))
+	if pre.Offered || pre.Refusal != "ambiguous_name" {
+		t.Errorf("preview of app = %+v, want it refused with ambiguous_name", pre)
+	}
+	if got := writeKinds(f.fake.Writes()); len(got) != 0 {
+		t.Errorf("the engine was asked %v after the refusals, want nothing", got)
+	}
+	one := answerOf[containerPreviewAnswer](t, operator.do(http.MethodGet, "updates/preview?kind=container&name=checked", ""))
+	if !one.Offered || one.Refusal != "" {
+		t.Errorf("preview of checked = %+v, want it offered: only one node holds the name", one)
+	}
+}
+
+// A container of a stack TierPlan manages is updated as that stack's service: the answer is the stack's deploy job, a revision is
+// written, and no container is recreated by hand.
+func TestManagedStackContainerUpdatesThroughItsStack(t *testing.T) {
+	t.Parallel()
+	s, up := newStandaloneShop(t, "web", "db")
+	s.move(t, "web", 'b')
+	_, calls := up.lastProject()
+
+	rec := s.operator.do(http.MethodPost, "updates/run", containerRunBody("solo-web-1", map[string]string{"web": updDigest('b')}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update of the container: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRunAnswer](t, rec)
+	if got.StackID != s.st.ID || got.JobID == "" {
+		t.Fatalf("answer = %+v, want the deploy job of stack %s", got, s.st.ID)
+	}
+	if job := s.f.awaitDeploy(t, got.JobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+	project, after := up.lastProject()
+	if after != calls+1 || project.Services["web"].Image != "registry.test/team/web:1@"+updDigest('b') || project.Services["db"].Image != "registry.test/team/db:1@"+updDigest('a') {
+		t.Errorf("the Compose engine ran %d times (was %d) with %+v, want one more run with web at b and db at a", after, calls, project)
+	}
+	if n := len(s.f.fake.ContainerCreates()); n != 0 {
+		t.Errorf("containers created by hand = %d, want none: the stack's engine does it", n)
+	}
+	if run := s.f.runByJob(t, got.JobID); run.Kind != "stack" || run.State != updates.RunDone {
+		t.Errorf("run = %+v, want a done stack run", run)
+	}
+}
+
+// Update anyway (plan 12-45, IMG-07, D-14). A version whose update failed before is not offered again by itself; a person can ask for
+// it again with force, for one workload, and only then does it run.
+
+// failureStoreOf is the memory of failed updates the test server judges by.
+func (f *envFix) failureStoreOf() *updates.FailureStore {
+	return &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+}
+
+// runUpdateAs asks for the update of a workload of a kind, with or without force.
+func (f *envFix) runUpdateAs(t *testing.T, e envBody, kind, name string, expect map[string]string, force bool) *envRec {
+	t.Helper()
+	body := map[string]any{"kind": kind, "name": name}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	if force {
+		body["force"] = true
+	}
+	raw, _ := json.Marshal(body)
+	return f.req(t, http.MethodPost, "/api/env/"+e.ID+"/updates/run", string(raw))
+}
+
+// The tracer of Update anyway: a service whose update was rolled back is refused without force, with nothing changed, and runs with it;
+// the forced update that works forgets the failure. A version whose pull failed (nothing was changed, nothing rolled back) is retried
+// the same way, and the refusal says so in those words.
+func TestUpdateAnywayNeedsForce(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{updates.ReasonUnhealthy, updates.ReasonPullFailed} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+			f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+			if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+				t.Fatalf("check now: %d %s", rec.code, rec.body)
+			}
+			fs := f.failureStoreOf()
+			remember(t, fs, e.ID, "service", "web", updDigest('b'), reason, false)
+
+			rec := f.runUpdateAs(t, e, "service", "web", map[string]string{"web": updDigest('b')}, false)
+			if rec.code != http.StatusConflict || rec.ptyp != "previously_failed" {
+				t.Fatalf("update without force = %d %s %s, want 409 previously_failed", rec.code, rec.ptyp, rec.body)
+			}
+			p := decode[updateProblem](t, rec)
+			if len(p.Errors) != 1 || p.Errors[0].Location != "reason" || p.Errors[0].Message != reason {
+				t.Errorf("errors = %+v, want the reason %s", p.Errors, reason)
+			}
+			if strings.Contains(strings.ToLower(p.Detail), "rolled back") {
+				t.Errorf("detail = %q, want no claim that anything was rolled back", p.Detail)
+			}
+			if reason == updates.ReasonPullFailed && (!strings.Contains(p.Detail, "could not be pulled") || !strings.Contains(p.Detail, "nothing was changed")) {
+				t.Errorf("detail = %q, want it to say the image could not be pulled and nothing was changed", p.Detail)
+			}
+			f.noRunsNoWrites(t, e)
+			if all, err := fs.ForEnv(context.Background(), e.ID); err != nil || len(all) != 1 {
+				t.Fatalf("failures = %+v %v, want the failure still remembered after a refusal", all, err)
+			}
+
+			rec = f.runUpdateAs(t, e, "service", "web", map[string]string{"web": updDigest('b')}, true)
+			if rec.code != http.StatusOK {
+				t.Fatalf("update with force = %d %s, want 200", rec.code, rec.body)
+			}
+			job := f.awaitUpdate(t, decode[updateRunAnswer](t, rec).JobID)
+			if job.State != jobs.JobDone {
+				t.Fatalf("job = %s %+v, want done", job.State, job.Items)
+			}
+			if run := f.runOf(t, job); run.State != updates.RunDone {
+				t.Errorf("run = %s %q, want done", run.State, run.Reason)
+			}
+			sent := f.fake.ServiceUpdates()
+			if len(sent) != 1 || sent[0].Spec.TaskTemplate.ContainerSpec.Image != "registry.test/team/web:1@"+updDigest('b') {
+				t.Errorf("service updates = %d, want one, to the digest that failed", len(sent))
+			}
+			if all, err := fs.ForEnv(context.Background(), e.ID); err != nil || len(all) != 0 {
+				t.Errorf("failures = %+v %v, want the failure forgotten after the forced update worked", all, err)
+			}
+		})
+	}
+}
+
+// A forced run needs the same permission as any update (T-12-75): a Viewer's is refused and changes nothing, an Operator's runs and is
+// audited as an update by the operator.
+func TestForceNeedsOperator(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	remember(t, f.failureStoreOf(), e.ID, "service", "web", updDigest('b'), updates.ReasonUnhealthy, false)
+	f.addUser(t, "vera", false)
+	f.addEnvRole(t, "vera", e.ID, "viewer")
+	f.addUser(t, "olive", false)
+	f.addEnvRole(t, "olive", e.ID, "operator")
+
+	path := "/api/env/" + e.ID + "/updates/run"
+	body := `{"kind":"service","name":"web","force":true}`
+	cookie, csrf := f.signIn(t, "vera", false)
+	if rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf}); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's forced update = %d %s, want 403", rec.Code, rec.Body)
+	}
+	f.noRunsNoWrites(t, e)
+	if all, err := f.failureStoreOf().ForEnv(context.Background(), e.ID); err != nil || len(all) != 1 {
+		t.Errorf("failures = %+v %v, want the failure still remembered", all, err)
+	}
+
+	cookie, csrf = f.signIn(t, "olive", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an operator's forced update = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var ans updateRunAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil {
+		t.Fatal(err)
+	}
+	if job := f.awaitUpdate(t, ans.JobID); job.State != jobs.JobDone {
+		t.Fatalf("job = %s, want done", job.State)
+	}
+	// The operator's forced run is audited like any update, under the operator.
+	if rows := f.auditRows(t, "image.updated"); len(rows) != 1 {
+		t.Errorf("image.updated rows = %+v, want one", rows)
+	}
+}
+
+// previousFailureAnswer is the preview as far as the warning of an earlier failure is read.
+type previousFailureAnswer struct {
+	Offered  bool `json:"offered"`
+	Warnings []struct {
+		Workload string `json:"workload"`
+		Code     string `json:"code"`
+		Reason   string `json:"reason"`
+		At       string `json:"at"`
+	} `json:"warnings"`
+	Refusal string `json:"refusal"`
+}
+
+// previousFailureOf is the previous_failure warning of an answer, and whether there is one.
+func (a previousFailureAnswer) previousFailureOf(workload string) (reason, at string, ok bool) {
+	for _, w := range a.Warnings {
+		if w.Code == "previous_failure" && w.Workload == workload {
+			return w.Reason, w.At, true
+		}
+	}
+	return "", "", false
+}
+
+// The preview of a version that failed before is still offered, so it can be tried again, and says when and why it failed (plan 12-45,
+// D-14). A pull that failed is told as that: the reason is pull_failed, which the web words as "could not be pulled, nothing changed".
+func TestPreviewPreviousFailure(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{updates.ReasonTimeout, updates.ReasonPullFailed} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}})
+			f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'), plainService("api", 'a'))
+			if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+				t.Fatalf("check now: %d %s", rec.code, rec.body)
+			}
+			remember(t, f.failureStoreOf(), e.ID, "service", "web", updDigest('b'), reason, false)
+
+			rec := f.preview(t, e, "web")
+			if rec.code != http.StatusOK {
+				t.Fatalf("preview = %d %s", rec.code, rec.body)
+			}
+			got := decode[previousFailureAnswer](t, rec)
+			why, at, ok := got.previousFailureOf("web")
+			if !got.Offered || got.Refusal != "" || !ok || why != reason {
+				t.Fatalf("preview = %+v, want it offered with previous_failure and the reason %s", got, reason)
+			}
+			if _, err := time.Parse(time.RFC3339, at); err != nil {
+				t.Errorf("at = %q: %v, want when it failed", at, err)
+			}
+			// A service that did not fail has no such warning.
+			other := decode[previousFailureAnswer](t, f.preview(t, e, "api"))
+			if _, _, has := other.previousFailureOf("api"); has || !other.Offered {
+				t.Errorf("api preview = %+v, want it offered with no previous_failure", other)
+			}
+		})
+	}
+}
+
+// A service of a stack TierPlan manages goes through the stack path with force like any update of it: without force the stack is not
+// touched, with force one revision changes that service alone, the failure is forgotten and the preview had warned first (plan 12-45,
+// D-06, D-14).
+func TestForceThroughManagedStack(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web", "api")
+	s.move(t, "web", 'b')
+	remember(t, s.f.failureStoreOf(), s.e.ID, "service", "shop_web", updDigest('b'), updates.ReasonUnhealthy, false)
+
+	pre := decode[previousFailureAnswer](t, s.f.req(t, http.MethodGet, "/api/env/"+s.e.ID+"/updates/preview?kind=service&name=shop_web", ""))
+	if why, _, ok := pre.previousFailureOf("shop_web"); !pre.Offered || !ok || why != updates.ReasonUnhealthy {
+		t.Fatalf("preview = %+v, want it offered with previous_failure unhealthy", pre)
+	}
+
+	expect := map[string]string{"shop_web": updDigest('b')}
+	rec := s.operator.do(http.MethodPost, "updates/run", stackForceBody("service", "shop_web", expect, false))
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "previously_failed" {
+		t.Fatalf("update without force = %d %s, want 409 previously_failed", rec.Code, rec.Body)
+	}
+	s.noNewRevision(t, 1)
+
+	before := len(s.f.fake.ServiceUpdates())
+	rec = s.operator.do(http.MethodPost, "updates/run", stackForceBody("service", "shop_web", expect, true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update with force = %d %s, want 200", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRunAnswer](t, rec)
+	if got.StackID != s.st.ID {
+		t.Fatalf("answer = %+v, want the stack's own deploy job", got)
+	}
+	if job := s.f.awaitDeploy(t, got.JobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+	sent := map[string]string{}
+	for _, u := range s.f.fake.ServiceUpdates()[before:] {
+		sent[u.Spec.Name] = u.Spec.TaskTemplate.ContainerSpec.Image
+	}
+	if sent["shop_web"] != "registry.test/team/web:1@"+updDigest('b') || sent["shop_api"] != "registry.test/team/api:1@"+updDigest('a') {
+		t.Errorf("services sent = %v, want web at b and api still at a", sent)
+	}
+	revs := s.f.revisions(t, s.st.ID)
+	if len(revs) != 2 || revs[1].Outcome != "good" {
+		t.Fatalf("revisions = %+v, want a good revision 2", revs)
+	}
+	old, now := pinsOf(t, revs[0]), pinsOf(t, revs[1])
+	if now["shop_web"] != "registry.test/team/web:1@"+updDigest('b') || now["shop_api"] != old["shop_api"] {
+		t.Errorf("pins were %v and are %v, want only shop_web moved to b", old, now)
+	}
+	if run := s.f.runByJob(t, got.JobID); run.State != updates.RunDone || len(run.Items) != 1 || run.Items[0].Service != "shop_web" {
+		t.Errorf("run = %+v, want a done run of shop_web alone", run)
+	}
+	if all, err := s.f.failureStoreOf().ForEnv(context.Background(), s.e.ID); err != nil || len(all) != 0 {
+		t.Errorf("failures = %+v %v, want the failure forgotten after the forced update worked", all, err)
+	}
+}
+
+// stackForceBody is the body of a request to update a stack or one of its services, with force.
+func stackForceBody(kind, name string, expect map[string]string, force bool) string {
+	body := map[string]any{"kind": kind, "name": name, "force": force}
+	if expect != nil {
+		body["expect"] = expect
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+// Update stack never retries a version that failed: the revision changes the services that have an update and leaves the rolled-back
+// one alone, even when the request carries force, and a stack with nothing else to update is refused (plan 12-45, D-14, IMG-07).
+func TestRolledBackNeverInUpdateStack(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web", "api", "db")
+	s.heads.set("team/web", updDigest('b'))
+	s.heads.set("team/api", updDigest('b'))
+	s.heads.set("team/db", updDigest('b'))
+	if rec := s.f.checkNow(t, s.e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	fs := s.f.failureStoreOf()
+	remember(t, fs, s.e.ID, "service", "shop_web", updDigest('b'), updates.ReasonTimeout, false)
+
+	// The preview of the stack names the two services it would change, and not the one that failed.
+	pre := answerOf[stackPreviewAnswer](t, s.operator.do(http.MethodGet, "updates/preview?kind=stack&name=shop", ""))
+	var names []string
+	for _, it := range pre.Items {
+		names = append(names, it.Name)
+	}
+	if !pre.Offered || strings.Join(names, ",") != "shop_api,shop_db" {
+		t.Fatalf("preview = %+v, want shop_api and shop_db only", pre)
+	}
+
+	// force on a request for the whole stack means nothing.
+	rec := s.operator.do(http.MethodPost, "updates/run", stackForceBody("stack", "shop", map[string]string{"shop_api": updDigest('b'), "shop_db": updDigest('b')}, true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update stack = %d %s, want 200", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRunAnswer](t, rec)
+	if job := s.f.awaitDeploy(t, got.JobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+	revs := s.f.revisions(t, s.st.ID)
+	if len(revs) != 2 {
+		t.Fatalf("revisions = %+v, want one new revision", revs)
+	}
+	old, now := pinsOf(t, revs[0]), pinsOf(t, revs[1])
+	if now["shop_web"] != old["shop_web"] || now["shop_api"] != "registry.test/team/api:1@"+updDigest('b') || now["shop_db"] != "registry.test/team/db:1@"+updDigest('b') {
+		t.Errorf("pins were %v and are %v, want api and db at b and web untouched", old, now)
+	}
+	run := s.f.runByJob(t, got.JobID)
+	var served []string
+	for _, it := range run.Items {
+		served = append(served, it.Service)
+	}
+	if strings.Join(served, ",") != "shop_api,shop_db" {
+		t.Errorf("run items = %v, want api and db", served)
+	}
+	if all, err := fs.ForEnv(context.Background(), s.e.ID); err != nil || len(all) != 1 {
+		t.Errorf("failures = %+v %v, want web's still remembered", all, err)
+	}
+
+	// With the others updated, the one that failed is all that is left, and Update stack has nothing to do for it.
+	rec = s.operator.do(http.MethodPost, "updates/run", stackForceBody("stack", "shop", nil, true))
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "nothing_to_update" {
+		t.Fatalf("update stack again = %d %s, want 409 nothing_to_update", rec.Code, rec.Body)
+	}
+	if revs := s.f.revisions(t, s.st.ID); len(revs) != 2 {
+		t.Errorf("revisions = %+v, want no third one", revs)
+	}
+}
+
+// The count of updates available leaves a rolled-back workload out, and takes it up again once the tag points at another digest
+// (plan 12-45, D-14).
+func TestRolledBackNeverCounted(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}, "team/api": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'), plainService("api", 'a'))
+	count := func() int {
+		t.Helper()
+		rec := f.checkNow(t, e)
+		if rec.code != http.StatusOK {
+			t.Fatalf("check now: %d %s", rec.code, rec.body)
+		}
+		return decode[struct {
+			Updates int `json:"updates"`
+		}](t, rec).Updates
+	}
+	if n := count(); n != 2 {
+		t.Fatalf("updates = %d, want 2 before any failure", n)
+	}
+	remember(t, f.failureStoreOf(), e.ID, "service", "web", updDigest('b'), updates.ReasonUnhealthy, false)
+	if n := count(); n != 1 {
+		t.Errorf("updates = %d, want only api: web's version failed", n)
+	}
+	heads.mu.Lock()
+	heads.answers["team/web"] = headAnswer{digest: updDigest('c')}
+	heads.mu.Unlock()
+	if n := count(); n != 2 {
+		t.Errorf("updates = %d, want web offered again once the tag points at another digest", n)
+	}
+}
+
+// The job of an update says how its run ended, because the steps cannot: a container update that a restart cut off before it touched
+// the old container ends its restore step done, and the console must not read that as a rollback (the run is failed, not rolled_back).
+func TestUpdateJobSaysHowItsRunEnded(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updateEnvOf(t, heads, nil, plainService("web", 'a'))
+	runs := updates.RunStore{Q: f.st.Q, W: f.st.Write}
+
+	for _, tc := range []struct {
+		name   string
+		state  updates.RunState
+		reason string
+	}{
+		{"cut-off", updates.RunFailed, updates.ReasonServerRestarted},
+		{"put-back", updates.RunRolledBack, updates.ReasonServerRestarted},
+		{"restore-failed", updates.RunRollbackFailed, updates.ReasonRestoreFailed},
+		{"done", updates.RunDone, ""},
+	} {
+		run := updates.Run{ID: "run-" + tc.name, EnvID: e.ID, Kind: "container", Workload: "cache", State: updates.RunRunning, Actor: "u1"}
+		if err := runs.Insert(testsupport.Context(t), run); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := runs.Finish(testsupport.Context(t), run.ID, tc.state, tc.reason, 0, 0); err != nil || !ok {
+			t.Fatalf("finish %s: %v %v", tc.name, ok, err)
+		}
+		job, err := f.jobHub.Start(jobs.Spec{
+			Kind: updates.JobKind, EnvID: e.ID, Owner: "user:u1",
+			Meta:  map[string]string{updates.MetaRunID: run.ID, updates.MetaKind: "container", updates.MetaWorkload: "cache"},
+			Items: []jobs.ItemSpec{{ID: updates.ItemRollback, Label: "Put the old container back", Kind: stackops.KindStep}},
+		}, func(context.Context, *jobs.Reporter) {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.awaitUpdate(t, job.ID)
+
+		rec := f.req(t, http.MethodGet, "/api/env/"+e.ID+"/update-jobs/"+job.ID, "")
+		if rec.code != http.StatusOK {
+			t.Fatalf("%s: GET job = %d %s", tc.name, rec.code, rec.body)
+		}
+		got := decode[struct {
+			RunState  string `json:"runState"`
+			RunReason string `json:"runReason"`
+		}](t, rec)
+		if got.RunState != string(tc.state) || got.RunReason != tc.reason {
+			t.Errorf("%s: runState %q and runReason %q, want %q and %q", tc.name, got.RunState, got.RunReason, tc.state, tc.reason)
+		}
+	}
+
+	// A job whose run is not on record says nothing of it.
+	job, err := f.jobHub.Start(jobs.Spec{
+		Kind: updates.JobKind, EnvID: e.ID, Owner: "user:u1", Meta: map[string]string{updates.MetaRunID: "run-gone"},
+	}, func(context.Context, *jobs.Reporter) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.awaitUpdate(t, job.ID)
+	rec := f.req(t, http.MethodGet, "/api/env/"+e.ID+"/update-jobs/"+job.ID, "")
+	if got := decode[map[string]any](t, rec); rec.code != http.StatusOK || got["runState"] != nil {
+		t.Errorf("a job whose run is gone = %d %v, want 200 without a runState", rec.code, got)
+	}
+}

@@ -39,6 +39,9 @@ interface UsageMeterProps {
   percent?: number;
   // Why an unknown meter could not be measured, shown in a tooltip on "Not measured".
   notMeasuredHint?: string;
+  // False where the state has a column of its own: the icon and the state word are then left off the
+  // meter. The meter's spoken value still names the state.
+  showState?: boolean;
 }
 
 const FILL: Record<MeterState, string> = {
@@ -61,6 +64,7 @@ export function UsageMeter({
   state: givenState,
   percent: givenPercent,
   notMeasuredHint,
+  showState = true,
 }: UsageMeterProps) {
   const t = useT();
   const state = givenState ?? meterState(used, capacity);
@@ -139,13 +143,13 @@ export function UsageMeter({
         />
       </div>
       <span className="shrink-0 text-xs font-semibold tabular-nums">{number.format(percent)}%</span>
-      {state === "getting_full" ? (
+      {showState && state === "getting_full" ? (
         <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-status-warning-text">
           <TriangleAlert aria-hidden="true" className="size-4" />
           {t("addressSpace.states.gettingFull")}
         </span>
       ) : null}
-      {state === "almost_full" ? (
+      {showState && state === "almost_full" ? (
         <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-status-offline-text">
           <CircleX aria-hidden="true" className="size-4" />
           {t("addressSpace.states.almostFull")}

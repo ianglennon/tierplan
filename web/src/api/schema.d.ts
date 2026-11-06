@@ -789,7 +789,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -3428,6 +3428,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/update-jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An image update's job
+         * @description The job of an image update as it stands: its steps and output. Anyone who may read the environment may read it. A job that is not an update of this environment, or that has left the server's history, is 404 update_job_not_found.
+         */
+        get: operations["getImageUpdateJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read how an environment is checked for image updates
+         * @description Answers whether the environment is checked by itself, its schedule and the time zone it is read in (each with the value that applies and whether this environment set it or follows the instance default), when an image of it was last checked, when the next scheduled check starts, and the version a save must send back. The default is every 6 hours; each environment starts at its own offset of up to 10 minutes that never changes. A check missed while the server was stopped is not made up. Needs environments.read on the environment.
+         */
+        get: operations["getUpdateCheckStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the environment's images for updates now
+         * @description Asks the registries what each image tag of the environment's swarm services points at now, with one manifest request for each distinct image and no more, and stores the answers. Answers within 60 seconds with how many images were asked about, how many of the environment's services and containers have an update available (judged for the platforms each runs on; a swarm service's task containers count once, as the service) and how many images could not be checked; a check that takes longer is 504 check_timed_out, and what it had learned stays stored. The services and containers lists carry the outcome for each. One request per 10 seconds per caller and environment: another is 429 too_many_requests. Needs updates.check (Operator) on the environment.
+         */
+        post: operations["checkEnvironmentUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ignore the updates of an image or of a service or container
+         * @description Hides every update until the choice is removed. scope image covers an image and tag (named by image) for every service and container using it in this environment and no other; scope workload covers one service or container (kind and name, 404 not_found when it is not there). 422 invalid_image when the image is not a reference with a tag, 422 invalid_ignore_target when the scope's fields are missing. Choosing what is ignored already changes nothing. Audited as image.updates_ignored. Needs updates.manage (an Env Admin) on the environment.
+         */
+        post: operations["ignoreImageUpdates"];
+        /**
+         * Stop ignoring the updates of an image or of a service or container
+         * @description Takes back an ignore chosen through this API, so updates are offered again. 404 ignore_not_found when there is none. 409 ignored_by_label when the workload is ignored by the tierplan.updates=ignore label in its compose file, which only its owner can remove. Audited as image.updates_unignored. Needs updates.manage (an Env Admin) on the environment.
+         */
+        delete: operations["unignoreImageUpdates"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change when an environment is checked for image updates
+         * @description Replaces the settings this environment sets itself: enabled and the schedule, each a value, or null to follow the instance default again. The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the status: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Turning the checks off stops the scheduled ones at once; Check now still works. Needs updates.manage (an Env Admin) on the environment. A change is audited as updates.policy_changed, naming the fields that changed; scheduled checks and Check now are not audited.
+         */
+        put: operations["setUpdateCheckPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What updating a service would change
+         * @description The digests that would change, the platforms they cover, and the warnings worth reading first: a replicated service with one replica that stops before its replacement starts (downtime), no health check in the service or its image (no_healthcheck), a port published in host mode (host_ports) and a mounted volume (volumes). When an update to this version failed before, the preview is still offered and carries the warning previous_failure with the reason and when it failed; running it then needs force (Update anyway). Read from the check that is stored and the service as it is now; the registry is not asked, so what it shows is what the badge shows. A service of a stack TierPlan manages, and kind stack, are described as the update of the stack: the services it would change and, in leftOut, those it leaves out because they are skipped or ignored. offered is false, with a refusal, when the service cannot or need not be updated (the TierPlan agent, a job, nothing newer, a stack that must be adopted first (adopt_first), no check yet, a failed check, a pinned or local image) or when the environment is offline. For kind container the warnings are container_downtime (always: it is stopped and recreated), no_healthcheck and volumes, and a container of a Compose project TierPlan does not manage, a task container, and a container name that more than one node has, are refused with compose_unmanaged, task_container or ambiguous_name. Needs containers.read (Viewer) as well. lock names who holds the environment's operation lock, if anyone does. 404 not_found when the service is not there. Needs services.read (Viewer) on the environment.
+         */
+        get: operations["previewImageUpdate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update a service to its newer image
+         * @description Asks the registry for the digest of the service's tag now, refuses with 409 update_moved (and the refreshed digest) when it is not the one in expect, then updates the service to it as a job: the image is pulled on the nodes that run its tasks, the service is changed in nothing but its image, and the update waits for the new tasks to run. The digest deployed is always the one the server read. 409 operation_locked when another operation holds the environment, 409 nothing_to_update when the service runs the newest version already, 409 not_updatable (code agent, job_mode, managed_by_stack, pinned_in_file, not_from_registry, compose_unmanaged, task_container or ambiguous_name), 409 update_check_failed when the registry could not be asked, 409 previously_failed when an update to this version failed before and the request does not carry force, 404 not_found when the service is not there. force true is a person's choice to try that version again, for this one service or container: it is ignored for a workload that has no failed update and for kind stack, and it needs the same permissions as any update. A forced update that works forgets the failure. A version whose pull failed (nothing was changed) is retried the same way. A service of a stack TierPlan manages, and kind stack (every service of the stack with an update available, leaving out the skipped and ignored ones), are updated as a new revision of the stack instead: the revision is the newest good one with only those services' images changed, deployed in the stack's own job, so History, roll back and drift stay right. The answer then carries the stackId and the job is followed at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId}. A stack from a git repository keeps its commit and its automatic deploys. A stack that was only found on the engine is 409 adopt_first. Needs stacks.deploy as well for a stack. A plain container (kind container) is recreated with the same settings and the new image: the replacement is created first, so a refusal changes nothing, then the old container is stopped and renamed, the replacement takes its name and starts, and only when it runs (and is healthy, when it has a health check) is the old container removed, without its volumes. If the replacement does not come up it is removed and the old container is put back and started. A container of a Compose project TierPlan does not manage is 409 not_updatable compose_unmanaged (adopt the stack first); a container name that more than one node of the environment has is 409 not_updatable ambiguous_name (nothing is changed on any node; rename one of the containers); a container of a stack TierPlan manages is updated as that stack's service. A container needs containers.control as well. When a service or container update fails after the engine was changed, TierPlan puts the previous version back itself and the run ends rolled_back (or rollback_failed when that failed too); the digest that failed is then not offered again until the tag points at another. Audited as image.updated, or image.update_failed (and image.update_rolled_back when the previous version was put back) when it ends. Needs services.control (Operator) on the environment.
+         */
+        post: operations["runImageUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/schedule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview an update check schedule
+         * @description Checks a cron expression and answers the next three times it would check this environment in the server's time zone, with this environment's start offset, so the page shows what a schedule does before it is saved. An expression is valid when it is five fields and no two of its next ten firings are less than an hour apart. An expression that is not valid answers 200 with valid false and the problem. It writes nothing. Needs environments.read on the environment.
+         */
+        post: operations["previewUpdateCheckSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/updates/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip the offered version of a service or container
+         * @description Hides the version of its image the service or container is offered now, until the tag points at a newer one. The version is the one the last check found, read on the server. 409 nothing_to_skip when the workload has no update available; 404 not_found when it is not there. Skipping a version that is skipped already changes nothing. Audited as image.update_skipped. Needs updates.manage (an Env Admin) on the environment.
+         */
+        post: operations["skipImageUpdate"];
+        /**
+         * Stop skipping a version of a service or container
+         * @description Takes back the skip of a service or container, so the update is offered again. 404 skip_not_found when it is not skipped. Audited as image.update_unskipped. Needs updates.manage (an Env Admin) on the environment.
+         */
+        delete: operations["unskipImageUpdate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/volumes": {
         parameters: {
             query?: never;
@@ -3585,7 +3773,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. An image update that failed is told too: one that was put back (update_rolled_back, with service or container, digest, reason and since) and one whose rollback failed as well, so the workload may be partly updated (update_rollback_failed, an error). They go while the tag still points at the digest that failed, which a newer digest or a good update ends, and are told only to callers who hold services.read (a service) or containers.read (a container) on the environment. More than five put-back updates of one environment are told as one item with count. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -3659,6 +3847,146 @@ export interface paths {
          * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
          */
         delete: operations["disableEnvironmentToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/failing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List what is failing across the environments the caller may read
+         * @description Every failing swarm service (fewer tasks running than desired) and standalone container (restarting, exited with a non-zero code, or unhealthy, and with a restart policy) of the environments the caller holds environments.read on, each with its environment, stack, state, since and last error. An environment that could not be read, or only for some nodes, is named in notIncluded with its reason; an environment the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds, from the same short-lived snapshots the environment pages use.
+         */
+        get: operations["listFleetFailing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the address pools and overlay networks near exhaustion across the environments the caller may read
+         * @description Every address pool and overlay network at 70% or more used (getting_full up to 90%, almost_full from 90%, by the whole percent rounded down) in the environments the caller holds environments.read on, fullest first, then by environment name and network name. A standalone host's pool is a guess and says so (estimated). An environment whose address space could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.
+         */
+        get: operations["listFleetPools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The four counts of the Overview's tiles
+         * @description Environments (total and how many need attention), failing services and containers, image updates available (with how many checks failed and when the last one was made) and address pools at 70% or more used, over the environments the caller holds environments.read on. A count that could not be read is null, never 0: so is a 0 that is only the count of the environments that were read while others were not (see notIncluded). An environment the caller may not read is not counted and not named.
+         */
+        get: operations["getFleetSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the pending image updates across the environments the caller may read
+         * @description Every workload with an update available, a failed check or update, or a skipped or ignored update, in the environments the caller holds environments.read on, grouped by environment (those with a failed check first, then by name), each with its kind, name, stack, image, old and new digest, changed platforms, the update object the lists carry and whether it can be updated now. show picks updates (the default), problems, ignored or all; counts gives how many each lists, and coverage what the checks have covered, so an empty list can be worded honestly. An environment that could not be read is named in notIncluded; one the caller may not read is neither listed nor named. At most 8 environments are read at once, each for at most 5 seconds.
+         */
+        get: operations["listFleetUpdates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/updates/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the images of the environments given, or of all the caller may read, for updates now
+         * @description Asks the registries what each image tag of the chosen environments points at now, one request for each distinct image across all of them, and stores the answers. Only environments the caller holds updates.check on are checked; the others, and any that cannot be reached, are skipped and named in skipped. With no environments given, every environment the caller may read is considered. Answers within 60 seconds; a check that takes longer is 504 check_timed_out, and what it learned stays stored. One request per 30 seconds per caller: another is 429 too_many_requests.
+         */
+        post: operations["checkFleetUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/updates/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update the selected workloads across environments
+         * @description Updates the chosen services and containers to the newest version of their image, in one action: one job for each environment, which takes the environment's operation lock once and updates its workloads one at a time, so a workload whose update fails is put back by itself and the job goes on with the next. Every workload is judged by the server, for the caller, as it is now: the caller needs services.control on its environment (and containers.control for a container, and stacks.deploy for a service of a stack TierPlan manages, which is updated as its own 'update images' revision of that stack inside the job), and only a workload whose update is available now is taken (a skipped, ignored, rolled back, running or held back one is not_selectable, and a rolled back version is never retried here). Each workload's newest version is asked of the registry again when its turn comes, and one that moved since expect is skipped as moved. A workload that is not taken is named in skipped and the others go on. While a job waits, its workloads read queued, then updating. At most 500 workloads. One bulk ID ties together the audit entries image.updated, image.update_failed and image.update_rolled_back of every workload, and each job ends with one image.bulk_updated entry. Open to every signed-in person; what they may update is judged for each workload. Reasons: no_permission: the caller may not do this to that workload there (or may not see the environment). not_selectable: it is not an update that is available now (skipped, ignored, rolled back, up to date, running, gone). offline: the environment could not be read. locked: another operation holds the environment. moved: the newest version changed since it was confirmed. not_updatable: it is a kind of workload this does not update, with code saying why. too_many_jobs: the caller already has the most jobs running.
+         */
+        post: operations["runFleetUpdates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleet/updates/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip the offered version of the selected workloads across environments
+         * @description Hides the version of its image each chosen service or container is offered now, until the tag points at a newer one, as skipping one does, for many at once. Needs updates.manage (an Environment Admin) on each environment: a workload in an environment where the caller lacks it is refused no_permission and the others are skipped. A workload that has no update available now is refused not_selectable. One audit entry image.update_skipped for each workload, all with the same bulk ID in the detail bulk. At most 500 workloads. Open to every signed-in person; what they may skip is judged for each workload. Reasons: no_permission: the caller may not do this to that workload there (or may not see the environment). not_selectable: it is not an update that is available now (skipped, ignored, rolled back, up to date, running, gone). offline: the environment could not be read. locked: another operation holds the environment. moved: the newest version changed since it was confirmed. not_updatable: it is a kind of workload this does not update, with code saying why. too_many_jobs: the caller already has the most jobs running.
+         */
+        post: operations["skipFleetUpdates"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4358,6 +4686,26 @@ export interface paths {
         patch: operations["updateInstanceCredential"];
         trace?: never;
     };
+    "/api/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search stacks, services, containers, images and networks across the environments the caller may read
+         * @description Finds what matches q by name, by image or stack, and for containers and images by four or more hexadecimal characters of the ID, ignoring case. A type is searched in an environment only where the caller holds that type's read permission (stacks.read, services.read, containers.read, images.read, networks.read); nothing else is returned, counted or named, and an environment the caller may not read is never named. Environments that could not be searched, or only in part, are named in notSearched with their reason. The search is live: it reads the same short-lived snapshots as the environment pages, at most 8 environments at once and each for at most 3 seconds.
+         */
+        get: operations["searchFleet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -4487,6 +4835,30 @@ export interface paths {
          */
         get: operations["previewStackHistoryPrune"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/update-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the instance-wide update check defaults
+         * @description The settings every environment's update checks follow until the environment sets the field itself (on or off, and the schedule, every 6 hours unless changed), the version a save must send back, the server's time zone and how many environments follow at least one default. Needs settings.read.
+         */
+        get: operations["getUpdateCheckDefaults"];
+        /**
+         * Change the instance-wide update check defaults
+         * @description Replaces every default. A change reaches every environment that follows the field and none that sets it itself; nothing is written to an environment. The schedule is a five-field cron expression that fires no more often than every hour (422 invalid_schedule, 422 schedule_too_frequent). version is the one read with the defaults: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs settings.write: an instance admin, not an environment admin. A change is audited as updates.defaults_changed, naming the fields.
+         */
+        put: operations["setUpdateCheckDefaults"];
         post?: never;
         delete?: never;
         options?: never;
@@ -4782,6 +5154,26 @@ export interface paths {
          * @description The user loses the access the team gave them on their next request and keeps every other grant. The automations they own that no longer qualify pause. The answer lists what they lost, worked out inside the same step. Audited as one team.member_removed entry carrying impact_count and impact (first ten items "username: environment before→after" joined by "; ", cut to 512 bytes). A user who is not in the team answers 404 member_not_found and nothing is written.
          */
         delete: operations["removeTeamMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/update-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The image updates you can follow
+         * @description The image updates that are running or ended in the last 10 minutes, newest first, for the header's Jobs indicator. Every update on an environment you may read (environments.read) is listed, whoever started it; an update on any other environment is left out, as if it did not exist. An update that has left the server's history is not listed, and its job answers 404 update_job_not_found.
+         */
+        get: operations["listImageUpdateJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -5777,6 +6169,23 @@ export interface components {
             /** @description The new password; at least 12 characters, not a common password and not containing the username */
             newPassword: string;
         };
+        CheckUpdatesBody: {
+            /**
+             * Format: int64
+             * @description How many distinct images (registry, repository and tag) were asked about
+             */
+            checked: number;
+            /**
+             * Format: int64
+             * @description How many images could not be checked; each service's update object says why
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description How many of the environment's services have an update available now, judged platform by platform
+             */
+            updates: number;
+        };
         CompleteSetupBody: {
             /** @description Sent as X-CSRF-Token on every mutating request */
             csrfToken: string;
@@ -6130,6 +6539,8 @@ export interface components {
             stopTimeout?: number;
             /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
             tierplanStackId: string;
+            /** @description The image update state of the container, as in the containers list. Absent when update checks are not wired or the container is not in the last read of its environment */
+            update?: components["schemas"]["UpdateInfoBody"];
             user?: string;
             workingDir?: string;
         };
@@ -6187,6 +6598,8 @@ export interface components {
             status: string;
             /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
             tierplanStackId: string;
+            /** @description The image update state of the container, judged from the digest of the image it runs on its own node and the stored check of the tag it was created from. Absent when update checks are not wired */
+            update?: components["schemas"]["UpdateInfoBody"];
         };
         ContainerListBody: {
             /** @description At most 500 rows */
@@ -6741,13 +7154,13 @@ export interface components {
             agentId?: string;
             /** @description For git_autodeploy_skipped: the short commit that is waiting for a fix or a manual review */
             commit?: string;
-            /** @description For restart_loop_container: the container's name, at most 64 characters */
+            /** @description For restart_loop_container and, when the update was of a container, update_rolled_back and update_rollback_failed: the container's name, at most 64 characters */
             container?: string;
-            /** @description For restart_loop_container: the container's ID as the last read holds it */
+            /** @description For restart_loop_container and, when the update was of a container, update_rolled_back and update_rollback_failed: the container's ID as the last read holds it */
             containerId?: string;
             /**
              * Format: int64
-             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window
+             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update
              */
             count?: number;
             /**
@@ -6755,6 +7168,8 @@ export interface components {
              * @description For pending_long: whole days since the environment was added
              */
             days?: number;
+            /** @description For update_rolled_back and update_rollback_failed: the digest the update failed with, without its algorithm and cut to 12 characters; absent on an item that stands for several updates */
+            digest?: string;
             /** @description The environment the problem is about. Absent for manual_update_needed when it spans more than one environment */
             envId?: string;
             /** @description That environment's name, at most 64 characters. For fold_offered, the swarm environment */
@@ -6770,7 +7185,7 @@ export interface components {
              * @description Which problem this is
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused" | "update_rolled_back" | "update_rollback_failed";
             /** @description For restart_loop_container: the exit code of the container's newest death */
             lastExitCode?: string;
             /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
@@ -6786,7 +7201,7 @@ export interface components {
             offsetSeconds?: number;
             /** @description For git_autodeploy_paused: the name of the user the automation runs for, at most 64 characters; absent when it has no owner any more */
             owner?: string;
-            /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
+            /** @description For env_offline and cluster_changed: the environment's reason code, as in its status. For update_rolled_back and update_rollback_failed: why the update failed (pull_failed means the image could not be pulled and nothing was changed, so nothing was rolled back); absent on an item that stands for several updates */
             reason?: string;
             /** @description For git_sync_error: why the sync check failed, one of the reason codes of the stack's git route (fetch_failed, host_key_changed, host_key_untrusted, ref_gone, folder_gone, checks_failed, auto_deploy_blocked, auto_deploy_failed) */
             reasonCode?: string;
@@ -6797,9 +7212,9 @@ export interface components {
              * @description For git_autodeploy_reverted: the number of the revision that put the changes back. For git_autodeploy_paused with reasonCode rollback: the revision rolled back to
              */
             revision?: number;
-            /** @description For restart_loop: the service's name, at most 64 characters */
+            /** @description For restart_loop and, when the update was of a service, update_rolled_back and update_rollback_failed: the service's name, at most 64 characters */
             service?: string;
-            /** @description For restart_loop: the service's ID */
+            /** @description For restart_loop and, when the update was of a service, update_rolled_back and update_rollback_failed: the service's ID */
             serviceId?: string;
             /**
              * @description error: an environment is out of reach or a certificate has expired. warning: something needs attention
@@ -7075,6 +7490,11 @@ export interface components {
              * @description When the counts were read from Docker; they are cached for a few seconds
              */
             fetchedAt: string;
+            /**
+             * Format: int64
+             * @description How many swarm services and containers have an update available (a task container counts as its service; skipped and ignored updates are not counted), from the stored image checks. Only for a caller who may read containers, and services on a swarm manager. Absent when it could not be read, so the dashboard says so instead of showing 0
+             */
+            imageUpdates?: number;
             /** @description True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24) */
             isWorker: boolean;
             /** @description Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster */
@@ -7164,6 +7584,434 @@ export interface components {
             envId: string;
             /** @description Its name */
             envName: string;
+        };
+        FleetBulkItem: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description For each service name (the compose service name for a container of a stack; the container's name otherwise), the digest the confirm showed. The server compares it with what the registry says now and skips the item as moved when they differ; it never deploys a digest from the request */
+            expect?: {
+                [key: string]: string;
+            };
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name */
+            name: string;
+        };
+        FleetBulkJob: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. Its items are the workloads, in the order they are updated, then a summary */
+            jobId: string;
+        };
+        FleetBulkRefused: {
+            /** @description For not_updatable, why in TierPlan's words (agent, job_mode, managed_by_stack, pinned_in_file, compose_unmanaged, task_container, ambiguous_name, workload_gone and the like) */
+            code?: string;
+            /** @description The environment's ID */
+            envId: string;
+            /**
+             * @description service or container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The workload's name */
+            name: string;
+            /**
+             * @description Why it was not taken
+             * @enum {string}
+             */
+            reason: "no_permission" | "not_selectable" | "offline" | "locked" | "moved" | "not_updatable" | "too_many_jobs";
+        };
+        FleetBulkRunBody: {
+            /** @description The ID that ties every audit entry of the selection together (detail bulk) */
+            bulkId: string;
+            /** @description One job for each environment that had workloads to update */
+            jobs: components["schemas"]["FleetBulkJob"][] | null;
+            /** @description The workloads that were not taken, and why. Items the caller may not update in an environment they may not read are named no_permission, as an environment that does not exist is */
+            skipped: components["schemas"]["FleetBulkRefused"][] | null;
+        };
+        FleetBulkRunRequest: {
+            /** @description The workloads to update, at most 500 */
+            items: components["schemas"]["FleetBulkItem"][] | null;
+        };
+        FleetBulkSkipBody: {
+            /** @description The ID that ties every audit entry of the selection together (detail bulk) */
+            bulkId: string;
+            /** @description The workloads whose version was not skipped, and why */
+            refused: components["schemas"]["FleetBulkRefused"][] | null;
+            /**
+             * Format: int64
+             * @description How many versions are skipped now, those that were skipped already included
+             */
+            skipped: number;
+        };
+        FleetBulkSkipItem: {
+            /** @description The environment's ID */
+            envId: string;
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name */
+            name: string;
+        };
+        FleetBulkSkipRequest: {
+            /** @description The workloads whose offered version is skipped, at most 500 */
+            items: components["schemas"]["FleetBulkSkipItem"][] | null;
+        };
+        FleetCheckBody: {
+            /**
+             * Format: int64
+             * @description How many distinct images (registry, repository and tag) were asked about
+             */
+            checked: number;
+            /**
+             * Format: int64
+             * @description How many images could not be checked; the Updates tab says why for each
+             */
+            failed: number;
+            /** @description The environments that were not checked, and why, by name */
+            skipped: components["schemas"]["FleetCheckSkipped"][] | null;
+            /**
+             * Format: int64
+             * @description How many workloads of the environments that were checked have an update available now, judged platform by platform
+             */
+            updates: number;
+        };
+        FleetCheckRequest: {
+            /** @description The environments to check. Empty or left out means every environment the caller may read. An ID the caller may not read is ignored, as if it were not given */
+            envIds?: string[] | null;
+        };
+        FleetCheckSkipped: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /**
+             * @description no_permission: the caller does not hold updates.check on it. offline: it could not be read, so there was nothing to check
+             * @enum {string}
+             */
+            reason: "no_permission" | "offline";
+        };
+        FleetEnvironmentsTile: {
+            /**
+             * Format: int64
+             * @description How many of them are not online, did not answer, or answered for only some of their nodes
+             */
+            needAttention: number;
+            /**
+             * Format: int64
+             * @description The environments the caller may read
+             */
+            total: number;
+        };
+        FleetFailingBody: {
+            /** @description Every failing service and container of the environments that were read, newest first, then by environment name, then by name */
+            items: components["schemas"]["FleetFailingItem"][] | null;
+            /** @description The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
+        };
+        FleetFailingItem: {
+            /**
+             * Format: int64
+             * @description A service's desired tasks; null for a container
+             */
+            desired: number | null;
+            /** @description The environment it is in */
+            envId: string;
+            /** @description The name of that environment */
+            envName: string;
+            /** @description The service or container ID */
+            id: string;
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description A service: the error of its newest failed task. A container: why it is listed, with its exit code. Plain text with control characters removed, at most 200 characters; empty when there is none */
+            lastError: string;
+            /** @description The service or container name */
+            name: string;
+            /** @description The node a container runs on; empty for a service */
+            node: string;
+            /** @description The ID of that node, for the link to the container; empty for a service */
+            nodeId: string;
+            /**
+             * Format: int64
+             * @description A service's running tasks; null for a container
+             */
+            running: number | null;
+            /**
+             * Format: date-time
+             * @description A service: when its newest failed task failed, else when it was last updated. A container: when it reached its state, only about right because the engine rounds the age. Empty when not known
+             */
+            since: string;
+            /** @description The stack or Compose project it belongs to; empty when it has none */
+            stack: string;
+            /** @description A service: '{running} of {desired} running'. A container: restarting, exited or unhealthy */
+            state: string;
+        };
+        FleetFailingTile: {
+            /**
+             * Format: int64
+             * @description Failing services and containers in the environments that were read. Null when it is not known: nothing failed in what was read but an environment was not read
+             */
+            count: number | null;
+            /**
+             * Format: int64
+             * @description How many environments have any. Null when count is
+             */
+            environments: number | null;
+        };
+        FleetNotIncludedBody: {
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /**
+             * Format: int64
+             * @description How many nodes did not report; 0 unless the reason is nodes_not_reporting
+             */
+            nodes: number;
+            /**
+             * @description offline: the environment cannot be reached. not_reporting: it did not answer in time or its cluster cannot be read. waiting_first_agent: no agent has enrolled yet. nodes_not_reporting: it was read, but the nodes in nodes did not answer, so what they run is missing
+             * @enum {string}
+             */
+            reason: "offline" | "not_reporting" | "waiting_first_agent" | "nodes_not_reporting";
+        };
+        FleetPoolItem: {
+            /**
+             * Format: int64
+             * @description What there is, in the unit given
+             */
+            capacity: number;
+            /** @description The environment it is in */
+            envId: string;
+            /** @description The name of that environment */
+            envName: string;
+            /** @description True for a standalone host's pool, whose number is a guess from Docker's defaults */
+            estimated: boolean;
+            /**
+             * @description pool for an address pool, ingress for the swarm's routing mesh network, overlay for any other overlay network
+             * @enum {string}
+             */
+            kind: "pool" | "ingress" | "overlay";
+            /** @description The pool's CIDR, or the network's name */
+            name: string;
+            /**
+             * Format: int64
+             * @description Whole percent used, rounded down
+             */
+            percent: number;
+            /**
+             * @description getting_full from 70% up to 90%, almost_full from 90%
+             * @enum {string}
+             */
+            state: "getting_full" | "almost_full";
+            /** @description The pool's CIDR, or the network's IPv4 subnets, comma separated */
+            subnet: string;
+            /**
+             * @description subnets for a pool, addresses for a network
+             * @enum {string}
+             */
+            unit: "subnets" | "addresses";
+            /**
+             * Format: int64
+             * @description What is used, in the unit given
+             */
+            used: number;
+        };
+        FleetPoolsBody: {
+            /** @description Every pool and overlay network at 70% or more used in the environments that were read, fullest first, then by environment name, then by name */
+            items: components["schemas"]["FleetPoolItem"][] | null;
+            /** @description The environments the caller may read whose address space could not be read. Environments the caller may not read are never named */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
+        };
+        FleetPoolsTile: {
+            /**
+             * Format: int64
+             * @description Those at 90% or more. Null when nearFull is
+             */
+            almostFull: number | null;
+            /**
+             * Format: int64
+             * @description Pools and overlay networks at 70% or more used (the almost full ones included). Null when it could not be read, or when it is 0 but an environment was not read
+             */
+            nearFull: number | null;
+        };
+        FleetSummaryBody: {
+            environments: components["schemas"]["FleetEnvironmentsTile"];
+            failing: components["schemas"]["FleetFailingTile"];
+            /** @description The environments the caller may read that could not be read, or only in part */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            pools: components["schemas"]["FleetPoolsTile"];
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
+            updates: components["schemas"]["FleetUpdatesTile"];
+        };
+        FleetUpdateCounts: {
+            /**
+             * Format: int64
+             * @description All of them: updates, problems and ignored
+             */
+            all: number;
+            /**
+             * Format: int64
+             * @description Skipped and ignored updates
+             */
+            ignored: number;
+            /**
+             * Format: int64
+             * @description Failed checks and failed updates (check_failed, rolled_back, rollback_failed)
+             */
+            problems: number;
+            /**
+             * Format: int64
+             * @description Updates available, queued, updating or held back by another operation
+             */
+            updates: number;
+        };
+        FleetUpdateCoverage: {
+            /**
+             * Format: int64
+             * @description Workloads that can be checked (they follow a tag), in the environments that were read
+             */
+            checkable: number;
+            /**
+             * Format: int64
+             * @description Of those, how many have been checked, whatever came of it
+             */
+            checked: number;
+            /**
+             * Format: int64
+             * @description How many environments were read
+             */
+            environments: number;
+            /**
+             * Format: int64
+             * @description Of those, how many have a failed check
+             */
+            failed: number;
+            /**
+             * Format: date-time
+             * @description When the schedule next checks an environment that has workloads never checked; empty when none has or no schedule will
+             */
+            firstCheckAt: string;
+            /**
+             * Format: date-time
+             * @description The newest check anywhere, whatever came of it; empty when none was made
+             */
+            lastCheckedAt: string;
+            /**
+             * Format: int64
+             * @description Of those, how many have never been checked
+             */
+            neverChecked: number;
+            /**
+             * Format: int64
+             * @description How many updates are skipped or ignored
+             */
+            skipped: number;
+        };
+        FleetUpdateGroup: {
+            /**
+             * @description Why a check of this environment's images failed, in TierPlan's words; null when none did
+             * @enum {string|null}
+             */
+            checkFailed: "auth" | "rate_limited" | "unreachable" | "not_found" | "unsupported" | "other" | null;
+            /** @description The environment's ID */
+            envId: string;
+            /** @description The environment's name */
+            envName: string;
+            /** @description The environment's items for the show filter, by name and then kind */
+            items: components["schemas"]["FleetUpdateItem"][] | null;
+            /**
+             * Format: date-time
+             * @description When the newest check of an image the environment runs was made, whatever came of it; empty when none was
+             */
+            lastCheckedAt: string;
+            /**
+             * @description swarm for a Swarm cluster, standalone for a single Docker host
+             * @enum {string}
+             */
+            type: "swarm" | "standalone";
+        };
+        FleetUpdateItem: {
+            /** @description For a multi-platform image, the platforms it runs on whose image changed. Empty when none is named */
+            changedPlatforms: string[] | null;
+            /** @description The digest it runs; empty when its spec names none */
+            fromDigest: string;
+            /** @description The service or container ID */
+            id: string;
+            /** @description The image as written, without a digest */
+            image: string;
+            /**
+             * @description service for a swarm service, container for a standalone container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service or container name */
+            name: string;
+            /** @description True when it can be updated now: an update is available, nothing runs or holds the environment, and it is not a container that must be adopted first. Skipped, ignored, rolled back and failed ones are never selectable */
+            selectable: boolean;
+            /** @description The stack or Compose project it belongs to; empty when it has none */
+            stack: string;
+            /** @description The ID of the TierPlan stack it belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
+            /** @description The digest the tag pointed at when it was last checked successfully; empty before any check did */
+            toDigest: string;
+            /** @description The same update object the services and containers lists carry: state, reason, checked and last-success times, skip or ignore and failure details */
+            update: components["schemas"]["UpdateInfoBody"];
+        };
+        FleetUpdatesBody: {
+            /** @description How many items each show value lists, over every environment that was read */
+            counts: components["schemas"]["FleetUpdateCounts"];
+            /** @description What the checks have covered */
+            coverage: components["schemas"]["FleetUpdateCoverage"];
+            /** @description The environments that have items for the show filter: those with a failed check first, then by name */
+            groups: components["schemas"]["FleetUpdateGroup"][] | null;
+            /** @description The environments the caller may read that could not be read, or only in part. Environments the caller may not read are never named */
+            notIncluded: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /**
+             * Format: date-time
+             * @description When the answer was put together
+             */
+            readAt: string;
+        };
+        FleetUpdatesTile: {
+            /** @description True only when every environment was read, no check failed and nothing is waiting for its first check */
+            allChecked: boolean;
+            /**
+             * Format: int64
+             * @description Workloads whose last check failed. Null when it could not be read
+             */
+            checksFailed: number | null;
+            /**
+             * Format: int64
+             * @description Workloads with an update available in the environments that were read. Null when it could not be read, or when it is 0 but an environment was not read
+             */
+            count: number | null;
+            /**
+             * Format: date-time
+             * @description The newest time any workload was checked, whatever came of it; empty when none was
+             */
+            lastCheckedAt: string;
         };
         GeneratedComposeBody: {
             /**
@@ -7898,6 +8746,36 @@ export interface components {
              * @enum {string}
              */
             result: "done" | "failed";
+        };
+        ImageUpdateJobListBody: {
+            /** @description The image updates running or ended in the last 10 minutes on the environments the caller may read, newest first */
+            jobs: components["schemas"]["ImageUpdateJobSummary"][] | null;
+        };
+        ImageUpdateJobSummary: {
+            /** @description Left out unless set: the bulk update this one belongs to */
+            bulk?: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            endedAt: string;
+            /** @description The environment the update runs on */
+            envId: string;
+            /** @description The environment's name when the update started */
+            envName: string;
+            /** @description The job ID: follow it at GET /api/env/{envId}/update-jobs/{id} */
+            id: string;
+            /**
+             * @description What is updated; bulk for a bulk update of several workloads of the environment
+             * @enum {string}
+             */
+            kind: "service" | "container" | "stack" | "bulk";
+            /** @description When the job started, RFC 3339 UTC */
+            startedAt: string;
+            /**
+             * @description Where it is. A job that ended with some of its work done and some not reads failed
+             * @enum {string}
+             */
+            state: "running" | "done" | "failed" | "cancelled";
+            /** @description The service's, container's or stack's name */
+            workload: string;
         };
         ImageUsedByBody: {
             /** @description Containers, running or stopped, on the nodes that hold the image, then swarm services whose spec names it, even with no task */
@@ -10501,6 +11379,77 @@ export interface components {
              */
             size?: number;
         };
+        SearchBody: {
+            /** @description How many things matched, by type. A type that was not searched, because type named another, counts 0 */
+            counts: components["schemas"]["SearchCounts"];
+            /** @description The environments the caller may read that could not be searched, or only in part. Environments the caller may not read are never named */
+            notSearched: components["schemas"]["FleetNotIncludedBody"][] | null;
+            /** @description The best matches first: the name is the query, the name starts with it, the name holds it, then an image or stack that holds it. Equal matches go by environment name, then name */
+            results: components["schemas"]["SearchResult"][] | null;
+            /**
+             * Format: date-time
+             * @description When the search was made
+             */
+            searchedAt: string;
+            /** @description True when there are more matches than results holds */
+            truncated: boolean;
+        };
+        SearchCounts: {
+            /**
+             * Format: int64
+             * @description The sum of the others
+             */
+            all: number;
+            /** Format: int64 */
+            container: number;
+            /** Format: int64 */
+            image: number;
+            /** Format: int64 */
+            network: number;
+            /** Format: int64 */
+            service: number;
+            /** Format: int64 */
+            stack: number;
+        };
+        SearchResult: {
+            /** @description A network: its driver; empty for the other types */
+            driver: string;
+            /** @description The environment it is in */
+            envId: string;
+            /** @description The name of that environment */
+            envName: string;
+            /** @description Its ID. Empty for a stack TierPlan does not manage, which is known by its name */
+            id: string;
+            /** @description A service or container: its image as written; empty for the other types */
+            image: string;
+            /** @description A stack: true when TierPlan manages it. False for everything else */
+            managed: boolean;
+            /** @description Its name. An image: the tag that matched, or its short ID when it has none */
+            name: string;
+            /** @description A container, image or network: the node it was read from; empty for the other types */
+            node: string;
+            /** @description The ID of that node, for the link to the thing; empty when there is no node */
+            nodeId: string;
+            /**
+             * Format: int64
+             * @description A stack: how many services (swarm) or containers (standalone host) it has; 0 for the other types
+             */
+            services: number;
+            /**
+             * Format: int64
+             * @description An image: its size in bytes; 0 for the other types
+             */
+            size: number;
+            /** @description A service or container: the stack or Compose project it belongs to; empty when it has none */
+            stack: string;
+            /** @description A network: its first subnet; empty when it has none or for the other types */
+            subnet: string;
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            type: "stack" | "service" | "container" | "image" | "network";
+        };
         SecretCreateBody: {
             /** @description The ID of the secret the swarm made */
             id: string;
@@ -10784,6 +11733,8 @@ export interface components {
             stack: string;
             /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
             tierplanStackId: string;
+            /** @description Left out for a TierPlan agent, a job and when update checks are not available: what is known about the service's image, as the services list carries it */
+            update?: components["schemas"]["UpdateInfoBody"];
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The update policy; absent when the spec sets none (the engine's defaults) */
@@ -10921,6 +11872,8 @@ export interface components {
             stack: string;
             /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
             tierplanStackId: string;
+            /** @description The image update state of the service; absent for the TierPlan agent, job-mode services, or when update checks are not wired */
+            update?: components["schemas"]["UpdateInfoBody"];
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
@@ -11702,6 +12655,8 @@ export interface components {
             target: "swarm" | "standalone";
             /** @description Set on an unmanaged stack only: what was found about it */
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
+            /** @description Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date */
+            update?: components["schemas"]["StackUpdateBody"];
         };
         StackDiffHunkBody: {
             /** @description The hunk's lines in order */
@@ -12330,6 +13285,8 @@ export interface components {
             target: "swarm" | "standalone";
             /** @description Set on an unmanaged stack only: what was found about it */
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
+            /** @description Left out for a stack not deployed, when no service of it is judged, and when update checks are not available: the states of the stack's services rolled up. A stack none of whose services can be checked reads none, never up_to_date */
+            update?: components["schemas"]["StackUpdateBody"];
         };
         StackJanitorBody: {
             /** @description True when the stack's own compose file says x-tierplan: {keep: true} at the top level. That keeps everything the stack owns out of every cleanup too, and only the file can undo it: the switch does not */
@@ -13010,6 +13967,8 @@ export interface components {
             deployed: boolean;
             /** @description The service a failed deploy stopped at; empty when it did not fail or the failure names none */
             failedService: string;
+            /** @description True for a revision a one-click image update made (origin update): History labels it Image update. A revision of the Update images deploy, which has the same origin, is false */
+            imageUpdate: boolean;
             /** @description The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with */
             images: components["schemas"]["StackRevisionImageChange"][] | null;
             /**
@@ -13160,6 +14119,8 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "degraded" | "not_running" | "stopped";
+            /** @description Left out when the service has no image that is judged (update checks not available, or none judged yet): what is known about the service's image. A standalone service carries the state of its containers, which run one image */
+            update?: components["schemas"]["UpdateInfoBody"];
             /** @description The state of a swarm service's last update or rollback; empty when it has none and on a standalone host */
             updateState: string;
         };
@@ -13235,6 +14196,22 @@ export interface components {
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */
             reason: string;
+        };
+        StackUpdateBody: {
+            /**
+             * Format: int64
+             * @description How many workloads have an update available; set when state is update_available, 0 otherwise
+             */
+            count: number;
+            /** @description Why some workloads of the stack are not part of the state: pinned_in_file (the file names a digest, not a tag) or not_from_registry (the image has no registry to ask). With state none these are the reasons nothing can be checked */
+            notCheckable: ("pinned_in_file" | "not_from_registry")[] | null;
+            /** @description Left out unless true: with state rolled_back, every workload that reads rolled back failed at the pull of its image, so the update changed nothing and nothing was rolled back. False for a stack where a workload really was put back */
+            pullFailed?: boolean;
+            /**
+             * @description The first that applies of: updating, busy, queued, update_available, rollback_failed, rolled_back, check_failed, not_checked, ignored or skipped (when every other checkable workload is one), check_stale, up_to_date. up_to_date only when every checkable workload is up to date. none when no workload of the stack can be checked (see notCheckable): never read as up to date
+             * @enum {string}
+             */
+            state: "update_available" | "updating" | "busy" | "queued" | "up_to_date" | "check_stale" | "check_failed" | "rolled_back" | "rollback_failed" | "not_checked" | "skipped" | "ignored" | "none";
         };
         StackVariableBody: {
             /** @description The default written in the compose file, when hasDefault is true */
@@ -13858,6 +14835,8 @@ export interface components {
              * @enum {string}
              */
             target: "swarm" | "standalone";
+            /** @description Left out when update checks are not available or no service is judged: the states of the stack's services rolled up, as on the stack lists */
+            update?: components["schemas"]["StackUpdateBody"];
         };
         UpdateAgentsBody: {
             /**
@@ -13866,11 +14845,287 @@ export interface components {
              */
             started: number;
         };
+        UpdateCheckBoolField: {
+            /** @description True when this environment set the value itself. False means it follows the instance default, so a changed default reaches it */
+            overridden: boolean;
+            /** @description The value that applies: the environment's own when it set one, else the instance default */
+            value: boolean;
+        };
+        UpdateCheckDefaultsBody: {
+            /** @description Whether the schedule checks an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description How many environments follow at least one of these defaults, because they set nothing themselves or leave a field to the default
+             */
+            followers: number;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description A five-field cron expression that fires no more often than every hour, read in the server's time zone */
+            schedule: string;
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times the defaults were saved, starting at 1. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        UpdateCheckDefaultsRequest: {
+            /** @description Whether the schedule checks an environment that does not set this itself */
+            enabled: boolean;
+            /**
+             * @description The preset the schedule came from, shown on the page; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description A five-field cron expression that fires no more often than every hour, read in the server's time zone */
+            schedule: string;
+            /**
+             * Format: int64
+             * @description The version read with the defaults; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        UpdateCheckPolicyRequest: {
+            /** @description Whether the schedule checks this environment. Null follows the instance default */
+            enabled?: boolean | null;
+            /**
+             * @description The preset the schedule came from, shown on the page. Needs a schedule; custom when null with a schedule
+             * @enum {string|null}
+             */
+            preset?: "hourly" | "every_6h" | "daily" | "weekly" | "custom" | null;
+            /** @description A five-field cron expression that fires no more often than every hour. Null follows the instance default */
+            schedule?: string | null;
+            /**
+             * Format: int64
+             * @description The version read with the status; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        UpdateCheckScheduleField: {
+            /** @description True when this environment set the schedule itself. False means it follows the instance default */
+            overridden: boolean;
+            /**
+             * @description The preset the expression came from; custom for one written by hand
+             * @enum {string}
+             */
+            preset: "hourly" | "every_6h" | "daily" | "weekly" | "custom";
+            /** @description The five-field cron expression that applies, read in the server's time zone */
+            value: string;
+        };
+        UpdateCheckStatusBody: {
+            enabled: components["schemas"]["UpdateCheckBoolField"];
+            /**
+             * Format: date-time
+             * @description When an image of this environment was last checked, by the schedule or by Check now, whatever came of it; empty when none was or when it cannot be read now
+             */
+            lastCheckedAt: string;
+            /**
+             * Format: date-time
+             * @description When the next scheduled check starts, in the server's time zone, including this environment's start offset of up to 10 minutes. Null when scheduled checks are off or the schedule cannot be used
+             */
+            nextCheckAt: string | null;
+            schedule: components["schemas"]["UpdateCheckScheduleField"];
+            /** @description The server's time zone, which the schedule is read in */
+            timezone: string;
+            /**
+             * Format: int64
+             * @description How many times this environment's schedule was saved, 0 while it has never been. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
         UpdateEnvironmentInputBody: {
             /** @description Switch automatic agent updates on or off for an agent environment */
             autoUpdate?: boolean;
             /** @description The new name, 1 to 64 characters */
             name?: string;
+        };
+        UpdateFailureBody: {
+            /**
+             * Format: date-time
+             * @description When it failed
+             */
+            at: string;
+            /** @description The digest the update failed with: the version that is not offered again */
+            digest: string;
+            /** @description Left out unless known: the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows while TierPlan still keeps it */
+            jobId?: string;
+            /** @description Why it failed, as a stable code: pull_failed, didnt_start, timeout, unhealthy, engine_error, service_rejected and so on */
+            reason: string;
+            /** @description True when putting the previous version back failed too, so the workload may still be running the version that failed */
+            rollbackFailed: boolean;
+        };
+        UpdateHeldBody: {
+            /** @description What is known about the workload's image now. Absent for an ignore of an image, which covers many workloads */
+            update?: components["schemas"]["UpdateInfoBody"];
+        };
+        UpdateHolderBody: {
+            /** @description Who started it, as a name; for an automatic deploy a system name */
+            by: string;
+            /**
+             * @description What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)
+             * @enum {string}
+             */
+            kind: "git_deploy" | "deploy" | "rollback" | "janitor" | "update";
+            /** @description Left out unless set: the stack a stack operation is on */
+            stack?: string;
+            /**
+             * Format: date-time
+             * @description When it started
+             */
+            started: string;
+            /** @description Left out unless set: for an image update, the service, container or stack being updated */
+            workload?: string;
+        };
+        UpdateIgnoreBody: {
+            /** @description For a skip, the version it passes over; empty for an ignore */
+            digest: string;
+            /**
+             * @description skip passes over one version; ignore hides every update until it is removed
+             * @enum {string}
+             */
+            mode: "skip" | "ignore";
+            /**
+             * @description What the choice covers: image (this image in this environment, every service and container using it here), workload (this service or container alone) or label (the tierplan.updates=ignore label on it, which only its owner can remove). A skip is always workload
+             * @enum {string}
+             */
+            scope: "image" | "workload" | "label";
+            /**
+             * Format: date-time
+             * @description When it was chosen; empty for the label
+             */
+            setAt: string;
+            /** @description The display name of the person who chose it; empty for the label, or when that person is gone */
+            setBy: string;
+        };
+        UpdateIgnoreRequest: {
+            /**
+             * @description Set to true when this is one of several choices made together; it is only noted in the audit log
+             * @enum {string}
+             */
+            bulk?: "true";
+            /** @description For scope image: an image reference with a tag, such as nginx:1.27. The registry, repository and tag are matched exactly */
+            image?: string;
+            /**
+             * @description For scope workload: service for a swarm service, container for a container
+             * @enum {string}
+             */
+            kind?: "service" | "container";
+            /** @description For scope workload: the service's or container's name */
+            name?: string;
+            /**
+             * @description image: the image and tag named by image, every service and container using it in this environment. workload: the service or container named by kind and name
+             * @enum {string}
+             */
+            scope: "image" | "workload";
+        };
+        UpdateInfoBody: {
+            /** @description For a multi-platform image, the platforms the service runs on whose image changed (linux/amd64). Empty when none is named */
+            changedPlatforms: string[] | null;
+            /**
+             * Format: date-time
+             * @description When the tag was last checked, whatever came of it; empty when it never was
+             */
+            checkedAt: string;
+            /** @description Left out unless set: when the state is rolled_back or rollback_failed, the update that failed with the version the tag still points at, which is not offered again until the tag points at another */
+            failure?: components["schemas"]["UpdateFailureBody"];
+            /** @description Set when the state is busy: who holds the environment's operation lock, which an update cannot start under */
+            holder?: components["schemas"]["UpdateHolderBody"];
+            /** @description Set when the state is skipped or ignored: which, how far it reaches, who chose it and when */
+            ignore?: components["schemas"]["UpdateIgnoreBody"];
+            /** @description Left out unless set: when the state is updating, the update's job, which GET /api/env/{envId}/update-jobs/{jobId} follows */
+            jobId?: string;
+            /**
+             * @description A plain-words addition: running_index_gone (the registry no longer serves the image index the service runs, so what changed cannot be told) or may_be_stale (the check may be out of date); empty for most states
+             * @enum {string}
+             */
+            note: "" | "running_index_gone" | "may_be_stale";
+            /**
+             * @description Why the last check failed, in TierPlan's words; empty unless state is check_failed
+             * @enum {string}
+             */
+            reason: "" | "auth" | "rate_limited" | "unreachable" | "not_found" | "unsupported" | "other";
+            /**
+             * @description Left out unless set, and only on a container: why it gets no one-click update whatever its state. compose_unmanaged (it belongs to a Compose project TierPlan does not manage, so the action reads Adopt to update) or task_container (a task container of a swarm service is updated through its service)
+             * @enum {string}
+             */
+            refusal?: "compose_unmanaged" | "task_container";
+            /** @description The registry host the image is checked at; empty when the image cannot be checked */
+            registry: string;
+            /** @description The digest the tag pointed at when it was last checked successfully; empty before any check did */
+            remoteDigest: string;
+            /** @description The repository below the registry host; empty when the image cannot be checked */
+            repository: string;
+            /** @description The digest the service runs, from its spec; empty when its spec names none */
+            runningDigest: string;
+            /**
+             * @description What is known about the image: update_available (the tag points at a digest the service does not run), up_to_date, check_stale (up to date when last checked, but that was too long ago), check_failed (see reason; never read as up to date), not_checked (no check yet), pinned_in_file (the file names a digest, not a tag), not_from_registry (the service names no digest to compare), and the states of an update in progress or finished: updating, busy, queued, rolled_back, rollback_failed, skipped, ignored
+             * @enum {string}
+             */
+            state: "update_available" | "updating" | "busy" | "queued" | "up_to_date" | "check_stale" | "check_failed" | "rolled_back" | "rollback_failed" | "not_from_registry" | "pinned_in_file" | "not_checked" | "skipped" | "ignored";
+            /**
+             * Format: date-time
+             * @description When a check of the tag last succeeded; empty when none did
+             */
+            successAt: string;
+            /** @description The tag that is followed; empty for an image named by digest alone */
+            tag: string;
+            /** @description True for a task container of a swarm service: its update is the service's, so it cannot be updated on its own */
+            task: boolean;
+        };
+        UpdateJobBody: {
+            /** @description Left out unless set: the bulk update this one belongs to */
+            bulk?: string;
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The digest it ran */
+            fromDigest: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The steps, in the order they run: check, pull, update, wait and, when the image has a health check, health */
+            items: components["schemas"]["StackJobItemBody"][] | null;
+            /**
+             * @description What is updated; bulk for the job of a bulk update of several workloads of the environment, whose items are those workloads in order and a summary (see POST /api/fleet/updates/run)
+             * @enum {string}
+             */
+            kind: "service" | "container" | "stack" | "bulk";
+            /** @description The output log, oldest first */
+            output: components["schemas"]["StackJobOutputLine"][] | null;
+            /** @description The update's run, kept after the job leaves the server's history */
+            runId: string;
+            /** @description Left out unless set: why the run ended as it did, in TierPlan's codes (for example server_restarted) */
+            runReason?: string;
+            /**
+             * @description Left out unless the run can be read: how the update's run stands. The steps cannot tell a rollback that happened from a restore that found nothing to put back; this does. rolled_back means the previous version was put back, failed that it was not (the update failed before it changed anything, or was cut off by a restart that left the workload as it was)
+             * @enum {string}
+             */
+            runState?: "queued" | "running" | "done" | "failed" | "rolled_back" | "rollback_failed";
+            /** @description Who started the update, as a name */
+            startedBy: string;
+            /**
+             * @description running until every step has ended, then done when every step is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /** @description The digest it is updated to, as the server read it from the registry */
+            toDigest: string;
+            /** @description The service's, container's or stack's name */
+            workload: string;
+        };
+        UpdateLeftOutBody: {
+            /** @description The service's name, as in items */
+            name: string;
+            /**
+             * @description Why it is left out: skipped (this version was skipped) or ignored (its image is ignored)
+             * @enum {string}
+             */
+            state: "skipped" | "ignored";
         };
         UpdateMyProfileInputBody: {
             /** @description The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it */
@@ -13882,6 +15137,82 @@ export interface components {
              * @description The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change
              */
             updatedAt: string;
+        };
+        UpdatePreviewBody: {
+            /** @description The workloads the update would change, one for a service; empty when offered is false */
+            items: components["schemas"]["UpdatePreviewItem"][] | null;
+            /** @description For a stack: the services the update leaves out because they are skipped or ignored; empty otherwise */
+            leftOut: components["schemas"]["UpdateLeftOutBody"][] | null;
+            /** @description Left out unless set: who holds the environment's operation lock. While it is held the update is refused with 409 operation_locked */
+            lock?: components["schemas"]["UpdateHolderBody"];
+            /** @description True when an update would be offered for this service */
+            offered: boolean;
+            /**
+             * @description Why no update is offered; empty when one is. compose_unmanaged: the container belongs to a Compose project TierPlan does not manage, so it is adopted first; task_container: a task container of a swarm service is updated through its service; ambiguous_name: more than one node of the environment has a container of that name, so none is offered until one is renamed
+             * @enum {string}
+             */
+            refusal: "" | "agent" | "job_mode" | "managed_by_stack" | "nothing_to_update" | "not_checked" | "check_failed" | "pinned_in_file" | "not_from_registry" | "offline" | "adopt_first" | "compose_unmanaged" | "task_container" | "ambiguous_name";
+            /** @description Pre-flight warnings, worked out on the server; empty when offered is false */
+            warnings: components["schemas"]["UpdateWarningBody"][] | null;
+        };
+        UpdatePreviewItem: {
+            /** @description The platforms it runs on whose image changed; empty when none is named */
+            changedPlatforms: string[] | null;
+            /** @description The digest it runs */
+            fromDigest: string;
+            /** @description The image it follows, without a digest (repository:tag) */
+            image: string;
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name; for a service of a stack on a standalone host, its name in the compose file */
+            name: string;
+            /** @description The platforms it runs on, for a multi-platform image; empty when none is known */
+            platforms: string[] | null;
+            /** @description The stack it belongs to; empty for a service made on its own */
+            stack: string;
+            /** @description The digest the stored check found the tag at */
+            toDigest: string;
+        };
+        UpdateRunBody: {
+            /** @description The update's job: follow it at GET /api/env/{envId}/update-jobs/{jobId} or its stream. For a stack, or a service of a stack TierPlan manages, the job is the stack's own deploy: follow it at GET /api/env/{envId}/stacks/{stackId}/deploys/{jobId} */
+            jobId: string;
+            /** @description Left out unless set: the stack whose new revision the update deploys. The job is then the stack's deploy job */
+            stackId?: string;
+        };
+        UpdateRunRequest: {
+            /** @description For each service name (the compose service name on a standalone host; the container's name for kind container), the digest the confirm showed. The server compares it with what the registry says now and refuses with 409 update_moved when they differ; it never deploys a digest from the request */
+            expect?: {
+                [key: string]: string;
+            };
+            /** @description True when a person chooses to try again, for this one service or container, a version whose update failed before (Update anyway). Without it such a workload is refused with 409 previously_failed and nothing is changed. It is ignored for a workload that has no failed update, and for kind stack, which never retries a failed version */
+            force?: boolean;
+            /**
+             * @description service for a swarm service (a service of a stack TierPlan manages is updated through a new revision of that stack), container for a plain container made with docker run (a container of a stack TierPlan manages is updated through that stack, one of a Compose project TierPlan does not manage is refused with not_updatable compose_unmanaged and a task container of a swarm service with task_container), stack for every service of a stack TierPlan manages that has an update available, leaving out the skipped and ignored ones
+             * @enum {string}
+             */
+            kind: "service" | "container" | "stack";
+            /** @description The service's or container's name, or the stack's name for kind stack */
+            name: string;
+        };
+        UpdateSchedulePreviewBody: {
+            /** @description The next three checks in the server's time zone, with this environment's start offset; empty when the expression is not valid */
+            nextRuns: string[] | null;
+            /**
+             * @description Why it is not accepted: invalid when it is not a five-field cron expression update checks can use, too_frequent when two of its next ten firings are less than an hour apart. Empty when valid
+             * @enum {string}
+             */
+            problem: "" | "invalid" | "too_frequent";
+            /** @description The server's time zone the expression is read in */
+            timezone: string;
+            /** @description Whether update checks accept the expression */
+            valid: boolean;
+        };
+        UpdateSchedulePreviewRequest: {
+            /** @description A five-field cron expression, such as 0 3 * * * */
+            schedule: string;
         };
         UpdateSettingsInputBody: {
             /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL for a host that is not this machine is refused with 422 insecure_agent_url unless TIERPLAN_AGENT_ALLOW_INSECURE is on */
@@ -13902,6 +15233,20 @@ export interface components {
              * @description New per-person cap on open shells, 1 to 50
              */
             maxPerUser?: number;
+        };
+        UpdateSkipRequest: {
+            /**
+             * @description Set to true when this is one of several workloads chosen together; it is only noted in the audit log
+             * @enum {string}
+             */
+            bulk?: "true";
+            /**
+             * @description service for a swarm service, container for a container
+             * @enum {string}
+             */
+            kind: "service" | "container";
+            /** @description The service's or container's name */
+            name: string;
         };
         UpdateStackHistorySettingsInputBody: {
             /**
@@ -13929,6 +15274,19 @@ export interface components {
              * @description The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change
              */
             updatedAt: string;
+        };
+        UpdateWarningBody: {
+            /** @description Left out unless set: for previous_failure, when the earlier update failed, RFC 3339 UTC */
+            at?: string;
+            /**
+             * @description downtime (the only replica stops before its replacement starts), container_downtime (a container is recreated), no_healthcheck (neither the service nor its image defines a health check), host_ports (a port is published in host mode), volumes (the service mounts a volume), previous_failure (an update to this version failed before)
+             * @enum {string}
+             */
+            code: "downtime" | "container_downtime" | "no_healthcheck" | "host_ports" | "volumes" | "previous_failure";
+            /** @description Left out unless set: for previous_failure, why the earlier update failed (for example timeout, unhealthy, didnt_start, or pull_failed when the image could not be pulled, in which case nothing was changed and nothing was rolled back) */
+            reason?: string;
+            /** @description The service the warning is about */
+            workload: string;
         };
         UserAccessBody: {
             /** @description The environments the user can reach, sorted by name */
@@ -15761,6 +17119,8 @@ export interface operations {
                 q?: string;
                 /** @description Only containers with one of these statuses, comma separated: running, exited, paused, restarting or unhealthy (a health, not a state). Applied before the 500-row cap; any other value is refused 422 invalid_status */
                 status?: string;
+                /** @description available: only containers whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list */
+                updates?: "" | "available";
             };
             header?: never;
             path: {
@@ -19041,6 +20401,8 @@ export interface operations {
                 q?: string;
                 /** @description Only services in one of these statuses, comma separated: degraded (some but not all tasks running), updating (updating, rollback_started), problem (paused, rollback_paused, rollback_completed) or loop (in a restart loop). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
+                /** @description available: only services whose image has an update available. Applied before the 500-row cap. Answers 503 when the checks cannot be read, never an empty list */
+                updates?: "" | "available";
             };
             header?: never;
             path: {
@@ -19746,6 +21108,8 @@ export interface operations {
                 status?: string;
                 /** @description Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
+                /** @description available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none */
+                updates?: "" | "available";
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
@@ -21487,6 +22851,398 @@ export interface operations {
             };
         };
     };
+    getImageUpdateJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The update's job ID */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getUpdateCheckStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkEnvironmentUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckUpdatesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    ignoreImageUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIgnoreRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateHeldBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unignoreImageUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIgnoreRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setUpdateCheckPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCheckPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewImageUpdate: {
+        parameters: {
+            query?: {
+                /** @description service for a swarm service (a service of a stack TierPlan manages is described through its stack), container for a plain container (needs containers.read as well; one of a stack TierPlan manages is described through its stack), stack for a stack TierPlan manages */
+                kind?: "service" | "container" | "stack";
+                /** @description The service's or container's name, or the stack's name for kind stack */
+                name?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    runImageUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRunRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateRunBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewUpdateCheckSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSchedulePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSchedulePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    skipImageUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkipRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateHeldBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unskipImageUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkipRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listVolumes: {
         parameters: {
             query?: {
@@ -22005,6 +23761,239 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listFleetFailing: {
+        parameters: {
+            query?: {
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetFailingBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listFleetPools: {
+        parameters: {
+            query?: {
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetPoolsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getFleetSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetSummaryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listFleetUpdates: {
+        parameters: {
+            query?: {
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+                /** @description Which items to list: updates (available, queued, updating, held back), problems (failed checks and failed updates), ignored (skipped and ignored) or all of them */
+                show?: "updates" | "problems" | "ignored" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetUpdatesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkFleetUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FleetCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    runFleetUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FleetBulkRunRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetBulkRunBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    skipFleetUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FleetBulkSkipRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetBulkSkipBody"];
+                };
             };
             /** @description Error */
             default: {
@@ -23423,6 +25412,45 @@ export interface operations {
             };
         };
     };
+    searchFleet: {
+        parameters: {
+            query: {
+                /** @description What to look for: a name, an image, a stack, or four or more hexadecimal characters of a container or image ID. Trimmed, then 2 to 100 characters. Case does not matter */
+                q: string;
+                /** @description Only this kind of thing; all searches every kind */
+                type?: "all" | "stack" | "service" | "container" | "image" | "network";
+                /** @description Only these environments. An ID the caller may not read is ignored, as if it were not given. Empty means every environment the caller may read */
+                env?: string[] | null;
+                /** @description page answers with at most 200 rows. palette answers with at most 5 rows of each type. The counts are the full totals either way */
+                limit?: "page" | "palette";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -23747,6 +25775,70 @@ export interface operations {
             };
         };
     };
+    getUpdateCheckDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setUpdateCheckDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCheckDefaultsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheckDefaultsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     completeSetup: {
         parameters: {
             query?: never;
@@ -23924,6 +26016,8 @@ export interface operations {
                 status?: string;
                 /** @description Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
+                /** @description available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none */
+                updates?: "" | "available";
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
@@ -24363,6 +26457,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImpactBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listImageUpdateJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUpdateJobListBody"];
                 };
             };
             /** @description Error */

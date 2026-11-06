@@ -9,8 +9,8 @@ import (
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
-// TestIsOwnershipLabel: TierPlan's own bookkeeping labels are the ones every strip site drops. tierplan.keep is the
-// user's label (JAN-07, D-09), so it is not one of them.
+// TestIsOwnershipLabel: TierPlan's own bookkeeping labels are the ones every strip site drops. tierplan.keep and tierplan.updates are
+// the user's labels (JAN-07, D-09; IMG-08, D-16), so they are not among them.
 func TestIsOwnershipLabel(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -24,6 +24,8 @@ func TestIsOwnershipLabel(t *testing.T) {
 		{stacks.LabelStoppedReplicas, true},
 		{"tierplan.anything-else", true},
 		{stacks.LabelKeep, false},
+		{stacks.LabelUpdates, false},
+		{"tierplan.updates", false},
 		{"tierplan.keep", false},
 		{"tierplan.keeper", true},
 		{"Tierplan.stack.id", false},

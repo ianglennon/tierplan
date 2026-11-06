@@ -44,8 +44,17 @@ func stackEnv(t *testing.T, tune func(*dockertest.FakeConfig), services ...docke
 // stackEnvTuned is stackEnv for a test that sets a field of the fixture before the router is built.
 func stackEnvTuned(t *testing.T, tune func(*envFix)) (*envFix, envBody) {
 	t.Helper()
+	return stackEnvCfg(t, nil, tune)
+}
+
+// stackEnvCfg is stackEnvTuned with the fake daemon's configuration tuned too, before the daemon is built.
+func stackEnvCfg(t *testing.T, tuneEngine func(*dockertest.FakeConfig), tune func(*envFix)) (*envFix, envBody) {
+	t.Helper()
 	cfg := swarmManagerEngine()
 	cfg.TasksFollowWrites = true
+	if tuneEngine != nil {
+		tuneEngine(&cfg)
+	}
 	f := newEnvFix(t, cfg)
 	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 	f.svc.WithClusters(f.clusters)
@@ -615,8 +624,10 @@ func standaloneEnv(t *testing.T, err error) (*envFix, envBody, *standaloneUp) {
 }
 
 type standaloneUp struct {
-	mu      sync.Mutex
-	err     error
+	mu  sync.Mutex
+	err error
+	// once is an error for the next run alone; the runs after it succeed again (plan 12-23).
+	once    error
 	project *types.Project
 	calls   int
 }
@@ -639,8 +650,19 @@ func (u *standaloneUp) run(_ context.Context, _ *dockerx.Client, p *types.Projec
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.project, u.calls = p, u.calls+1
+	err := u.err
+	if u.once != nil {
+		err, u.once = u.once, nil
+	}
 	on(dockerx.ComposeEvent{Kind: dockerx.ComposeKindContainer, Name: "solo-web-1", Container: "solo-web-1", Service: "web", Status: "Running", Done: true})
-	return u.err
+	return err
+}
+
+// failNext makes the next run of the Compose stand-in end with err and the runs after it succeed.
+func (u *standaloneUp) failNext(err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.once = err
 }
 
 func TestADeployToAStandaloneHostRunsTheComposeEngineAndIsAudited(t *testing.T) {

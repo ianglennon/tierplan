@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/updates"
 )
 
 // maxStackQuery is the longest search the stack lists take, in characters.
@@ -84,11 +85,12 @@ type StackStatusCountsBody struct {
 
 // StackQueryInput is the search, status filter and sort both stack lists take.
 type StackQueryInput struct {
-	Q      string `query:"q" doc:"Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
-	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
-	Kind   string `query:"kind" maxLength:"16" doc:"Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
-	Sort   string `query:"sort" enum:"name,state,lastDeployed" doc:"What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name"`
-	Dir    string `query:"dir" enum:"asc,desc" doc:"asc (the default) or desc"`
+	Q       string `query:"q" doc:"Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
+	Status  string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
+	Kind    string `query:"kind" maxLength:"16" doc:"Only stacks TierPlan manages (managed) or only stacks found on the engine that TierPlan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
+	Updates string `query:"updates" enum:",available" doc:"available: only stacks with an update available, those whose roll-up of the images of their services reads update_available. Applied before the 500-row cap. An environment whose checks cannot be read is named in failedEnvironments, never listed as having none"`
+	Sort    string `query:"sort" enum:"name,state,lastDeployed" doc:"What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name"`
+	Dir     string `query:"dir" enum:"asc,desc" doc:"asc (the default) or desc"`
 }
 
 // stackRow is a stack of a list with what the search and the sort read.
@@ -108,6 +110,7 @@ type stackQuery struct {
 	q        string
 	statuses []string
 	kind     string
+	updates  string
 	sort     string
 	desc     bool
 }
@@ -118,7 +121,7 @@ func newStackQuery(in StackQueryInput) (stackQuery, error) {
 		return stackQuery{}, httpx.Problem(http.StatusUnprocessableEntity, problemQueryTooLong,
 			"The search can be at most "+strconv.Itoa(maxStackQuery)+" characters.")
 	}
-	q := stackQuery{q: strings.ToLower(strings.TrimSpace(in.Q)), sort: in.Sort, desc: in.Dir == "desc"}
+	q := stackQuery{q: strings.ToLower(strings.TrimSpace(in.Q)), sort: in.Sort, desc: in.Dir == "desc", updates: in.Updates}
 	switch in.Kind {
 	case "", stackKindManaged, stackKindUnmanaged:
 		q.kind = in.Kind
@@ -219,6 +222,9 @@ func stackKindCounts(rows []stackRow) StackKindCountsBody {
 // matches says whether a row passes the search, the kind and the status filter.
 func (q stackQuery) matches(r stackRow) bool {
 	if q.kind == stackKindManaged && !r.item.Managed || q.kind == stackKindUnmanaged && r.item.Managed {
+		return false
+	}
+	if q.updates == "available" && (r.item.Update == nil || r.item.Update.State != string(updates.StateUpdateAvailable)) {
 		return false
 	}
 	if q.q != "" && !strings.Contains(strings.ToLower(r.item.Name), q.q) &&
@@ -394,7 +400,7 @@ func listAllStacks(ctx context.Context, d StacksDeps, in *AllStacksInput) (*AllS
 		if len(chosen) > 0 && !slices.Contains(chosen, e.ID) {
 			continue
 		}
-		got, err := d.stackRowsOf(ctx, e.ID, e.Name, e.Kind == envs.KindLocal)
+		got, err := d.stackRowsOf(ctx, e.ID, e.Name, e.Kind == envs.KindLocal, q.updates == "available")
 		envRows := got.rows
 		if err != nil {
 			d.Log.Error("the stacks of an environment could not be read for the all-stacks list", "environment", e.ID, "error", err)
@@ -458,8 +464,9 @@ type envStackRows struct {
 // them and, for a stack that has had an operation, what the engine runs, from the caches the lists
 // use, then the stacks found on the engine that TierPlan did not make (stackops.Discover) from the same
 // caches. envName is kept on each row to break a tie between environments. selfHost is true for the
-// Docker host TierPlan itself runs on, the only one whose swarm namespace can be TierPlan's own.
-func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, selfHost bool) (envStackRows, error) {
+// Docker host TierPlan itself runs on, the only one whose swarm namespace can be TierPlan's own. needUpdates is true
+// when the list is filtered by update: the environment then fails when its update checks cannot be read.
+func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, selfHost, needUpdates bool) (envStackRows, error) {
 	if d.ReadEnv != nil {
 		if err := d.ReadEnv(ctx, envID); err != nil {
 			return envStackRows{}, err
@@ -491,6 +498,11 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 		return envStackRows{}, err
 	}
 	reads := newStackReads(ctx, d, envID)
+	if needUpdates && !reads.judged() {
+		// The list is filtered by update: an environment whose checks cannot be read is a failed one, not one
+		// with no update available.
+		return envStackRows{}, errUpdatesUnread
+	}
 	out := envStackRows{rows: make([]stackRow, 0, len(list))}
 	for _, st := range list {
 		l, hasL := latest[st.ID]
@@ -511,7 +523,9 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 	found, target, ok := d.discover(ctx, reads, list, selfHost)
 	out.target, out.discoveryFailed = string(target), !ok
 	for _, u := range found {
-		out.rows = append(out.rows, unmanagedRow(u, envID, envName))
+		row := unmanagedRow(u, envID, envName)
+		row.item.Update = reads.stackUpdate(u.Name)
+		out.rows = append(out.rows, row)
 	}
 	return out, nil
 }

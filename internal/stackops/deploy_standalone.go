@@ -409,7 +409,10 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	if d.subnetPlanHook != nil {
 		d.subnetPlanHook()
 	}
+	// The SDK's up may change containers as soon as it begins, so a deploy that fails once up is called may have written. A
+	// host that cannot be reached or is read-only now is refused before the callback runs: nothing was sent, nothing changed.
 	err = d.Aggregator.WriteOnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
+		res.Wrote = true
 		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout, ForceRecreate: diff.Forced}, events.on)
 	})
 	// The networks exist now, or the up stopped where it did: the blocks are no longer only a plan, and what the

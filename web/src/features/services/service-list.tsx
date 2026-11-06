@@ -6,6 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { ChevronsDownUp, ChevronsUpDown, Ellipsis, Plus, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
+import { isUpdateChecksUnavailable } from "@/api/resources";
 import { isNotASwarm, type ServiceItem, servicesQuery } from "@/api/services";
 import { NoPermission } from "@/components/full-page-state";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -29,6 +30,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
@@ -77,6 +79,10 @@ import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
+import { IgnoreUpdatesDialog } from "@/features/updates/ignore-updates-dialog";
+import { UpdateBadge } from "@/features/updates/update-badge";
+import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
+import { UpdateMenuItems } from "@/features/updates/update-menu-items";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -141,89 +147,140 @@ function RowActions({
   // Set when an item was chosen, so the menu does not hand focus back to its button before
   // the dialog has opened.
   const chose = useRef(false);
+  // Ignore updates… opens a dialog that belongs to the row: the menu's content is gone once an
+  // item is chosen. While it is open the list holds still, as it does for an open menu, and when
+  // it closes focus goes back to the row's menu button.
+  const [ignoring, setIgnoring] = useState(false);
+  // Update… opens the compact confirm, which belongs to the row for the same reason.
+  const [updating, setUpdating] = useState(false);
+  const envName = useEnvName(envId);
+  const button = useRef<HTMLButtonElement>(null);
+  const report = useRef(onOpenChange);
+  report.current = onOpenChange;
+  const holding = ignoring || updating;
+  useEffect(() => {
+    if (!holding) return;
+    report.current(true);
+    return () => report.current(false);
+  }, [holding]);
   return (
-    <DropdownMenu onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="max-md:size-11"
-          disabled={disabled}
-          aria-label={t("actions.menu.label", { name: service.name })}
+    <>
+      <DropdownMenu onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            ref={button}
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="max-md:size-11"
+            disabled={disabled}
+            aria-label={t("actions.menu.label", { name: service.name })}
+          >
+            <Ellipsis aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => {
+            if (!chose.current) return;
+            chose.current = false;
+            event.preventDefault();
+          }}
         >
-          <Ellipsis aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        onCloseAutoFocus={(event) => {
-          if (!chose.current) return;
-          chose.current = false;
-          event.preventDefault();
-        }}
-      >
-        <DropdownMenuItem asChild className="max-md:min-h-11">
-          <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId: service.id }}>
-            {t("actions.menu.open")}
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {canScale ? (
+          <DropdownMenuItem asChild className="max-md:min-h-11">
+            <Link to="/env/$envId/services/$serviceId" params={{ envId, serviceId: service.id }}>
+              {t("actions.menu.open")}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {canScale ? (
+            <NeedsTooltip reason={needs.reason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                disabled={!needs.allowed && !needs.reason}
+                onSelect={() => {
+                  chose.current = true;
+                  onScale(service);
+                }}
+              >
+                {t("services.list.menu.scale")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
           <NeedsTooltip reason={needs.reason}>
             <DropdownMenuItem
               className="max-md:min-h-11"
               disabled={!needs.allowed && !needs.reason}
               onSelect={() => {
+                if (!needs.allowed) return;
                 chose.current = true;
-                onScale(service);
+                onForceUpdate(service);
               }}
             >
-              {t("services.list.menu.scale")}
+              {t("services.list.menu.forceUpdate")}
             </DropdownMenuItem>
           </NeedsTooltip>
-        ) : null}
-        <NeedsTooltip reason={needs.reason}>
-          <DropdownMenuItem
-            className="max-md:min-h-11"
-            disabled={!needs.allowed && !needs.reason}
-            onSelect={() => {
-              if (!needs.allowed) return;
-              chose.current = true;
-              onForceUpdate(service);
-            }}
-          >
-            {t("services.list.menu.forceUpdate")}
-          </DropdownMenuItem>
-        </NeedsTooltip>
-        <RollbackMenuItem
-          hasPreviousSpec={service.hasPreviousSpec}
-          needs={needs}
-          onSelect={() => {
-            chose.current = true;
-            onRollback(service);
-          }}
-        />
-        {service.restartLoop ? (
-          <MuteMenuItem
-            envId={envId}
-            serviceId={service.id}
-            name={service.name}
-            muted={service.restartLoop.state === "muted"}
+          <RollbackMenuItem
+            hasPreviousSpec={service.hasPreviousSpec}
             needs={needs}
+            onSelect={() => {
+              chose.current = true;
+              onRollback(service);
+            }}
           />
-        ) : null}
-        <DropdownMenuSeparator />
-        <RemoveServiceMenuItem
-          stack={service.stack}
-          needs={manage}
-          onSelect={() => {
-            chose.current = true;
-            onRemove(service);
+          {service.restartLoop ? (
+            <MuteMenuItem
+              envId={envId}
+              serviceId={service.id}
+              name={service.name}
+              muted={service.restartLoop.state === "muted"}
+              needs={needs}
+            />
+          ) : null}
+          <UpdateMenuItems
+            envId={envId}
+            workload={{ kind: "service", name: service.name }}
+            update={service.update}
+            onChosen={() => {
+              chose.current = true;
+            }}
+            onIgnore={() => setIgnoring(true)}
+            onUpdate={service.agent ? undefined : () => setUpdating(true)}
+          />
+          <DropdownMenuSeparator />
+          <RemoveServiceMenuItem
+            stack={service.stack}
+            needs={manage}
+            onSelect={() => {
+              chose.current = true;
+              onRemove(service);
+            }}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {ignoring && service.update ? (
+        <IgnoreUpdatesDialog
+          envId={envId}
+          workload={{ kind: "service", name: service.name }}
+          update={service.update}
+          open
+          onOpenChange={(isOpen) => {
+            if (!isOpen) setIgnoring(false);
           }}
+          onClosed={() => button.current?.focus()}
         />
-      </DropdownMenuContent>
-    </DropdownMenu>
+      ) : null}
+      {updating ? (
+        <UpdateConfirmDialog
+          envId={envId}
+          envName={envName}
+          workload={{ kind: "service", name: service.name }}
+          managedStack={service.tierplanStackId ? service.stack : undefined}
+          onClose={() => setUpdating(false)}
+          onClosed={() => button.current?.focus()}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -256,6 +313,7 @@ const fingerprintOf = (s: ServiceItem) =>
     s.running,
     s.desired,
     s.updateState,
+    s.update?.state,
     s.image,
     (s.ports ?? []).join(","),
     s.updatedAt,
@@ -278,7 +336,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const canCreate = usePermission("services.manage", envId);
   const createNeeds = useNeeds("services.manage", envId);
   const query = useQuery({
-    ...servicesQuery(envId, { q: search.q, status: search.status }),
+    ...servicesQuery(envId, { q: search.q, status: search.status, updates: search.updates }),
     enabled: allowed,
   });
   const data = query.data;
@@ -397,7 +455,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
     // Rows of the previous filters, kept on screen while the new ones load, are not an
     // earlier answer to this question.
     ready: data !== undefined && !query.isPlaceholderData,
-    resetKey: [envId, search.q, search.status].join("\u0000"),
+    resetKey: [envId, search.q, search.status, search.updates].join("\u0000"),
   });
 
   const shownRows = useMemo(() => frozen.rows.map((r) => r.row), [frozen.rows]);
@@ -492,8 +550,9 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   const headed = groups.filter((g) => g.header).map((g) => g.key);
   const allCollapsed = headed.length > 0 && headed.every((k) => collapse.collapsed.has(k));
 
-  const filtered = Boolean(search.q || search.status);
-  const clearFilters = () => onSearchChange({ q: undefined, status: undefined });
+  const filtered = Boolean(search.q || search.status || search.updates);
+  const clearFilters = () =>
+    onSearchChange({ q: undefined, status: undefined, updates: undefined });
 
   function onSort(key: string) {
     const next = key as ServiceSortKey;
@@ -516,7 +575,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
   // Search alone gets its own empty state; a chip makes it a filter match, since the filter
   // may be the cause (UI-SPEC "Core elements"). With neither set, someone who can create a
   // service is told how; everyone else gets the table's plain "nothing to show".
-  const searchOnly = Boolean(search.q) && !search.status;
+  const searchOnly = Boolean(search.q) && !search.status && !search.updates;
   const empty = filtered ? (
     <Empty className="min-h-[30svh] border">
       <EmptyHeader>
@@ -653,6 +712,23 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
       ),
     },
     {
+      id: "updates",
+      header: t("updates.list.column"),
+      className: "w-44 min-w-44",
+      // The server's word for the row; a row it sent no update object for shows a dash, never "Up to date".
+      cell: (s) =>
+        s.update ? (
+          <UpdateBadge
+            info={s.update}
+            name={s.name}
+            envId={envId}
+            stackId={s.tierplanStackId || undefined}
+          />
+        ) : (
+          <span>{missing}</span>
+        ),
+    },
+    {
       id: "mode",
       header: t("services.list.columns.mode"),
       className: "w-32 min-w-32",
@@ -786,35 +862,46 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
           </Button>
         ) : null}
       </div>
-      <ToggleGroup
-        type="multiple"
-        // The chips are toggle buttons in a labelled group, not a toolbar.
-        role="group"
-        variant="outline"
-        size="sm"
-        spacing={2}
-        aria-label={t("services.list.status.label")}
-        value={statuses}
-        onValueChange={(v) =>
-          onSearchChange({ status: serviceStatusParam(v as ServiceStatusValue[]) })
-        }
-        className={STATUS_CHIP_ROW}
-      >
-        {SERVICE_STATUS_VALUES.map((v) => {
-          const label = t(`services.list.status.${v}`);
-          return (
-            <ToggleGroupItem
-              key={v}
-              value={v}
-              className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
-            >
-              {data
-                ? t("services.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
-                : label}
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
+      <div className="flex flex-wrap items-center gap-2">
+        <ToggleGroup
+          type="multiple"
+          // The chips are toggle buttons in a labelled group, not a toolbar.
+          role="group"
+          variant="outline"
+          size="sm"
+          spacing={2}
+          aria-label={t("services.list.status.label")}
+          value={statuses}
+          onValueChange={(v) =>
+            onSearchChange({ status: serviceStatusParam(v as ServiceStatusValue[]) })
+          }
+          className={STATUS_CHIP_ROW}
+        >
+          {SERVICE_STATUS_VALUES.map((v) => {
+            const label = t(`services.list.status.${v}`);
+            return (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+              >
+                {data
+                  ? t("services.list.status.chip", { label, count: data.statusCounts?.[v] ?? 0 })
+                  : label}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+        <Toggle
+          variant="outline"
+          size="sm"
+          className="aria-pressed:border-ring aria-pressed:text-ring max-md:h-11"
+          pressed={search.updates === "available"}
+          onPressedChange={(on) => onSearchChange({ updates: on ? "available" : undefined })}
+        >
+          {t("updates.list.filter")}
+        </Toggle>
+      </div>
     </div>
   );
 
@@ -839,6 +926,9 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
         empty={empty}
         actions={<div className="ml-auto">{createControl}</div>}
         capNote={data ? t("services.list.cap", { total: data.total }) : undefined}
+        errorBody={
+          isUpdateChecksUnavailable(query.error) ? t("updates.list.checksUnavailable") : undefined
+        }
         retryLabel={t("services.list.errorRetry")}
         captionExtra={
           <NewItemsPill

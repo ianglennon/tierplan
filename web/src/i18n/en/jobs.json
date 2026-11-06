@@ -13,7 +13,8 @@
         "pulls": "Couldn't load the pulls.",
         "stack": "Couldn't load the stack jobs.",
         "janitor": "Couldn't load the cleanups.",
-        "retry": "Retry"
+        "retry": "Retry",
+        "update": "Couldn't load the updates."
       },
       "state": {
         "running_one": "Pulling on {{running}} of {{count}} node",
@@ -97,6 +98,20 @@
           "failed": "Failed",
           "cancelled": "Cancelled"
         }
+      },
+      "update": {
+        "title": "Updating {{name}}",
+        "running": "Updating…",
+        "done": "Updated",
+        "rolledBack": "Rolled back",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "open": "Open the update of {{name}}",
+        "bulk_one": "Updating {{count, number}} item in {{environment}}",
+        "bulk_other": "Updating {{count, number}} items in {{environment}}",
+        "bulkUnknown": "Updating items in {{environment}}",
+        "bulkOpen": "Open the console of the update in {{environment}}",
+        "bulkPartial": "Partly done"
       }
     },
     "toast": {
@@ -133,6 +148,11 @@
       "other": {
         "done": "Finished the operation on {{name}}.",
         "failed": "The operation on {{name}} failed."
+      },
+      "bulk": {
+        "done": "Updated {{done, number}} of {{total, number}} in {{environment}}.",
+        "rolledBack": "{{count, number}} rolled back.",
+        "ended": "The updates in {{environment}} have ended."
       }
     }
   }

@@ -16,6 +16,7 @@ export type StackDraftSaveInput = components["schemas"]["StackDraftSaveRequest"]
 export type StackDraftSaved = components["schemas"]["StackDraftSaveBody"];
 export type StackCreateInput = components["schemas"]["StackCreateRequest"];
 export type StackState = StackItem["state"];
+export type StackUpdate = components["schemas"]["StackUpdateBody"];
 export type StackCheck = components["schemas"]["StackCheckBody"];
 export type StackProblem = components["schemas"]["StackProblemBody"];
 export type StackCheckInput = components["schemas"]["StackCheckRequest"];
@@ -127,6 +128,8 @@ export interface StackFilters {
   kind?: "managed" | "unmanaged";
   sort?: "name" | "state" | "lastDeployed";
   dir?: "asc" | "desc";
+  // available: only stacks with a service whose image has an update available.
+  updates?: "available";
 }
 
 // The filters that are set, so an unfiltered read keeps the bare key and a filtered one extends it.

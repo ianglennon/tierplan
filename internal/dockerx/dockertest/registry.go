@@ -6,7 +6,9 @@ package dockertest
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +30,11 @@ const (
 	// "localhost" as ::1, so a push or login there times out. 127.0.0.0/8 is still
 	// trusted over plain HTTP by default.
 	swarmRegistryHost = "127.0.0.1:5000"
+
+	// fixtureRegistryImage is the name the registry fixtures run registry:2 under. TierPlan checks the image of every service and
+	// container of an environment it manages, and one of docker.io/library/registry:2 would have the server ask Docker Hub. A name that can
+	// never resolve (RFC 6761) is asked about nobody's registry at all, and its check fails at once, as that of a local image.
+	fixtureRegistryImage = "registry.fixture.invalid/tp/registry:2"
 
 	registryName = "tp-registry"
 	registryDir  = "/tmp/tp-registry"
@@ -112,10 +119,15 @@ func StartRegistry(t testing.TB, node *Node, o RegistryOptions) string {
 	LoadImage(t, RegistryImage, node)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	if out, err := node.Exec(ctx, "docker", "tag", RegistryImage, fixtureRegistryImage); err != nil {
+		t.Fatalf("tag the registry image on %s: %v\n%s", node.Hostname, err, out)
+	}
 	if err := o.writeFiles(ctx, node); err != nil {
 		t.Fatalf("write the registry files: %v", err)
 	}
-	args := []string{"docker", "run", "-d", "--name", registryName, "-p", "127.0.0.1:5000:5000"}
+	// It is published on the node's own address too, so a test that needs TierPlan's server to ask it (ForwardRegistry)
+	// can reach it from this machine; the engine still reaches it at the loopback address it trusts.
+	args := []string{"docker", "run", "-d", "--name", registryName, "-p", "127.0.0.1:5000:5000", "-p", node.IP + ":5000:5000"}
 	for _, e := range o.env() {
 		args = append(args, "-e", e)
 	}
@@ -125,7 +137,7 @@ func StartRegistry(t testing.TB, node *Node, o RegistryOptions) string {
 	if o.tls() {
 		args = append(args, "-v", registryDir+"/tls.crt:/certs/tls.crt:ro", "-v", registryDir+"/tls.key:/certs/tls.key:ro")
 	}
-	args = append(args, RegistryImage)
+	args = append(args, fixtureRegistryImage)
 	if out, err := node.Exec(ctx, args...); err != nil {
 		t.Fatalf("start the registry on %s: %v\n%s", node.Hostname, err, out)
 	}
@@ -143,6 +155,11 @@ func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 	LoadImage(t, RegistryImage, s.Nodes()...)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	for _, n := range s.Nodes() {
+		if out, err := n.Exec(ctx, "docker", "tag", RegistryImage, fixtureRegistryImage); err != nil {
+			t.Fatalf("tag the registry image on %s: %v\n%s", n.Hostname, err, out)
+		}
+	}
 	mgr := s.Managers[0]
 	// The service is pinned to the manager that holds the files, since a bind mount
 	// of a file written on one node means nothing on another.
@@ -165,7 +182,7 @@ func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 			"--mount", "type=bind,source="+registryDir+"/tls.crt,target=/certs/tls.crt,readonly",
 			"--mount", "type=bind,source="+registryDir+"/tls.key,target=/certs/tls.key,readonly")
 	}
-	args = append(args, RegistryImage)
+	args = append(args, fixtureRegistryImage)
 	if out, err := mgr.Exec(ctx, args...); err != nil {
 		t.Fatalf("create the registry service: %v\n%s", err, out)
 	}
@@ -175,6 +192,53 @@ func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 		})
 	}
 	return swarmRegistryHost
+}
+
+// ForwardRegistry makes the fixture registry of the node reachable at 127.0.0.1:5000 on this machine, the address the
+// nodes' engines know it by, for the rest of the test. TierPlan's server asks registries itself (an image update check
+// is a manifest HEAD from the server, not from a node), and the name in a fixture service's image is the nodes' loopback:
+// without this the server would be asking its own machine, where no registry is. The registry is the one StartRegistry
+// published on the node's address, or the swarm's, which the ingress publishes on every node. The name cannot be moved, so
+// when this machine's port 5000 is taken this waits for it: CI runs two jobs at a time on one machine, and the other may hold it.
+func ForwardRegistry(t testing.TB, node *Node) {
+	t.Helper()
+	var l net.Listener
+	Wait(t, 10*time.Minute, "127.0.0.1:5000 to be free to forward the fixture registry (is another registry or test using the port?)", func() (bool, string) {
+		var err error
+		l, err = net.Listen("tcp", "127.0.0.1:5000")
+		return err == nil, fmt.Sprint(err)
+	})
+	target := net.JoinHostPort(node.IP, "5000")
+	var mu sync.Mutex
+	conns := map[net.Conn]struct{}{}
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		_ = l.Close()
+		mu.Lock()
+		for c := range conns {
+			_ = c.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+	})
+	wg.Go(func() {
+		for {
+			in, err := l.Accept()
+			if err != nil {
+				return
+			}
+			out, err := net.DialTimeout("tcp", target, 10*time.Second)
+			if err != nil {
+				_ = in.Close()
+				continue
+			}
+			mu.Lock()
+			conns[in], conns[out] = struct{}{}, struct{}{}
+			mu.Unlock()
+			wg.Go(func() { pipe(out, in) })
+			wg.Go(func() { pipe(in, out) })
+		}
+	})
 }
 
 // PushImage copies src (from this machine's engine, pulled there first when it is
@@ -222,7 +286,18 @@ func pushTagged(t testing.TB, node *Node, target string, login *Login) string {
 			return f
 		}
 	}
-	t.Fatalf("push %s printed no digest:\n%s", target, out)
+	// Engine 24 prints no digest for a push from its containerd image store, but the image records it.
+	repo := target[:strings.LastIndex(target, ":")] + "@"
+	digests, err := node.Exec(ctx, "docker", "image", "inspect", "-f", `{{join .RepoDigests " "}}`, target)
+	if err != nil {
+		t.Fatalf("read the digest of %s on %s: %v\n%s", target, node.Hostname, err, digests)
+	}
+	for _, f := range strings.Fields(digests) {
+		if d, ok := strings.CutPrefix(f, repo); ok {
+			return d
+		}
+	}
+	t.Fatalf("push %s printed no digest and the image records none:\n%s\n%s", target, out, digests)
 	return ""
 }
 

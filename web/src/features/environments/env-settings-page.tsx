@@ -26,6 +26,7 @@ import { RemoveEnvironmentCard } from "@/features/environments/remove-environmen
 import { SettingsCard } from "@/features/environments/settings-card";
 import { RestartLoopCard } from "@/features/restart-loop/restart-loop-card";
 import { settingsQuery } from "@/features/settings/general-form";
+import { UpdateChecksCard } from "@/features/updates/update-checks-card";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -253,6 +254,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
       {canConfigure && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
       {canConfigure ? <RestartLoopCard envId={env.id} /> : null}
+      {canRead ? <UpdateChecksCard env={env} /> : null}
       {canNetworks ? (
         <SmallSubnetsCard
           envId={env.id}

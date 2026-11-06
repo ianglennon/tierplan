@@ -226,6 +226,17 @@ func (c *Clusters) lookup(envID string) (*clusterEntry, bool) {
 	return e, ok
 }
 
+// Policies is the restart policies remembered for the containers of an environment, as the last
+// read of a standalone host left them. It is empty before a read. A caller that wants the
+// failing containers reads State first, which fills it.
+func (c *Clusters) Policies(envID string) *PolicyCache {
+	e, ok := c.lookup(envID)
+	if !ok {
+		return NewPolicyCache()
+	}
+	return e.policies
+}
+
 // Forget drops what is known of a removed environment.
 func (c *Clusters) Forget(envID string) {
 	c.mu.Lock()

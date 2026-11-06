@@ -53,6 +53,13 @@ describe("serviceSearchSchema", () => {
   it("is an empty search for an empty URL", () => {
     expect(serviceSearchSchema.parse({})).toEqual({});
   });
+
+  it("keeps updates=available and drops any other value (T-12-24)", () => {
+    expect(serviceSearchSchema.parse({ updates: "available" }).updates).toBe("available");
+    expect(serviceSearchSchema.parse({ updates: "all" }).updates).toBeUndefined();
+    expect(serviceSearchSchema.parse({ updates: "" }).updates).toBeUndefined();
+    expect(serviceSearchSchema.parse({ updates: ["available"] }).updates).toBeUndefined();
+  });
 });
 
 describe("the status chips", () => {

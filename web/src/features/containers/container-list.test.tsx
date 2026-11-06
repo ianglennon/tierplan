@@ -566,6 +566,24 @@ describe("container list: empty states", () => {
   });
 });
 
+describe("container list: the filter by update is refused", () => {
+  it("says the update checks cannot be read, not that Docker is unreachable, and shows no empty list", async () => {
+    answer = (url) =>
+      url.searchParams.get("updates")
+        ? Response.json(
+            { type: "update_checks_unavailable", title: "Service Unavailable", status: 503 },
+            { status: 503 },
+          )
+        : Response.json(body(ROWS));
+    mount({ updates: "available" });
+    await screen.findByText("Couldn't load containers.");
+    expect(screen.getByText(/Update checks can't be read right now/)).toBeTruthy();
+    expect(screen.queryByText("Docker may be unreachable. Try again.")).toBeNull();
+    expect(screen.queryByText(/No containers/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});
+
 describe("container list: caption", () => {
   it("counts the containers, plural-aware", async () => {
     answer = () => Response.json(body([row("a")]));
@@ -616,6 +634,7 @@ describe("container list: columns and cells", () => {
       "",
       "Name",
       "State",
+      "Updates",
       "Image",
       "Ports",
       "Created",
@@ -632,6 +651,7 @@ describe("container list: columns and cells", () => {
       "Name",
       "Node",
       "State",
+      "Updates",
       "Image",
       "Ports",
       "Created",
@@ -691,7 +711,7 @@ describe("container list: columns and cells", () => {
     mount({ group: "none" });
     await screen.findByText("many");
     const portsOf = (name: string) =>
-      within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell")[4];
+      within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell")[5];
     expect(portsOf("many")?.textContent).toBe("80/tcp, 443/tcp+2");
     expect(within(portsOf("many") as HTMLElement).getByText("+2")).toBeTruthy();
     expect(portsOf("two")?.textContent).toBe("80/tcp, 443/tcp");
@@ -1394,5 +1414,136 @@ describe("container list: restart loops", () => {
     const hushed = (await screen.findByRole("row", { name: /hushed/ })) as HTMLElement;
     expect(within(hushed).getByText("Muted")).toBeTruthy();
     expect(within(hushed).queryByText("Restart loop")).toBeNull();
+  });
+});
+
+const updateInfo = (extra: Partial<NonNullable<ContainerRow["update"]>> = {}) => ({
+  state: "not_checked" as const,
+  reason: "" as const,
+  registry: "registry.example.com",
+  repository: "acme/web",
+  tag: "1.4",
+  runningDigest: `sha256:${"a".repeat(64)}`,
+  remoteDigest: "",
+  changedPlatforms: [],
+  checkedAt: "",
+  successAt: "",
+  note: "" as const,
+  task: false,
+  ...extra,
+});
+
+describe("container list: image updates (12-08)", () => {
+  beforeEach(() => {
+    answer = () =>
+      Response.json(
+        body([
+          row("web", {
+            update: updateInfo({
+              state: "update_available",
+              remoteDigest: `sha256:${"b".repeat(64)}`,
+              checkedAt: new Date().toISOString(),
+            }),
+          }),
+          row("task-1", {
+            service: "web-svc",
+            update: updateInfo({ state: "update_available", task: true }),
+          }),
+          row("db"),
+        ]),
+      );
+  });
+
+  it("says each container's update state after State, and a dash when the server sent none", async () => {
+    mount();
+    await screen.findByText("web");
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.indexOf("Updates")).toBe(heads.indexOf("State") + 1);
+    const web = screen.getByRole("row", { name: /^Select web/ });
+    expect(within(web).getByText("Update available")).toBeTruthy();
+    // A task container reads the same state word as any container.
+    const task = screen.getByRole("row", { name: /^Select task-1/ });
+    expect(within(task).getByText("Update available")).toBeTruthy();
+    const db = screen.getByRole("row", { name: /^Select db/ });
+    expect(within(db).queryByText("Update available")).toBeNull();
+    expect(within(db).queryByText("Up to date")).toBeNull();
+  });
+
+  it("offers Check now in the row menu", async () => {
+    mount();
+    await screen.findByText("web");
+    const web = screen.getByRole("row", { name: /^Select web/ });
+    fireEvent.pointerDown(within(web).getByRole("button", { name: /^Actions for web/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitem", { name: "Check now" })).toBeTruthy();
+  });
+});
+
+describe("container list: the Updates available filter (12-08)", () => {
+  it("sets updates=available in the search when pressed, asks the server for it, and removes it when pressed again", async () => {
+    mount();
+    await screen.findByText("shop-web");
+    answer = (url) =>
+      Response.json(body(ROWS.slice(0, 1), { total: url.searchParams.get("updates") ? 1 : 4 }));
+    const toggle = screen.getByRole("button", { name: "Updates available" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(changes).toEqual([{ updates: "available" }]);
+    await waitFor(() => expect(urls).toContain(`/api/env/${ENV}/containers?updates=available`));
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Updates available" }));
+    expect(changes[1]).toEqual({ updates: undefined });
+    expect(changes[1]).toHaveProperty("updates", undefined);
+  });
+
+  it("starts pressed when the URL says updates=available, and combines with a status chip", async () => {
+    mount({ updates: "available", status: "running" });
+    await screen.findByText("shop-web");
+    expect(
+      screen.getByRole("button", { name: "Updates available" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    await waitFor(() =>
+      expect(urls).toContain(`/api/env/${ENV}/containers?status=running&updates=available`),
+    );
+  });
+
+  it("counts as a filter: Clear filters shows, and resets it", async () => {
+    mount({ updates: "available" });
+    await screen.findByText("shop-web");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(changes[0]).toHaveProperty("updates", undefined);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull());
+  });
+
+  it("drops an unknown updates value from the URL search", () => {
+    expect(containerSearchSchema.parse({ updates: "available" }).updates).toBe("available");
+    expect(containerSearchSchema.parse({ updates: "all" }).updates).toBeUndefined();
+    expect(containerSearchSchema.parse({ updates: "" }).updates).toBeUndefined();
+    expect(containerSearchSchema.parse({ updates: 1 }).updates).toBeUndefined();
+  });
+
+  it("renders a container name and its registry's words containing markup as text", async () => {
+    answer = () =>
+      Response.json(
+        body([
+          row("<img src=x onerror=alert(1)>", {
+            image: "<img src=z>",
+            update: updateInfo({
+              state: "check_failed",
+              reason: "other",
+              registry: "<b>evil</b>.example.com",
+              checkedAt: new Date().toISOString(),
+            }),
+          }),
+        ]),
+      );
+    mount({ group: "none" });
+    await screen.findByText("<img src=x onerror=alert(1)>");
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("b")).toBeNull();
   });
 });

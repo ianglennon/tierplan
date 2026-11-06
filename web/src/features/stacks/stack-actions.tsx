@@ -3,7 +3,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, CircleArrowUp } from "lucide-react";
 import { useState } from "react";
 
 import { StackGitPullError, usePullStackGit } from "@/api/stack-git";
@@ -24,11 +24,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { followStackOperation, refusalKey } from "@/features/stacks/follow-operation";
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { StoppedAlert } from "@/features/stacks/stopped-alert";
 import { UpdateImagesDialog } from "@/features/stacks/update-images-dialog";
+import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -59,7 +61,10 @@ export const canStart = (state: StackState) => state === "stopped";
 // Images can be updated where something runs to update: the states a stop acts on.
 export const canUpdateImages = canStop;
 
-type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state" | "source">;
+type LifecycleStack = Pick<
+  StackDetail,
+  "id" | "envId" | "name" | "target" | "state" | "source" | "update"
+>;
 
 interface StackActionsProps {
   stack: LifecycleStack;
@@ -210,6 +215,7 @@ export function StoppedAlertWithStart({ stack }: { stack: StackDetail }) {
 export function StackActions({ stack }: StackActionsProps) {
   return (
     <>
+      <UpdateStackAction stack={stack} />
       <UpdateImagesAction stack={stack} />
       <StopStartAction stack={stack} />
       <StackMoreMenu stack={stack} />
@@ -321,6 +327,56 @@ function UpdateImagesAction({ stack }: StackActionsProps) {
       </NeedsTooltip>
       {needs.allowed && !nothing ? (
         <UpdateImagesDialog stack={stack} open={open} onOpenChange={setOpen} />
+      ) : null}
+    </>
+  );
+}
+
+// UpdateStackAction is the header's Update stack ({n}) (D-06, UI-SPEC "Stack header action"): outline, with the
+// CircleArrowUp, shown only while n services of a stack TierPlan manages have an update on offer. It opens the
+// compact confirm for the whole stack, whose "Review everything first" opens the full review of Update images…
+// (D-16). It is off, with the role it takes, for a user who may not update, and it is not there while an
+// operation is under way on the stack. A stack found on the engine has no such action: its page offers
+// "Adopt to update…" (D-09).
+function UpdateStackAction({ stack }: StackActionsProps) {
+  const t = useT();
+  const needs = useNeeds("services.control", stack.envId);
+  const deploys = useNeeds("stacks.deploy", stack.envId);
+  const envName = useEnvName(stack.envId);
+  const [confirming, setConfirming] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const count = stack.update?.state === "update_available" ? stack.update.count : 0;
+  if (count <= 0 || isOperating(stack.state) || stack.source === "unmanaged") return null;
+  const allowed = needs.allowed && deploys.allowed;
+  const reason = allowed ? undefined : (needs.reason ?? deploys.reason);
+  if (!allowed && !reason) return null;
+  return (
+    <>
+      <NeedsTooltip reason={reason}>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-md:h-11"
+          onClick={() => setConfirming(true)}
+        >
+          <CircleArrowUp aria-hidden="true" />
+          {t("updates.stack.action.update", { count })}
+        </Button>
+      </NeedsTooltip>
+      {allowed && confirming ? (
+        <UpdateConfirmDialog
+          envId={stack.envId}
+          envName={envName}
+          workload={{ kind: "stack", name: stack.name }}
+          onReview={() => {
+            setConfirming(false);
+            setReviewing(true);
+          }}
+          onClose={() => setConfirming(false)}
+        />
+      ) : null}
+      {allowed && reviewing ? (
+        <UpdateImagesDialog stack={stack} open onOpenChange={setReviewing} />
       ) : null}
     </>
   );

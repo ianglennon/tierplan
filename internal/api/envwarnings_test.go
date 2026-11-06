@@ -4,14 +4,17 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/internal/updates"
 )
 
 // GET /api/environments/warnings (plan 02-31, ENV-06, ENV-08, D-37, D-39, T-02-98): the
@@ -355,5 +358,173 @@ func TestEnvWarningsRestartLoopContainerIsShownToAViewerOfTheEnvironmentAndToNob
 	cookie, csrf = f.signIn(t, "bell-nobody", false)
 	if got := f.containerLoopWarnings(t, cookie, csrf); len(got) != 0 {
 		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
+	}
+}
+
+// Failed image updates in the bell (plan 12-44, IMG-07, D-14, T-12-73). The environment is a swarm manager whose services
+// run digest 'a' of a scripted registry that says 'b' now; a failure is remembered by hand, as the applier does.
+
+type updateWarning struct {
+	ID        string `json:"id"`
+	Severity  string `json:"severity"`
+	EnvID     string `json:"envId"`
+	EnvName   string `json:"envName"`
+	Service   string `json:"service"`
+	ServiceID string `json:"serviceId"`
+	Container string `json:"container"`
+	Digest    string `json:"digest"`
+	Reason    string `json:"reason"`
+	Count     int    `json:"count"`
+	Since     string `json:"since"`
+}
+
+// bellUpdateEnv is a checked environment whose services are named, each running digest 'a' while the registry says 'b'.
+func bellUpdateEnv(t *testing.T, names ...string) (*envFix, envBody, *updates.FailureStore, *scriptedHeads) {
+	t.Helper()
+	answers := map[string]headAnswer{}
+	var services []dockertest.FakeService
+	for _, n := range names {
+		answers["team/"+n] = headAnswer{digest: updDigest('b')}
+		services = append(services, updatedService(n, 'a'))
+	}
+	heads := newScriptedHeads(answers)
+	f, e := updatesEnv(t, heads, services...)
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	return f, e, &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}, heads
+}
+
+// remember files a failed update of a service of the environment.
+func remember(t *testing.T, fs *updates.FailureStore, envID, kind, name, digest, reason string, rollbackFailed bool) {
+	t.Helper()
+	err := fs.Record(context.Background(), updates.Failure{
+		EnvID: envID, Kind: kind, Workload: name, Digest: digest, Reason: reason, RunID: "run-" + name, RollbackFailed: rollbackFailed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// updateItems are the failed-update items the bell shows a caller.
+func (f *envFix) updateItems(t *testing.T, cookie, csrf string) []updateWarning {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []updateWarning `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []updateWarning
+	for _, w := range body.Items {
+		if strings.HasPrefix(w.ID, "update_") {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestBellShowsRolledBackUpdate(t *testing.T) {
+	t.Parallel()
+	f, e, fs, _ := bellUpdateEnv(t, "web")
+	if got := f.updateItems(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Fatalf("before any failure: %+v, want none", got)
+	}
+	remember(t, fs, e.ID, "service", "web", updDigest('b'), updates.ReasonUnhealthy, false)
+
+	got := f.updateItems(t, f.cookie, f.csrf)
+	if len(got) != 1 {
+		t.Fatalf("update items = %+v, want one, for web", got)
+	}
+	w := got[0]
+	if w.ID != "update_rolled_back" || w.Severity != "warning" || w.EnvID != e.ID || w.EnvName != e.Name || w.Service != "web" ||
+		w.ServiceID != "svc-web" || w.Digest != strings.Repeat("b", 12) || w.Reason != updates.ReasonUnhealthy {
+		t.Errorf("item = %+v", w)
+	}
+	if _, err := time.Parse(time.RFC3339, w.Since); err != nil {
+		t.Errorf("since = %q: %v", w.Since, err)
+	}
+}
+
+func TestBellUpdateItemsFiltered(t *testing.T) {
+	t.Parallel()
+	f, e, fs, _ := bellUpdateEnv(t, "web")
+	remember(t, fs, e.ID, "service", "web", updDigest('b'), updates.ReasonTimeout, false)
+
+	f.addUser(t, "bell-viewer", false)
+	f.addEnvRole(t, "bell-viewer", e.ID, "viewer")
+	cookie, csrf := f.signIn(t, "bell-viewer", false)
+	if got := f.updateItems(t, cookie, csrf); len(got) != 1 || got[0].Service != "web" {
+		t.Errorf("a Viewer's items = %+v, want web's", got)
+	}
+	f.addUser(t, "bell-nobody", false)
+	cookie, csrf = f.signIn(t, "bell-nobody", false)
+	if got := f.updateItems(t, cookie, csrf); len(got) != 0 {
+		t.Errorf("a user with no grant got %+v, want nothing: the bell must not reveal what the caller cannot open", got)
+	}
+}
+
+func TestBellUpdateItemsClear(t *testing.T) {
+	t.Parallel()
+	f, e, fs, heads := bellUpdateEnv(t, "web", "api")
+	remember(t, fs, e.ID, "service", "web", updDigest('b'), updates.ReasonTimeout, false)
+	remember(t, fs, e.ID, "service", "api", updDigest('b'), updates.ReasonUnhealthy, false)
+	if got := f.updateItems(t, f.cookie, f.csrf); len(got) != 2 {
+		t.Fatalf("items = %+v, want web and api", got)
+	}
+
+	// A good update by hand clears the failure of that workload and with it the item.
+	if cleared, err := fs.Clear(context.Background(), e.ID, "service", "api"); err != nil || !cleared {
+		t.Fatalf("clear api = %v, %v", cleared, err)
+	}
+	if got := f.updateItems(t, f.cookie, f.csrf); len(got) != 1 || got[0].Service != "web" {
+		t.Fatalf("after api was updated: %+v, want web alone", got)
+	}
+
+	// A newer digest on the tag is a new update to offer, not the one that failed: the item goes.
+	heads.mu.Lock()
+	heads.answers["team/web"] = headAnswer{digest: updDigest('c')}
+	heads.mu.Unlock()
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	if got := f.updateItems(t, f.cookie, f.csrf); len(got) != 0 {
+		t.Errorf("after the tag moved: %+v, want none", got)
+	}
+}
+
+// After a rollback the swarm refused, the service runs the digest that failed and its badge reads up to date; the bell still says the
+// service may be partly updated, because it reads the failure and not the badge (12-23).
+func TestBellUpdateItemsFailedRollbackOutlivesTheBadge(t *testing.T) {
+	t.Parallel()
+	heads := newScriptedHeads(map[string]headAnswer{"team/web": {digest: updDigest('b')}})
+	f, e := updatesEnv(t, heads, updatedService("web", 'b'))
+	if rec := f.checkNow(t, e); rec.code != http.StatusOK {
+		t.Fatalf("check now: %d %s", rec.code, rec.body)
+	}
+	list := decode[updatedList](t, f.get(t, e, "services"))
+	if u := updateOf(t, list, "web"); u == nil || u.State != "up_to_date" {
+		t.Fatalf("web = %+v, want up_to_date", u)
+	}
+	fs := &updates.FailureStore{Q: f.st.Q, W: f.st.Write, Now: f.clk.now}
+	remember(t, fs, e.ID, "service", "web", updDigest('b'), updates.ReasonTimeout, true)
+	got := f.updateItems(t, f.cookie, f.csrf)
+	if len(got) != 1 || got[0].ID != "update_rollback_failed" || got[0].Severity != "error" || got[0].Service != "web" {
+		t.Errorf("items = %+v, want one update_rollback_failed error for web", got)
+	}
+}
+
+// A pull failure changed nothing; its item carries pull_failed so the page can say the image could not be pulled.
+func TestBellUpdateItemsPullFailedSaysSo(t *testing.T) {
+	t.Parallel()
+	f, e, fs, _ := bellUpdateEnv(t, "web")
+	remember(t, fs, e.ID, "service", "web", updDigest('b'), updates.ReasonPullFailed, false)
+	got := f.updateItems(t, f.cookie, f.csrf)
+	if len(got) != 1 || got[0].Reason != "pull_failed" {
+		t.Errorf("items = %+v, want one with reason pull_failed", got)
 	}
 }

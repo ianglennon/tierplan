@@ -394,6 +394,40 @@ func TestStandaloneDeployOnAReadOnlyHostFailsTheCheckStepAndRunsNothing(t *testi
 	}
 }
 
+// Whether a failed deploy wrote decides whether an image update puts the stack back (WR-12). A host that cannot be reached when the up
+// is to begin is refused before anything is sent, so the deploy changed nothing and has nothing to restore.
+func TestStandaloneDeployThatCannotReachTheHostWhenTheUpBeginsHasNotWritten(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	// The host is there for every step before the up and gone when the up asks for it.
+	rig.deps = stackops.SetSubnetPlanHook(rig.deps, rig.mon.StopAll)
+
+	res, _ := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if res.OK() {
+		t.Fatalf("result = %+v, want a failure: the host was gone", res)
+	}
+	if stand.calls != 0 || res.Wrote || res.NeedsRestore() {
+		t.Errorf("SDK calls %d, wrote %v, needs restore %v, want the up never called and nothing to restore", stand.calls, res.Wrote, res.NeedsRestore())
+	}
+}
+
+// An up that was handed to the host and failed may have changed it, whatever it said: the stack is put back.
+func TestStandaloneDeployWhoseUpFailedHasWritten(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	stand := &upStandIn{err: errString("Error response from daemon: boom")}
+	rig.deps.Up = stand.up
+
+	res, _ := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if res.OK() || stand.calls != 1 || !res.Wrote || !res.NeedsRestore() {
+		t.Errorf("result = %+v after %d SDK calls, want a failed deploy that wrote and needs a restore", res, stand.calls)
+	}
+}
+
 // A standalone roll back sends the images the revision stored (plan 08-05, STK-08, D-06, T-08-18).
 func TestStandaloneRollbackSendsTheStoredDigest(t *testing.T) {
 	t.Parallel()

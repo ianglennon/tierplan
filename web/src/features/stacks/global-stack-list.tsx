@@ -178,6 +178,7 @@ export function GlobalStackList({
       q: search.q,
       status: search.status,
       kind: search.kind,
+      updates: search.updates,
       sort: search.sort,
       dir: search.dir,
     }),
@@ -270,9 +271,17 @@ export function GlobalStackList({
     [data, groupRows, query.isPending, query.isError, query.isFetching, query.refetch],
   );
 
-  const filtered = Boolean(search.q || search.status || search.env || search.kind);
+  const filtered = Boolean(
+    search.q || search.status || search.env || search.kind || search.updates,
+  );
   const clearFilters = () =>
-    onSearchChange({ q: undefined, status: undefined, env: undefined, kind: undefined });
+    onSearchChange({
+      q: undefined,
+      status: undefined,
+      env: undefined,
+      kind: undefined,
+      updates: undefined,
+    });
   const unmanagedCount = data?.kindCounts?.unmanaged ?? 0;
   // The Show group alone left nothing: every stack is managed, or every stack was created elsewhere.
   const kindOnly =
@@ -280,6 +289,7 @@ export function GlobalStackList({
     !search.q &&
     !search.status &&
     !search.env &&
+    !search.updates &&
     (search.kind === "unmanaged" || unmanagedCount > 0);
   // The environments whose look for unmanaged stacks failed, named where no group can carry the notice.
   const lookFailed = groupRows.filter((g) => g.group.discoveryFailed).map((g) => g.group);
@@ -321,11 +331,12 @@ export function GlobalStackList({
       ) : noMatch ? (
         <StackNoMatch
           q={search.q}
-          moreThanSearch={Boolean(search.status || search.env || search.kind)}
+          moreThanSearch={Boolean(search.status || search.env || search.kind || search.updates)}
           onClearSearch={() => onSearchChange({ q: undefined })}
           onClear={clearFilters}
         />
-      ) : (
+      ) : failed.length > 0 ? null : (
+        // An environment that could not be read may hold stacks, so "none yet" is not said while one is named.
         <Empty className="min-h-[30svh] border">
           <EmptyHeader>
             <EmptyTitle role="heading" aria-level={2} className="text-base">
@@ -379,6 +390,8 @@ export function GlobalStackList({
       filtered={filtered}
       onSearch={(q) => onSearchChange({ q })}
       onStatus={(status) => onSearchChange({ status })}
+      updates={search.updates}
+      onUpdates={(updates) => onSearchChange({ updates })}
       onClear={clearFilters}
       chipRowClassName={STATUS_CHIP_ROW}
     >
@@ -449,7 +462,7 @@ export function GlobalStackList({
         caption={
           data
             ? `${t("stackUnmanaged.caption.global")} ${
-                search.q || search.status || search.kind
+                search.q || search.status || search.kind || search.updates
                   ? t("stackLists.global.filtered", {
                       n: data.total,
                       count: data.unfilteredTotal,

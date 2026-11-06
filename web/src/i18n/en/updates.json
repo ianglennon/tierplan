@@ -1,0 +1,542 @@
+{
+  "updates": {
+    "list": {
+      "column": "Updates",
+      "filter": "Updates available",
+      "checksUnavailable": "Update checks can't be read right now, so this list can't be narrowed to the updates available. It isn't empty, it is unknown. Turn off Updates available, or try again."
+    },
+    "tile": {
+      "label": "Updates available",
+      "subline": "In this environment",
+      "error": "Couldn't read this."
+    },
+    "badge": {
+      "update_available": "Update available",
+      "count_one": "{{count, number}} update",
+      "count_other": "{{count, number}} updates",
+      "updating": "Updating…",
+      "busy": "Busy",
+      "queued": "Queued",
+      "up_to_date": "Up to date",
+      "check_stale": "Check stale",
+      "check_failed": "Check failed",
+      "rolled_back": "Update failed, rolled back",
+      "pull_failed": "Couldn't pull the image",
+      "rollback_failed": "Rollback failed",
+      "not_from_registry": "Not from a registry",
+      "pinned_in_file": "Pinned in file",
+      "not_checked": "Not checked yet",
+      "skipped": "Version skipped",
+      "ignored": "Updates ignored"
+    },
+    "detail": {
+      "update_available": "Running {{old}}, {{new}} is available. Checked {{checked}}.",
+      "update_available_noRunning": "{{new}} is available. Checked {{checked}}.",
+      "update_available_stale": "Running {{old}}, {{new}} is available. Checked {{checked}}, may be out of date.",
+      "update_available_noRunning_stale": "{{new}} is available. Checked {{checked}}, may be out of date.",
+      "changedPlatforms": "Changed for {{platforms}}.",
+      "running_index_gone": "The registry no longer has the version this service runs, so TierPlan can't tell what changed.",
+      "updating": "Update in progress. Open the console.",
+      "busy": "Another action holds this service. Update is available again when it finishes.",
+      "queued": "Waiting for the updates before it.",
+      "up_to_date": "Checked {{checked}}.",
+      "check_stale": "Last checked {{checked}}. Checks may be off or failing for this environment.",
+      "check_failed": "{{reason}}",
+      "lastSuccess": "Last successful check {{checked}}.",
+      "neverSucceeded": "It has never succeeded.",
+      "rolled_back": "TierPlan rolled this service back because its update failed. It won't offer {{new}} again until a newer version appears. You can still update by hand.",
+      "rolled_back_noDigest": "TierPlan rolled this service back because its update failed. It won't offer that version again until a newer version appears. You can still update by hand.",
+      "rollback_failed": "TierPlan couldn't restore the previous version. Open the console.",
+      "not_from_registry": "This image has no registry digest, so TierPlan can't check it.",
+      "pinned_in_file": "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+      "not_checked": "No check has run for this image yet. The first check runs on schedule, or choose Check now.",
+      "skipped": "This version was skipped. A newer version will show again.",
+      "skipped_withDigest": "{{new}} was skipped. A newer version will show again.",
+      "ignored": "Updates are ignored for this service.",
+      "skipped_by": "{{user}} skipped {{digest}} {{when}}. A newer version will show again.",
+      "skipped_by_noDigest": "{{user}} skipped this version {{when}}. A newer version will show again.",
+      "ignored_by": "{{user}} ignored updates for {{scope}} {{when}}.",
+      "ignored_label": "Ignored by the tierplan.updates=ignore label.",
+      "someone": "Someone",
+      "thisWorkload": "this workload",
+      "rolled_back_failure": "TierPlan rolled {{name}} back {{when}} because {{reason}}. It won't offer {{new}} again until a newer version appears. You can still update by hand.",
+      "rolled_back_failureNoDigest": "TierPlan rolled {{name}} back {{when}} because {{reason}}. It won't offer that version again until a newer version appears. You can still update by hand.",
+      "pull_failed": "TierPlan couldn't pull the image for {{new}} {{when}}, so nothing was changed on {{name}}. It won't offer {{new}} again until a newer version appears. You can still try it with Update anyway.",
+      "pull_failedNoDigest": "TierPlan couldn't pull the image for that version {{when}}, so nothing was changed on {{name}}. It won't offer it again until a newer version appears. You can still try it with Update anyway.",
+      "workloadFallback": "this workload",
+      "itFallback": "it"
+    },
+    "reason": {
+      "registryFallback": "The registry",
+      "tagFallback": "this tag",
+      "repositoryFallback": "this image",
+      "auth": "{{registry}} refused TierPlan's credentials. Check them under Registries.",
+      "rate_limited": "{{registry}} is limiting requests. TierPlan will try again later.",
+      "unreachable": "TierPlan couldn't reach {{registry}}.",
+      "not_found": "{{registry}} doesn't have {{tag}} of {{repository}} any more.",
+      "unsupported": "{{registry}} gave an answer TierPlan can't read.",
+      "other": "The check didn't finish. TierPlan will try again at the next check."
+    },
+    "check": {
+      "action": "Check now",
+      "pending": "Checking…",
+      "needs": "{{needs}} on {{environment}}",
+      "checked_one": "Checked {{count, number}} image.",
+      "checked_other": "Checked {{count, number}} images.",
+      "found_one": "{{count, number}} update available.",
+      "found_other": "{{count, number}} updates available.",
+      "failed": "Couldn't check for updates. Try again.",
+      "wait": "Checked a moment ago. Wait a moment before checking again."
+    },
+    "stack": {
+      "action": {
+        "update": "Update stack ({{count, number}})",
+        "adopt": "Adopt to update…",
+        "adoptTooltip": "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to."
+      },
+      "noneTooltip": "No service of this stack can be checked: {{reasons}}.",
+      "noneTooltipBare": "No service of this stack can be checked.",
+      "detail": {
+        "update_available_one": "{{count, number}} service of this stack has an update available.",
+        "update_available_other": "{{count, number}} services of this stack have an update available.",
+        "updating": "A service of this stack is being updated. Open the console.",
+        "busy": "Another action holds a service of this stack. Update is available again when it finishes.",
+        "queued": "An update of this stack is waiting for the updates before it.",
+        "up_to_date": "Every service of this stack that can be checked is up to date.",
+        "check_stale": "A service of this stack was last checked a while ago. Checks may be off or failing for this environment.",
+        "check_failed": "The check failed for a service of this stack. Open the stack to see which.",
+        "rolled_back": "TierPlan rolled a service of this stack back because its update failed.",
+        "pull_failed": "TierPlan couldn't pull the image for the update of this stack, so nothing was changed. Open the stack to see which service.",
+        "rollback_failed": "TierPlan couldn't restore the previous version of a service of this stack. Open the console.",
+        "not_checked": "No check has run for a service of this stack yet. The first check runs on schedule, or choose Check now.",
+        "skipped": "The new version of each service that can be checked was skipped. A newer version will show again.",
+        "ignored": "Updates are ignored for the services of this stack that can be checked."
+      }
+    },
+    "schedule": {
+      "run": "Check",
+      "at": "At",
+      "on": "On",
+      "cron": "Cron expression",
+      "cronPlaceholder": "0 3 * * *",
+      "helper": "Server time ({{timezone}}). The start is spread out a little per environment, and identical images are checked once for the whole fleet.",
+      "presets": {
+        "hourly": "Hourly",
+        "every_6h": "Every 6 hours",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "custom": "Custom (cron)"
+      },
+      "weekdays": {
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday",
+        "0": "Sunday"
+      },
+      "checking": "Checking the schedule…",
+      "nextRuns": "Next checks: {{times}}.",
+      "invalid": "Enter a cron expression like 0 3 * * * (minute hour day month weekday).",
+      "tooFrequent": "Checks can be at most once an hour.",
+      "timeMissing": "Pick a time of day."
+    },
+    "checks": {
+      "title": "Image update checks",
+      "caption": "How often TierPlan looks for newer versions of the images this environment runs. Fields marked Default follow Settings, General; change a field here to override it for this environment.",
+      "loading": "Loading the update check settings",
+      "loadFailed": {
+        "title": "Couldn't load the update check settings.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading settings"
+      },
+      "status": {
+        "both": "Last checked <time/>. Next check {{next}}.",
+        "last": "Last checked <time/>.",
+        "nextOnly": "Not checked yet. Next check {{next}}.",
+        "never": "Not checked yet."
+      },
+      "rows": {
+        "enabled": {
+          "label": "Update checks",
+          "switch": "Check this environment for image updates",
+          "helper": "On by default. Turning it off stops scheduled checks; you can still choose Check now. TierPlan never updates anything by itself."
+        },
+        "schedule": {
+          "label": "Schedule"
+        }
+      },
+      "footer": {
+        "save": "Save update check settings",
+        "saving": "Saving…",
+        "saved": "Saved the update check settings.",
+        "saveFailed": "Couldn't save the update check settings.",
+        "retry": "Try again.",
+        "unsaved": "Unsaved changes"
+      },
+      "conflict": {
+        "message": "{{user}} changed this schedule while you were editing. Reload to see it.",
+        "messageAnon": "This schedule was changed while you were editing. Reload to see it.",
+        "reload": "Reload"
+      }
+    },
+    "defaults": {
+      "title": "Image update check defaults",
+      "caption": "Every environment follows these unless it overrides a field on its own settings page.",
+      "loading": "Loading the update check defaults",
+      "loadFailed": {
+        "title": "Couldn't load the update check defaults.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading defaults"
+      },
+      "enabledSwitch": "Check environments that follow this default for image updates",
+      "footer": {
+        "save": "Save update check defaults",
+        "saving": "Saving…",
+        "unsaved": "Unsaved changes"
+      },
+      "saved": "Saved the update check defaults.",
+      "saveFailed": "Couldn't save the update check defaults.",
+      "retry": "Try again.",
+      "conflict": {
+        "message": "{{user}} changed the update check defaults while you were editing. Reload to see them.",
+        "messageAnon": "The update check defaults were changed while you were editing. Reload to see them.",
+        "reload": "Reload"
+      }
+    },
+    "undo": "Undo",
+    "menu": {
+      "skip": "Skip this version",
+      "unskip": "Stop skipping",
+      "ignore": "Ignore updates…",
+      "unignore": "Stop ignoring updates",
+      "needs": "{{needs}} on {{environment}}",
+      "labelIgnored": "Ignored by the tierplan.updates=ignore label on the object. Remove the label from your compose file to stop ignoring.",
+      "update": "Update…",
+      "disabled": {
+        "busy": "Waiting for a deploy to finish. {{what}}",
+        "busyStack": "{{stack}} is deploying.",
+        "busyUpdate": "{{workload}} is updating.",
+        "busyJanitor": "The janitor is cleaning {{environment}}.",
+        "busyOther": "Another operation is running in {{environment}}.",
+        "updating": "An update is already running. Open the console.",
+        "pinned_in_file": "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+        "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
+        "not_checked": "TierPlan has no check result for this image yet. Choose Check now first.",
+        "check_failed": "The last check failed: {{reason}} Choose Check now to try again.",
+        "offline": "{{environment}} isn't reporting, so TierPlan can't update it.",
+        "task_container": "Update the service {{name}} instead. Its tasks are replaced for you."
+      },
+      "updateAnyway": "Update anyway…"
+    },
+    "skip": {
+      "done": "Skipped {{digest}} for {{name}}. A newer version will show again.",
+      "failed": "Couldn't skip this version of {{name}}."
+    },
+    "unskip": {
+      "done": "Updates for {{scope}} will show again.",
+      "failed": "Couldn't stop skipping {{name}}."
+    },
+    "ignore": {
+      "title": "Ignore updates",
+      "description": "TierPlan stops showing updates for this until you turn it back on. It is left out of counts and out of Update stack.",
+      "scope": "Scope",
+      "image": {
+        "label": "This image in {{environment}}",
+        "hint_one": "{{image}}, for the {{count, number}} workload that uses it here.",
+        "hint_other": "{{image}}, for all {{count, number}} workloads that use it here.",
+        "hintUnknown": "{{image}}, for every workload that uses it here."
+      },
+      "workload": {
+        "label": "Only {{name}}",
+        "hint": "Other workloads that use the same image still show updates."
+      },
+      "labelHint": "To keep this in your compose file instead, add the label <code/> to the service.",
+      "labelCopy": "label",
+      "cancel": "Cancel",
+      "submit": "Ignore updates",
+      "pending": "Saving…",
+      "done": "Ignoring updates for {{scope}}.",
+      "failed": "Couldn't ignore updates for {{name}}."
+    },
+    "unignore": {
+      "done": "Updates for {{scope}} will show again.",
+      "failed": "Couldn't stop ignoring updates for {{name}}."
+    },
+    "header": {
+      "update": "Update"
+    },
+    "confirm": {
+      "title": "Update {{name}}",
+      "titleStack": "Update stack {{name}}",
+      "description": "TierPlan changes only the image of this service and keeps its other settings.",
+      "descriptionManaged": "TierPlan pulls the new image and updates the service in place. This is saved as a new revision of {{stack}}, so you can roll back from History.",
+      "leftOut_one": "{{count, number}} is skipped or ignored and won't change.",
+      "leftOut_other": "{{count, number}} are skipped or ignored and won't change.",
+      "review": "Review everything first",
+      "adoptFirst": {
+        "title": "Adopt this stack first",
+        "link": "Adopt stack…"
+      },
+      "rowsLabel": "What will change",
+      "loading": "Loading what will change",
+      "loadFailed": "Couldn't load what this update changes.",
+      "retry": "Retry",
+      "noDigest": "unknown",
+      "preflight": {
+        "heading": "Before you update",
+        "downtime": "{{name}} runs 1 replica and Docker stops the old task before it starts the new one, so it will be down for a short time.",
+        "container_downtime": "A container can't be replaced without stopping it, so {{name}} will be down for a short time.",
+        "no_healthcheck": "{{name}}'s image has no health check. TierPlan can only tell the update worked if the new container is running, not that it is healthy.",
+        "host_ports": "{{name}} publishes a port in host mode. A new task can't start on a node while the old one still holds the port.",
+        "volumes": "{{name}} mounts a volume. The new version may change the data in it, and rolling back will not undo that.",
+        "previous_failure": "This version failed before: {{reason}}. It was rolled back {{when}}.",
+        "more_one": "Show {{count}} more warning",
+        "more_other": "Show {{count}} more warnings",
+        "fewer": "Show fewer warnings",
+        "previous_failure_pull": "This version failed before: TierPlan couldn't pull the image. Nothing was changed. That was {{when}}.",
+        "previous_failure_noWhen": "This version failed before: {{reason}}. It was rolled back."
+      },
+      "note": "If the update fails, TierPlan puts the previous version back on its own and records both in the audit log.",
+      "cancel": "Cancel",
+      "commit": "Update {{name}}",
+      "commitStack_one": "Update {{count, number}} service",
+      "commitStack_other": "Update {{count, number}} services",
+      "checking": "Checking…",
+      "moved": {
+        "title": "A newer version appeared",
+        "body": "{{names}} changed again while you were looking. The list now shows the latest. Check it and choose Update again."
+      },
+      "lock": {
+        "stack": "Another stack operation is running on {{environment}}: {{stack}}, started",
+        "update": "{{workload}} is being updated on {{environment}}, started",
+        "janitor": "The janitor is cleaning {{environment}}, started",
+        "other": "Another operation is running on {{environment}}, started",
+        "after": ".",
+        "message": "Only one operation runs at a time. Try again when it finishes."
+      },
+      "lockedToast": "A deploy is running in {{environment}}. Try again when it finishes.",
+      "refusal": {
+        "title": "Nothing to update",
+        "nothing_to_update": "{{name}} already runs the newest version.",
+        "agent": "{{name}} is part of TierPlan and is updated by updating TierPlan.",
+        "job_mode": "{{name}} is a job, which runs to completion, so there is nothing to update in place.",
+        "managed_by_stack": "{{name}} belongs to a stack TierPlan manages. Update it from the stack.",
+        "not_checked": "TierPlan has no check result for this image yet. Choose Check now first.",
+        "check_failed": "The last check of this image failed. Choose Check now to try again.",
+        "pinned_in_file": "The image reference in your compose file has a digest, so it never changes. Edit the file to move it.",
+        "not_from_registry": "This image didn't come from a registry, so there is nothing to update to.",
+        "offline": "{{environment}} isn't reporting, so TierPlan can't update it.",
+        "adopt_first": "TierPlan doesn't manage this stack yet. Adopt it first so an update has a revision to roll back to.",
+        "stack_nothing": "Every service of {{name}} already runs the newest version, or its update is skipped or ignored.",
+        "compose_unmanaged": "{{name}} belongs to a Compose project TierPlan doesn't manage. Adopt the project first so an update has a revision to roll back to.",
+        "task_container": "{{name}} is a task of a service. Update the service instead; its tasks are replaced for you.",
+        "ambiguous_name": "{{name}} is the name of a container on more than one node, so TierPlan can't tell which one to update. Nothing was changed. Rename one of them and try again."
+      },
+      "failed": {
+        "title": "Couldn't start the update.",
+        "body": "Nothing was changed. Check the connection and try again.",
+        "check_failed": "Couldn't reach the registry to check the newest version. Nothing was changed. Check that the registry is up and try again.",
+        "permission": "You can't update {{name}} in {{environment}}. Nothing was changed."
+      },
+      "descriptionContainer": "TierPlan recreates {{name}} with the same settings and the new image. It keeps the old container until the new one is running, then removes it.",
+      "anywayTitle": "Update {{name}} anyway",
+      "commitAnyway": "Update {{name}} anyway",
+      "fleet": {
+        "title_one": "Update {{count, number}} item",
+        "title_other": "Update {{count, number}} items",
+        "description": "One update runs at a time in each environment. If one fails, only that one is rolled back.",
+        "groupCount_one": "{{count, number}} item",
+        "groupCount_other": "{{count, number}} items",
+        "rowsLabel": "What will change in {{environment}}",
+        "showAll": "Show all {{count, number}}",
+        "fewer": "Show fewer",
+        "skipped": {
+          "offline": "Skipped: {{environment}} isn't reporting.",
+          "no_permission": "Skipped: you can't update anything in {{environment}}."
+        },
+        "refused": "Skipped: you can't update these in {{environment}}: {{names}}.",
+        "tooMany": "You can update at most {{max, number}} at a time. Clear some ticks and try again.",
+        "checked": "Each item is checked again when its turn comes. One that has a newer version by then, or whose update failed before, is skipped and nothing is changed.",
+        "commit_one": "Update {{count, number}} item",
+        "commit_other": "Update {{count, number}} items"
+      }
+    },
+    "console": {
+      "title": "Update of {{name}}",
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "update": "Update of {{name}}"
+      },
+      "started": "Started by {{user}} {{time}}.",
+      "startedAnon": "Started {{time}}.",
+      "stepsLabel": "Steps of the update",
+      "progress": {
+        "label": "Update progress",
+        "text_one": "{{done}} of {{count}} step done",
+        "text_other": "{{done}} of {{count}} steps done"
+      },
+      "steps": {
+        "check": "Check the new version",
+        "pull": "Pull the image",
+        "pullNodes_one": "Pull the image on {{count}} node",
+        "pullNodes_other": "Pull the image on {{count}} nodes",
+        "update": "Update the service",
+        "wait": "Wait for the new tasks",
+        "health": "Wait for a healthy check",
+        "done": "Done",
+        "create": "Create the new container",
+        "swap": "Stop and rename the old container",
+        "start": "Start the new container",
+        "remove_old": "Remove the old container",
+        "rollback": "Roll back to the previous version",
+        "rollbackNothing": "Check what the update changed",
+        "rollback_wait": "Wait for the previous version to run"
+      },
+      "success": {
+        "title": "Updated",
+        "body": "{{name}} now runs {{digest}}.",
+        "bodyNoDigest": "{{name}} now runs the new version."
+      },
+      "failed": {
+        "title": "The update failed",
+        "body": "{{reason}} Open {{name}} to see what it runs now.",
+        "bodyNoReason": "Open {{name}} to see what it runs now.",
+        "restarted": "TierPlan restarted during this update."
+      },
+      "cancelled": {
+        "title": "The update was cancelled",
+        "body": "Open {{name}} to see what it runs now."
+      },
+      "openService": "Open {{name}}",
+      "announce": {
+        "updated": "Update of {{name}} completed.",
+        "failed": "Update of {{name}} failed.",
+        "cancelled": "Update of {{name}} cancelled.",
+        "rolledBack": "Update of {{name}} failed and was rolled back.",
+        "rollbackFailed": "Update of {{name}} failed and the rollback failed.",
+        "pullFailed": "Update of {{name}} failed. The image could not be pulled and nothing was changed.",
+        "bulk": "The update of {{count}} items has ended."
+      },
+      "gone": {
+        "title": "This update is no longer listed",
+        "body": "Finished updates stay here for a short while. Open the service to see what it runs now.",
+        "open": "Open services"
+      },
+      "error": {
+        "title": "Couldn't load the update.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading the update"
+      },
+      "loading": "Loading the update…",
+      "outcome": {
+        "done": "Updated",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "rolled_back": "Rolled back",
+        "rollback_failed": "Rollback failed",
+        "pull_failed": "Not updated"
+      },
+      "documentTitle": "Update",
+      "healthWait": {
+        "text": "Waiting for {{name}} to be healthy. Up to {{window}} left.",
+        "valueText": "Waiting for {{name}} to be healthy, {{window}} left",
+        "announce": "Waiting for {{name}} to be healthy, {{window}} left",
+        "label": "Time left to become healthy"
+      },
+      "rolledBack": {
+        "title": "The update failed and was rolled back",
+        "body": "{{reason}}. TierPlan put {{old}} back. The failed version won't be offered again until a newer one appears.",
+        "bodyNoDigest": "{{reason}}. TierPlan put the previous version back. The failed version won't be offered again until a newer one appears."
+      },
+      "rollbackFailed": {
+        "title": "The rollback failed",
+        "body": "{{name}} may not be running the version you expect. TierPlan couldn't restore {{old}}: {{reason}}. Open {{name}} to see what it runs, or update it again.",
+        "bodyNoDigest": "{{name}} may not be running the version you expect. TierPlan couldn't restore the previous version: {{reason}}. Open {{name}} to see what it runs, or update it again."
+      },
+      "pullFailed": {
+        "title": "The image couldn't be pulled",
+        "body": "Nothing was changed: {{name}} still runs {{old}}. TierPlan won't offer this version again until a newer one appears, but you can still try it with Update anyway.",
+        "bodyNoDigest": "Nothing was changed: {{name}} still runs the version it ran before. TierPlan won't offer this version again until a newer one appears, but you can still try it with Update anyway."
+      },
+      "updateAnyway": "Update anyway…",
+      "bulk": {
+        "title_one": "Update of {{count, number}} item",
+        "title_other": "Update of {{count, number}} items",
+        "itemsLabel": "Items of the update",
+        "state": {
+          "waiting": "Waiting",
+          "running": "Updating…",
+          "done": "Updated",
+          "rolledBack": "Rolled back",
+          "failed": "Failed",
+          "skipped": "Skipped",
+          "cancelled": "Cancelled"
+        },
+        "reason": {
+          "moved": "A newer version appeared since you confirmed, so {{name}} was skipped.",
+          "locked": "Another operation holds the environment, so {{name}} was skipped.",
+          "nothing_to_update": "{{name}} already runs the newest version.",
+          "previously_failed": "An update of {{name}} to this version failed before, so it was skipped.",
+          "check_failed": "The registry could not be asked for the newest version of {{name}}, so nothing was changed.",
+          "workload_gone": "{{name}} is not there any more.",
+          "cancelled": "The update was cancelled before {{name}} was started.",
+          "managed_by_stack": "{{name}} belongs to a stack, which is updated through a new revision of the stack.",
+          "compose_unmanaged": "{{name}} belongs to a Compose project TierPlan does not manage. Adopt the stack first.",
+          "ambiguous_name": "{{name}} is the name of a container on more than one node, so it was skipped and nothing was changed. Rename one of them.",
+          "pinned_in_file": "The image of {{name}} is pinned to a digest in its file.",
+          "not_checked": "The image of {{name}} has not been checked yet.",
+          "other": "{{name}} was not updated, and nothing was changed."
+        },
+        "rolledBackReason": "{{reason}}. TierPlan put the previous version back.",
+        "failedReason": "{{name}} could not be updated.",
+        "partial": {
+          "title": "Partly done",
+          "none": "Nothing was updated",
+          "updated": "Updated {{done, number}} of {{total, number}}.",
+          "rolledBack_one": "{{count, number}} was rolled back",
+          "rolledBack_other": "{{count, number}} were rolled back",
+          "failed_one": "{{count, number}} failed",
+          "failed_other": "{{count, number}} failed",
+          "skipped_one": "{{count, number}} was skipped",
+          "skipped_other": "{{count, number}} were skipped"
+        },
+        "success": {
+          "title": "Updated",
+          "body_one": "{{count, number}} item now runs its newest version.",
+          "body_other": "All {{count, number}} items now run their newest version."
+        },
+        "cancelled": {
+          "title": "Cancelled"
+        },
+        "pullFailed": "{{name}} could not be pulled. Nothing was changed.",
+        "progress": {
+          "text_one": "{{done}} of {{count}} item done",
+          "text_other": "{{done}} of {{count}} items done"
+        },
+        "started": "Started by {{user}} {{time}} as part of an update of {{count, number}} items.",
+        "startedAnon": "Started {{time}} as part of an update of {{count, number}} items."
+      }
+    },
+    "rollbackReason": {
+      "didnt_start": "{{subject}} didn't start",
+      "unhealthy": "{{subject}} didn't become healthy within {{window}}",
+      "unhealthy_noWindow": "{{subject}} didn't become healthy in time",
+      "timeout": "{{subject}} didn't finish updating within {{window}}",
+      "timeout_noWindow": "{{subject}} didn't finish updating in time",
+      "pull_failed": "TierPlan couldn't pull the image",
+      "server_restarted": "TierPlan restarted during this update",
+      "environment_offline": "TierPlan lost contact with the environment",
+      "create_refused": "{{subject}} couldn't be recreated",
+      "agent_host_policy": "{{subject}} isn't allowed to run with host access on its node",
+      "other": "{{subject}} couldn't be updated"
+    },
+    "restoreReason": {
+      "restore_refused": "the swarm wouldn't take it back",
+      "restore_unsettled": "it didn't run in time",
+      "restore_failed": "the old container couldn't be put back",
+      "other": "the restore didn't finish"
+    }
+  }
+}

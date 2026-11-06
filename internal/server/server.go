@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/internal/vault"
 	"github.com/ianglennon/tierplan/internal/webui"
 	"github.com/ianglennon/tierplan/web"
@@ -175,11 +177,13 @@ type RouterDeps struct {
 	Agents        api.AgentsDeps
 	UnknownAgents api.UnknownAgentsDeps
 	Dashboard     api.DashboardDeps
+	Fleet         api.FleetDeps
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
 	AddressSpace  api.AddressSpaceDeps
 	Janitor       api.JanitorDeps
 	Services      api.ServicesDeps
+	Updates       api.UpdatesDeps
 	RestartLoop   api.RestartLoopDeps
 	Secrets       api.SecretsDeps
 	Configs       api.ConfigsDeps
@@ -230,14 +234,16 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
 	api.RegisterUnknownAgents(r, d.UnknownAgents)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Log: d.Environments.Log})
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Updates: d.Updates.Updates, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
+	api.RegisterFleet(r, d.Fleet)
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
 	api.RegisterAddressSpace(r, d.AddressSpace)
 	api.RegisterJanitor(r, d.Janitor)
 	api.RegisterJanitorTaskHistory(r, d.Janitor)
 	api.RegisterServices(r, d.Services)
+	api.RegisterUpdates(r, d.Updates)
 	api.RegisterRestartLoop(r, d.RestartLoop)
 	api.RegisterSecrets(r, d.Secrets)
 	api.RegisterConfigs(r, d.Configs)
@@ -273,6 +279,7 @@ type buildOptions struct {
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
 	noJanitorSched  bool
+	noUpdateSched   bool
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
@@ -305,6 +312,13 @@ func WithJanitorClock(c stackops.Clock) Option {
 // its schedule.
 func WithoutJanitorScheduler() Option {
 	return func(o *buildOptions) { o.noJanitorSched = true }
+}
+
+// WithoutUpdateScheduler keeps the scheduler of the image update checks from running, so that no environment is
+// checked against a registry by itself at 06:00. It exists for tests, which must not depend on the time of day they
+// run at nor reach a real registry. It is a Go option only: a production build calls Build without it.
+func WithoutUpdateScheduler() Option {
+	return func(o *buildOptions) { o.noUpdateSched = true }
 }
 
 // WithSelfContainerID supplies the ID of the container TierPlan runs in. The
@@ -847,6 +861,18 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	gitConns := gitconn.NewStore(st, vlt, nil)
+	// Image update checks: the registries are asked through the same clients and egress policy as every other
+	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
+	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
+	runIndex := updates.NewRunIndex()
+	updateService := &updates.Service{
+		Store: updates.SQLStore{Q: st.Q, W: st.Write}, Resolver: resolver, Clusters: clusters, Aggregator: aggregator, Runs: runIndex,
+		Checker: &updates.Checker{Heads: updates.NewHeads(resolver, registryClients), Store: updates.SQLStore{Q: st.Q, W: st.Write}, Runs: runIndex, Creds: resolver, Log: log},
+		// A container whose list row shows an image ID is named by an inspect, at most 50 new ones a read (RESEARCH Pitfall 7).
+		ImageTexts: &updates.ImageTextCache{Inspect: updates.InspectImageTexts(aggregator)},
+		// Skips and ignores people set, read with the checks (D-15, D-16).
+		Ignores: &updates.IgnoreStore{Q: st.Q, W: st.Write},
+	}
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,
 		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Audit: aud, Log: log, Access: accessSvc}),
@@ -907,8 +933,59 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Runner: janitorDeps.Runner, Clock: bo.janitorClock, Loc: time.Local, Log: log,
 	}
 	janitorDeps.Scheduler = janitorSched
-	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
+	// Every environment is checked for image updates at its slot, every 6 hours by default, as the system, through the
+	// one fleet-deduplicated checker. The scheduler's schedule also sets how old a check may be before it reads stale.
+	updatePolicies := &updates.PolicyStore{Q: st.Q, W: st.Write}
+	updateSched := &updates.Scheduler{
+		Envs: func(ctx context.Context) ([]string, error) {
+			rows, err := st.RQ.ListEnvironments(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]string, 0, len(rows))
+			for _, row := range rows {
+				if row.Enabled != 0 {
+					ids = append(ids, row.ID)
+				}
+			}
+			return ids, nil
+		},
+		Policy: updatePolicies, Service: updateService, Loc: time.Local, Log: log,
+	}
+	updateService.StaleAfter = updateSched.StaleAfter
+	updateService.NextCheck = updateSched.Next
+	// A workload reads updating while an image update of it runs, and busy while another operation holds the environment's lock.
+	updateService.Locks, updateService.UpdateRuns = stackLocks, &updates.RunStore{Q: st.Q, W: st.Write}
+	// The digest an update last failed with is remembered per workload, read by the judge and written by the applier (D-14).
+	updateFailures := &updates.FailureStore{Q: st.Q, W: st.Write}
+	updateService.Failures = updateFailures
+	// An image update is one job under the environment's operation lock, shared with deploys and the janitor; its runs are on
+	// record before the engine is touched.
+	updateApplier := &updates.Applier{
+		Service: updateService, Runs: &updates.RunStore{Q: st.Q, W: st.Write}, Locks: stackLocks, Jobs: jobHub, Aggregator: aggregator,
+		Resolver: resolver, Audit: aud, ConvergeTimeout: cfg.StackConvergeTimeout,
+		ManagedStack: api.NewManagedStackLookup(stackops.Repo{Store: st, Vault: vlt}), SelfContainerID: selfID, Failures: updateFailures, Log: log,
+	}
+	// An image update a restart interrupted is found again on startup and rolled back like any failed update (IMG-07, D-12). It starts
+	// once the stack operations are marked interrupted and the environments are being watched.
+	updateRecovery := &updates.Recovery{
+		Runs: updateApplier.Runs, Applier: updateApplier, Log: log,
+		// Taken here, before any listener serves a request, so a run a user starts later is never mistaken for an interrupted one.
+		Boot: time.Now(),
+		ActorOf: func(ctx context.Context, key string) audit.Actor {
+			if strings.HasPrefix(key, "system:") {
+				return audit.Actor{Type: audit.ActorSystem, ID: key, Name: key}
+			}
+			name := key
+			if u, uerr := st.RQ.GetUserByID(ctx, key); uerr == nil && u.Username != "" {
+				name = u.Username
+			}
+			return audit.Actor{Type: audit.ActorUser, ID: key, Name: name}
+		},
+	}
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
+	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -970,11 +1047,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
+		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
 		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,
-		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
+		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Updates: updateService, Log: log},
+		Updates:       api.UpdatesDeps{Updates: updateService, Checker: checker, Store: st, Audit: aud, Policies: updatePolicies, Scheduler: updateSched, Applier: updateApplier, Stacks: stacksDeps, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
@@ -987,7 +1066,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Git:           gitDeps,
 		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
-		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
+		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Updates: updateService, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
 		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
@@ -1075,6 +1154,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if !bo.noJanitorSched {
 		srv.background.Go(func() { janitorSched.Run(bg) })
 	}
+	// Every environment's images are checked for updates every 6 hours by default, server time (IMG-04).
+	if !bo.noUpdateSched {
+		srv.background.Go(func() { updateSched.Run(bg) })
+	}
 	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
 	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
 	// The mirrors of those repositories are a cache: the ones whose repository is gone, that nothing has used for
@@ -1098,6 +1181,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, fmt.Errorf("start environment monitors: %w", err)
 	}
+	// The environments are being watched, so what a restart left half done can be put back (an offline one is tried again later).
+	srv.background.Go(func() { updateRecovery.Run(bg) })
 	return srv, nil
 }
 

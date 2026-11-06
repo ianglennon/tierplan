@@ -360,6 +360,49 @@ func TestCloseCancelsRunningJobsAndClosesSubscriptions(t *testing.T) {
 	}
 }
 
+// A run can tell the server stopping from a person's Cancel by its context: Closing is true after Close and false after Cancel (CR-01).
+func TestClosingTellsTheServerStoppingFromAPersonsCancel(t *testing.T) {
+	seen := func(t *testing.T, stop func(h *jobs.Hub, id string)) (cancelled, closing bool) {
+		t.Helper()
+		h := jobs.New(jobs.Options{})
+		t.Cleanup(h.Close)
+		started := make(chan struct{})
+		ended := make(chan struct{})
+		job, err := h.Start(twoItems("u"), func(ctx context.Context, _ *jobs.Reporter) {
+			close(started)
+			<-ctx.Done()
+			cancelled, closing = ctx.Err() != nil, jobs.Closing(ctx)
+			close(ended)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-started
+		stop(h, job.ID)
+		<-ended
+		return cancelled, closing
+	}
+	t.Run("close", func(t *testing.T) {
+		cancelled, closing := seen(t, func(h *jobs.Hub, _ string) { h.Close() })
+		if !cancelled || !closing {
+			t.Errorf("after Close: cancelled = %v, closing = %v, want both true", cancelled, closing)
+		}
+	})
+	t.Run("cancel", func(t *testing.T) {
+		cancelled, closing := seen(t, func(h *jobs.Hub, id string) {
+			if err := h.Cancel(id); err != nil {
+				t.Error(err)
+			}
+		})
+		if !cancelled || closing {
+			t.Errorf("after Cancel: cancelled = %v, closing = %v, want cancelled and not closing", cancelled, closing)
+		}
+	})
+	if jobs.Closing(context.Background()) {
+		t.Error("a live context reads as closing")
+	}
+}
+
 // Cancel (plan 05-04, D-26): the items that have not finished end cancelled with a code, the
 // ones that have keep their result, and cancelling a job that has ended changes nothing.
 
@@ -748,7 +791,10 @@ func TestOutputOfAFinishedJobIsKeptAndALateLineIsDropped(t *testing.T) {
 func TestDetailIsTheRemoteWordsCleanedAndPublishedWithTheItem(t *testing.T) {
 	h := jobs.New(jobs.Options{})
 	t.Cleanup(h.Close)
+	// The body waits for the subscriber: a job that ends first would hand it the end and no item events.
+	subscribed := make(chan struct{})
 	job, err := h.Start(jobs.Spec{Kind: "k", Owner: "u", Items: []jobs.ItemSpec{{ID: "a", Label: "a"}}}, func(ctx context.Context, r *jobs.Reporter) {
+		<-subscribed
 		r.Detail("a", "rpc error:\x1b[1m code = InvalidArgument\n"+strings.Repeat("z", 3000))
 		r.Finish("a", jobs.ItemFailed, "service_rejected", "The swarm rejected the service.", nil)
 		r.Detail("a", "too late") // an item that has ended is not changed
@@ -761,6 +807,7 @@ func TestDetailIsTheRemoteWordsCleanedAndPublishedWithTheItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
+	close(subscribed)
 	evs := drain(t, ch)
 	got, _ := h.Get(job.ID)
 	detail := got.Items[0].Detail
@@ -827,5 +874,55 @@ func TestASkippedItemIsFinalAndTheRunsEndLeavesItAlone(t *testing.T) {
 	// The item the run never touched is ended by the hub, as before.
 	if got.Items[1].State != jobs.ItemFailed || got.Items[1].Code != jobs.CodeInterrupted {
 		t.Errorf("second item = %+v, want interrupted", got.Items[1])
+	}
+}
+
+// A scoped reporter lets code written for a job of one operation run as one of several in a bigger job (plan 12-30): its item IDs
+// and the parents it names are prefixed, its added items belong to the item the scope is for, and the job's items stay apart.
+func TestScopedReporterKeepsTheItemsOfEachScopeApart(t *testing.T) {
+	t.Parallel()
+	h := jobs.New(jobs.Options{})
+	t.Cleanup(h.Close)
+	job, err := h.Start(jobs.Spec{
+		Kind: "image_update", Owner: "u",
+		Items: []jobs.ItemSpec{{ID: "i0", Label: "first"}, {ID: "i1", Label: "second"}},
+	}, func(ctx context.Context, r *jobs.Reporter) {
+		for i, id := range []string{"i0", "i1"} {
+			s := r.Scoped(id+"/", id)
+			s.Add(jobs.ItemSpec{ID: "pull", Label: "Pull"})
+			s.Add(jobs.ItemSpec{ID: "layer", Label: "Layer", Parent: "pull"})
+			s.Update("pull", func(it *jobs.Item) { it.State = jobs.ItemRunning })
+			s.Detail("pull", "detail "+id)
+			s.Finish("layer", jobs.ItemDone, "", "", nil)
+			state := jobs.ItemDone
+			if i == 1 {
+				state = jobs.ItemFailed
+			}
+			s.Finish("pull", state, "", "", nil)
+			r.Finish(id, state, "", "", nil)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.Wait(testsupport.Context(t), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ id, parent, state, detail string }
+	var rows []row
+	for _, it := range got.Items {
+		rows = append(rows, row{it.ID, it.Parent, it.State, it.Detail})
+	}
+	want := []row{
+		{"i0", "", jobs.ItemDone, ""}, {"i1", "", jobs.ItemFailed, ""},
+		{"i0/pull", "i0", jobs.ItemDone, "detail i0"}, {"i0/layer", "i0/pull", jobs.ItemDone, ""},
+		{"i1/pull", "i1", jobs.ItemFailed, "detail i1"}, {"i1/layer", "i1/pull", jobs.ItemDone, ""},
+	}
+	if !slices.Equal(rows, want) {
+		t.Errorf("items = %+v\nwant %+v", rows, want)
+	}
+	if got.State != jobs.JobPartial {
+		t.Errorf("job state = %q, want partial", got.State)
 	}
 }

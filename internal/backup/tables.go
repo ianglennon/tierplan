@@ -123,6 +123,34 @@ var Tables = map[string]Class{
 	"janitor_env_policy":  Included,
 	"janitor_node_policy": Included,
 
+	// What the registries last answered about the tag of each image (Phase 12, D-04): the digest, per
+	// platform, and when and how the last check ended, keyed by registry, repository, tag and the
+	// credential that asked. Badges survive a restore and the fleet view loads without calling a
+	// registry. It is matched to the running digests live, so it states no fact about Docker, and it
+	// holds no credential and no registry text.
+	"image_checks": Included,
+
+	// When each environment is checked for image updates (Phase 12, D-01): the instance defaults (one
+	// seeded row, every 6 hours) and each environment's overrides. A NULL field follows the default, so
+	// nothing here is a copy of a default. No secret.
+	"image_update_defaults":   Included,
+	"image_update_env_policy": Included,
+
+	// What a person asked TierPlan to stop offering image updates for (Phase 12, D-15, D-16): skips of one
+	// remote version of a workload and ignores of an image or a workload, each in one environment. They
+	// are a person's choices, not derived, and hold no secret.
+	"image_update_ignores": Included,
+
+	// The record of every image update (Phase 12, IMG-06): which environment, workload and images, the
+	// state it ended in, who ran it and the revisions it wrote, so what was updated and by whom survives
+	// a restore. It belongs to its environment and holds no credential.
+	"image_update_runs": Included,
+
+	// The digest an image update last failed with, per workload (Phase 12, D-14): so a badge keeps saying
+	// "Update failed, rolled back" for that exact digest and the update is not offered again until a newer
+	// one appears. It belongs to its environment and holds no credential.
+	"image_update_failures": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.
