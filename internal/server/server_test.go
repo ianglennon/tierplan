@@ -951,9 +951,71 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 		t.Errorf("supplied certificate: Strict-Transport-Security = %q, want max-age=31536000", got)
 	}
 
-	// TLS ended in front of TierPlan: the request is plain but the public URL is https.
-	if got := hstsOf(t, map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.example"}, false); got != "max-age=31536000" {
-		t.Errorf("https public URL behind a proxy: Strict-Transport-Security = %q, want max-age=31536000", got)
+	// A plain request with nothing marking it https is not sent HSTS, whatever the public URL says.
+	if got := hstsOf(t, map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.example"}, false); got != "" {
+		t.Errorf("plain request, https public URL: Strict-Transport-Security = %q, want none", got)
+	}
+}
+
+func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
+	const trustedPeer = "203.0.113.9:40000"
+	const untrustedPeer = "198.51.100.7:40000"
+	proto := func(v string) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", v) }
+	}
+	supplied := t.TempDir()
+	if _, err := TLSConfig(config.Config{DataDir: supplied, TLSSelfSigned: true}, "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	suppliedEnv := map[string]string{
+		"TIERPLAN_TLS_CERT_FILE": filepath.Join(supplied, "tls", "selfsigned.crt"),
+		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(supplied, "tls", "selfsigned.key"),
+	}
+	const hsts = "max-age=31536000"
+	withEnv := func(extra map[string]string) map[string]string {
+		env := map[string]string{
+			"TIERPLAN_PUBLIC_URL":      "https://tierplan.example",
+			"TIERPLAN_TRUSTED_PROXIES": "203.0.113.0/24",
+		}
+		for k, v := range extra {
+			env[k] = v
+		}
+		return env
+	}
+	tests := []struct {
+		name   string
+		env    map[string]string
+		target string
+		peer   string
+		mutate func(*http.Request)
+		want   string
+	}{
+		// Plain HTTP that TierPlan answers itself: never, whichever mode and whichever path.
+		{"healthz, no TLS, https public URL", withEnv(nil), "/healthz", untrustedPeer, nil, ""},
+		{"readyz, no TLS, https public URL", withEnv(nil), "/readyz", untrustedPeer, nil, ""},
+		{"healthz, supplied certificate, https public URL", withEnv(suppliedEnv), "/healthz", untrustedPeer, nil, ""},
+		{"healthz, self-signed, https public URL", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, nil, ""},
+		{"loopback request, supplied certificate", withEnv(suppliedEnv), "/api/version", "127.0.0.1:40000", nil, ""},
+		{"ACME challenge path, supplied certificate", withEnv(suppliedEnv), "/.well-known/acme-challenge/tok", untrustedPeer, nil, ""},
+		{"https public URL from a trusted proxy that did not say https", withEnv(nil), "/api/version", trustedPeer, nil, ""},
+		{"trusted proxy saying http", withEnv(nil), "/api/version", trustedPeer, proto("http"), ""},
+		{"untrusted peer claiming https is not believed", withEnv(nil), "/api/version", untrustedPeer, proto("https"), ""},
+		// A trusted proxy that ends TLS: unchanged.
+		{"trusted proxy saying https, https public URL", withEnv(nil), "/api/version", trustedPeer, proto("https"), hsts},
+		{"trusted proxy saying https on /healthz", withEnv(nil), "/healthz", trustedPeer, proto("https"), hsts},
+		{"trusted proxy saying https, http public URL", withEnv(map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.example"}), "/api/version", trustedPeer, proto("https"), ""},
+		// Over TLS: unchanged.
+		{"TLS with a supplied certificate", withEnv(suppliedEnv), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, hsts},
+		{"TLS with the self-signed certificate", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := gateServer(t, tc.env)
+			rec := plainFrom(srv, http.MethodGet, tc.target, tc.peer, tc.mutate)
+			if got := rec.Header().Get("Strict-Transport-Security"); got != tc.want {
+				t.Errorf("status %d: Strict-Transport-Security = %q, want %q", rec.Code, got, tc.want)
+			}
+		})
 	}
 }
 

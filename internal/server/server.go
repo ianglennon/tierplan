@@ -1037,13 +1037,18 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:          proxyObs,
 			PublicOrigin:   inst.PublicOrigin,
 			Logger:         log,
-			// Strict-Transport-Security when the request came over TLS or the
-			// public URL is https, which also covers a TLS-terminating proxy (D-37).
-			// Not for TierPlan's own self-signed certificate: a browser pinned to it
-			// could not click through a regenerated one (WR-09).
+			// Strict-Transport-Security when the request came over TLS, or a trusted
+			// proxy that ends TLS marked it X-Forwarded-Proto: https and the public
+			// URL is https (D-37). Never on a response TierPlan sends over plain
+			// HTTP itself: the health probes, a loopback request and the ACME
+			// challenge path. Not for TierPlan's own self-signed certificate: a
+			// browser pinned to it could not click through a regenerated one (WR-09).
 			HSTS: func(r *http.Request) bool {
 				if r.TLS != nil {
 					return rt.HSTSAllowed()
+				}
+				if httpx.EffectiveScheme(r.Context()) != "https" {
+					return false
 				}
 				return inst.Secure()
 			},
