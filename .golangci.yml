@@ -116,6 +116,24 @@ linters:
               desc: needs CGO, which breaks static multi-arch builds; use modernc.org/sqlite (CLAUDE.md "What NOT to Use")
             - pkg: github.com/docker/cli/cli/compose/loader
               desc: legacy v3.13 schema; TierPlan loads with compose-go v2 in internal/stacks
+        lego-narrow:
+          list-mode: lax
+          files:
+            - $all
+          allow:
+            - github.com/go-acme/lego/v5/providers/dns/cloudflare
+          deny:
+            - pkg: github.com/go-acme/lego/v5/providers/dns
+              desc: import only providers/dns/cloudflare; the aggregate package and the other providers link every DNS SDK into the binary
+            - pkg: github.com/go-acme/lego/v5/cmd
+              desc: the lego CLI is not a library
+        agent-no-lego:
+          list-mode: lax
+          files:
+            - "**/agent/**"
+          deny:
+            - pkg: github.com/go-acme
+              desc: the agent image stays small; ACME belongs to the server only (D-11)
 
   exclusions:
     generated: lax
