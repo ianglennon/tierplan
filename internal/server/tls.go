@@ -50,10 +50,12 @@ const (
 	suppliedRecheck   = time.Minute
 )
 
-// TLSEnabled reports whether the settings ask for HTTPS, from files or from a
-// generated certificate. The healthcheck uses it to pick http or https.
+// TLSEnabled reports whether the environment asks for HTTPS, from files or from a
+// generated certificate. The healthcheck and the redirect gate use it. It is
+// config.Config.EnvTLS, the one definition shared with `tierplan https disable`.
 func TLSEnabled(cfg config.Config) bool {
-	return cfg.TLSSelfSigned || cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
+	_, ok := cfg.EnvTLS()
+	return ok
 }
 
 // TLSConfig returns the TLS configuration to serve with, or nil for plain HTTP (D-12).

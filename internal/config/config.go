@@ -362,6 +362,23 @@ func resolve(s setting, flags *pflag.FlagSet, env func(string) string, readFile 
 	}
 }
 
+// EnvTLS reports whether an environment variable (or its flag) turns TLS on for the
+// whole process: the self-signed switch or a certificate file. variable names the
+// setting for a message. It is the one place that decides this, so the listener, the
+// redirect gate, the health check and `tierplan https disable` cannot disagree (D-18).
+// A lone key file counts: Validate rejects it, but nothing here may treat it as plain.
+func (c Config) EnvTLS() (variable string, ok bool) {
+	switch {
+	case c.TLSSelfSigned:
+		return "TIERPLAN_TLS_SELF_SIGNED", true
+	case c.TLSCertFile != "":
+		return "TIERPLAN_TLS_CERT_FILE", true
+	case c.TLSKeyFile != "":
+		return "TIERPLAN_TLS_KEY_FILE", true
+	}
+	return "", false
+}
+
 // crossCheck validates combinations of settings.
 func (c Config) crossCheck() error {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {

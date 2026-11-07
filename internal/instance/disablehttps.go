@@ -19,7 +19,7 @@ import (
 )
 
 // ErrTLSSetByEnv is returned by DisableHTTPS when TIERPLAN_TLS_SELF_SIGNED or
-// TIERPLAN_TLS_CERT_FILE sets TLS (D-18). Such an install serves HTTPS whatever is
+// TIERPLAN_TLS_CERT_FILE sets TLS, as config.Config.EnvTLS decides (D-18). Such an install serves HTTPS whatever is
 // stored, and an http public URL there would lock the admin out: https sign-in
 // fails the Origin check and plain HTTP is refused (D-14). Nothing is written.
 var ErrTLSSetByEnv = errors.New("TLS is set by an environment variable")
@@ -55,8 +55,8 @@ func DisableHTTPS(ctx context.Context, st *store.Store, cfg config.Config, w *au
 	if cfg.PublicURL != "" {
 		return DisableResult{}, ErrPublicURLLocked
 	}
-	if cfg.TLSSelfSigned || cfg.TLSCertFile != "" {
-		return refuseEnvTLS(ctx, st, cfg)
+	if variable, ok := cfg.EnvTLS(); ok {
+		return refuseEnvTLS(ctx, st, cfg, variable)
 	}
 
 	tx, err := st.Write.BeginTx(ctx, nil)
@@ -163,13 +163,9 @@ func publicURLPort(u *neturl.URL, listen string) (port string, fromStored bool, 
 
 // refuseEnvTLS is the D-18 refusal: TLS is set by an environment variable, so the
 // stored URL is left alone and the operator is told the https address that works and
-// how to get plain HTTP. It reads the stored URL without a write transaction.
-func refuseEnvTLS(ctx context.Context, st *store.Store, cfg config.Config) (DisableResult, error) {
-	variable := "TIERPLAN_TLS_CERT_FILE"
-	if cfg.TLSSelfSigned {
-		variable = "TIERPLAN_TLS_SELF_SIGNED"
-	}
-
+// how to get plain HTTP. variable is the setting cfg.EnvTLS named. It reads the stored
+// URL without a write transaction.
+func refuseEnvTLS(ctx context.Context, st *store.Store, cfg config.Config, variable string) (DisableResult, error) {
 	stored, err := st.RQ.GetSetting(ctx, SettingPublicURL)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return DisableResult{}, fmt.Errorf("read setting %s: %w", SettingPublicURL, err)
