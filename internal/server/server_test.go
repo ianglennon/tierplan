@@ -957,6 +957,49 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 	}
 }
 
+func TestHSTSIsNeverSentOnThePlainRedirectOrRefusal(t *testing.T) {
+	// A redirect or a refusal that carried HSTS could pin a browser to an address that does not
+	// answer yet (D-04), so the gate answers before the router adds it.
+	src := t.TempDir()
+	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	supplied := func(extra map[string]string) map[string]string {
+		env := map[string]string{
+			"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
+			"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
+		}
+		for k, v := range extra {
+			env[k] = v
+		}
+		return env
+	}
+
+	srv := gateServer(t, supplied(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.example"}))
+	rec := plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, nil)
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("redirect: status = %d, want 307", rec.Code)
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("redirect: Strict-Transport-Security = %q, want none", got)
+	}
+
+	srv = gateServer(t, supplied(nil))
+	rec = plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("refusal: status = %d, want 400", rec.Code)
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("refusal: Strict-Transport-Security = %q, want none", got)
+	}
+
+	// What the router serves over TLS still carries it.
+	rec = plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} })
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
+		t.Errorf("served over TLS: Strict-Transport-Security = %q, want max-age=31536000", got)
+	}
+}
+
 // healthyOn serves a 200 on ln and returns its port.
 func healthyOn(t *testing.T, ln net.Listener) string {
 	t.Helper()
