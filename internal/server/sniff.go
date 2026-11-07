@@ -4,6 +4,7 @@
 package server
 
 import (
+	"container/list"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -19,7 +20,9 @@ import (
 const sniffTimeout = 10 * time.Second
 
 // maxPendingSniffs is how many connections may wait for their first byte at once. Each costs one
-// goroutine and a few KiB; the next one is closed at once.
+// goroutine and a few KiB. When the limit is reached the oldest waiting connection is closed to make
+// room, so a flood of silent sockets cannot lock everyone else out. A loopback peer is never counted
+// against the limit and never closed for it: the container's own health probe dials 127.0.0.1.
 const maxPendingSniffs = 1024
 
 // acceptBackoffMin and acceptBackoffMax bound the wait after a temporary Accept error (a client that
@@ -89,8 +92,12 @@ type sniffListener struct {
 	failOnce  sync.Once
 	err       error
 
+	// pending holds every connection waiting for its first byte. The value is the connection's
+	// place in order, or nil for a loopback peer, which is outside the limit. order holds the
+	// others, oldest first, so a full limit can close the oldest.
 	mu         sync.Mutex
-	pending    map[net.Conn]struct{}
+	pending    map[net.Conn]*list.Element
+	order      *list.List
 	closed     bool
 	maxPending int
 	wg         sync.WaitGroup
@@ -114,7 +121,8 @@ func newSniffListenerCap(base net.Listener, rt *httpsRuntime, after afterFunc, m
 		ready:      make(chan net.Conn),
 		done:       make(chan struct{}),
 		failed:     make(chan struct{}),
-		pending:    make(map[net.Conn]struct{}),
+		pending:    make(map[net.Conn]*list.Element),
+		order:      list.New(),
 		maxPending: maxPending,
 	}
 	l.wg.Add(1)
@@ -156,7 +164,11 @@ func (l *sniffListener) acceptLoop() {
 		}
 		backoff = acceptBackoffMin
 		// No per-address limit: Docker's proxy and swarm ingress make every client one address.
-		if !l.register(c) {
+		admitted, evicted := l.register(c)
+		if evicted != nil {
+			_ = evicted.Close()
+		}
+		if !admitted {
 			_ = c.Close()
 			continue
 		}
@@ -186,20 +198,44 @@ func (l *sniffListener) fail(err error) {
 }
 
 // register adds c to the connections waiting for their first byte. It reports false when c must be
-// closed instead: the listener is closed, or too many connections are already waiting.
-func (l *sniffListener) register(c net.Conn) bool {
+// closed instead, which happens only when the listener is closed. When the limit is full and c is
+// not a loopback peer, the oldest waiting connection is removed to make room and returned; the
+// caller closes it. A loopback peer is always admitted and is not counted against the limit.
+func (l *sniffListener) register(c net.Conn) (admitted bool, evicted net.Conn) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || len(l.pending) >= l.maxPending {
-		return false
+	if l.closed {
+		return false, nil
 	}
-	l.pending[c] = struct{}{}
-	return true
+	if isLoopbackConn(c) {
+		l.pending[c] = nil
+		return true, nil
+	}
+	if l.order.Len() >= l.maxPending {
+		oldest := l.order.Front()
+		if v, ok := l.order.Remove(oldest).(net.Conn); ok {
+			evicted = v
+			delete(l.pending, v)
+		}
+	}
+	l.pending[c] = l.order.PushBack(c)
+	return true, evicted
+}
+
+// isLoopbackConn reports whether c's TCP peer is a loopback address.
+func isLoopbackConn(c net.Conn) bool {
+	a := c.RemoteAddr()
+	return a != nil && isLoopbackPeer(a.String())
 }
 
 func (l *sniffListener) forget(c net.Conn) {
 	l.mu.Lock()
-	delete(l.pending, c)
+	if e, ok := l.pending[c]; ok {
+		if e != nil {
+			l.order.Remove(e)
+		}
+		delete(l.pending, c)
+	}
 	l.mu.Unlock()
 }
 
@@ -229,6 +265,9 @@ func (l *sniffListener) classify(c net.Conn) {
 		_ = c.Close()
 		return
 	}
+	// It has spoken, so it is no longer waiting: leave the set before anything else, so a full
+	// limit can never close a connection that is already being handed on.
+	l.forget(c)
 	pc := &prefixConn{Conn: c, b: b[0], has: true}
 	var out net.Conn = pc
 	if b[0] == tlsHandshakeRecord {
@@ -238,7 +277,6 @@ func (l *sniffListener) classify(c net.Conn) {
 			out = tls.Server(pc, cfg)
 		}
 	}
-	l.forget(c)
 	select {
 	case l.ready <- out:
 	case <-l.done:

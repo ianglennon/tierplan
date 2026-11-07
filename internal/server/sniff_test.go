@@ -10,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -178,21 +180,153 @@ func TestSniffHandsOverAConnectionWhileAnEarlierOneIsSilent(t *testing.T) {
 	}
 }
 
-func TestSniffCapsPendingConnections(t *testing.T) {
-	r := newSniffRig(t, 2, true)
-	a, b := r.dial(t), r.dial(t)
-	r.timers.WaitArmed(t)
-	r.timers.WaitArmed(t)
+// capRig is a sniffing listener over a scripted base, so each connection reports the peer address the
+// test gives it. Every real test client is on loopback, which the cap exempts, so the cap itself can
+// only be reached with a made-up peer. The connections are in-memory pipes: no socket, no port, and
+// closing one end is seen at the other at once.
+type capRig struct {
+	l      *sniffListener
+	base   *scriptedListener
+	timers *manualTimers
+}
 
-	third := r.dial(t)
-	if err := readErr(t, third); !errors.Is(err, io.EOF) {
-		t.Fatalf("the connection over the cap got %v, want it closed at once", err)
+// loopbackPeer is a loopback peer address. publicAt gives a public one (RFC 5737 documentation range).
+const loopbackPeer = "127.0.0.1:40001"
+
+func newCapRig(t *testing.T, maxPending int) *capRig {
+	t.Helper()
+	base := newScriptedListener()
+	timers := newManualTimers()
+	l := newSniffListenerCap(base, newHTTPSRuntime(), timers.after, maxPending)
+	t.Cleanup(func() { _ = l.Close() })
+	return &capRig{l: l, base: base, timers: timers}
+}
+
+// connect hands the listener one connection from peer and waits until it is pending (its peek timer
+// is armed). It returns the client end.
+func (r *capRig) connect(t *testing.T, peer string) net.Conn {
+	t.Helper()
+	ap, err := netip.ParseAddrPort(peer)
+	if err != nil {
+		t.Fatal(err)
 	}
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	r.base.push(t, acceptResult{conn: addrConn{Conn: server, remote: net.TCPAddrFromAddrPort(ap)}})
+	if d := r.timers.WaitArmed(t); d != sniffTimeout {
+		t.Fatalf("the peek timer was armed for %v, want %v", d, sniffTimeout)
+	}
+	return client
+}
+
+// publicAt is a public peer address with its own port, so a test can tell connections apart.
+func publicAt(port int) string { return "203.0.113.7:" + strconv.Itoa(port) }
+
+// speak sends one byte from client and returns the connection the listener hands over for it.
+func (r *capRig) speak(t *testing.T, client net.Conn, b byte) net.Conn {
+	t.Helper()
+	accepted := acceptAsync(r.l)
+	go func() { _, _ = client.Write([]byte{b}) }()
+	got := testsupport.Await(t, "the listener to hand over the connection that spoke", accepted)
+	if got.err != nil {
+		t.Fatalf("Accept: %v", got.err)
+	}
+	t.Cleanup(func() { _ = got.conn.Close() })
+	var first [1]byte
+	if _, err := io.ReadFull(got.conn, first[:]); err != nil || first[0] != b {
+		t.Fatalf("Accept returned a connection that read %q, %v; want the one that sent %q", first[:], err, b)
+	}
+	return got.conn
+}
+
+func TestSniffFullCapEvictsTheOldestPendingConnectionAndServesTheNewOne(t *testing.T) {
+	r := newCapRig(t, 2)
+	oldest := r.connect(t, publicAt(40001))
+	second := r.connect(t, publicAt(40002))
 	if n := r.l.pendingCount(); n != 2 {
 		t.Fatalf("%d connections pending, want the two under the cap", n)
 	}
 
-	accepted := acceptAsync(r.l)
+	newest := r.connect(t, publicAt(40003))
+	// The oldest silent connection is the one closed; the newcomer is not dropped.
+	if err := readErr(t, oldest); !errors.Is(err, io.EOF) {
+		t.Fatalf("the oldest pending connection got %v, want it closed to make room", err)
+	}
+	if n := r.l.pendingCount(); n != 2 {
+		t.Fatalf("%d connections pending after the eviction, want the cap of 2", n)
+	}
+	r.speak(t, newest, 'N')
+	if n := r.l.pendingCount(); n != 1 {
+		t.Fatalf("%d connections pending after the newcomer spoke, want only the second", n)
+	}
+
+	// The second connection was spared, so it still works when it speaks.
+	r.speak(t, second, 'S')
+	if n := r.l.pendingCount(); n != 0 {
+		t.Fatalf("%d connections pending, want 0", n)
+	}
+}
+
+func TestSniffEvictsInArrivalOrder(t *testing.T) {
+	r := newCapRig(t, 2)
+	first := r.connect(t, publicAt(40001))
+	second := r.connect(t, publicAt(40002))
+	third := r.connect(t, publicAt(40003))
+	if err := readErr(t, first); !errors.Is(err, io.EOF) {
+		t.Fatalf("the first connection got %v, want it evicted", err)
+	}
+	fourth := r.connect(t, publicAt(40004))
+	if err := readErr(t, second); !errors.Is(err, io.EOF) {
+		t.Fatalf("the second connection got %v, want it evicted next", err)
+	}
+	// A connection that spoke has left the line: it is not evicted later in place of a silent one.
+	r.speak(t, third, 'T')
+	fifth := r.connect(t, publicAt(40005))
+	r.speak(t, fourth, 'F')
+	r.speak(t, fifth, 'V')
+}
+
+func TestSniffFullCapStillAdmitsLoopbackPeers(t *testing.T) {
+	r := newCapRig(t, 2)
+	a := r.connect(t, publicAt(40001))
+	b := r.connect(t, publicAt(40002))
+
+	// The health probe dials 127.0.0.1: it is admitted over the full cap, nobody is evicted for it,
+	// and it is served.
+	probe := r.connect(t, loopbackPeer)
+	if n := r.l.pendingCount(); n != 3 {
+		t.Fatalf("%d connections pending, want the two public ones and the loopback one", n)
+	}
+	r.speak(t, probe, 'P')
+
+	// Loopback connections do not use up the cap either: more of them leave the public ones alone.
+	for range 3 {
+		r.connect(t, loopbackPeer)
+	}
+	if n := r.l.pendingCount(); n != 5 {
+		t.Fatalf("%d connections pending, want the two public ones and three loopback ones", n)
+	}
+	r.speak(t, a, 'A')
+	r.speak(t, b, 'B')
+}
+
+func TestSniffLoopbackPeersDoNotCrowdOutOthers(t *testing.T) {
+	r := newCapRig(t, 2)
+	for range 4 {
+		r.connect(t, loopbackPeer)
+	}
+	// Four loopback connections wait, and a public one is still admitted without evicting any of them.
+	public := r.connect(t, publicAt(40001))
+	if n := r.l.pendingCount(); n != 5 {
+		t.Fatalf("%d connections pending, want all five", n)
+	}
+	r.speak(t, public, 'P')
+}
+
+func TestSniffCapFreesWhenTheTimersFire(t *testing.T) {
+	r := newCapRig(t, 2)
+	a := r.connect(t, publicAt(40001))
+	b := r.connect(t, publicAt(40002))
 	r.timers.FireAll()
 	for _, c := range []net.Conn{a, b} {
 		if err := readErr(t, c); !errors.Is(err, io.EOF) {
@@ -202,15 +336,8 @@ func TestSniffCapsPendingConnections(t *testing.T) {
 	if n := r.l.pendingCount(); n != 0 {
 		t.Fatalf("%d connections pending after the timers fired, want 0", n)
 	}
-	// Room again: a new connection is taken, and it is the first one that reaches Accept.
-	if _, err := r.dial(t).Write([]byte("N")); err != nil {
-		t.Fatal(err)
-	}
-	got := testsupport.Await(t, "the listener to take a connection once there is room", accepted)
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	_ = got.conn.Close()
+	// Room again: the next connection is taken and served, with nothing evicted.
+	r.speak(t, r.connect(t, publicAt(40003)), 'N')
 }
 
 func TestSniffCloseClosesPendingAndAcceptReturnsErrClosed(t *testing.T) {
