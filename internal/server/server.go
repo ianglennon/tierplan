@@ -76,14 +76,24 @@ const maxHeaderBytes = 64 << 10
 // newHTTPServer returns the http.Server TierPlan serves with. huma already caps
 // JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here. Production
 // passes defaultReadTimeout.
-func newHTTPServer(h http.Handler, tlsCfg *tls.Config, readTimeout time.Duration) *http.Server {
+//
+// It serves HTTP/1.1 and, over TLS, HTTP/2. HTTP/2 over a plain connection (h2c)
+// is never enabled (D-17). The server has no TLSConfig of its own: the sniffing
+// listener hands it connections that are already *tls.Conn, configured by the
+// runtime, and a TLSConfig here that lacked "h2" would let a client negotiate h2
+// with a server that cannot speak it. The TLS parameter is kept so the callers
+// that pass nil keep compiling, and it is ignored.
+func newHTTPServer(h http.Handler, _ *tls.Config, readTimeout time.Duration) *http.Server {
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
 	return &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
-		TLSConfig:         tlsCfg,
+		Protocols:         &protocols,
 	}
 }
 
@@ -1384,9 +1394,9 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 }
 
 // httpServer is the http.Server the process serves with: production's read
-// timeout, the TLS settings the configuration chose.
+// timeout. TLS is not on it: the sniffing listener decides per connection.
 func (s *Server) httpServer() *http.Server {
-	return newHTTPServer(s.Handler(), s.https.ServerConfig(), defaultReadTimeout)
+	return newHTTPServer(s.Handler(), nil, defaultReadTimeout)
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -1407,14 +1417,13 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).
 	srv.RegisterOnShutdown(s.tunnel.Close)
 	errc := make(chan error, 1)
-	// With a TLS config the certificate is already in it, so the file names are empty.
+	// Every mode serves through the one sniffing listener, which tells TLS from plain HTTP on each
+	// connection (D-01). The scheme logged is the one at start; TLS can come and go while running.
 	scheme := "http"
 	if s.https.Live() {
 		scheme = "https"
-		go func() { errc <- srv.ServeTLS(ln, "", "") }()
-	} else {
-		go func() { errc <- srv.Serve(ln) }()
 	}
+	go func() { errc <- srv.Serve(newSniffListener(ln, s.https, nil)) }()
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
 	// bound address, so ":0" shows as the real port.

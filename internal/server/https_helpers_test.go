@@ -99,3 +99,77 @@ func genCert(t *testing.T, commonName string) (tls.Certificate, *x509.Certificat
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, leaf
 }
+
+// manualTimers stands in for time.AfterFunc under the sniffing listener: nothing waits on real time.
+// Each armed timer is recorded and announced, so a test that fires them knows the listener has armed
+// them and never sleeps to find out. Its after method matches afterFunc.
+type manualTimers struct {
+	mu     sync.Mutex
+	timers []*manualTimer
+	armed  chan time.Duration
+}
+
+type manualTimer struct {
+	d       time.Duration
+	f       func()
+	stopped bool
+	fired   bool
+}
+
+func newManualTimers() *manualTimers {
+	return &manualTimers{armed: make(chan time.Duration, 4096)}
+}
+
+// after arms a timer. The stop func it returns behaves as time.Timer.Stop does: true when it stopped
+// the timer before it fired, false when the timer had already fired or was stopped before.
+func (m *manualTimers) after(d time.Duration, f func()) func() bool {
+	t := &manualTimer{d: d, f: f}
+	m.mu.Lock()
+	m.timers = append(m.timers, t)
+	m.mu.Unlock()
+	m.armed <- d
+	return func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if t.stopped || t.fired {
+			return false
+		}
+		t.stopped = true
+		return true
+	}
+}
+
+// WaitArmed waits for the next timer to be armed and returns its duration.
+func (m *manualTimers) WaitArmed(t *testing.T) time.Duration {
+	t.Helper()
+	return testsupport.Await(t, "the listener to arm a timer", m.armed)
+}
+
+// Pending is how many timers are armed and neither stopped nor fired.
+func (m *manualTimers) Pending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, t := range m.timers {
+		if !t.stopped && !t.fired {
+			n++
+		}
+	}
+	return n
+}
+
+// FireAll runs the callback of every timer that is neither stopped nor fired.
+func (m *manualTimers) FireAll() {
+	m.mu.Lock()
+	var due []*manualTimer
+	for _, t := range m.timers {
+		if !t.stopped && !t.fired {
+			t.fired = true
+			due = append(due, t)
+		}
+	}
+	m.mu.Unlock()
+	for _, t := range due {
+		t.f()
+	}
+}

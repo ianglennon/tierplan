@@ -324,9 +324,10 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 	if err := Healthcheck(context.Background(), ":"+port, missing); err == nil || !strings.Contains(err.Error(), "none.crt") {
 		t.Fatalf("a missing certificate file gave %v, want an error naming it", err)
 	}
-	// Plain HTTP against the TLS listener must not pass as healthy.
-	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil {
-		t.Fatal("a plain-HTTP healthcheck against a TLS listener should fail")
+	// The port answers plain HTTP as well (D-01), and /healthz is exempt from the redirect gate, so a
+	// plain probe passes against a TLS install too.
+	if err := Healthcheck(context.Background(), ":"+port, ""); err != nil {
+		t.Fatalf("a plain-HTTP healthcheck against the shared listener: %v", err)
 	}
 
 	// A real client sees the certificate, and the server logs its fingerprint.
