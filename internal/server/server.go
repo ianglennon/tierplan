@@ -290,6 +290,7 @@ type buildOptions struct {
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
 	tlsRefreshClock stackops.Clock
+	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
 }
@@ -325,6 +326,15 @@ func WithJanitorClock(c stackops.Clock) Option {
 // which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
 func WithTLSRefreshClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.tlsRefreshClock = c }
+}
+
+// WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
+// settings are read again to see a change another process made (`tierplan https disable`). It exists
+// for tests, which move it by a poll interval instead of waiting for one. It is a Go option only,
+// like WithJanitorClock: no setting, flag or environment variable reaches it, so a production build,
+// which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
+func WithSettingsClock(c instance.Clock) Option {
+	return func(o *buildOptions) { o.settingsClock = c }
 }
 
 // WithoutJanitorScheduler keeps the janitor's scheduler from running, so that no environment is cleaned
@@ -1169,6 +1179,17 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if tlsSrc != nil {
 		srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
 	}
+	// A setting another process wrote (`tierplan https disable`) is applied here within one poll,
+	// so the redirect gate, the cookie scope and the Origin check follow it without a restart. The
+	// watcher only reloads the instance's cached values: it pushes no address to agents. Connected
+	// wss agents stay valid because the hub compares the audience without the scheme, and a new
+	// ws:// endpoint must never be pushed.
+	settingsClock := bo.settingsClock
+	if settingsClock == nil {
+		settingsClock = stackops.RealClock()
+	}
+	watcher := &instance.Watcher{Inst: inst, Store: st, Clock: settingsClock, Every: instance.SettingsPollInterval, Log: log}
+	srv.background.Go(func() { watcher.Run(bg) })
 	// Scheduled backups wait for the next instant the saved schedule names.
 	srv.background.Go(func() { backups.Run(bg) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
