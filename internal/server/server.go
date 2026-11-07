@@ -1330,8 +1330,15 @@ func (s *Server) Routes() []httpx.RouteRecord { return s.router.Routes() }
 // Handler is the root HTTP handler: the router behind StripBasePath, so a
 // request under the public URL's path reaches the same routes whether or not a
 // proxy stripped the prefix. It runs before chi and every middleware (D-50).
+//
+// The HTTPS gate runs inside the stripper and in front of the router, so
+// /healthz, /readyz and the redirect target are judged on the path below the
+// base, and what the gate answers never reaches the router's security headers
+// (no HSTS on a redirect or a refusal). This is a deliberate deviation from the
+// milestone architecture draft, which put the gate outside the stripper.
 func (s *Server) Handler() http.Handler {
-	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
+	gate := newHTTPSGate(s.https, s.inst.PublicURL, TLSEnabled(s.cfg), s.cfg.TrustedProxies)
+	return httpx.StripBasePath(s.inst.BasePath)(gate(s.router.Handler()))
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s. When
