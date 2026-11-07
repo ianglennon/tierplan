@@ -5,9 +5,11 @@ package server
 
 import (
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -19,6 +21,13 @@ const sniffTimeout = 10 * time.Second
 // maxPendingSniffs is how many connections may wait for their first byte at once. Each costs one
 // goroutine and a few KiB; the next one is closed at once.
 const maxPendingSniffs = 1024
+
+// acceptBackoffMin and acceptBackoffMax bound the wait after a temporary Accept error (a client that
+// aborted, or the process out of file descriptors). The wait doubles from the first to the second.
+const (
+	acceptBackoffMin = 5 * time.Millisecond
+	acceptBackoffMax = time.Second
+)
 
 // tlsHandshakeRecord is the first byte of a TLS ClientHello (the handshake record type).
 const tlsHandshakeRecord = 0x16
@@ -89,6 +98,12 @@ type sniffListener struct {
 
 // newSniffListener serves base through rt. A nil after means real timers.
 func newSniffListener(base net.Listener, rt *httpsRuntime, after afterFunc) *sniffListener {
+	return newSniffListenerCap(base, rt, after, maxPendingSniffs)
+}
+
+// newSniffListenerCap is newSniffListener with its own limit on the connections waiting for a first
+// byte, so a test can use a small one.
+func newSniffListenerCap(base net.Listener, rt *httpsRuntime, after afterFunc, maxPending int) *sniffListener {
 	if after == nil {
 		after = realAfter
 	}
@@ -100,31 +115,66 @@ func newSniffListener(base net.Listener, rt *httpsRuntime, after afterFunc) *sni
 		done:       make(chan struct{}),
 		failed:     make(chan struct{}),
 		pending:    make(map[net.Conn]struct{}),
-		maxPending: maxPendingSniffs,
+		maxPending: maxPending,
 	}
 	l.wg.Add(1)
 	go l.acceptLoop()
 	return l
 }
 
+// isTemporaryAcceptError reports an Accept error that clears by itself: a timeout, a connection the
+// client aborted, or the process or the system out of file descriptors.
+func isTemporaryAcceptError(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE)
+}
+
+// acceptLoop only accepts; it never reads, so a client that sends nothing cannot hold up the next.
 func (l *sniffListener) acceptLoop() {
 	defer l.wg.Done()
+	backoff := acceptBackoffMin
 	for {
 		c, err := l.base.Accept()
 		if err != nil {
 			select {
 			case <-l.done:
+				return
 			default:
-				l.fail(err)
 			}
-			return
+			if !isTemporaryAcceptError(err) {
+				l.fail(err)
+				return
+			}
+			if !l.sleep(backoff) {
+				return
+			}
+			backoff = min(backoff*2, acceptBackoffMax)
+			continue
 		}
+		backoff = acceptBackoffMin
+		// No per-address limit: Docker's proxy and swarm ingress make every client one address.
 		if !l.register(c) {
 			_ = c.Close()
 			continue
 		}
 		l.wg.Add(1)
 		go l.classify(c)
+	}
+}
+
+// sleep waits d through the injected timer. It reports false when the listener was closed first.
+func (l *sniffListener) sleep(d time.Duration) bool {
+	woke := make(chan struct{})
+	stop := l.after(d, func() { close(woke) })
+	select {
+	case <-woke:
+		return true
+	case <-l.done:
+		stop()
+		return false
 	}
 }
 
@@ -136,11 +186,11 @@ func (l *sniffListener) fail(err error) {
 }
 
 // register adds c to the connections waiting for their first byte. It reports false when c must be
-// closed instead.
+// closed instead: the listener is closed, or too many connections are already waiting.
 func (l *sniffListener) register(c net.Conn) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed {
+	if l.closed || len(l.pending) >= l.maxPending {
 		return false
 	}
 	l.pending[c] = struct{}{}
@@ -153,11 +203,23 @@ func (l *sniffListener) forget(c net.Conn) {
 	l.mu.Unlock()
 }
 
+// pendingCount is how many connections are waiting for their first byte.
+func (l *sniffListener) pendingCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.pending)
+}
+
 // classify reads the first byte of c and hands it on as a TLS connection or a plain one. It closes
 // quietly a connection that stays silent, or that the client drops, before the first byte.
 func (l *sniffListener) classify(c net.Conn) {
 	defer l.wg.Done()
-	stop := l.after(sniffTimeout, func() { _ = c.Close() })
+	// The timer leaves the pending set before it closes, so the count is already down when the
+	// client sees the close.
+	stop := l.after(sniffTimeout, func() {
+		l.forget(c)
+		_ = c.Close()
+	})
 	var b [1]byte
 	_, err := io.ReadFull(c, b[:])
 	// stop runs before the connection is handed on, so the timer can never close a connection that
