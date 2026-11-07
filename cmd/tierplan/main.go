@@ -69,6 +69,7 @@ func newRoot() *cobra.Command {
 		newAuditCmd(),
 		newSetupTokenCmd(),
 		newUserCmd(),
+		newHTTPSCmd(),
 		newBackupCmd(),
 		newRestoreCmd(),
 		newKeyCmd(),

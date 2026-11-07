@@ -60,9 +60,10 @@ var errNoSuchUser = errors.New("no such user")
 // errUserDisabled is a reset for a user who cannot sign in.
 var errUserDisabled = errors.New("user is disabled")
 
-// userTools is what a command that changes a user from the host needs: the
-// store and an audit writer that signs with the server's own key.
-type userTools struct {
+// hostTools is what a command that changes the instance from the host needs: the
+// store and an audit writer that signs with the server's own key. The `user` and
+// `https` subcommands share it.
+type hostTools struct {
 	ctx   context.Context
 	cfg   config.Config
 	store *store.Store
@@ -71,9 +72,10 @@ type userTools struct {
 	fail func(err error) error
 }
 
-// openUserTools opens the data directory for a `tierplan user` subcommand. The
-// returned func closes the store.
-func openUserTools(cmd *cobra.Command, name string) (*userTools, func(), error) {
+// openHostTools opens the data directory for a host-side subcommand such as
+// `user unlock` or `https disable`; command names it in the messages it prints.
+// The returned func closes the store.
+func openHostTools(cmd *cobra.Command, command string) (*hostTools, func(), error) {
 	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return nil, nil, err
@@ -83,7 +85,7 @@ func openUserTools(cmd *cobra.Command, name string) (*userTools, func(), error) 
 		ctx = context.Background()
 	}
 	fail := func(err error) error {
-		fmt.Fprintln(cmd.ErrOrStderr(), "user "+name+":", err)
+		fmt.Fprintln(cmd.ErrOrStderr(), command+":", err)
 		return err
 	}
 
@@ -111,11 +113,11 @@ func openUserTools(cmd *cobra.Command, name string) (*userTools, func(), error) 
 	// The audit writer logs every entry it appends; the command's own output is
 	// the answer, so that log goes nowhere.
 	w := audit.NewWriter(st, v, slog.New(slog.DiscardHandler), nil)
-	return &userTools{ctx: ctx, cfg: cfg, store: st, audit: w, fail: fail}, func() { _ = st.Close() }, nil
+	return &hostTools{ctx: ctx, cfg: cfg, store: st, audit: w, fail: fail}, func() { _ = st.Close() }, nil
 }
 
 func runUserUnlock(cmd *cobra.Command, name string) error {
-	tools, closeTools, err := openUserTools(cmd, "unlock")
+	tools, closeTools, err := openHostTools(cmd, "user unlock")
 	if err != nil {
 		return err
 	}
@@ -138,7 +140,7 @@ func runUserUnlock(cmd *cobra.Command, name string) error {
 // two cannot disagree. It works for the last instance admin: no guard applies to
 // a reset.
 func runUserResetPassword(cmd *cobra.Command, name string) error {
-	tools, closeTools, err := openUserTools(cmd, "reset-password")
+	tools, closeTools, err := openHostTools(cmd, "user reset-password")
 	if err != nil {
 		return err
 	}
