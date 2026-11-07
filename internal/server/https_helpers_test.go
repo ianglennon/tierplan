@@ -6,6 +6,8 @@ package server
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"net"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -173,3 +175,43 @@ func (m *manualTimers) FireAll() {
 		t.f()
 	}
 }
+
+// fakeAddrListener wraps a listener so every connection it accepts reports a chosen peer address.
+// Every Go test client is on loopback, so without it the gate's non-loopback branches could only be
+// reached by calling the handler directly, never over a real socket through the sniffing listener.
+type fakeAddrListener struct {
+	net.Listener
+	remote net.Addr
+}
+
+// defaultFakePeer is a documentation-range address (RFC 5737): public, never loopback.
+const defaultFakePeer = "203.0.113.9:40000"
+
+// newFakeAddrListener reports peer (default defaultFakePeer) as the remote address of every
+// connection accepted from ln.
+func newFakeAddrListener(t *testing.T, ln net.Listener, peer string) fakeAddrListener {
+	t.Helper()
+	if peer == "" {
+		peer = defaultFakePeer
+	}
+	ap, err := netip.ParseAddrPort(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fakeAddrListener{Listener: ln, remote: net.TCPAddrFromAddrPort(ap)}
+}
+
+func (l fakeAddrListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return addrConn{Conn: c, remote: l.remote}, nil
+}
+
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c addrConn) RemoteAddr() net.Addr { return c.remote }
