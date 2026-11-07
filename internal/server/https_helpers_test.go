@@ -4,6 +4,8 @@
 package server
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"sync"
 	"testing"
 	"time"
@@ -72,4 +74,28 @@ func (c *stepClock) Tick(t *testing.T, d time.Duration) {
 	t.Helper()
 	c.WaitArmed(t)
 	c.Advance(d)
+}
+
+// genCert makes a certificate of its own, with its own key, that a client can verify with a pool
+// and ServerName "localhost". commonName is added to the names, so two certificates differ in more
+// than their serial number. Plans 05-08 reuse it.
+func genCert(t *testing.T, commonName string) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := newKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := names{dns: []string{"localhost"}, ips: []string{"127.0.0.1", "::1"}}
+	if commonName != "" && commonName != "localhost" {
+		want.dns = sortedKeys(map[string]bool{"localhost": true, commonName: true})
+	}
+	der, err := signCertificate(key, want, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, leaf
 }
