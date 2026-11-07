@@ -1851,7 +1851,7 @@
   },
   {
     "name": "github.com/ProtonMail/go-crypto",
-    "version": "v1.4.1",
+    "version": "v1.5.2",
     "licence": "BSD-3-Clause"
   },
   {
@@ -2061,27 +2061,27 @@
   },
   {
     "name": "golang.org/x/crypto",
-    "version": "v0.57.0",
-    "licence": "BSD-3-Clause"
-  },
-  {
-    "name": "golang.org/x/net",
     "version": "v0.58.0",
     "licence": "BSD-3-Clause"
   },
   {
+    "name": "golang.org/x/net",
+    "version": "v0.62.0",
+    "licence": "BSD-3-Clause"
+  },
+  {
     "name": "golang.org/x/sync",
-    "version": "v0.23.0",
+    "version": "v0.24.0",
     "licence": "BSD-3-Clause"
   },
   {
     "name": "golang.org/x/sys",
-    "version": "v0.48.0",
+    "version": "v0.49.0",
     "licence": "BSD-3-Clause"
   },
   {
     "name": "golang.org/x/text",
-    "version": "v0.42.0",
+    "version": "v0.43.0",
     "licence": "BSD-3-Clause"
   },
   {
@@ -2096,7 +2096,7 @@
   },
   {
     "name": "google.golang.org/genproto/googleapis/rpc",
-    "version": "v0.0.0-20260831171406-18b4a7587f8a",
+    "version": "v0.0.0-20261019180522-ce908d29299b",
     "licence": "Apache-2.0"
   },
   {
