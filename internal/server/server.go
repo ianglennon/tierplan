@@ -137,8 +137,9 @@ type Server struct {
 	agents  *agents.Service
 	updater *agents.Updater
 	router  *httpx.Router
-	// tlsConfig is nil when the server speaks plain HTTP (D-12).
-	tlsConfig *tls.Config
+	// https is the live TLS state: every handshake, pin and HSTS decision reads
+	// it. Nothing but Build and tests calls Install (D-12).
+	https *httpsRuntime
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -278,6 +279,7 @@ type buildOptions struct {
 	refusalClock    func() time.Time
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
+	tlsRefreshClock stackops.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
 }
@@ -304,6 +306,15 @@ func WithAddressSpaceClock(now func() time.Time) Option {
 // always reads the real time. A nil clock keeps the wall clock.
 func WithJanitorClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.janitorClock = c }
+}
+
+// WithTLSRefreshClock replaces the clock the certificate refresh loop waits on, which decides when
+// a renewed certificate or a replaced cert-file pair is looked at again. It exists for tests, which
+// move it by a recheck interval instead of waiting for one. It is a Go option only, like
+// WithJanitorClock: no setting, flag or environment variable reaches it, so a production build,
+// which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
+func WithTLSRefreshClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.tlsRefreshClock = c }
 }
 
 // WithoutJanitorScheduler keeps the janitor's scheduler from running, so that no environment is cleaned
@@ -627,20 +638,28 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
 	// (D-12). It is prepared here so a bad pair stops startup before listening.
-	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), inst.AgentURL(), nil)
+	tlsClock := bo.tlsRefreshClock
+	if tlsClock == nil {
+		tlsClock = stackops.RealClock()
+	}
+	tlsSrc, tlsSrcKind, err := newCertSource(cfg, inst.PublicURL(), inst.AgentURL(), tlsClock.Now)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
 	}
-	switch {
-	case tlsCfg == nil:
+	rt := newHTTPSRuntime()
+	if tlsSrc != nil {
+		rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
+	}
+	switch rt.Kind() {
+	case tlsKindNone:
 		log.Info("serving plain HTTP; set TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE, TIERPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
-	case cfg.TLSSelfSigned:
+	case tlsKindSelfSigned:
 		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
-			"sha256", fingerprint(tlsCfg), "tls_pin", spkiPin(tlsCfg),
+			"sha256", fingerprint(rt.Config()), "tls_pin", spkiPin(rt.Config()),
 			"certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
 	default:
-		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(tlsCfg))
+		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(rt.Config()))
 	}
 
 	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
@@ -702,7 +721,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The pin an install command carries, and the hint a refused agent gets, are
 	// both read when asked: the pin changes only if the self-signed key is
 	// replaced, and the endpoint follows Settings.
-	tlsPin := func() string { return firstSelfSignedPin(cfg, tlsCfg) }
+	tlsPin := rt.Pin
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -719,7 +738,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// Every welcome, and every push when an address changes, carries the
 		// endpoint agents are told to dial (D-19).
 		WithEndpoint(inst.AgentEndpoint).
-		WithPins(func() []string { return selfSignedPins(cfg, tlsCfg) }).
+		WithPins(rt.Pins).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
 		WithServerVersion(buildinfo.Get().Version).
@@ -1004,7 +1023,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			// could not click through a regenerated one (WR-09).
 			HSTS: func(r *http.Request) bool {
 				if r.TLS != nil {
-					return !cfg.TLSSelfSigned
+					return rt.HSTSAllowed()
 				}
 				return inst.Secure()
 			},
@@ -1128,13 +1147,18 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		agents:     agentSvc,
 		updater:    updater,
 		router:     router,
-		tlsConfig:  tlsCfg,
+		https:      rt,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
 	bg, stop := context.WithCancel(ctx)
 	srv.stopBackground = stop
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
+	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
+	// the handshake path, so a handshake never waits on the disk.
+	if tlsSrc != nil {
+		srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
+	}
 	// Scheduled backups wait for the next instant the saved schedule names.
 	srv.background.Go(func() { backups.Run(bg) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
@@ -1235,28 +1259,7 @@ func (s *Server) Clusters() *envs.Clusters { return s.clusters }
 // generated for itself, which an install command carries so the agent can trust
 // it (D-06). It is empty when TierPlan serves a supplied certificate or plain
 // HTTP: the first is the operator's to pin, the second has nothing to pin.
-func (s *Server) TLSPin() string { return firstSelfSignedPin(s.cfg, s.tlsConfig) }
-
-// firstSelfSignedPin is the pin an install command carries: the generated
-// certificate's, and "" when there is none.
-func firstSelfSignedPin(cfg config.Config, tlsCfg *tls.Config) string {
-	if p := selfSignedPins(cfg, tlsCfg); len(p) > 0 {
-		return p[0]
-	}
-	return ""
-}
-
-// selfSignedPins is the pin list a welcome carries: the generated certificate's
-// pin, and nothing for a supplied certificate or plain HTTP.
-func selfSignedPins(cfg config.Config, tlsCfg *tls.Config) []string {
-	if !cfg.TLSSelfSigned {
-		return nil
-	}
-	if p := spkiPin(tlsCfg); p != "" {
-		return []string{p}
-	}
-	return nil
-}
+func (s *Server) TLSPin() string { return s.https.Pin() }
 
 // Tunnel holds the live agent connections.
 func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }
@@ -1376,7 +1379,7 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 // httpServer is the http.Server the process serves with: production's read
 // timeout, the TLS settings the configuration chose.
 func (s *Server) httpServer() *http.Server {
-	return newHTTPServer(s.Handler(), s.tlsConfig, defaultReadTimeout)
+	return newHTTPServer(s.Handler(), s.https.ServerConfig(), defaultReadTimeout)
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -1399,7 +1402,7 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	errc := make(chan error, 1)
 	// With a TLS config the certificate is already in it, so the file names are empty.
 	scheme := "http"
-	if s.tlsConfig != nil {
+	if s.https.Live() {
 		scheme = "https"
 		go func() { errc <- srv.ServeTLS(ln, "", "") }()
 	} else {

@@ -10,9 +10,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"slices"
@@ -329,7 +331,7 @@ func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 
 	// A real client sees the certificate, and the server logs its fingerprint.
 	pool := x509.NewCertPool()
-	pool.AddCert(leafOf(t, srv.tlsConfig))
+	pool.AddCert(leafOf(t, srv.https.Config()))
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
 	resp, err := client.Get("https://127.0.0.1:" + port + "/healthz") //nolint:noctx // test against a loopback listener
 	if err != nil {
@@ -429,27 +431,22 @@ func TestTLSSelfSignedIsKeptWhenItCoversMoreThanIsWanted(t *testing.T) {
 	}
 }
 
-// movingClock is a clock a test advances.
-type movingClock struct{ t time.Time }
-
-func (c *movingClock) now() time.Time { return c.t }
-
 func TestTLSSelfSignedIsRenewedWhileRunning(t *testing.T) {
-	clk := &movingClock{t: fixedNow}
-	got, err := TLSConfig(selfSignedConfig(t), "", "", clk.now)
+	src, _, err := newCertSource(selfSignedConfig(t), "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := &tls.Config{GetCertificate: src.GetCertificate}
 	first := leafOf(t, got)
 
 	// Well inside the year: the same certificate is served.
-	clk.t = fixedNow.Add(24 * time.Hour)
+	src.Refresh(fixedNow.Add(24 * time.Hour))
 	if leafOf(t, got).SerialNumber.Cmp(first.SerialNumber) != 0 {
 		t.Fatal("the certificate was replaced a day after it was made")
 	}
 
 	// 25 days before it expires, with the process still running.
-	clk.t = fixedNow.Add(340 * 24 * time.Hour)
+	src.Refresh(fixedNow.Add(340 * 24 * time.Hour))
 	renewed := leafOf(t, got)
 	if !renewed.NotAfter.After(first.NotAfter) {
 		t.Fatalf("NotAfter = %v after renewal, want later than %v", renewed.NotAfter, first.NotAfter)
@@ -488,22 +485,22 @@ func TestTLSSuppliedCertificateIsReloadedWhenTheFilesChange(t *testing.T) {
 	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
 	a := writePair(t, crt, key, "a.example.com")
 
-	clk := &movingClock{t: fixedNow}
-	got, err := TLSConfig(config.Config{DataDir: t.TempDir(), TLSCertFile: crt, TLSKeyFile: key}, "", "", clk.now)
+	src, _, err := newCertSource(config.Config{DataDir: t.TempDir(), TLSCertFile: crt, TLSKeyFile: key}, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := &tls.Config{GetCertificate: src.GetCertificate}
 	if leafOf(t, got).SerialNumber.Cmp(a.SerialNumber) != 0 {
 		t.Fatal("pair A is not the one served")
 	}
 
 	b := writePair(t, crt, key, "b.example.com")
 	// Within the reload interval nothing is re-read.
-	clk.t = fixedNow.Add(10 * time.Second)
+	src.Refresh(fixedNow.Add(10 * time.Second))
 	if leafOf(t, got).SerialNumber.Cmp(a.SerialNumber) != 0 {
 		t.Error("the files were re-read inside the reload interval")
 	}
-	clk.t = fixedNow.Add(2 * time.Minute)
+	src.Refresh(fixedNow.Add(2 * time.Minute))
 	if leafOf(t, got).SerialNumber.Cmp(b.SerialNumber) != 0 {
 		t.Fatal("pair B was not picked up after the files were replaced")
 	}
@@ -514,9 +511,102 @@ func TestTLSSuppliedCertificateIsReloadedWhenTheFilesChange(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	clk.t = fixedNow.Add(5 * time.Minute)
+	src.Refresh(fixedNow.Add(5 * time.Minute))
 	if leafOf(t, got).SerialNumber.Cmp(b.SerialNumber) != 0 {
 		t.Fatal("a broken replacement displaced the working certificate")
+	}
+}
+
+// servedLeaf opens a fresh TLS connection to addr and returns the certificate the server presents.
+func servedLeaf(t *testing.T, addr string, roots *x509.CertPool) *x509.Certificate {
+	t.Helper()
+	conn, err := tls.Dial("tcp", addr, &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatalf("TLS handshake with %s: %v", addr, err)
+	}
+	defer func() { _ = conn.Close() }()
+	return conn.ConnectionState().PeerCertificates[0]
+}
+
+func TestTLSSuppliedPairIsServedWithinOneRecheckWithoutARestart(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	a := writePair(t, crt, key, "a.example.com")
+
+	clk := newStepClock(fixedNow)
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{
+		"TIERPLAN_DATA_DIR":      t.TempDir() + "/data",
+		"TIERPLAN_TLS_CERT_FILE": crt,
+		"TIERPLAN_TLS_KEY_FILE":  key,
+	}), slog.New(slog.DiscardHandler), WithTLSRefreshClock(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.serve(ctx, ln) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	addr := ln.Addr().String()
+
+	// The client trusts both pairs, so what it sees is decided by the server alone.
+	b := writePair(t, filepath.Join(dir, "b.pem"), filepath.Join(dir, "b.key"), "b.example.com")
+	roots := x509.NewCertPool()
+	roots.AddCert(a)
+	roots.AddCert(b)
+
+	if got := servedLeaf(t, addr, roots); got.SerialNumber.Cmp(a.SerialNumber) != 0 {
+		t.Fatal("pair A is not the one served")
+	}
+
+	// A connection opened under A, kept alive across the swap.
+	held := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(held.CloseIdleConnections)
+	get := func() (reused bool, peer *x509.Certificate) {
+		t.Helper()
+		trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused = i.Reused }}
+		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), http.MethodGet, "https://"+addr+"/healthz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := held.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return reused, resp.TLS.PeerCertificates[0]
+	}
+	if _, peer := get(); peer.SerialNumber.Cmp(a.SerialNumber) != 0 {
+		t.Fatal("the held connection was not opened under pair A")
+	}
+
+	// The operator replaces the pair. One recheck interval later, with no restart, B is served.
+	if err := os.Rename(filepath.Join(dir, "b.pem"), crt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, "b.key"), key); err != nil {
+		t.Fatal(err)
+	}
+	clk.Tick(t, suppliedRecheck)
+	clk.WaitArmed(t) // the loop arms again once Refresh has run
+
+	if got := servedLeaf(t, addr, roots); got.SerialNumber.Cmp(b.SerialNumber) != 0 {
+		t.Fatal("pair B is not served within one recheck interval of the files being replaced")
+	}
+	reused, peer := get()
+	if !reused {
+		t.Error("the connection opened before the swap was not reused, so it did not survive it")
+	}
+	if peer.SerialNumber.Cmp(a.SerialNumber) != 0 {
+		t.Error("the connection opened before the swap does not still show pair A")
 	}
 }
 
@@ -564,13 +654,13 @@ func TestSPKIPinIsStableWhenTheCertificateIsRenewed(t *testing.T) {
 
 func TestSPKIPinIsStableWhileRunningAcrossARenewal(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	var now = fixedNow
-	got, err := TLSConfig(cfg, "", "", func() time.Time { return now })
+	src, _, err := newCertSource(cfg, "", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := &tls.Config{GetCertificate: src.GetCertificate}
 	before := pinOf(t, got)
-	now = fixedNow.AddDate(1, 0, -29).Add(selfSignedRecheck)
+	src.Refresh(fixedNow.AddDate(1, 0, -29).Add(selfSignedRecheck))
 	if after := pinOf(t, got); after != before {
 		t.Fatalf("pin changed in a running renewal: %s then %s", before, after)
 	}
@@ -654,7 +744,7 @@ func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 	}
 
 	self := build(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"})
-	if got, want := self.TLSPin(), spkiPin(self.tlsConfig); got == "" || got != want {
+	if got, want := self.TLSPin(), spkiPin(self.https.Config()); got == "" || got != want {
 		t.Errorf("self-signed TLSPin() = %q, want %q", got, want)
 	}
 
