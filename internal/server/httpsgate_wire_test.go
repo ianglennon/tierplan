@@ -46,7 +46,7 @@ func startWire(t *testing.T, env map[string]string, peer string) *wireServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var serving net.Listener = ln
+	serving := ln
 	if peer != "" {
 		serving = newFakeAddrListener(t, ln, peer)
 	}
@@ -90,8 +90,15 @@ func (w *wireServer) tlsClient(t *testing.T) *http.Client {
 	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-// wireGet sends a GET with an optional Host override and returns the response with its body read.
-func wireGet(t *testing.T, c *http.Client, url, host string) (*http.Response, string) {
+// wireReply is what a client saw of a response whose body it has read and closed.
+type wireReply struct {
+	status int
+	header http.Header
+	body   string
+}
+
+// wireGet sends a GET with an optional Host override and returns what came back.
+func wireGet(t *testing.T, c *http.Client, url, host string) wireReply {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 	if err != nil {
@@ -106,7 +113,7 @@ func wireGet(t *testing.T, c *http.Client, url, host string) (*http.Response, st
 	}
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
-	return resp, string(b)
+	return wireReply{status: resp.StatusCode, header: resp.Header, body: string(b)}
 }
 
 func TestGateWireRedirectsANonLoopbackPlainClient(t *testing.T) {
@@ -115,17 +122,17 @@ func TestGateWireRedirectsANonLoopbackPlainClient(t *testing.T) {
 		"TIERPLAN_PUBLIC_URL":      "https://tierplan.example.com:8443",
 	}, defaultFakePeer)
 	// The Host header is the caller's to choose and must not reach the Location.
-	resp, _ := wireGet(t, w.plainClient(t), "http://"+w.addr+"/api/version?x=1", "evil.test")
-	if resp.StatusCode != http.StatusTemporaryRedirect {
-		t.Fatalf("status = %d, want 307", resp.StatusCode)
+	resp := wireGet(t, w.plainClient(t), "http://"+w.addr+"/api/version?x=1", "evil.test")
+	if resp.status != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", resp.status)
 	}
-	if got, want := resp.Header.Get("Location"), "https://tierplan.example.com:8443/api/version?x=1"; got != want {
+	if got, want := resp.header.Get("Location"), "https://tierplan.example.com:8443/api/version?x=1"; got != want {
 		t.Errorf("Location = %q, want %q", got, want)
 	}
-	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+	if got := resp.header.Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
-	if got := resp.Header.Get("Strict-Transport-Security"); got != "" {
+	if got := resp.header.Get("Strict-Transport-Security"); got != "" {
 		t.Errorf("Strict-Transport-Security = %q, want none on the redirect", got)
 	}
 }
@@ -135,15 +142,15 @@ func TestGateWireFollowingTheLocationIsNotRedirectedAgain(t *testing.T) {
 		"TIERPLAN_TLS_SELF_SIGNED": "true",
 		"TIERPLAN_PUBLIC_URL":      "https://tierplan.example.com:8443",
 	}, defaultFakePeer)
-	first, _ := wireGet(t, w.plainClient(t), "http://"+w.addr+"/api/version?x=1", "")
-	loc := first.Header.Get("Location")
-	if first.StatusCode != http.StatusTemporaryRedirect || loc == "" {
-		t.Fatalf("plain request: status = %d, Location = %q, want a 307 with a Location", first.StatusCode, loc)
+	first := wireGet(t, w.plainClient(t), "http://"+w.addr+"/api/version?x=1", "")
+	loc := first.header.Get("Location")
+	if first.status != http.StatusTemporaryRedirect || loc == "" {
+		t.Fatalf("plain request: status = %d, Location = %q, want a 307 with a Location", first.status, loc)
 	}
 	// The same connection, now over TLS, from the same non-loopback peer.
-	resp, _ := wireGet(t, w.tlsClient(t), loc, "")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s over TLS: status = %d, Location = %q, want 200 and no second redirect", loc, resp.StatusCode, resp.Header.Get("Location"))
+	resp := wireGet(t, w.tlsClient(t), loc, "")
+	if resp.status != http.StatusOK {
+		t.Fatalf("GET %s over TLS: status = %d, Location = %q, want 200 and no second redirect", loc, resp.status, resp.header.Get("Location"))
 	}
 }
 
@@ -152,9 +159,9 @@ func TestGateWireServesALoopbackPlainClient(t *testing.T) {
 		"TIERPLAN_TLS_SELF_SIGNED": "true",
 		"TIERPLAN_PUBLIC_URL":      "https://tierplan.example.com:8443",
 	}, "")
-	resp, _ := wireGet(t, w.plainClient(t), "http://"+w.addr+"/api/version", "")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, Location = %q, want 200: a loopback peer is exempt", resp.StatusCode, resp.Header.Get("Location"))
+	resp := wireGet(t, w.plainClient(t), "http://"+w.addr+"/api/version", "")
+	if resp.status != http.StatusOK {
+		t.Fatalf("status = %d, Location = %q, want 200: a loopback peer is exempt", resp.status, resp.header.Get("Location"))
 	}
 }
 
@@ -168,22 +175,22 @@ func TestGateWireRefusesPlainHTTPOnAnEnvTLSInstallWithoutAnHTTPSPublicURL(t *tes
 			plain := w.plainClient(t)
 			// Sign-in, the setup wizard and the API are not reachable in clear.
 			for _, target := range []string{"/", "/api/version", "/api/auth/login", "/api/setup/status", "/setup"} {
-				resp, body := wireGet(t, plain, "http://"+w.addr+target, "")
-				if resp.StatusCode != http.StatusBadRequest || body != refusalBody {
-					t.Errorf("plain GET %s: status = %d, body = %q, want 400 and the refusal", target, resp.StatusCode, body)
+				resp := wireGet(t, plain, "http://"+w.addr+target, "")
+				if resp.status != http.StatusBadRequest || resp.body != refusalBody {
+					t.Errorf("plain GET %s: status = %d, body = %q, want 400 and the refusal", target, resp.status, resp.body)
 				}
-				if loc := resp.Header.Get("Location"); loc != "" {
+				if loc := resp.header.Get("Location"); loc != "" {
 					t.Errorf("plain GET %s: Location = %q, want none", target, loc)
 				}
 			}
 			for _, probe := range []string{"/healthz", "/readyz"} {
-				if resp, _ := wireGet(t, plain, "http://"+w.addr+probe, ""); resp.StatusCode != http.StatusOK {
-					t.Errorf("plain GET %s: status = %d, want 200", probe, resp.StatusCode)
+				if resp := wireGet(t, plain, "http://"+w.addr+probe, ""); resp.status != http.StatusOK {
+					t.Errorf("plain GET %s: status = %d, want 200", probe, resp.status)
 				}
 			}
-			resp, _ := wireGet(t, w.tlsClient(t), "https://"+w.addr+"/api/version", "")
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("https GET /api/version: status = %d, want 200", resp.StatusCode)
+			resp := wireGet(t, w.tlsClient(t), "https://"+w.addr+"/api/version", "")
+			if resp.status != http.StatusOK {
+				t.Errorf("https GET /api/version: status = %d, want 200", resp.status)
 			}
 		})
 	}
