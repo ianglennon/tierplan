@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -490,6 +491,50 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	return srv, nil
 }
 
+// upgradeHTTPStep is where the operator reads the manual step for a stored http
+// URL. The heading is named here only, so the wording is changed in one place.
+const upgradeHTTPStep = `docs/upgrade.md, "Upgrading from a plain-HTTP install"`
+
+// refuseHTTPURLs stops startup when the public URL or the agent URL in effect is
+// http: TierPlan serves HTTPS only (D-07). An upgraded plain-HTTP install and a
+// restored backup can hold one in the settings. The refusal is a
+// restoredStateError, so a pending restore rolls back instead of leaving an
+// instance that cannot start. When TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL is
+// set it wins over the stored value; a stored http value is then read once, only
+// to say it is being ignored.
+func refuseHTTPURLs(ctx context.Context, st *store.Store, inst *instance.Instance, cfg config.Config, log *slog.Logger) error {
+	for _, u := range []struct {
+		what, variable, key, effective string
+		fixed                          bool
+	}{
+		{"public URL", "TIERPLAN_PUBLIC_URL", instance.SettingPublicURL, inst.PublicURL(), cfg.PublicURL != ""},
+		{"agent URL", "TIERPLAN_AGENT_URL", instance.SettingAgentURL, inst.AgentURL(), cfg.AgentURL != ""},
+	} {
+		if !u.fixed {
+			if isHTTPURL(u.effective) {
+				// A sentence for the operator, not a wrapped error, so it keeps its capital and full stop.
+				msg := fmt.Sprintf("The stored %s is %s. TierPlan serves HTTPS only and will not start. Set %s to the https address and keep it set, or see %s.",
+					u.what, u.effective, u.variable, upgradeHTTPStep)
+				return errors.New(msg)
+			}
+			continue
+		}
+		stored, err := st.RQ.GetSetting(ctx, u.key)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read the stored %s: %w", u.what, err)
+		}
+		if err == nil && isHTTPURL(stored) {
+			log.Warn("the stored "+u.what+" is http and is ignored while "+u.variable+" is set; TierPlan serves HTTPS only, so keep the variable set",
+				"stored", stored, "variable", u.variable)
+		}
+	}
+	return nil
+}
+
+func isHTTPURL(v string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "http://")
+}
+
 // errRestoredState marks a start failure that comes from the data a restore put
 // in place: the database cannot be opened, is on a key this instance does not
 // hold, cannot be migrated or does not load.
@@ -647,6 +692,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if err != nil {
 		_ = st.Close()
 		return nil, restoredStateError{fmt.Errorf("load instance settings: %w", err)}
+	}
+	if err := refuseHTTPURLs(ctx, st, inst, cfg, log); err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{err}
 	}
 
 	// Revisions beyond the retention limit go once at startup, after the deploys that were running are ended
