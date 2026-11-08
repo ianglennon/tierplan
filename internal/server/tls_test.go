@@ -725,7 +725,8 @@ func TestSPKIPinIsStableWhenTheWantedNamesChange(t *testing.T) {
 }
 
 // A key that cannot be read stops startup. It is never replaced, because a new key would change the
-// pin that every agent holds (T-13.1-03). Plan 04 adds the legacy-file and unreadable-envelope cases.
+// pin that every agent holds (T-13.1-03). The unreadable envelope and the legacy-file cases are in
+// tlsimport_test.go.
 func TestAStoredKeyThatCannotBeReadStopsStartupAndIsNotReplaced(t *testing.T) {
 	f := newSSFixture(t)
 	f.tlsConfig(t, "", "", fixedNow)

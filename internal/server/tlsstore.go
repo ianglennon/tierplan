@@ -171,6 +171,7 @@ func prepareSelfSigned(ctx context.Context, store tlsCertStore, dataDir string, 
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("the stored TLS key %q is unreadable and was not replaced, because a new key would change the pin every agent holds: %w", selfSignedID, err)
 	}
+	removeLeftoverLegacyFiles(dataDir, key)
 	if block, _ := pem.Decode(certPEM); block != nil && block.Type == "CERTIFICATE" {
 		if leaf, perr := x509.ParseCertificate(block.Bytes); perr == nil &&
 			want.covers(leaf) && !now.Before(leaf.NotBefore) && now.Before(leaf.NotAfter) {
@@ -201,7 +202,16 @@ func importOrGenerate(ctx context.Context, store tlsCertStore, dataDir string, w
 	certPath := filepath.Join(tlsDir, selfSignedCertFile)
 
 	legacy, lerr := loadKey(keyPath)
-	// A key that loads is an earlier version's identity: it is imported, and the pin stays.
+	var pathErr *fs.PathError
+	switch {
+	case lerr == nil:
+		// An earlier version's key is the identity: it is imported, and the pin stays.
+	case errors.As(lerr, &pathErr) && !errors.Is(lerr, fs.ErrNotExist):
+		// The file is there and cannot be read (permissions, I/O). It may well be a good key, so
+		// startup stops rather than minting a replacement.
+		return tls.Certificate{}, nil, fmt.Errorf("the legacy TLS key %s cannot be read and was not replaced, because a new key would change the pin every agent holds: %w", keyPath, lerr)
+	}
+
 	key := legacy
 	imported := lerr == nil
 	if !imported {
@@ -261,6 +271,26 @@ func removeLegacyFiles(keyPath, certPath string) {
 			return
 		}
 	}
+}
+
+// removeLeftoverLegacyFiles handles a legacy key or certificate file next to a stored row. The
+// database is the only source of the key, so a leftover file is removed and never served. When it
+// holds a key with another pin, that is worth saying: the file's pin is not the one in use.
+func removeLeftoverLegacyFiles(dataDir string, stored *ecdsa.PrivateKey) {
+	tlsDir := filepath.Join(dataDir, selfSignedDir)
+	keyPath := filepath.Join(tlsDir, selfSignedKeyFile)
+	certPath := filepath.Join(tlsDir, selfSignedCertFile)
+	if _, err := os.Stat(keyPath); err == nil {
+		switch legacy, lerr := loadKey(keyPath); {
+		case lerr != nil:
+			slog.Warn("removing a legacy self-signed TLS key file that cannot be read; the key stored in the database is the one in use",
+				"path", keyPath, "err", lerr)
+		case !legacy.Equal(stored):
+			slog.Warn("removing a legacy self-signed TLS key file whose key differs from the one stored in the database; the stored key is the one in use",
+				"path", keyPath, "file_pin", keyPin(&legacy.PublicKey), "tls_pin", keyPin(&stored.PublicKey))
+		}
+	}
+	removeLegacyFiles(keyPath, certPath)
 }
 
 // keyPin is the SPKI pin of a public key, in the form authn.SPKIPin gives for a certificate.
