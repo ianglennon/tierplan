@@ -163,13 +163,13 @@ expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 # variables or the -n flag state into the make under test.
 mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
 expect pass "dev-go-default-public-url" mk dev-go
-expect_out "dev-go-default-public-url" "TIERPLAN_PUBLIC_URL='http://localhost:5173'"
-expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=http://dev.example.test:5173
-expect_out "dev-go-custom-public-url" "TIERPLAN_PUBLIC_URL='http://dev.example.test:5173'"
+expect_out "dev-go-default-public-url" "TIERPLAN_PUBLIC_URL='https://localhost:5173'"
+expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=https://dev.example.test:5173
+expect_out "dev-go-custom-public-url" "TIERPLAN_PUBLIC_URL='https://dev.example.test:5173'"
 expect pass "dev-go-empty-public-url" mk dev-go DEV_PUBLIC_URL=
 expect_out "dev-go-empty-public-url (unset, so not locked)" "TIERPLAN_PUBLIC_URL=''"
 expect pass "dev-web-default" mk dev-web
-expect_out "dev-web-default passes the public URL to Vite" "TIERPLAN_DEV_PUBLIC_URL='http://localhost:5173'"
+expect_out "dev-web-default passes the public URL to Vite" "TIERPLAN_DEV_PUBLIC_URL='https://localhost:5173'"
 if grep -qF -- "--host" <<<"${LAST_OUT}"; then
   echo "SCRIPT TEST FAIL: dev-web-default must not pass --host (Vite stays on loopback)"
   failures=$((failures + 1))
@@ -632,7 +632,7 @@ vite_status() {
   echo "${code}"
 }
 dev_port="${DEV_LOOP_TEST_PORT:-5198}"
-expect pass "vite-allows-public-url-host" vite_status "http://dev.example.test:${dev_port}" "dev.example.test:${dev_port}"
+expect pass "vite-allows-public-url-host" vite_status "https://dev.example.test:${dev_port}" "dev.example.test:${dev_port}"
 if [ "${LAST_OUT##*$'\n'}" != "200" ]; then
   echo "SCRIPT TEST FAIL: vite-allows-public-url-host (want 200, got: ${LAST_OUT##*$'\n'})"
   failures=$((failures + 1))
