@@ -155,10 +155,8 @@ func TestPublicURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://tierplan.example.com/":       "https://tierplan.example.com",
 		"HTTPS://TierPlan.Example.com":        "https://tierplan.example.com",
-		"http://localhost:5173":               "http://localhost:5173",
 		"https://example.com/tierplan/":       "https://example.com/tierplan",
 		"https://example.com/sub/path":        "https://example.com/sub/path",
-		"http://192.168.1.10:7480":            "http://192.168.1.10:7480",
 		"https://tierplan.example.com:443///": "https://tierplan.example.com:443",
 	} {
 		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
@@ -174,6 +172,30 @@ func TestPublicURL(t *testing.T) {
 		if _, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": bad}, files{}); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}
+	}
+}
+
+func TestAnHTTPURLIsRefusedForBothVariablesAndEmptyStarts(t *testing.T) {
+	for _, name := range []string{"TIERPLAN_PUBLIC_URL", "TIERPLAN_AGENT_URL"} {
+		for _, in := range []string{"http://tierplan.test", "HTTP://X", "http://localhost:5173"} {
+			_, err := load(t, nil, envMap{name: in}, files{})
+			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "serves HTTPS only") {
+				t.Errorf("%s=%q: error = %v, want one naming the variable and saying TierPlan serves HTTPS only", name, in, err)
+			}
+		}
+		c, err := load(t, nil, envMap{name: "HTTPS://Tierplan.Example"}, files{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := c.PublicURL + c.AgentURL; got != "https://tierplan.example" {
+			t.Errorf("%s stored %q, want https://tierplan.example", name, got)
+		}
+		if _, err := load(t, nil, envMap{name: ""}, files{}); err != nil {
+			t.Errorf("%s empty: %v", name, err)
+		}
+	}
+	if _, err := config.NormalisePublicURL("http://x.example"); err == nil {
+		t.Error("NormalisePublicURL accepted an http URL")
 	}
 }
 
@@ -470,7 +492,6 @@ func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://tierplan.internal:7480":  "https://tierplan.internal:7480",
 		"HTTPS://TierPlan.Internal:7480/": "https://tierplan.internal:7480",
-		"http://192.168.1.10:7480":        "http://192.168.1.10:7480",
 		"https://example.com/tierplan/":   "https://example.com/tierplan",
 	} {
 		c, err := load(t, nil, envMap{"TIERPLAN_AGENT_URL": in}, files{})

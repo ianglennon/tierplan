@@ -548,18 +548,22 @@ func AgentEndpoint(baseURL string) (string, error) {
 	return out.String(), nil
 }
 
-// normalisePublicURL accepts an absolute http or https URL and returns its
-// origin plus an optional path with no trailing slash. Empty stays empty.
+// normalisePublicURL accepts an absolute https URL and returns its origin plus
+// an optional path with no trailing slash. TierPlan serves HTTPS only, so an
+// http URL is refused with the reason. Empty stays empty.
 func normalisePublicURL(raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("must be an absolute http or https URL: %w", err)
+		return "", fmt.Errorf("must be an absolute https URL: %w", err)
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", errors.New("must be an absolute http or https URL, for example https://tierplan.example.com")
+	if u.Scheme == "http" && u.Host != "" {
+		return "", errors.New("must start with https://: TierPlan serves HTTPS only")
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return "", errors.New("must be an absolute https URL, for example https://tierplan.example.com")
 	}
 	if u.User != nil {
 		return "", errors.New("must not contain a user name or password")
