@@ -33,21 +33,20 @@ import (
 )
 
 const (
-	selfSignedDir      = "tls"
-	selfSignedCertFile = "selfsigned.crt"
-	selfSignedKeyFile  = "selfsigned.key"
+	selfSignedDir = "tls"
 
-	selfSignedValidity = 365 * 24 * time.Hour
-	// renewBefore is how long before expiry a self-signed certificate is replaced.
-	renewBefore = 30 * 24 * time.Hour
+	// selfSignedValidity is long on purpose: the certificate is never renewed on a timer (D-12). It is
+	// re-signed with the same key only when the names it must cover change, so the pin that agents
+	// hold does not move.
+	selfSignedValidity = 3650 * 24 * time.Hour
 	// backdate covers a client whose clock runs a little behind.
 	backdate = time.Hour
 
-	// A running server looks again at its certificate this often: hourly for
-	// the one it generated (a renewal is weeks ahead of expiry), every minute
-	// for supplied files (so a renewed pair is picked up promptly).
-	selfSignedRecheck = time.Hour
-	suppliedRecheck   = time.Minute
+	// A running server looks again at its certificate this often: every ten seconds for the one it
+	// generated (a cheap comparison of the wanted names, so a URL saved after start is covered within
+	// one interval), every minute for supplied files (so a renewed pair is picked up promptly).
+	selfSignedNameCheck = 10 * time.Second
+	suppliedRecheck     = time.Minute
 )
 
 // TLSEnabled reports whether the environment asks for HTTPS, from files or from a
@@ -58,42 +57,34 @@ func TLSEnabled(cfg config.Config) bool {
 	return ok
 }
 
-// TLSConfig returns the TLS configuration to serve with, or nil for plain HTTP (D-12).
-//
-// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair. With
-// TIERPLAN_TLS_SELF_SIGNED it serves an ECDSA P-256 certificate kept under
-// <data>/tls, covering localhost, the loopback addresses, the machine host name
-// (unless it is a container ID), the host of publicURL and the host of agentURL
-// (the address agents dial when it is not the public one, D-18). That certificate is
-// generated when missing or unreadable, replaced when it no longer covers every
-// name wanted, and replaced within 30 days of its expiry. The minimum version
-// is TLS 1.2.
-//
-// The certificate is served through GetCertificate and Certificates is left
-// empty on purpose: Go answers from a static Certificates list, and never calls
-// GetCertificate, for a client that sends no server name, such as one that
-// connects to an IP address. A running server therefore renews the generated
-// certificate before it expires, and reloads a supplied pair that was replaced,
-// without a restart (WR-09).
-func TLSConfig(cfg config.Config, publicURL, agentURL string, now func() time.Time) (*tls.Config, error) {
-	src, _, err := newCertSource(cfg, publicURL, agentURL, now)
-	if err != nil || src == nil {
-		return nil, err
-	}
-	return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
-}
-
 // newCertSource builds the certificate source the environment's TLS settings
 // ask for, and says which kind it is. It returns a nil source and tlsKindNone
 // for plain HTTP. The source does not refresh itself: the server runs
-// runCertRefresh beside it, so a handshake never waits on the disk.
-func newCertSource(cfg config.Config, publicURL, agentURL string, now func() time.Time) (*certSource, tlsKind, error) {
+// runCertRefresh beside it, so a handshake never waits on the database or the disk.
+//
+// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair. With
+// TIERPLAN_TLS_SELF_SIGNED it serves an ECDSA P-256 certificate whose key lives in store, covering
+// localhost, the loopback addresses, the machine host name (unless it is a container ID) and the
+// hosts of the public URL and the agent URL (the address agents dial when it is not the public
+// one). publicURL and agentURL are read again on every name check, so a URL saved after start is
+// covered without a restart. The minimum TLS version is 1.2.
+//
+// The certificate is served through GetCertificate and Certificates is left empty on purpose: Go
+// answers from a static Certificates list, and never calls GetCertificate, for a client that sends
+// no server name, such as one that connects to an IP address.
+func newCertSource(ctx context.Context, cfg config.Config, store tlsCertStore, publicURL, agentURL func() string, now func() time.Time) (*certSource, tlsKind, error) {
 	files := cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
 	if files && cfg.TLSSelfSigned {
 		return nil, tlsKindNone, errors.New("TIERPLAN_TLS_SELF_SIGNED conflicts with TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE; use one or the other")
 	}
 	if now == nil {
 		now = time.Now
+	}
+	if publicURL == nil {
+		publicURL = func() string { return "" }
+	}
+	if agentURL == nil {
+		agentURL = func() string { return "" }
 	}
 
 	switch {
@@ -104,7 +95,7 @@ func newCertSource(cfg config.Config, publicURL, agentURL string, now func() tim
 		}
 		return src, tlsKindSupplied, nil
 	case cfg.TLSSelfSigned:
-		src, err := newSelfSignedSource(filepath.Join(cfg.DataDir, selfSignedDir), wantedNames(publicURL, agentURL), now)
+		src, err := newSelfSignedSource(ctx, store, cfg.DataDir, publicURL, agentURL, now)
 		if err != nil {
 			return nil, tlsKindNone, fmt.Errorf("prepare the self-signed certificate (TIERPLAN_TLS_SELF_SIGNED): %w", err)
 		}
@@ -183,28 +174,19 @@ func runCertRefresh(ctx context.Context, clk stackops.Clock, src *certSource) {
 	}
 }
 
-// newSelfSignedSource loads or generates the self-signed certificate. Once
-// within renewBefore of its expiry it is regenerated in place.
-func newSelfSignedSource(dir string, want names, now func() time.Time) (*certSource, error) {
+// newSelfSignedSource loads or generates the self-signed certificate from store and serves it. The
+// source never renews it on a timer.
+func newSelfSignedSource(ctx context.Context, store tlsCertStore, dataDir string, publicURL, agentURL func() string, now func() time.Time) (*certSource, error) {
 	t0 := now()
-	cert, err := selfSigned(dir, want, t0)
+	cert, _, err := prepareSelfSigned(ctx, store, dataDir, wantedNames(publicURL(), agentURL()), t0)
 	if err != nil {
 		return nil, err
 	}
-	src := &certSource{now: now, interval: selfSignedRecheck}
+	src := &certSource{now: now, interval: selfSignedNameCheck}
 	if err := src.set(cert, t0); err != nil {
 		return nil, err
 	}
-	src.refresh = func(at time.Time, leaf *x509.Certificate) (*tls.Certificate, error) {
-		if leaf.NotAfter.Sub(at) > renewBefore {
-			return nil, nil
-		}
-		next, err := selfSigned(dir, want, at)
-		if err != nil {
-			return nil, fmt.Errorf("renew the self-signed certificate: %w", err)
-		}
-		return &next, nil
-	}
+	src.refresh = func(time.Time, *x509.Certificate) (*tls.Certificate, error) { return nil, nil }
 	return src, nil
 }
 
@@ -355,64 +337,6 @@ func (n names) covers(leaf *x509.Certificate) bool {
 	return true
 }
 
-// selfSigned loads the stored certificate when it is still right, and otherwise
-// signs a new one.
-//
-// The key and the certificate are kept apart. The key is what agents pin (D-06),
-// so it is created once and then only ever read: a renewal, or a change of the
-// names wanted, signs a new certificate with the stored key and leaves its SPKI
-// pin alone. A key is generated only when none can be loaded, and that is logged
-// as a pin change because every pinned agent depends on the old one.
-func selfSigned(dir string, want names, now time.Time) (tls.Certificate, error) {
-	certPath := filepath.Join(dir, selfSignedCertFile)
-	keyPath := filepath.Join(dir, selfSignedKeyFile)
-
-	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
-		leaf, perr := x509.ParseCertificate(cert.Certificate[0])
-		if perr == nil && want.covers(leaf) && leaf.NotAfter.Sub(now) > renewBefore && !now.Before(leaf.NotBefore) {
-			return cert, nil
-		}
-	}
-	// Missing, corrupt, a mismatched pair, other names or nearly expired: sign a
-	// new certificate, with the stored key when it can be read.
-
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return tls.Certificate{}, fmt.Errorf("create %s: %w", dir, err)
-	}
-	key, keyErr := loadKey(keyPath)
-	newlyMade := keyErr != nil
-	_, statErr := os.Stat(certPath)
-	hadCert := statErr == nil
-	if newlyMade {
-		key, keyErr = newKey()
-		if keyErr != nil {
-			return tls.Certificate{}, keyErr
-		}
-		keyPEM, err := encodeKey(key)
-		if err != nil {
-			return tls.Certificate{}, err
-		}
-		// The key goes first. A crash between the two renames leaves a pair that
-		// does not match, which the next start detects and replaces.
-		if err := writeAtomic(keyPath, keyPEM, 0o600); err != nil {
-			return tls.Certificate{}, err
-		}
-	}
-
-	certDER, err := signCertificate(key, want, now)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	if err := writeAtomic(certPath, certPEM, 0o644); err != nil {
-		return tls.Certificate{}, err
-	}
-	if newlyMade {
-		logNewKey(hadCert, certDER)
-	}
-	return tls.Certificate{Certificate: [][]byte{certDER}, PrivateKey: key}, nil
-}
-
 // logNewKey records that a key was created. When a certificate already existed
 // the pin that agents hold is gone, which is worth a warning; on a first start
 // it is just news.
@@ -429,15 +353,25 @@ func logNewKey(hadCert bool, certDER []byte) {
 	slog.Info("generated a self-signed TLS key", "tls_pin", pin)
 }
 
-// loadKey reads the stored ECDSA key, or reports why it cannot.
+// loadKey reads an ECDSA key from a file, or reports why it cannot. Since the key moved into the
+// database it reads only a key a person or an earlier version left on disk.
 func loadKey(path string) (*ecdsa.PrivateKey, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // TierPlan's own key under its data directory
+	data, err := os.ReadFile(path) //nolint:gosec // a key file the operator or an earlier TierPlan version left on disk
 	if err != nil {
 		return nil, err
 	}
+	key, err := decodeKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return key, nil
+}
+
+// decodeKey reads an ECDSA P-256 key from its PKCS#8 PEM encoding.
+func decodeKey(data []byte) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil || block.Type != "PRIVATE KEY" {
-		return nil, errors.New("no PKCS#8 private key in " + path)
+		return nil, errors.New("no PKCS#8 private key")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
@@ -467,7 +401,7 @@ func encodeKey(key *ecdsa.PrivateKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
-// signCertificate makes a one-year server certificate for the names, signed by
+// signCertificate makes a ten-year server certificate for the names, signed by
 // key itself.
 func signCertificate(key *ecdsa.PrivateKey, want names, now time.Time) ([]byte, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))

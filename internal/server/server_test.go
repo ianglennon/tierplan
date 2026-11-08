@@ -940,12 +940,10 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 
 	// A supplied certificate is the operator's own: HSTS is sent (D-37).
 	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
-		t.Fatal(err)
-	}
+	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
 	supplied := map[string]string{
-		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
-		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
+		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
+		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
 	}
 	if got := hstsOf(t, supplied, true); got != "max-age=31536000" {
 		t.Errorf("supplied certificate: Strict-Transport-Security = %q, want max-age=31536000", got)
@@ -964,12 +962,10 @@ func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
 		return func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", v) }
 	}
 	supplied := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: supplied, TLSSelfSigned: true}, "", "", nil); err != nil {
-		t.Fatal(err)
-	}
+	writePair(t, filepath.Join(supplied, "c.pem"), filepath.Join(supplied, "k.pem"), "supplied.example.com")
 	suppliedEnv := map[string]string{
-		"TIERPLAN_TLS_CERT_FILE": filepath.Join(supplied, "tls", "selfsigned.crt"),
-		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(supplied, "tls", "selfsigned.key"),
+		"TIERPLAN_TLS_CERT_FILE": filepath.Join(supplied, "c.pem"),
+		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(supplied, "k.pem"),
 	}
 	const hsts = "max-age=31536000"
 	withEnv := func(extra map[string]string) map[string]string {
@@ -1023,13 +1019,11 @@ func TestHSTSIsNeverSentOnThePlainRedirectOrRefusal(t *testing.T) {
 	// A redirect or a refusal that carried HSTS could pin a browser to an address that does not
 	// answer yet (D-04), so the gate answers before the router adds it.
 	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
-		t.Fatal(err)
-	}
+	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
 	supplied := func(extra map[string]string) map[string]string {
 		env := map[string]string{
-			"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
-			"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
+			"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
+			"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
 		}
 		for k, v := range extra {
 			env[k] = v

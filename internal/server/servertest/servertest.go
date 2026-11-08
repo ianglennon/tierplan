@@ -288,7 +288,7 @@ func (s *Server) Core() *server.Server { return s.srv }
 // certificate, which names the host, so the client verifies the connection
 // normally.
 func (s *Server) trustServerCertificate() *x509.CertPool {
-	raw, err := os.ReadFile(filepath.Join(s.DataDir, "tls", "selfsigned.crt"))
+	raw, err := os.ReadFile(filepath.Join(s.DataDir, "tls", "server.crt"))
 	if err != nil {
 		s.t.Fatalf("read the server's self-signed certificate: %v", err)
 	}

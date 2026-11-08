@@ -6,8 +6,12 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
 	"github.com/ianglennon/tierplan/internal/vault"
 )
@@ -253,5 +258,103 @@ func TestWriteMirrorWritesOnlyThePublicCertificateAtomically(t *testing.T) {
 		if data, _ := os.ReadFile(filepath.Join(tlsDir, e.Name())); strings.Contains(string(data), "PRIVATE KEY") { //nolint:gosec // a path under the test's own temporary directory
 			t.Errorf("%s holds key material", e.Name())
 		}
+	}
+}
+
+// buildSelfSigned builds a server the way production does, with TIERPLAN_TLS_SELF_SIGNED set and a fresh
+// data directory, and returns it with the configuration and everything Build logged.
+func buildSelfSigned(t *testing.T) (*Server, config.Config, string) {
+	t.Helper()
+	cfg := testConfig(t, map[string]string{
+		"TIERPLAN_DATA_DIR":        t.TempDir() + "/data",
+		"TIERPLAN_TLS_SELF_SIGNED": "true",
+	})
+	var logs bytes.Buffer
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv, cfg, logs.String()
+}
+
+func TestASelfSignedInstallServesHTTPSFromItsSealedCertificate(t *testing.T) {
+	srv, cfg, logs := buildSelfSigned(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.serve(ctx, ln) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	addr := ln.Addr().String()
+
+	// The healthcheck verifies the served certificate against the mirror, from the first start.
+	if err := Healthcheck(context.Background(), addr, HealthcheckCertFile(cfg)); err != nil {
+		t.Fatalf("Healthcheck over TLS against the mirror: %v", err)
+	}
+	mirror, err := os.ReadFile(HealthcheckCertFile(cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(mirror) {
+		t.Fatal("the mirror holds no certificate")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(client.CloseIdleConnections)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+"/healthz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /healthz over TLS trusting only the mirror: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /healthz = %d, want 200", resp.StatusCode)
+	}
+
+	// The certificate is good for ten years.
+	leaf := resp.TLS.PeerCertificates[0]
+	if want := time.Now().Add(3650 * 24 * time.Hour); leaf.NotAfter.Sub(want).Abs() > 24*time.Hour {
+		t.Errorf("NotAfter = %v, want about %v (ten years)", leaf.NotAfter, want)
+	}
+
+	// The key is in the database as a vault envelope, and nowhere else.
+	var sealed string
+	if err := srv.store.Read.QueryRowContext(ctx, `SELECT key_sealed FROM tls_certs WHERE id = ?`, selfSignedID).Scan(&sealed); err != nil {
+		t.Fatalf("the %s row: %v", selfSignedID, err)
+	}
+	if strings.Contains(sealed, "PRIVATE KEY") {
+		t.Error("key_sealed holds the key in the clear")
+	}
+	entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "tls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != mirrorCertFile {
+		t.Errorf("tls directory = %v, want exactly %s", entries, mirrorCertFile)
+	}
+
+	// Startup says the browser will warn, with the fingerprint to compare, and never logs key material.
+	if !strings.Contains(logs, "Your browser will warn about it") || !strings.Contains(logs, fingerprint(srv.https.Config())) {
+		t.Errorf("startup log lacks the browser warning and the fingerprint:\n%s", logs)
+	}
+	if strings.Contains(logs, "PRIVATE KEY") || strings.Contains(logs, sealed) {
+		t.Error("the startup log holds key material")
+	}
+}
+
+func TestTwoSelfSignedInstallsHaveDifferentPins(t *testing.T) {
+	a, _, _ := buildSelfSigned(t)
+	b, _, _ := buildSelfSigned(t)
+	if a.TLSPin() == "" || a.TLSPin() == b.TLSPin() {
+		t.Errorf("pins = %q and %q; want two different, non-empty pins", a.TLSPin(), b.TLSPin())
 	}
 }

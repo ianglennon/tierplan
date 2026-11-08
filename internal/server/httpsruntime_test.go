@@ -169,7 +169,7 @@ func TestHTTPSRuntimeRemoveFailsAPendingHandshakeWithoutAPanic(t *testing.T) {
 func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	rt := newHTTPSRuntime()
 
-	src, _, err := newCertSource(selfSignedConfig(t), "", "", nowFn(fixedNow))
+	src, _, err := newCertSource(context.Background(), selfSignedConfig(t), newMemCertStore(), nil, nil, nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}

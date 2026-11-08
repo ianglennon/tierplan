@@ -662,7 +662,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if tlsClock == nil {
 		tlsClock = stackops.RealClock()
 	}
-	tlsSrc, tlsSrcKind, err := newCertSource(cfg, inst.PublicURL(), inst.AgentURL(), tlsClock.Now)
+	tlsSrc, tlsSrcKind, err := newCertSource(ctx, cfg, sealedCertStore{st: st, v: vlt}, inst.PublicURL, inst.AgentURL, tlsClock.Now)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
@@ -675,9 +675,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	case tlsKindNone:
 		log.Info("serving plain HTTP; set TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE, TIERPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
 	case tlsKindSelfSigned:
-		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
+		log.Info("TierPlan serves HTTPS with its own self-signed certificate. Your browser will warn about it: check that the warning shows this SHA-256 fingerprint before you continue",
 			"sha256", fingerprint(rt.Config()), "tls_pin", spkiPin(rt.Config()),
-			"certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
+			"certificate", filepath.Join(info.Path, selfSignedDir, mirrorCertFile))
 	default:
 		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(rt.Config()))
 	}
