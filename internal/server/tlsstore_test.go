@@ -231,7 +231,7 @@ func TestWriteMirrorWritesOnlyThePublicCertificateAtomically(t *testing.T) {
 	if err != nil || fi.Mode().Perm() != 0o644 {
 		t.Fatalf("%s = %v, %v; want a file with mode 0644", file, fi, err)
 	}
-	if got, _ := os.ReadFile(file); !bytes.Equal(got, first) {
+	if got, _ := os.ReadFile(file); !bytes.Equal(got, first) { //nolint:gosec // a path under the test's own temporary directory
 		t.Errorf("%s = %q; want exactly the certificate", file, got)
 	}
 
@@ -239,7 +239,7 @@ func TestWriteMirrorWritesOnlyThePublicCertificateAtomically(t *testing.T) {
 	if err := writeMirror(dir, second); err != nil {
 		t.Fatalf("second writeMirror: %v", err)
 	}
-	if got, _ := os.ReadFile(file); !bytes.Equal(got, second) {
+	if got, _ := os.ReadFile(file); !bytes.Equal(got, second) { //nolint:gosec // a path under the test's own temporary directory
 		t.Errorf("%s after a second write = %q; want the new certificate", file, got)
 	}
 	entries, err := os.ReadDir(tlsDir)
@@ -250,7 +250,7 @@ func TestWriteMirrorWritesOnlyThePublicCertificateAtomically(t *testing.T) {
 		if e.Name() != mirrorCertFile {
 			t.Errorf("tls/ holds %q besides %s", e.Name(), mirrorCertFile)
 		}
-		if data, _ := os.ReadFile(filepath.Join(tlsDir, e.Name())); strings.Contains(string(data), "PRIVATE KEY") {
+		if data, _ := os.ReadFile(filepath.Join(tlsDir, e.Name())); strings.Contains(string(data), "PRIVATE KEY") { //nolint:gosec // a path under the test's own temporary directory
 			t.Errorf("%s holds key material", e.Name())
 		}
 	}

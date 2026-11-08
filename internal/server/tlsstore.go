@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/store"
@@ -105,8 +107,17 @@ func (s sealedCertStore) UpdateCert(ctx context.Context, id string, certPEM []by
 	return nil
 }
 
-// mirrorCertFile is the public certificate's file name under <DataDir>/tls.
+// mirrorCertFile is the public certificate's file name under <DataDir>/tls. It is one neutral name
+// for the default certificate and for any later source, so the healthcheck reads one path.
 const mirrorCertFile = "server.crt"
 
-// writeMirror is not written yet.
-func writeMirror(string, []byte) error { return errors.New("not implemented") }
+// writeMirror puts the public certificate where the healthcheck can read it without opening the
+// database: <dataDir>/tls/server.crt, mode 0644, replaced atomically. Only the certificate goes
+// here; the key stays in the database as a vault envelope.
+func writeMirror(dataDir string, certPEM []byte) error {
+	dir := filepath.Join(dataDir, selfSignedDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	return writeAtomic(filepath.Join(dir, mirrorCertFile), certPEM, 0o644)
+}
