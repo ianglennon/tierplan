@@ -99,8 +99,10 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     command = await page.evaluate(() => navigator.clipboard.readText());
     expect(command.trim()).toBe(((await code.textContent()) ?? "").trim());
     expect(command).toContain("docker run -d --name tierplan-agent");
-    // A private-CA proxy's pin is not in the command TierPlan shows.
-    expect(command).not.toContain("TIERPLAN_AGENT_PIN");
+    // Every install serves its own certificate and publishes its pin, so the command TierPlan shows
+    // carries TierPlan's own pin. The proxy certificate's pin withPin adds later is a later -e, which
+    // docker run applies last, so the agent still trusts the proxy.
+    expect(command).toContain("TIERPLAN_AGENT_PIN");
 
     await expect(dialog.getByRole("status").filter({ hasText: "Waiting for the first agent" })).toBeVisible();
     await shot(page, "1-waiting-for-the-first-agent");
