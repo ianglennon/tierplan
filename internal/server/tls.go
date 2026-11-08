@@ -51,7 +51,7 @@ const (
 
 // TLSEnabled reports whether the environment asks for HTTPS, from files or from a
 // generated certificate. The healthcheck and the redirect gate use it. It is
-// config.Config.EnvTLS, the one definition shared with `tierplan https disable`.
+// config.Config.EnvTLS, the one definition both share.
 func TLSEnabled(cfg config.Config) bool {
 	_, ok := cfg.EnvTLS()
 	return ok
@@ -62,7 +62,8 @@ func TLSEnabled(cfg config.Config) bool {
 // from its first start. The source does not refresh itself: the server runs
 // runCertRefresh beside it, so a handshake never waits on the database or the disk.
 //
-// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair. Otherwise (with or
+// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair, also when the
+// deprecated TIERPLAN_TLS_SELF_SIGNED is still set. Otherwise (with or
 // without TIERPLAN_TLS_SELF_SIGNED, which no longer changes anything) it serves an ECDSA P-256
 // certificate whose key lives in store, covering
 // localhost, the loopback addresses, the machine host name (unless it is a container ID) and the
@@ -75,9 +76,6 @@ func TLSEnabled(cfg config.Config) bool {
 // no server name, such as one that connects to an IP address.
 func newCertSource(ctx context.Context, cfg config.Config, store tlsCertStore, publicURL, agentURL func() string, now func() time.Time) (*certSource, tlsKind, error) {
 	files := cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
-	if files && cfg.TLSSelfSigned {
-		return nil, tlsKindNone, errors.New("TIERPLAN_TLS_SELF_SIGNED conflicts with TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE; use one or the other")
-	}
 	if now == nil {
 		now = time.Now
 	}
