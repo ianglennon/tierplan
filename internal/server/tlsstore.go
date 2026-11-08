@@ -6,12 +6,16 @@ package server
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -129,41 +133,38 @@ func writeMirror(dataDir string, certPEM []byte) error {
 // selfSignedID is the tls_certs row that holds the certificate TierPlan made for itself.
 const selfSignedID = "selfsigned"
 
+// The files an earlier TierPlan kept its self-signed pair in, under <DataDir>/tls. The key is what
+// agents pin: the first start of this version moves it into the database and removes both files.
+const (
+	selfSignedCertFile = "selfsigned.crt"
+	selfSignedKeyFile  = "selfsigned.key"
+)
+
+// removeFile deletes a legacy file. It is a variable so a test can make the removal fail.
+var removeFile = os.Remove
+
 // prepareSelfSigned returns the self-signed certificate to serve and its key, creating them on the
 // first start.
 //
 // The key is what agents pin, so it is created once and then only read. A stored certificate that
 // still carries every wanted name and is inside its validity is served as it is; one that does not is
-// signed again with the stored key, which leaves the SPKI pin alone. A key is generated only when no
-// row exists. A row that cannot be opened or read is an error that stops startup: a replacement key
-// would silently change the pin every agent holds, so the person must decide (T-13.1-03). Either way
-// the public certificate is mirrored for the healthcheck before this returns.
+// signed again with the stored key, which leaves the SPKI pin alone. A row that cannot be opened or
+// read is an error that stops startup: a replacement key would silently change the pin every agent
+// holds, so the person must decide (T-13.1-03). Either way the public certificate is mirrored for the
+// healthcheck before this returns.
+//
+// With no row, the key an earlier version left in <dataDir>/tls/selfsigned.key is imported (D-11): a
+// certificate is signed with it, stored, made durable, read back and compared, and only then are the
+// files removed, so no failure at any step can lose the only copy of the key. A key is generated only
+// when there is no row and no legacy key to import. With a row the database wins: a legacy file that
+// is still there is a leftover and is removed, and never replaces the stored key.
 func prepareSelfSigned(ctx context.Context, store tlsCertStore, dataDir string, want names, now time.Time) (tls.Certificate, *ecdsa.PrivateKey, error) {
 	certPEM, keyPEM, found, err := store.Load(ctx, selfSignedID)
 	if err != nil {
 		return tls.Certificate{}, nil, err
 	}
 	if !found {
-		key, err := newKey()
-		if err != nil {
-			return tls.Certificate{}, nil, err
-		}
-		cert, certPEM, err := signSelfSigned(key, want, now)
-		if err != nil {
-			return tls.Certificate{}, nil, err
-		}
-		keyPEM, err := encodeKey(key)
-		if err != nil {
-			return tls.Certificate{}, nil, err
-		}
-		if err := store.Insert(ctx, selfSignedID, certPEM, keyPEM, now); err != nil {
-			return tls.Certificate{}, nil, err
-		}
-		logNewKey(false, cert.Certificate[0])
-		if err := writeMirror(dataDir, certPEM); err != nil {
-			return tls.Certificate{}, nil, err
-		}
-		return cert, key, nil
+		return importOrGenerate(ctx, store, dataDir, want, now)
 	}
 
 	key, err := decodeKey(keyPEM)
@@ -191,6 +192,85 @@ func prepareSelfSigned(ctx context.Context, store tlsCertStore, dataDir string, 
 		return tls.Certificate{}, nil, err
 	}
 	return cert, key, nil
+}
+
+// importOrGenerate is prepareSelfSigned for an install with no tls_certs row.
+func importOrGenerate(ctx context.Context, store tlsCertStore, dataDir string, want names, now time.Time) (tls.Certificate, *ecdsa.PrivateKey, error) {
+	tlsDir := filepath.Join(dataDir, selfSignedDir)
+	keyPath := filepath.Join(tlsDir, selfSignedKeyFile)
+	certPath := filepath.Join(tlsDir, selfSignedCertFile)
+
+	legacy, lerr := loadKey(keyPath)
+	// A key that loads is an earlier version's identity: it is imported, and the pin stays.
+	key := legacy
+	imported := lerr == nil
+	if !imported {
+		k, err := newKey()
+		if err != nil {
+			return tls.Certificate{}, nil, err
+		}
+		key = k
+	}
+	cert, certPEM, err := signSelfSigned(key, want, now)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	keyPEM, err := encodeKey(key)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	// Insert returns only once the row is committed and checkpointed; an error here returns before
+	// anything is deleted.
+	if err := store.Insert(ctx, selfSignedID, certPEM, keyPEM, now); err != nil {
+		return tls.Certificate{}, nil, err
+	}
+
+	if !imported {
+		// A certificate with no key beside it means agents may hold a pin that is now gone.
+		_, statErr := os.Stat(certPath)
+		hadLegacy := statErr == nil || !errors.Is(lerr, fs.ErrNotExist)
+		logNewKey(hadLegacy, cert.Certificate[0])
+	} else {
+		// Read the row back and compare the key that came out of the database with the file's key.
+		_, gotKey, found, err := store.Load(ctx, selfSignedID)
+		if err != nil {
+			return tls.Certificate{}, nil, fmt.Errorf("check the imported TLS key: %w", err)
+		}
+		stored, derr := decodeKey(gotKey)
+		if !found || derr != nil || !stored.Equal(legacy) {
+			return tls.Certificate{}, nil, errors.New("the imported TLS key does not match the key file; the file was kept and the import will be tried again at the next start")
+		}
+		slog.Info("imported the self-signed TLS key into the database and re-signed its certificate for 10 years; tls_pin is unchanged",
+			"tls_pin", keyPin(&key.PublicKey))
+		removeLegacyFiles(keyPath, certPath)
+	}
+	if err := writeMirror(dataDir, certPEM); err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	return cert, key, nil
+}
+
+// removeLegacyFiles deletes the key file and then the certificate file of an earlier version. The
+// row holding the key is durable and verified before this is called, so a failure is only a leftover:
+// it is logged, and the next start removes it. The key goes first; a missing file is not an error.
+func removeLegacyFiles(keyPath, certPath string) {
+	for _, path := range []string{keyPath, certPath} {
+		if err := removeFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("could not remove a legacy self-signed TLS file; it is not used and will be removed at the next start",
+				"path", path, "err", err)
+			return
+		}
+	}
+}
+
+// keyPin is the SPKI pin of a public key, in the form authn.SPKIPin gives for a certificate.
+func keyPin(pub *ecdsa.PublicKey) string {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(der)
+	return "sha256/" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
 // signSelfSigned signs a certificate for want with key and returns it, with its PEM encoding.
