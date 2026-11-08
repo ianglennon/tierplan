@@ -54,18 +54,14 @@ func Healthcheck(ctx context.Context, listen, certFile string) error {
 	return healthcheck(ctx, listen, certFile != "", client)
 }
 
-// HealthcheckCertFile is the certificate file the listener serves for an
-// env-set TLS mode, for Healthcheck: the operator's own when one is supplied,
-// the mirror of the generated self-signed one (<DataDir>/tls/server.crt) when that
-// is enabled, and empty otherwise (plain HTTP).
+// HealthcheckCertFile is the certificate file the listener serves, for Healthcheck: the operator's
+// own when one is supplied, otherwise the mirror of the install's own certificate
+// (<DataDir>/tls/server.crt). It is never empty: every install serves HTTPS.
 func HealthcheckCertFile(cfg config.Config) string {
-	switch {
-	case cfg.TLSCertFile != "":
+	if cfg.TLSCertFile != "" {
 		return cfg.TLSCertFile
-	case cfg.TLSSelfSigned:
-		return filepath.Join(cfg.DataDir, selfSignedDir, mirrorCertFile)
 	}
-	return ""
+	return filepath.Join(cfg.DataDir, selfSignedDir, mirrorCertFile)
 }
 
 // ownCertificateTrust is a TLS configuration that trusts exactly the

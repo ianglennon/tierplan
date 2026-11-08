@@ -358,3 +358,98 @@ func TestTwoSelfSignedInstallsHaveDifferentPins(t *testing.T) {
 		t.Errorf("pins = %q and %q; want two different, non-empty pins", a.TLSPin(), b.TLSPin())
 	}
 }
+
+// buildFresh builds a server the way a fresh install starts: a new data directory and no TLS variable.
+func buildFresh(t *testing.T) (*Server, config.Config, string) {
+	t.Helper()
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"})
+	var logs bytes.Buffer
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv, cfg, logs.String()
+}
+
+func TestFreshInstallServesHTTPSFromItsSealedCertificate(t *testing.T) {
+	srv, cfg, logs := buildFresh(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.serve(ctx, ln) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	addr := ln.Addr().String()
+
+	mirrorPath := filepath.Join(cfg.DataDir, "tls", mirrorCertFile)
+	if got := HealthcheckCertFile(cfg); got != mirrorPath {
+		t.Fatalf("HealthcheckCertFile = %q, want the mirror %q", got, mirrorPath)
+	}
+	if err := Healthcheck(context.Background(), addr, HealthcheckCertFile(cfg)); err != nil {
+		t.Fatalf("Healthcheck over TLS against the mirror: %v", err)
+	}
+	mirror, err := os.ReadFile(mirrorPath) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(mirror) {
+		t.Fatal("the mirror holds no certificate")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(client.CloseIdleConnections)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+"/healthz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /healthz over TLS trusting only the mirror: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /healthz = %d, want 200", resp.StatusCode)
+	}
+
+	// The certificate is good for ten years.
+	leaf := resp.TLS.PeerCertificates[0]
+	if want := time.Now().Add(3650 * 24 * time.Hour); leaf.NotAfter.Sub(want).Abs() > 24*time.Hour {
+		t.Errorf("NotAfter = %v, want about %v (ten years)", leaf.NotAfter, want)
+	}
+
+	var sealed string
+	if err := srv.store.Read.QueryRowContext(ctx, `SELECT key_sealed FROM tls_certs WHERE id = ?`, selfSignedID).Scan(&sealed); err != nil {
+		t.Fatalf("the %s row: %v", selfSignedID, err)
+	}
+	if strings.Contains(sealed, "PRIVATE KEY") {
+		t.Error("key_sealed holds the key in the clear")
+	}
+	entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "tls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != mirrorCertFile {
+		t.Errorf("tls directory = %v, want exactly %s", entries, mirrorCertFile)
+	}
+
+	if !strings.Contains(logs, fingerprint(srv.https.Config())) || strings.Contains(logs, "serving plain HTTP") {
+		t.Errorf("startup log lacks the fingerprint line or still says plain HTTP:\n%s", logs)
+	}
+	if strings.Contains(logs, "PRIVATE KEY") {
+		t.Error("the startup log holds key material")
+	}
+}
+
+func TestTwoFreshInstallsHaveDifferentPins(t *testing.T) {
+	a, _, _ := buildFresh(t)
+	b, _, _ := buildFresh(t)
+	if a.TLSPin() == "" || a.TLSPin() == b.TLSPin() {
+		t.Errorf("pins = %q and %q; want two different, non-empty pins", a.TLSPin(), b.TLSPin())
+	}
+}

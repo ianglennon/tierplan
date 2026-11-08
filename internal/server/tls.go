@@ -58,12 +58,13 @@ func TLSEnabled(cfg config.Config) bool {
 }
 
 // newCertSource builds the certificate source the environment's TLS settings
-// ask for, and says which kind it is. It returns a nil source and tlsKindNone
-// for plain HTTP. The source does not refresh itself: the server runs
+// ask for, and says which kind it is. The source is never nil on success: an install serves HTTPS
+// from its first start. The source does not refresh itself: the server runs
 // runCertRefresh beside it, so a handshake never waits on the database or the disk.
 //
-// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair. With
-// TIERPLAN_TLS_SELF_SIGNED it serves an ECDSA P-256 certificate whose key lives in store, covering
+// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE it serves that pair. Otherwise (with or
+// without TIERPLAN_TLS_SELF_SIGNED, which no longer changes anything) it serves an ECDSA P-256
+// certificate whose key lives in store, covering
 // localhost, the loopback addresses, the machine host name (unless it is a container ID) and the
 // hosts of the public URL and the agent URL (the address agents dial when it is not the public
 // one). publicURL and agentURL are read again on every name check, so a URL saved after start is
@@ -87,21 +88,18 @@ func newCertSource(ctx context.Context, cfg config.Config, store tlsCertStore, p
 		agentURL = func() string { return "" }
 	}
 
-	switch {
-	case files:
+	if files {
 		src, err := newSuppliedSource(cfg.TLSCertFile, cfg.TLSKeyFile, now)
 		if err != nil {
 			return nil, tlsKindNone, fmt.Errorf("load the TLS certificate from TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE: %w", err)
 		}
 		return src, tlsKindSupplied, nil
-	case cfg.TLSSelfSigned:
-		src, err := newSelfSignedSource(ctx, store, cfg.DataDir, publicURL, agentURL, now)
-		if err != nil {
-			return nil, tlsKindNone, fmt.Errorf("prepare the self-signed certificate (TIERPLAN_TLS_SELF_SIGNED): %w", err)
-		}
-		return src, tlsKindSelfSigned, nil
 	}
-	return nil, tlsKindNone, nil
+	src, err := newSelfSignedSource(ctx, store, cfg.DataDir, publicURL, agentURL, now)
+	if err != nil {
+		return nil, tlsKindNone, fmt.Errorf("prepare the self-signed certificate: %w", err)
+	}
+	return src, tlsKindSelfSigned, nil
 }
 
 // certSource serves the current certificate and keeps it fresh. It holds the
