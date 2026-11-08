@@ -174,11 +174,16 @@ func runCertRefresh(ctx context.Context, clk stackops.Clock, src *certSource) {
 	}
 }
 
-// newSelfSignedSource loads or generates the self-signed certificate from store and serves it. The
-// source never renews it on a timer.
+// newSelfSignedSource loads or generates the self-signed certificate from store and serves it.
+//
+// The source never renews the certificate on a timer. Each name check, which is cheap, compares the
+// names now wanted (the URLs are read again, so one saved after start is seen) with those on the
+// served certificate, and only when one is missing signs a new certificate with the same key, so the
+// SPKI pin that agents hold does not move. The database row and the mirror are written before the
+// new certificate is swapped in; a failed write keeps the current certificate.
 func newSelfSignedSource(ctx context.Context, store tlsCertStore, dataDir string, publicURL, agentURL func() string, now func() time.Time) (*certSource, error) {
 	t0 := now()
-	cert, _, err := prepareSelfSigned(ctx, store, dataDir, wantedNames(publicURL(), agentURL()), t0)
+	cert, key, err := prepareSelfSigned(ctx, store, dataDir, wantedNames(publicURL(), agentURL()), t0)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +191,25 @@ func newSelfSignedSource(ctx context.Context, store tlsCertStore, dataDir string
 	if err := src.set(cert, t0); err != nil {
 		return nil, err
 	}
-	src.refresh = func(time.Time, *x509.Certificate) (*tls.Certificate, error) { return nil, nil }
+	// The check outlives the start-up context, which may be cancelled once the server is built.
+	checkCtx := context.WithoutCancel(ctx)
+	src.refresh = func(at time.Time, leaf *x509.Certificate) (*tls.Certificate, error) {
+		want := wantedNames(publicURL(), agentURL())
+		if want.covers(leaf) {
+			return nil, nil
+		}
+		next, certPEM, err := signSelfSigned(key, want, at)
+		if err != nil {
+			return nil, fmt.Errorf("sign the self-signed certificate for the new names: %w", err)
+		}
+		if err := store.UpdateCert(checkCtx, selfSignedID, certPEM, at); err != nil {
+			return nil, err
+		}
+		if err := writeMirror(dataDir, certPEM); err != nil {
+			return nil, err
+		}
+		return &next, nil
+	}
 	return src, nil
 }
 

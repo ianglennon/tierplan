@@ -541,7 +541,7 @@ func TestSelfSignedIsResignedLiveWhenTheURLChanges(t *testing.T) {
 
 	// A host already covered, in another letter case, is not signed again.
 	setPublic("https://NEW.example.test")
-	clk.Tick(t, selfSignedNameCheck)
+	clk.Advance(selfSignedNameCheck) // the loop is already waiting on its timer
 	clk.WaitArmed(t)
 	if f.store.updates != 1 || leafOf(t, got).SerialNumber.Cmp(after.SerialNumber) != 0 {
 		t.Error("a covered host in another letter case caused a re-sign")
