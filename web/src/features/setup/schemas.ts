@@ -34,6 +34,7 @@ const KEY = {
   instanceNameRequired: "setup.errors.instanceNameRequired",
   instanceNameTooLong: "setup.errors.instanceNameTooLong",
   publicUrl: "setup.errors.publicUrl",
+  publicUrlHttp: "setup.errors.publicUrlHttp",
   server: "setup.errors.server",
 } as const;
 
@@ -87,23 +88,42 @@ export const adminSchema = z
 export type AdminInput = z.input<typeof adminSchema>;
 export type AdminValues = z.output<typeof adminSchema>;
 
-// isPublicUrl mirrors config.NormalisePublicURL: an absolute http or https
-// address with a host, no credentials, no query and no fragment.
-export function isPublicUrl(raw: string): boolean {
-  if (/[?#]/.test(raw)) return false;
+// urlProblem classifies a typed address against config.NormalisePublicURL: an
+// absolute https address with a host, no credentials, no query and no fragment.
+// TierPlan serves HTTPS only (D-07), so a well-formed http address is its own
+// case: the screen can then say why it is refused instead of calling it
+// malformed. null means the address is acceptable.
+function urlProblem(raw: string): "http" | "invalid" | null {
+  if (/[?#]/.test(raw)) return "invalid";
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
-    return false;
+    return "invalid";
   }
-  return (
-    (u.protocol === "http:" || u.protocol === "https:") &&
-    u.host !== "" &&
-    u.username === "" &&
-    u.password === ""
-  );
+  if (u.host === "" || u.username !== "" || u.password !== "") return "invalid";
+  if (u.protocol === "https:") return null;
+  return u.protocol === "http:" ? "http" : "invalid";
 }
+
+// isPublicUrl is true for an address TierPlan accepts: https only.
+export function isPublicUrl(raw: string): boolean {
+  return urlProblem(raw) === null;
+}
+
+// urlIssue is the refinement shared by the public URL and the agent URL: it
+// reports the message key for the address, or nothing when it is acceptable.
+// The http message differs per field, so the caller names it.
+function urlIssue(httpKey: string): (raw: string, ctx: z.core.$RefinementCtx<string>) => void {
+  return (raw, ctx) => {
+    const problem = urlProblem(raw);
+    if (problem === null) return;
+    ctx.addIssue({ code: "custom", message: problem === "http" ? httpKey : KEY.publicUrl });
+  };
+}
+
+// The agent URL message for a well-formed http address (D-07).
+const AGENT_URL_HTTPS_ONLY = "settings.general.agentUrl.httpsOnly";
 
 export const instanceSchema = z.object({
   instanceName: z
@@ -111,20 +131,22 @@ export const instanceSchema = z.object({
     .trim()
     .refine((s) => chars(s) >= 1, { error: KEY.instanceNameRequired })
     .refine((s) => chars(s) <= MAX_INSTANCE_NAME_LENGTH, { error: KEY.instanceNameTooLong }),
-  publicUrl: z.string().trim().refine(isPublicUrl, { error: KEY.publicUrl }),
+  publicUrl: z.string().trim().superRefine(urlIssue(KEY.publicUrlHttp)),
 });
 
 export type InstanceInput = z.input<typeof instanceSchema>;
 export type InstanceValues = z.output<typeof instanceSchema>;
 
 // The settings form is the instance form plus the agent URL (plan 02-26, D-18).
-// An agent URL is checked like the public URL, and an empty one is valid: it
-// means agents dial the public URL.
+// An agent URL is checked like the public URL (https only), and an empty one is
+// valid: it means agents dial the public URL.
 export const settingsSchema = instanceSchema.extend({
   agentUrl: z
     .string()
     .trim()
-    .refine((s) => s === "" || isPublicUrl(s), { error: KEY.publicUrl }),
+    .superRefine((s, ctx) => {
+      if (s !== "") urlIssue(AGENT_URL_HTTPS_ONLY)(s, ctx);
+    }),
 });
 
 export type SettingsInput = z.input<typeof settingsSchema>;

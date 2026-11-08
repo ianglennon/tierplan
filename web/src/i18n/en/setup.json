@@ -42,7 +42,7 @@
       },
       "url": {
         "label": "Public URL",
-        "helper": "The address people use to reach TierPlan. It controls cookies and request origin checks.",
+        "helper": "The address people use to reach TierPlan. It must start with https://. It controls cookies and request origin checks.",
         "locked": "Set by the TIERPLAN_PUBLIC_URL environment variable.",
         "lockedIcon": "Locked"
       },
@@ -60,7 +60,8 @@
       "passwordMismatch": "The passwords don't match.",
       "instanceNameRequired": "Enter a name.",
       "instanceNameTooLong": "Use 64 characters or fewer.",
-      "publicUrl": "Enter a full address such as https://tierplan.example.com.",
+      "publicUrl": "Enter a full https address such as https://tierplan.example.com.",
+      "publicUrlHttp": "TierPlan serves HTTPS only. Use an address that starts with https://, such as https://tierplan.example.com.",
       "server": "Something went wrong on the server. Try again, and check the container logs if it keeps happening."
     },
     "restore": {
