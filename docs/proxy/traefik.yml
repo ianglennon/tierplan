@@ -4,28 +4,40 @@
 # Traefik in front of TierPlan. See docs/reverse-proxy.md. This is Traefik's
 # dynamic configuration for the file provider:
 #
-#   traefik --entrypoints.web.address=:80 \
+#   traefik --entrypoints.websecure.address=:443 \
 #           --providers.file.filename=/etc/traefik/tierplan.yml
 #
-# It uses an entry point called "web". To end TLS in Traefik, add an entry point
-# for port 443 with a certificate resolver and name it in each router's
-# entryPoints. Traefik passes WebSocket upgrades through by itself, flushes
-# text/event-stream responses at once, and sets X-Forwarded-For, X-Forwarded-Proto
-# and Host. It also adds X-Forwarded-Prefix when it strips a prefix; TierPlan
-# ignores that header, so the public URL stays the only source of the base path.
+# It uses an entry point called "websecure" that ends TLS for the browser, and talks
+# HTTPS to TierPlan, which serves nothing else. Put your own certificate and key at
+# the two paths under "tls", or use a certificate resolver instead. The
+# serversTransport checks TierPlan's certificate: rootCAs is the copy of TierPlan's
+# own certificate (/data/tls/server.crt in TierPlan's data volume, shared read-only
+# with Traefik or copied out), and serverName is a host name that certificate
+# carries (give TierPlan the host name tierplan, or use the host of its public URL).
+# Traefik passes WebSocket upgrades through by itself, flushes text/event-stream
+# responses at once, and sets X-Forwarded-For, X-Forwarded-Proto and Host. It also
+# adds X-Forwarded-Prefix when it strips a prefix; TierPlan ignores that header, so
+# the public URL stays the only source of the base path.
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/tls/cert.pem
+      keyFile: /etc/traefik/tls/key.pem
 
 http:
   routers:
     # A dedicated host name (recommended). Set TIERPLAN_PUBLIC_URL=https://tierplan.example.com.
     tierplan-root:
       rule: "Host(`tierplan.example.com`)"
-      entryPoints: [web]
+      entryPoints: [websecure]
+      tls: {}
       service: tierplan
 
     # A subpath on a host you share. Set TIERPLAN_PUBLIC_URL=https://example.com/tierplan.
     tierplan-sub:
       rule: "Host(`example.com`) && (Path(`/tierplan`) || PathPrefix(`/tierplan/`))"
-      entryPoints: [web]
+      entryPoints: [websecure]
+      tls: {}
       middlewares: [tierplan-strip]
       service: tierplan
 
@@ -34,8 +46,15 @@ http:
       stripPrefix:
         prefixes: ["/tierplan"]
 
+  serversTransports:
+    tierplan:
+      rootCAs:
+        - /tierplan-data/tls/server.crt
+      serverName: tierplan
+
   services:
     tierplan:
       loadBalancer:
+        serversTransport: tierplan
         servers:
-          - url: "http://tierplan:7480"
+          - url: "https://tierplan:7480"
