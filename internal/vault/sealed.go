@@ -54,6 +54,10 @@ var SealedColumns = []SealedColumn{
 		Table: "stack_git", Column: "webhook_secret_sealed", KeyColumns: []string{"stack_id"},
 		Context: func(keys []string) string { return ContextGitWebhook + keys[0] },
 	},
+	{
+		Table: "tls_certs", Column: "key_sealed", KeyColumns: []string{"id"},
+		Context: func(keys []string) string { return ContextTLSKey + keys[0] },
+	},
 }
 
 // RewrapAll moves every sealed value in tx from the vault from to the vault to:
