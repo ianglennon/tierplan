@@ -2,30 +2,44 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
-# The upgrade proof an operator would run by hand (D-34, PLAT-02): put real state
-# into the PREVIOUS build's image, replace the container with the CURRENT image on
-# the same /data volume and the same network alias, and check that everything
-# survived. `make upgrade-smoke UPGRADE_BASE_REF=<commit>` builds both images and
-# runs this; until v0.1.0 there is no released image, so the baseline is a commit
-# (the pull request's base, or the previous commit on a push) built locally and
-# nothing is pulled from a registry.
+# The upgrade proof an operator would run by hand (D-34, PLAT-02, D-11, D-13): put
+# real state into the PREVIOUS build's image, replace the container with the CURRENT
+# image on the same /data volume and the same network alias, and check that
+# everything survived, the agent's TLS pin above all. `make upgrade-smoke
+# UPGRADE_BASE_REF=<commit>` builds both images and runs this; until v0.1.0 there is
+# no released image, so the baseline is a commit (the pull request's base, or the
+# previous commit on a push) built locally and nothing is pulled from a registry.
+#
+# There is no plain HTTP and no development switch anywhere in this script. The
+# baseline is TierPlan's self-signed mode (TIERPLAN_TLS_SELF_SIGNED=true) behind an
+# https public URL, because upgrading a plain-HTTP install is not supported (D-07).
+# Every request goes over https with curl --cacert on the certificate the server
+# being tested serves, copied out with docker cp; verification is never switched off
+# (D-10).
 #
 # What it does:
 #   1. runs BASE_IMAGE on a new volume and network (alias "tierplan"), completes
 #      setup through the API, adds an agent environment and connects a real agent
-#      (AGENT_IMAGE) that dials TierPlan by that alias, and waits until the
-#      environment is online;
+#      (AGENT_IMAGE) over wss with the pin from the base's install command, records
+#      the SPKI pin the base serves and whether the base left a legacy
+#      /data/tls/selfsigned.key on the volume, and waits until the environment is
+#      online;
 #   2. when the base answers POST /api/users with 201 it also seeds a user (who
 #      accepts the invite and chooses a password), a team with that user in it and
 #      a Viewer grant on the environment; a base without the users API (404 or
 #      405) is reported as SKIP, any other answer fails;
 #   3. runs `tierplan audit verify` in the base container, then `docker rm -f`s the
 #      server and keeps the volume and the agent;
-#   4. runs HEAD_IMAGE with the same name, alias, volume and settings and checks:
-#      /readyz is 200, the first admin signs in and /api/me reports instanceAdmin
-#      true, the agent environment is online again by itself within
-#      RECONNECT_WAIT seconds, the seeded user signs in with the grant, team and
-#      membership intact, and `tierplan audit verify` prints "audit chain OK".
+#   4. runs HEAD_IMAGE with the same name, alias, volume and settings
+#      (TIERPLAN_TLS_SELF_SIGNED=true stays set, which also proves the deprecation
+#      does not break startup) and checks: /readyz is 200, HEAD serves the same SPKI
+#      pin, its certificate is valid for more than 9 years, the legacy key file is
+#      gone from the volume (SKIP when the base never had one, i.e. it was already a
+#      13.1 build), the log carries the deprecation line, the first admin signs in
+#      and /api/me reports instanceAdmin true, the agent environment is online again
+#      by itself within RECONNECT_WAIT seconds, the seeded user signs in with the
+#      grant, team and membership intact, and `tierplan audit verify` prints
+#      "audit chain OK".
 #
 # One PASS or FAIL line per check. A failing check prints "UPGRADE SMOKE FAIL: ..."
 # with the last 50 log lines of the server and the agent and exits 1; a clean run
@@ -37,12 +51,9 @@
 # assigns it and it is read back after every server start) and RECONNECT_WAIT (120).
 # Every container, network and volume carries the label
 # tierplan.ci.owner=$TIERPLAN_CI_OWNER (local-<pid> when unset) so `make ci-clean`
-# removes what a cancelled CI job left (D-23). Needs Docker, curl and jq.
-#
-# The throwaway containers talk plain HTTP on a private network, so both the
-# server and the agent get TIERPLAN_AGENT_ALLOW_INSECURE=true, the development
-# switch (docs/agent.md). The passwords and tokens belong to containers that are
-# destroyed at the end; no repository secret is involved.
+# removes what a cancelled CI job left (D-23). Needs Docker, curl, jq and openssl.
+# The passwords and tokens belong to containers that are destroyed at the end; no
+# repository secret is involved.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -53,7 +64,7 @@ AGENT_IMAGE="${AGENT_IMAGE:-tierplan-agent:dev}"
 OWNER_LABEL="tierplan.ci.owner=${TIERPLAN_CI_OWNER:-local-$$}"
 RECONNECT_WAIT="${RECONNECT_WAIT:-120}"
 
-for tool in docker curl jq; do
+for tool in docker curl jq openssl; do
   command -v "${tool}" >/dev/null || { echo "UPGRADE SMOKE FAIL: ${tool} is required" >&2; exit 1; }
 done
 for image in "${BASE_IMAGE}" "${HEAD_IMAGE}" "${AGENT_IMAGE}"; do
@@ -68,7 +79,7 @@ AGENT_VOLUME="tierplan-upgrade-agent-${RUN_ID}"
 SERVER="tierplan-upgrade-server-${RUN_ID}"
 AGENT="tierplan-upgrade-agent-${RUN_ID}"
 ALIAS="tierplan"
-PUBLIC="http://${ALIAS}:7480"
+PUBLIC="https://${ALIAS}:7480" # the alias is a name in the certificate: it is the public URL host
 HOST_URL="" # set by start_server from the port Docker assigned
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
@@ -113,12 +124,48 @@ start_server() {
     -v "${VOLUME}:/data" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" \
-    -e TIERPLAN_AGENT_ALLOW_INSECURE=true \
+    -e TIERPLAN_TLS_SELF_SIGNED=true \
     --health-interval 3s --health-start-period 0s --health-retries 5 \
     "$1" >/dev/null || return 1
   # Docker assigned the host port (unless SMOKE_PORT is set); read it back, because
   # every swap of the server gets a new one.
-  HOST_URL="http://127.0.0.1:$(docker port "${SERVER}" 7480/tcp | head -n 1 | sed 's/.*://')"
+  HOST_URL="https://127.0.0.1:$(docker port "${SERVER}" 7480/tcp | head -n 1 | sed 's/.*://')"
+}
+
+# tcurl is curl that trusts the certificate of the server under test (copied out by
+# fetch_cert) and nothing else.
+tcurl() { curl --cacert "${WORK}/server.crt" "$@"; }
+
+# fetch_cert copies the certificate the server mirrors into its data volume:
+# /data/tls/server.crt, or /data/tls/selfsigned.crt for a Phase 13 base. docker cp
+# needs no shell, which the distroless image does not have. A copy from before a
+# swap is stale, so it is removed first.
+fetch_cert() {
+  rm -f "${WORK}/server.crt"
+  local f
+  for f in server.crt selfsigned.crt; do
+    docker cp "${SERVER}:/data/tls/${f}" "${WORK}/server.crt" >/dev/null 2>&1 \
+      && grep -q 'BEGIN CERTIFICATE' "${WORK}/server.crt" && return 0
+  done
+  return 1
+}
+
+# pin_of PEMFILE prints the SPKI pin (base64 SHA-256 of the public key) of a certificate.
+pin_of() {
+  openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+}
+
+# served_pin prints the SPKI pin of the certificate the server presents on the
+# published port. It only reads the pin; trust is established by tcurl.
+served_pin() {
+  openssl s_client -connect "${HOST_URL#https://}" -servername 127.0.0.1 </dev/null 2>/dev/null \
+    | openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null \
+    | openssl dgst -sha256 -binary | base64
+}
+
+# has_legacy_key succeeds when /data/tls/selfsigned.key exists in the server container.
+has_legacy_key() {
+  docker cp "${SERVER}:/data/tls/selfsigned.key" - >/dev/null 2>&1
 }
 
 wait_healthy() {
@@ -136,7 +183,7 @@ wait_healthy() {
 # sets HTTP_CODE and API_BODY. It is not run in a subshell.
 COOKIE="" CSRF=""
 api() {
-  HTTP_CODE="$(curl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${PUBLIC}" \
+  HTTP_CODE="$(tcurl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${PUBLIC}" \
     ${CSRF:+-H "X-CSRF-Token: ${CSRF}"} ${COOKIE:+-H "Cookie: ${COOKIE}"} ${3:+-H "${JSON_H}" -d "$3"} "${HOST_URL}$2")" || HTTP_CODE="curl-failed"
   API_BODY="$(cat "${WORK}/api.out" 2>/dev/null || true)"
 }
@@ -145,7 +192,7 @@ api() {
 # the server does not answer 200.
 login() {
   local code
-  code="$(curl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+  code="$(tcurl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
     -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${HOST_URL}/api/auth/login")" || return 1
   [ "${code}" = "200" ] || return 1
   COOKIE="$(grep -i '^set-cookie:' "${WORK}/login.hdr" | head -n 1 | tr -d '\r' | sed 's/^[^:]*: *//; s/;.*//')"
@@ -180,8 +227,16 @@ start_server "${BASE_IMAGE}" || fail "base starts" "docker run failed"
 wait_healthy || fail "base healthy" "the container did not become healthy within 90 seconds"
 pass "base healthy (${BASE_IMAGE})"
 
+fetch_cert || fail "base certificate copied" "could not copy /data/tls/server.crt or selfsigned.crt out of the base container"
+BASE_PIN="$(served_pin)"
+[ -n "${BASE_PIN}" ] || fail "base pin recorded" "could not read the certificate the base presents"
+[ "${BASE_PIN}" = "$(pin_of "${WORK}/server.crt")" ] || fail "base pin recorded" "the served certificate is not the one in /data/tls"
+[ "$(tcurl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/healthz")" = "200" ] \
+  || fail "base over verified https" "/healthz did not answer 200 with --cacert on the base's certificate"
+pass "base served over verified https, tls pin recorded (${BASE_PIN})"
+
 TOKEN="$(docker exec "${SERVER}" /usr/local/bin/tierplan setup-token)" || fail "setup token" "docker exec tierplan setup-token failed"
-code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+code="$(tcurl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${ADMIN_PW}\",\"instanceName\":\"Upgrade smoke\",\"publicUrl\":\"${PUBLIC}\"}" \
   "${HOST_URL}/api/setup/complete")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "setup done" "setup completion returned ${code}: $(cat "${WORK}/complete.json" 2>/dev/null)"
@@ -195,17 +250,23 @@ api POST /api/environments '{"kind":"agent","name":"smoke-agent"}'
 ENV_ID="$(printf '%s' "${API_BODY}" | jq -r .id)"
 JOIN_TOKEN="$(printf '%s' "${API_BODY}" | jq -r .install.joinToken)"
 AGENT_URL="$(printf '%s' "${API_BODY}" | jq -r .install.agentUrl)"
+AGENT_PIN="$(printf '%s' "${API_BODY}" | jq -r '.install.pin // empty')"
 { [ -n "${ENV_ID}" ] && [ "${ENV_ID}" != null ] && [ -n "${JOIN_TOKEN}" ] && [ "${JOIN_TOKEN}" != null ] && [ -n "${AGENT_URL}" ] && [ "${AGENT_URL}" != null ]; } \
   || fail "agent environment added" "the answer carries no environment, join token or agent URL"
+case "${AGENT_URL}" in wss://*) ;; *) fail "agent url is wss" "the install command dials ${AGENT_URL}" ;; esac
+[ "${AGENT_PIN}" = "sha256/${BASE_PIN}" ] \
+  || fail "install command carries the served pin" "install pin '${AGENT_PIN}', base serves sha256/${BASE_PIN}"
+pass "install command dials wss and carries the pin the base serves"
 
-# The agent runs the way the standalone install command runs it, on the same
-# network so that it reaches TierPlan by its alias.
+# The agent runs the way the standalone install command runs it (the URL, the pin
+# and the join token come from the base's install answer), on the same network so
+# that it reaches TierPlan by its alias.
 docker run -d --name "${AGENT}" --network "${NET}" --label "${OWNER_LABEL}" \
   --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
   -v /var/run/docker.sock:/var/run/docker.sock -v "${AGENT_VOLUME}:/var/lib/tierplan-agent" \
   --label tierplan.agent=true \
   -e "TIERPLAN_AGENT_URL=${AGENT_URL}" -e "TIERPLAN_AGENT_JOIN_TOKEN=${JOIN_TOKEN}" \
-  -e TIERPLAN_AGENT_ALLOW_INSECURE=true \
+  -e "TIERPLAN_AGENT_PIN=${AGENT_PIN}" \
   "${AGENT_IMAGE}" >/dev/null || fail "agent starts" "docker run failed"
 wait_online "${ENV_ID}" || fail "agent environment online on base" "state ${LAST_STATE} after ${RECONNECT_WAIT} seconds"
 pass "agent environment online on base"
@@ -221,7 +282,7 @@ case "${HTTP_CODE}" in
     INVITE_URL="$(printf '%s' "${API_BODY}" | jq -r .link.url)"
     INVITE_TOKEN="${INVITE_URL##*#token=}"
     [ -n "${INVITE_TOKEN}" ] && [ "${INVITE_TOKEN}" != "${INVITE_URL}" ] || fail "users seeded" "the invite link carries no token: ${INVITE_URL}"
-    code="$(curl -sS -o "${WORK}/accept.out" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+    code="$(tcurl -sS -o "${WORK}/accept.out" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
       -d "{\"token\":\"${INVITE_TOKEN}\",\"password\":\"${BOB_PW}\"}" "${HOST_URL}/api/invite/accept")" || code="curl-failed"
     [ "${code}" = "204" ] || fail "users seeded" "accepting the invite returned ${code}: $(cat "${WORK}/accept.out")"
     api POST /api/teams '{"name":"ops"}'
@@ -247,13 +308,36 @@ pass "audit verify on base"
 
 # ---- 3. the swap: the server goes, the volume and the agent stay ----
 
+HAD_LEGACY_KEY=false
+if has_legacy_key; then HAD_LEGACY_KEY=true; fi
 docker rm -f "${SERVER}" >/dev/null || fail "base removed" "docker rm -f failed"
 COOKIE="" CSRF=""
 start_server "${HEAD_IMAGE}" || fail "head healthy on the same volume" "docker run failed"
 wait_healthy || fail "head healthy on the same volume" "the container did not become healthy within 90 seconds"
 pass "head healthy on the same volume (${HEAD_IMAGE})"
 
-code="$(curl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/readyz")" || code="curl-failed"
+fetch_cert || fail "head certificate copied" "could not copy /data/tls/server.crt out of the head container"
+HEAD_PIN="$(served_pin)"
+[ "${HEAD_PIN}" = "${BASE_PIN}" ] || fail "same tls pin after upgrade" "head presents '${HEAD_PIN}', the base presented ${BASE_PIN}"
+[ "$(pin_of "${WORK}/server.crt")" = "${BASE_PIN}" ] || fail "same tls pin after upgrade" "the certificate head mirrors is not the base's key"
+pass "same tls pin after upgrade"
+
+openssl x509 -in "${WORK}/server.crt" -noout -checkend $((9 * 365 * 86400)) >/dev/null \
+  || fail "certificate valid over 9 years" "$(openssl x509 -in "${WORK}/server.crt" -noout -enddate)"
+pass "certificate valid for more than 9 years ($(openssl x509 -in "${WORK}/server.crt" -noout -enddate))"
+
+if [ "${HAD_LEGACY_KEY}" = true ]; then
+  if has_legacy_key; then fail "legacy key file gone" "/data/tls/selfsigned.key is still on the volume"; fi
+  pass "legacy key file gone (/data/tls/selfsigned.key imported into the database)"
+else
+  skip "legacy key file gone: base had no legacy key file (already a 13.1 build)"
+fi
+
+docker logs "${SERVER}" 2>&1 | grep -q 'TIERPLAN_TLS_SELF_SIGNED is deprecated' \
+  || fail "deprecation line logged" "the log has no TIERPLAN_TLS_SELF_SIGNED deprecation line"
+pass "deprecation line logged for the leftover TIERPLAN_TLS_SELF_SIGNED"
+
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/readyz")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "readyz" "/readyz returned ${code}, want 200"
 pass "readyz 200"
 
@@ -269,7 +353,7 @@ pass "instanceAdmin true"
 # The head server reads the environment from the migrated database; its agent
 # redials by itself (the reconnect grace, D-41).
 wait_online "${ENV_ID}" || fail "environment online again" "state ${LAST_STATE} after ${RECONNECT_WAIT} seconds"
-pass "environment online again"
+pass "agent back online by itself, same pin (environment online again)"
 
 if [ "${SEEDED}" = true ]; then
   api GET "/api/users/${BOB_ID}/access"
