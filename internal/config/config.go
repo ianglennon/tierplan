@@ -548,6 +548,10 @@ func AgentEndpoint(baseURL string) (string, error) {
 	return out.String(), nil
 }
 
+// ErrHTTPSOnly is the fixed reason an http public or agent URL is refused. It
+// carries no part of the submitted value, so an API answer may repeat it.
+var ErrHTTPSOnly = errors.New("must start with https://: TierPlan serves HTTPS only")
+
 // normalisePublicURL accepts an absolute https URL and returns its origin plus
 // an optional path with no trailing slash. TierPlan serves HTTPS only, so an
 // http URL is refused with the reason. Empty stays empty.
@@ -560,7 +564,7 @@ func normalisePublicURL(raw string) (string, error) {
 		return "", fmt.Errorf("must be an absolute https URL: %w", err)
 	}
 	if u.Scheme == "http" && u.Host != "" {
-		return "", errors.New("must start with https://: TierPlan serves HTTPS only")
+		return "", ErrHTTPSOnly
 	}
 	if u.Scheme != "https" || u.Host == "" {
 		return "", errors.New("must be an absolute https URL, for example https://tierplan.example.com")

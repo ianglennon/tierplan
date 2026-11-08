@@ -325,13 +325,13 @@ func (d SetupDeps) complete(ctx context.Context, in *CompleteSetupInput) (*Compl
 		return nil, huma.Error500InternalServerError("internal error")
 	}
 
-	c, problems := d.validate(in)
+	c, problems, detail := d.validate(in)
 	if len(problems) > 0 {
 		return nil, &huma.ErrorModel{
 			Type:   problemValidationFailed,
 			Title:  http.StatusText(http.StatusUnprocessableEntity),
 			Status: http.StatusUnprocessableEntity,
-			Detail: "validation failed",
+			Detail: detail,
 			Errors: problems,
 		}
 	}
@@ -439,7 +439,8 @@ type completion struct {
 
 // validate checks every field and reports all the problems at once, each as a
 // stable code at the field's location. It never echoes a submitted value.
-func (d SetupDeps) validate(in *CompleteSetupInput) (completion, []*huma.ErrorDetail) {
+func (d SetupDeps) validate(in *CompleteSetupInput) (completion, []*huma.ErrorDetail, string) {
+	detail := "validation failed"
 	var problems []*huma.ErrorDetail
 	add := func(location, code string) {
 		problems = append(problems, &huma.ErrorDetail{Location: location, Message: code})
@@ -475,8 +476,12 @@ func (d SetupDeps) validate(in *CompleteSetupInput) (completion, []*huma.ErrorDe
 		u, err := config.NormalisePublicURL(strings.TrimSpace(in.Body.PublicURL))
 		if err != nil || u == "" {
 			add("body.publicUrl", codeInvalidPublicURL)
+			if errors.Is(err, config.ErrHTTPSOnly) {
+				// The code stays the SPA's key; the fixed reason rides in the detail (D-07).
+				detail = "validation failed: body.publicUrl " + err.Error()
+			}
 		}
 		c.publicURL = u
 	}
-	return c, problems
+	return c, problems, detail
 }

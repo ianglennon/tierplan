@@ -257,6 +257,12 @@ func TestSetupCompleteRefusesAnHTTPPublicURL(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "invalid_public_url") {
 		t.Fatalf("body = %s, want invalid_public_url", rec.Body)
 	}
+	if !strings.Contains(rec.Body.String(), "HTTPS only") {
+		t.Fatalf("body = %s, want the reason: TierPlan serves HTTPS only", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Fatalf("body = %s echoes the submitted URL", rec.Body)
+	}
 	if c := sessionCookie(rec); c != nil {
 		t.Fatalf("a refused setup set a session cookie: %+v", c)
 	}
