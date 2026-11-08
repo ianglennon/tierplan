@@ -442,7 +442,7 @@ expect_out "test runs the web suite" "vitest run"
 expect pass "test-go-gotestsum" mk test-go
 expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
 expect_out "test-go keeps race, shuffle and a timeout from the budget" "-race -count=1 -shuffle=on -timeout \${left}s"
-expect_out "test-go shows its one budget" "TEST_BUDGET=30m"
+expect_out "test-go shows its one budget" "TEST_BUDGET=40m"
 # 06.1-46: the modules share one budget; a module with no time left fails, it is not skipped.
 expect fail "test-go-budget-used-up" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=0m TEST_RESULTS="${scratch}/go-results"
 expect_out "test-go-budget-used-up names the budget" "test-go: the 0m budget (TEST_GO_BUDGET) was used up before ."
