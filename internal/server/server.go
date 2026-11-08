@@ -403,6 +403,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		"version", buildinfo.Get().Display,
 		"config", cfg.Redacted(),
 	)
+	if cfg.TLSSelfSignedSet {
+		log.Warn("TIERPLAN_TLS_SELF_SIGNED is deprecated and has no effect: TierPlan always serves HTTPS with a self-signed certificate unless you supply one. Remove it from your configuration.")
+	}
 
 	// DOCKER_HOST is honoured for unix:// only (D-21). Checking it before
 	// anything is written means a bad value stops startup with a clear message.

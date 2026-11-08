@@ -79,9 +79,14 @@ type Config struct {
 	// TierPlan's own host. Optional: when it is not there the check says so.
 	HostRouteFile string
 
-	TLSCertFile   string
-	TLSKeyFile    string
-	TLSSelfSigned bool
+	TLSCertFile string
+	TLSKeyFile  string
+	// TLSSelfSigned is the value of the deprecated TIERPLAN_TLS_SELF_SIGNED (true only for a
+	// value that reads as true). TierPlan serves HTTPS with a certificate of its own without it, so it
+	// changes nothing apart from the places that still ask EnvTLS. TLSSelfSignedSet is whether the
+	// operator set it at all, to any value, so the server can say once that it is deprecated (D-14).
+	TLSSelfSigned    bool
+	TLSSelfSignedSet bool
 
 	// DockerGID overrides the detected socket group; nil when unset (D-17).
 	DockerGID *int
@@ -224,8 +229,14 @@ var settings = []setting{
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
 	{env: "TIERPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSKeyFile = raw; return nil }},
-	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", def: "false", desc: "serve a generated self-signed certificate",
-		apply: func(c *Config, raw string) (err error) { c.TLSSelfSigned, err = strconv.ParseBool(raw); return err }},
+	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", desc: "deprecated and without effect: TierPlan always serves HTTPS with a self-signed certificate unless a certificate file is supplied; any value is accepted and logged at start",
+		apply: func(c *Config, raw string) error {
+			// A stale value must never stop startup, so one that is not a boolean reads as not true.
+			c.TLSSelfSignedSet = raw != ""
+			on, err := strconv.ParseBool(raw)
+			c.TLSSelfSigned = err == nil && on
+			return nil
+		}},
 	{env: "TIERPLAN_DOCKER_GID", flag: "docker-gid", desc: "group ID of the Docker socket, overriding detection",
 		apply: func(c *Config, raw string) error {
 			if raw == "" {

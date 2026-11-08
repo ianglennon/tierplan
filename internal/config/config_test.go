@@ -56,7 +56,7 @@ func TestDefaults(t *testing.T) {
 	if c.SessionIdleTimeout != 12*time.Hour || c.SessionRememberLifetime != 720*time.Hour {
 		t.Errorf("session defaults = %v/%v", c.SessionIdleTimeout, c.SessionRememberLifetime)
 	}
-	if c.AuditRetentionDays != 365 || c.SkipPreMigrateBackup || c.TLSSelfSigned {
+	if c.AuditRetentionDays != 365 || c.SkipPreMigrateBackup || c.TLSSelfSigned || c.TLSSelfSignedSet {
 		t.Errorf("audit/backup/tls defaults wrong: %+v", c)
 	}
 	if c.DockerGID != nil {
@@ -242,7 +242,6 @@ func TestInvalidValuesNameTheEnvVar(t *testing.T) {
 		"TIERPLAN_SESSION_REMEMBER_LIFETIME": "0s",
 		"TIERPLAN_AUDIT_RETENTION_DAYS":      "-3",
 		"TIERPLAN_SKIP_PRE_MIGRATE_BACKUP":   "maybe",
-		"TIERPLAN_TLS_SELF_SIGNED":           "perhaps",
 		"TIERPLAN_DOCKER_GID":                "abc",
 		"TIERPLAN_LOG_LEVEL":                 "loud",
 	} {
@@ -253,6 +252,21 @@ func TestInvalidValuesNameTheEnvVar(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), env) {
 			t.Errorf("error %q does not name %s", err, env)
+		}
+	}
+}
+
+func TestTLSSelfSignedIsAcceptedWhateverItsValue(t *testing.T) {
+	// It is deprecated and has no effect, so a stale value never stops startup (D-14); only the
+	// operator having set it is reported.
+	for value, wantOn := range map[string]bool{"true": true, "false": false, "perhaps": false, "1": true} {
+		c, err := load(t, nil, envMap{"TIERPLAN_TLS_SELF_SIGNED": value}, files{})
+		if err != nil {
+			t.Errorf("TIERPLAN_TLS_SELF_SIGNED=%q was rejected: %v", value, err)
+			continue
+		}
+		if !c.TLSSelfSignedSet || c.TLSSelfSigned != wantOn {
+			t.Errorf("TIERPLAN_TLS_SELF_SIGNED=%q gave Set=%v Self=%v, want Set=true Self=%v", value, c.TLSSelfSignedSet, c.TLSSelfSigned, wantOn)
 		}
 	}
 }
