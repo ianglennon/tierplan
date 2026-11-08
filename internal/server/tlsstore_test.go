@@ -98,6 +98,14 @@ type memCertStore struct {
 	rows    map[string]memCert
 	inserts int
 	updates int
+
+	// Failure switches for the import's fault-injection tests. failInsert makes Insert store
+	// nothing and fail; failCheckpoint makes it store the row and then fail, as sealedCertStore does
+	// when the commit worked and the checkpoint did not; otherKey makes Load answer with a key that
+	// is not the one stored.
+	failInsert     error
+	failCheckpoint error
+	otherKey       bool
 }
 
 type memCert struct {
@@ -114,18 +122,32 @@ func (m *memCertStore) Load(_ context.Context, id string) ([]byte, []byte, bool,
 	if !ok {
 		return nil, nil, false, nil
 	}
+	if m.otherKey {
+		other, err := newKey()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		otherPEM, err := encodeKey(other)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		return bytes.Clone(r.cert), otherPEM, true, nil
+	}
 	return bytes.Clone(r.cert), bytes.Clone(r.key), true, nil
 }
 
 func (m *memCertStore) Insert(_ context.Context, id string, certPEM, keyPEM []byte, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failInsert != nil {
+		return m.failInsert
+	}
 	if _, ok := m.rows[id]; ok {
 		return errors.New("duplicate id " + id)
 	}
 	m.rows[id] = memCert{cert: bytes.Clone(certPEM), key: bytes.Clone(keyPEM), updated: now}
 	m.inserts++
-	return nil
+	return m.failCheckpoint
 }
 
 func (m *memCertStore) UpdateCert(_ context.Context, id string, certPEM []byte, now time.Time) error {

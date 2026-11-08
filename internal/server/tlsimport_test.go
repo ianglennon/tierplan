@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"math/big"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // importLine is the log line the one-time import writes.
@@ -172,5 +175,317 @@ func TestImportKeepsThePinAndResignsForTenYears(t *testing.T) {
 	}
 	if got := srv2.TLSPin(); got != wantPin {
 		t.Errorf("pin after the second start = %q, want %q", got, wantPin)
+	}
+}
+
+// prepare is one start of the self-signed source over store: what the server does at Build.
+func prepare(t *testing.T, store tlsCertStore, dataDir string) (*ecdsa.PrivateKey, error) {
+	t.Helper()
+	_, key, err := prepareSelfSigned(context.Background(), store, dataDir, wantedNames("", ""), fixedNow)
+	return key, err
+}
+
+// failRemoval makes the removal of a legacy file fail until the test ends or restore is called.
+func failRemoval(t *testing.T) (restore func()) {
+	t.Helper()
+	old := removeFile
+	removeFile = func(string) error { return errors.New("the file system is read-only") }
+	restore = func() { removeFile = old }
+	t.Cleanup(restore)
+	return restore
+}
+
+// A failure at any step of the import leaves the key file in place, and the next start finishes the
+// import with the pin the install had (D-11, T-13.1-08).
+func TestImportSurvivesAFailureAtEachStep(t *testing.T) {
+	steps := []struct {
+		name string
+		// inject breaks one step and returns what undoes it for the next start.
+		inject  func(t *testing.T, m *memCertStore) (undo func())
+		wantErr bool
+		// keyKept is whether selfsigned.key is still there after the failed start.
+		keyKept bool
+		wantLog string
+	}{
+		{name: "no failure", inject: func(*testing.T, *memCertStore) func() { return func() {} }, keyKept: false},
+		{
+			name: "insert",
+			inject: func(_ *testing.T, m *memCertStore) func() {
+				m.failInsert = errors.New("the database is full")
+				return func() { m.failInsert = nil }
+			},
+			wantErr: true, keyKept: true,
+		},
+		{
+			name: "checkpoint",
+			inject: func(_ *testing.T, m *memCertStore) func() {
+				m.failCheckpoint = errors.New("the checkpoint was blocked by another connection")
+				return func() { m.failCheckpoint = nil }
+			},
+			wantErr: true, keyKept: true,
+		},
+		{
+			name: "compare",
+			inject: func(_ *testing.T, m *memCertStore) func() {
+				m.otherKey = true
+				return func() { m.otherKey = false }
+			},
+			wantErr: true, keyKept: true,
+		},
+		{
+			name: "remove",
+			inject: func(t *testing.T, _ *memCertStore) func() {
+				return failRemoval(t)
+			},
+			keyKept: true,
+			wantLog: "could not remove a legacy self-signed TLS file",
+		},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			logs := captureDefaultLog(t)
+			dataDir := t.TempDir()
+			key := writeLegacyPair(t, dataDir, fixedNow)
+			wantPin := keyPin(&key.PublicKey)
+			p := legacyPaths(dataDir)
+			m := newMemCertStore()
+
+			undo := step.inject(t, m)
+			got, err := prepare(t, m, dataDir)
+			if (err != nil) != step.wantErr {
+				t.Fatalf("start with the %s step broken: err = %v, want an error: %v", step.name, err, step.wantErr)
+			}
+			if exists(t, p.key) != step.keyKept {
+				t.Errorf("selfsigned.key present = %v after the %s step failed, want %v", exists(t, p.key), step.name, step.keyKept)
+			}
+			if step.wantErr && !exists(t, p.cert) {
+				t.Errorf("selfsigned.crt was removed although the import failed")
+			}
+			if err == nil && keyPin(&got.PublicKey) != wantPin {
+				t.Errorf("served pin = %s, want the legacy pin %s", keyPin(&got.PublicKey), wantPin)
+			}
+			if step.wantLog != "" && !strings.Contains(logs.String(), step.wantLog) {
+				t.Errorf("log lacks %q:\n%s", step.wantLog, logs)
+			}
+
+			// The next start, with the fault gone, ends with the same pin and no legacy files.
+			undo()
+			got, err = prepare(t, m, dataDir)
+			if err != nil {
+				t.Fatalf("the start after the %s failure: %v", step.name, err)
+			}
+			if keyPin(&got.PublicKey) != wantPin {
+				t.Errorf("pin after the %s failure = %s, want %s", step.name, keyPin(&got.PublicKey), wantPin)
+			}
+			if exists(t, p.key) || exists(t, p.cert) {
+				t.Errorf("legacy files remain after the next start: key %v, cert %v", exists(t, p.key), exists(t, p.cert))
+			}
+			if m.updates != 0 {
+				t.Errorf("the certificate was rewritten %d times", m.updates)
+			}
+		})
+	}
+}
+
+// A row in the database always wins over a legacy file, which is only a leftover (T-13.1-09).
+func TestStoredKeyWinsOverAStrayKeyFile(t *testing.T) {
+	strays := []struct {
+		name    string
+		write   func(t *testing.T, dataDir string, stored *ecdsa.PrivateKey)
+		wantLog string
+	}{
+		{
+			name: "another key",
+			write: func(t *testing.T, dataDir string, _ *ecdsa.PrivateKey) {
+				writeLegacyPair(t, dataDir, fixedNow)
+			},
+			wantLog: "whose key differs",
+		},
+		{
+			name: "the stored key",
+			write: func(t *testing.T, dataDir string, stored *ecdsa.PrivateKey) {
+				p := legacyPaths(dataDir)
+				if err := os.MkdirAll(p.dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				keyPEM, err := encodeKey(stored)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p.key, keyPEM, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				writeOneYearCert(t, p.cert, stored, fixedNow)
+			},
+		},
+		{
+			name: "a file that is not a key",
+			write: func(t *testing.T, dataDir string, _ *ecdsa.PrivateKey) {
+				p := legacyPaths(dataDir)
+				if err := os.MkdirAll(p.dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p.key, []byte("not a key"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantLog: "cannot be read",
+		},
+	}
+	for _, stray := range strays {
+		t.Run(stray.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			m := newMemCertStore()
+			stored, err := prepare(t, m, dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			storedPin := keyPin(&stored.PublicKey)
+
+			logs := captureDefaultLog(t)
+			stray.write(t, dataDir, stored)
+			got, err := prepare(t, m, dataDir)
+			if err != nil {
+				t.Fatalf("start with a stray key file: %v", err)
+			}
+			if keyPin(&got.PublicKey) != storedPin {
+				t.Errorf("served pin = %s, want the stored key's pin %s", keyPin(&got.PublicKey), storedPin)
+			}
+			p := legacyPaths(dataDir)
+			if exists(t, p.key) || exists(t, p.cert) {
+				t.Errorf("the stray files remain: key %v, cert %v", exists(t, p.key), exists(t, p.cert))
+			}
+			if stray.wantLog == "" {
+				if strings.Contains(logs.String(), "level=WARN") {
+					t.Errorf("a stray copy of the stored key caused a warning:\n%s", logs)
+				}
+			} else if !strings.Contains(logs.String(), stray.wantLog) {
+				t.Errorf("log lacks %q:\n%s", stray.wantLog, logs)
+			}
+			if stray.name == "another key" {
+				if !strings.Contains(logs.String(), storedPin) {
+					t.Errorf("the warning does not name the stored pin %s:\n%s", storedPin, logs)
+				}
+			}
+			if m.inserts != 1 || m.updates != 0 {
+				t.Errorf("writes = %d inserts, %d updates; want the original insert only", m.inserts, m.updates)
+			}
+		})
+	}
+}
+
+// A row that does not open stops startup with the vault's error. No key is made, the row is left as
+// it is, and a legacy key file is not touched, because it may be the only good copy.
+func TestAnUnreadableStoredKeyStopsStartup(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	good := newSealedStore(t)
+	if _, err := prepare(t, good, dataDir); err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	if err := good.st.Read.QueryRowContext(ctx, `SELECT key_sealed FROM tls_certs WHERE id = ?`, selfSignedID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	writeLegacyPair(t, dataDir, fixedNow)
+
+	other, err := vault.LoadOrCreate("", t.TempDir(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = prepare(t, sealedCertStore{st: good.st, v: other}, dataDir)
+	if err == nil {
+		t.Fatal("startup with a vault that cannot open the TLS key succeeded")
+	}
+	if !errors.Is(err, vault.ErrUnknownKey) {
+		t.Errorf("err = %v, want one wrapping the vault's error", err)
+	}
+	var after string
+	var rows int
+	if err := good.st.Read.QueryRowContext(ctx, `SELECT COUNT(*), MAX(key_sealed) FROM tls_certs`).Scan(&rows, &after); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || after != before {
+		t.Errorf("tls_certs = %d rows, key_sealed unchanged %v; want the one row exactly as it was", rows, after == before)
+	}
+	if !exists(t, legacyPaths(dataDir).key) {
+		t.Error("the legacy key file was removed although the stored key could not be opened")
+	}
+}
+
+// With no row and no key to import, a key is made. When a certificate or a broken key file shows
+// that agents may hold a pin, the change of pin is warned about.
+func TestANewKeyIsMadeAndWarnedAboutWhenNoLegacyKeyCanBeLoaded(t *testing.T) {
+	cases := []struct {
+		name     string
+		setup    func(t *testing.T, dataDir string)
+		wantWarn bool
+	}{
+		{name: "nothing there", setup: func(*testing.T, string) {}},
+		{
+			name: "a certificate and no key",
+			setup: func(t *testing.T, dataDir string) {
+				p := legacyPaths(dataDir)
+				if err := os.MkdirAll(p.dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				old, err := newKey()
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeOneYearCert(t, p.cert, old, fixedNow)
+			},
+			wantWarn: true,
+		},
+		{
+			name: "a key file that is not a key",
+			setup: func(t *testing.T, dataDir string) {
+				p := legacyPaths(dataDir)
+				if err := os.MkdirAll(p.dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p.key, []byte("not a key"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantWarn: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logs := captureDefaultLog(t)
+			dataDir := t.TempDir()
+			c.setup(t, dataDir)
+			m := newMemCertStore()
+			if _, err := prepare(t, m, dataDir); err != nil {
+				t.Fatal(err)
+			}
+			if m.inserts != 1 {
+				t.Errorf("inserts = %d, want a new key stored", m.inserts)
+			}
+			warned := strings.Contains(logs.String(), "could not be loaded and was replaced")
+			if warned != c.wantWarn {
+				t.Errorf("pin-change warning logged = %v, want %v:\n%s", warned, c.wantWarn, logs)
+			}
+		})
+	}
+}
+
+// A legacy key file that exists but cannot be read may well be a good key, so startup stops rather
+// than minting a replacement that would change the pin.
+func TestAnUnreadableLegacyKeyFileStopsStartup(t *testing.T) {
+	dataDir := t.TempDir()
+	p := legacyPaths(dataDir)
+	// A directory where the file should be: reading it fails, and it is not a missing file.
+	if err := os.MkdirAll(p.key, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := newMemCertStore()
+	_, err := prepare(t, m, dataDir)
+	if err == nil || !strings.Contains(err.Error(), "was not replaced") {
+		t.Fatalf("err = %v, want one saying the legacy key was not replaced", err)
+	}
+	if m.inserts != 0 {
+		t.Errorf("inserts = %d, want no key made", m.inserts)
 	}
 }
