@@ -248,10 +248,6 @@ type authFixture struct {
 	// tlsPin is the pin TierPlan's own self-signed certificate would have; empty
 	// means it serves none (plan 02-09).
 	tlsPin string
-	// agentAllowInsecure is the server's TIERPLAN_AGENT_ALLOW_INSECURE as the
-	// environment, agent and settings routes see it; false unless a test sets it
-	// before build (plans 02-42, 02-45).
-	agentAllowInsecure bool
 	// agentSvc and liveAgents, when set, replace the agents service the agent routes
 	// use and say which tunnel hub the node list reads live state from (plan 02-15).
 	// A test with a real hub sets them to the tunneltest server's, so a revoke closes
@@ -360,11 +356,11 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Access: f.access, Store: f.st, Checker: checker, Instance: f.inst, Sessions: f.sess,
 		Limiter: inviteLimiter, AnonAudit: f.inviteAudit, Now: f.clk.now, Log: log,
 	})
-	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, AgentAllowInsecure: f.agentAllowInsecure, Log: log})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, Log: log})
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
-		TLSPin: func() string { return f.tlsPin }, AgentAllowInsecure: f.agentAllowInsecure, Checker: checker, Updater: f.updater, Log: log,
+		TLSPin: func() string { return f.tlsPin }, Checker: checker, Updater: f.updater, Log: log,
 	})
 	if f.fleet != nil && f.envSvc != nil {
 		fleetDeps := *f.fleet
@@ -385,8 +381,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	api.RegisterAgents(r, api.AgentsDeps{
 		Agents: agentSvc, Local: foldedNodes, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
-		AgentAllowInsecure: f.agentAllowInsecure,
-		Updater:            f.updater, ServerVersion: f.serverVersion, Log: log,
+		Updater: f.updater, ServerVersion: f.serverVersion, Log: log,
 	})
 	gitx.InstallTransport(registry.NewEgressPolicy(nil))
 	gitClient := f.gitClient
@@ -426,8 +421,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, Log: log,
 			Agents: api.AgentsDeps{
 				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
-				AgentAllowInsecure: f.agentAllowInsecure,
-				Updater:            f.updater, ServerVersion: f.serverVersion,
+				Updater: f.updater, ServerVersion: f.serverVersion,
 			},
 		})
 	}

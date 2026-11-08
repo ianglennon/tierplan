@@ -756,12 +756,11 @@ func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
 	}
 }
 
-// With the development switch off, an address that is plain ws:// for a host that
-// is not this machine is one agents refuse at start (plan 02-41), so TierPlan hands
-// out no install for it: 409 insecure_agent_url, before any state changes
-// (G-02-R4-3, T-02-144, T-02-145). The agent URL and the public URL are both
-// judged, whichever supplies the address.
-func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t *testing.T) {
+// An address that is plain ws:// is one agents connect to never (D-09), so TierPlan
+// hands out no install for it, for another host or for this machine alike: 409
+// insecure_agent_url, before any state changes (G-02-R4-3, T-02-144, T-02-145).
+// The agent URL and the public URL are both judged, whichever supplies the address.
+func TestEnvironmentAddAgentRefusesAPlainAddressForEveryHost(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		label string
@@ -769,6 +768,8 @@ func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t
 	}{
 		{"only an agent URL", func(f *envFix) { f.inst.ApplyAgentURL("http://10.0.0.5:7480") }},
 		{"only a public URL", func(f *envFix) { f.inst.Apply("TierPlan", "http://10.0.0.5:7480") }},
+		{"an agent URL on this machine", func(f *envFix) { f.inst.ApplyAgentURL("http://127.0.0.1:7480") }},
+		{"a public URL on localhost", func(f *envFix) { f.inst.Apply("TierPlan", "http://localhost:7480") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -778,8 +779,10 @@ func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t
 			if rec.code != http.StatusConflict || rec.ptyp != "insecure_agent_url" {
 				t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
 			}
-			if strings.Contains(string(rec.body), "10.0.0.5") {
-				t.Errorf("the refusal repeats the address: %s", rec.body)
+			for _, host := range []string{"10.0.0.5", "127.0.0.1", "localhost"} {
+				if strings.Contains(string(rec.body), host) {
+					t.Errorf("the refusal repeats the address %s: %s", host, rec.body)
+				}
 			}
 			for _, table := range []string{"environments", "env_join_tokens", "env_cas"} {
 				var n int
@@ -1407,41 +1410,25 @@ func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
 	}
 }
 
-// The agent's own TIERPLAN_AGENT_ALLOW_INSECURE is in the install texts only while
-// the server's switch is on and the address is plain ws:// (T-02-31). A production
-// install, wss:// or a server without the switch, never carries it.
-func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
+// No install text carries an allow-insecure line (D-09): agents connect only over
+// wss://, so an https address builds an install without one. The switch's name is
+// spelled in two halves so a repository-wide gate for it stays exact.
+func TestEnvironmentAddAgentCarriesNoRemovedSwitchLine(t *testing.T) {
 	t.Parallel()
-	const name = "TIERPLAN_AGENT_ALLOW_INSECURE"
-	cases := []struct {
-		label string
-		allow bool
-		url   string
-		want  bool
-	}{
-		{"switch off, http agent URL on this machine", false, "http://127.0.0.1:7480", false},
-		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
-		{"switch on, https agent URL", true, "https://tierplan.example.com", false},
+	const name = "TIERPLAN_AGENT_ALLOW_" + "INSECURE"
+	f := newEnvFix(t, dockertest.FakeConfig{})
+	f.inst.ApplyAgentURL("https://tierplan.example.com")
+	got, rec := f.addAgent(t)
+	if rec.code != http.StatusCreated || got.Install == nil {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			f := newEnvFix(t, dockertest.FakeConfig{})
-			f.agentAllowInsecure = tc.allow
-			f.h = f.build(t)
-			f.inst.ApplyAgentURL(tc.url)
-			got, rec := f.addAgent(t)
-			if rec.code != http.StatusCreated || got.Install == nil {
-				t.Fatalf("status = %d: %s", rec.code, rec.body)
-			}
-			for label, text := range map[string]string{
-				"swarm command": got.Install.Swarm.Command, "stack file": got.Install.Swarm.StackFile,
-				"standalone command": got.Install.Standalone.Command, "compose file": got.Install.Standalone.ComposeFile,
-			} {
-				if has := strings.Contains(text, name); has != tc.want {
-					t.Errorf("%s carries the agent switch = %v, want %v:\n%s", label, has, tc.want, text)
-				}
-			}
-		})
+	for label, text := range map[string]string{
+		"swarm command": got.Install.Swarm.Command, "stack file": got.Install.Swarm.StackFile,
+		"standalone command": got.Install.Standalone.Command, "compose file": got.Install.Standalone.ComposeFile,
+	} {
+		if strings.Contains(text, name) {
+			t.Errorf("%s carries the removed agent switch:\n%s", label, text)
+		}
 	}
 }
 

@@ -603,8 +603,8 @@ func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
 	}
 }
 
-// The agent address agents refuse (G-02-R4-3, plan 02-45): a plain address for a
-// host that is not this machine, with the development switch off.
+// The agent address agents refuse (G-02-R4-3, D-09): every plain address, this
+// machine included, because agents connect only over wss://.
 
 func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 	t.Parallel()
@@ -612,23 +612,19 @@ func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 		label      string
 		publicURL  string
 		agentURL   string
-		allow      bool
 		wantRefuse bool
 	}{
-		{"plain agent URL for another host, switch off", "", "http://10.0.0.5:7480", false, true},
-		{"plain agent URL for another host, switch on", "", "http://10.0.0.5:7480", true, false},
-		{"plain public URL for another host, no agent URL, switch off", "http://10.0.0.5:7480", "", false, true},
-		{"plain public URL for another host, no agent URL, switch on", "http://10.0.0.5:7480", "", true, false},
-		{"plain agent URL on this machine", "https://pub.example", "http://127.0.0.1:7480", false, false},
-		{"https agent URL under a plain public URL", "http://10.0.0.5:7480", "https://10.0.0.5:7480", false, false},
-		{"https public URL, no agent URL", "https://pub.example", "", false, false},
-		{"no address at all", "", "", false, false},
+		{"plain agent URL for another host", "", "http://10.0.0.5:7480", true},
+		{"plain public URL for another host, no agent URL", "http://10.0.0.5:7480", "", true},
+		{"plain agent URL on this machine", "https://pub.example", "http://127.0.0.1:7480", true},
+		{"plain public URL on this machine, no agent URL", "http://localhost:7480", "", true},
+		{"https agent URL under a plain public URL", "http://10.0.0.5:7480", "https://10.0.0.5:7480", false},
+		{"https public URL, no agent URL", "https://pub.example", "", false},
+		{"no address at all", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
 			f := newAuthFixture(t, config.Config{})
-			f.agentAllowInsecure = tc.allow
-			f.h = f.build(t)
 			if tc.publicURL != "" {
 				f.inst.Apply(f.inst.Name(), tc.publicURL)
 			}
@@ -647,7 +643,7 @@ func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 	}
 }
 
-func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *testing.T) {
+func TestPatchSettingsRefusesAPlainAgentURLForEveryHost(t *testing.T) {
 	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
@@ -656,7 +652,7 @@ func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *tes
 	}
 	audits, pushes := len(f.audits(t, "settings.updated")), len(fake.pushed())
 
-	for _, bad := range []string{"http://10.0.0.5:7480", "http://tierplan.lan:7480", "http://[2001:db8::1]:7480"} {
+	for _, bad := range []string{"http://10.0.0.5:7480", "http://tierplan.lan:7480", "http://[2001:db8::1]:7480", "http://127.0.0.1:7480", "http://localhost:7480", "http://[::1]:7480"} {
 		rec := f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Changed", "agentUrl": bad})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%q: status = %d: %s, want 422", bad, rec.Code, rec.Body)
@@ -677,29 +673,23 @@ func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *tes
 	}
 }
 
-func TestPatchSettingsAcceptsAPlainAgentURLOnlyOnThisMachineOrWithTheSwitch(t *testing.T) {
+func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURL(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		label     string
-		allow     bool
 		publicURL string // applied before the request, "" for none
 		agentURL  string // applied before the request, "" for none
 		body      map[string]string
 		// wantRefused is agentEndpointRefused in the answer.
 		wantRefused bool
 	}{
-		{"loopback address, switch off", false, "", "", map[string]string{"agentUrl": "http://127.0.0.1:7480"}, false},
-		{"localhost, switch off", false, "", "", map[string]string{"agentUrl": "http://localhost:7480"}, false},
-		{"another host, switch on", true, "", "", map[string]string{"agentUrl": "http://10.0.0.5:7480"}, false},
-		{"https for another host, switch off", false, "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}, false},
-		{"clearing it under a plain public URL", false, "http://10.0.0.5:7480", "https://agent.example", map[string]string{"agentUrl": ""}, true},
-		{"a plain public URL with no agent URL", false, "", "", map[string]string{"publicUrl": "http://10.0.0.5:7480"}, true},
+		{"https for another host", "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}, false},
+		{"clearing it under a plain public URL", "http://10.0.0.5:7480", "https://agent.example", map[string]string{"agentUrl": ""}, true},
+		{"a plain public URL with no agent URL", "", "", map[string]string{"publicUrl": "http://10.0.0.5:7480"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
 			f := newAuthFixture(t, config.Config{})
-			f.agentAllowInsecure = tc.allow
-			f.h = f.build(t)
 			if tc.publicURL != "" {
 				f.inst.Apply(f.inst.Name(), tc.publicURL)
 			}
