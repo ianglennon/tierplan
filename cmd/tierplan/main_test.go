@@ -4,8 +4,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/server"
@@ -36,6 +38,30 @@ func TestHealthcheckNeverPreparesTheDataDirectory(t *testing.T) {
 		if got := dropOptions(cmd).DataDir; got != tc.want {
 			t.Errorf("%s: DataDir = %q, want %q", tc.command, got, tc.want)
 		}
+	}
+}
+
+// TierPlan always serves HTTPS with its own certificate, so there is no plain mode
+// to recover to and `tierplan https disable` is gone (D-14, TLS-12). This keeps it
+// from coming back unnoticed.
+func TestTheRootCommandHasNoHTTPSCommand(t *testing.T) {
+	root := newRoot()
+	for _, c := range root.Commands() {
+		if c.Name() == "https" {
+			t.Fatalf("the root command still has an %q subcommand", c.Name())
+		}
+	}
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"https", "disable"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("`https disable` succeeded, want an unknown-command error")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("error = %q, want it to say unknown command", err)
 	}
 }
 
