@@ -156,6 +156,53 @@ printf 'package p\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/web/node_modules
 expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfix}"
 printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
 expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
+
+# The same gate over everything that is not Go (D-10, TLS-12): e2e, Vite, scripts and
+# the shipped proxy configs. Every spelling is built from halves so this file does not
+# trip the gate it tests.
+nofix="${scratch}/tls-nongo-fixture"
+mkdir -p "${nofix}/e2e/specs" "${nofix}/e2e/node_modules/p" "${nofix}/web/node_modules/p" \
+  "${nofix}/scripts" "${nofix}/docs/proxy"
+printf 'export default { use: { baseURL: "https://x.test" } }\n' >"${nofix}/e2e/playwright.config.ts"
+printf 'services:\n  dind:\n    command: --insecure-registry 127.0.0.1:5000\n' >"${nofix}/e2e/compose.yaml"
+printf 'expect(cookie).toMatchObject({ secure: false, httpOnly: true })\n' >"${nofix}/e2e/specs/cookie.spec.ts"
+printf 'export default { server: { proxy: { "/api": { target: "https://127.0.0.1:7480" } } } }\n' >"${nofix}/web/vite.config.ts"
+printf 'curl --cacert "$CERT" https://127.0.0.1:7480/healthz\n' >"${nofix}/scripts/ok.sh"
+printf 'reverse_proxy https://tierplan:7480 {\n  transport http {\n    tls_trust_pool file /ca.pem\n  }\n}\n' >"${nofix}/docs/proxy/Caddyfile"
+expect pass "tls-gate-nongo-clean" scripts/insecure-tls-check.sh "${nofix}"
+
+# One seeded file per pattern: the gate must fail and name the file and the pattern.
+nogo_case() { # nogo_case <name> <relative path> <content>
+  mkdir -p "${nofix}/$(dirname "$2")"
+  printf '%s\n' "$3" >"${nofix}/$2"
+  expect fail "tls-gate-nongo-$1" scripts/insecure-tls-check.sh "${nofix}"
+  expect_out "tls-gate-nongo-$1 names the file" "INSECURE TLS: $2 uses"
+  rm -f "${nofix}/$2"
+}
+nogo_case ignore-https-errors e2e/specs/seeded.spec.ts "test.use({ ignoreHTTPS""Errors: true })"
+nogo_case reject-unauthorized e2e/seeded.mjs "https.get(url, { reject""Unauthorized: false })"
+nogo_case node-tls-env scripts/seeded.sh "NODE_TLS_REJECT""_UNAUTHORIZED=0 node check.mjs"
+nogo_case curl-short-flag scripts/seeded.sh "curl -""k https://127.0.0.1:7480/healthz"
+nogo_case curl-long-flag scripts/seeded.sh "curl -sS --insec""ure https://127.0.0.1:7480/healthz"
+nogo_case curl-combined-flags scripts/seeded.sh "curl -sS""k https://127.0.0.1:7480/healthz"
+nogo_case caddy-skip-verify docs/proxy/Caddyfile "  tls_insecure_skip""_verify"
+nogo_case traefik-skip-verify docs/proxy/traefik.yml "  insecure""SkipVerify: true"
+nogo_case nginx-ssl-verify-off docs/proxy/nginx.conf "  proxy_ssl_verify"" off;"
+nogo_case vite-secure-false web/vite.config.ts "export default { server: { proxy: { '/api': { secure: fal""se } } } }"
+nogo_case vite-secure-false-variant-file web/vite.dev.ts "export default { server: { proxy: { '/api': { secure : fal""se } } } }"
+
+# `secure: false` is a TLS setting only in the Vite config: the same text in an e2e spec passes.
+printf 'expect(cookie).toMatchObject({ secure: fal''se })\n' >"${nofix}/e2e/specs/seeded.spec.ts"
+expect pass "tls-gate-nongo-secure-false-outside-vite" scripts/insecure-tls-check.sh "${nofix}"
+rm -f "${nofix}/e2e/specs/seeded.spec.ts"
+# docker's --insecure-registry is about a registry, not about verifying TierPlan.
+printf 'dockerd --insecure-registry 127.0.0.1:5000\ncurl --cacert x --insecure-registry-note\n' >"${nofix}/scripts/registry.sh"
+expect pass "tls-gate-nongo-insecure-registry" scripts/insecure-tls-check.sh "${nofix}"
+rm -f "${nofix}/scripts/registry.sh"
+# Dependencies under e2e and web are not scanned.
+printf 'o = { ignoreHTTPS''Errors: true, reject''Unauthorized: false }\n' >"${nofix}/e2e/node_modules/p/x.js"
+printf 'o = { secure: fal''se }\n' >"${nofix}/web/node_modules/p/vite.config.ts"
+expect pass "tls-gate-nongo-skips-dependencies" scripts/insecure-tls-check.sh "${nofix}"
 expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 
 # --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
