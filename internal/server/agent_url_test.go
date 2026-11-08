@@ -35,7 +35,7 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 		req.Header.Set("Upgrade", "websocket")
 		req.Header.Set("Sec-WebSocket-Version", "13")
 		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-		req.RemoteAddr = "203.0.113.7:40000"
+		req.RemoteAddr = "127.0.0.1:40000"
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)
 		return rec.Code

@@ -104,13 +104,14 @@ func (f ssFixture) tlsConfig(t *testing.T, public, agent string, now time.Time) 
 	return &tls.Config{GetCertificate: f.source(t, public, agent, now).GetCertificate, MinVersion: tls.VersionTLS12}
 }
 
-func TestTLSConfigIsNilWithoutTLSSettings(t *testing.T) {
-	src, kind, err := newCertSource(context.Background(), config.Config{DataDir: t.TempDir()}, newMemCertStore(), nil, nil, nowFn(fixedNow))
-	if err != nil || src != nil || kind != tlsKindNone {
-		t.Fatalf("newCertSource = %v, %v, %v; want no source, none and no error (plain HTTP)", src, kind, err)
+func TestTLSDefaultIsTheSelfSignedCertificate(t *testing.T) {
+	dir := t.TempDir()
+	src, kind, err := newCertSource(context.Background(), config.Config{DataDir: dir}, newMemCertStore(), nil, nil, nowFn(fixedNow))
+	if err != nil || src == nil || kind != tlsKindSelfSigned {
+		t.Fatalf("newCertSource = %v, %v, %v; want a source, the self-signed kind and no error", src, kind, err)
 	}
-	if TLSEnabled(config.Config{}) {
-		t.Fatal("TLSEnabled is true with no TLS settings")
+	if _, err := os.Stat(filepath.Join(dir, selfSignedDir, mirrorCertFile)); err != nil {
+		t.Errorf("the mirror was not written: %v", err)
 	}
 }
 
@@ -733,8 +734,8 @@ func TestAStoredKeyThatCannotBeReadStopsStartupAndIsNotReplaced(t *testing.T) {
 	f.store.rows[selfSignedID] = row
 
 	_, _, err := newCertSource(context.Background(), f.cfg, f.store, str(""), str(""), nowFn(fixedNow))
-	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_SELF_SIGNED") {
-		t.Fatalf("err = %v, want one that names the setting", err)
+	if err == nil || !strings.Contains(err.Error(), "was not replaced") {
+		t.Fatalf("err = %v, want one that says the stored key was not replaced", err)
 	}
 	if string(f.store.rows[selfSignedID].key) != "not a key" || f.store.inserts != 1 || f.store.updates != 0 {
 		t.Error("the unreadable row was replaced or rewritten")
@@ -796,8 +797,9 @@ func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 		t.Errorf("supplied certificate TLSPin() = %q, want empty", got)
 	}
 
-	if got := build(map[string]string{}).TLSPin(); got != "" {
-		t.Errorf("plain HTTP TLSPin() = %q, want empty", got)
+	def := build(map[string]string{})
+	if got, want := def.TLSPin(), spkiPin(def.https.Config()); got == "" || got != want {
+		t.Errorf("default TLSPin() = %q, want the self-signed pin %q", got, want)
 	}
 }
 
@@ -815,8 +817,9 @@ func TestServerWelcomePinsComeFromTheSelfSignedPin(t *testing.T) {
 	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != srv.TLSPin() || !strings.HasPrefix(got[0], "sha256/") {
 		t.Errorf("self-signed welcome pins = %v, want exactly [%s]", got, srv.TLSPin())
 	}
-	if got := self(map[string]string{}).Tunnel().Pins(); len(got) != 0 {
-		t.Errorf("plain HTTP welcome pins = %v, want none", got)
+	def := self(map[string]string{})
+	if got := def.Tunnel().Pins(); len(got) != 1 || got[0] != def.TLSPin() || !strings.HasPrefix(got[0], "sha256/") {
+		t.Errorf("default welcome pins = %v, want exactly [%s]", got, def.TLSPin())
 	}
 }
 

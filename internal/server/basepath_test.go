@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io/fs"
 	"log/slog"
@@ -59,8 +60,15 @@ func TestBasePathInvariant(t *testing.T) {
 			const password = "correct horse battery"
 			addAdmin(t, srv, password)
 
+			// A browser on an https public URL arrives over TLS, so those rows' requests carry a TLS state.
+			overTLS := func(req *http.Request) {
+				if strings.HasPrefix(tc.publicURL, "https://") {
+					req.TLS = &tls.ConnectionState{}
+				}
+			}
 			do := func(method, target, body string) *httptest.ResponseRecorder {
 				req := httptest.NewRequest(method, target, strings.NewReader(body))
+				overTLS(req)
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Origin", srv.Instance().PublicOrigin())
 				rec := httptest.NewRecorder()
@@ -127,6 +135,7 @@ func TestBasePathInvariant(t *testing.T) {
 			// ...and it authenticates, with the base and without it.
 			for _, p := range []string{tc.base + "/api/me", "/api/me"} {
 				req := httptest.NewRequest(http.MethodGet, p, nil)
+				overTLS(req)
 				req.AddCookie(c)
 				rec := httptest.NewRecorder()
 				srv.Handler().ServeHTTP(rec, req)
@@ -138,6 +147,7 @@ func TestBasePathInvariant(t *testing.T) {
 			// The address agents are told to dial carries the same base path, with
 			// wss for https and ws for http, and the commands are built from it.
 			req := httptest.NewRequest(http.MethodPost, tc.base+"/api/environments", strings.NewReader(`{"kind":"agent","name":"edge"}`))
+			overTLS(req)
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Origin", srv.Instance().PublicOrigin())
 			req.Header.Set("X-CSRF-Token", session.CSRFToken)

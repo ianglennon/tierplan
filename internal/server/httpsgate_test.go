@@ -286,6 +286,8 @@ func TestGateServesPlainHTTPWhenTLSIsLiveButThePublicURLIsHTTP(t *testing.T) {
 
 func TestGateServesWhenTLSIsNotLive(t *testing.T) {
 	srv := gateServer(t, map[string]string{"TIERPLAN_PUBLIC_URL": "https://h:8443"})
+	// A fresh install is live now; take the certificate away to reach the gate's not-live rule.
+	srv.https.Remove()
 	if srv.https.Live() {
 		t.Fatal("TLS is live")
 	}

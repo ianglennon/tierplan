@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,7 +63,7 @@ func modeEnv(t *testing.T, mode, host string) map[string]string {
 }
 
 func TestHealthcheckMatrix(t *testing.T) {
-	for _, mode := range []string{"plain", "self-signed", "cert-file"} {
+	for _, mode := range []string{"default", "self-signed", "cert-file"} {
 		for name, pub := range map[string]string{"unset": "", "http": matrixHTTPURL, "https": matrixHTTPSURL} {
 			t.Run(mode+"/"+name+" public URL", func(t *testing.T) {
 				env := modeEnv(t, mode, "tierplan.example.com")
@@ -82,30 +83,25 @@ func TestHealthcheckMatrix(t *testing.T) {
 	}
 }
 
-func TestHealthcheckMatrixStaysGreenWhileTLSIsSwitched(t *testing.T) {
+func TestHealthcheckMatrixIsGreenOverTLSFromFirstStart(t *testing.T) {
 	w := startWire(t, nil, "")
 	if err := w.probe(t); err != nil {
-		t.Fatalf("before the certificate: %v", err)
+		t.Fatalf("a fresh install with no TLS variable: %v", err)
 	}
-
-	cert, leaf := genCert(t, "")
-	w.srv.https.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
-	if err := w.probe(t); err != nil {
-		t.Errorf("with the certificate installed: %v", err)
+	// The same port answers TLS, and /healthz is served over it to a client that trusts only the mirror.
+	mirror, err := os.ReadFile(HealthcheckCertFile(w.cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The same port now answers TLS as well, and /healthz is served over it.
 	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
+	if !pool.AppendCertsFromPEM(mirror) {
+		t.Fatal("the mirror holds no certificate")
+	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}}
 	t.Cleanup(tr.CloseIdleConnections)
 	resp := wireGet(t, &http.Client{Transport: tr}, "https://"+w.addr+"/healthz", "")
 	if resp.status != http.StatusOK {
-		t.Errorf("https GET /healthz with the certificate installed: status = %d, want 200", resp.status)
-	}
-
-	w.srv.https.Remove()
-	if err := w.probe(t); err != nil {
-		t.Errorf("after the certificate is removed: %v", err)
+		t.Errorf("https GET /healthz trusting only the mirror: status = %d, want 200", resp.status)
 	}
 }
 
