@@ -6,12 +6,13 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
-	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -22,12 +23,10 @@ import (
 )
 
 // The tunnel judges every agent connection against the address agents are told
-// to dial: the agent URL when one is set, else the public URL (D-18). The agent
-// URL, not the public URL, decides, so the same request is admitted or refused
-// depending only on it: an https public URL with a plain agent URL on this
-// machine admits plain transport, an http public URL on this machine with an
-// https agent URL refuses it (a plain agent URL for another host is the subject of
-// TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn).
+// to dial: the agent URL when one is set, else the public URL (D-18). No plain
+// connection is admitted whatever the agent URL says: a plain request is refused
+// with an https public URL, with a plain agent URL on this machine and with an
+// https agent URL (TestOnlyTLSAgentConnectionsAreAdmitted covers the TLS side).
 func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	upgrade := func(srv *Server) int {
 		req := httptest.NewRequest(http.MethodGet, "/agent/connect", nil)
@@ -55,14 +54,13 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	if code := upgrade(build(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test"})); code != http.StatusForbidden {
 		t.Fatalf("a plain connection with an https public URL = %d, want 403", code)
 	}
-	// A plain agent URL on this machine is where agents dial, so plain transport
-	// is acceptable there and the request gets past the preflight to the
-	// WebSocket accept, although the public URL is https.
+	// A plain agent URL on this machine no longer makes plain transport
+	// acceptable: no plain connection is admitted, whatever the agent URL.
 	if code := upgrade(build(map[string]string{
 		"TIERPLAN_PUBLIC_URL": "https://tierplan.test",
 		"TIERPLAN_AGENT_URL":  "http://127.0.0.1:7480",
-	})); code == http.StatusForbidden || code == http.StatusServiceUnavailable {
-		t.Fatalf("a plain connection with an http agent URL on this machine = %d, want it past the preflight", code)
+	})); code != http.StatusForbidden {
+		t.Fatalf("a plain connection with an http agent URL on this machine = %d, want 403", code)
 	}
 	// An https agent URL is where agents dial, so a plain connection is refused
 	// although the public URL is plain http on this machine.
@@ -99,106 +97,98 @@ func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.
 	}
 }
 
-// TierPlan accepts plain ws:// for an agent address that is not this machine only
-// while its own development switch is on, the rule the agent applies to itself
-// since 02-41. Loopback is exempt on both ends, and an http public URL stays
-// legal for the UI: the refusal is keyed on the address agents are told to dial
-// (the agent URL, else the public URL), not on the scheme of the public URL
-// (G-02-R4-3, review WR-02).
-func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) {
+// TierPlan admits an agent only on a TLS connection, whatever address agents are
+// told to dial (D-04, D-09). Over the real TLS listener the upgrade is admitted
+// for every agent address, and the refusal of a plain request is asserted through
+// the handler, so no test here depends on the listener serving plain connections.
+func TestOnlyTLSAgentConnectionsAreAdmitted(t *testing.T) {
 	cases := []struct {
 		name string
-		// env is added to the data dir and a public URL on the listener's address.
-		env      map[string]string
-		admitted bool
+		env  map[string]string
 	}{
-		{name: "plain to another host, switch off", env: map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"}},
-		{name: "plain to another host, switch on", env: map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480", "TIERPLAN_AGENT_ALLOW_INSECURE": "true"}, admitted: true},
-		{name: "plain on this machine by address", env: map[string]string{}, admitted: true},
-		{name: "plain on this machine by name", env: map[string]string{"TIERPLAN_AGENT_URL": "http://localhost:7480"}, admitted: true},
-		{name: "https agent address, switch off", env: map[string]string{"TIERPLAN_AGENT_URL": "https://tierplan.test"}},
+		{name: "https public URL", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test"}},
+		{name: "https agent address", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "https://10.0.0.5:7480"}},
+		{name: "plain agent address for another host", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"}},
+		{name: "plain agent address on this machine", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://127.0.0.1:7480"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ln, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Skipf("cannot listen on loopback: %v", err)
-			}
-			ts := httptest.NewUnstartedServer(nil)
-			_ = ts.Listener.Close()
-			ts.Listener = ln
-			addr := ln.Addr().String()
 			env := map[string]string{
-				"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"TIERPLAN_PUBLIC_URL": "http://" + addr,
+				"TIERPLAN_DATA_DIR": t.TempDir() + "/data",
+				"TIERPLAN_LISTEN":   "127.0.0.1:0",
 			}
 			for k, v := range tc.env {
 				env[k] = v
 			}
-			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+			cfg := testConfig(t, env)
+			lines := listeningLines{addrs: make(chan string, 1)}
+			srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(lines, nil)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			ts.Config.Handler = srv.Handler()
-			ts.Start()
+			ctx, cancel := context.WithCancel(testsupport.Context(t))
+			done := make(chan error, 1)
+			go func() { done <- srv.Run(ctx) }()
 			t.Cleanup(func() {
-				ts.Close()
-				_ = srv.Close()
+				cancel()
+				<-done
 			})
+			base := testsupport.Await(t, "the listening log line", lines.addrs)
 
-			if tc.admitted {
-				ctx, cancel := context.WithTimeout(context.Background(), testsupport.Deadline)
-				defer cancel()
-				c, resp, err := websocket.Dial(ctx, "ws://"+addr+"/agent/connect", &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // a WebSocket upgrade response has no body to close
-				if err != nil {
-					code := 0
-					if resp != nil {
-						code = resp.StatusCode
-					}
-					t.Fatalf("dial = %v (status %d), want the upgrade admitted", err, code)
-				}
-				defer func() { _ = c.CloseNow() }()
-				if got := c.Subprotocol(); got != wire.Subprotocol {
-					t.Fatalf("subprotocol = %q, want %q", got, wire.Subprotocol)
-				}
-				return
-			}
-
-			req, err := http.NewRequest(http.MethodGet, ts.URL+"/agent/connect", nil)
+			// wss over the server's TLS listener, trusting the mirror: admitted.
+			mirror, err := os.ReadFile(HealthcheckCertFile(cfg)) //nolint:gosec // the mirror under the test's own data directory
 			if err != nil {
 				t.Fatal(err)
 			}
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM(mirror) {
+				t.Fatal("the mirror holds no certificate")
+			}
+			client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
+			t.Cleanup(client.CloseIdleConnections)
+			dctx, dcancel := context.WithTimeout(ctx, testsupport.Deadline)
+			defer dcancel()
+			c, resp, err := websocket.Dial(dctx, "wss"+strings.TrimPrefix(base, "https")+"/agent/connect", &websocket.DialOptions{HTTPClient: client, Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // a WebSocket upgrade response has no body to close
+			if err != nil {
+				code := 0
+				if resp != nil {
+					code = resp.StatusCode
+				}
+				t.Fatalf("wss dial = %v (status %d), want the upgrade admitted", err, code)
+			}
+			defer func() { _ = c.CloseNow() }()
+			if got := c.Subprotocol(); got != wire.Subprotocol {
+				t.Fatalf("subprotocol = %q, want %q", got, wire.Subprotocol)
+			}
+
+			// The same request without TLS, through the handler: refused.
+			req := httptest.NewRequest(http.MethodGet, "/agent/connect", nil)
 			req.Header.Set("Connection", "Upgrade")
 			req.Header.Set("Upgrade", "websocket")
 			req.Header.Set("Sec-WebSocket-Version", "13")
 			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
 			req.Header.Set("Sec-WebSocket-Protocol", wire.Subprotocol)
-			resp, err := ts.Client().Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			body, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode != http.StatusForbidden || !strings.HasPrefix(string(body), wire.RefuseInsecureTransport) {
-				t.Fatalf("plain upgrade = %d %q, want 403 starting %s", resp.StatusCode, body, wire.RefuseInsecureTransport)
+			req.RemoteAddr = "127.0.0.1:40000"
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden || !strings.HasPrefix(rec.Body.String(), wire.RefuseInsecureTransport) {
+				t.Fatalf("plain upgrade = %d %q, want 403 starting %s", rec.Code, rec.Body.String(), wire.RefuseInsecureTransport)
 			}
 		})
 	}
 }
 
-// TierPlan says at start when the address agents are given is plain http for a
-// host that is not this machine and its switch is off: agents refuse such an
-// address and so does TierPlan, so nothing could connect (G-02-R4-3).
+// TierPlan says at start when the address agents are given is plain http, for any
+// host: TierPlan accepts agents only over wss://, so nothing could connect.
 func TestBuildWarnsWhenAgentsWouldBeGivenAPlainAddressForAnotherHost(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		env  map[string]string
 		want int
 	}{
-		{"plain public URL for another host, switch off", map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.test"}, 1},
-		{"plain public URL for another host, switch on", map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.test", "TIERPLAN_AGENT_ALLOW_INSECURE": "true"}, 0},
+		{"plain public URL for another host", map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.test"}, 1},
 		{"https public URL", map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test"}, 0},
-		{"https public URL, plain agent URL on this machine", map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://127.0.0.1:7480"}, 0},
+		{"https public URL, plain agent URL on this machine", map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://127.0.0.1:7480"}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.env["TIERPLAN_DATA_DIR"] = t.TempDir() + "/data"

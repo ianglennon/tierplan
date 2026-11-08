@@ -93,19 +93,6 @@ const (
 	refusedNotUpgrade = "not_upgrade"
 )
 
-// WithAllowInsecure lets agents connect over plain ws:// to an agent address that
-// is not this machine: an https address, or an http one for another host. A plain
-// address on this machine needs no switch. It is for development only
-// (TIERPLAN_AGENT_ALLOW_INSECURE): the join token and every Docker answer then
-// cross the network in the clear. Call it before the hub serves.
-func (h *Hub) WithAllowInsecure(allow bool) *Hub {
-	h.allowInsecure = allow
-	if allow {
-		h.log.Warn("TIERPLAN_AGENT_ALLOW_INSECURE is set: agents may connect over plain ws://, so join tokens and Docker answers can be read on the network. Use it for development only")
-	}
-	return h
-}
-
 // WithConnectLimit sets how many connection attempts one client address may make
 // at once; it earns one more every 100 ms. A burst below one keeps the default
 // (TIERPLAN_AGENT_CONNECT_BURST). Call it before the hub serves.
@@ -205,24 +192,17 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 		}
 		return "", &preflightRefusal{status: http.StatusUpgradeRequired, code: refusedNotUpgrade, msg: "a WebSocket upgrade is required", audit: true}
 	}
-	aud, plainOK, err := h.audience()
+	aud, err := h.audience()
 	if err != nil {
 		h.logBeforeAdmission(slog.LevelError, ip, "agent connection refused: TierPlan has no usable public URL", "error", err)
 		return "", &preflightRefusal{status: http.StatusServiceUnavailable, msg: "this server has no public URL, so it cannot accept agents"}
 	}
 	if !secureTransport(r) {
-		if !plainOK && !h.allowInsecure {
-			if base := h.publicURL(); PlainAddressRefused(base, false) {
-				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: the agent address is plain http for a host that is not this machine; it needs an https public URL or agent URL (TIERPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only)")
-			} else {
-				h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: it did not arrive over TLS")
-			}
-			return "", &preflightRefusal{
-				status: http.StatusForbidden, code: wire.RefuseInsecureTransport, audit: true,
-				msg: wire.RefuseInsecureTransport + ": agents must connect over wss://",
-			}
+		h.logBeforeAdmission(slog.LevelWarn, ip, "agent connection refused: it did not arrive over TLS")
+		return "", &preflightRefusal{
+			status: http.StatusForbidden, code: wire.RefuseInsecureTransport, audit: true,
+			msg: wire.RefuseInsecureTransport + ": agents must connect over wss://",
 		}
-		h.logBeforeAdmission(slog.LevelWarn, ip, "an agent connected over plain HTTP, so the join token and the Docker answers are not encrypted")
 	}
 	return aud, nil
 }

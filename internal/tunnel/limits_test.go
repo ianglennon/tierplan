@@ -277,43 +277,61 @@ func TestAnUpgradeFailureIsRecordedByTheProxyObserverAndAnOriginRefusalIsNot(t *
 	}
 }
 
-func TestInsecureTransportIsRefusedUnlessTrustedProxyOrAllowedByTheOperator(t *testing.T) {
+func TestInsecureTransportIsAlwaysRefused(t *testing.T) {
 	cases := []struct {
-		name      string
-		trusted   bool
-		headers   map[string]string
-		configure func(*tunnel.Hub) *tunnel.Hub
-		want      int
+		name    string
+		scheme  string
+		trusted bool
+		headers map[string]string
 	}{
-		{name: "an untrusted peer over plain HTTP", want: http.StatusForbidden},
-		{name: "an untrusted peer claiming https in a header", headers: map[string]string{"X-Forwarded-Proto": "https"}, want: http.StatusForbidden},
-		{name: "a trusted proxy that does not say https", trusted: true, want: http.StatusForbidden},
-		{name: "a trusted proxy saying https", trusted: true, headers: map[string]string{"X-Forwarded-Proto": "https"}, want: http.StatusSwitchingProtocols},
-		{name: "the operator allowed plain transport", configure: func(h *tunnel.Hub) *tunnel.Hub { return h.WithAllowInsecure(true) }, want: http.StatusSwitchingProtocols},
+		{name: "an untrusted peer over plain HTTP", scheme: "https"},
+		{name: "an untrusted peer claiming https in a header", scheme: "https", headers: map[string]string{"X-Forwarded-Proto": "https"}},
+		{name: "a trusted proxy that does not say https", scheme: "https", trusted: true},
+		{name: "a plain loopback peer for an agent address on this machine", scheme: "http"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &auditSink{}
-			ts, _ := plainServer(t, "https", tc.trusted, func(h *tunnel.Hub) *tunnel.Hub {
-				h = h.WithRefusalAudit(sink)
-				if tc.configure != nil {
-					h = tc.configure(h)
-				}
-				return h
-			})
+			ts, v := plainServer(t, tc.scheme, tc.trusted, func(h *tunnel.Hub) *tunnel.Hub { return h.WithRefusalAudit(sink) })
 			status, body := upgradeRequest(t, ts.URL, tc.headers)
-			if status != tc.want {
-				t.Fatalf("status %d, want %d (%s)", status, tc.want, body)
+			if status != http.StatusForbidden {
+				t.Fatalf("status %d, want 403 (%s)", status, body)
 			}
-			if tc.want == http.StatusForbidden {
-				if !strings.Contains(body, wire.RefuseInsecureTransport) {
-					t.Errorf("body %q does not say %s", body, wire.RefuseInsecureTransport)
-				}
-				if got := sink.all(); len(got) != 1 || got[0].Details["code"] != wire.RefuseInsecureTransport {
-					t.Errorf("audit = %+v, want one entry with code insecure_transport", got)
-				}
+			if !strings.Contains(body, wire.RefuseInsecureTransport) {
+				t.Errorf("body %q does not say %s", body, wire.RefuseInsecureTransport)
+			}
+			if got := sink.all(); len(got) != 1 || got[0].Details["code"] != wire.RefuseInsecureTransport {
+				t.Errorf("audit = %+v, want one entry with code insecure_transport", got)
+			}
+			if v.callCount() != 0 {
+				t.Error("the verifier was asked about a refused connection")
 			}
 		})
+	}
+
+	t.Run("a TLS request", func(t *testing.T) {
+		srv := tunneltest.Start(t, tunneltest.Options{})
+		ctx, cancel := context.WithTimeout(context.Background(), testsupport.Deadline)
+		defer cancel()
+		ws, _, typ := firstMessage(t, ctx, srv)
+		defer func() { _ = ws.CloseNow() }()
+		if typ == wire.TypeRefuse {
+			t.Fatal("a connection over TLS was refused before the handshake")
+		}
+	})
+}
+
+// A trusted proxy's X-Forwarded-Proto says nothing about the hop to TierPlan, so it
+// no longer admits a plain agent connection (D-04, D-09): the proxy must talk https
+// upstream.
+func TestHubRefusesAPlainRequestMarkedHTTPSByATrustedProxy(t *testing.T) {
+	ts, v := plainServer(t, "https", true, nil)
+	status, body := upgradeRequest(t, ts.URL, map[string]string{"X-Forwarded-Proto": "https"})
+	if status != http.StatusForbidden || !strings.Contains(body, wire.RefuseInsecureTransport) {
+		t.Fatalf("status %d (%s), want 403 insecure_transport", status, body)
+	}
+	if v.callCount() != 0 {
+		t.Error("the verifier was asked about a refused connection")
 	}
 }
 
@@ -730,18 +748,6 @@ func TestPreAdmissionWarningsAreWrittenOncePerAddressPerMinute(t *testing.T) {
 }
 
 func TestPlainTransportWarningsAreWrittenOncePerAddressPerMinute(t *testing.T) {
-	t.Run("accepted over plain HTTP", func(t *testing.T) {
-		log, rec := newRecordingLogger()
-		ts, _ := loggedPlainServer(t, "http", false, log, nil, nil)
-		for range 20 {
-			if status, _ := upgradeRequest(t, ts.URL, nil); status != http.StatusSwitchingProtocols {
-				t.Fatalf("status %d, want 101", status)
-			}
-		}
-		if got := rec.containing("connected over plain HTTP"); len(got) != 1 || got[0].level != slog.LevelWarn {
-			t.Fatalf("20 plain upgrades wrote %d records (first: %+v), want exactly one WARN", len(got), first(got))
-		}
-	})
 	t.Run("refused over plain HTTP", func(t *testing.T) {
 		log, rec := newRecordingLogger()
 		ts, _ := loggedPlainServer(t, "https", false, log, nil, nil)

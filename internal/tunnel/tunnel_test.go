@@ -156,7 +156,7 @@ func newFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string) *f
 
 // newConfiguredFixture is newFixture with the hub's logger chosen by the test and
 // a configure function applied to the hub before it serves, for the options that
-// must be set before the hub serves (WithAllowInsecure).
+// must be set before the hub serves.
 func newConfiguredFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string, log *slog.Logger, configure func(*tunnel.Hub) *tunnel.Hub) *fixture {
 	t.Helper()
 	f := &fixture{v: &fakeVerifier{}, o: newObserver()}
@@ -513,18 +513,24 @@ func TestPlainTransportIsRefusedWhenThePublicURLIsHTTPS(t *testing.T) {
 	}
 }
 
-// The httptest address is 127.0.0.1, so an http base on it is plain http on this
-// machine and needs no switch.
-func TestPlainTransportIsAcceptedWhenTheAgentAddressIsPlainHTTPOnThisMachine(t *testing.T) {
+// No plain connection is admitted, whatever the agent address says: an http base
+// on this machine used to be accepted, and is refused like any other.
+func TestPlainTransportIsRefusedEvenForAnAgentAddressOnThisMachine(t *testing.T) {
 	f := newFixture(t, false, sameAddr("http"))
-	ac := f.dial(t, hs{noEKM: true})
-	if ac.welcome == nil {
-		t.Fatalf("refused: %+v", ac.refuse)
+	_, resp, err := websocket.Dial(context.Background(), f.wsURL(), &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
+	if err == nil {
+		t.Fatal("a plain ws:// connection was accepted")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("response = %v, want 403 insecure_transport", resp)
+	}
+	if f.v.callCount() != 0 {
+		t.Error("the verifier was asked about a refused connection")
 	}
 }
 
-// A plain http agent address for another host does not make plain transport
-// acceptable; only the development switch does (G-02-R4-3, T-02-139).
+// A plain http agent address for another host is refused like every plain
+// connection, with one warning that says it did not arrive over TLS.
 func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *testing.T) {
 	log, rec := newRecordingLogger()
 	f := newConfiguredFixture(t, false, func(string) string { return "http://10.0.0.5:7480" }, log, nil)
@@ -538,17 +544,8 @@ func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *
 	if f.v.callCount() != 0 {
 		t.Error("the verifier was asked about a refused connection")
 	}
-	if got := rec.containing("TIERPLAN_AGENT_ALLOW_INSECURE"); len(got) != 1 || got[0].level != slog.LevelWarn {
-		t.Errorf("records naming the switch = %+v, want exactly one Warn", got)
-	}
-}
-
-func TestPlainTransportToAnotherHostIsAcceptedWithTheSwitch(t *testing.T) {
-	f := newConfiguredFixture(t, false, func(string) string { return "http://10.0.0.5:7480" }, slog.New(slog.DiscardHandler),
-		func(h *tunnel.Hub) *tunnel.Hub { return h.WithAllowInsecure(true) })
-	ac := f.dial(t, hs{aud: "10.0.0.5:7480", noEKM: true})
-	if ac.welcome == nil {
-		t.Fatalf("refused: %+v", ac.refuse)
+	if got := rec.containing("did not arrive over TLS"); len(got) != 1 || got[0].level != slog.LevelWarn {
+		t.Errorf("records saying the connection did not arrive over TLS = %+v, want exactly one Warn", got)
 	}
 }
 

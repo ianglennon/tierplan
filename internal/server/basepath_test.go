@@ -22,16 +22,15 @@ import (
 )
 
 // TestBasePathInvariant runs the same assertions at the root and under a base
-// path, over http and https, through the real router (D-50). The address in the
-// agent install commands is built from the same base path (plan 02-09).
+// path, over https, through the real router (D-50). The address in the agent
+// install commands is built from the same base path (plan 02-09). An http public
+// URL is not a case here: it hands agents a plain address no agent can use.
 func TestBasePathInvariant(t *testing.T) {
 	cases := []struct {
 		name, publicURL, base string
 		wantCookie, wantPath  string
 	}{
-		{"root over http", "http://tierplan.test", "", "tierplan_session", "/"},
 		{"root over https", "https://tierplan.test", "", "__Host-tierplan_session", "/"},
-		{"base over http", "http://tierplan.test/tierplan", "/tierplan", "tierplan_session", "/tierplan"},
 		{"base over https", "https://tierplan.test/tierplan", "/tierplan", "__Secure-tierplan_session", "/tierplan"},
 	}
 	_, err := fs.Stat(web.FS(), "index.html")
@@ -41,12 +40,6 @@ func TestBasePathInvariant(t *testing.T) {
 			env := map[string]string{
 				"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
 				"TIERPLAN_PUBLIC_URL": tc.publicURL,
-			}
-			if strings.HasPrefix(tc.publicURL, "http://") {
-				// An http public URL for another host is a plain agent address that
-				// only the development switch hands out (G-02-R4-3), and this test is
-				// about the base path, so the http cases turn the switch on.
-				env["TIERPLAN_AGENT_ALLOW_INSECURE"] = "true"
 			}
 			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 			if err != nil {
@@ -60,11 +53,9 @@ func TestBasePathInvariant(t *testing.T) {
 			const password = "correct horse battery"
 			addAdmin(t, srv, password)
 
-			// A browser on an https public URL arrives over TLS, so those rows' requests carry a TLS state.
+			// A browser on an https public URL arrives over TLS, so the requests carry a TLS state.
 			overTLS := func(req *http.Request) {
-				if strings.HasPrefix(tc.publicURL, "https://") {
-					req.TLS = &tls.ConnectionState{}
-				}
+				req.TLS = &tls.ConnectionState{}
 			}
 			do := func(method, target, body string) *httptest.ResponseRecorder {
 				req := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -129,7 +120,7 @@ func TestBasePathInvariant(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil || session.CSRFToken == "" {
 				t.Fatalf("login body has no csrfToken: %s (%v)", rec.Body, err)
 			}
-			if c.Name != tc.wantCookie || c.Path != tc.wantPath || c.Secure != strings.HasPrefix(tc.publicURL, "https://") || !c.HttpOnly {
+			if c.Name != tc.wantCookie || c.Path != tc.wantPath || !c.Secure || !c.HttpOnly {
 				t.Fatalf("cookie = %+v, want name %q path %q", c, tc.wantCookie, tc.wantPath)
 			}
 			// ...and it authenticates, with the base and without it.
@@ -168,11 +159,7 @@ func TestBasePathInvariant(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &added); err != nil {
 				t.Fatal(err)
 			}
-			wantScheme := "wss://"
-			if strings.HasPrefix(tc.publicURL, "http://") {
-				wantScheme = "ws://"
-			}
-			if want := wantScheme + "tierplan.test" + tc.base + "/agent/connect"; added.Install.AgentURL != want {
+			if want := "wss://tierplan.test" + tc.base + "/agent/connect"; added.Install.AgentURL != want {
 				t.Errorf("install.agentUrl = %q, want %q", added.Install.AgentURL, want)
 			}
 			if !strings.HasSuffix(added.Install.AgentURL, tc.base+"/agent/connect") {

@@ -18,10 +18,9 @@ import (
 // TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse is the "never advertise"
 // half of G-02-R4-3 (review WR-02), end to end through a real server and real
 // HTTP. TierPlan hands out only an address its agents will dial. A plain address
-// for another host is refused (409 insecure_agent_url, nothing created) unless the
-// server's development switch TIERPLAN_AGENT_ALLOW_INSECURE is on, and then the
-// install carries the agent's own switch (plan 02-42). A plain address on this
-// machine needs no switch, and an https address never carries one.
+// for another host is refused (409 insecure_agent_url, nothing created), and an
+// https address is handed out as wss://. Agents connect only over TLS, so there is
+// no switch that lets a plain one through.
 func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 	type install struct {
 		AgentURL string `json:"agentUrl"`
@@ -32,8 +31,6 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 			Command string `json:"command"`
 		} `json:"standalone"`
 	}
-	const insecure = "TIERPLAN_AGENT_ALLOW_INSECURE"
-
 	cases := []struct {
 		name string
 		// env is extra server environment; %ADDR% in a value is the listener's address.
@@ -42,26 +39,17 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 		wantCode int
 		// wantAgentURL is the install's agentUrl for a 201, %ADDR% as above.
 		wantAgentURL string
-		// wantSwitch says whether the install commands carry the agent's switch.
-		wantSwitch bool
 	}{
 		{
-			name:     "plain to another host, switch off",
+			name:     "plain to another host",
 			env:      map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"},
 			wantCode: http.StatusConflict,
 		},
 		{
-			name:         "plain to another host, switch on",
-			env:          map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480", insecure: "true"},
+			name:         "https on this machine",
+			env:          map[string]string{"TIERPLAN_PUBLIC_URL": "https://%ADDR%"},
 			wantCode:     http.StatusCreated,
-			wantAgentURL: "ws://10.0.0.5:7480/agent/connect",
-			wantSwitch:   true,
-		},
-		{
-			name:         "plain on this machine",
-			env:          map[string]string{},
-			wantCode:     http.StatusCreated,
-			wantAgentURL: "ws://%ADDR%/agent/connect",
+			wantAgentURL: "wss://%ADDR%/agent/connect",
 		},
 		{
 			name:         "https",
@@ -172,14 +160,6 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 			if want := strings.ReplaceAll(tc.wantAgentURL, "%ADDR%", addr); in.AgentURL != want {
 				t.Errorf("install.agentUrl = %q, want %q", in.AgentURL, want)
 			}
-			for name, text := range map[string]string{"swarm": in.Swarm.Command, "standalone": in.Standalone.Command} {
-				if got := strings.Contains(text, insecure+"=true"); got != tc.wantSwitch {
-					t.Errorf("the %s command carries %s = %v, want %v:\n%s", name, insecure, got, tc.wantSwitch, text)
-				}
-			}
-			if tc.wantSwitch && !strings.Contains(in.Standalone.Command, "-e '"+insecure+"=true'") {
-				t.Errorf("the standalone command lacks -e '%s=true':\n%s", insecure, in.Standalone.Command)
-			}
 			if got := listed(); got != before+1 {
 				t.Errorf("the add left %d environments, want %d", got, before+1)
 			}
@@ -190,8 +170,7 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 // TestTheSettingsSayWhenAgentsCannotUseTheirAddress is the operator's side of
 // G-02-R4-3 (review WR-02), end to end through a real server. GET /api/settings
 // says agentEndpointRefused exactly when the address agents are told to dial is
-// plain ws:// for a host that is not this machine and the development switch is
-// off: the same rule as the hub and the install.
+// plain ws:// for a host that is not this machine: the same rule as the install.
 func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 	cases := []struct {
 		name string
@@ -201,20 +180,15 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 		wantRefused  bool
 	}{
 		{
-			name:         "plain to another host, switch off",
+			name:         "plain to another host",
 			env:          map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"},
 			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
 			wantRefused:  true,
 		},
 		{
-			name:         "plain to another host, switch on",
-			env:          map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480", "TIERPLAN_AGENT_ALLOW_INSECURE": "true"},
-			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
-		},
-		{
-			name:         "no agent URL, public URL on this machine",
-			env:          map[string]string{},
-			wantEndpoint: "ws://%ADDR%/agent/connect",
+			name:         "no agent URL, https public URL on this machine",
+			env:          map[string]string{"TIERPLAN_PUBLIC_URL": "https://%ADDR%"},
+			wantEndpoint: "wss://%ADDR%/agent/connect",
 		},
 		{
 			name:         "https agent URL",
@@ -238,7 +212,7 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 				"TIERPLAN_PUBLIC_URL": "http://" + addr,
 			}
 			for k, v := range tc.env {
-				env[k] = v
+				env[k] = strings.ReplaceAll(v, "%ADDR%", addr)
 			}
 			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 			if err != nil {

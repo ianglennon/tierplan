@@ -16,7 +16,6 @@ import (
 	"github.com/hashicorp/yamux"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/proto/authn"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
@@ -135,33 +134,22 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 // audience is the host the agent must have dialed, from the agent base the hub
-// was given, and whether plain transport is acceptable without the development
-// switch: only when that base is plain http for this machine (authn.LoopbackHost).
-// An http base for any other host does not make plain transport acceptable, only
-// the switch does (G-02-R4-3).
-func (h *Hub) audience() (aud string, plainOK bool, err error) {
+// was given. Plain transport is never acceptable, so there is no flag for it:
+// secureTransport decides that from the connection alone.
+func (h *Hub) audience() (aud string, err error) {
 	if h.publicURL == nil {
-		return "", false, errors.New("the hub was given no public URL")
+		return "", errors.New("the hub was given no public URL")
 	}
 	raw := h.publicURL()
 	if raw == "" {
-		return "", false, errors.New("the public URL is not set")
+		return "", errors.New("the public URL is not set")
 	}
-	aud, err = authn.Audience(raw)
-	if err != nil {
-		return "", false, err
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", false, err
-	}
-	return aud, strings.EqualFold(u.Scheme, "http") && !PlainAddressRefused(raw, false), nil
+	return authn.Audience(raw)
 }
 
 // PlainAddressRefused reports whether raw is an address TierPlan refuses to have
 // agents dial: it is plain (scheme http or ws, any case) for a host that
-// authn.LoopbackHost does not accept, and allowInsecure (TIERPLAN_AGENT_ALLOW_INSECURE)
-// is false. raw is an address agents are told to dial, the agent base or the
+// authn.LoopbackHost does not accept, and allowInsecure is false. raw is an address agents are told to dial, the agent base or the
 // endpoint built from it. An https or wss address, an empty value and one that does
 // not parse are not refused here; the caller deals with a missing address. This is
 // the one server-side rule for plain agent addresses (G-02-R4-3): the hub refuses
@@ -180,11 +168,12 @@ func PlainAddressRefused(raw string, allowInsecure bool) bool {
 	return !authn.LoopbackHost(u.Hostname())
 }
 
-// secureTransport reports whether the connection reached TierPlan over TLS, either
-// directly or through a proxy TierPlan trusts to say so: the effective scheme
-// believes X-Forwarded-Proto from a trusted peer and from nobody else (D-51).
+// secureTransport reports whether the connection reached TierPlan over TLS: only
+// the connection itself counts. X-Forwarded-Proto from a trusted proxy does not
+// admit a plain agent connection, because the hop from the proxy to TierPlan would
+// still be in clear; a proxy must talk https to TierPlan (D-04, D-09).
 func secureTransport(r *http.Request) bool {
-	return r.TLS != nil || httpx.EffectiveScheme(r.Context()) == "https"
+	return r.TLS != nil
 }
 
 func isWebSocketUpgrade(r *http.Request) bool {

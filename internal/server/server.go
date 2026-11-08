@@ -771,16 +771,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 				AllowInsecure: cfg.AgentAllowInsecure,
 			})
 		}).
-		WithAllowInsecure(cfg.AgentAllowInsecure).
 		WithConnectLimit(cfg.AgentConnectBurst).
 		WithRefusalAudit(agentAudit)
-	// Agents refuse a plain ws:// address for another host, and so does the hub,
-	// unless the development switch is on. Say so at start, because nothing could
+	// TierPlan accepts agents only over wss://, so an agent address that is plain
+	// ws:// cannot work for any host. Say so at start, because nothing could
 	// connect. The address is read at start only; the hub's own refusal line covers
-	// a later change in Settings (G-02-R4-3).
-	if base := inst.AgentBase(); tunnel.PlainAddressRefused(base, cfg.AgentAllowInsecure) {
-		log.Warn("agents cannot connect: the address they are given is plain http for a host that is not this machine, so agents refuse it and so does TierPlan. Set an https TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL (or change it in Settings); TIERPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only",
-			"agent_base", base)
+	// a later change in Settings. Plans 13 and 14 make such an address impossible
+	// and plan 16 deletes this warning.
+	if strings.HasPrefix(inst.AgentEndpoint(), "ws://") {
+		log.Warn("agents cannot connect: the address they are given is plain http, and TierPlan accepts agents only over wss://. Set an https TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.",
+			"agent_base", inst.AgentBase())
 	}
 	// A revoke commits first and then closes the agent's live session through the hub.
 	agentSvc.WithKicker(tunnelHub)
