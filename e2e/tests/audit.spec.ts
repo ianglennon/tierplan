@@ -73,7 +73,6 @@ test("a password typed as the username never reaches the audit log, its export o
   // test.use() above would otherwise hand this context the admin's cookie.
   const anonymous = await playwright.request.newContext({
     baseURL: ORIGIN,
-    ignoreHTTPSErrors: true,
     storageState: { cookies: [], origins: [] },
   });
   try {

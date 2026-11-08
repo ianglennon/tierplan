@@ -203,7 +203,6 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
 
     context = await browser.newContext({
       baseURL: ORIGIN,
-      ignoreHTTPSErrors: true,
       storageState: { cookies: [], origins: [] },
       locale: "en-GB",
       timezoneId: "UTC",
