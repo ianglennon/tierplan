@@ -29,8 +29,6 @@ type settingsResp struct {
 	AgentEndpoint   string `json:"agentEndpoint"`
 	EnrolledAgents  int    `json:"enrolledAgents"`
 	OfflineAgents   int    `json:"offlineAgents"`
-
-	AgentEndpointRefused bool `json:"agentEndpointRefused"`
 }
 
 func (f *authFixture) getSettings(t *testing.T, cookie string) (int, settingsResp) {
@@ -603,41 +601,6 @@ func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
 	}
 }
 
-// An http agent address can no longer be stored or built (D-07), so agentEndpointRefused
-// is false for every address that can be in effect.
-
-func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		label      string
-		publicURL  string
-		agentURL   string
-		wantRefuse bool
-	}{
-		{"https public URL, no agent URL", "https://pub.example", "", false},
-		{"no address at all", "", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			f := newAuthFixture(t, config.Config{})
-			if tc.publicURL != "" {
-				f.inst.Apply(f.inst.Name(), tc.publicURL)
-			}
-			if tc.agentURL != "" {
-				f.inst.ApplyAgentURL(tc.agentURL)
-			}
-			cookie, _ := f.signIn(t, "admin", false)
-			code, s := f.getSettings(t, cookie)
-			if code != http.StatusOK {
-				t.Fatalf("GET /api/settings = %d", code)
-			}
-			if s.AgentEndpointRefused != tc.wantRefuse {
-				t.Errorf("agentEndpointRefused = %v for endpoint %q, want %v", s.AgentEndpointRefused, s.AgentEndpoint, tc.wantRefuse)
-			}
-		})
-	}
-}
-
 // assertHTTPSOnlyReason checks a 422 says why an http URL was refused and does
 // not repeat the submitted value (D-07, T-13.1-43).
 func assertHTTPSOnlyReason(t *testing.T, rec *httptest.ResponseRecorder, submitted string) {
@@ -692,17 +655,15 @@ func TestPatchSettingsRefusesAnHTTPAgentURLAndPublicURLForEveryHost(t *testing.T
 	}
 }
 
-func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURLAlreadyStored(t *testing.T) {
+func TestPatchSettingsAcceptsAnHTTPSAgentURL(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		label     string
 		publicURL string // applied before the request, "" for none
 		agentURL  string // applied before the request, "" for none
 		body      map[string]string
-		// wantRefused is agentEndpointRefused in the answer.
-		wantRefused bool
 	}{
-		{"https for another host", "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}, false},
+		{"https for another host", "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -722,8 +683,8 @@ func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURLAlreadyStor
 			if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
 				t.Fatal(err)
 			}
-			if s.AgentEndpointRefused != tc.wantRefused {
-				t.Errorf("agentEndpointRefused = %v in the answer (endpoint %q), want %v", s.AgentEndpointRefused, s.AgentEndpoint, tc.wantRefused)
+			if want := "wss://10.0.0.5:7480/agent/connect"; s.AgentEndpoint != want {
+				t.Errorf("agentEndpoint = %q in the answer, want %q", s.AgentEndpoint, want)
 			}
 		})
 	}

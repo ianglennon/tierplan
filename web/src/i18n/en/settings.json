@@ -26,9 +26,7 @@
         "helper": "Leave empty to use the public URL. Set it if your hosts reach TierPlan at a different address, such as an internal hostname. It must start with https://.",
         "httpsOnly": "Agents connect over HTTPS only. Use an address that starts with https://, such as https://tierplan.internal:7480.",
         "placeholder": "https://tierplan.internal:7480",
-        "locked": "Set by the TIERPLAN_AGENT_URL environment variable.",
-        "insecure": "Agents refuse a plain http address for another host. Use an https address. For development only, start TierPlan with TIERPLAN_AGENT_ALLOW_INSECURE=true.",
-        "refused": "Agents can't connect to this TierPlan. They would dial {{endpoint}}, a plain ws:// address for another host, which agents refuse, and so does TierPlan. Set an https agent URL above, or give TierPlan an https public URL. For development only, TIERPLAN_AGENT_ALLOW_INSECURE=true on TierPlan allows it."
+        "locked": "Set by the TIERPLAN_AGENT_URL environment variable."
       },
       "confirm": {
         "title": "Change the public URL?",

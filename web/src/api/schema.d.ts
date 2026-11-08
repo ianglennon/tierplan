@@ -4715,7 +4715,7 @@ export interface paths {
         };
         /**
          * Get the instance name, public URL and agent URL
-         * @description publicUrlLocked is true when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when TIERPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when agentEndpoint is plain ws://: an http agent address is refused, because agents connect only over wss:// (G-02-R4-3).
+         * @description publicUrlLocked is true when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), agentUrlLocked when TIERPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are not revoked and offlineAgents those of them with no connection now (D-19).
          */
         get: operations["getSettings"];
         put?: never;
@@ -4725,7 +4725,7 @@ export interface paths {
         head?: never;
         /**
          * Change the instance name, the public URL or the agent URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An http public URL answers 422 invalid_public_url and an http agent URL answers 422 invalid_agent_url, each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). An http public URL answers 422 invalid_public_url and an http agent URL answers 422 invalid_agent_url, each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -12282,8 +12282,6 @@ export interface components {
         SettingsBody: {
             /** @description The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set */
             agentEndpoint: string;
-            /** @description True when agentEndpoint is plain ws://. An http agent address is refused; agents connect only over wss://, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https */
-            agentEndpointRefused: boolean;
             /** @description The address agents dial when it differs from the public URL; empty means they dial the public URL */
             agentUrl: string;
             /** @description True when the TIERPLAN_AGENT_URL environment variable fixes the agent URL */

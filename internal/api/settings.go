@@ -23,7 +23,6 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
-	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // problemPublicURLLocked is the 409 returned when TIERPLAN_PUBLIC_URL fixes the
@@ -37,12 +36,6 @@ const problemAgentURLLocked = "agent_url_locked"
 // codeInvalidAgentURL is the field error code of a malformed agent URL. The SPA
 // maps it to the same "Enter a full address" copy as invalid_public_url.
 const codeInvalidAgentURL = "invalid_agent_url"
-
-// codeInsecureAgentURL is the field error code of an agent URL that is plain http
-// (a plain address is refused for every host, this machine included):
-// agents connect only over wss://. It is the same word as the 409 problem type of
-// add and rotate (G-02-R4-3), defined once.
-const codeInsecureAgentURL = problemInsecureAgentURL
 
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
@@ -77,15 +70,14 @@ type SettingsDeps struct {
 
 // SettingsBody is the instance's editable settings.
 type SettingsBody struct {
-	InstanceName         string `json:"instanceName" doc:"The name shown in the header, tab titles and the sign-in page"`
-	PublicURL            string `json:"publicUrl" doc:"The URL users reach TierPlan at; drives the Origin check and the cookie Secure flag"`
-	PublicURLLocked      bool   `json:"publicUrlLocked" doc:"True when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL"`
-	AgentURL             string `json:"agentUrl" doc:"The address agents dial when it differs from the public URL; empty means they dial the public URL"`
-	AgentURLLocked       bool   `json:"agentUrlLocked" doc:"True when the TIERPLAN_AGENT_URL environment variable fixes the agent URL"`
-	AgentEndpoint        string `json:"agentEndpoint" doc:"The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set"`
-	AgentEndpointRefused bool   `json:"agentEndpointRefused" doc:"True when agentEndpoint is plain ws://. An http agent address is refused; agents connect only over wss://, and adding an agent environment or rotating a join token answers 409 insecure_agent_url until the agent URL or the public URL is https"`
-	EnrolledAgents       int    `json:"enrolledAgents" doc:"How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0"`
-	OfflineAgents        int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted"`
+	InstanceName    string `json:"instanceName" doc:"The name shown in the header, tab titles and the sign-in page"`
+	PublicURL       string `json:"publicUrl" doc:"The URL users reach TierPlan at; drives the Origin check and the cookie Secure flag"`
+	PublicURLLocked bool   `json:"publicUrlLocked" doc:"True when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL"`
+	AgentURL        string `json:"agentUrl" doc:"The address agents dial when it differs from the public URL; empty means they dial the public URL"`
+	AgentURLLocked  bool   `json:"agentUrlLocked" doc:"True when the TIERPLAN_AGENT_URL environment variable fixes the agent URL"`
+	AgentEndpoint   string `json:"agentEndpoint" doc:"The WebSocket address agents are told to dial, built from the agent URL or else the public URL and ending in /agent/connect; empty when neither is set"`
+	EnrolledAgents  int    `json:"enrolledAgents" doc:"How many agents are enrolled and not revoked, across all environments. A change of the public URL or the agent URL needs a confirmation while this is above 0"`
+	OfflineAgents   int    `json:"offlineAgents" doc:"How many of the enrolled agents have no connection now. They cannot be sent a new address, so after a change of the host or port agents dial they are refused until they are reinstalled with the new address or the change is reverted"`
 }
 
 // SettingsOutput wraps SettingsBody for huma.
@@ -121,13 +113,12 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 	current := func() SettingsBody {
 		endpoint := d.Instance.AgentEndpoint()
 		return SettingsBody{
-			InstanceName:         d.Instance.Name(),
-			PublicURL:            d.Instance.PublicURL(),
-			PublicURLLocked:      d.Instance.Locked(),
-			AgentURL:             d.Instance.AgentURL(),
-			AgentURLLocked:       d.Instance.AgentURLLocked(),
-			AgentEndpoint:        endpoint,
-			AgentEndpointRefused: tunnel.PlainAddressRefused(endpoint),
+			InstanceName:    d.Instance.Name(),
+			PublicURL:       d.Instance.PublicURL(),
+			PublicURLLocked: d.Instance.Locked(),
+			AgentURL:        d.Instance.AgentURL(),
+			AgentURLLocked:  d.Instance.AgentURLLocked(),
+			AgentEndpoint:   endpoint,
 		}
 	}
 	// withAgents adds how many agents are enrolled and how many of those have no
@@ -162,9 +153,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Description: "publicUrlLocked is true when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL (D-04), " +
 			"agentUrlLocked when TIERPLAN_AGENT_URL fixes the agent URL (D-18). agentEndpoint is the address agents dial: " +
 			"the agent URL, else the public URL, with its path and /agent/connect. enrolledAgents counts the agents that are " +
-			"not revoked and offlineAgents those of them with no connection now (D-19). agentEndpointRefused is true when " +
-			"agentEndpoint is plain ws://: an http agent address is refused, " +
-			"because agents connect only over wss:// (G-02-R4-3).",
+			"not revoked and offlineAgents those of them with no connection now (D-19).",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*SettingsOutput, error) {
 		return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, current())}, nil
@@ -176,7 +165,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Path:        "/api/settings",
 		Summary:     "Change the instance name, the public URL or the agent URL",
 		Description: "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field " +
-			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + ", " + codeInsecureAgentURL + "). " +
+			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + "). " +
 			"An http public URL answers 422 " + codeInvalidPublicURL + " and an http agent URL answers 422 " + codeInvalidAgentURL +
 			", each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. " +
 			"An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while " +
@@ -260,10 +249,6 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			case err != nil:
 				add("body.agentUrl", codeInvalidAgentURL)
 				noteHTTPSOnly("body.agentUrl", err)
-			case u != agentURL && u != "" && tunnel.PlainAddressRefused(u):
-				// Agents refuse this address and so does TierPlan; saving it would
-				// only hand them one they cannot dial (G-02-R4-3, T-02-148).
-				add("body.agentUrl", codeInsecureAgentURL)
 			case u != agentURL:
 				details["agent_url_from"], details["agent_url_to"] = agentURL, u
 				agentURL = u

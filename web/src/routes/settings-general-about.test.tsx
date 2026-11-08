@@ -71,7 +71,6 @@ interface SettingsState {
   agentUrl: string;
   agentUrlLocked: boolean;
   agentEndpoint: string;
-  agentEndpointRefused: boolean;
   enrolledAgents: number;
   offlineAgents: number;
 }
@@ -86,7 +85,6 @@ function settingsState(over: Partial<SettingsState> = {}): SettingsState {
     agentUrl: "",
     agentUrlLocked: false,
     agentEndpoint: "",
-    agentEndpointRefused: false,
     enrolledAgents: 0,
     offlineAgents: 0,
     ...over,
@@ -664,24 +662,6 @@ describe("General tab: agent URL", () => {
     expect(patches()[0]?.body).toEqual({ agentUrl: "" });
   });
 
-  it("warns under the Agent URL field when agents cannot use the address, naming it and the switch", async () => {
-    settings = settingsState({
-      agentEndpoint: "ws://10.0.0.5:7480/agent/connect",
-      agentEndpointRefused: true,
-    });
-    await openGeneral();
-    const note = await screen.findByText(/ws:\/\/10\.0\.0\.5:7480\/agent\/connect/);
-    expect(note.textContent).toContain("TIERPLAN_AGENT_ALLOW_INSECURE");
-    expect(note.closest('[role="alert"]')).not.toBeNull();
-  });
-
-  it("shows no refused-address warning when agents can use the address", async () => {
-    settings = settingsState({ agentEndpoint: "wss://tierplan.test/agent/connect" });
-    await openGeneral();
-    expect(screen.queryByText(/TIERPLAN_AGENT_ALLOW_INSECURE/)).toBeNull();
-    expect(screen.queryByText(/Agents can't connect to this TierPlan/)).toBeNull();
-  });
-
   it("refuses an http public URL with the https-only sentence and sends nothing", async () => {
     await openGeneral();
     fireEvent.change(urlField(), { target: { value: "http://tierplan.example.com" } });
@@ -761,30 +741,6 @@ describe("General tab: agent URL", () => {
       await screen.findByText("Enter a full https address such as https://tierplan.example.com."),
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
-  });
-
-  it("maps the server's insecure_agent_url to its own inline error", async () => {
-    patchAnswer = () =>
-      Response.json(
-        {
-          type: "validation_failed",
-          status: 422,
-          errors: [{ location: "body.agentUrl", message: "insecure_agent_url" }],
-        },
-        { status: 422, headers: { "Content-Type": "application/problem+json" } },
-      );
-    await openGeneral();
-    // Plan 15 removes this branch with the API field; the client now refuses an http value itself,
-    // so the stubbed server code is reached with an https one.
-    fireEvent.change(agentField(), { target: { value: "https://10.0.0.5:7480" } });
-    fireEvent.click(saveButton());
-    expect(
-      await screen.findByText(/Agents refuse a plain http address for another host/),
-    ).toBeTruthy();
-    expect(agentField().getAttribute("aria-invalid")).toBe("true");
-    expect(
-      screen.queryByText("Enter a full https address such as https://tierplan.example.com."),
-    ).toBeNull();
   });
 
   it("shows the lock as a field error when the server says the agent URL is now fixed", async () => {

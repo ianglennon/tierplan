@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, TriangleAlert } from "lucide-react";
+import { Lock } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -66,7 +66,6 @@ const KEY = {
   locked: "setup.instance.url.locked",
   agentLocked: "settings.general.agentUrl.locked",
   invalidUrl: "setup.errors.publicUrl",
-  insecureAgentUrl: "settings.general.agentUrl.insecure",
 } as const;
 
 // Where the fields sit on screen, which is where focus goes first on an error.
@@ -240,12 +239,7 @@ function SettingsForm({ settings }: { settings: Settings }) {
         (f) => f.location === "body.agentUrl" || f.message === "invalid_agent_url",
       )
     ) {
-      // An address agents refuse is not a malformed one: say why, in its own words.
-      const insecure = problem.fields.some((f) => f.message === "insecure_agent_url");
-      routed.push({
-        field: "agentUrl",
-        messageKey: insecure ? KEY.insecureAgentUrl : KEY.invalidUrl,
-      });
+      routed.push({ field: "agentUrl", messageKey: KEY.invalidUrl });
     }
     if (routed.length === 0) {
       setFormError(KEY.server);
@@ -377,14 +371,6 @@ function SettingsForm({ settings }: { settings: Settings }) {
                 </InputGroup>
               )}
             </FieldShell>
-            {settings.agentEndpointRefused ? (
-              <Alert variant="warning">
-                <TriangleAlert aria-hidden="true" />
-                <AlertDescription className="text-foreground break-words">
-                  {t("settings.general.agentUrl.refused", { endpoint: settings.agentEndpoint })}
-                </AlertDescription>
-              </Alert>
-            ) : null}
             {readOnly ? null : (
               <div>
                 <Button type="submit" className={TOUCH_HEIGHT} disabled={!dirty || pending}>
