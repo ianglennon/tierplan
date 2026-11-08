@@ -10,6 +10,9 @@ import (
 )
 
 const getTLSCert = `-- name: GetTLSCert :one
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
+
 SELECT id, cert_pem, key_sealed, created_at, updated_at FROM tls_certs WHERE id = ?
 `
 
