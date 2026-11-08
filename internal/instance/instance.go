@@ -88,31 +88,52 @@ type Instance struct {
 // Load reads the stored settings. When TIERPLAN_PUBLIC_URL is set it wins over
 // any stored value and the instance is locked: the stored value is neither read
 // nor written, so removing the variable later falls back to what was stored.
+// TIERPLAN_AGENT_URL locks the agent URL the same way. Load records the two
+// locks, then fills every value through Reload, so a later Reload keeps them.
 func Load(ctx context.Context, s *store.Store, cfg config.Config) (*Instance, error) {
 	i := &Instance{locked: cfg.PublicURL != "", agentLocked: cfg.AgentURL != ""}
+	if i.locked {
+		url := cfg.PublicURL
+		i.url.Store(&url)
+	}
+	if i.agentLocked {
+		agent := cfg.AgentURL
+		i.agentURL.Store(&agent)
+	}
+	if _, err := i.Reload(ctx, s); err != nil {
+		return nil, err
+	}
+	return i, nil
+}
 
+// Reload re-reads the stored settings and applies the ones that differ from the
+// cache, so a change another process made (the CLI, a restore) reaches a running
+// server without a restart (D-05). It returns the keys that changed, in the fixed
+// order instance_name, public_url, agent_url, shell_idle_minutes,
+// shell_max_per_user, stack_revisions_kept.
+//
+// A value fixed by TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL is neither read nor
+// replaced: the locks were recorded by Load and last the life of the process. Every
+// value is read before any is applied, so a failed read applies nothing. A cache
+// that is still empty counts as different, so Reload fills a fresh Instance. The
+// stored shell limits and revision count are read as Load always has: a value that
+// is missing or out of range reads as its default.
+func (i *Instance) Reload(ctx context.Context, s *store.Store) (changed []string, err error) {
 	name, err := read(ctx, s, SettingName)
 	if err != nil {
 		return nil, err
 	}
-	i.name.Store(&name)
-
-	url := cfg.PublicURL
+	var url, agent string
 	if !i.locked {
 		if url, err = read(ctx, s, SettingPublicURL); err != nil {
 			return nil, err
 		}
 	}
-	i.url.Store(&url)
-
-	agent := cfg.AgentURL
 	if !i.agentLocked {
 		if agent, err = read(ctx, s, SettingAgentURL); err != nil {
 			return nil, err
 		}
 	}
-	i.agentURL.Store(&agent)
-
 	idle, err := readInt(ctx, s, SettingShellIdleMinutes, DefaultShellIdleMinutes, MinShellIdleMinutes, MaxShellIdleMinutes)
 	if err != nil {
 		return nil, err
@@ -121,14 +142,43 @@ func Load(ctx context.Context, s *store.Store, cfg config.Config) (*Instance, er
 	if err != nil {
 		return nil, err
 	}
-	i.ApplyShellLimits(idle, capN)
-
 	kept, err := readInt(ctx, s, SettingStackRevisionsKept, DefaultStackRevisionsKept, MinStackRevisionsKept, MaxStackRevisionsKept)
 	if err != nil {
 		return nil, err
 	}
-	i.ApplyStackRevisionsKept(kept)
-	return i, nil
+
+	if differs(&i.name, name) {
+		i.name.Store(&name)
+		changed = append(changed, SettingName)
+	}
+	if !i.locked && differs(&i.url, url) {
+		i.url.Store(&url)
+		changed = append(changed, SettingPublicURL)
+	}
+	if !i.agentLocked && differs(&i.agentURL, agent) {
+		i.agentURL.Store(&agent)
+		changed = append(changed, SettingAgentURL)
+	}
+	if i.shellIdle.Load() != int64(idle) {
+		i.shellIdle.Store(int64(idle))
+		changed = append(changed, SettingShellIdleMinutes)
+	}
+	if i.shellCap.Load() != int64(capN) {
+		i.shellCap.Store(int64(capN))
+		changed = append(changed, SettingShellMaxPerUser)
+	}
+	if i.revisionsKept.Load() != int64(kept) {
+		i.revisionsKept.Store(int64(kept))
+		changed = append(changed, SettingStackRevisionsKept)
+	}
+	return changed, nil
+}
+
+// differs reports whether the cached string is not v. A pointer that was never
+// stored counts as different.
+func differs(p *atomic.Pointer[string], v string) bool {
+	cur := p.Load()
+	return cur == nil || *cur != v
 }
 
 // readInt reads a whole-number setting, and gives def when it is not stored, is not

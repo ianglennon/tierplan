@@ -276,6 +276,9 @@ lint:
 	  echo "lint: $$m"; \
 	  (cd $$m && $(GOLANGCI_LINT) run ./...); \
 	done
+	@if (cd agent && go list -deps ./... | grep -q go-acme); then \
+	  echo "lint: the agent module depends on go-acme; ACME belongs to the server only (D-11)" >&2; exit 1; \
+	fi
 	scripts/insecure-tls-check.sh
 	scripts/timeouts-check.sh
 	scripts/no-retries-check.sh

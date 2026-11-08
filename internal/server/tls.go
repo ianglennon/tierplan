@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -23,9 +24,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/authn"
 )
 
@@ -47,10 +50,12 @@ const (
 	suppliedRecheck   = time.Minute
 )
 
-// TLSEnabled reports whether the settings ask for HTTPS, from files or from a
-// generated certificate. The healthcheck uses it to pick http or https.
+// TLSEnabled reports whether the environment asks for HTTPS, from files or from a
+// generated certificate. The healthcheck and the redirect gate use it. It is
+// config.Config.EnvTLS, the one definition shared with `tierplan https disable`.
 func TLSEnabled(cfg config.Config) bool {
-	return cfg.TLSSelfSigned || cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
+	_, ok := cfg.EnvTLS()
+	return ok
 }
 
 // TLSConfig returns the TLS configuration to serve with, or nil for plain HTTP (D-12).
@@ -71,9 +76,21 @@ func TLSEnabled(cfg config.Config) bool {
 // certificate before it expires, and reloads a supplied pair that was replaced,
 // without a restart (WR-09).
 func TLSConfig(cfg config.Config, publicURL, agentURL string, now func() time.Time) (*tls.Config, error) {
+	src, _, err := newCertSource(cfg, publicURL, agentURL, now)
+	if err != nil || src == nil {
+		return nil, err
+	}
+	return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
+}
+
+// newCertSource builds the certificate source the environment's TLS settings
+// ask for, and says which kind it is. It returns a nil source and tlsKindNone
+// for plain HTTP. The source does not refresh itself: the server runs
+// runCertRefresh beside it, so a handshake never waits on the disk.
+func newCertSource(cfg config.Config, publicURL, agentURL string, now func() time.Time) (*certSource, tlsKind, error) {
 	files := cfg.TLSCertFile != "" || cfg.TLSKeyFile != ""
 	if files && cfg.TLSSelfSigned {
-		return nil, errors.New("TIERPLAN_TLS_SELF_SIGNED conflicts with TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE; use one or the other")
+		return nil, tlsKindNone, errors.New("TIERPLAN_TLS_SELF_SIGNED conflicts with TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE; use one or the other")
 	}
 	if now == nil {
 		now = time.Now
@@ -83,27 +100,32 @@ func TLSConfig(cfg config.Config, publicURL, agentURL string, now func() time.Ti
 	case files:
 		src, err := newSuppliedSource(cfg.TLSCertFile, cfg.TLSKeyFile, now)
 		if err != nil {
-			return nil, fmt.Errorf("load the TLS certificate from TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE: %w", err)
+			return nil, tlsKindNone, fmt.Errorf("load the TLS certificate from TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE: %w", err)
 		}
-		return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
+		return src, tlsKindSupplied, nil
 	case cfg.TLSSelfSigned:
 		src, err := newSelfSignedSource(filepath.Join(cfg.DataDir, selfSignedDir), wantedNames(publicURL, agentURL), now)
 		if err != nil {
-			return nil, fmt.Errorf("prepare the self-signed certificate (TIERPLAN_TLS_SELF_SIGNED): %w", err)
+			return nil, tlsKindNone, fmt.Errorf("prepare the self-signed certificate (TIERPLAN_TLS_SELF_SIGNED): %w", err)
 		}
-		return &tls.Config{GetCertificate: src.GetCertificate, MinVersion: tls.VersionTLS12}, nil
+		return src, tlsKindSelfSigned, nil
 	}
-	return nil, nil
+	return nil, tlsKindNone, nil
 }
 
 // certSource serves the current certificate and keeps it fresh. It holds the
 // pair in memory, so a failed renewal or reload leaves the working certificate
-// in place and a handshake never touches the disk more than once per interval.
+// in place. A handshake only loads an atomic pointer: it takes no lock, reads no
+// clock and touches no file. Refresh does the looking, on a ticker.
 type certSource struct {
 	now func() time.Time
 
+	// cert is what GetCertificate answers with.
+	cert atomic.Pointer[tls.Certificate]
+
+	// mu serialises Refresh calls and guards leaf and checked. No handshake
+	// takes it.
 	mu      sync.Mutex
-	cert    *tls.Certificate
 	leaf    *x509.Certificate
 	checked time.Time
 	// refresh looks again at the certificate when the recheck interval has
@@ -118,29 +140,47 @@ func (c *certSource) set(cert tls.Certificate, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("read the certificate: %w", err)
 	}
-	c.cert, c.leaf, c.checked = &cert, leaf, now
+	c.leaf, c.checked = leaf, now
+	c.cert.Store(&cert)
 	return nil
 }
 
 // GetCertificate implements tls.Config.GetCertificate. The hello is not read:
 // one certificate serves every name.
 func (c *certSource) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return c.cert.Load(), nil
+}
+
+// Refresh looks again at the certificate when the recheck interval has passed
+// since the last look, keeping the current pair when the new one cannot be had.
+func (c *certSource) Refresh(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := c.now()
-	if now.Sub(c.checked) >= c.interval {
-		c.checked = now
-		next, err := c.refresh(now, c.leaf)
-		switch {
-		case err != nil:
+	if now.Sub(c.checked) < c.interval {
+		return
+	}
+	c.checked = now
+	next, err := c.refresh(now, c.leaf)
+	switch {
+	case err != nil:
+		slog.Warn("keeping the current TLS certificate", "error", err)
+	case next != nil:
+		if err := c.set(*next, now); err != nil {
 			slog.Warn("keeping the current TLS certificate", "error", err)
-		case next != nil:
-			if err := c.set(*next, now); err != nil {
-				slog.Warn("keeping the current TLS certificate", "error", err)
-			}
 		}
 	}
-	return c.cert, nil
+}
+
+// runCertRefresh refreshes src once per its recheck interval until ctx ends.
+func runCertRefresh(ctx context.Context, clk stackops.Clock, src *certSource) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-clk.After(src.interval):
+			src.Refresh(clk.Now())
+		}
+	}
 }
 
 // newSelfSignedSource loads or generates the self-signed certificate. Once

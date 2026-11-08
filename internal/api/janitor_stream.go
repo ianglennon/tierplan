@@ -201,8 +201,8 @@ func serveJanitorRunStream(w http.ResponseWriter, req *http.Request, d JanitorDe
 		writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
 		return
 	}
-	job, ok := d.Jobs.Get(run.JobID)
-	if run.JobID == "" || !ok || job.Kind != janitor.JobKind || job.EnvID != env.ID {
+	job, ok := janitorRunJob(d.Jobs, env.ID, run)
+	if !ok {
 		writeJSONProblem(w, http.StatusNotFound, problemJanitorJobNotFound, janitorJobGone)
 		return
 	}
@@ -221,4 +221,20 @@ func serveJanitorRunStream(w http.ResponseWriter, req *http.Request, d JanitorDe
 			return nil, false
 		},
 	})
+}
+
+// janitorRunJob finds the job that is the given run in envID. The run's record names its job only
+// once the job's body has begun, which can be a moment after the start request has answered with
+// the job ID; a stream opened in that gap finds the job by the run ID it carries in its meta.
+func janitorRunJob(hub *jobs.Hub, envID string, run janitor.Run) (jobs.Job, bool) {
+	isRun := func(j jobs.Job) bool { return j.Kind == janitor.JobKind && j.EnvID == envID }
+	if run.JobID != "" {
+		j, ok := hub.Get(run.JobID)
+		return j, ok && isRun(j)
+	}
+	found := hub.List(func(j jobs.Job) bool { return isRun(j) && j.Meta[janitor.MetaRunID] == run.ID })
+	if len(found) == 0 {
+		return jobs.Job{}, false
+	}
+	return found[0], true
 }

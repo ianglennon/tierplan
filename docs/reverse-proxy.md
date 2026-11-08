@@ -30,7 +30,7 @@ TierPlan believes forwarded headers only from the addresses in `TIERPLAN_TRUSTED
 | Header | What TierPlan does with it |
 |--------|---------------------------|
 | `X-Forwarded-For` | The client address, for the audit log and the rate limits. TierPlan takes the rightmost address that is not itself a trusted proxy, so a client cannot choose its address by sending the header first. |
-| `X-Forwarded-Proto` | The scheme the client used. `https` from a trusted proxy lets agents connect over `wss://` and tells TierPlan the request was secure. With several values, the last one counts. |
+| `X-Forwarded-Proto` | The scheme the client used. `https` from a trusted proxy lets agents connect over `wss://` and tells TierPlan the request was secure, which is also what lets it send `Strict-Transport-Security` behind your proxy when the public URL is `https://`. With several values, the last one counts. |
 
 TierPlan **ignores** `X-Forwarded-Host`, `X-Forwarded-Prefix` and the standard `Forwarded` header, from every peer. It also ignores `X-Forwarded-For` and `X-Forwarded-Proto` from any peer that is not trusted. Traefik adds `X-Forwarded-Prefix` when it strips a prefix; that is harmless.
 

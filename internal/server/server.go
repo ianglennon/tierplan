@@ -76,14 +76,24 @@ const maxHeaderBytes = 64 << 10
 // newHTTPServer returns the http.Server TierPlan serves with. huma already caps
 // JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here. Production
 // passes defaultReadTimeout.
-func newHTTPServer(h http.Handler, tlsCfg *tls.Config, readTimeout time.Duration) *http.Server {
+//
+// It serves HTTP/1.1 and, over TLS, HTTP/2. HTTP/2 over a plain connection (h2c)
+// is never enabled (D-17). The server has no TLSConfig of its own: the sniffing
+// listener hands it connections that are already *tls.Conn, configured by the
+// runtime, and a TLSConfig here that lacked "h2" would let a client negotiate h2
+// with a server that cannot speak it. The TLS parameter is kept so the callers
+// that pass nil keep compiling, and it is ignored.
+func newHTTPServer(h http.Handler, _ *tls.Config, readTimeout time.Duration) *http.Server {
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
 	return &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
-		TLSConfig:         tlsCfg,
+		Protocols:         &protocols,
 	}
 }
 
@@ -137,8 +147,9 @@ type Server struct {
 	agents  *agents.Service
 	updater *agents.Updater
 	router  *httpx.Router
-	// tlsConfig is nil when the server speaks plain HTTP (D-12).
-	tlsConfig *tls.Config
+	// https is the live TLS state: every handshake, pin and HSTS decision reads
+	// it. Nothing but Build and tests calls Install (D-12).
+	https *httpsRuntime
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -278,6 +289,8 @@ type buildOptions struct {
 	refusalClock    func() time.Time
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
+	tlsRefreshClock stackops.Clock
+	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
 }
@@ -304,6 +317,24 @@ func WithAddressSpaceClock(now func() time.Time) Option {
 // always reads the real time. A nil clock keeps the wall clock.
 func WithJanitorClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.janitorClock = c }
+}
+
+// WithTLSRefreshClock replaces the clock the certificate refresh loop waits on, which decides when
+// a renewed certificate or a replaced cert-file pair is looked at again. It exists for tests, which
+// move it by a recheck interval instead of waiting for one. It is a Go option only, like
+// WithJanitorClock: no setting, flag or environment variable reaches it, so a production build,
+// which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
+func WithTLSRefreshClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.tlsRefreshClock = c }
+}
+
+// WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
+// settings are read again to see a change another process made (`tierplan https disable`). It exists
+// for tests, which move it by a poll interval instead of waiting for one. It is a Go option only,
+// like WithJanitorClock: no setting, flag or environment variable reaches it, so a production build,
+// which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
+func WithSettingsClock(c instance.Clock) Option {
+	return func(o *buildOptions) { o.settingsClock = c }
 }
 
 // WithoutJanitorScheduler keeps the janitor's scheduler from running, so that no environment is cleaned
@@ -627,20 +658,28 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
 	// (D-12). It is prepared here so a bad pair stops startup before listening.
-	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), inst.AgentURL(), nil)
+	tlsClock := bo.tlsRefreshClock
+	if tlsClock == nil {
+		tlsClock = stackops.RealClock()
+	}
+	tlsSrc, tlsSrcKind, err := newCertSource(cfg, inst.PublicURL(), inst.AgentURL(), tlsClock.Now)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
 	}
-	switch {
-	case tlsCfg == nil:
+	rt := newHTTPSRuntime()
+	if tlsSrc != nil {
+		rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
+	}
+	switch rt.Kind() {
+	case tlsKindNone:
 		log.Info("serving plain HTTP; set TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE, TIERPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
-	case cfg.TLSSelfSigned:
+	case tlsKindSelfSigned:
 		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
-			"sha256", fingerprint(tlsCfg), "tls_pin", spkiPin(tlsCfg),
+			"sha256", fingerprint(rt.Config()), "tls_pin", spkiPin(rt.Config()),
 			"certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
 	default:
-		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(tlsCfg))
+		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(rt.Config()))
 	}
 
 	sessions := auth.NewSessions(st, vlt, cfg.SessionIdleTimeout, cfg.SessionRememberLifetime, nil)
@@ -702,7 +741,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The pin an install command carries, and the hint a refused agent gets, are
 	// both read when asked: the pin changes only if the self-signed key is
 	// replaced, and the endpoint follows Settings.
-	tlsPin := func() string { return firstSelfSignedPin(cfg, tlsCfg) }
+	tlsPin := rt.Pin
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -719,7 +758,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// Every welcome, and every push when an address changes, carries the
 		// endpoint agents are told to dial (D-19).
 		WithEndpoint(inst.AgentEndpoint).
-		WithPins(func() []string { return selfSignedPins(cfg, tlsCfg) }).
+		WithPins(rt.Pins).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
 		WithServerVersion(buildinfo.Get().Version).
@@ -998,13 +1037,18 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:          proxyObs,
 			PublicOrigin:   inst.PublicOrigin,
 			Logger:         log,
-			// Strict-Transport-Security when the request came over TLS or the
-			// public URL is https, which also covers a TLS-terminating proxy (D-37).
-			// Not for TierPlan's own self-signed certificate: a browser pinned to it
-			// could not click through a regenerated one (WR-09).
+			// Strict-Transport-Security when the request came over TLS, or a trusted
+			// proxy that ends TLS marked it X-Forwarded-Proto: https and the public
+			// URL is https (D-37). Never on a response TierPlan sends over plain
+			// HTTP itself: the health probes, a loopback request and the ACME
+			// challenge path. Not for TierPlan's own self-signed certificate: a
+			// browser pinned to it could not click through a regenerated one (WR-09).
 			HSTS: func(r *http.Request) bool {
 				if r.TLS != nil {
-					return !cfg.TLSSelfSigned
+					return rt.HSTSAllowed()
+				}
+				if httpx.EffectiveScheme(r.Context()) != "https" {
+					return false
 				}
 				return inst.Secure()
 			},
@@ -1128,13 +1172,29 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		agents:     agentSvc,
 		updater:    updater,
 		router:     router,
-		tlsConfig:  tlsCfg,
+		https:      rt,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
 	bg, stop := context.WithCancel(ctx)
 	srv.stopBackground = stop
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
+	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
+	// the handshake path, so a handshake never waits on the disk.
+	if tlsSrc != nil {
+		srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
+	}
+	// A setting another process wrote (`tierplan https disable`) is applied here within one poll,
+	// so the redirect gate, the cookie scope and the Origin check follow it without a restart. The
+	// watcher only reloads the instance's cached values: it pushes no address to agents. Connected
+	// wss agents stay valid because the hub compares the audience without the scheme, and a new
+	// ws:// endpoint must never be pushed.
+	settingsClock := bo.settingsClock
+	if settingsClock == nil {
+		settingsClock = stackops.RealClock()
+	}
+	watcher := &instance.Watcher{Inst: inst, Store: st, Clock: settingsClock, Every: instance.SettingsPollInterval, Log: log}
+	srv.background.Go(func() { watcher.Run(bg) })
 	// Scheduled backups wait for the next instant the saved schedule names.
 	srv.background.Go(func() { backups.Run(bg) })
 	// Expired sessions are refused on lookup; this hourly sweep only keeps the table small.
@@ -1235,28 +1295,7 @@ func (s *Server) Clusters() *envs.Clusters { return s.clusters }
 // generated for itself, which an install command carries so the agent can trust
 // it (D-06). It is empty when TierPlan serves a supplied certificate or plain
 // HTTP: the first is the operator's to pin, the second has nothing to pin.
-func (s *Server) TLSPin() string { return firstSelfSignedPin(s.cfg, s.tlsConfig) }
-
-// firstSelfSignedPin is the pin an install command carries: the generated
-// certificate's, and "" when there is none.
-func firstSelfSignedPin(cfg config.Config, tlsCfg *tls.Config) string {
-	if p := selfSignedPins(cfg, tlsCfg); len(p) > 0 {
-		return p[0]
-	}
-	return ""
-}
-
-// selfSignedPins is the pin list a welcome carries: the generated certificate's
-// pin, and nothing for a supplied certificate or plain HTTP.
-func selfSignedPins(cfg config.Config, tlsCfg *tls.Config) []string {
-	if !cfg.TLSSelfSigned {
-		return nil
-	}
-	if p := spkiPin(tlsCfg); p != "" {
-		return []string{p}
-	}
-	return nil
-}
+func (s *Server) TLSPin() string { return s.https.Pin() }
 
 // Tunnel holds the live agent connections.
 func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }
@@ -1327,8 +1366,15 @@ func (s *Server) Routes() []httpx.RouteRecord { return s.router.Routes() }
 // Handler is the root HTTP handler: the router behind StripBasePath, so a
 // request under the public URL's path reaches the same routes whether or not a
 // proxy stripped the prefix. It runs before chi and every middleware (D-50).
+//
+// The HTTPS gate runs inside the stripper and in front of the router, so
+// /healthz, /readyz and the redirect target are judged on the path below the
+// base, and what the gate answers never reaches the router's security headers
+// (no HSTS on a redirect or a refusal). This is a deliberate deviation from the
+// milestone architecture draft, which put the gate outside the stripper.
 func (s *Server) Handler() http.Handler {
-	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
+	gate := newHTTPSGate(s.https, s.inst.PublicURL, TLSEnabled(s.cfg), s.cfg.TrustedProxies)
+	return httpx.StripBasePath(s.inst.BasePath)(gate(s.router.Handler()))
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s. When
@@ -1374,9 +1420,9 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 }
 
 // httpServer is the http.Server the process serves with: production's read
-// timeout, the TLS settings the configuration chose.
+// timeout. TLS is not on it: the sniffing listener decides per connection.
 func (s *Server) httpServer() *http.Server {
-	return newHTTPServer(s.Handler(), s.tlsConfig, defaultReadTimeout)
+	return newHTTPServer(s.Handler(), nil, defaultReadTimeout)
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -1397,14 +1443,13 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).
 	srv.RegisterOnShutdown(s.tunnel.Close)
 	errc := make(chan error, 1)
-	// With a TLS config the certificate is already in it, so the file names are empty.
+	// Every mode serves through the one sniffing listener, which tells TLS from plain HTTP on each
+	// connection (D-01). The scheme logged is the one at start; TLS can come and go while running.
 	scheme := "http"
-	if s.tlsConfig != nil {
+	if s.https.Live() {
 		scheme = "https"
-		go func() { errc <- srv.ServeTLS(ln, "", "") }()
-	} else {
-		go func() { errc <- srv.Serve(ln) }()
 	}
+	go func() { errc <- srv.Serve(newSniffListener(ln, s.https, nil)) }()
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
 	// bound address, so ":0" shows as the real port.

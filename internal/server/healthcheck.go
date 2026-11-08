@@ -29,14 +29,18 @@ const healthcheckTimeout = 3 * time.Second
 // image has no curl, so the container HEALTHCHECK runs `tierplan healthcheck`
 // (D-17, D-86, WR-10).
 //
-// An empty certFile probes over plain HTTP. Otherwise the probe speaks https and
-// verifies the listener's certificate against the one in certFile: the listener
-// is in the same container and its certificate file is the one it serves, so the
-// file is the trust anchor and the name checked is the first one the certificate
-// carries. The certificate is therefore verified, never waved through, which is
-// also what lets the repository keep its one reviewed place for switching
-// verification off (scripts/insecure-tls-check.sh). The probe sends no
-// credentials and reads no body.
+// The one port is shared by TLS and plain HTTP, and the redirect gate exempts
+// /healthz, so /healthz answers on both schemes whatever the mode or the public
+// URL. An empty certFile probes over plain HTTP. Otherwise the probe speaks https
+// and verifies the listener's certificate against the one in certFile: for an env
+// TLS mode the probe still speaks https and verifies TierPlan's own certificate,
+// which also proves TLS is being served. The listener is in the same container
+// and its certificate file is the one it serves, so the file is the trust anchor
+// and the name checked is the first one the certificate carries. The certificate
+// is therefore verified, never waved through, which is also what lets the
+// repository keep its one reviewed place for switching verification off
+// (scripts/insecure-tls-check.sh). The probe sends no credentials and reads no
+// body.
 func Healthcheck(ctx context.Context, listen, certFile string) error {
 	client := http.DefaultClient
 	if certFile != "" {
@@ -50,9 +54,10 @@ func Healthcheck(ctx context.Context, listen, certFile string) error {
 	return healthcheck(ctx, listen, certFile != "", client)
 }
 
-// HealthcheckCertFile is the certificate file the listener serves, for
-// Healthcheck: the operator's own when one is supplied, the generated
-// self-signed one when that is enabled, and empty for plain HTTP.
+// HealthcheckCertFile is the certificate file the listener serves for an
+// env-set TLS mode, for Healthcheck: the operator's own when one is supplied,
+// the generated self-signed one when that is enabled, and empty otherwise (plain
+// HTTP).
 func HealthcheckCertFile(cfg config.Config) string {
 	switch {
 	case cfg.TLSCertFile != "":
