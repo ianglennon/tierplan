@@ -26,11 +26,6 @@ import "@/i18n";
 import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
-// Whether the page counts as "plain HTTP from another host" is decided by
-// window.location, which jsdom does not let a test change.
-let plainHttp = false;
-vi.mock("@/components/auth-layout", () => ({ isPlainHttpRemote: () => plainHttp }));
-
 const ADMIN = makeMe({
   instanceAdmin: true,
   permissions: { global: ["settings.read", "settings.write"], environments: {} },
@@ -77,7 +72,6 @@ beforeEach(() => {
   envStatus = 200;
   envGate = null;
   registryItems = [];
-  plainHttp = false;
   setCsrfToken("csrf-1");
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -195,24 +189,6 @@ describe("HealthBell", () => {
     expect(screen.queryByText("No warnings")).toBeNull();
   });
 
-  it("lists the plain HTTP warning from a non-localhost http page, with its fix link", async () => {
-    plainHttp = true;
-    renderWarnings();
-    await openBell("Warnings, 1 item");
-    expect(await screen.findByText("You're using TierPlan over plain HTTP.")).toBeTruthy();
-    const fix = screen.getByRole("link", {
-      name: "Serve TierPlan over HTTPS or put it behind a reverse proxy",
-    });
-    expect(fix.getAttribute("rel")).toBe("noopener noreferrer");
-  });
-
-  it("counts both items together", async () => {
-    plainHttp = true;
-    items = [{ id: "key_backup", keyPath: "/data/tierplan.key" }];
-    renderWarnings();
-    expect(await screen.findByRole("button", { name: "Warnings, 2 items" })).toBeTruthy();
-  });
-
   it("acknowledges the key backup once and the item disappears", async () => {
     items = [{ id: "key_backup", keyPath: "/data/tierplan.key" }];
     renderWarnings();
@@ -299,14 +275,13 @@ describe("HealthBell reverse proxy items", () => {
   });
 
   it("counts every proxy item with the others and lists them all", async () => {
-    plainHttp = true;
     items = [
       { id: "key_backup", keyPath: "/data/tierplan.key" },
       { id: "proxy_untrusted_forwarded", ip: "10.0.0.5" },
       { id: "proxy_websocket_failing", ip: "203.0.113.9" },
     ];
     renderWarnings();
-    await openBell("Warnings, 4 items");
+    await openBell("Warnings, 3 items");
     expect(screen.getAllByRole("link", { name: "Reverse proxy docs" })).toHaveLength(2);
   });
 
@@ -426,7 +401,6 @@ describe("HealthBell environment items", () => {
   });
 
   it("orders errors before warnings and then newest first, with the instance items after the dated ones", async () => {
-    plainHttp = true;
     items = [{ id: "key_backup", keyPath: "/data/tierplan.key" }];
     envItems = [
       { id: "fold_offered", severity: "warning", envId: "s1", envName: "Prod swarm" },
@@ -444,14 +418,13 @@ describe("HealthBell environment items", () => {
     ];
     me = ADMIN_AND_READER;
     renderWarnings();
-    await openBell("Warnings, 6 items");
+    await openBell("Warnings, 5 items");
     await screen.findByText("Newer is offline");
     expect(listed().map(([, title]) => title)).toEqual([
       "Newer is offline",
       "Older is offline",
       "The clock is off on node-a",
       "This host is part of Prod swarm",
-      "You're using TierPlan over plain HTTP.",
       "Back up your encryption key.",
     ]);
   });
@@ -1411,16 +1384,11 @@ describe("HealthBell registry credential items", () => {
 
   it("puts an expired credential among the errors, before the warnings", async () => {
     me = REGISTRY_ADMIN;
-    plainHttp = true;
     registryItems = [alertOf("expiring", "cred-1", "soon"), alertOf("expired", "cred-2", "gone")];
     renderWarnings();
-    await openBell("Warnings, 3 items");
+    await openBell("Warnings, 2 items");
     await screen.findByText("“gone” has expired");
-    expect(listed().map(([id]) => id)).toEqual([
-      "registry_expired",
-      "plain_http",
-      "registry_expiring",
-    ]);
+    expect(listed().map(([id]) => id)).toEqual(["registry_expired", "registry_expiring"]);
   });
 
   it("truncates a long name with its whole text on hover and wraps a long host", async () => {

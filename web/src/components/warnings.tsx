@@ -10,7 +10,6 @@ import { api } from "@/api/client";
 import { type CredentialAlert, credentialAlertsQuery } from "@/api/registries";
 import type { components } from "@/api/schema";
 import { ENV_WARNINGS_KEY, WARNINGS_KEY } from "@/api/warnings";
-import { isPlainHttpRemote } from "@/components/auth-layout";
 import { useNow } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,8 +32,8 @@ import { useT } from "@/i18n/use-t";
 import { formatClock, formatRelative } from "@/lib/format";
 import { toastError } from "@/lib/toast";
 
-// Build-time source URL (Vite define). The plain-HTTP fix link points at the
-// project's own pages, which say how to serve TierPlan over HTTPS.
+// Build-time source URL (Vite define). The proxy warning's docs link points at the
+// project's own pages.
 declare const __TIERPLAN_SOURCE_URL__: string;
 
 export type Warning = components["schemas"]["WarningBody"];
@@ -85,10 +84,8 @@ export function useRegistryAlerts(): {
 // useWarnings reads the instance warnings the server knows about: the data
 // directory is not persisted, and the generated encryption key has not been
 // backed up. Only an admin may ask (settings.read), so for anyone else the
-// query never runs and the list stays empty (D-59). The plain-HTTP warning is
-// not here: only the browser knows how it reached the server. loading is true
-// until the first answer, so the bell never claims there is nothing before it
-// knows.
+// query never runs and the list stays empty (D-59). loading is true until the
+// first answer, so the bell never claims there is nothing before it knows.
 export function useWarnings(): { items: Warning[]; allowed: boolean; loading: boolean } {
   const allowed = usePermission("settings.read");
   const { data, isPending } = useQuery({
@@ -128,7 +125,6 @@ export function useEnvWarnings(): { items: EnvWarning[]; allowed: boolean; loadi
 // One line of the bell. Environment items, the collapsed offline item and the
 // instance items all have a severity and, where it is known, when they began.
 type Entry =
-  | { kind: "plainHttp"; key: string; severity: "warning"; since?: string }
   | { kind: "keyBackup"; key: string; severity: "warning"; since?: string }
   | { kind: "proxy"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "refusalBurst"; key: string; severity: "warning"; since?: string; w: Warning }
@@ -197,7 +193,6 @@ const entryKey = (w: EnvWarning) =>
 export function bellEntries(
   env: EnvWarning[],
   instance: {
-    plainHttp: boolean;
     keyBackup: boolean;
     proxy: Warning[];
     bursts?: Warning[];
@@ -347,8 +342,6 @@ export function bellEntries(
       count: ws.length,
     });
   }
-  if (instance.plainHttp)
-    entries.push({ kind: "plainHttp", key: "plain_http", severity: "warning" });
   for (const w of instance.proxy) {
     entries.push({ kind: "proxy", key: w.id, severity: "warning", w });
   }
@@ -939,14 +932,12 @@ export function HealthBell() {
   const bell = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
 
-  const plainHttp = isPlainHttpRemote();
   const keyBackup = items.some((w) => w.id === "key_backup");
   const proxyItems = items.filter((w) => proxyCopy(w.id) !== undefined);
   const bursts = items.filter((w) => w.id === "refusal_burst");
   const backupFailed = items.filter((w) => w.id === "backup_failed");
   const unknownAgents = items.filter((w) => w.id === "unknown_agents");
   const entries = bellEntries(envItems, {
-    plainHttp,
     keyBackup,
     proxy: proxyItems,
     bursts,
@@ -1154,30 +1145,6 @@ export function HealthBell() {
                             {t("restartLoop.container.bell.manyShow")}
                           </Link>
                         </BellItem>
-                      );
-                    case "plainHttp":
-                      return (
-                        <Item
-                          key={entry.key}
-                          variant="outline"
-                          size="sm"
-                          role="listitem"
-                          data-warning="plain_http"
-                        >
-                          <ItemContent className="min-w-0">
-                            <ItemTitle>{t("shell.warnings.plainHttp.title")}</ItemTitle>
-                            <ItemDescription>
-                              <a
-                                href={__TIERPLAN_SOURCE_URL__}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={linkClass}
-                              >
-                                {t("shell.warnings.plainHttp.fix")}
-                              </a>
-                            </ItemDescription>
-                          </ItemContent>
-                        </Item>
                       );
                     case "proxy": {
                       const key = proxyCopy(entry.w.id);

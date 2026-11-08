@@ -56,3 +56,18 @@ describe("the TierPlan logo on the auth screens", () => {
     expect(screen.getByText("Create the first account")).toBeTruthy();
   });
 });
+
+describe("the card", () => {
+  it("renders only when there are children, and never carries a plain-HTTP notice", () => {
+    const { container, rerender } = render(<AuthLayout title="Homelab" />);
+    expect(container.querySelector('[data-slot="card"]')).toBeNull();
+    rerender(
+      <AuthLayout title="Homelab">
+        <p>form</p>
+      </AuthLayout>,
+    );
+    const card = container.querySelector('[data-slot="card"]') as HTMLElement;
+    expect(within(card).getByText("form")).toBeTruthy();
+    expect(within(card).queryByRole("alert")).toBeNull();
+  });
+});

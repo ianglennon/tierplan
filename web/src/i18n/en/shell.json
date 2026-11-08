@@ -78,10 +78,6 @@
       "bellCount_one": "Warnings, {{count}} item",
       "bellCount_other": "Warnings, {{count}} items",
       "empty": "No warnings",
-      "plainHttp": {
-        "title": "You're using TierPlan over plain HTTP.",
-        "fix": "Serve TierPlan over HTTPS or put it behind a reverse proxy"
-      },
       "keyBackup": {
         "title": "Back up your encryption key.",
         "body": "Stored secrets can't be recovered without /data/tierplan.key.",
