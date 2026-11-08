@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -20,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -454,6 +456,96 @@ func writePair(t *testing.T, crt, key string, host string) *x509.Certificate {
 		t.Fatal(err)
 	}
 	return leaf
+}
+
+func TestSelfSignedIsNeverRenewedOnATimer(t *testing.T) {
+	f := newSSFixture(t)
+	src := f.source(t, "https://a.example.com", "", fixedNow)
+	got := &tls.Config{GetCertificate: src.GetCertificate}
+	first := leafOf(t, got)
+
+	// Past 30 days before expiry, and past a year: the same certificate is served and nothing is written.
+	for _, at := range []time.Time{
+		fixedNow.AddDate(0, 0, 3650-29),
+		fixedNow.AddDate(1, 0, 0),
+		fixedNow.AddDate(5, 0, 0),
+	} {
+		src.Refresh(at)
+		if leafOf(t, got).SerialNumber.Cmp(first.SerialNumber) != 0 {
+			t.Fatalf("the certificate was replaced when the clock reached %v", at)
+		}
+	}
+	if f.store.updates != 0 {
+		t.Errorf("%d certificate writes with the names unchanged, want none", f.store.updates)
+	}
+}
+
+func TestSelfSignedIsResignedLiveWhenTheURLChanges(t *testing.T) {
+	f := newSSFixture(t)
+	clk := newStepClock(fixedNow)
+	var public atomic.Pointer[string]
+	setPublic := func(v string) { public.Store(&v) }
+	setPublic("")
+	src, _, err := newCertSource(context.Background(), f.cfg, f.store, func() string { return *public.Load() }, str(""), clk.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := &tls.Config{GetCertificate: src.GetCertificate}
+	before := leafOf(t, got)
+	pin := pinOf(t, got)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runCertRefresh(ctx, clk, src)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	// A URL saved by the wizard or Settings after start is covered within one name-check interval.
+	setPublic("https://new.example.test")
+	clk.Tick(t, selfSignedNameCheck)
+	clk.WaitArmed(t) // the loop arms again once Refresh has run
+
+	after := leafOf(t, got)
+	if !slices.Contains(after.DNSNames, "new.example.test") {
+		t.Fatalf("DNS SANs = %v, want the saved URL's host", after.DNSNames)
+	}
+	if after.SerialNumber.Cmp(before.SerialNumber) == 0 {
+		t.Error("the serial did not change, so nothing was signed")
+	}
+	if got := pinOf(t, got); got != pin {
+		t.Errorf("pin = %s after the re-sign, want %s", got, pin)
+	}
+	// The row and the mirror both hold the new certificate.
+	stored, _, _, _ := f.store.Load(context.Background(), selfSignedID)
+	mirror, err := os.ReadFile(filepath.Join(f.cfg.DataDir, "tls", mirrorCertFile)) //nolint:gosec // a path inside the test's temporary directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"row": stored, "mirror": mirror} {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			t.Fatalf("the %s holds no certificate", name)
+		}
+		if block.Type != "CERTIFICATE" || !bytes.Equal(block.Bytes, after.Raw) {
+			t.Errorf("the %s does not hold the certificate being served", name)
+		}
+	}
+	if f.store.updates != 1 {
+		t.Errorf("%d certificate writes, want 1", f.store.updates)
+	}
+
+	// A host already covered, in another letter case, is not signed again.
+	setPublic("https://NEW.example.test")
+	clk.Tick(t, selfSignedNameCheck)
+	clk.WaitArmed(t)
+	if f.store.updates != 1 || leafOf(t, got).SerialNumber.Cmp(after.SerialNumber) != 0 {
+		t.Error("a covered host in another letter case caused a re-sign")
+	}
 }
 
 func TestTLSSuppliedCertificateIsReloadedWhenTheFilesChange(t *testing.T) {
