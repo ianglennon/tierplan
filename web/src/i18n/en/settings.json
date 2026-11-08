@@ -19,11 +19,12 @@
       "submit": "Save settings",
       "pending": "Saving…",
       "publicUrl": {
-        "helper": "The address people use to reach TierPlan. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks."
+        "helper": "The address people use to reach TierPlan. It must start with https://. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks."
       },
       "agentUrl": {
         "label": "Agent URL",
-        "helper": "Leave empty to use the public URL. Set it if your hosts reach TierPlan at a different address, such as an internal hostname.",
+        "helper": "Leave empty to use the public URL. Set it if your hosts reach TierPlan at a different address, such as an internal hostname. It must start with https://.",
+        "httpsOnly": "Agents connect over HTTPS only. Use an address that starts with https://, such as https://tierplan.internal:7480.",
         "placeholder": "https://tierplan.internal:7480",
         "locked": "Set by the TIERPLAN_AGENT_URL environment variable.",
         "insecure": "Agents refuse a plain http address for another host. Use an https address. For development only, start TierPlan with TIERPLAN_AGENT_ALLOW_INSECURE=true.",
@@ -36,7 +37,7 @@
         "confirm": "Change public URL",
         "agentTitle": "Change the agent URL?",
         "agentConfirm": "Change agent URL",
-        "agentsTold": "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on TierPlan refuses agents that dial a different host or port: there's no fallback period.",
+        "agentsTold": "Connected agents are sent the new address now and switch to it on their next connection. From now on TierPlan refuses agents that dial a different host or port: there's no fallback period.",
         "offline_one": "{{count}} agent is offline. It can't learn the new address, and TierPlan will refuse it until you reinstall it with the new address or change the URL back.",
         "offline_other": "{{count}} agents are offline. They can't learn the new address, and TierPlan will refuse them until you reinstall them with the new address or change the URL back."
       }

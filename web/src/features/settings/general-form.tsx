@@ -57,6 +57,9 @@ export const settingsQuery = queryOptions({
 
 // Messages are i18n keys, never literals (D-65). The field copy and its
 // validation messages are the setup wizard's, so both screens say the same.
+// The https-only rule comes from settingsSchema, which answers an http public URL
+// with setup.errors.publicUrlHttp and an http agent URL with
+// settings.general.agentUrl.httpsOnly (D-07); errorOf below translates either.
 const KEY = {
   server: "common.mutationFailed",
   unreachable: "common.errors.unreachable",

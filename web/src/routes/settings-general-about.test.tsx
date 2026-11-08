@@ -30,7 +30,10 @@ function announceBase(base: string | null): void {
   document.head.append(meta);
 }
 
-const ORIGIN = window.location.origin;
+// TierPlan serves HTTPS only (D-07), so these tests run on an https page: the saved public URL has
+// to pass the form's own https rule, and the "address in use" logic compares against this origin.
+// jsdom's own page is http://localhost:3000.
+const ORIGIN = "https://tierplan.example.com";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 const ADMIN = makeMe({
@@ -102,6 +105,7 @@ function applyPatch(body: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("location", { ...window.location, protocol: "https:", origin: ORIGIN });
   calls = [];
   me = ADMIN;
   settings = settingsState();
@@ -340,7 +344,7 @@ describe("General tab", () => {
     fireEvent.click(saveButton());
     expect(await screen.findByText("Enter a name.")).toBeTruthy();
     expect(
-      screen.getByText("Enter a full address such as https://tierplan.example.com."),
+      screen.getByText("Enter a full https address such as https://tierplan.example.com."),
     ).toBeTruthy();
     expect(nameField().getAttribute("aria-invalid")).toBe("true");
     expect(patches()).toHaveLength(0);
@@ -439,7 +443,7 @@ describe("General tab", () => {
 describe("General tab: agent URL", () => {
   const CHANGE_AGENT = "Change the agent URL?";
   const TOLD =
-    "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on TierPlan refuses agents that dial a different host or port: there's no fallback period.";
+    "Connected agents are sent the new address now and switch to it on their next connection. From now on TierPlan refuses agents that dial a different host or port: there's no fallback period.";
 
   it("shows the Agent URL field, mono, with its helper and placeholder, empty when none is set", async () => {
     await openGeneral();
@@ -448,7 +452,7 @@ describe("General tab: agent URL", () => {
     expect(agentField().className).toContain("font-mono");
     expect(
       screen.getByText(
-        "Leave empty to use the public URL. Set it if your hosts reach TierPlan at a different address, such as an internal hostname.",
+        "Leave empty to use the public URL. Set it if your hosts reach TierPlan at a different address, such as an internal hostname. It must start with https://.",
       ),
     ).toBeTruthy();
     expect(agentField().readOnly).toBe(false);
@@ -459,7 +463,7 @@ describe("General tab: agent URL", () => {
     await openGeneral();
     expect(
       screen.getByText(
-        "The address people use to reach TierPlan. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks.",
+        "The address people use to reach TierPlan. It must start with https://. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks.",
       ),
     ).toBeTruthy();
   });
@@ -496,7 +500,7 @@ describe("General tab: agent URL", () => {
     fireEvent.change(agentField(), { target: { value: "tierplan.internal" } });
     fireEvent.click(saveButton());
     expect(
-      await screen.findByText("Enter a full address such as https://tierplan.example.com."),
+      await screen.findByText("Enter a full https address such as https://tierplan.example.com."),
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
     expect(patches()).toHaveLength(0);
@@ -678,6 +682,68 @@ describe("General tab: agent URL", () => {
     expect(screen.queryByText(/Agents can't connect to this TierPlan/)).toBeNull();
   });
 
+  it("refuses an http public URL with the https-only sentence and sends nothing", async () => {
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: "http://tierplan.example.com" } });
+    fireEvent.click(saveButton());
+    const err = await screen.findByText(
+      "TierPlan serves HTTPS only. Use an address that starts with https://, such as https://tierplan.example.com.",
+    );
+    expect(urlField().getAttribute("aria-invalid")).toBe("true");
+    expect(urlField().getAttribute("aria-describedby")).toContain(err.id);
+    expect(err.closest('[data-slot="field-error"]')).toBeTruthy();
+    expect(patches()).toHaveLength(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("refuses an http agent URL with the agent https-only sentence and sends nothing", async () => {
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "http://tierplan.internal:7480" } });
+    fireEvent.click(saveButton());
+    const err = await screen.findByText(
+      "Agents connect over HTTPS only. Use an address that starts with https://, such as https://tierplan.internal:7480.",
+    );
+    expect(agentField().getAttribute("aria-invalid")).toBe("true");
+    expect(agentField().getAttribute("aria-describedby")).toContain(err.id);
+    expect(patches()).toHaveLength(0);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("requires a public URL but accepts an empty agent URL", async () => {
+    settings = settingsState({ agentUrl: "https://old.internal:7480" });
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: "" } });
+    fireEvent.click(saveButton());
+    expect(
+      await screen.findByText("Enter a full https address such as https://tierplan.example.com."),
+    ).toBeTruthy();
+    expect(patches()).toHaveLength(0);
+
+    fireEvent.change(urlField(), { target: { value: ORIGIN } });
+    fireEvent.change(agentField(), { target: { value: "" } });
+    fireEvent.click(saveButton());
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({ agentUrl: "" });
+  });
+
+  it("validates and sends only the agent URL when the public URL is locked by the environment", async () => {
+    settings = settingsState({ publicUrl: "https://fixed.example", publicUrlLocked: true });
+    await openGeneral();
+    expect(urlField().readOnly).toBe(true);
+
+    fireEvent.change(agentField(), { target: { value: "http://tierplan.internal:7480" } });
+    fireEvent.click(saveButton());
+    expect(await screen.findByText(/Agents connect over HTTPS only/)).toBeTruthy();
+    expect(patches()).toHaveLength(0);
+
+    fireEvent.change(agentField(), { target: { value: "https://tierplan.internal:7480" } });
+    fireEvent.click(saveButton());
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()[0]?.body).toEqual({ agentUrl: "https://tierplan.internal:7480" });
+    // The locked field keeps its lock and its helper.
+    expect(screen.getByText("Set by the TIERPLAN_PUBLIC_URL environment variable.")).toBeTruthy();
+  });
+
   it("maps the server's invalid_agent_url to the same inline error", async () => {
     patchAnswer = () =>
       Response.json(
@@ -692,7 +758,7 @@ describe("General tab: agent URL", () => {
     fireEvent.change(agentField(), { target: { value: "https://tierplan.lan:7480" } });
     fireEvent.click(saveButton());
     expect(
-      await screen.findByText("Enter a full address such as https://tierplan.example.com."),
+      await screen.findByText("Enter a full https address such as https://tierplan.example.com."),
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
   });
@@ -708,14 +774,16 @@ describe("General tab: agent URL", () => {
         { status: 422, headers: { "Content-Type": "application/problem+json" } },
       );
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "http://10.0.0.5:7480" } });
+    // Plan 15 removes this branch with the API field; the client now refuses an http value itself,
+    // so the stubbed server code is reached with an https one.
+    fireEvent.change(agentField(), { target: { value: "https://10.0.0.5:7480" } });
     fireEvent.click(saveButton());
     expect(
       await screen.findByText(/Agents refuse a plain http address for another host/),
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
     expect(
-      screen.queryByText("Enter a full address such as https://tierplan.example.com."),
+      screen.queryByText("Enter a full https address such as https://tierplan.example.com."),
     ).toBeNull();
   });
 
