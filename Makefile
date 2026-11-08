@@ -434,11 +434,17 @@ ci-clean:
 ci-preflight:
 	scripts/ci-preflight.sh
 
-# The upgrade proof (D-34, PLAT-02): run the previous build, put state into it (setup, an
-# agent environment with a real agent connected, and a user, a team and a grant when
-# that build has them), swap in the current image on the same volume and network alias,
-# and check sign-in, the first admin's instance-admin flag, the agent coming back
-# online by itself, the grant and the audit chain. One PASS or FAIL line per check.
+# The upgrade proof (D-34, PLAT-02, D-11, D-13): run the previous build in TierPlan's
+# self-signed mode (TIERPLAN_TLS_SELF_SIGNED=true) behind an https public URL, put state
+# into it (setup, an agent environment with a real agent connected over wss with the
+# pin from the install command, and a user, a team and a grant when that build has
+# them), swap in the current image on the same volume and network alias, and check that
+# the SPKI pin is the same, the certificate is valid for about 10 years, the legacy
+# /data/tls/selfsigned.key has been imported and removed, sign-in, the first admin's
+# instance-admin flag, the agent coming back online by itself, the grant and the audit
+# chain. Every request is over https with curl --cacert; no verification is switched
+# off. A plain-HTTP baseline is not supported, because upgrading a plain-HTTP install is
+# not (D-07). One PASS or FAIL line per check.
 #
 # The baseline is UPGRADE_BASE_REF, a commit (CI passes the pull request's base, or the
 # previous commit on a push). It is BUILT here from a detached git worktree with the
