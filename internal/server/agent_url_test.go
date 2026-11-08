@@ -4,11 +4,9 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -54,18 +52,18 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	if code := upgrade(build(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test"})); code != http.StatusForbidden {
 		t.Fatalf("a plain connection with an https public URL = %d, want 403", code)
 	}
-	// A plain agent URL on this machine no longer makes plain transport
-	// acceptable: no plain connection is admitted, whatever the agent URL.
+	// An https agent URL on another host does not make plain transport
+	// acceptable either: no plain connection is admitted, whatever the agent URL.
 	if code := upgrade(build(map[string]string{
 		"TIERPLAN_PUBLIC_URL": "https://tierplan.test",
-		"TIERPLAN_AGENT_URL":  "http://127.0.0.1:7480",
+		"TIERPLAN_AGENT_URL":  "https://10.0.0.5:7480",
 	})); code != http.StatusForbidden {
-		t.Fatalf("a plain connection with an http agent URL on this machine = %d, want 403", code)
+		t.Fatalf("a plain connection with an https agent URL on another host = %d, want 403", code)
 	}
 	// An https agent URL is where agents dial, so a plain connection is refused
-	// although the public URL is plain http on this machine.
+	// although the public URL is another https address on this machine.
 	if code := upgrade(build(map[string]string{
-		"TIERPLAN_PUBLIC_URL": "http://127.0.0.1:7480",
+		"TIERPLAN_PUBLIC_URL": "https://127.0.0.1:7480",
 		"TIERPLAN_AGENT_URL":  "https://tierplan.test",
 	})); code != http.StatusForbidden {
 		t.Fatalf("a plain connection with an https agent URL = %d, want 403", code)
@@ -108,8 +106,7 @@ func TestOnlyTLSAgentConnectionsAreAdmitted(t *testing.T) {
 	}{
 		{name: "https public URL", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test"}},
 		{name: "https agent address", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "https://10.0.0.5:7480"}},
-		{name: "plain agent address for another host", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"}},
-		{name: "plain agent address on this machine", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://127.0.0.1:7480"}},
+		{name: "https agent address on this machine", env: map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "https://127.0.0.1:7480"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,43 +170,6 @@ func TestOnlyTLSAgentConnectionsAreAdmitted(t *testing.T) {
 			srv.Handler().ServeHTTP(rec, req)
 			if rec.Code != http.StatusForbidden || !strings.HasPrefix(rec.Body.String(), wire.RefuseInsecureTransport) {
 				t.Fatalf("plain upgrade = %d %q, want 403 starting %s", rec.Code, rec.Body.String(), wire.RefuseInsecureTransport)
-			}
-		})
-	}
-}
-
-// TierPlan says at start when the address agents are given is plain http, for any
-// host: TierPlan accepts agents only over wss://, so nothing could connect.
-func TestBuildWarnsWhenAgentsWouldBeGivenAPlainAddressForAnotherHost(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		env  map[string]string
-		want int
-	}{
-		{"plain public URL for another host", map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.test"}, 1},
-		{"https public URL", map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test"}, 0},
-		{"https public URL, plain agent URL on this machine", map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "http://127.0.0.1:7480"}, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.env["TIERPLAN_DATA_DIR"] = t.TempDir() + "/data"
-			var logs bytes.Buffer
-			srv, err := Build(context.Background(), testConfig(t, tc.env), slog.New(slog.NewJSONHandler(&logs, nil)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = srv.Close() })
-			got := 0
-			for _, line := range bytes.Split(logs.Bytes(), []byte("\n")) {
-				var rec struct {
-					Level string `json:"level"`
-					Msg   string `json:"msg"`
-				}
-				if json.Unmarshal(line, &rec) == nil && rec.Level == "WARN" && strings.HasPrefix(rec.Msg, "agents cannot connect") {
-					got++
-				}
-			}
-			if got != tc.want {
-				t.Fatalf("%d warnings starting %q, want %d; log:\n%s", got, "agents cannot connect", tc.want, logs.String())
 			}
 		})
 	}

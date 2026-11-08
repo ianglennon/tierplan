@@ -20,8 +20,8 @@ import (
 // every TLS mode, with every public URL, and while either is switched at runtime (TLS-07).
 
 const (
-	matrixHTTPURL  = "http://tierplan.example.com:7480"
-	matrixHTTPSURL = "https://tierplan.example.com:8443"
+	matrixHTTPSURL      = "https://tierplan.example.com:8443"
+	matrixOtherHTTPSURL = "https://other.example.com:9443"
 )
 
 // port is the port the server listens on, as the ":port" form the healthcheck reads from the
@@ -64,7 +64,7 @@ func modeEnv(t *testing.T, mode, host string) map[string]string {
 
 func TestHealthcheckMatrix(t *testing.T) {
 	for _, mode := range []string{"default", "self-signed", "cert-file"} {
-		for name, pub := range map[string]string{"unset": "", "http": matrixHTTPURL, "https": matrixHTTPSURL} {
+		for name, pub := range map[string]string{"unset": "", "https": matrixHTTPSURL} {
 			t.Run(mode+"/"+name+" public URL", func(t *testing.T) {
 				env := modeEnv(t, mode, "tierplan.example.com")
 				if pub != "" {
@@ -107,7 +107,7 @@ func TestHealthcheckMatrixIsGreenOverTLSFromFirstStart(t *testing.T) {
 
 func TestHealthcheckMatrixStaysGreenWhileThePublicURLFlips(t *testing.T) {
 	w := startWire(t, map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true", "TIERPLAN_PUBLIC_URL": matrixHTTPSURL}, "")
-	for _, pub := range []string{matrixHTTPSURL, matrixHTTPURL, "", matrixHTTPSURL} {
+	for _, pub := range []string{matrixHTTPSURL, matrixOtherHTTPSURL, "", matrixHTTPSURL} {
 		w.srv.Instance().Apply("TierPlan", pub)
 		if err := w.probe(t); err != nil {
 			t.Errorf("public URL %q: the TLS probe: %v", pub, err)

@@ -643,7 +643,7 @@ func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 	}
 }
 
-func TestPatchSettingsRefusesAPlainAgentURLForEveryHost(t *testing.T) {
+func TestPatchSettingsRefusesAnHTTPAgentURLAndPublicURLForEveryHost(t *testing.T) {
 	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
 	f, cookie, csrf := agentsFixture(t, config.Config{}, fake)
@@ -658,8 +658,17 @@ func TestPatchSettingsRefusesAPlainAgentURLForEveryHost(t *testing.T) {
 			t.Fatalf("%q: status = %d: %s, want 422", bad, rec.Code, rec.Body)
 		}
 		p := decodeProblem(t, rec)
-		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.agentUrl" || p.Errors[0].Message != "insecure_agent_url" {
-			t.Fatalf("%q: problem = %+v, want insecure_agent_url at body.agentUrl", bad, p)
+		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.agentUrl" || p.Errors[0].Message != "invalid_agent_url" {
+			t.Fatalf("%q: problem = %+v, want invalid_agent_url at body.agentUrl", bad, p)
+		}
+		// The public URL runs the same rule, so an http one is refused too.
+		rec = f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Changed", "publicUrl": bad})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("public URL %q: status = %d: %s, want 422", bad, rec.Code, rec.Body)
+		}
+		p = decodeProblem(t, rec)
+		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.publicUrl" || p.Errors[0].Message != "invalid_public_url" {
+			t.Fatalf("public URL %q: problem = %+v, want invalid_public_url at body.publicUrl", bad, p)
 		}
 	}
 	if _, s := f.getSettings(t, cookie); s.AgentURL != "https://agent.internal:7480" || s.InstanceName == "Changed" {
@@ -673,7 +682,7 @@ func TestPatchSettingsRefusesAPlainAgentURLForEveryHost(t *testing.T) {
 	}
 }
 
-func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURL(t *testing.T) {
+func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURLAlreadyStored(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		label     string
@@ -685,7 +694,6 @@ func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURL(t *testing
 	}{
 		{"https for another host", "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}, false},
 		{"clearing it under a plain public URL", "http://10.0.0.5:7480", "https://agent.example", map[string]string{"agentUrl": ""}, true},
-		{"a plain public URL with no agent URL", "", "", map[string]string{"publicUrl": "http://10.0.0.5:7480"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {

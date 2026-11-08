@@ -167,8 +167,7 @@ func TestGateWireServesALoopbackPlainClient(t *testing.T) {
 
 func TestGateWireRefusesPlainHTTPOnAnEnvTLSInstallWithoutAnHTTPSPublicURL(t *testing.T) {
 	for name, env := range map[string]map[string]string{
-		"no public URL":   {"TIERPLAN_TLS_SELF_SIGNED": "true"},
-		"http public URL": {"TIERPLAN_TLS_SELF_SIGNED": "true", "TIERPLAN_PUBLIC_URL": "http://tierplan.example.com:7480"},
+		"no public URL": {"TIERPLAN_TLS_SELF_SIGNED": "true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := startWire(t, env, defaultFakePeer)

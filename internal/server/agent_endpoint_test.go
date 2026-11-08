@@ -17,10 +17,9 @@ import (
 
 // TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse is the "never advertise"
 // half of G-02-R4-3 (review WR-02), end to end through a real server and real
-// HTTP. TierPlan hands out only an address its agents will dial. A plain address
-// for another host is refused (409 insecure_agent_url, nothing created), and an
-// https address is handed out as wss://. Agents connect only over TLS, so there is
-// no switch that lets a plain one through.
+// HTTP. TierPlan hands out only an address its agents will dial: an https address
+// is handed out as wss://. An http address cannot reach this point, because
+// TIERPLAN_PUBLIC_URL and TIERPLAN_AGENT_URL refuse it at start.
 func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 	type install struct {
 		AgentURL string `json:"agentUrl"`
@@ -40,11 +39,6 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 		// wantAgentURL is the install's agentUrl for a 201, %ADDR% as above.
 		wantAgentURL string
 	}{
-		{
-			name:     "plain to another host",
-			env:      map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"},
-			wantCode: http.StatusConflict,
-		},
 		{
 			name:         "https on this machine",
 			env:          map[string]string{"TIERPLAN_PUBLIC_URL": "https://%ADDR%"},
@@ -72,7 +66,7 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 
 			env := map[string]string{
 				"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"TIERPLAN_PUBLIC_URL": "http://" + addr,
+				"TIERPLAN_PUBLIC_URL": "https://" + addr,
 			}
 			for k, v := range tc.env {
 				env[k] = strings.ReplaceAll(v, "%ADDR%", addr)
@@ -180,12 +174,6 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 		wantRefused  bool
 	}{
 		{
-			name:         "plain to another host",
-			env:          map[string]string{"TIERPLAN_AGENT_URL": "http://10.0.0.5:7480"},
-			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
-			wantRefused:  true,
-		},
-		{
 			name:         "no agent URL, https public URL on this machine",
 			env:          map[string]string{"TIERPLAN_PUBLIC_URL": "https://%ADDR%"},
 			wantEndpoint: "wss://%ADDR%/agent/connect",
@@ -209,7 +197,7 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 
 			env := map[string]string{
 				"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"TIERPLAN_PUBLIC_URL": "http://" + addr,
+				"TIERPLAN_PUBLIC_URL": "https://" + addr,
 			}
 			for k, v := range tc.env {
 				env[k] = strings.ReplaceAll(v, "%ADDR%", addr)

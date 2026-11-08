@@ -247,16 +247,21 @@ func TestSetupCompleteMakesTheInstanceAndTheOriginGuardUseTheNewSettingsAtOnce(t
 	}
 }
 
-func TestSetupCompleteUsesAnUnprefixedCookieWhenThePublicURLIsHTTP(t *testing.T) {
+func TestSetupCompleteRefusesAnHTTPPublicURL(t *testing.T) {
 	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	rec := f.complete(t, map[string]any{"publicUrl": "http://10.0.0.5:7480"})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d: %s, want 422", rec.Code, rec.Body)
 	}
-	c := sessionCookie(rec)
-	if c == nil || c.Name != "tierplan_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("cookie = %+v", c)
+	if !strings.Contains(rec.Body.String(), "invalid_public_url") {
+		t.Fatalf("body = %s, want invalid_public_url", rec.Body)
+	}
+	if c := sessionCookie(rec); c != nil {
+		t.Fatalf("a refused setup set a session cookie: %+v", c)
+	}
+	if v, ok := f.setting(t, "public_url"); ok {
+		t.Fatalf("a refused setup stored public_url %q", v)
 	}
 }
 
@@ -331,6 +336,7 @@ func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *
 		"instance name 65 chars":     {map[string]any{"instanceName": tooLong}, "body.instanceName", "instance_name_too_long"},
 		"public url relative":        {map[string]any{"publicUrl": "/tierplan"}, "body.publicUrl", "invalid_public_url"},
 		"public url no scheme":       {map[string]any{"publicUrl": "tierplan.example"}, "body.publicUrl", "invalid_public_url"},
+		"public url http":            {map[string]any{"publicUrl": "http://tierplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url wrong scheme":    {map[string]any{"publicUrl": "ftp://tierplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url with userinfo":   {map[string]any{"publicUrl": "https://user:" + "secret@tierplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url with a query":    {map[string]any{"publicUrl": "https://tierplan.example/?a=b"}, "body.publicUrl", "invalid_public_url"},

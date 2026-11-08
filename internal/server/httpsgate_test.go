@@ -228,7 +228,6 @@ func TestRedirectTargetIgnoresHostileTargets(t *testing.T) {
 func TestGateRefusesPlainHTTPOnAnEnvTLSInstallWithoutAnHTTPSPublicURL(t *testing.T) {
 	for _, env := range []map[string]string{
 		{"TIERPLAN_TLS_SELF_SIGNED": "true"},
-		{"TIERPLAN_TLS_SELF_SIGNED": "true", "TIERPLAN_PUBLIC_URL": "http://h:7480"},
 	} {
 		srv := gateServer(t, env)
 		for _, peer := range []string{nonLoopbackPeer, "127.0.0.1:40000"} {

@@ -999,7 +999,6 @@ func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
 		// A trusted proxy that ends TLS: unchanged.
 		{"trusted proxy saying https, https public URL", withEnv(nil), "/api/version", trustedPeer, proto("https"), hsts},
 		{"trusted proxy saying https on /healthz", withEnv(nil), "/healthz", trustedPeer, proto("https"), hsts},
-		{"trusted proxy saying https, http public URL", withEnv(map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.example"}), "/api/version", trustedPeer, proto("https"), ""},
 		// Over TLS: unchanged.
 		{"TLS with a supplied certificate", withEnv(suppliedEnv), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, hsts},
 		{"TLS with the self-signed certificate", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, ""},
