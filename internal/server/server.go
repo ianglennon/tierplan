@@ -768,7 +768,6 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		WithUpdateHint(func(tooOld bool, envType string) string {
 			return agents.UpdateHint(tooOld, envType, agents.InstallParams{
 				Endpoint: inst.AgentEndpoint(), Pin: tlsPin(), ServerVersion: buildinfo.Get().Version,
-				AllowInsecure: cfg.AgentAllowInsecure,
 			})
 		}).
 		WithConnectLimit(cfg.AgentConnectBurst).
@@ -1089,9 +1088,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Log:       log,
 		},
 		LocalHost:     api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
-		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
+		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
 		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
@@ -1120,7 +1119,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
-		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
+		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
 		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,

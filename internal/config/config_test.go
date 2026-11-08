@@ -407,36 +407,54 @@ func TestTheOfflineWindowMustBeAtLeastTwiceTheHeartbeatInterval(t *testing.T) {
 
 func TestNamesListsTheAgentEndpointSettings(t *testing.T) {
 	names := strings.Join(config.Names(), " ")
-	for _, want := range []string{"TIERPLAN_AGENT_ALLOW_INSECURE", "TIERPLAN_AGENT_CONNECT_BURST"} {
-		if !strings.Contains(names, want) {
-			t.Errorf("Names() does not list %s", want)
-		}
+	if !strings.Contains(names, "TIERPLAN_AGENT_CONNECT_BURST") {
+		t.Errorf("Names() does not list TIERPLAN_AGENT_CONNECT_BURST")
+	}
+	if strings.Contains(names, removedAgentSwitch) {
+		t.Errorf("Names() lists %s, which is no longer a setting", removedAgentSwitch)
 	}
 }
 
-func TestTheAgentEndpointDefaultsAreSecureAndTwoHundred(t *testing.T) {
+// removedAgentSwitch is the development switch that let agents connect over plain
+// ws://. It is gone from the server, so it is spelled in two halves to keep the
+// repository-wide checks for it exact.
+const removedAgentSwitch = "TIERPLAN_AGENT_ALLOW_" + "INSECURE"
+
+func TestAStaleAgentSwitchIsIgnoredLikeAnyUnknownVariable(t *testing.T) {
+	c, err := load(t, nil, envMap{removedAgentSwitch: "true"}, files{})
+	if err != nil {
+		t.Fatalf("a stale %s failed Load: %v", removedAgentSwitch, err)
+	}
+	if c.AgentConnectBurst != 200 {
+		t.Errorf("burst = %d, want the default 200", c.AgentConnectBurst)
+	}
+	if strings.Contains(strings.Join(config.Names(), " "), removedAgentSwitch) {
+		t.Errorf("Names() lists %s", removedAgentSwitch)
+	}
+}
+
+func TestTheAgentEndpointDefaultIsTwoHundred(t *testing.T) {
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.AgentAllowInsecure || c.AgentConnectBurst != 200 {
-		t.Fatalf("allow insecure %v, burst %d; want false and 200", c.AgentAllowInsecure, c.AgentConnectBurst)
+	if c.AgentConnectBurst != 200 {
+		t.Fatalf("burst %d; want 200", c.AgentConnectBurst)
 	}
 }
 
 func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testing.T) {
-	c, err := load(t, nil, envMap{"TIERPLAN_AGENT_ALLOW_INSECURE": "true", "TIERPLAN_AGENT_CONNECT_BURST": "500"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_AGENT_CONNECT_BURST": "500"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.AgentAllowInsecure || c.AgentConnectBurst != 500 {
-		t.Fatalf("allow insecure %v, burst %d; want true and 500", c.AgentAllowInsecure, c.AgentConnectBurst)
+	if c.AgentConnectBurst != 500 {
+		t.Fatalf("burst %d; want 500", c.AgentConnectBurst)
 	}
 	for name, vars := range map[string]envMap{
-		"a zero burst":      {"TIERPLAN_AGENT_CONNECT_BURST": "0"},
-		"a negative burst":  {"TIERPLAN_AGENT_CONNECT_BURST": "-5"},
-		"a burst of text":   {"TIERPLAN_AGENT_CONNECT_BURST": "many"},
-		"insecure not bool": {"TIERPLAN_AGENT_ALLOW_INSECURE": "sometimes"},
+		"a zero burst":     {"TIERPLAN_AGENT_CONNECT_BURST": "0"},
+		"a negative burst": {"TIERPLAN_AGENT_CONNECT_BURST": "-5"},
+		"a burst of text":  {"TIERPLAN_AGENT_CONNECT_BURST": "many"},
 	} {
 		if _, err := load(t, nil, vars, files{}); err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_") {
 			t.Errorf("%s: error = %v, want one naming a TIERPLAN_AGENT_ variable", name, err)

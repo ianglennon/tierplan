@@ -108,14 +108,9 @@ type Config struct {
 	// after the swarm accepted it (D-13). A service that has not settled by then reads
 	// "Timed out"; Docker may still finish it.
 	StackConvergeTimeout time.Duration
-	// AgentAllowInsecure lets agents connect over plain ws:// to an agent address
-	// that is not this machine; for development only. Join tokens and Docker
-	// answers then travel unencrypted, and install commands for a plain address
-	// also set it on the agent. A plain address on this machine needs no switch.
 	// AgentConnectBurst is how many connection attempts one client address may
 	// make at once.
-	AgentAllowInsecure bool
-	AgentConnectBurst  int
+	AgentConnectBurst int
 
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string
@@ -275,11 +270,6 @@ var settings = []setting{
 			if err == nil && (c.StackConvergeTimeout < minConvergeTimeout || c.StackConvergeTimeout > maxConvergeTimeout) {
 				err = fmt.Errorf("%q must be between %s and %s", raw, minConvergeTimeout, maxConvergeTimeout)
 			}
-			return err
-		}},
-	{env: "TIERPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
-		apply: func(c *Config, raw string) (err error) {
-			c.AgentAllowInsecure, err = strconv.ParseBool(raw)
 			return err
 		}},
 	{env: "TIERPLAN_AGENT_CONNECT_BURST", flag: "agent-connect-burst", def: "200", desc: "how many connection attempts one client address may make at once on the agent endpoint; sized so a whole swarm behind one NAT can reconnect together",
