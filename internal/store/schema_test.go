@@ -115,3 +115,72 @@ func assertShellPrefsTableWorks(t *testing.T, s *store.Store, userID string) {
 		t.Errorf("a shell outside auto, bash, sh, ash and custom was accepted")
 	}
 }
+
+// A database as v0.1.0 left it (migrated to 00036 only) gains tls_certs when the next binary
+// migrates it, and the rows it already held are untouched.
+func TestTLSCertsTableArrivesOnA00036Database(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.1.0", DataDir: dir, Migrations: plus(t, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if hasTable(t, s, "tls_certs") {
+		t.Fatal("a database at 00036 already has tls_certs")
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES ('u-1', 'ada', 'x', 1, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.2.0", DataDir: dir})
+	if err != nil {
+		t.Fatalf("migrate from 00036: %v", err)
+	}
+	if res.From != 36 || res.To < 37 {
+		t.Errorf("From, To = %d, %d; want 36 and at least 37", res.From, res.To)
+	}
+	if !hasTable(t, s, "tls_certs") {
+		t.Error("tls_certs is missing after migrating a 00036 database")
+	}
+	var name string
+	if err := s.Read.QueryRowContext(ctx, `SELECT username FROM users WHERE id = 'u-1'`).Scan(&name); err != nil || name != "ada" {
+		t.Errorf("the existing user row = %q, %v; want ada", name, err)
+	}
+	assertTLSCertsTableWorks(t, s)
+}
+
+func TestTLSCertsTableExistsInAFreshDatabase(t *testing.T) {
+	s := migratedFresh(t)
+	if !hasTable(t, s, "tls_certs") {
+		t.Fatal("tls_certs is missing from a fresh database")
+	}
+	assertTLSCertsTableWorks(t, s)
+}
+
+func hasTable(t *testing.T, s *store.Store, name string) bool {
+	t.Helper()
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n == 1
+}
+
+// assertTLSCertsTableWorks checks the id is free (the default certificate and later sources each
+// use their own) and unique, and that every column is required.
+func assertTLSCertsTableWorks(t *testing.T, s *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	const ins = `INSERT INTO tls_certs (id, cert_pem, key_sealed, created_at, updated_at) VALUES (?, 'c', 'k', 1, 1)`
+	for _, id := range []string{"selfsigned", "acme"} {
+		if _, err := s.Write.ExecContext(ctx, ins, id); err != nil {
+			t.Errorf("insert %q: %v", id, err)
+		}
+	}
+	if _, err := s.Write.ExecContext(ctx, ins, "selfsigned"); err == nil {
+		t.Error("a second row with the same id was accepted")
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO tls_certs (id, cert_pem, created_at, updated_at) VALUES ('nokey', 'c', 1, 1)`); err == nil {
+		t.Error("a row without a sealed key was accepted")
+	}
+}

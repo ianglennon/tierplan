@@ -104,3 +104,9 @@ func (s sealedCertStore) UpdateCert(ctx context.Context, id string, certPEM []by
 	}
 	return nil
 }
+
+// mirrorCertFile is the public certificate's file name under <DataDir>/tls.
+const mirrorCertFile = "server.crt"
+
+// writeMirror is not written yet.
+func writeMirror(string, []byte) error { return errors.New("not implemented") }
