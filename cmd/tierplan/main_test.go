@@ -42,7 +42,7 @@ func TestHealthcheckNeverPreparesTheDataDirectory(t *testing.T) {
 }
 
 // TierPlan always serves HTTPS with its own certificate, so there is no plain mode
-// to recover to and `tierplan https disable` is gone (D-14, TLS-12). This keeps it
+// to recover to and the recovery command is gone (D-14, TLS-12). This keeps it
 // from coming back unnoticed.
 func TestTheRootCommandHasNoHTTPSCommand(t *testing.T) {
 	root := newRoot()
@@ -58,7 +58,7 @@ func TestTheRootCommandHasNoHTTPSCommand(t *testing.T) {
 	root.SetArgs([]string{"https", "disable"})
 	err := root.Execute()
 	if err == nil {
-		t.Fatal("`https disable` succeeded, want an unknown-command error")
+		t.Fatal("the removed https command succeeded, want an unknown-command error")
 	}
 	if !strings.Contains(err.Error(), "unknown command") {
 		t.Errorf("error = %q, want it to say unknown command", err)

@@ -329,7 +329,7 @@ func WithTLSRefreshClock(c stackops.Clock) Option {
 }
 
 // WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
-// settings are read again to see a change another process made (`tierplan https disable`). It exists
+// settings are read again to see a change another store handle made, such as a restore. It exists
 // for tests, which move it by a poll interval instead of waiting for one. It is a Go option only,
 // like WithJanitorClock: no setting, flag or environment variable reaches it, so a production build,
 // which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
@@ -1184,11 +1184,11 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if tlsSrc != nil {
 		srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
 	}
-	// A setting another process wrote (`tierplan https disable`) is applied here within one poll,
-	// so the redirect gate, the cookie scope and the Origin check follow it without a restart. The
-	// watcher only reloads the instance's cached values: it pushes no address to agents. Connected
-	// wss agents stay valid because the hub compares the audience without the scheme, and a new
-	// ws:// endpoint must never be pushed.
+	// A setting another store handle wrote, such as a restore or a CLI user command, is applied here
+	// within one poll, so the redirect gate, the cookie scope and the Origin check follow it without
+	// a restart. The watcher only reloads the instance's cached values: it pushes no address to
+	// agents, and connected agents stay valid because the hub compares the audience without the
+	// scheme.
 	settingsClock := bo.settingsClock
 	if settingsClock == nil {
 		settingsClock = stackops.RealClock()
