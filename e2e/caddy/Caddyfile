@@ -34,7 +34,17 @@ https://:443, https://:{$TIERPLAN_E2E_HTTPS_PORT:8443} {
 	# handle_path removes /tierplan before the request reaches TierPlan, which is
 	# told its public URL ends in /tierplan and serves both forms.
 	handle_path /tierplan/* {
-		reverse_proxy tierplan:7480
+		# TierPlan serves https with its own self-signed certificate, which Caddy
+		# verifies against the copy TierPlan mirrors to its data volume. Caddy 2.11
+		# rewrites Host for an https upstream, which would break TierPlan's check of
+		# the public URL, so the browser's Host is passed through.
+		reverse_proxy https://tierplan:7480 {
+			header_up Host {host}
+			transport http {
+				tls_trust_pool file /tierplan-data/tls/server.crt
+				tls_server_name tierplan
+			}
+		}
 	}
 	redir /tierplan /tierplan/ permanent
 }

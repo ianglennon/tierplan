@@ -3,7 +3,7 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
-import { ORIGIN as baseURL } from "./tests/env";
+import { ORIGIN as baseURL, SPKI_HASH } from "./tests/env";
 
 // The specs share one instance and depend on each other's state: the first
 // claims it, the rest use that account. Playwright orders files alphabetically
@@ -13,9 +13,14 @@ import { ORIGIN as baseURL } from "./tests/env";
 // `make e2e` runs the browser in a container that cannot see the host's network
 // change (see the browser service in compose.yaml) and names its server here.
 const wsEndpoint = process.env.TIERPLAN_E2E_BROWSER_WS;
+// The proxy's certificate is the harness's own, made by scripts/e2e-cert.go, and no public CA
+// signed it. The browser trusts it by the hash of its public key and trusts no other
+// certificate it cannot verify: nothing here switches certificate checking off. The remote
+// run-server takes the launch options from the runner, so the flag reaches that Chromium.
 const chromium = {
   ...devices["Desktop Chrome"],
   baseURL,
+  launchOptions: { args: [`--ignore-certificate-errors-spki-list=${SPKI_HASH}`] },
   ...(wsEndpoint ? { connectOptions: { wsEndpoint } } : {}),
 };
 // The containers project follows the dashboard because it starts from the one
@@ -87,8 +92,6 @@ export default defineConfig({
   outputDir: "../.devdata/playwright-results",
   use: {
     baseURL,
-    // The proxy's certificate is the harness's own, made by scripts/e2e-cert.go.
-    ignoreHTTPSErrors: true,
     // A click that cannot find its target fails in seconds, not at the end of the
     // test's own timeout.
     actionTimeout: 15_000,

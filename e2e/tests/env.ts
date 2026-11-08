@@ -44,6 +44,11 @@ export const AGENT_PIN = ((): string => {
   }
 })();
 
+// The same hash without the "sha256/" prefix: the base64 SPKI hash that Chromium's
+// --ignore-certificate-errors-spki-list takes. It is how the browser trusts the
+// harness certificate and nothing else, in place of ignoring certificate errors.
+export const SPKI_HASH = AGENT_PIN.replace(/^sha256\//, "");
+
 // The signed-in browser state the first spec saves for the later ones. It lives
 // under .devdata/, which is git-ignored.
 export const AUTH_STATE = resolve(HERE, "../../.devdata/e2e-admin.json");
