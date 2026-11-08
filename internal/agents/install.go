@@ -46,8 +46,9 @@ const (
 type InstallParams struct {
 	// Token is the join token, shown once (D-02).
 	Token string
-	// Endpoint is the address the agent dials: wss:// (ws:// for plain http), the
-	// agent or public URL with its path, and /agent/connect (D-18).
+	// Endpoint is the address the agent dials: wss://, the agent or public URL
+	// with its path, and /agent/connect (D-18). A plain ws:// endpoint is refused
+	// (ErrPlainEndpointRefused).
 	Endpoint string
 	// Pin is the SPKI pin of TierPlan's own self-signed certificate. Empty when
 	// TierPlan serves a supplied certificate or plain HTTP, and then no command
@@ -58,21 +59,6 @@ type InstallParams struct {
 	// Generation numbers the token (env_join_tokens.generation, from 1). It is in
 	// the name of the swarm secret so every rotation creates a fresh name.
 	Generation int
-	// AllowInsecure is the server's own TIERPLAN_AGENT_ALLOW_INSECURE (development
-	// only). With it on and a ws:// Endpoint, every install text also sets
-	// TIERPLAN_AGENT_ALLOW_INSECURE=true on the agent, which otherwise refuses to dial
-	// plain ws:// to another host (T-02-31). Nothing else may set it, and it never
-	// appears for a wss:// Endpoint. With it off, a ws:// Endpoint for a host that is
-	// not this machine is one agents refuse, so no install, manual update command or
-	// hint is built for it (ErrPlainEndpointRefused); a ws:// Endpoint on this machine
-	// needs no switch.
-	AllowInsecure bool
-}
-
-// agentSwitch reports whether the commands built from p must carry the agent's
-// TIERPLAN_AGENT_ALLOW_INSECURE: the server's switch is on and the address is plain.
-func (p InstallParams) agentSwitch() bool {
-	return p.AllowInsecure && strings.HasPrefix(p.Endpoint, "ws://")
 }
 
 // Install is everything an admin copies to connect hosts to an agent environment.
@@ -130,11 +116,10 @@ func AgentImage(serverVersion string) string {
 func SecretName(g int) string { return SecretPrefix + strconv.Itoa(g) }
 
 // ErrPlainEndpointRefused is returned by BuildInstall for an endpoint that is plain
-// ws:// for a host that is not this machine while the server's switch is off: agents
-// refuse such an address at start (plan 02-41), so no text may point them at it
-// (G-02-R4-3). The API checks first and answers 409 insecure_agent_url, so reaching
+// ws:// (or http), for any host: agents connect only over wss://, so no text may
+// point them at a plain address (D-09, G-02-R4-3). The API checks first and answers 409 insecure_agent_url, so reaching
 // this error from there is a server bug.
-var ErrPlainEndpointRefused = errors.New("the agent endpoint is plain ws:// for a host that is not this machine, which agents refuse")
+var ErrPlainEndpointRefused = errors.New("the agent endpoint is plain, and agents connect only over wss://")
 
 // BuildInstall builds every install text for one join token. It refuses a token,
 // endpoint or pin that holds a quote, a control character or a space: they are
@@ -153,7 +138,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 			return Install{}, fmt.Errorf("%w: the %s", ErrInstallValue, name)
 		}
 	}
-	if tunnel.PlainAddressRefused(p.Endpoint, p.AllowInsecure) {
+	if tunnel.PlainAddressRefused(p.Endpoint) {
 		return Install{}, ErrPlainEndpointRefused
 	}
 
@@ -176,7 +161,6 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" --update-parallelism 1 --update-delay 10s" +
 		" --label " + labelPair + " --container-label " + labelPair +
 		envFlag("--env", "TIERPLAN_AGENT_URL", p.Endpoint) +
-		insecureFlag("--env", p) +
 		optionalEnvFlag("--env", "TIERPLAN_AGENT_PIN", p.Pin) +
 		envFlag("--env", "TIERPLAN_AGENT_JOIN_TOKEN_FILE", tokenFilePath) +
 		" " + image
@@ -187,7 +171,6 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" -v " + hostRouteSrc + ":" + hostRouteDst + ":ro" +
 		" --label " + labelPair +
 		envFlag("-e", "TIERPLAN_AGENT_URL", p.Endpoint) +
-		insecureFlag("-e", p) +
 		optionalEnvFlag("-e", "TIERPLAN_AGENT_PIN", p.Pin) +
 		envFlag("-e", "TIERPLAN_AGENT_JOIN_TOKEN", p.Token) +
 		" " + image
@@ -220,14 +203,11 @@ func CleanupCommands(generation int) (swarm, standalone string) {
 // ManualUpdateCommand is the command an operator runs to bring an agent of the
 // given environment type ("swarm" or "standalone") to image. It is what a
 // version_incompatible refusal shows (D-25). A swarm updates its service in
-// place and keeps its environment, so it needs no switch. A standalone host
-// recreates the container with the same flags, including the agent's
-// TIERPLAN_AGENT_ALLOW_INSECURE when the install had it (a development server and a
-// plain address, T-02-31), so a recreated dev agent keeps dialing; its state
-// volume already holds the agent's identity, so no join token goes in. An
-// unknown type, a value that could escape its quotes, or a standalone endpoint
-// agents refuse (plain ws:// for another host without the server's switch, see
-// ErrPlainEndpointRefused) answers "".
+// place and keeps its environment. A standalone host
+// recreates the container with the same flags; its state volume already holds
+// the agent's identity, so no join token goes in. An unknown type, a value that
+// could escape its quotes, or a standalone endpoint agents refuse (a plain address,
+// see ErrPlainEndpointRefused) answers "".
 func ManualUpdateCommand(envType, image string, p InstallParams) string {
 	if !safeValue(image) || !safeValue(p.Endpoint) || !safeValue(p.Pin) || strings.ContainsAny(image, "'\"$`\\ ") {
 		return ""
@@ -239,7 +219,7 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 		if p.Endpoint == "" {
 			return "" // a recreated container with no address to dial would never connect
 		}
-		if tunnel.PlainAddressRefused(p.Endpoint, p.AllowInsecure) {
+		if tunnel.PlainAddressRefused(p.Endpoint) {
 			return "" // the recreated agent would refuse the address and exit at start
 		}
 		return " docker pull " + image + " && docker rm -f " + ServiceName +
@@ -249,7 +229,6 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 			" -v " + hostRouteSrc + ":" + hostRouteDst + ":ro" +
 			" --label " + labelPair +
 			envFlag("-e", "TIERPLAN_AGENT_URL", p.Endpoint) +
-			insecureFlag("-e", p) +
 			optionalEnvFlag("-e", "TIERPLAN_AGENT_PIN", p.Pin) +
 			" " + image
 	}
@@ -315,23 +294,6 @@ func sq(v string) string { return "'" + v + "'" }
 
 func envFlag(flag, name, value string) string { return " " + flag + " " + sq(name+"="+value) }
 
-// insecureFlag is the agent's development switch as a flag, or "" when p does
-// not need it. Name and value are fixed literals, so nothing from input is quoted.
-func insecureFlag(flag string, p InstallParams) string {
-	if !p.agentSwitch() {
-		return ""
-	}
-	return envFlag(flag, "TIERPLAN_AGENT_ALLOW_INSECURE", "true")
-}
-
-// insecureYAML is the same switch as a line of a compose environment block.
-func insecureYAML(p InstallParams) string {
-	if !p.agentSwitch() {
-		return ""
-	}
-	return "      TIERPLAN_AGENT_ALLOW_INSECURE: " + yamlString("true") + "\n"
-}
-
 func optionalEnvFlag(flag, name, value string) string {
 	if value == "" {
 		return ""
@@ -362,7 +324,6 @@ func swarmStack(p InstallParams, image, secret string) string {
 	b.WriteString("    labels:\n      tierplan.agent: \"true\"\n")
 	b.WriteString("    environment:\n")
 	b.WriteString("      TIERPLAN_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
-	b.WriteString(insecureYAML(p))
 	if p.Pin != "" {
 		b.WriteString("      TIERPLAN_AGENT_PIN: " + yamlString(p.Pin) + "\n")
 	}
@@ -398,7 +359,6 @@ func standaloneCompose(p InstallParams, image string) string {
 	b.WriteString("    labels:\n      tierplan.agent: \"true\"\n")
 	b.WriteString("    environment:\n")
 	b.WriteString("      TIERPLAN_AGENT_URL: " + yamlString(p.Endpoint) + "\n")
-	b.WriteString(insecureYAML(p))
 	if p.Pin != "" {
 		b.WriteString("      TIERPLAN_AGENT_PIN: " + yamlString(p.Pin) + "\n")
 	}

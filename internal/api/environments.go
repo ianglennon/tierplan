@@ -64,13 +64,6 @@ type EnvironmentsDeps struct {
 	// "" when it serves a supplied certificate or plain HTTP, and then the install
 	// carries no pin (D-06). Nil means none.
 	TLSPin func() string
-	// AgentAllowInsecure is the server's TIERPLAN_AGENT_ALLOW_INSECURE, a development
-	// switch. A plain ws:// address for a host that is not this machine is handed out
-	// only while it is on, and then the install also tells the agent to accept it
-	// (T-02-31); otherwise adding an environment is refused (insecure_agent_url).
-	// A wss:// install never carries it, and a plain address on this machine needs it
-	// for neither.
-	AgentAllowInsecure bool
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
 	// Updater is asked to look at an environment's agents when automatic updates
@@ -429,7 +422,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			"TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
 			"and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, " +
 			"with its base path); 409 " + problemPublicURLRequired + " when TierPlan has neither, and 409 " + problemInsecureAgentURL +
-			" when that address is plain ws:// for a host that is not this machine and TIERPLAN_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. " +
+			" when that address is plain ws://: an http agent address is refused, because agents connect only over wss://. Nothing is created in either case. 422 invalid_name. " +
 			"The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
@@ -586,7 +579,7 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 		return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
 			"TierPlan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
 	}
-	if tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure) {
+	if tunnel.PlainAddressRefused(endpoint) {
 		return nil, insecureAgentURLProblem()
 	}
 	created, err := d.Agents.CreateEnvironment(ctx, p.AuditActor(), in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
@@ -603,7 +596,6 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 	}
 	install, err := agents.BuildInstall(agents.InstallParams{
 		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation,
-		AllowInsecure: d.AgentAllowInsecure,
 	})
 	if err != nil {
 		// The environment exists and its token cannot be shown again. A value that
@@ -622,9 +614,8 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 // fixed and does not repeat the address.
 func insecureAgentURLProblem() error {
 	return httpx.Problem(http.StatusConflict, problemInsecureAgentURL,
-		"The address agents are given is plain ws:// for a host that is not this machine. Agents refuse it, and so does TierPlan. "+
-			"Set an https public URL or agent URL in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL. "+
-			"TIERPLAN_AGENT_ALLOW_INSECURE=true on TierPlan allows it for development only.")
+		"The address agents are given is plain ws://. Agents connect only over wss://, so an http agent address is refused. "+
+			"Set an https public URL or agent URL in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
 }
 
 // installBody maps the built install to its API shape.

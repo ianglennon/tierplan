@@ -549,27 +549,25 @@ func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *
 	}
 }
 
-func TestPlainAddressRefusedOnlyForPlainAddressesToAnotherHostWithoutTheSwitch(t *testing.T) {
+func TestPlainAddressRefusedForEveryPlainAddress(t *testing.T) {
 	for _, c := range []struct {
-		raw   string
-		allow bool
-		want  bool
+		raw  string
+		want bool
 	}{
-		{"http://10.0.0.5:7480", false, true},
-		{"http://10.0.0.5:7480", true, false},
-		{"ws://10.0.0.5:7480/agent/connect", false, true},
-		{"HTTP://TierPlan.Example", false, true},
-		{"http://localhost.example", false, true},
-		{"http://127.0.0.1:7480", false, false},
-		{"ws://[::1]:7480/agent/connect", false, false},
-		{"http://localhost:5173", false, false},
-		{"https://tierplan.example", false, false},
-		{"wss://tierplan.example/agent/connect", false, false},
-		{"", false, false},
-		{"http://[::1", false, false}, // url.Parse refuses it
+		{"http://10.0.0.5:7480", true},
+		{"ws://10.0.0.5:7480/agent/connect", true},
+		{"HTTP://TierPlan.Example", true},
+		{"http://localhost.example", true},
+		{"http://127.0.0.1:7480", true},
+		{"ws://[::1]:7480/agent/connect", true},
+		{"http://localhost:5173", true},
+		{"https://tierplan.example", false},
+		{"wss://tierplan.example/agent/connect", false},
+		{"", false},
+		{"http://[::1", false}, // url.Parse refuses it
 	} {
-		if got := tunnel.PlainAddressRefused(c.raw, c.allow); got != c.want {
-			t.Errorf("PlainAddressRefused(%q, %v) = %v, want %v", c.raw, c.allow, got, c.want)
+		if got := tunnel.PlainAddressRefused(c.raw); got != c.want {
+			t.Errorf("PlainAddressRefused(%q) = %v, want %v", c.raw, got, c.want)
 		}
 	}
 }

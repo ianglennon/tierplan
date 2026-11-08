@@ -147,25 +147,19 @@ func (h *Hub) audience() (aud string, err error) {
 	return authn.Audience(raw)
 }
 
-// PlainAddressRefused reports whether raw is an address TierPlan refuses to have
-// agents dial: it is plain (scheme http or ws, any case) for a host that
-// authn.LoopbackHost does not accept, and allowInsecure is false. raw is an address agents are told to dial, the agent base or the
-// endpoint built from it. An https or wss address, an empty value and one that does
-// not parse are not refused here; the caller deals with a missing address. This is
-// the one server-side rule for plain agent addresses (G-02-R4-3): the hub refuses
-// plain connections for such an address, and TierPlan does not hand it out.
-func PlainAddressRefused(raw string, allowInsecure bool) bool {
-	if allowInsecure {
-		return false
-	}
+// PlainAddressRefused reports whether raw is a plain address (scheme http or ws,
+// any case) for any host, this machine included: agents connect only over wss://,
+// so TierPlan hands out no plain address (D-09). raw is an address agents are told
+// to dial, the agent base or the endpoint built from it. An https or wss address, an
+// empty value and one that does not parse are not refused here; the caller deals
+// with a missing address. Plans 13 and 14 make such addresses impossible, and this
+// rule exists only until the API stops checking for them (plan 16).
+func PlainAddressRefused(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return false
 	}
-	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "ws") {
-		return false
-	}
-	return !authn.LoopbackHost(u.Hostname())
+	return strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "ws")
 }
 
 // secureTransport reports whether the connection reached TierPlan over TLS: only
