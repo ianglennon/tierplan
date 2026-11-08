@@ -756,47 +756,6 @@ func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
 	}
 }
 
-// An address that is plain ws:// is one agents connect to never (D-09), so TierPlan
-// hands out no install for it, for another host or for this machine alike: 409
-// insecure_agent_url, before any state changes (G-02-R4-3, T-02-144, T-02-145).
-// The agent URL and the public URL are both judged, whichever supplies the address.
-func TestEnvironmentAddAgentRefusesAPlainAddressForEveryHost(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		label string
-		apply func(f *envFix)
-	}{
-		{"only an agent URL", func(f *envFix) { f.inst.ApplyAgentURL("http://10.0.0.5:7480") }},
-		{"only a public URL", func(f *envFix) { f.inst.Apply("TierPlan", "http://10.0.0.5:7480") }},
-		{"an agent URL on this machine", func(f *envFix) { f.inst.ApplyAgentURL("http://127.0.0.1:7480") }},
-		{"a public URL on localhost", func(f *envFix) { f.inst.Apply("TierPlan", "http://localhost:7480") }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			f := newEnvFix(t, dockertest.FakeConfig{})
-			tc.apply(f)
-			_, rec := f.addAgent(t)
-			if rec.code != http.StatusConflict || rec.ptyp != "insecure_agent_url" {
-				t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
-			}
-			for _, host := range []string{"10.0.0.5", "127.0.0.1", "localhost"} {
-				if strings.Contains(string(rec.body), host) {
-					t.Errorf("the refusal repeats the address %s: %s", host, rec.body)
-				}
-			}
-			for _, table := range []string{"environments", "env_join_tokens", "env_cas"} {
-				var n int
-				if err := f.st.Read.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil || n != 0 {
-					t.Errorf("%s holds %d rows after a refused add (%v), want none", table, n, err)
-				}
-			}
-			if n := len(f.audits(t, audit.ActionEnvironmentAdded)); n != 0 {
-				t.Errorf("%d environment.added entries after a refused add", n)
-			}
-		})
-	}
-}
-
 func TestEnvironmentAddAgentNeedsAUsableURLAndCreatesNothingWithoutOne(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})

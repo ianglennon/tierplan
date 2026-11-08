@@ -579,7 +579,6 @@ func TestAgentURLFollowsThePublicURL(t *testing.T) {
 		"https://tierplan.example/":          "wss://tierplan.example/agent/connect",
 		"https://example.com/tierplan":       "wss://example.com/tierplan/agent/connect",
 		"https://example.com/tierplan/":      "wss://example.com/tierplan/agent/connect",
-		"http://127.0.0.1:7480":              "ws://127.0.0.1:7480/agent/connect",
 		"https://tierplan.example:8443/a/b":  "wss://tierplan.example:8443/a/b/agent/connect",
 		"https://u:p@tierplan.example/x?q=1": "wss://tierplan.example/x/agent/connect",
 	} {
@@ -588,7 +587,7 @@ func TestAgentURLFollowsThePublicURL(t *testing.T) {
 			t.Errorf("AgentURL(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "ftp://x", "not a url", "https://"} {
+	for _, bad := range []string{"", "ftp://x", "not a url", "https://", "http://127.0.0.1:7480"} {
 		if got, err := agents.AgentURL(bad); err == nil {
 			t.Errorf("AgentURL(%q) = %q, want an error", bad, got)
 		}

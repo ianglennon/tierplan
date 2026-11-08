@@ -20,7 +20,7 @@ func TestReloadNeverOverwritesALockedPublicURL(t *testing.T) {
 		AgentURL:  "https://agents.env.example.com",
 	})
 
-	watchPut(t, other, instance.SettingPublicURL, "http://stored.example.com")
+	watchPut(t, other, instance.SettingPublicURL, "https://stored.example.com")
 	watchPut(t, other, instance.SettingAgentURL, "https://agents.stored.example.com")
 
 	changed, err := inst.Reload(context.Background(), server)
@@ -39,7 +39,7 @@ func TestReloadLocksAreIndependent(t *testing.T) {
 	server, other := watchDataDir(t)
 	inst := mustLoad(t, server, config.Config{PublicURL: "https://env.example.com"})
 
-	watchPut(t, other, instance.SettingPublicURL, "http://stored.example.com")
+	watchPut(t, other, instance.SettingPublicURL, "https://stored.example.com")
 	watchPut(t, other, instance.SettingAgentURL, "https://agents.stored.example.com")
 
 	changed, err := inst.Reload(context.Background(), server)
@@ -96,7 +96,7 @@ func TestReloadAppliesNothingWhenAReadFails(t *testing.T) {
 
 	// The database moves on, then the server's handle goes away.
 	watchPut(t, other, instance.SettingName, "Renamed")
-	watchPut(t, other, instance.SettingPublicURL, "http://tierplan.example.com")
+	watchPut(t, other, instance.SettingPublicURL, "https://moved.example.com")
 	if err := server.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestReloadReportsChangedKeysInAFixedOrder(t *testing.T) {
 
 	// Every key, in the documented order.
 	watchPut(t, other, instance.SettingName, "Again")
-	watchPut(t, other, instance.SettingPublicURL, "http://tierplan.example.com")
+	watchPut(t, other, instance.SettingPublicURL, "https://moved.example.com")
 	watchPut(t, other, instance.SettingAgentURL, "https://agents.example.com")
 	watchPut(t, other, instance.SettingShellIdleMinutes, "60")
 	watchPut(t, other, instance.SettingShellMaxPerUser, "3")

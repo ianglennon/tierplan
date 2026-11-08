@@ -47,6 +47,8 @@ func newHookFix(t *testing.T) *hookFix {
 			h.started <- waiting
 		}
 	})
+	// The address a git host calls is built on the public URL, which is always https.
+	h.f.inst.Apply(h.f.inst.Name(), "https://example.com")
 	rec := h.create(t, h.admin, h.body(nil))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
@@ -156,8 +158,8 @@ func TestCreateStackGitWebhook(t *testing.T) {
 	if got.Flavour != "github" || got.Placement != "header" {
 		t.Errorf("flavour, placement = %q, %q, want github, header", got.Flavour, got.Placement)
 	}
-	if !strings.HasPrefix(got.URL, "http://example.com/hooks/git/") || len(got.token()) != 43 || len(got.Secret) != 43 {
-		t.Errorf("answer = %+v, want an address on the request's origin with a 256 bit token and a 256 bit secret", got)
+	if !strings.HasPrefix(got.URL, "https://example.com/hooks/git/") || len(got.token()) != 43 || len(got.Secret) != 43 {
+		t.Errorf("answer = %+v, want an address on the public URL with a 256 bit token and a 256 bit secret", got)
 	}
 
 	// Only the SHA-256 of the token is stored, the secret is sealed, and the webhook is owned by its maker.
@@ -357,7 +359,7 @@ func TestWebhookRotate(t *testing.T) {
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
-	if fresh.Flavour != "github" || fresh.Placement != "header" || len(fresh.token()) != 43 || len(fresh.Secret) != 43 || !strings.HasPrefix(fresh.URL, "http://example.com/hooks/git/") {
+	if fresh.Flavour != "github" || fresh.Placement != "header" || len(fresh.token()) != 43 || len(fresh.Secret) != 43 || !strings.HasPrefix(fresh.URL, "https://example.com/hooks/git/") {
 		t.Errorf("answer = %+v, want a new address and a new secret for the same github webhook", fresh)
 	}
 	if fresh.token() == old.token() || fresh.Secret == old.Secret {
@@ -660,7 +662,7 @@ func TestWebhookSummaryHasNoSecret(t *testing.T) {
 			if got.Flavour != tc.flavour || got.Placement != wantPlacement || got.Last4 != wantLast4 || got.Paused || got.LastAt != "" || got.LastResult != "" {
 				t.Errorf("webhook = %+v, want %s in %s, last four %q, active and never called", got, tc.flavour, wantPlacement, wantLast4)
 			}
-			if got.Address != "http://example.com/hooks/git/\u2022\u2022\u2022\u2022" {
+			if got.Address != "https://example.com/hooks/git/\u2022\u2022\u2022\u2022" {
 				t.Errorf("address = %q, want the address with the token masked", got.Address)
 			}
 			if got.Owner.ID == "" || got.Owner.Name == "" {

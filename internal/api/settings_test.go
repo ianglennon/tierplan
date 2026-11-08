@@ -603,8 +603,8 @@ func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
 	}
 }
 
-// The agent address agents refuse (G-02-R4-3, D-09): every plain address, this
-// machine included, because agents connect only over wss://.
+// An http agent address can no longer be stored or built (D-07), so agentEndpointRefused
+// is false for every address that can be in effect.
 
 func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 	t.Parallel()
@@ -614,11 +614,6 @@ func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 		agentURL   string
 		wantRefuse bool
 	}{
-		{"plain agent URL for another host", "", "http://10.0.0.5:7480", true},
-		{"plain public URL for another host, no agent URL", "http://10.0.0.5:7480", "", true},
-		{"plain agent URL on this machine", "https://pub.example", "http://127.0.0.1:7480", true},
-		{"plain public URL on this machine, no agent URL", "http://localhost:7480", "", true},
-		{"https agent URL under a plain public URL", "http://10.0.0.5:7480", "https://10.0.0.5:7480", false},
 		{"https public URL, no agent URL", "https://pub.example", "", false},
 		{"no address at all", "", "", false},
 	}
@@ -708,7 +703,6 @@ func TestPatchSettingsAcceptsAnHTTPSAgentURLAndReportsAPlainPublicURLAlreadyStor
 		wantRefused bool
 	}{
 		{"https for another host", "", "", map[string]string{"agentUrl": "https://10.0.0.5:7480"}, false},
-		{"clearing it under a plain public URL", "http://10.0.0.5:7480", "https://agent.example", map[string]string{"agentUrl": ""}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {

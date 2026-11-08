@@ -116,7 +116,7 @@ func TestWatcherPollAppliesAPublicURLWrittenByAnotherHandle(t *testing.T) {
 		t.Fatalf("a poll with nothing written = %v, %v", changed, err)
 	}
 
-	watchPut(t, other, instance.SettingPublicURL, "http://tierplan.example.com:8443")
+	watchPut(t, other, instance.SettingPublicURL, "https://other.example.com:8443")
 	changed, err := w.Poll(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -124,13 +124,13 @@ func TestWatcherPollAppliesAPublicURLWrittenByAnotherHandle(t *testing.T) {
 	if want := []string{instance.SettingPublicURL}; !reflect.DeepEqual(changed, want) {
 		t.Fatalf("changed = %v, want %v", changed, want)
 	}
-	if inst.PublicURL() != "http://tierplan.example.com:8443" {
+	if inst.PublicURL() != "https://other.example.com:8443" {
 		t.Fatalf("PublicURL = %q", inst.PublicURL())
 	}
-	if inst.Secure() || inst.CookieScope().Secure {
-		t.Fatalf("still secure after the URL went to http: Secure=%v CookieScope=%+v", inst.Secure(), inst.CookieScope())
+	if !inst.Secure() || !inst.CookieScope().Secure {
+		t.Fatalf("not secure after the URL changed: Secure=%v CookieScope=%+v", inst.Secure(), inst.CookieScope())
 	}
-	if inst.PublicOrigin() != "http://tierplan.example.com:8443" {
+	if inst.PublicOrigin() != "https://other.example.com:8443" {
 		t.Fatalf("PublicOrigin = %q", inst.PublicOrigin())
 	}
 }
@@ -152,7 +152,7 @@ func TestWatcherRunPollsOnlyWhenTheClockFires(t *testing.T) {
 
 	// Run is waiting on the clock, which has not moved: the write must not be seen.
 	testsupport.Await(t, "the watcher to arm its first tick", clock.armed)
-	watchPut(t, other, instance.SettingPublicURL, "http://tierplan.example.com:8443")
+	watchPut(t, other, instance.SettingPublicURL, "https://other.example.com:8443")
 	if inst.PublicURL() != "https://tierplan.example.com:8443" {
 		t.Fatalf("applied before the clock fired: %q", inst.PublicURL())
 	}
@@ -166,7 +166,7 @@ func TestWatcherRunPollsOnlyWhenTheClockFires(t *testing.T) {
 	// The full interval fires the poll; the next arm means that poll is done.
 	clock.Advance(time.Second)
 	testsupport.Await(t, "the watcher to arm its next tick", clock.armed)
-	if inst.PublicURL() != "http://tierplan.example.com:8443" {
+	if inst.PublicURL() != "https://other.example.com:8443" {
 		t.Fatalf("not applied after the tick: %q", inst.PublicURL())
 	}
 

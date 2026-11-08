@@ -529,7 +529,6 @@ func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 		"https://example.com/tierplan":       "wss://example.com/tierplan/agent/connect",
 		"https://example.com/tierplan/":      "wss://example.com/tierplan/agent/connect",
 		"https://tierplan.lan:7480":          "wss://tierplan.lan:7480/agent/connect",
-		"http://192.168.1.10:7480":           "ws://192.168.1.10:7480/agent/connect",
 		"https://u:p@tierplan.example/x?q=1": "wss://tierplan.example/x/agent/connect",
 	} {
 		got, err := config.AgentEndpoint(in)
@@ -537,7 +536,7 @@ func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 			t.Errorf("AgentEndpoint(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "ftp://x", "not a url", "https://"} {
+	for _, bad := range []string{"", "ftp://x", "not a url", "https://", "http://192.168.1.10:7480", "ws://x.example"} {
 		if got, err := config.AgentEndpoint(bad); err == nil {
 			t.Errorf("AgentEndpoint(%q) = %q, want an error", bad, got)
 		}

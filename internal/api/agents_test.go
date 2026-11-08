@@ -176,27 +176,6 @@ func TestTokenRotateWithoutAnAddressRefusesAndChangesNothing(t *testing.T) {
 	}
 }
 
-// A rotation whose install would point agents at a plain address for another host
-// is refused before anything changes: the current token stays and nothing is audited
-// (G-02-R4-3, T-02-144, T-02-145).
-func TestTokenRotateWithAPlainAddressForAnotherHostRefusesAndChangesNothing(t *testing.T) {
-	t.Parallel()
-	f := newEnvFix(t, dockertest.FakeConfig{})
-	id, _ := f.agentEnv(t)
-	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
-	_, rec := f.rotate(t, id)
-	if rec.code != http.StatusConflict || rec.ptyp != "insecure_agent_url" {
-		t.Fatalf("status = %d type %q: %s", rec.code, rec.ptyp, rec.body)
-	}
-	var n int
-	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM env_join_tokens WHERE env_id = ?`, id).Scan(&n); err != nil || n != 1 {
-		t.Errorf("%d token rows (%v), want the one the environment started with", n, err)
-	}
-	if got := len(f.audits(t, audit.ActionEnvironmentTokenRotated)); got != 0 {
-		t.Errorf("%d rotation entries after a refused rotation", got)
-	}
-}
-
 func TestTokenDisableAnswers204AuditsAndShowsInTheStatusUntilARotation(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
@@ -1146,44 +1125,6 @@ func TestRotateAndManualUpdateCarryNoRemovedSwitchLine(t *testing.T) {
 	f.srv.Events.WaitLen(t, 2)
 	if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") || strings.Contains(cmd, name) {
 		t.Errorf("the swarm manual update = %q, want a service update without the removed switch", cmd)
-	}
-}
-
-// A plain agent address on this machine is refused like any other: agents connect
-// only over wss://, so a rotation refuses it and changes nothing (D-09, TLS-12).
-func TestRotateWithAnHTTPAgentAddressOnThisMachineIsRefused(t *testing.T) {
-	t.Parallel()
-	f := newAgentFix(t)
-	id, _ := f.agentEnv(t)
-	f.inst.ApplyAgentURL("http://127.0.0.1:7480")
-	if _, rec := f.rotate(t, id); rec.code != http.StatusConflict || rec.ptyp != "insecure_agent_url" {
-		t.Fatalf("status = %d type %q: %s", rec.code, rec.ptyp, rec.body)
-	}
-}
-
-// The node list's manual update for a standalone agent that refuses self-update is
-// the recreate command, which carries the agent address. For a plain address on
-// another host with the switch off that is a command whose agent would exit at
-// start, so there is none; a swarm node's service update carries no address and
-// stays (G-02-R4-3, T-02-144).
-func TestTheNodeListOffersNoStandaloneManualUpdateForAPlainAddressForAnotherHost(t *testing.T) {
-	t.Parallel()
-	f := newAgentFix(t)
-	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
-
-	env := f.srv.NewEnvironment(t, "Dev")
-	plain := f.connect(t, env, dockertest.FakeConfig{Hostname: "plain"}, &wire.Facts{
-		EngineID: "ENG:plain", Hostname: "plain", EngineReachable: true, Policy: wire.PolicyFacts{SelfUpdate: false}})
-	f.srv.Events.WaitLen(t, 1)
-	if cmd := f.node(t, env.ID, plain.id).ManualUpdateCommand; cmd != "" {
-		t.Errorf("a standalone agent's manual update for a refused address = %q, want none", cmd)
-	}
-
-	env2 := f.srv.NewEnvironment(t, "DevSwarm")
-	node := f.connect(t, env2, dockertest.FakeConfig{Hostname: "node", SwarmState: "active"}, swarmFacts("node", true, false))
-	f.srv.Events.WaitLen(t, 2)
-	if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") {
-		t.Errorf("the swarm manual update = %q, want the service update", cmd)
 	}
 }
 

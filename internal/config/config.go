@@ -524,27 +524,22 @@ func reservedSegment(p string) string {
 func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
 
 // AgentEndpoint is the address an agent dials for the URL it is told to use, the
-// agent URL or else the public URL: the same host and base path, https as wss and
-// http as ws, with /agent/connect on the end (D-18). It is the one place that
-// builds the address, so the install commands, the welcome and Settings agree.
+// agent URL or else the public URL: the same host and base path, https as wss,
+// with /agent/connect on the end (D-18). Agents dial wss only (D-07), so any other
+// scheme, http included, is an error. It is the one place that builds the address,
+// so the install commands, the welcome and Settings agree.
 func AgentEndpoint(baseURL string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return "", fmt.Errorf("parse the URL: %w", err)
 	}
-	var scheme string
-	switch strings.ToLower(u.Scheme) {
-	case "https":
-		scheme = "wss"
-	case "http":
-		scheme = "ws"
-	default:
-		return "", fmt.Errorf("the URL %q is not http or https", baseURL)
+	if strings.ToLower(u.Scheme) != "https" {
+		return "", fmt.Errorf("the URL %q is not https: agents dial wss only", baseURL)
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("the URL %q has no host", baseURL)
 	}
-	out := url.URL{Scheme: scheme, Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
+	out := url.URL{Scheme: "wss", Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
 	return out.String(), nil
 }
 

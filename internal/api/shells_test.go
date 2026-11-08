@@ -411,12 +411,12 @@ func TestShellWebSocketAcceptsTheInstancesPublicOriginAndNoOther(t *testing.T) {
 	t.Parallel()
 	f := newShellFix(t, nil)
 	// Behind a proxy the Host is the proxy's own, so the public origin is what counts.
-	f.inst.Apply("", "http://tierplan.example")
+	f.inst.Apply("", "https://tierplan.example")
 	s := f.session(t)
 
-	_, status, ptype, err := f.dial(t, f.cookie, s.WSPath, "http://other.example")
+	_, status, ptype, err := f.dial(t, f.cookie, s.WSPath, "https://other.example")
 	dialRefused(t, "another origin", status, ptype, err, http.StatusForbidden)
-	c, status, _, err := f.dial(t, f.cookie, s.WSPath, "http://tierplan.example")
+	c, status, _, err := f.dial(t, f.cookie, s.WSPath, "https://tierplan.example")
 	if err != nil {
 		t.Fatalf("the public origin: %v (status %d)", err, status)
 	}

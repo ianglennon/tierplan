@@ -76,7 +76,7 @@ func TestSetTxChangesAreInvisibleUntilAppliedAndLostOnRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := i.SetTx(context.Background(), tx, st.Q, "Lab", "http://127.0.0.1:7480"); err != nil {
+	if err := i.SetTx(context.Background(), tx, st.Q, "Lab", "https://127.0.0.1:7480"); err != nil {
 		t.Fatal(err)
 	}
 	if i.Name() != "" || i.PublicURL() != "" {
@@ -139,14 +139,14 @@ func TestSetTxRefusesToChangeALockedURLButStillStoresTheName(t *testing.T) {
 
 func TestStoredURLIsUsedWhenTheEnvironmentIsUnset(t *testing.T) {
 	i, st := load(t, config.Config{})
-	if err := set(t, i, st, "Lab", "http://10.0.0.5:7480"); err != nil {
+	if err := set(t, i, st, "Lab", "https://10.0.0.5:7480"); err != nil {
 		t.Fatal(err)
 	}
 	again, err := instance.Load(context.Background(), st, config.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Locked() || again.PublicURL() != "http://10.0.0.5:7480" || again.PublicOrigin() != "http://10.0.0.5:7480" {
+	if again.Locked() || again.PublicURL() != "https://10.0.0.5:7480" || again.PublicOrigin() != "https://10.0.0.5:7480" {
 		t.Fatalf("locked=%v url=%q origin=%q", again.Locked(), again.PublicURL(), again.PublicOrigin())
 	}
 }
@@ -201,7 +201,7 @@ func TestAgentEndpointFollowsThePublicURLAndItsBasePath(t *testing.T) {
 		{"", ""},
 		{"https://example.com", "wss://example.com/agent/connect"},
 		{"https://example.com/tierplan", "wss://example.com/tierplan/agent/connect"},
-		{"http://10.0.0.5:7480", "ws://10.0.0.5:7480/agent/connect"},
+		{"http://10.0.0.5:7480", ""},
 	} {
 		i, _ := load(t, config.Config{})
 		i.Apply("x", tc.public)
