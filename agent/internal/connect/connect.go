@@ -84,11 +84,6 @@ type Config struct {
 	ReadOnly, SelfUpdate bool
 	// AllowPrivilegedServices is TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES.
 	AllowPrivilegedServices bool
-	// AllowInsecure is TIERPLAN_AGENT_ALLOW_INSECURE: it lets the agent dial a plain
-	// ws:// address for a host that is not loopback. For development only; without
-	// it such an address is never dialed, whether it came from URL, from the stored
-	// list or from the server (T-02-31). It changes nothing for wss://.
-	AllowInsecure bool
 	// Maint answers the server's update and uninstall messages (D-24, D-26). Nil
 	// answers every such message self_update_disabled.
 	Maint selfmaint.Service
@@ -197,15 +192,14 @@ type target struct{ url, aud, host string }
 
 // newTarget reads an address the agent is going to dial. It refuses what
 // state.DialableURL refuses, so nothing reaches the dialer around the filters at
-// load: a plain ws:// address for a host that is not loopback is only dialed with
-// allowPlain (T-02-31).
-func newTarget(raw string, allowPlain bool) (target, error) {
+// load: only a wss:// address is ever dialed (D-09, T-13.1-39).
+func newTarget(raw string) (target, error) {
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
-		return target{}, fmt.Errorf("%q is not a wss:// (or ws://) address", raw)
+	if err != nil || u.Scheme != "wss" {
+		return target{}, fmt.Errorf("%q is not a wss:// address", raw)
 	}
-	if !state.DialableURL(raw, allowPlain) {
-		return target{}, fmt.Errorf("%s is not an address the agent may dial: plain ws:// to another host needs TIERPLAN_AGENT_ALLOW_INSECURE=true", u.Host)
+	if !state.DialableURL(raw) {
+		return target{}, fmt.Errorf("%s is not an address the agent may dial", u.Host)
 	}
 	aud, err := authn.Audience(raw)
 	if err != nil {
@@ -235,21 +229,11 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		env.now = time.Now
 	}
 	u, err := url.Parse(cfg.URL)
-	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
-		return fmt.Errorf("TIERPLAN_AGENT_URL must be a wss:// (or ws://) address: %q", cfg.URL)
-	}
-	if !state.DialableURL(cfg.URL, cfg.AllowInsecure) {
-		return fmt.Errorf("TIERPLAN_AGENT_URL %s is plain ws:// for a host that is not loopback, so the agent will not dial it: use wss://, or set TIERPLAN_AGENT_ALLOW_INSECURE=true for development only", u.Host)
+	if err != nil || u.Scheme != "wss" || !state.DialableURL(cfg.URL) {
+		return fmt.Errorf("TIERPLAN_AGENT_URL must be a wss:// address: the agent connects to TierPlan only over TLS: %q", cfg.URL)
 	}
 	if _, err := authn.Audience(cfg.URL); err != nil {
 		return fmt.Errorf("TIERPLAN_AGENT_URL: %w", err)
-	}
-	if u.Scheme == "ws" {
-		if cfg.AllowInsecure {
-			log.Warn("the agent endpoint is plain ws:// and TIERPLAN_AGENT_ALLOW_INSECURE is set (development only): the join token and every Docker answer travel unencrypted")
-		} else {
-			log.Warn("the agent endpoint is plain ws:// (loopback): the join token and every Docker answer travel unencrypted")
-		}
 	}
 
 	// Until the server says otherwise the address from the environment is the only
@@ -284,12 +268,12 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 		if err != nil {
 			log.Warn("the agent could not read the addresses the server gave it; it will dial TIERPLAN_AGENT_URL", "error", err)
 		} else {
-			// A stored plain ws:// address for another host was learned or written
-			// under other settings. Without the switch it is not dialed (T-02-31, D-18).
+			// A stored plain ws:// address was learned or written by an earlier
+			// version. It is never dialed (D-09, T-13.1-39).
 			if kept := slices.DeleteFunc(slices.Clone(stored), func(e state.URLEntry) bool {
-				return !state.DialableURL(e.URL, cfg.AllowInsecure)
+				return !state.DialableURL(e.URL)
 			}); len(kept) != len(stored) {
-				log.Warn("the agent ignored stored addresses for plain ws:// on another host; TIERPLAN_AGENT_ALLOW_INSECURE=true is needed to dial them",
+				log.Warn("the agent dropped stored addresses that are not wss://; it dials only over TLS",
 					"count", len(stored)-len(kept))
 				stored = kept
 			}
@@ -516,7 +500,7 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	var first error
 	urls := r.dialURLs()
 	for i, raw := range urls {
-		tg, err := newTarget(raw, r.cfg.AllowInsecure)
+		tg, err := newTarget(raw)
 		if err != nil {
 			// Only addresses that passed state.ValidURL are kept, so this is a bug
 			// in what was stored, not something to stop on.
@@ -618,7 +602,7 @@ func (r *runner) hooks(verified bool) controlHooks {
 	warned := false
 	maint := r.cfg.Maint
 	if !verified {
-		maint = &insecureMaint{log: r.log}
+		maint = &unverifiedMaint{log: r.log}
 	}
 	return controlHooks{
 		maint: maint,
@@ -639,8 +623,7 @@ func (r *runner) hooks(verified bool) controlHooks {
 
 // pushable reports whether the agent will take an address from the server: one it
 // could dial, over wss. A verified session is TLS, so a plain ws:// address could
-// only be a downgrade. TIERPLAN_AGENT_ALLOW_INSECURE does not change this: it lets
-// the operator point the agent at a plain address, never the server.
+// only be a downgrade.
 func pushable(raw string) bool {
 	if !state.ValidURL(raw) {
 		return false

@@ -23,8 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 // File names inside the state directory.
@@ -256,16 +254,12 @@ func ValidPin(s string) bool {
 	return err == nil && len(raw) == 32
 }
 
-// DialableURL reports whether the agent may dial s: it passes ValidURL, and it is
-// either wss, or ws to a loopback host (the name localhost in any case, or an IP
-// literal that is loopback once an IPv4-mapped address is unmapped), or allowPlain
-// is true. A plain address sends the join token, the proof and every Docker answer
-// unencrypted to a peer that was never authenticated, so it is dialed only on the
-// same machine or when the operator set TIERPLAN_AGENT_ALLOW_INSECURE on the agent
-// itself (T-02-31). The loopback rule is authn.LoopbackHost in proto/authn, the
-// same one TierPlan applies to the address it tells agents to dial, so the two ends
-// cannot disagree about which plain address is local.
-func DialableURL(s string, allowPlain bool) bool {
+// DialableURL reports whether the agent may dial s: it passes ValidURL and it is
+// wss. A plain ws:// address would send the join token, the proof and every Docker
+// answer unencrypted to a peer that was never authenticated, so it is never dialed,
+// whether it came from the environment, the stored list or the server (D-09,
+// T-13.1-39).
+func DialableURL(s string) bool {
 	if !ValidURL(s) {
 		return false
 	}
@@ -273,7 +267,7 @@ func DialableURL(s string, allowPlain bool) bool {
 	if err != nil {
 		return false
 	}
-	return u.Scheme == "wss" || allowPlain || authn.LoopbackHost(u.Hostname())
+	return u.Scheme == "wss"
 }
 
 // live reports whether e still counts at now.

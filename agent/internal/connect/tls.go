@@ -40,10 +40,8 @@ import (
 // VerifyConnection, which is mandatory here and accepts only the three cases
 // above, in its place. For wss:// there is no other way to a verified-by-pin
 // connection and no setting, variable or error path that leaves a connection
-// unverified. Plain ws:// is not TLS at all: it is dialed only to a loopback host,
-// or to another host when TIERPLAN_AGENT_ALLOW_INSECURE is set on the agent, which
-// is for development (T-02-31). Nothing learned over such a session is kept
-// (pushes are taken only over a verified wss:// session).
+// unverified. The agent dials no plain ws:// address at all (D-09), and what a
+// server pushes is taken only over a verified wss:// session.
 
 const (
 	// untrustedCode is the code an operator searches the agent's log for.
