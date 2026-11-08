@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -50,17 +51,17 @@ const (
 	// including the volumes they name; on every agent-managed host it also covers
 	// volume creates (a worker's agent forwards no service write).
 	envAllowPrivilegedServices = "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"
-	// envAllowInsecure lets the agent dial plain ws:// to a host that is not
-	// loopback. For development only: the join token, the proof and every Docker
-	// answer then cross the network unencrypted to a server the agent cannot check
-	// (T-02-31). The default is false; wss:// is verified whatever its value.
-	envAllowInsecure = "TIERPLAN_AGENT_ALLOW_INSECURE"
-
 	// envHostRouteFile is where the agent reads its host's routes: a read-only bind
 	// mount of the host's /proc/1/net/route. The default is hostnet.DefaultRouteFile
 	// (/host/route). The file being absent is a state the agent reports, not an
 	// error, so the setting only names a place.
 	envHostRouteFile = "TIERPLAN_AGENT_HOST_ROUTE_FILE"
+
+	// removedAllowInsecureVar is the switch that once let the agent dial a plain
+	// ws:// address. It was removed (D-09): the agent connects only over wss://. The
+	// name stays here so that an old compose file or install command still starts,
+	// with one warning; no code reads its value as a switch.
+	removedAllowInsecureVar = "TIERPLAN_AGENT_ALLOW_INSECURE"
 
 	// envPin is the pin of the server's certificate, or several separated by
 	// commas, as "sha256/" and a base64 SPKI hash. The install command carries it
@@ -72,7 +73,7 @@ const (
 
 // Config is what the agent needs to start.
 type Config struct {
-	// URL is the server's agent endpoint (ws:// or wss://).
+	// URL is the server's agent endpoint (wss:// only).
 	URL string
 	// JoinToken is the one-time enrolment secret. It is never logged.
 	JoinToken string
@@ -94,9 +95,6 @@ type Config struct {
 	// manager it lets the agent forward service specs that give tasks host access,
 	// and on every agent-managed host it also covers volume creates.
 	AllowPrivilegedServices bool
-	// AllowInsecure allows a plain ws:// address for a host that is not loopback
-	// (development only).
-	AllowInsecure bool
 	// Pins are the server certificate pins from the install command, validated.
 	Pins []string
 	// HostRouteFile is TIERPLAN_AGENT_HOST_ROUTE_FILE: an absolute path, by default
@@ -112,8 +110,7 @@ type Config struct {
 // an agent with no token has an identity is decided by CheckEnrolled once the
 // process has dropped its privileges.
 //
-//	TIERPLAN_AGENT_URL              required, wss://; ws:// only to a loopback host, or with TIERPLAN_AGENT_ALLOW_INSECURE=true
-//	TIERPLAN_AGENT_ALLOW_INSECURE   true allows ws:// to another host (development only), default false
+//	TIERPLAN_AGENT_URL              required, wss:// for every host; a ws:// address stops the agent
 //	TIERPLAN_AGENT_JOIN_TOKEN_FILE  path of a Docker secret holding the token; wins over the variable
 //	TIERPLAN_AGENT_JOIN_TOKEN       the token itself
 //	TIERPLAN_AGENT_SOCKET           default /var/run/docker.sock
@@ -123,7 +120,7 @@ type Config struct {
 //	TIERPLAN_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
 //	TIERPLAN_AGENT_HOST_ROUTE_FILE  absolute, clean path of the host's route file, default /host/route
 //
-// The host policy flags (envReadOnly, envSelfUpdate and envAllowPrivilegedServices) and envAllowInsecure are
+// The host policy flags (envReadOnly, envSelfUpdate and envAllowPrivilegedServices) are
 // true or false; a value that is neither stops the agent, so that a restriction is
 // never dropped because it was misspelled.
 func Load(env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
@@ -139,13 +136,11 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		cfg.StateDir = DefaultStateDir
 	}
 
+	if err := checkURL(cfg.URL); err != nil {
+		return Config{}, err
+	}
+
 	var err error
-	if cfg.AllowInsecure, err = parseFlag(env, envAllowInsecure, false); err != nil {
-		return Config{}, err
-	}
-	if err := checkURL(cfg.URL, cfg.AllowInsecure); err != nil {
-		return Config{}, err
-	}
 
 	gid, err := parseGID(env("TIERPLAN_AGENT_DOCKER_GID"))
 	if err != nil {
@@ -183,6 +178,17 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 	cfg.JoinToken = token
 
 	return cfg, nil
+}
+
+// WarnRemoved logs one Warn when the environment still holds a setting that was
+// removed and now has no effect, so an old compose file or install command starts
+// instead of failing. It reports whether it warned. The value is never logged.
+func WarnRemoved(env func(string) string, log *slog.Logger) bool {
+	if strings.TrimSpace(env(removedAllowInsecureVar)) == "" {
+		return false
+	}
+	log.Warn(removedAllowInsecureVar + " was removed and has no effect: the agent connects only over wss://. Remove it from the agent's configuration.")
+	return true
 }
 
 // CheckEnrolled decides whether an agent without a join token may start: it may
@@ -228,30 +234,26 @@ func LoadHelper(env func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// checkURL requires an address the agent may dial (state.ValidURL and
-// state.DialableURL): ws:// or wss:// with a host and no user name, query or
-// fragment. The URL itself can hold no secret, because the token travels in the
-// handshake, never in a URL (D-20); an error never repeats the value, since a
-// mistaken one may carry a password. A plain ws:// address for a host that is not
-// loopback needs allowInsecure, so a mistyped scheme cannot send the join token
-// over the network unencrypted (T-02-31).
-func checkURL(raw string, allowInsecure bool) error {
+// checkURL requires an address the agent may dial: wss:// with a host and no user
+// name, query or fragment, for every host, loopback included. The URL itself can
+// hold no secret, because the token travels in the handshake, never in a URL
+// (D-20); an error never repeats the value, since a mistaken one may carry a
+// password. A plain ws:// address stops the agent here, before any dial, so a
+// mistyped scheme cannot send the join token over the network unencrypted
+// (T-02-31, D-09).
+func checkURL(raw string) error {
 	if raw == "" {
 		return errors.New("TIERPLAN_AGENT_URL must be set to the server's agent address, for example wss://tierplan.example/agent/connect")
 	}
 	if !state.ValidURL(raw) {
-		msg := "TIERPLAN_AGENT_URL must be a ws:// or wss:// address with a host and no user name, query or fragment"
+		msg := "TIERPLAN_AGENT_URL must be a wss:// address with a host and no user name, query or fragment"
 		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
 			msg += " (the host is " + u.Hostname() + ")"
 		}
 		return errors.New(msg)
 	}
-	if !state.DialableURL(raw, allowInsecure) {
-		host := ""
-		if u, err := url.Parse(raw); err == nil {
-			host = u.Hostname()
-		}
-		return fmt.Errorf("TIERPLAN_AGENT_URL is a plain ws:// address for %s: the join token and every Docker answer would cross the network unencrypted, to a server the agent cannot check. Use wss:// with a certificate the agent checks; %s=true allows it, for development only", host, envAllowInsecure)
+	if u, err := url.Parse(raw); err != nil || !strings.EqualFold(u.Scheme, "wss") {
+		return errors.New("TIERPLAN_AGENT_URL must start with wss://: the agent connects to TierPlan only over TLS")
 	}
 	return nil
 }

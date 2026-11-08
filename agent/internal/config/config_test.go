@@ -249,7 +249,7 @@ func TestLoadRequiresAWebSocketURL(t *testing.T) {
 			t.Errorf("URL %q: the error %q does not name TIERPLAN_AGENT_URL", u, err)
 		}
 	}
-	for _, u := range []string{"ws://127.0.0.1:7480/agent/connect", goodURL} {
+	for _, u := range []string{"wss://127.0.0.1:7480/agent/connect", goodURL} {
 		if _, err := Load(
 			env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}),
 			files(nil),
@@ -499,54 +499,69 @@ func TestLoadHelperRefusesAGroupThatIsNotANumber(t *testing.T) {
 	}
 }
 
-func TestLoadRefusesPlainWSToAnotherHostWithoutTheSwitch(t *testing.T) {
-	for _, u := range []string{"ws://tierplan.example/agent/connect", "ws://192.168.1.10:7480/agent/connect", "ws://[2001:db8::1]/agent/connect"} {
+func TestLoadRefusesPlainWSForEveryHost(t *testing.T) {
+	for _, u := range []string{
+		"ws://tierplan.example/agent/connect",
+		"ws://192.168.1.10:7480/agent/connect",
+		"ws://[2001:db8::1]/agent/connect",
+		"ws://127.0.0.1:7480/agent/connect",
+		"ws://localhost/agent/connect",
+		"ws://[::1]:7480/agent/connect",
+		"WS://localhost/agent/connect",
+	} {
 		_, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
 		if err == nil {
-			t.Errorf("URL %q without the switch: want an error", u)
+			t.Errorf("URL %q: want an error", u)
 			continue
 		}
-		for _, want := range []string{"TIERPLAN_AGENT_URL", "TIERPLAN_AGENT_ALLOW_INSECURE", "wss://", "development"} {
+		for _, want := range []string{"TIERPLAN_AGENT_URL must start with wss://", "only over TLS"} {
 			if !strings.Contains(err.Error(), want) {
-				t.Errorf("URL %q: the error %q does not mention %s", u, err, want)
+				t.Errorf("URL %q: the error %q does not mention %q", u, err, want)
 			}
 		}
-		cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", "TIERPLAN_AGENT_ALLOW_INSECURE": "true"}), files(nil))
-		if err != nil || !cfg.AllowInsecure {
-			t.Errorf("URL %q with the switch: cfg.AllowInsecure %v, err %v; want it loaded", u, cfg.AllowInsecure, err)
+		// Naming the removed switch no longer opens the door.
+		_, err = Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok", "TIERPLAN_AGENT_" + "ALLOW_INSECURE": "true"}), files(nil))
+		if err == nil {
+			t.Errorf("URL %q with the removed switch set: want an error", u)
 		}
 	}
-	for _, u := range []string{"ws://127.0.0.1:7480/agent/connect", "ws://localhost/agent/connect", goodURL} {
+	for _, u := range []string{goodURL, "wss://127.0.0.1:7480/agent/connect", "wss://localhost/agent/connect"} {
 		cfg, err := Load(env(map[string]string{"TIERPLAN_AGENT_URL": u, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}), files(nil))
-		if err != nil || cfg.AllowInsecure {
-			t.Errorf("URL %q without the switch: cfg.AllowInsecure %v, err %v; want it loaded with the switch off", u, cfg.AllowInsecure, err)
+		if err != nil || cfg.URL != u {
+			t.Errorf("URL %q: cfg.URL %q, err %v; want it loaded", u, cfg.URL, err)
 		}
 	}
 }
 
-func TestLoadReadsTheAllowInsecureSwitchStrictly(t *testing.T) {
+func TestLoadWarnsOnceAboutTheRemovedSwitch(t *testing.T) {
+	const removed = "TIERPLAN_AGENT_" + "ALLOW_INSECURE"
 	base := map[string]string{"TIERPLAN_AGENT_URL": goodURL, "TIERPLAN_AGENT_JOIN_TOKEN": "tok"}
-	cfg, err := Load(env(base), files(nil))
-	if err != nil || cfg.AllowInsecure {
-		t.Fatalf("default: AllowInsecure %v, err %v; want false", cfg.AllowInsecure, err)
+	warnings := func(m map[string]string) (int, string) {
+		var logs bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logs, nil))
+		e := env(m)
+		if _, err := Load(e, files(nil)); err != nil {
+			t.Fatalf("Load with %v: %v", m, err)
+		}
+		WarnRemoved(e, log)
+		return strings.Count(logs.String(), "level=WARN"), logs.String()
 	}
-	for v, want := range map[string]bool{"true": true, "TRUE": true, "1": true, "false": false, "0": false} {
-		m := map[string]string{"TIERPLAN_AGENT_ALLOW_INSECURE": v}
+
+	for _, v := range []string{"true", "false", "1"} {
+		m := map[string]string{removed: v}
 		for k, x := range base {
 			m[k] = x
 		}
-		cfg, err := Load(env(m), files(nil))
-		if err != nil || cfg.AllowInsecure != want {
-			t.Errorf("value %q: AllowInsecure %v, err %v; want %v", v, cfg.AllowInsecure, err, want)
+		n, out := warnings(m)
+		if n != 1 {
+			t.Errorf("value %q: %d warnings, want exactly one: %s", v, n, out)
+		}
+		if !strings.Contains(out, removed+" was removed and has no effect") || !strings.Contains(out, "wss://") {
+			t.Errorf("value %q: the warning does not say the variable was removed: %s", v, out)
 		}
 	}
-	m := map[string]string{"TIERPLAN_AGENT_ALLOW_INSECURE": "yes please"}
-	for k, x := range base {
-		m[k] = x
-	}
-	_, err = Load(env(m), files(nil))
-	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_ALLOW_INSECURE") {
-		t.Fatalf("a switch that is not a boolean: err = %v, want one naming the variable", err)
+	if n, out := warnings(base); n != 0 || out != "" {
+		t.Errorf("the variable absent: %d warnings, output %q; want none", n, out)
 	}
 }
 

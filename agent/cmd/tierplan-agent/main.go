@@ -77,6 +77,9 @@ func run(d deps) int {
 		return 2
 	}
 
+	// A variable removed from the agent only warns, so an old install command still starts.
+	config.WarnRemoved(d.getenv, log)
+
 	res, err := d.drop(privdrop.Options{SocketPath: cfg.SocketPath, DockerGID: cfg.DockerGID})
 	if err != nil {
 		log.Error("the agent could not drop its privileges, so it will not start", "error", err)
@@ -100,7 +103,6 @@ func run(d deps) int {
 		"read_only", cfg.ReadOnly,
 		"self_update", cfg.SelfUpdate,
 		"allow_privileged_services", cfg.AllowPrivilegedServices,
-		"allow_insecure", cfg.AllowInsecure,
 		"host_route_file", cfg.HostRouteFile,
 		"dropped_privileges", res.Dropped,
 		"uid", d.getuid(),
@@ -120,7 +122,7 @@ func run(d deps) int {
 	err = d.connect(ctx, connect.Config{
 		URL: cfg.URL, JoinToken: cfg.JoinToken, SocketPath: cfg.SocketPath, Version: version.Version, Log: log,
 		StateDir: cfg.StateDir, BackoffMin: cfg.BackoffMin, BackoffMax: cfg.BackoffMax,
-		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, AllowPrivilegedServices: cfg.AllowPrivilegedServices, AllowInsecure: cfg.AllowInsecure, InstallPins: cfg.Pins, HostRouteFile: cfg.HostRouteFile,
+		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, AllowPrivilegedServices: cfg.AllowPrivilegedServices, InstallPins: cfg.Pins, HostRouteFile: cfg.HostRouteFile,
 		Maint: selfmaint.New(selfmaint.Config{
 			SocketPath: cfg.SocketPath, SelfUpdate: cfg.SelfUpdate, StateDir: cfg.StateDir, Log: log,
 		}),
