@@ -6,8 +6,11 @@ package server
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // deprecationText is the start of the line logged for a leftover TIERPLAN_TLS_SELF_SIGNED.
@@ -46,4 +49,55 @@ func TestNoDeprecationLineWhenUnset(t *testing.T) {
 	if strings.Contains(logged, "deprecated") {
 		t.Errorf("a deprecation line was logged with TIERPLAN_TLS_SELF_SIGNED unset; log:\n%s", logged)
 	}
+}
+
+func TestCertFilesWinOverTheDefaultAndTheDeprecatedSwitch(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	want := writePair(t, crt, key, "supplied.example.com")
+	files := map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key}
+
+	t.Run("files with the deprecated switch set", func(t *testing.T) {
+		env := map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}
+		for k, v := range files {
+			env[k] = v
+		}
+		srv, logged := buildLogged(t, env)
+		if got := leafOf(t, srv.https.Config()); !got.Equal(want) {
+			t.Error("the server did not serve the supplied certificate")
+		}
+		if pins := srv.Tunnel().Pins(); len(pins) != 0 {
+			t.Errorf("welcome pins = %v for a supplied certificate, want none", pins)
+		}
+		if n := strings.Count(logged, deprecationText); n != 1 {
+			t.Errorf("the deprecation line appeared %d times, want once", n)
+		}
+	})
+	t.Run("files alone", func(t *testing.T) {
+		env := map[string]string{}
+		for k, v := range files {
+			env[k] = v
+		}
+		srv, logged := buildLogged(t, env)
+		if got := leafOf(t, srv.https.Config()); !got.Equal(want) {
+			t.Error("the server did not serve the supplied certificate")
+		}
+		if pins := srv.Tunnel().Pins(); len(pins) != 0 {
+			t.Errorf("welcome pins = %v for a supplied certificate, want none", pins)
+		}
+		if strings.Contains(logged, "deprecated") {
+			t.Error("a deprecation line was logged with the switch unset")
+		}
+	})
+	t.Run("a key file without a cert file, or the reverse, is still refused", func(t *testing.T) {
+		for _, cfg := range []config.Config{
+			{DataDir: t.TempDir(), TLSKeyFile: key},
+			{DataDir: t.TempDir(), TLSCertFile: crt},
+			{DataDir: t.TempDir(), TLSSelfSigned: true, TLSKeyFile: key},
+		} {
+			if _, _, err := newCertSource(context.Background(), cfg, newMemCertStore(), nil, nil, nowFn(fixedNow)); err == nil {
+				t.Errorf("newCertSource accepted %+v, want an error", cfg)
+			}
+		}
+	})
 }

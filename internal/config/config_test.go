@@ -298,13 +298,16 @@ func TestTLSSettingsMustBeConsistent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_KEY_FILE") {
 		t.Errorf("cert without key error = %v", err)
 	}
-	_, err = load(t, nil, envMap{
+	// Cert files win over the deprecated switch: both set is accepted (D-14).
+	c, err := load(t, nil, envMap{
 		"TIERPLAN_TLS_CERT_FILE":   "/c.pem",
 		"TIERPLAN_TLS_KEY_FILE":    "/k.pem",
 		"TIERPLAN_TLS_SELF_SIGNED": "true",
 	}, files{})
-	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_SELF_SIGNED") {
-		t.Errorf("cert plus self-signed error = %v", err)
+	if err != nil {
+		t.Errorf("cert files plus the deprecated switch were rejected: %v", err)
+	} else if c.TLSCertFile != "/c.pem" || c.TLSKeyFile != "/k.pem" || !c.TLSSelfSignedSet {
+		t.Errorf("cert files plus the deprecated switch loaded as %+v", c)
 	}
 }
 

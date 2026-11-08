@@ -115,16 +115,17 @@ func TestTLSDefaultIsTheSelfSignedCertificate(t *testing.T) {
 	}
 }
 
-func TestTLSConfigRefusesFilesTogetherWithSelfSigned(t *testing.T) {
-	cfg := config.Config{DataDir: t.TempDir(), TLSSelfSigned: true, TLSCertFile: "/c.pem", TLSKeyFile: "/k.pem"}
-	_, _, err := newCertSource(context.Background(), cfg, newMemCertStore(), nil, nil, nowFn(fixedNow))
-	if err == nil {
-		t.Fatal("want an error")
+func TestTLSConfigServesFilesEvenWithTheDeprecatedSwitch(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	want := writePair(t, crt, key, "supplied.example.com")
+	cfg := config.Config{DataDir: t.TempDir(), TLSSelfSigned: true, TLSCertFile: crt, TLSKeyFile: key}
+	src, kind, err := newCertSource(context.Background(), cfg, newMemCertStore(), nil, nil, nowFn(fixedNow))
+	if err != nil || kind != tlsKindSupplied {
+		t.Fatalf("newCertSource = %v, %v, want the supplied kind and no error", kind, err)
 	}
-	for _, want := range []string{"TIERPLAN_TLS_SELF_SIGNED", "TIERPLAN_TLS_CERT_FILE", "TIERPLAN_TLS_KEY_FILE"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not name %s", err, want)
-		}
+	if got := leafOf(t, &tls.Config{GetCertificate: src.GetCertificate}); !got.Equal(want) {
+		t.Error("the supplied certificate was not served")
 	}
 }
 
