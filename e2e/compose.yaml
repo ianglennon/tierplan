@@ -178,8 +178,14 @@ services:
     init: true
     user: pwuser
     working_dir: /e2e
+    environment:
+      # page.request and context.request are made by this server's Node, not by Chromium, so
+      # the browser's SPKI flag does not cover them. Node takes the proxy's certificate (the
+      # one Caddy serves) as an extra root and still verifies its name and dates.
+      NODE_EXTRA_CA_CERTS: /certs/cert.pem
     volumes:
       - ./node_modules:/e2e/node_modules:ro
+      - ../.devdata/e2e-tls/cert.pem:/certs/cert.pem:ro
     # --unsafe lets the runner's launch args reach this Chromium: without it the server
     # drops them, and the SPKI pin the browser trusts the proxy certificate by
     # (playwright.config.ts) would never arrive. The port is published on loopback only.

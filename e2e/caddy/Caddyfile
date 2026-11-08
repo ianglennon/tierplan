@@ -37,9 +37,9 @@ https://:443, https://:{$TIERPLAN_E2E_HTTPS_PORT:8443} {
 		# TierPlan serves https with its own self-signed certificate, which Caddy
 		# verifies against the copy TierPlan mirrors to its data volume. Caddy 2.11
 		# rewrites Host for an https upstream, which would break TierPlan's check of
-		# the public URL, so the browser's Host is passed through.
+		# the public URL, so the browser's Host, with its port ({host} alone drops it), is passed through.
 		reverse_proxy https://tierplan:7480 {
-			header_up Host {host}
+			header_up Host {hostport}
 			transport http {
 				tls_trust_pool file /tierplan-data/tls/server.crt
 				tls_server_name tierplan
