@@ -11,6 +11,9 @@
 //
 //	go run scripts/e2e-cert.go -out .devdata/e2e-tls
 //
+// -dns adds comma-separated host names to the certificate (scripts/proxy-smoke.sh
+// names the sites it serves).
+//
 // It writes cert.pem, key.pem and pin.txt. pin.txt holds the SPKI pin the agent
 // is given in TIERPLAN_AGENT_PIN, written by authn.SPKIPin, the same function that
 // writes the pin TierPlan shows for its own certificate. An existing, unexpired
@@ -31,6 +34,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ianglennon/tierplan/proto/authn"
@@ -46,14 +50,15 @@ const (
 
 func main() {
 	out := flag.String("out", ".devdata/e2e-tls", "directory for cert.pem, key.pem and pin.txt")
+	dns := flag.String("dns", "", "comma-separated host names to add to the certificate")
 	flag.Parse()
-	if err := run(*out); err != nil {
+	if err := run(*out, *dns); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e-cert:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dir string) error {
+func run(dir, dns string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -81,6 +86,12 @@ func run(dir string) error {
 		return err
 	}
 	now := time.Now()
+	names := []string{"localhost"}
+	for _, n := range strings.Split(dns, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "tierplan-e2e-proxy", Organization: []string{"TierPlan end-to-end harness"}},
@@ -89,7 +100,7 @@ func run(dir string) error {
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
+		DNSNames:              names,
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP(proxyIP)},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
