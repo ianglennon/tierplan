@@ -100,8 +100,8 @@ type UpdateSettingsInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
 		InstanceName *string `json:"instanceName,omitempty" doc:"New instance name, 1 to 64 characters"`
-		PublicURL    *string `json:"publicUrl,omitempty" doc:"New public URL, an absolute http or https URL. Refused with 409 public_url_locked while TIERPLAN_PUBLIC_URL is set"`
-		AgentURL     *string `json:"agentUrl,omitempty" doc:"New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL is refused with 422 insecure_agent_url, because agents connect only over wss://"`
+		PublicURL    *string `json:"publicUrl,omitempty" doc:"New public URL, an absolute https URL. An http URL is refused with 422 invalid_public_url, because TierPlan serves HTTPS only. Refused with 409 public_url_locked while TIERPLAN_PUBLIC_URL is set"`
+		AgentURL     *string `json:"agentUrl,omitempty" doc:"New agent URL, an absolute https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL is refused with 422 invalid_agent_url, because TierPlan serves HTTPS only and agents connect only over wss://"`
 	}
 }
 
@@ -177,9 +177,9 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Summary:     "Change the instance name, the public URL or the agent URL",
 		Description: "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field " +
 			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + ", " + codeInsecureAgentURL + "). " +
-			"An agent URL that is plain http answers 422 " + codeInsecureAgentURL + ": an http agent address is refused, " +
-			"because agents connect only over wss://; an https agent URL, clearing it, " +
-			"and an http public URL are accepted. A different public URL while " +
+			"An http public URL answers 422 " + codeInvalidPublicURL + " and an http agent URL answers 422 " + codeInvalidAgentURL +
+			", each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. " +
+			"An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while " +
 			"TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set " +
 			"answers 409 " + problemAgentURLLocked + "; both change nothing. An empty agentUrl clears it. A change takes effect at once: " +
 			"the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents " +
@@ -208,6 +208,15 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			problems = append(problems, &huma.ErrorDetail{Location: location, Message: code})
 		}
 
+		// The code stays the SPA's key; the fixed https-only reason rides in the
+		// problem detail, never the submitted value (D-07).
+		detail := "validation failed"
+		noteHTTPSOnly := func(location string, err error) {
+			if errors.Is(err, config.ErrHTTPSOnly) {
+				detail = "validation failed: " + location + " " + err.Error()
+			}
+		}
+
 		if in.Body.InstanceName != nil {
 			n := strings.TrimSpace(*in.Body.InstanceName)
 			switch c := utf8.RuneCountInString(n); {
@@ -232,6 +241,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 				}
 			case err != nil || u == "":
 				add("body.publicUrl", codeInvalidPublicURL)
+				noteHTTPSOnly("body.publicUrl", err)
 			case u != url:
 				details["public_url_from"], details["public_url_to"] = url, u
 				url = u
@@ -249,6 +259,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 				}
 			case err != nil:
 				add("body.agentUrl", codeInvalidAgentURL)
+				noteHTTPSOnly("body.agentUrl", err)
 			case u != agentURL && u != "" && tunnel.PlainAddressRefused(u):
 				// Agents refuse this address and so does TierPlan; saving it would
 				// only hand them one they cannot dial (G-02-R4-3, T-02-148).
@@ -264,7 +275,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 				Type:   problemValidationFailed,
 				Title:  http.StatusText(http.StatusUnprocessableEntity),
 				Status: http.StatusUnprocessableEntity,
-				Detail: "validation failed",
+				Detail: detail,
 				Errors: problems,
 			}
 		}

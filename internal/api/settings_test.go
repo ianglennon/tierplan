@@ -643,6 +643,19 @@ func TestGetSettingsSaysWhenAgentsCannotUseTheEndpoint(t *testing.T) {
 	}
 }
 
+// assertHTTPSOnlyReason checks a 422 says why an http URL was refused and does
+// not repeat the submitted value (D-07, T-13.1-43).
+func assertHTTPSOnlyReason(t *testing.T, rec *httptest.ResponseRecorder, submitted string) {
+	t.Helper()
+	body := rec.Body.String()
+	if !strings.Contains(body, "HTTPS only") {
+		t.Errorf("%q: body = %s, want the reason: TierPlan serves HTTPS only", submitted, body)
+	}
+	if strings.Contains(body, submitted) {
+		t.Errorf("%q: body = %s echoes the submitted URL", submitted, body)
+	}
+}
+
 func TestPatchSettingsRefusesAnHTTPAgentURLAndPublicURLForEveryHost(t *testing.T) {
 	t.Parallel()
 	fake := &fakeSettingsAgents{connected: map[string]bool{"a": true}}
@@ -661,6 +674,7 @@ func TestPatchSettingsRefusesAnHTTPAgentURLAndPublicURLForEveryHost(t *testing.T
 		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.agentUrl" || p.Errors[0].Message != "invalid_agent_url" {
 			t.Fatalf("%q: problem = %+v, want invalid_agent_url at body.agentUrl", bad, p)
 		}
+		assertHTTPSOnlyReason(t, rec, bad)
 		// The public URL runs the same rule, so an http one is refused too.
 		rec = f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Changed", "publicUrl": bad})
 		if rec.Code != http.StatusUnprocessableEntity {
@@ -670,6 +684,7 @@ func TestPatchSettingsRefusesAnHTTPAgentURLAndPublicURLForEveryHost(t *testing.T
 		if p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != "body.publicUrl" || p.Errors[0].Message != "invalid_public_url" {
 			t.Fatalf("public URL %q: problem = %+v, want invalid_public_url at body.publicUrl", bad, p)
 		}
+		assertHTTPSOnlyReason(t, rec, bad)
 	}
 	if _, s := f.getSettings(t, cookie); s.AgentURL != "https://agent.internal:7480" || s.InstanceName == "Changed" {
 		t.Fatalf("a refused change stored agent URL %q name %q", s.AgentURL, s.InstanceName)

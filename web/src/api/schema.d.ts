@@ -4725,7 +4725,7 @@ export interface paths {
         head?: never;
         /**
          * Change the instance name, the public URL or the agent URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An agent URL that is plain http answers 422 insecure_agent_url: an http agent address is refused, because agents connect only over wss://; an https agent URL, clearing it, and an http public URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url, insecure_agent_url). An http public URL answers 422 invalid_public_url and an http agent URL answers 422 invalid_agent_url, each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -15215,11 +15215,11 @@ export interface components {
             schedule: string;
         };
         UpdateSettingsInputBody: {
-            /** @description New agent URL, an absolute http or https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL is refused with 422 insecure_agent_url, because agents connect only over wss:// */
+            /** @description New agent URL, an absolute https URL, or an empty string to clear it so agents dial the public URL. Refused with a 409 while TIERPLAN_AGENT_URL is set. An http agent URL is refused with 422 invalid_agent_url, because TierPlan serves HTTPS only and agents connect only over wss:// */
             agentUrl?: string;
             /** @description New instance name, 1 to 64 characters */
             instanceName?: string;
-            /** @description New public URL, an absolute http or https URL. Refused with 409 public_url_locked while TIERPLAN_PUBLIC_URL is set */
+            /** @description New public URL, an absolute https URL. An http URL is refused with 422 invalid_public_url, because TierPlan serves HTTPS only. Refused with 409 public_url_locked while TIERPLAN_PUBLIC_URL is set */
             publicUrl?: string;
         };
         UpdateShellSettingsInputBody: {
