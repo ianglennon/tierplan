@@ -17,7 +17,6 @@ A remote Docker host or swarm is managed through a small agent that you install 
 - [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again)
 - [Updates](#updates)
 - [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)
-- [Development only: plain ws://](#development-only-plain-ws)
 
 ## What the agent is
 
@@ -167,7 +166,7 @@ A read-only host refuses the call before the body is read. The bind mounts of a 
 ## Before you install
 
 1. **TierPlan must be reachable from the host.** The agent dials `<agent URL>/agent/connect` over `wss://`. The agent URL is `TIERPLAN_AGENT_URL`, or the public URL (`TIERPLAN_PUBLIC_URL`) when it is not set. The install command shows the exact address under **Connects to**. If TierPlan is behind a reverse proxy, the proxy has to pass WebSocket upgrades and TierPlan has to trust its `X-Forwarded-Proto` header: see [Running TierPlan behind a reverse proxy](reverse-proxy.md).
-2. **TierPlan must have a certificate the agent can check.** Either a certificate from a public CA, TierPlan's own self-signed certificate (the install command carries its pin), or a proxy's private certificate (add `TIERPLAN_AGENT_PIN`, see below). On `wss://` the agent always checks the certificate, and no setting skips the check. It does not dial plain `ws://` to another host unless `TIERPLAN_AGENT_ALLOW_INSECURE=true` is set on the agent, which is for development only (see [Development only](#development-only-plain-ws)). TierPlan holds itself to the same rule. Without its own `TIERPLAN_AGENT_ALLOW_INSECURE=true` it refuses plain connections to an agent address on another host, and it refuses to add an agent environment or rotate a join token for one (`insecure_agent_url`). Settings, General says so under the Agent URL field. So a TierPlan reached over plain `http`, such as a plain `docker run` install, can connect agents only on its own machine. For other hosts, give it a certificate or put a TLS proxy in front.
+2. **The agent must be able to check TierPlan's certificate.** Agents connect only over `wss://` and always verify the certificate; no setting skips the check, and the agent refuses a `ws://` address at start. TierPlan always serves HTTPS. With its own certificate (the default) every install command carries that certificate's pin (`TIERPLAN_AGENT_PIN`), so a direct connection needs nothing more. With certificate files you supply, or a public-CA certificate on a proxy in front, the agent trusts the certificate through the system roots and the command carries no pin. A proxy with a certificate from a private CA needs its own pin added; see [A proxy with its own certificate](#a-proxy-with-its-own-certificate-tierplan_agent_pin). TierPlan itself refuses a plain connection to the agent endpoint (`insecure_transport`), so a proxy must talk HTTPS to TierPlan.
 3. **Docker Engine 24 to 29** on every host. Older engines are shown as unsupported.
 4. **The host's clock must be right** to within five minutes (use NTP). TierPlan refuses an agent beyond that.
 
@@ -336,15 +335,15 @@ These are set by whoever owns the host, in the agent's environment (`-e` on a st
 | `TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES` | `false` | On a swarm manager, let the agent forward service specs that give tasks host access (and, on every agent-managed host, container creates that give the container host access, see [Container creates and host access](#container-creates-and-host-access)): a bind of the Docker socket or of a host path outside `/srv`, `/mnt` and `/media`, an added capability, a lowered sandbox, the host network (see [Service specs and host access](#service-specs-and-host-access)), and volumes that mount the host or use a volume plugin. Set it only on a swarm where you accept that a compromised TierPlan could then run a privileged service on every node, which is root on every node. It takes `true` or `false` (the other spellings Go's boolean parser reads, such as `1`, also work); any other value, a typo like `yes` included, stops the agent at start and names the variable, so the restriction is never dropped by mistake. On managers it covers service writes, including the volumes they name; on every agent-managed host it also covers volume creates. The server's own host has no agent; set it on the agent of every host where you need host-folder or plugin volumes outside `/srv`, `/mnt` and `/media`. |
 | `TIERPLAN_AGENT_SELF_UPDATE` | `true` | Whether the agent may update or uninstall itself when TierPlan asks. With `false` the node list gives you the update command to run by hand and removing the environment leaves the agent in place (see [Updates](#updates) and [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)). |
 
-Smaller settings, rarely needed: `TIERPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `TIERPLAN_AGENT_STATE_DIR` (default `/var/lib/tierplan-agent`), `TIERPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `TIERPLAN_AGENT_BACKOFF_MIN` and `TIERPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default), `TIERPLAN_AGENT_HOST_ROUTE_FILE` (default `/host/route`, an absolute path to a read-only mount of the host's `/proc/1/net/route`; when the agent can read it, the handshake says so and TierPlan can ask for the host's IPv4 routes to warn about a subnet that collides with a LAN or VPN route; when it cannot, the check is skipped and nothing else changes), and `TIERPLAN_AGENT_ALLOW_INSECURE` (development only, see [Development only](#development-only-plain-ws)).
+Smaller settings, rarely needed: `TIERPLAN_AGENT_SOCKET` (default `/var/run/docker.sock`), `TIERPLAN_AGENT_STATE_DIR` (default `/var/lib/tierplan-agent`), `TIERPLAN_AGENT_DOCKER_GID` (the group of the socket, when it cannot be detected), `TIERPLAN_AGENT_BACKOFF_MIN` and `TIERPLAN_AGENT_BACKOFF_MAX` (reconnect delay, 1 s to 60 s by default), `TIERPLAN_AGENT_HOST_ROUTE_FILE` (default `/host/route`, an absolute path to a read-only mount of the host's `/proc/1/net/route`; when the agent can read it, the handshake says so and TierPlan can ask for the host's IPv4 routes to warn about a subnet that collides with a LAN or VPN route; when it cannot, the check is skipped and nothing else changes).
 
 ## A proxy with its own certificate: TIERPLAN_AGENT_PIN
 
-These three ways apply to `wss://`, the only scheme a real install uses. The agent checks TierPlan's certificate in one of them and never skips the check:
+Agents use `wss://` only. The agent checks TierPlan's certificate in one of these ways and never skips the check:
 
 1. **A certificate from a public CA** (Let's Encrypt, a commercial CA): nothing to configure.
-2. **TierPlan's own self-signed certificate** (`TIERPLAN_TLS_SELF_SIGNED=true`): the install command carries `TIERPLAN_AGENT_PIN`, the pin of TierPlan's key. The key survives renewals, so the pin does not change.
-3. **A proxy with a certificate of its own CA** (a corporate CA, Caddy's internal CA, a self-signed certificate on the proxy): TierPlan cannot know that certificate, so the command it shows has no pin and the agent answers `tls_untrusted`. Add the pin yourself.
+2. **TierPlan's own self-signed certificate** (the default): the install command carries `TIERPLAN_AGENT_PIN`, the pin of TierPlan's key. The key is made once, is kept in the database and in every backup, and is never replaced by a re-signing, so the pin does not change, even across a restore onto a new host.
+3. **A proxy with a certificate of its own CA** (a corporate CA, Caddy's internal CA, a self-signed certificate on the proxy): TierPlan cannot know that certificate. The pin in the command, if there is one, is TierPlan's own, which the proxy does not present, so the agent answers `tls_untrusted`. Add the proxy's pin to `TIERPLAN_AGENT_PIN`, separated by a comma from any pin already there.
 
 A pin is `sha256/` and the base64 SHA-256 of a certificate's public key (its SPKI). Compute it from the certificate file:
 
@@ -376,7 +375,7 @@ docker service logs tierplan-agent   # swarm
 
 If the agent connects by an IP address (for example the proxy's address on a Docker network, because a host cannot resolve container names), the certificate must list that IP as a subject alternative name.
 
-**Do not use `TIERPLAN_AGENT_ALLOW_INSECURE` to get around a certificate problem.** It exists for local development only (see [Development only](#development-only-plain-ws)).
+There is no switch that turns the check off, and none should be added to get around a certificate problem: fix the certificate or add its pin.
 
 ## Change TierPlan's agent address
 
@@ -384,8 +383,8 @@ Agents dial the agent URL (`TIERPLAN_AGENT_URL`, or the public URL when it is no
 
 When you change the address in Settings, General:
 
-- Every agent that is connected over `wss://` is sent the new address over its tunnel straight away, keeps its current connection, and dials the new address from its next connection. A move to a plain `http` agent URL is not sent this way.
-- Agents on plain `ws://` are not told, and neither are agents that are offline. The confirmation counts the offline ones.
+- Every agent that is connected over `wss://` is sent the new address over its tunnel straight away, keeps its current connection, and dials the new address from its next connection. An `http` agent URL is refused, so there is no such move.
+- Agents that are offline are not told. The confirmation counts the offline ones.
 - From then on TierPlan refuses any agent that dials a different host or port, with `auth_rejected` and the audit reason `audience`. There is no fallback period. The agent keeps the previous address in its list for 30 days, but that helps only if you change the address back.
 
 To get a refused agent back, either change the address back in Settings (the agent reconnects by itself), or start it again with the new address on its existing `tierplan-agent` volume, so it keeps its identity and needs no join token:
@@ -417,7 +416,7 @@ TierPlan shows the same reason on the environment, in the overview's tooltip, in
 |------|---------------|------------|
 | `agent_offline` | The agent on a node is not connected. | Check that it is running (`docker ps` on a standalone host, `docker service ps tierplan-agent` on a swarm) and look at its log. It reconnects by itself when it can reach TierPlan. |
 | `tls_untrusted` | The agent does not trust TierPlan's certificate. | Use a certificate from a public CA, or give the agent the pin: see [TIERPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-tierplan_agent_pin). With TierPlan's own certificate, reinstall with the command from Show install command, which carries the pin. |
-| `auth_rejected` | TierPlan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. It is also what an agent gets when it dials an address that is no longer TierPlan's agent URL, because it was offline or on plain `ws://` when the address changed. | For a token problem, generate a new join token and reinstall the agent with the new command. The audit log entry's reason tells which it was: `audience` means the address, and [Change TierPlan's agent address](#change-tierplans-agent-address) says how to get the agent back. |
+| `auth_rejected` | TierPlan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. It is also what an agent gets when it dials an address that is no longer TierPlan's agent URL, because it was offline when the address changed. | For a token problem, generate a new join token and reinstall the agent with the new command. The audit log entry's reason tells which it was: `audience` means the address, and [Change TierPlan's agent address](#change-tierplans-agent-address) says how to get the agent back. |
 | `cert_expired` | The agent's certificate expired before it could renew (the host was off or cut off for a month). | Reinstall the agent with a fresh join token. It enrols again with a new certificate. While it can reach TierPlan an agent renews by itself, two thirds of the way through the certificate's life. |
 | `revoked` | An admin revoked the node. | Remove the agent from the host. To let it back in, see [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again). |
 | `blocked` | The node is blocked from enrolling. | Unblock it in Settings, Environments, in the nodes list. |
@@ -439,7 +438,7 @@ An agent that is refused when it first connects also gets one of these. They app
 | `duplicate_environment` | The host already belongs to another environment. | Open that environment, or remove it first, then enrol again. |
 | `type_mismatch` | A swarm manager used a standalone environment's command, or the other way round. | Add the host as its own environment. |
 | `host_mismatch` | A standalone environment already manages a different host. | Add this host as its own environment. |
-| `insecure_transport` (agent log: HTTP 403 "did not arrive over TLS") | Two causes. TierPlan's agent address is `https`, but the agent's connection reached it as plain HTTP: usually a proxy that does not send `X-Forwarded-Proto: https`, or TierPlan does not list the proxy in `TIERPLAN_TRUSTED_PROXIES`. Or the agent address is plain `http` for another host and TierPlan's own `TIERPLAN_AGENT_ALLOW_INSECURE` is off. | For the first, fix the proxy as described in [Running TierPlan behind a reverse proxy](reverse-proxy.md); the bell shows "Forwarded headers from an untrusted address" when this is the cause. For the second, give TierPlan an `https` public URL or agent URL; the switch on TierPlan is for development only. TierPlan logs "agents cannot connect" at start when this is the case. |
+| `insecure_transport` (agent log: HTTP 403 "did not arrive over TLS") | The agent's connection reached TierPlan without TLS. This is almost always a reverse proxy that talks plain HTTP to TierPlan, because TierPlan serves HTTPS only and does not take `X-Forwarded-Proto` as proof of TLS. | Point the proxy at TierPlan's `https://` port (HTTPS upstream) as described in [Running TierPlan behind a reverse proxy](reverse-proxy.md). |
 | `rate_limited` | Too many connection attempts from one address, too many handshakes at once, or more than 16 handshakes at once from one address (an IPv6 /64 counts as one address). | The agent waits as long as TierPlan asks and tries again. |
 | `internal_error` | TierPlan failed while handling a valid request. | The agent retries. Look at TierPlan's log. |
 
@@ -447,10 +446,9 @@ A few things that are not codes:
 
 - **The environment stays "Waiting for the first agent" and no refusal is listed.** The agent never reached TierPlan's handshake. Look at the agent's log: a DNS problem (see the next item) or a routing problem, a proxy that does not pass the upgrade (TierPlan warns in the bell: "WebSocket connections are failing"), or an `insecure_transport` refusal that has no environment to show it under.
 - **The agent cannot resolve TierPlan's host name, but the host can.** The agent runs on Docker's default bridge (the install commands set no network). Containers there get the host's `resolv.conf` without its loopback servers. When the host lists only loopback resolvers (Pi-hole, dnsmasq or unbound on `127.0.0.1`, or a Docker that itself runs in a container), nothing is left and Docker silently uses `8.8.8.8` and `8.8.4.4`, which cannot resolve LAN names. (systemd-resolved's `127.0.0.53` is handled: Docker reads `/run/systemd/resolve/resolv.conf` instead.) To tell: the agent's log shows a lookup failing "on 8.8.8.8:53", and the Docker daemon's log says "No non-localhost DNS nameservers are left in resolv.conf. Using default external servers". The agent image has no shell, so read the file on the host that `docker inspect -f '{{.ResolvConfPath}}' tierplan-agent` names. Fixes: on a standalone host, run the agent again with `--dns <your DNS server>`; on a swarm, `docker service update --dns-add <your DNS server> tierplan-agent`; or set `"dns": ["<your DNS server>"]` in `/etc/docker/daemon.json` and restart Docker; or give the agent an IP address as TierPlan's URL (with a certificate that lists that IP).
-- **Add environment or Rotate token answers that agents cannot connect to this TierPlan (`insecure_agent_url`).** The address agents would dial is plain `ws://` for another host, which agents refuse and so does TierPlan. Set an `https` agent URL or public URL. Settings, General shows the same warning under the Agent URL field, and refuses to save such an agent URL.
-- **The agent stops at start and its log names `TIERPLAN_AGENT_ALLOW_INSECURE`.** `TIERPLAN_AGENT_URL` is a plain `ws://` address for another host, and the agent will not dial it unencrypted. Use `wss://` with a certificate the agent checks: the command from **Show install command** on a TierPlan that has a certificate. The switch exists only for the development swarm.
+- **The agent stops at start and its log says `TIERPLAN_AGENT_URL` must start with `wss://`.** The address starts with `ws://` and not `wss://`, and the agent never dials it. Reinstall with the command from **Show install command**, which uses `wss://` and carries TierPlan's pin.
 - **The agent exits and Docker restarts it again and again.** It exits on a refusal and Docker's restart policy brings it back after a longer pause each time, up to about a minute. Fix the cause in the table; the loop stops by itself.
-- **An update or an uninstall answers `insecure_session`.** Both are accepted only on a session that checked TierPlan's certificate, and this agent is on plain `ws://`. Use `wss://` with a certificate the agent checks.
+- **An update or an uninstall answers `insecure_session`.** Both are accepted only on a session that checked TierPlan's certificate. An agent whose certificate check could not complete does not connect at all, so this is rare now: look for `tls_untrusted` in the agent's log first.
 - **The agent cannot reach Docker** (the socket is not mounted, Docker is stopped, or the socket file is left over from a Docker that is no longer running). The agent cannot say anything to TierPlan before it has read its engine, so the environment stays pending with no reason of its own, and after two minutes the waiting panel adds the line that points you to the agent's log. The log says "the Docker engine did not answer on its socket"; start Docker, or mount `/var/run/docker.sock` into the agent, and it connects by itself.
 
 ## Cloned machines and the engine ID
@@ -516,14 +514,3 @@ docker rm -f tierplan-agent && docker volume rm tierplan-agent
 ```
 
 A stack-file install: `docker stack rm <stack>`, then remove the stack's network and the `tierplan-agent` volume if they are left behind.
-
-## Development only: plain ws://
-
-There are two switches with the same name, and plain `ws://` needs both.
-
-- **On TierPlan**, `TIERPLAN_AGENT_ALLOW_INSECURE=true` lets agents connect over plain `ws://` to an agent address that is not this machine: an `https` address, or an `http` one for another host. Without it TierPlan refuses those connections (`insecure_transport`), refuses to add an agent environment, rotate a join token or save such an agent URL (`insecure_agent_url`), and logs a warning at start. While it is on, the install commands and files for a `ws://` address also set `TIERPLAN_AGENT_ALLOW_INSECURE=true` on the agent.
-- **On the agent**, `TIERPLAN_AGENT_ALLOW_INSECURE=true` lets it dial plain `ws://` to another host. Without it the agent stops at start with a message naming the switch, and it never dials a stored plain address for another host. `ws://` to `127.0.0.1`, `::1` or `localhost` needs no switch. Addresses TierPlan pushes to a connected agent are taken only as `wss://`.
-
-A plain address on TierPlan's own machine (`127.0.0.1`, `::1`, `localhost`) needs no switch on either end.
-
-Join tokens and every Docker answer then cross the network unencrypted, and update and uninstall are refused on such a session (`insecure_session`). It exists for the development swarm (`make dev-swarm`) and for nothing else: never set it on a TierPlan you use for real, and never use it to get past a certificate problem. Fix the certificate instead (see [TIERPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-tierplan_agent_pin)).

@@ -85,6 +85,17 @@ What the gate cannot see is a short duration held somewhere else and used as a d
 
 When a flake turns out to be a real race or ordering bug in the product, fix the product code and add a regression test that fails every time without the fix. A test-only workaround that hides a product race is not acceptable.
 
+## Tests run over verified TLS
+
+TierPlan serves HTTPS only, so no suite talks plain HTTP to it, and none turns certificate verification off:
+
+- **The dev loop.** `make dev` serves the Go server and the Vite dev server over https. Vite's proxy verifies the Go server's own certificate (the mirror at `<data>/tls/server.crt`) as its only trust anchor. `make dev-tls-check` proves this with a client that verifies: the API answers through the proxy, a different certificate is refused, and there is no plain dev UI.
+- **End to end.** `make e2e` runs Playwright through Caddy with both hops verified. Chromium trusts the harness proxy's certificate by SPKI pin only, and Caddy verifies TierPlan's own certificate. The agent golden path carries both TierPlan's pin and the proxy's pin in one `TIERPLAN_AGENT_PIN` list.
+- **Docker smokes.** The smoke, image, upgrade, restore and proxy scripts call TierPlan (or the proxy in front of it) with `curl --cacert`, trusting the certificate the server presents, which TierPlan also writes to `/data/tls/server.crt`.
+- **Go suites.** A test server uses the same certificate source as production, and the test client trusts only that server's `server.crt`. A plain connection is closed with no answer, and the tests assert that.
+
+**The insecure-TLS gate.** `scripts/insecure-tls-check.sh` (part of `make lint`) fails on any switch that turns verification off. In Go the one reviewed file allowed to name Go's skip-verification setting is `agent/internal/connect/tls.go`, where it is replaced by a check. The gate also scans `e2e/`, `scripts/` and `docs/proxy/`, and the Vite configs (`web/vite*.ts`), for the Playwright, Node, Caddy, Traefik, nginx and curl spellings of "do not verify". A new test helper trusts a pinned certificate or a generated CA instead.
+
 ## The swarm suite
 
 Each swarm test needs a real swarm of dind nodes, and starting one costs about half of a test's time. The tests that leave the swarm itself as they found it (they make and remove their own services, secrets, configs, networks and volumes, and install and remove agents) take turns on one swarm of three managers and a worker: they are cases in `sharedSwarmCases`, run as subtests of `TestSwarmShared` (`internal/agents/swarm_shared_test.go`). Each case still gets its own TierPlan and agent environment. After each case `dockertest.Swarm.Reset` removes everything a test can leave (services, secrets, configs, networks, volumes, containers, images, node labels, the test registry's files and sign-in) and checks the swarm against the baseline recorded when it started; a swarm that fails the check is removed and a new one started, and the log says so.

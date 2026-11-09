@@ -19,8 +19,9 @@ The bell lists an agent here when it is older than the server and TierPlan canno
 - The agent is outside the compatibility window of this server, or too old to understand
   the update message.
 - The agent's connection is not verified. Update and uninstall are accepted only on a
-  session that checked TierPlan's certificate (`wss://`), and an agent on a plain `ws://`
-  connection answers `insecure_session`.
+  session that checked TierPlan's certificate, and an agent on any other session answers
+  `insecure_session`. Agents connect over `wss://` only, so this is rare: an agent that
+  cannot verify the certificate does not connect at all.
 - The last update did not finish (the node list says why: the new agent never connected,
   or it rolled back to the old version).
 

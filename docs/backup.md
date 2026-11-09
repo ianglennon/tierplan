@@ -21,6 +21,11 @@ and they are not an upgrade tool: see [upgrade.md](upgrade.md) for that.
 - environments, with their certificate authorities and the records of the agent certificates
   they issued;
 - the whole audit log;
+- **TierPlan's own TLS key and certificate**, when it serves its own self-signed certificate. The key is sealed
+  like the other secrets and re-sealed under the restoring instance's key. It is what the agents' pin is made
+  from, so keeping it in the backup is what lets a restore keep that pin (see
+  [After a restore: agents](#after-a-restore-agents)). Certificate files you supply yourself with
+  `TIERPLAN_TLS_CERT_FILE` and `TIERPLAN_TLS_KEY_FILE` are not in a backup: keep those files yourself;
 - registry credentials, compose stacks, their revisions and the owned automations (see [stacks.md](stacks.md));
 - **everything git**, in four tables: `git_credentials` (HTTPS tokens and SSH deploy keys, sealed), `git_repos` (address,
   credential choice, custom CA and the SSH host key a person trusted), `stack_git` (a git stack's repository, ref, folder,
@@ -183,6 +188,12 @@ honour it, so on those, always stop TierPlan yourself before running either comm
 The certificate authorities and certificate records of every environment are restored, so
 **agents enrolled before the backup reconnect by themselves** once your public URL points at the
 restored TierPlan. You do not reinstall them.
+
+**A restore onto a new host serves the same certificate.** TierPlan's own TLS key is in the backup, so the
+restored instance keeps its key and its pin. If the new host has another name, TierPlan signs the certificate
+again for the new names with the same key, and the pin does not change. Agents enrolled before the backup
+therefore still trust it, and your browser sees a certificate with the same key. Only a certificate you supply
+yourself has to be put in place again by you.
 
 **Agents installed after the backup was taken** are unknown to the restored TierPlan. It refuses
 them with the reason `unknown_agent`, and says so in three places: the **Agents TierPlan doesn't
