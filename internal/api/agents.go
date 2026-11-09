@@ -315,8 +315,8 @@ type updateView struct {
 
 // updates builds the view the node list uses from the route's dependencies. A
 // standalone agent's manual update command is empty (and the SPA shows none) when
-// the address agents are given is plain ws:// for another host with the switch off:
-// agents.ManualUpdateCommand answers "" there, so nothing is checked here.
+// TierPlan has no address to give agents: agents.ManualUpdateCommand answers ""
+// there, so nothing is checked here.
 func (d AgentsDeps) updates() updateView {
 	version := cmpOr(d.ServerVersion, buildinfo.Get().Version)
 	v := updateView{serverVersion: version, command: func(role string) string {

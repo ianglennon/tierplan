@@ -17,7 +17,7 @@ import (
 
 // TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse is the "never advertise"
 // half of G-02-R4-3 (review WR-02), end to end through a real server and real
-// HTTP. TierPlan hands out only an address its agents will dial: an https address
+// HTTP. TierPlan hands out only wss:// addresses: an https public URL or agent URL
 // is handed out as wss://. An http address cannot reach this point, because
 // TIERPLAN_PUBLIC_URL and TIERPLAN_AGENT_URL refuse it at start.
 func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
@@ -126,22 +126,6 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 			code, body := call(http.MethodPost, "/api/environments", `{"kind":"agent"}`)
 			if code != tc.wantCode {
 				t.Fatalf("POST /api/environments kind agent = %d %s, want %d", code, body, tc.wantCode)
-			}
-
-			if tc.wantCode == http.StatusConflict {
-				var p struct {
-					Type string `json:"type"`
-				}
-				if err := json.Unmarshal(body, &p); err != nil {
-					t.Fatal(err)
-				}
-				if p.Type != "insecure_agent_url" {
-					t.Errorf("problem type = %q, want insecure_agent_url\n%s", p.Type, body)
-				}
-				if got := listed(); got != before {
-					t.Errorf("a refused add left %d environments, want %d", got, before)
-				}
-				return
 			}
 
 			var created struct {
