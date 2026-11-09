@@ -786,7 +786,7 @@ func TestLoginSignsInWithABrowserSessionCookieAndReturnsTheUserAndCSRFToken(t *t
 		t.Fatalf("body = %s, want no role field", rec.Body)
 	}
 	c := sessionCookie(rec)
-	if c == nil || c.Name != "tierplan_session" || c.Value == "" {
+	if c == nil || c.Name != "__Host-tierplan_session" || !c.Secure || c.Value == "" {
 		t.Fatalf("cookie = %+v", c)
 	}
 	if c.MaxAge != 0 || !c.Expires.IsZero() {
@@ -1343,7 +1343,7 @@ func TestAnHTTPSInstanceIgnoresABareSessionCookie(t *testing.T) {
 	}
 }
 
-func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
+func TestABareSessionCookieIsIgnored(t *testing.T) {
 	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	raw, _ := f.signIn(t, "admin", false)
@@ -1355,11 +1355,11 @@ func TestAPlainHTTPInstanceIgnoresAHostPrefixedCookie(t *testing.T) {
 		f.h.ServeHTTP(rec, req)
 		return rec.Code
 	}
-	if got := me("__Host-tierplan_session"); got != http.StatusUnauthorized {
-		t.Fatalf("a __Host- cookie on plain http: %d, want 401", got)
+	if got := me("tierplan_session"); got != http.StatusUnauthorized {
+		t.Fatalf("a bare cookie with no public URL: %d, want 401 (TLS-11: it is neither issued nor accepted)", got)
 	}
-	if got := me("tierplan_session"); got != http.StatusOK {
-		t.Fatalf("the bare cookie on plain http: %d, want 200", got)
+	if got := me("__Host-tierplan_session"); got != http.StatusOK {
+		t.Fatalf("the __Host- cookie with no public URL: %d, want 200", got)
 	}
 }
 

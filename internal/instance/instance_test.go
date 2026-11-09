@@ -94,11 +94,14 @@ func TestSetTxChangesAreInvisibleUntilAppliedAndLostOnRollback(t *testing.T) {
 	}
 }
 
-func TestPlainHTTPURLIsNotSecureAndDefaultPortsDropFromTheOrigin(t *testing.T) {
+func TestDefaultPortsDropFromTheOriginAndTheCookieScopeCarriesOnlyTheBasePath(t *testing.T) {
 	i, _ := load(t, config.Config{})
-	i.Apply("x", "http://TierPlan.Example:80")
-	if i.Secure() || i.PublicOrigin() != "http://tierplan.example" {
+	i.Apply("x", "https://TierPlan.Example:443/tierplan")
+	if !i.Secure() || i.PublicOrigin() != "https://tierplan.example" {
 		t.Fatalf("origin %q secure %v", i.PublicOrigin(), i.Secure())
+	}
+	if got := i.CookieScope(); got.BasePath != "/tierplan" {
+		t.Fatalf("CookieScope = %+v, want the base path /tierplan", got)
 	}
 }
 
