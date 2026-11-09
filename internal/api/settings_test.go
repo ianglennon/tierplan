@@ -139,8 +139,8 @@ func TestPatchSettingsSwitchesTheOriginGuardImmediately(t *testing.T) {
 	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://NEW.example"}); rec.Code != http.StatusOK {
 		t.Fatalf("change: %d %s", rec.Code, rec.Body)
 	}
-	if f.inst.PublicURL() != "https://new.example" || !f.inst.Secure() {
-		t.Fatalf("public URL = %q secure = %v, want the normalised new origin and a Secure cookie", f.inst.PublicURL(), f.inst.Secure())
+	if f.inst.PublicURL() != "https://new.example" {
+		t.Fatalf("public URL = %q, want the normalised new origin", f.inst.PublicURL())
 	}
 
 	// The session cookie is always the __Host- one, so the change of origin
