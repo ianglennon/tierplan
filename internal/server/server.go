@@ -723,9 +723,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		return nil, err
 	}
 	rt := newHTTPSRuntime()
-	if tlsSrc != nil {
-		rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
-	}
+	rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
 	switch rt.Kind() {
 	case tlsKindSelfSigned:
 		log.Info("TierPlan serves HTTPS with its own self-signed certificate. Your browser will warn about it: check that the warning shows this SHA-256 fingerprint before you continue",
@@ -1080,21 +1078,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:          proxyObs,
 			PublicOrigin:   inst.PublicOrigin,
 			Logger:         log,
-			// Strict-Transport-Security when the request came over TLS, or a trusted
-			// proxy that ends TLS marked it X-Forwarded-Proto: https and the public
-			// URL is https (D-37). Never on a response TierPlan sends over plain
-			// HTTP itself: the health probes, a loopback request and the ACME
-			// challenge path. Not for TierPlan's own self-signed certificate: a
-			// browser pinned to it could not click through a regenerated one (WR-09).
-			HSTS: func(r *http.Request) bool {
-				if r.TLS != nil {
-					return rt.HSTSAllowed()
-				}
-				if httpx.EffectiveScheme(r.Context()) != "https" {
-					return false
-				}
-				return inst.Secure()
-			},
+			// Strict-Transport-Security only on a response to a request that came
+			// over TLS: no plain response exists to carry it, and an
+			// X-Forwarded-Proto header decides nothing here. Not for TierPlan's own
+			// self-signed certificate: a browser pinned to it could not click through
+			// a regenerated one (WR-09).
+			HSTS: func(r *http.Request) bool { return r.TLS != nil && rt.HSTSAllowed() },
 		},
 		System: api.SystemDeps{Ready: ready},
 		Setup:  setupDeps,
@@ -1224,9 +1213,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
 	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
 	// the handshake path, so a handshake never waits on the disk.
-	if tlsSrc != nil {
-		srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
-	}
+	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
 	// A setting another store handle wrote, such as a restore or a CLI user command, is applied here
 	// within one poll, so the redirect gate, the cookie scope and the Origin check follow it without
 	// a restart. The watcher only reloads the instance's cached values: it pushes no address to
@@ -1409,15 +1396,8 @@ func (s *Server) Routes() []httpx.RouteRecord { return s.router.Routes() }
 // Handler is the root HTTP handler: the router behind StripBasePath, so a
 // request under the public URL's path reaches the same routes whether or not a
 // proxy stripped the prefix. It runs before chi and every middleware (D-50).
-//
-// The HTTPS gate runs inside the stripper and in front of the router, so
-// /healthz, /readyz and the redirect target are judged on the path below the
-// base, and what the gate answers never reaches the router's security headers
-// (no HSTS on a redirect or a refusal). This is a deliberate deviation from the
-// milestone architecture draft, which put the gate outside the stripper.
 func (s *Server) Handler() http.Handler {
-	gate := newHTTPSGate(s.https, s.inst.PublicURL, TLSEnabled(s.cfg), s.cfg.TrustedProxies)
-	return httpx.StripBasePath(s.inst.BasePath)(gate(s.router.Handler()))
+	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s. When

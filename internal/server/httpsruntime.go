@@ -9,21 +9,15 @@ import (
 	"sync/atomic"
 )
 
-// errTLSNotLive is what a handshake gets when TLS is removed while it is
-// pending. It is an error, never a panic: the connection fails and the client
-// tries again.
-var errTLSNotLive = errors.New("TLS is not being served")
-
 // tlsKind says where the live certificate comes from. It decides whether a pin
 // is published and whether HSTS may be sent.
 type tlsKind uint8
 
 const (
-	// tlsKindNone is plain HTTP.
-	tlsKindNone tlsKind = iota
 	// tlsKindSelfSigned is the certificate TierPlan generated. Agents pin its
-	// key, and HSTS is never sent with it (WR-09).
-	tlsKindSelfSigned
+	// key, and HSTS is never sent with it (WR-09). The kinds start at 1, so the
+	// zero value is no kind at all and never reads as self-signed.
+	tlsKindSelfSigned tlsKind = iota + 1
 	// tlsKindSupplied is a certificate the operator provided or obtained. HSTS
 	// is allowed over it and no pin is published.
 	tlsKindSupplied
@@ -37,8 +31,9 @@ type liveTLS struct {
 
 // httpsRuntime is the live TLS state that every handshake, pin and HSTS
 // decision reads. It holds one stable tls.Config whose GetCertificate looks at
-// the current source, so a certificate can change, or TLS be removed, while the
-// server runs. Nothing in it takes a lock or touches a file: the handshake
+// the current source, so a certificate can change while the server runs. TLS is
+// never off: once assemble has installed a source every handshake is answered
+// with a certificate. Nothing in it takes a lock or touches a file: the handshake
 // answers from memory.
 //
 // Nothing but Build and tests calls Install (D-12): no setting, flag or
@@ -65,46 +60,30 @@ func newHTTPSRuntime() *httpsRuntime {
 }
 
 // Install makes get the source of every handshake that starts from now on. A
-// connection already open keeps the certificate it was set up with. A nil get
-// or tlsKindNone is Remove.
+// connection already open keeps the certificate it was set up with.
 func (r *httpsRuntime) Install(kind tlsKind, get func(*tls.ClientHelloInfo) (*tls.Certificate, error)) {
-	if get == nil || kind == tlsKindNone {
-		r.Remove()
-		return
-	}
 	r.cur.Store(&liveTLS{kind: kind, get: get})
 }
 
-// Remove stops serving TLS. A handshake that is already pending fails with
-// errTLSNotLive.
-func (r *httpsRuntime) Remove() { r.cur.Store(nil) }
-
-// Live reports whether a certificate is installed.
-func (r *httpsRuntime) Live() bool { return r.cur.Load() != nil }
-
-// Kind is the kind of the installed source, tlsKindNone when there is none.
+// Kind is the kind of the installed source, 0 when nothing is installed. That
+// is only the window between newHTTPSRuntime and assemble's Install, or a test
+// rig that never installs.
 func (r *httpsRuntime) Kind() tlsKind {
 	if l := r.cur.Load(); l != nil {
 		return l.kind
 	}
-	return tlsKindNone
+	return 0
 }
 
-// Config is the stable tls.Config, whether or not a certificate is installed.
-// spkiPin and fingerprint read the certificate through it.
+// Config is the stable tls.Config. spkiPin and fingerprint read the certificate
+// through it.
 func (r *httpsRuntime) Config() *tls.Config { return r.cfg }
 
-// ServerConfig is the config a TLS listener serves with: the stable one while
-// live, nil otherwise.
-func (r *httpsRuntime) ServerConfig() *tls.Config {
-	if r.Live() {
-		return r.cfg
-	}
-	return nil
-}
+// ServerConfig is the config a TLS listener serves with. It is never nil.
+func (r *httpsRuntime) ServerConfig() *tls.Config { return r.cfg }
 
 // Pins is the SPKI pin list a welcome carries: the generated certificate's pin
-// and nothing else. A supplied certificate and plain HTTP publish none.
+// and nothing else. A supplied certificate publishes none.
 func (r *httpsRuntime) Pins() []string {
 	if r.Kind() != tlsKindSelfSigned {
 		return nil
@@ -130,8 +109,8 @@ func (r *httpsRuntime) HSTSAllowed() bool { return r.Kind() == tlsKindSupplied }
 
 func (r *httpsRuntime) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	l := r.cur.Load()
-	if l == nil {
-		return nil, errTLSNotLive
+	if l == nil || l.get == nil {
+		return nil, errors.New("no certificate is installed")
 	}
 	return l.get(hello)
 }

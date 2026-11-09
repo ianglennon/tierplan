@@ -184,8 +184,8 @@ func (m *manualTimers) FireAll() {
 }
 
 // fakeAddrListener wraps a listener so every connection it accepts reports a chosen peer address.
-// Every Go test client is on loopback, so without it the gate's non-loopback branches could only be
-// reached by calling the handler directly, never over a real socket through the sniffing listener.
+// Every Go test client is on loopback, so without it the non-loopback branches of the sniffing listener (the pending cap, trusted-proxy
+// handling) could not be reached over a real socket.
 type fakeAddrListener struct {
 	net.Listener
 	remote net.Addr

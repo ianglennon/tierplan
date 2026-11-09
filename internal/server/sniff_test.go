@@ -28,13 +28,11 @@ type sniffRig struct {
 	addr   string
 }
 
-func newSniffRig(t *testing.T, maxPending int, tlsLive bool) *sniffRig {
+func newSniffRig(t *testing.T, maxPending int) *sniffRig {
 	t.Helper()
 	rt := newHTTPSRuntime()
-	if tlsLive {
-		cert, _ := genCert(t, "")
-		rt.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
-	}
+	cert, _ := genCert(t, "")
+	rt.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
 	base, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -111,28 +109,17 @@ func wantHead(t *testing.T, c net.Conn, want string) {
 }
 
 func TestSniffClassifiesByFirstByte(t *testing.T) {
-	t.Run("a handshake byte with TLS live is a TLS connection", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
+	t.Run("a handshake byte is a TLS connection", func(t *testing.T) {
+		r := newSniffRig(t, maxPendingSniffs)
 		if _, err := r.dial(t).Write([]byte{tlsHandshakeRecord}); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := accept(t, r.l).(*tls.Conn); !ok {
-			t.Fatal("a ClientHello with TLS live was not handed over as a *tls.Conn")
-		}
-	})
-	t.Run("a handshake byte with TLS removed is closed", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
-		r.rt.Remove()
-		c := r.dial(t)
-		if _, err := c.Write([]byte{tlsHandshakeRecord}); err != nil {
-			t.Fatal(err)
-		}
-		if err := readErr(t, c); !errors.Is(err, io.EOF) {
-			t.Fatalf("a ClientHello with TLS not live got %v, want it closed with no bytes", err)
+			t.Fatal("a ClientHello was not handed over as a *tls.Conn")
 		}
 	})
 	t.Run("a challenge head is replayed byte for byte", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
+		r := newSniffRig(t, maxPendingSniffs)
 		head := challengeHead("token")
 		if _, err := r.dial(t).Write([]byte(head)); err != nil {
 			t.Fatal(err)
@@ -147,7 +134,7 @@ func TestSniffClassifiesByFirstByte(t *testing.T) {
 		}
 	})
 	t.Run("a non-challenge head is closed and never handed over", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
+		r := newSniffRig(t, maxPendingSniffs)
 		c := r.dial(t)
 		accepted := acceptAsync(r.l)
 		if _, err := c.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n")); err != nil {
@@ -182,7 +169,7 @@ func TestSniffClassifiesByFirstByte(t *testing.T) {
 }
 
 func TestSniffClosesASilentConnectionWhenItsTimerFires(t *testing.T) {
-	r := newSniffRig(t, maxPendingSniffs, true)
+	r := newSniffRig(t, maxPendingSniffs)
 	silent := r.dial(t)
 	if d := r.timers.WaitArmed(t); d != sniffTimeout {
 		t.Fatalf("the peek timer was armed for %v, want %v", d, sniffTimeout)
@@ -206,7 +193,7 @@ func TestSniffClosesASilentConnectionWhenItsTimerFires(t *testing.T) {
 }
 
 func TestSniffHandsOverAConnectionWhileAnEarlierOneIsSilent(t *testing.T) {
-	r := newSniffRig(t, maxPendingSniffs, true)
+	r := newSniffRig(t, maxPendingSniffs)
 	_ = r.dial(t) // A: silent
 	r.timers.WaitArmed(t)
 	head := challengeHead("B")
@@ -380,7 +367,7 @@ func TestSniffCapFreesWhenTheTimersFire(t *testing.T) {
 }
 
 func TestSniffCloseClosesPendingAndAcceptReturnsErrClosed(t *testing.T) {
-	r := newSniffRig(t, maxPendingSniffs, true)
+	r := newSniffRig(t, maxPendingSniffs)
 	silent := r.dial(t)
 	r.timers.WaitArmed(t)
 	accepted := acceptAsync(r.l)

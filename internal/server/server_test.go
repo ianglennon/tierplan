@@ -918,6 +918,16 @@ func TestBuildAggregatesAnAnonymousDenialFloodAndKeepsSignInWorking(t *testing.T
 // Strict-Transport-Security header, for a request that arrived over TLS or not.
 func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 	t.Helper()
+	return hstsFor(t, env, func(r *http.Request) {
+		if overTLS {
+			r.TLS = &tls.ConnectionState{}
+		}
+	})
+}
+
+// hstsFor is hstsOf with the request shaped by mutate: the peer address, a forwarded header or TLS.
+func hstsFor(t *testing.T, env map[string]string, mutate func(*http.Request)) string {
+	t.Helper()
 	env["TIERPLAN_DATA_DIR"] = t.TempDir() + "/data"
 	srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -925,9 +935,7 @@ func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	if overTLS {
-		req.TLS = &tls.ConnectionState{}
-	}
+	mutate(req)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	return rec.Header().Get("Strict-Transport-Security")
@@ -960,19 +968,23 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 	}
 }
 
-func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
+func TestHSTSIsSentOnlyOverTLS(t *testing.T) {
 	const trustedPeer = "203.0.113.9:40000"
 	const untrustedPeer = "198.51.100.7:40000"
-	proto := func(v string) func(*http.Request) {
-		return func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", v) }
-	}
-	supplied := t.TempDir()
-	writePair(t, filepath.Join(supplied, "c.pem"), filepath.Join(supplied, "k.pem"), "supplied.example.com")
-	suppliedEnv := map[string]string{
-		"TIERPLAN_TLS_CERT_FILE": filepath.Join(supplied, "c.pem"),
-		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(supplied, "k.pem"),
-	}
 	const hsts = "max-age=31536000"
+	forwarded := func(peer, proto string, overTLS bool) func(*http.Request) {
+		return func(r *http.Request) {
+			r.RemoteAddr = peer
+			if proto != "" {
+				r.Header.Set("X-Forwarded-Proto", proto)
+			}
+			if overTLS {
+				r.TLS = &tls.ConnectionState{}
+			}
+		}
+	}
+	src := t.TempDir()
+	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
 	withEnv := func(extra map[string]string) map[string]string {
 		env := map[string]string{
 			"TIERPLAN_PUBLIC_URL":      "https://tierplan.example",
@@ -983,80 +995,35 @@ func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
 		}
 		return env
 	}
+	supplied := map[string]string{
+		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
+		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
+	}
 	tests := []struct {
 		name   string
 		env    map[string]string
-		target string
-		peer   string
 		mutate func(*http.Request)
 		want   string
 	}{
-		// Plain HTTP that TierPlan answers itself: never, whichever mode and whichever path.
-		{"healthz, no TLS, https public URL", withEnv(nil), "/healthz", untrustedPeer, nil, ""},
-		{"readyz, no TLS, https public URL", withEnv(nil), "/readyz", untrustedPeer, nil, ""},
-		{"healthz, supplied certificate, https public URL", withEnv(suppliedEnv), "/healthz", untrustedPeer, nil, ""},
-		{"healthz, self-signed, https public URL", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, nil, ""},
-		{"loopback request, supplied certificate", withEnv(suppliedEnv), "/api/version", "127.0.0.1:40000", nil, ""},
-		{"ACME challenge path, supplied certificate", withEnv(suppliedEnv), "/.well-known/acme-challenge/tok", untrustedPeer, nil, ""},
-		{"https public URL from a trusted proxy that did not say https", withEnv(nil), "/api/version", trustedPeer, nil, ""},
-		{"trusted proxy saying http", withEnv(nil), "/api/version", trustedPeer, proto("http"), ""},
-		{"untrusted peer claiming https is not believed", withEnv(nil), "/api/version", untrustedPeer, proto("https"), ""},
-		// A trusted proxy that ends TLS: unchanged.
-		{"trusted proxy saying https, https public URL", withEnv(nil), "/api/version", trustedPeer, proto("https"), hsts},
-		{"trusted proxy saying https on /healthz", withEnv(nil), "/healthz", trustedPeer, proto("https"), hsts},
-		// Over TLS: unchanged.
-		{"TLS with a supplied certificate", withEnv(suppliedEnv), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, hsts},
-		{"TLS with the self-signed certificate", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, ""},
+		// Without r.TLS there is no header, whatever a trusted or untrusted peer says.
+		{"no TLS, supplied certificate, no header from the peer", withEnv(supplied), forwarded(untrustedPeer, "", false), ""},
+		{"no TLS, trusted proxy saying https", withEnv(supplied), forwarded(trustedPeer, "https", false), ""},
+		{"no TLS, trusted proxy saying http", withEnv(supplied), forwarded(trustedPeer, "http", false), ""},
+		{"no TLS, untrusted peer claiming https", withEnv(supplied), forwarded(untrustedPeer, "https", false), ""},
+		{"no TLS, loopback peer", withEnv(supplied), forwarded("127.0.0.1:40000", "", false), ""},
+		{"no TLS, self-signed, trusted proxy saying https", withEnv(nil), forwarded(trustedPeer, "https", false), ""},
+		// Over TLS the certificate kind decides.
+		{"TLS with a supplied certificate", withEnv(supplied), forwarded(untrustedPeer, "", true), hsts},
+		{"TLS with a supplied certificate and a forwarded http", withEnv(supplied), forwarded(trustedPeer, "http", true), hsts},
+		{"TLS with the self-signed certificate", withEnv(nil), forwarded(untrustedPeer, "", true), ""},
+		{"TLS with the self-signed certificate and a trusted proxy saying https", withEnv(nil), forwarded(trustedPeer, "https", true), ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := gateServer(t, tc.env)
-			rec := plainFrom(srv, http.MethodGet, tc.target, tc.peer, tc.mutate)
-			if got := rec.Header().Get("Strict-Transport-Security"); got != tc.want {
-				t.Errorf("status %d: Strict-Transport-Security = %q, want %q", rec.Code, got, tc.want)
+			if got := hstsFor(t, tc.env, tc.mutate); got != tc.want {
+				t.Errorf("Strict-Transport-Security = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestHSTSIsNeverSentOnThePlainRedirectOrRefusal(t *testing.T) {
-	// A redirect or a refusal that carried HSTS could pin a browser to an address that does not
-	// answer yet (D-04), so the gate answers before the router adds it.
-	src := t.TempDir()
-	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
-	supplied := func(extra map[string]string) map[string]string {
-		env := map[string]string{
-			"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
-			"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
-		}
-		for k, v := range extra {
-			env[k] = v
-		}
-		return env
-	}
-
-	srv := gateServer(t, supplied(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.example"}))
-	rec := plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, nil)
-	if rec.Code != http.StatusTemporaryRedirect {
-		t.Fatalf("redirect: status = %d, want 307", rec.Code)
-	}
-	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
-		t.Errorf("redirect: Strict-Transport-Security = %q, want none", got)
-	}
-
-	srv = gateServer(t, supplied(nil))
-	rec = plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("refusal: status = %d, want 400", rec.Code)
-	}
-	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
-		t.Errorf("refusal: Strict-Transport-Security = %q, want none", got)
-	}
-
-	// What the router serves over TLS still carries it.
-	rec = plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} })
-	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
-		t.Errorf("served over TLS: Strict-Transport-Security = %q, want max-age=31536000", got)
 	}
 }
 

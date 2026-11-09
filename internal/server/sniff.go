@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"syscall"
@@ -227,6 +228,16 @@ func (l *sniffListener) register(c net.Conn) (admitted bool, evicted net.Conn) {
 	return true, evicted
 }
 
+// isLoopbackPeer reports whether remoteAddr, the TCP peer, is a loopback address.
+// It is judged from the connection, never from a header.
+func isLoopbackPeer(remoteAddr string) bool {
+	ap, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	return ap.Addr().Unmap().IsLoopback()
+}
+
 // isLoopbackConn reports whether c's TCP peer is a loopback address.
 func isLoopbackConn(c net.Conn) bool {
 	a := c.RemoteAddr()
@@ -286,12 +297,7 @@ func (l *sniffListener) classify(c net.Conn) {
 		// It has spoken, so it is no longer waiting: leave the set before anything else, so a full
 		// limit can never close a connection that is already being handed on.
 		l.forget(c)
-		cfg := l.rt.ServerConfig()
-		if cfg == nil {
-			_ = c.Close()
-			return
-		}
-		l.deliver(tls.Server(&prefixConn{Conn: c, b: b[0], has: true}, cfg))
+		l.deliver(tls.Server(&prefixConn{Conn: c, b: b[0], has: true}, l.rt.ServerConfig()))
 		return
 	}
 	// Plain: read the request head ourselves, so net/http never gets the chance to write a

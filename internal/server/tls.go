@@ -49,14 +49,6 @@ const (
 	suppliedRecheck     = time.Minute
 )
 
-// TLSEnabled reports whether the environment asks for HTTPS, from files or from a
-// generated certificate. The healthcheck and the redirect gate use it. It is
-// config.Config.EnvTLS, the one definition both share.
-func TLSEnabled(cfg config.Config) bool {
-	_, ok := cfg.EnvTLS()
-	return ok
-}
-
 // newCertSource builds the certificate source the environment's TLS settings
 // ask for, and says which kind it is. The source is never nil on success: an install serves HTTPS
 // from its first start. The source does not refresh itself: the server runs
@@ -89,13 +81,13 @@ func newCertSource(ctx context.Context, cfg config.Config, store tlsCertStore, p
 	if files {
 		src, err := newSuppliedSource(cfg.TLSCertFile, cfg.TLSKeyFile, now)
 		if err != nil {
-			return nil, tlsKindNone, fmt.Errorf("load the TLS certificate from TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE: %w", err)
+			return nil, 0, fmt.Errorf("load the TLS certificate from TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE: %w", err)
 		}
 		return src, tlsKindSupplied, nil
 	}
 	src, err := newSelfSignedSource(ctx, store, cfg.DataDir, publicURL, agentURL, now)
 	if err != nil {
-		return nil, tlsKindNone, fmt.Errorf("prepare the self-signed certificate: %w", err)
+		return nil, 0, fmt.Errorf("prepare the self-signed certificate: %w", err)
 	}
 	return src, tlsKindSelfSigned, nil
 }

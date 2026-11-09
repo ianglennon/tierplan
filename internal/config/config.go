@@ -83,7 +83,7 @@ type Config struct {
 	TLSKeyFile  string
 	// TLSSelfSigned is the value of the deprecated TIERPLAN_TLS_SELF_SIGNED (true only for a
 	// value that reads as true). TierPlan serves HTTPS with a certificate of its own without it, so it
-	// changes nothing apart from the places that still ask EnvTLS. TLSSelfSignedSet is whether the
+	// changes nothing. TLSSelfSignedSet is whether the
 	// operator set it at all, to any value, so the server can say once that it is deprecated (D-14).
 	TLSSelfSigned    bool
 	TLSSelfSignedSet bool
@@ -361,23 +361,6 @@ func resolve(s setting, flags *pflag.FlagSet, env func(string) string, readFile 
 	default:
 		return s.def, nil
 	}
-}
-
-// EnvTLS reports whether an environment variable (or its flag) turns TLS on for the
-// whole process: the self-signed switch or a certificate file. variable names the
-// setting for a message. It is the one place that decides this, so the listener, the
-// redirect gate and the health check cannot disagree (D-18).
-// A lone key file counts: Validate rejects it, but nothing here may treat it as plain.
-func (c Config) EnvTLS() (variable string, ok bool) {
-	switch {
-	case c.TLSSelfSigned:
-		return "TIERPLAN_TLS_SELF_SIGNED", true
-	case c.TLSCertFile != "":
-		return "TIERPLAN_TLS_CERT_FILE", true
-	case c.TLSKeyFile != "":
-		return "TIERPLAN_TLS_KEY_FILE", true
-	}
-	return "", false
 }
 
 // crossCheck validates combinations of settings.
