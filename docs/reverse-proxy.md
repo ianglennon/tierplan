@@ -57,9 +57,8 @@ The session cookie's name depends on how TierPlan is reached:
 |------------|--------|------|
 | `https://tierplan.example.com` | `__Host-tierplan_session` | `/` |
 | `https://example.com/tierplan` | `__Secure-tierplan_session` | `/tierplan` |
-| `http://…` | `tierplan_session` | the base path, or `/` |
 
-A cookie with the `__Host-` prefix must have the path `/`, so a subpath uses `__Secure-` instead. Changing the public URL's scheme or path changes the cookie, which signs everyone out once.
+A cookie with the `__Host-` prefix must have the path `/`, so a subpath uses `__Secure-` instead. Changing the public URL's path changes the cookie, which signs everyone out once.
 
 **Prefer a host name of its own.** A cookie is scoped by host, not by origin: another web application on the same host name can set or replace cookies for the `/tierplan` path, and its pages run on the same origin as TierPlan's. On a host name of its own nothing else can.
 
