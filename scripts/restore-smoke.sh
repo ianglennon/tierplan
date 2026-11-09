@@ -278,7 +278,9 @@ pass "restore accepted (202)"
 wait_restored() {
   local _
   for _ in $(seq 1 "${RESTORE_WAIT}"); do
-    if docker logs "${NAME}" 2>&1 | grep -q '"restore completed"' \
+    # Read the logs in full first: under pipefail, grep -q stopping early kills
+    # docker logs with SIGPIPE and fails the pipeline.
+    if grep -q '"restore completed"' <<<"$(docker logs "${NAME}" 2>&1)" \
       && refresh_host_url \
       && fetch_cert \
       && [ "$(tcurl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/readyz" 2>/dev/null || true)" = "200" ]; then

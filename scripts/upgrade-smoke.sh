@@ -333,7 +333,9 @@ else
   skip "legacy key file gone: base had no legacy key file (already a 13.1 build)"
 fi
 
-docker logs "${SERVER}" 2>&1 | grep -q 'TIERPLAN_TLS_SELF_SIGNED is deprecated' \
+# The logs are read in full first: under pipefail, grep -q stopping at an early
+# match kills docker logs with SIGPIPE and fails the pipeline.
+grep -q 'TIERPLAN_TLS_SELF_SIGNED is deprecated' <<<"$(docker logs "${SERVER}" 2>&1)" \
   || fail "deprecation line logged" "the log has no TIERPLAN_TLS_SELF_SIGNED deprecation line"
 pass "deprecation line logged for the leftover TIERPLAN_TLS_SELF_SIGNED"
 
