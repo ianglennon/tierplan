@@ -30,6 +30,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/authn"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -305,7 +306,12 @@ func wantedNames(publicURL, agentURL string) names {
 			ips[ip.String()] = true
 			return
 		}
-		dns[host] = true
+		ascii, ok := certDNSName(host)
+		if !ok {
+			logDroppedName(host)
+			return
+		}
+		dns[ascii] = true
 	}
 	if h, err := osHostname(); err == nil && !looksLikeContainerID(strings.ToLower(strings.TrimSpace(h))) {
 		add(h)
@@ -316,6 +322,38 @@ func wantedNames(publicURL, agentURL string) names {
 		}
 	}
 	return names{dns: sortedKeys(dns), ips: sortedKeys(ips)}
+}
+
+// nameProfile converts a host name to its ASCII (punycode) form. It maps case and Unicode
+// compatibility forms but, unlike idna.Lookup, does not apply the STD3 rules, so a name with an
+// underscore (a Docker service name, an OS host name) stays valid as before.
+var nameProfile = idna.New(idna.MapForLookup(), idna.StrictDomainName(false))
+
+// certDNSName is host as a DNS name a certificate can carry: pure ASCII, with a non-ASCII name
+// converted to punycode. ok is false for a name that cannot be encoded, which x509 would reject
+// with an error that stops the certificate (and so start-up) altogether.
+func certDNSName(host string) (string, bool) {
+	ascii, err := nameProfile.ToASCII(host)
+	if err != nil || ascii == "" || len(ascii) > 253 {
+		return "", false
+	}
+	for i := 0; i < len(ascii); i++ {
+		if c := ascii[i]; c <= ' ' || c >= 0x7f {
+			return "", false
+		}
+	}
+	return ascii, true
+}
+
+// droppedNames remembers the names already reported, because wantedNames runs at every name check
+// (every 10 seconds) and a name that cannot be used would otherwise be logged each time.
+var droppedNames sync.Map
+
+func logDroppedName(host string) {
+	if _, seen := droppedNames.LoadOrStore(host, struct{}{}); seen {
+		return
+	}
+	slog.Warn("a host name cannot go into the TLS certificate and was left out; use an ASCII or punycode name", "host", host)
 }
 
 func sortedKeys(m map[string]bool) []string {

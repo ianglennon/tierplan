@@ -767,3 +767,25 @@ func TestConfigHostRouteFile(t *testing.T) {
 		}
 	}
 }
+
+// A non-ASCII host is stored as punycode, so the stored URL, the Origin check and the certificate
+// all name the host one way (CR-01).
+func TestPublicURLStoresANonASCIIHostAsPunycode(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://bücher.example":           "https://xn--bcher-kva.example",
+		"https://Bücher.Example:8443/app/": "https://xn--bcher-kva.example:8443/app",
+		"https://tierplan.example:7480":    "https://tierplan.example:7480",
+	} {
+		got, err := config.NormalisePublicURL(in)
+		if err != nil || got != want {
+			t.Errorf("NormalisePublicURL(%q) = %q, %v; want %q", in, got, err, want)
+		}
+		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
+		if err != nil || c.PublicURL != want {
+			t.Errorf("TIERPLAN_PUBLIC_URL %q stored %q, %v; want %q", in, c.PublicURL, err, want)
+		}
+	}
+	if got, err := config.NormalisePublicURL("https://bad\u200bhost\u2028.example"); err == nil {
+		t.Errorf("an unencodable host was accepted as %q", got)
+	}
+}

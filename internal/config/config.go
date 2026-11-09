@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"golang.org/x/net/idna"
 )
 
 // The two agent timing settings are named in the table and in the check that
@@ -556,6 +557,41 @@ func normalisePublicURL(raw string) (string, error) {
 	if seg := reservedSegment(u.Path); seg != "" {
 		return "", fmt.Errorf("must not start with /%s, which TierPlan serves itself", seg)
 	}
+	host, err := asciiHost(u)
+	if err != nil {
+		return "", err
+	}
 	path := strings.TrimRight(u.EscapedPath(), "/")
-	return u.Scheme + "://" + strings.ToLower(u.Host) + path, nil
+	return u.Scheme + "://" + host + path, nil
 }
+
+// asciiHost is the host (and port) of u in lower case with a non-ASCII name converted to its
+// punycode form, so the stored URL, the origin check and the certificate all name the host the
+// same way, and a name that cannot be written in ASCII is refused here, not at certificate
+// signing. The profile does not apply the STD3 rules, so an underscore stays valid as before.
+func asciiHost(u *url.URL) (string, error) {
+	host := strings.ToLower(u.Host)
+	ascii := true
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return host, nil
+	}
+	name, err := hostProfile.ToASCII(u.Hostname())
+	if err != nil || name == "" {
+		return "", errors.New("the host name is not a valid internationalised domain name")
+	}
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port := u.Port(); port != "" {
+		name += ":" + port
+	}
+	return strings.ToLower(name), nil
+}
+
+var hostProfile = idna.New(idna.MapForLookup(), idna.StrictDomainName(false))

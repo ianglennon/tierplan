@@ -871,3 +871,60 @@ func TestWantedNamesTakesBothURLs(t *testing.T) {
 		}
 	}
 }
+
+// A host name that x509 cannot encode must never stop the certificate, and so start-up: a
+// non-ASCII public URL host goes in as punycode and a non-ASCII OS host name does too (CR-01).
+func TestTLSSelfSignedCopesWithNonASCIINames(t *testing.T) {
+	setHostname(t, "ünï", nil)
+	f := newSSFixture(t)
+	leaf := leafOf(t, f.tlsConfig(t, "https://bücher.example", "https://agënts.example:7480", fixedNow))
+	for _, want := range []string{"xn--bcher-kva.example", "xn--agnts-osa.example", "xn--n-nga1b"} {
+		if !slices.Contains(leaf.DNSNames, want) {
+			t.Errorf("DNS names %v lack %q", leaf.DNSNames, want)
+		}
+	}
+	for _, d := range leaf.DNSNames {
+		for i := 0; i < len(d); i++ {
+			if d[i] >= 0x80 {
+				t.Errorf("DNS name %q is not ASCII", d)
+			}
+		}
+	}
+}
+
+// A name that cannot be converted at all is left out; the certificate is still made, at start
+// and on the name check, and the name is logged once and not at every check.
+func TestTLSSelfSignedDropsANameItCannotEncode(t *testing.T) {
+	setHostname(t, "bad\xffname", nil)
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	droppedNames.Clear()
+
+	f := newSSFixture(t)
+	public := "https://ok.example"
+	cur := public
+	src, _, err := newCertSource(context.Background(), f.cfg, f.store, func() string { return cur }, str("https://bad\xe2\x80\x8bhost.example"), nowFn(fixedNow))
+	if err != nil {
+		t.Fatalf("a name that cannot be encoded stopped the certificate: %v", err)
+	}
+	cur = "https://other.example"
+	for i := 0; i < 3; i++ {
+		src.Refresh(fixedNow.Add(time.Duration(i+1) * time.Minute))
+	}
+	leaf := leafOf(t, &tls.Config{GetCertificate: src.GetCertificate})
+	if !slices.Contains(leaf.DNSNames, "other.example") {
+		t.Errorf("DNS names %v lack the valid name saved after start", leaf.DNSNames)
+	}
+	if n := strings.Count(buf.String(), "cannot go into the TLS certificate"); n > 2 {
+		t.Errorf("each unusable name must be logged once, got %d log lines:\n%s", n, buf.String())
+	}
+}
+
+func TestWantedNamesKeepsAnUnderscoreName(t *testing.T) {
+	setHostname(t, "my_host", nil)
+	if got := wantedNames("", ""); !slices.Contains(got.dns, "my_host") {
+		t.Errorf("dns = %v, want the underscore host name kept", got.dns)
+	}
+}
