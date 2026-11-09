@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -29,29 +30,25 @@ const healthcheckTimeout = 3 * time.Second
 // image has no curl, so the container HEALTHCHECK runs `tierplan healthcheck`
 // (D-17, D-86, WR-10).
 //
-// The one port is shared by TLS and plain HTTP, and the redirect gate exempts
-// /healthz, so /healthz answers on both schemes whatever the mode or the public
-// URL. An empty certFile probes over plain HTTP. Otherwise the probe speaks https
-// and verifies the listener's certificate against the one in certFile: for an env
-// TLS mode the probe still speaks https and verifies TierPlan's own certificate,
-// which also proves TLS is being served. The listener is in the same container
-// and its certificate file is the one it serves, so the file is the trust anchor
-// and the name checked is the first one the certificate carries. The certificate
-// is therefore verified, never waved through, which is also what lets the
-// repository keep its one reviewed place for switching verification off
-// (scripts/insecure-tls-check.sh). The probe sends no credentials and reads no
-// body.
+// The probe always speaks https and verifies the listener's certificate against the one in
+// certFile: the install's own certificate (the mirror under the data directory) or the operator's
+// supplied one, which also proves TLS is being served. The listener is in the same container and its
+// certificate file is the one it serves, so the file is the trust anchor and the name checked is the
+// first one the certificate carries. The certificate is therefore verified, never waved through,
+// which is also what lets the repository keep its one reviewed place for switching verification off
+// (scripts/insecure-tls-check.sh). An empty certFile is an error: there is no plain-HTTP probe. The
+// probe sends no credentials and reads no body (D-03).
 func Healthcheck(ctx context.Context, listen, certFile string) error {
-	client := http.DefaultClient
-	if certFile != "" {
-		tlsCfg, err := ownCertificateTrust(certFile)
-		if err != nil {
-			return err
-		}
-		client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
-		defer client.CloseIdleConnections()
+	if certFile == "" {
+		return errors.New("no certificate file was given for the healthcheck: it only probes https and verifies TierPlan's own certificate")
 	}
-	return healthcheck(ctx, listen, certFile != "", client)
+	tlsCfg, err := ownCertificateTrust(certFile)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	defer client.CloseIdleConnections()
+	return healthcheck(ctx, listen, client)
 }
 
 // HealthcheckCertFile is the certificate file the listener serves, for Healthcheck: the operator's
@@ -106,7 +103,7 @@ func ownCertificateTrust(certFile string) (*tls.Config, error) {
 	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: name}, nil
 }
 
-func healthcheck(ctx context.Context, listen string, useTLS bool, client *http.Client) error {
+func healthcheck(ctx context.Context, listen string, client *http.Client) error {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return fmt.Errorf("cannot read the port from listen address %q: %w", listen, err)
@@ -114,11 +111,7 @@ func healthcheck(ctx context.Context, listen string, useTLS bool, client *http.C
 	ctx, cancel := context.WithTimeout(ctx, healthcheckTimeout)
 	defer cancel()
 
-	scheme := "http"
-	if useTLS {
-		scheme = "https"
-	}
-	url := scheme + "://" + net.JoinHostPort(probeHost(host), port) + "/healthz"
+	url := "https://" + net.JoinHostPort(probeHost(host), port) + "/healthz"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

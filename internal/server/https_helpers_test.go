@@ -4,14 +4,21 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -215,3 +222,122 @@ type addrConn struct {
 }
 
 func (c addrConn) RemoteAddr() net.Addr { return c.remote }
+
+// trustedTLSConfig is the client side of TierPlan's own TLS: it trusts exactly the certificate the
+// install serves, the mirror at <DataDir>/tls/server.crt (or the supplied pair), and verifies it. It
+// never skips verification (scripts/insecure-tls-check.sh). The name checked is the first one the
+// certificate carries, which the loopback dials of the real-listener tests present.
+func trustedTLSConfig(t *testing.T, cfg config.Config) *tls.Config {
+	t.Helper()
+	c, err := ownCertificateTrust(HealthcheckCertFile(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// trustedClient is the one HTTP client the real-listener tests use: it trusts only the install's own
+// certificate. It keeps no idle connections, so a graceful shutdown is not held up by a spare
+// connection that never sent a request.
+func trustedClient(t *testing.T, cfg config.Config) *http.Client {
+	t.Helper()
+	tr := &http.Transport{TLSClientConfig: trustedTLSConfig(t, cfg), DisableKeepAlives: true}
+	t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{Transport: tr}
+}
+
+// trustedDialOptions is a WebSocket dial that trusts only the install's own certificate, with the
+// headers the caller passes.
+func trustedDialOptions(t *testing.T, cfg config.Config, header http.Header) *websocket.DialOptions {
+	t.Helper()
+	tr := &http.Transport{TLSClientConfig: trustedTLSConfig(t, cfg), DisableKeepAlives: true}
+	t.Cleanup(tr.CloseIdleConnections)
+	return &websocket.DialOptions{HTTPClient: &http.Client{Transport: tr}, HTTPHeader: header}
+}
+
+// httpsBase is the https base URL for a listener address.
+func httpsBase(addr string) string { return "https://" + addr }
+
+// wireServer is a Build'd server being served on a loopback port.
+type wireServer struct {
+	srv  *Server
+	cfg  config.Config
+	addr string
+}
+
+// startWire builds a server from env and serves it on 127.0.0.1:0. When peer is not empty, every
+// connection reports it as its remote address. It is stopped when the test ends.
+func startWire(t *testing.T, env map[string]string, peer string, opts ...Option) *wireServer {
+	t.Helper()
+	all := map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"}
+	for k, v := range env {
+		all[k] = v
+	}
+	cfg := testConfig(t, all)
+	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serving := ln
+	if peer != "" {
+		serving = newFakeAddrListener(t, ln, peer)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.serve(ctx, serving) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return &wireServer{srv: srv, cfg: cfg, addr: ln.Addr().String()}
+}
+
+// tlsClient speaks TLS to the listener whatever name the URL carries, trusting exactly the
+// certificate TierPlan serves. Certificate verification stays on.
+func (w *wireServer) tlsClient(t *testing.T) *http.Client {
+	t.Helper()
+	cfg := trustedTLSConfig(t, w.cfg)
+	// The name comes from the URL being fetched, so a Location naming a host the certificate does
+	// not carry fails here.
+	cfg.ServerName = ""
+	tr := &http.Transport{
+		TLSClientConfig: cfg,
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, w.addr)
+		},
+	}
+	t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// wireReply is what a client saw of a response whose body it has read and closed.
+type wireReply struct {
+	status int
+	header http.Header
+	body   string
+}
+
+// wireGet sends a GET with an optional Host override and returns what came back.
+func wireGet(t *testing.T, c *http.Client, url, host string) wireReply {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "" {
+		req.Host = host
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return wireReply{status: resp.StatusCode, header: resp.Header, body: string(b)}
+}

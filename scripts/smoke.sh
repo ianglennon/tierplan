@@ -51,7 +51,7 @@ await_listening() {
       addr="$(printf '%s' "${line}" | jq -r '.addr')" || fail "the listening line is not JSON: ${line}"
       PORT="${addr##*:}"
       [[ "${PORT}" =~ ^[0-9]+$ ]] || fail "the listening line has no port: ${line}"
-      BASE="http://127.0.0.1:${PORT}"
+      BASE="https://localhost:${PORT}"
       return 0
     fi
     kill -0 "${PID}" 2>/dev/null || fail "$1 exited during startup"
@@ -62,13 +62,19 @@ await_listening() {
 
 BIN="$(pwd)/bin/tierplan"
 DATA="${WORK}/data"
+
+# tcurl is curl over TLS, verifying TierPlan's own certificate: the mirror the server writes under
+# its data directory is the only thing trusted, and verification is never switched off (D-10).
+tcurl() {
+  curl --cacert "${DATA}/tls/server.crt" "$@"
+}
 (cd "${WORK}" && TIERPLAN_DATA_DIR="${DATA}" exec "${BIN}" serve --listen "127.0.0.1:${LISTEN_PORT}") >"${LOG}" 2>&1 &
 PID=$!
 
 await_listening "the server"
 up=""
 for _ in $(seq 1 100); do
-  if curl -fsS "${BASE}/api/version" -o "${WORK}/version.json" 2>/dev/null; then
+  if tcurl -fsS "${BASE}/api/version" -o "${WORK}/version.json" 2>/dev/null; then
     up=1
     break
   fi
@@ -81,25 +87,25 @@ for field in display sourceTreeUrl; do
   grep -q "\"${field}\"" "${WORK}/version.json" || fail "/api/version has no ${field}"
 done
 
-code="$(curl -sS -o "${WORK}/login.html" -w '%{http_code}' "${BASE}/login")"
+code="$(tcurl -sS -o "${WORK}/login.html" -w '%{http_code}' "${BASE}/login")"
 [ "${code}" = "200" ] || fail "/login returned ${code}, want 200"
 grep -q 'id="root"' "${WORK}/login.html" || fail "/login is not the SPA (no id=\"root\")"
 
-code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/api/does-not-exist")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' "${BASE}/api/does-not-exist")"
 [ "${code}" = "404" ] || fail "/api/does-not-exist returned ${code}, want 404"
 
-code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/docs")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' "${BASE}/docs")"
 [ "${code}" = "404" ] || fail "/docs returned ${code}, want 404"
 
-curl -sSI "${BASE}/api/version" | grep -qi '^content-security-policy:' \
+tcurl -sSI "${BASE}/api/version" | grep -qi '^content-security-policy:' \
   || fail "Content-Security-Policy header missing"
 
 # Health endpoints (D-86): fixed bodies, no version details.
-code="$(curl -sS -o "${WORK}/healthz.txt" -w '%{http_code}' "${BASE}/healthz")"
+code="$(tcurl -sS -o "${WORK}/healthz.txt" -w '%{http_code}' "${BASE}/healthz")"
 [ "${code}" = "200" ] || fail "/healthz returned ${code}, want 200"
 [ "$(cat "${WORK}/healthz.txt")" = "ok" ] || fail "/healthz body is not exactly 'ok'"
 
-code="$(curl -sS -o "${WORK}/readyz.txt" -w '%{http_code}' "${BASE}/readyz")"
+code="$(tcurl -sS -o "${WORK}/readyz.txt" -w '%{http_code}' "${BASE}/readyz")"
 [ "${code}" = "200" ] || fail "/readyz returned ${code}, want 200"
 [ "$(cat "${WORK}/readyz.txt")" = "ready" ] || fail "/readyz body is not exactly 'ready'"
 
@@ -132,13 +138,13 @@ printf '%s' "${TOKEN}" | grep -Eq "${TOKEN_RE}" || fail "tierplan setup-token pr
 grep -q '"setup required"' "${LOG}" || fail "first start did not log 'setup required'"
 grep -qF "${TOKEN}" "${LOG}" || fail "the server log does not contain the setup token"
 
-curl -fsS "${BASE}/api/instance" -o "${WORK}/instance.json" || fail "/api/instance did not answer 200"
+tcurl -fsS "${BASE}/api/instance" -o "${WORK}/instance.json" || fail "/api/instance did not answer 200"
 grep -q '"needsSetup":true' "${WORK}/instance.json" || fail "/api/instance does not report needsSetup true"
-code="$(curl -sS -o "${WORK}/setup.html" -w '%{http_code}' "${BASE}/setup")"
+code="$(tcurl -sS -o "${WORK}/setup.html" -w '%{http_code}' "${BASE}/setup")"
 [ "${code}" = "200" ] || fail "/setup returned ${code}, want 200 while setup is needed"
 grep -q 'id="root"' "${WORK}/setup.html" || fail "/setup is not the SPA"
 
-code="$(curl -sS -o "${WORK}/wrong.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+code="$(tcurl -sS -o "${WORK}/wrong.json" -w '%{http_code}' -H 'Content-Type: application/json' \
   -d '{"token":"00000000-00000000-00000000-00000000"}' "${BASE}/api/setup/token")"
 [ "${code}" = "401" ] || fail "a wrong setup token returned ${code}, want 401"
 grep -q 'invalid_setup_token' "${WORK}/wrong.json" || fail "a wrong setup token did not answer invalid_setup_token"
@@ -146,7 +152,7 @@ grep -q 'setup.token_failed' "${LOG}" || fail "a wrong setup token was not audit
 if grep -q '00000000-00000000-00000000-00000000' "${LOG}"; then
   fail "the server log contains the attempted setup token"
 fi
-code="$(curl -sS -o "${WORK}/right.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+code="$(tcurl -sS -o "${WORK}/right.json" -w '%{http_code}' -H 'Content-Type: application/json' \
   -d "{\"token\":\"${TOKEN}\"}" "${BASE}/api/setup/token")"
 [ "${code}" = "200" ] || fail "the right setup token returned ${code}, want 200"
 grep -q '"defaultInstanceName"' "${WORK}/right.json" || fail "the right setup token did not return the step 3 defaults"
@@ -156,7 +162,7 @@ grep -q '"defaultInstanceName"' "${WORK}/right.json" || fail "the right setup to
 # Setup completion (D-02, AUTH-01): the token holder creates the one admin, is
 # signed in with a hardened cookie, and the token is spent.
 PW='correct horse battery'
-code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H 'Content-Type: application/json' \
+code="$(tcurl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H 'Content-Type: application/json' \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"Admin\",\"password\":\"${PW}\",\"instanceName\":\"Smoke lab\",\"publicUrl\":\"https://tierplan.example\"}" \
   "${BASE}/api/setup/complete")"
 [ "${code}" = "200" ] || fail "setup completion returned ${code}, want 200: $(cat "${WORK}/complete.json")"
@@ -176,14 +182,14 @@ grep -qi '^cache-control: .*no-store' "${WORK}/complete.hdr" || fail "setup comp
 if TIERPLAN_DATA_DIR="${DATA}" "${BIN}" setup-token >/dev/null 2>&1; then
   fail "tierplan setup-token still prints a token after completion"
 fi
-code="$(curl -sS -o "${WORK}/replay.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+code="$(tcurl -sS -o "${WORK}/replay.json" -w '%{http_code}' -H 'Content-Type: application/json' \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"mallory\",\"password\":\"${PW}\",\"instanceName\":\"x\",\"publicUrl\":\"https://tierplan.example\"}" \
   "${BASE}/api/setup/complete")"
 [ "${code}" = "409" ] || fail "a second completion returned ${code}, want 409"
 grep -q 'setup_complete' "${WORK}/replay.json" || fail "a second completion did not answer setup_complete"
-code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/setup")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' "${BASE}/setup")"
 [ "${code}" = "302" ] || fail "/setup returned ${code} after completion, want 302"
-curl -fsS "${BASE}/api/instance" -o "${WORK}/instance2.json" || fail "/api/instance did not answer after completion"
+tcurl -fsS "${BASE}/api/instance" -o "${WORK}/instance2.json" || fail "/api/instance did not answer after completion"
 grep -q '"needsSetup":false' "${WORK}/instance2.json" || fail "/api/instance still reports needsSetup after completion"
 grep -q '"instanceName":"Smoke lab"' "${WORK}/instance2.json" || fail "/api/instance does not report the stored instance name"
 # Secrets are never logged, and the database holds only a hash of the session ID.
@@ -200,12 +206,12 @@ grep -q 'setup.completed' "${LOG}" || fail "setup.completed was not logged"
 ORIGIN='https://tierplan.example'
 JSON_H='Content-Type: application/json'
 login() { # $1 = username, $2 = password, $3 = optional extra curl args; body in login.json, headers in login.hdr
-  curl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${ORIGIN}" \
+  tcurl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${ORIGIN}" \
     -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${BASE}/api/auth/login"
 }
-code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/api/me")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' "${BASE}/api/me")"
 [ "${code}" = "401" ] || fail "/api/me without a session returned ${code}, want 401"
-code="$(curl -sS -o "${WORK}/me0.json" -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION_ID}" "${BASE}/api/me")"
+code="$(tcurl -sS -o "${WORK}/me0.json" -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION_ID}" "${BASE}/api/me")"
 [ "${code}" = "200" ] || fail "/api/me with the setup session returned ${code}, want 200: $(cat "${WORK}/me0.json")"
 grep -q '"username":"admin"' "${WORK}/me0.json" || fail "/api/me did not return the admin"
 grep -q '"environments":{"\*":\[' "${WORK}/me0.json" || fail "/api/me did not list the admin's all-environment permissions"
@@ -229,18 +235,18 @@ if printf '%s' "${COOKIE_LINE}" | grep -qiE 'max-age|expires='; then fail "a sig
 SESSION2="$(printf '%s' "${COOKIE_LINE}" | sed 's/^[^=]*=//; s/;.*//')"
 CSRF2="$(sed 's/.*"csrfToken":"\([^"]*\)".*/\1/' "${WORK}/login.json")"
 [ -n "${CSRF2}" ] || fail "sign-in returned no CSRF token"
-code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/me")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/me")"
 [ "${code}" = "200" ] || fail "/api/me after sign-in returned ${code}, want 200"
-code="$(curl -sS -o "${WORK}/csrf.json" -w '%{http_code}' -X POST -H "Origin: ${ORIGIN}" -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/auth/logout")"
+code="$(tcurl -sS -o "${WORK}/csrf.json" -w '%{http_code}' -X POST -H "Origin: ${ORIGIN}" -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/auth/logout")"
 [ "${code}" = "403" ] || fail "logout without the CSRF token returned ${code}, want 403"
 grep -q 'csrf_failed' "${WORK}/csrf.json" || fail "logout without the CSRF token did not answer csrf_failed"
-code="$(curl -sS -o /dev/null -D "${WORK}/logout.hdr" -w '%{http_code}' -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF2}" \
+code="$(tcurl -sS -o /dev/null -D "${WORK}/logout.hdr" -w '%{http_code}' -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF2}" \
   -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/auth/logout")"
 [ "${code}" = "204" ] || fail "logout with the CSRF token returned ${code}, want 204"
 grep -i '^set-cookie:' "${WORK}/logout.hdr" | grep -qi 'max-age=0' || fail "logout did not clear the cookie"
-code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/me")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION2}" "${BASE}/api/me")"
 [ "${code}" = "401" ] || fail "/api/me after logout returned ${code}, want 401"
-code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION_ID}" "${BASE}/api/me")"
+code="$(tcurl -sS -o /dev/null -w '%{http_code}' -H "Cookie: __Host-tierplan_session=${SESSION_ID}" "${BASE}/api/me")"
 [ "${code}" = "200" ] || fail "signing out one device ended the other (${code}), want 200"
 if grep -qF "${SESSION2}" "${LOG}" || grep -qaF "${SESSION2}" "${DATA}"/tierplan.db*; then
   fail "the raw session ID of a sign-in reached the log or the database"
@@ -266,7 +272,7 @@ TIERPLAN_DATA_DIR="${DATA}" "${BIN}" audit verify | grep -Eq '^audit chain OK: [
   || fail "the audit chain is broken after sign-ins and a CLI unlock"
 
 # The healthcheck subcommand, as the container HEALTHCHECK runs it.
-TIERPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
+TIERPLAN_DATA_DIR="${DATA}" TIERPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck \
   || fail "tierplan healthcheck exited non-zero while the server is up"
 
 # A bad setting stops startup and names the env var (D-11).
@@ -279,7 +285,7 @@ grep -q 'TIERPLAN_PUBLIC_URL' "${WORK}/bad.log" || fail "startup error does not 
 kill "${PID}"
 wait "${PID}" 2>/dev/null || true
 PID=""
-if TIERPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck 2>/dev/null; then
+if TIERPLAN_DATA_DIR="${DATA}" TIERPLAN_LISTEN="127.0.0.1:${PORT}" "${BIN}" healthcheck 2>/dev/null; then
   fail "tierplan healthcheck exited 0 after the server stopped"
 fi
 
@@ -291,7 +297,7 @@ PID=$!
 await_listening "the restarted server"
 up=""
 for _ in $(seq 1 100); do
-  if curl -fsS "${BASE}/readyz" -o "${WORK}/readyz2.txt" 2>/dev/null; then
+  if tcurl -fsS "${BASE}/readyz" -o "${WORK}/readyz2.txt" 2>/dev/null; then
     up=1
     break
   fi
@@ -302,7 +308,7 @@ done
 [ "$(cat "${WORK}/readyz2.txt")" = "ready" ] || fail "/readyz body after the restart is not exactly 'ready'"
 grep -q '"database ready"' "${LOG}" || fail "restart did not log 'database ready'"
 # The admin and the settings survive the restart, and no new setup token is minted.
-curl -fsS "${BASE}/api/instance" -o "${WORK}/instance3.json" || fail "/api/instance did not answer after the restart"
+tcurl -fsS "${BASE}/api/instance" -o "${WORK}/instance3.json" || fail "/api/instance did not answer after the restart"
 grep -q '"needsSetup":false' "${WORK}/instance3.json" || fail "the restart reopened setup"
 grep -q '"instanceName":"Smoke lab"' "${WORK}/instance3.json" || fail "the instance name did not survive the restart"
 [ ! -e "${DATA}/setup-token" ] || fail "the restart wrote a setup-token although an admin exists"

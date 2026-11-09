@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -138,7 +139,8 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 }
 
 func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +158,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 
 	// Healthcheck succeeds while the server is up. The listen address may be
 	// ":port" or "host:port"; only the port matters.
-	if err := Healthcheck(context.Background(), ":"+port, ""); err != nil {
+	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(cfg)); err != nil {
 		t.Fatalf("Healthcheck while up: %v", err)
 	}
 
@@ -170,22 +172,26 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 		t.Fatal("server did not shut down")
 	}
 
-	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil {
+	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(cfg)); err == nil {
 		t.Fatal("Healthcheck after shutdown should fail")
 	}
 }
 
 func TestHealthcheckRejectsNon200AndBadListen(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer ts.Close()
-	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
-	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil || !strings.Contains(err.Error(), "503") {
+	certFile := writeServerCert(t, ts)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "https://"))
+	if err := Healthcheck(context.Background(), ":"+port, certFile); err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("Healthcheck against a 503 = %v, want an error naming 503", err)
 	}
-	if err := Healthcheck(context.Background(), "no-port", ""); err == nil {
+	if err := Healthcheck(context.Background(), "no-port", certFile); err == nil {
 		t.Error("Healthcheck with an unusable listen address should fail")
+	}
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil || !strings.Contains(err.Error(), "no certificate file") {
+		t.Errorf("Healthcheck with no certificate file = %v, want an error saying so", err)
 	}
 	if _, err := strconv.Atoi(port); err != nil {
 		t.Fatal(err)
@@ -755,7 +761,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := "http://" + ln.Addr().String()
+	base := httpsBase(ln.Addr().String())
 	sctx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- srv.serve(sctx, ln) }()
@@ -764,8 +770,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	// login connection is on its way back to the pool, and Shutdown waits up to
 	// 5s for a connection that never sent a request, which is not the stream
 	// this test is about.
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	t.Cleanup(client.CloseIdleConnections)
+	client := trustedClient(t, cfg)
 
 	loginReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -1055,19 +1060,31 @@ func TestHSTSIsNeverSentOnThePlainRedirectOrRefusal(t *testing.T) {
 	}
 }
 
-// healthyOn serves a 200 on ln and returns its port.
-func healthyOn(t *testing.T, ln net.Listener) string {
+// writeServerCert writes the certificate an httptest TLS server presents to a temporary PEM file and
+// returns its path: the file the healthcheck verifies against.
+func writeServerCert(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "server.crt")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ts.Certificate().Raw})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// healthyOn serves a 200 over TLS on ln and returns its port and the certificate file to verify it.
+func healthyOn(t *testing.T, ln net.Listener) (port, certFile string) {
 	t.Helper()
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	_ = ts.Listener.Close()
 	ts.Listener = ln
-	ts.Start()
+	ts.StartTLS()
 	t.Cleanup(ts.Close)
 	_, port, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return port
+	return port, writeServerCert(t, ts)
 }
 
 func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
@@ -1078,8 +1095,8 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		if err != nil {
 			t.Skipf("cannot bind 127.0.0.2: %v", err)
 		}
-		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, ""); err != nil {
+		port, certFile := healthyOn(t, ln)
+		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, certFile); err != nil {
 			t.Errorf("Healthcheck on the address the server is bound to: %v", err)
 		}
 	})
@@ -1088,8 +1105,8 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		if err != nil {
 			t.Skipf("no IPv6 loopback: %v", err)
 		}
-		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "[::1]:"+port, ""); err != nil {
+		port, certFile := healthyOn(t, ln)
+		if err := Healthcheck(context.Background(), "[::1]:"+port, certFile); err != nil {
 			t.Errorf("Healthcheck on [::1]: %v", err)
 		}
 	})
@@ -1098,9 +1115,9 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		port := healthyOn(t, ln)
+		port, certFile := healthyOn(t, ln)
 		for _, listen := range []string{":" + port, "0.0.0.0:" + port, "[::]:" + port} {
-			if err := Healthcheck(context.Background(), listen, ""); err != nil {
+			if err := Healthcheck(context.Background(), listen, certFile); err != nil {
 				t.Errorf("Healthcheck(%q): %v", listen, err)
 			}
 		}

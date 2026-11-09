@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -41,12 +42,6 @@ func (w *wireServer) probe(t *testing.T) error {
 	return Healthcheck(t.Context(), w.port(t), HealthcheckCertFile(w.cfg))
 }
 
-// plainProbe runs the healthcheck over plain HTTP, which /healthz answers on every install.
-func (w *wireServer) plainProbe(t *testing.T) error {
-	t.Helper()
-	return Healthcheck(t.Context(), w.port(t), "")
-}
-
 // modeEnv is the environment for one TLS mode. The certificate-file pair is written for host.
 func modeEnv(t *testing.T, mode, host string) map[string]string {
 	t.Helper()
@@ -73,10 +68,6 @@ func TestHealthcheckMatrix(t *testing.T) {
 				w := startWire(t, env, "")
 				if err := w.probe(t); err != nil {
 					t.Errorf("the container healthcheck: %v", err)
-				}
-				// /healthz is exempt from the gate, so a plain probe passes against every install.
-				if err := w.plainProbe(t); err != nil {
-					t.Errorf("a plain-HTTP probe: %v", err)
 				}
 			})
 		}
@@ -112,9 +103,6 @@ func TestHealthcheckMatrixStaysGreenWhileThePublicURLFlips(t *testing.T) {
 		if err := w.probe(t); err != nil {
 			t.Errorf("public URL %q: the TLS probe: %v", pub, err)
 		}
-		if err := w.plainProbe(t); err != nil {
-			t.Errorf("public URL %q: the plain probe: %v", pub, err)
-		}
 	}
 }
 
@@ -134,5 +122,63 @@ func TestHealthcheckMatrixStillVerifiesTheCertificate(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "none.crt")
 	if err := Healthcheck(context.Background(), w.port(t), missing); err == nil || !strings.Contains(err.Error(), "none.crt") {
 		t.Errorf("a missing certificate file gave %v, want an error naming it", err)
+	}
+}
+
+func TestHealthcheckMatrixStaysGreenAfterALiveReSign(t *testing.T) {
+	clk := newStepClock(fixedNow)
+	w := startWire(t, nil, "", WithTLSRefreshClock(clk))
+	if err := w.probe(t); err != nil {
+		t.Fatalf("before the re-sign: %v", err)
+	}
+	// A saved public URL names a host the certificate lacks, so the refresh loop signs again and the
+	// mirror the probe trusts follows the certificate being served.
+	before, err := os.ReadFile(HealthcheckCertFile(w.cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.srv.Instance().Apply("TierPlan", matrixHTTPSURL)
+	clk.Tick(t, selfSignedNameCheck)
+	clk.WaitArmed(t)                                      // the loop arms again once Refresh has run
+	after, err := os.ReadFile(HealthcheckCertFile(w.cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(before, after) {
+		t.Fatal("the mirror still holds the certificate from before the re-sign, so nothing was signed")
+	}
+	if err := w.probe(t); err != nil {
+		t.Errorf("after a live re-sign: %v", err)
+	}
+}
+
+func TestHealthcheckMatrixStaysGreenAfterASuppliedPairIsReplaced(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	writePair(t, crt, key, "a.example.com")
+	clk := newStepClock(fixedNow)
+	w := startWire(t, map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key}, "", WithTLSRefreshClock(clk))
+	if err := w.probe(t); err != nil {
+		t.Fatalf("before the replacement: %v", err)
+	}
+	writePair(t, filepath.Join(dir, "b.pem"), filepath.Join(dir, "b.key"), "b.example.com")
+	if err := os.Rename(filepath.Join(dir, "b.pem"), crt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, "b.key"), key); err != nil {
+		t.Fatal(err)
+	}
+	clk.Tick(t, suppliedRecheck)
+	clk.WaitArmed(t) // the loop arms again once Refresh has run
+	if err := w.probe(t); err != nil {
+		t.Errorf("after the supplied pair was replaced: %v", err)
+	}
+}
+
+func TestHealthcheckWithNoCertificateFileNamesItAndProbesNothing(t *testing.T) {
+	w := startWire(t, nil, "")
+	err := Healthcheck(t.Context(), w.port(t), "")
+	if err == nil || !strings.Contains(err.Error(), "no certificate file") {
+		t.Errorf("an empty certificate file gave %v, want an error saying none was given", err)
 	}
 }

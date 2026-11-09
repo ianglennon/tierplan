@@ -4,14 +4,8 @@
 package server
 
 import (
-	"context"
-	"io"
-	"log/slog"
-	"net"
 	"net/http"
 	"testing"
-
-	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // The gate tests in httpsgate_test.go call the handler with a chosen RemoteAddr. These go over real
@@ -21,99 +15,12 @@ import (
 
 const refusalBody = "This TierPlan serves HTTPS on this port. Use an https:// address.\n"
 
-// wireServer is a Build'd server being served on a loopback port.
-type wireServer struct {
-	srv  *Server
-	cfg  config.Config
-	addr string
-}
-
-// startWire builds a server from env and serves it on 127.0.0.1:0. When peer is not empty, every
-// connection reports it as its remote address. It is stopped when the test ends.
-func startWire(t *testing.T, env map[string]string, peer string) *wireServer {
-	t.Helper()
-	all := map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"}
-	for k, v := range env {
-		all[k] = v
-	}
-	cfg := testConfig(t, all)
-	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	serving := ln
-	if peer != "" {
-		serving = newFakeAddrListener(t, ln, peer)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- srv.serve(ctx, serving) }()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-	return &wireServer{srv: srv, cfg: cfg, addr: ln.Addr().String()}
-}
-
 // plainClient sends plain HTTP to the listener and does not follow redirects.
 func (w *wireServer) plainClient(t *testing.T) *http.Client {
 	t.Helper()
 	tr := &http.Transport{}
 	t.Cleanup(tr.CloseIdleConnections)
 	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
-// tlsClient speaks TLS to the listener whatever name the URL carries, trusting exactly the
-// certificate TierPlan serves. Certificate verification stays on.
-func (w *wireServer) tlsClient(t *testing.T) *http.Client {
-	t.Helper()
-	cfg, err := ownCertificateTrust(HealthcheckCertFile(w.cfg))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The name comes from the URL being fetched, so a Location naming a host the certificate does
-	// not carry fails here.
-	cfg.ServerName = ""
-	tr := &http.Transport{
-		TLSClientConfig: cfg,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, w.addr)
-		},
-	}
-	t.Cleanup(tr.CloseIdleConnections)
-	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
-// wireReply is what a client saw of a response whose body it has read and closed.
-type wireReply struct {
-	status int
-	header http.Header
-	body   string
-}
-
-// wireGet sends a GET with an optional Host override and returns what came back.
-func wireGet(t *testing.T, c *http.Client, url, host string) wireReply {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if host != "" {
-		req.Host = host
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	return wireReply{status: resp.StatusCode, header: resp.Header, body: string(b)}
 }
 
 func TestGateWireRedirectsANonLoopbackPlainClient(t *testing.T) {

@@ -31,10 +31,8 @@ ENV TIERPLAN_DATA_DIR=/data
 VOLUME ["/data"]
 EXPOSE 7480
 
-# A distroless image has no curl, so the binary probes itself. With
-# TIERPLAN_TLS_SELF_SIGNED or the certificate-file variables it probes over
-# https, verifying TierPlan's own certificate; otherwise it probes plain HTTP.
-# /healthz answers on both schemes on the one port (D-86).
+# A distroless image has no curl, so the binary probes itself. It always probes
+# https and verifies TierPlan's own certificate (D-03, D-86).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["/usr/local/bin/tierplan", "healthcheck"]
 
