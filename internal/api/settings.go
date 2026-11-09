@@ -71,7 +71,7 @@ type SettingsDeps struct {
 // SettingsBody is the instance's editable settings.
 type SettingsBody struct {
 	InstanceName    string `json:"instanceName" doc:"The name shown in the header, tab titles and the sign-in page"`
-	PublicURL       string `json:"publicUrl" doc:"The URL users reach TierPlan at; drives the Origin check and the cookie Secure flag"`
+	PublicURL       string `json:"publicUrl" doc:"The URL users reach TierPlan at; drives the Origin check and the session cookie's name and Path; the cookie is always Secure"`
 	PublicURLLocked bool   `json:"publicUrlLocked" doc:"True when the TIERPLAN_PUBLIC_URL environment variable fixes the public URL"`
 	AgentURL        string `json:"agentUrl" doc:"The address agents dial when it differs from the public URL; empty means they dial the public URL"`
 	AgentURLLocked  bool   `json:"agentUrlLocked" doc:"True when the TIERPLAN_AGENT_URL environment variable fixes the agent URL"`
@@ -171,7 +171,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			"An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while " +
 			"TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set " +
 			"answers 409 " + problemAgentURLLocked + "; both change nothing. An empty agentUrl clears it. A change takes effect at once: " +
-			"the Origin check and the cookie Secure flag use the new public URL from the next request. When the address agents " +
+			"the Origin check and the session cookie's name and Path use the new public URL from the next request; the cookie is always Secure. When the address agents " +
 			"dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its " +
 			"tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on " +
 			"the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was " +

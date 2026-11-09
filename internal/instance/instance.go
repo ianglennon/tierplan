@@ -3,8 +3,8 @@
 
 // Package instance holds the instance settings every request reads: the display
 // name (D-03), the public URL that drives the Origin guard and the session
-// cookie's Secure flag (D-04), and the agent URL that tells agents where to dial
-// when it is not the public one (D-18).
+// cookie's name and Path (D-04; the cookie is always Secure), and the agent URL
+// that tells agents where to dial when it is not the public one (D-18).
 //
 // The values live in the settings table. This package caches them in atomics so
 // the Origin guard, which runs on every mutation, never touches the database,
