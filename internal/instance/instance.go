@@ -216,12 +216,6 @@ func (i *Instance) PublicURL() string { return *i.url.Load() }
 // is set. httpx.Options.PublicOrigin reads it on every request.
 func (i *Instance) PublicOrigin() string { return httpx.OriginOf(i.PublicURL()) }
 
-// Secure reports whether the public URL is https, which decides the session
-// cookie's Secure flag and name (D-12).
-func (i *Instance) Secure() bool {
-	return strings.HasPrefix(i.PublicOrigin(), "https://")
-}
-
 // BasePath is the escaped path of the public URL, for example "/tierplan" for
 // https://example.com/tierplan, and "" when there is no public URL or it has no
 // path. It is the single source of the base every link, asset URL and cookie

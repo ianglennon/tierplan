@@ -43,8 +43,8 @@ func set(t *testing.T, i *instance.Instance, st *store.Store, name, url string) 
 
 func TestLoadOnAFreshStoreIsEmptyAndUnlocked(t *testing.T) {
 	i, _ := load(t, config.Config{})
-	if i.Name() != "" || i.PublicURL() != "" || i.PublicOrigin() != "" || i.Secure() || i.Locked() {
-		t.Fatalf("fresh instance = %q %q %q secure=%v locked=%v", i.Name(), i.PublicURL(), i.PublicOrigin(), i.Secure(), i.Locked())
+	if i.Name() != "" || i.PublicURL() != "" || i.PublicOrigin() != "" || i.Locked() {
+		t.Fatalf("fresh instance = %q %q %q locked=%v", i.Name(), i.PublicURL(), i.PublicOrigin(), i.Locked())
 	}
 }
 
@@ -57,8 +57,8 @@ func TestSetTxPersistsAndLoadReadsItBack(t *testing.T) {
 	if i.Name() != "Home lab" || i.PublicURL() != "https://tierplan.example/ui" {
 		t.Fatalf("after Apply: %q %q", i.Name(), i.PublicURL())
 	}
-	if i.PublicOrigin() != "https://tierplan.example" || !i.Secure() {
-		t.Fatalf("origin %q secure %v, want https://tierplan.example true", i.PublicOrigin(), i.Secure())
+	if i.PublicOrigin() != "https://tierplan.example" {
+		t.Fatalf("origin %q, want https://tierplan.example", i.PublicOrigin())
 	}
 
 	again, err := instance.Load(context.Background(), st, config.Config{})
@@ -97,8 +97,8 @@ func TestSetTxChangesAreInvisibleUntilAppliedAndLostOnRollback(t *testing.T) {
 func TestDefaultPortsDropFromTheOriginAndTheCookieScopeCarriesOnlyTheBasePath(t *testing.T) {
 	i, _ := load(t, config.Config{})
 	i.Apply("x", "https://TierPlan.Example:443/tierplan")
-	if !i.Secure() || i.PublicOrigin() != "https://tierplan.example" {
-		t.Fatalf("origin %q secure %v", i.PublicOrigin(), i.Secure())
+	if i.PublicOrigin() != "https://tierplan.example" {
+		t.Fatalf("origin %q", i.PublicOrigin())
 	}
 	if got := i.CookieScope(); got.BasePath != "/tierplan" {
 		t.Fatalf("CookieScope = %+v, want the base path /tierplan", got)
@@ -107,8 +107,8 @@ func TestDefaultPortsDropFromTheOriginAndTheCookieScopeCarriesOnlyTheBasePath(t 
 
 func TestEnvironmentURLWinsAndLocksTheInstance(t *testing.T) {
 	i, st := load(t, config.Config{PublicURL: "https://env.example"})
-	if !i.Locked() || i.PublicURL() != "https://env.example" || !i.Secure() {
-		t.Fatalf("locked=%v url=%q secure=%v", i.Locked(), i.PublicURL(), i.Secure())
+	if !i.Locked() || i.PublicURL() != "https://env.example" {
+		t.Fatalf("locked=%v url=%q", i.Locked(), i.PublicURL())
 	}
 	// A stored value never overrides the environment.
 	if err := set(t, i, st, "Lab", "https://env.example"); err != nil {

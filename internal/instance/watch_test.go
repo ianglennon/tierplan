@@ -107,8 +107,8 @@ func TestWatcherPollAppliesAPublicURLWrittenByAnotherHandle(t *testing.T) {
 	server, other := watchDataDir(t)
 	watchPut(t, other, instance.SettingPublicURL, "https://tierplan.example.com:8443")
 	inst := mustLoad(t, server, config.Config{})
-	if inst.PublicURL() != "https://tierplan.example.com:8443" || !inst.Secure() {
-		t.Fatalf("loaded %q secure=%v", inst.PublicURL(), inst.Secure())
+	if inst.PublicURL() != "https://tierplan.example.com:8443" {
+		t.Fatalf("loaded %q, want https://tierplan.example.com:8443", inst.PublicURL())
 	}
 
 	w := &instance.Watcher{Inst: inst, Store: server, Clock: newWatchClock(), Log: slog.New(slog.DiscardHandler)}
@@ -126,9 +126,6 @@ func TestWatcherPollAppliesAPublicURLWrittenByAnotherHandle(t *testing.T) {
 	}
 	if inst.PublicURL() != "https://other.example.com:8443" {
 		t.Fatalf("PublicURL = %q", inst.PublicURL())
-	}
-	if !inst.Secure() {
-		t.Fatalf("not secure after the URL changed: Secure=%v", inst.Secure())
 	}
 	if inst.PublicOrigin() != "https://other.example.com:8443" {
 		t.Fatalf("PublicOrigin = %q", inst.PublicOrigin())
