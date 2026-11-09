@@ -19,7 +19,6 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/rbac"
-	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // Stable problem types of the environment routes. The SPA maps each to copy.
@@ -31,23 +30,19 @@ const (
 	problemInvalidName            = "invalid_name"
 	problemEnvironmentNotFound    = "environment_not_found"
 	problemPublicURLRequired      = "public_url_required"
-	// problemInsecureAgentURL: the address agents are given is plain ws:// for a
-	// host that is not this machine and the development switch is off, so agents
-	// would refuse it (G-02-R4-3). It is checked before anything is created.
-	problemInsecureAgentURL    = "insecure_agent_url"
-	problemAgentsUnavailable   = "agents_unavailable"
-	problemAgentNotFound       = "agent_not_found"
-	problemAgentAlreadyRevoked = "agent_already_revoked"
-	problemNotBlocked          = "not_blocked"
-	problemNoClusterChange     = "no_cluster_change"
-	problemClusterInUse        = "cluster_in_use"
-	problemAgentOffline        = "agent_offline"
-	problemNoManager           = "no_manager_connected"
-	problemSelfUpdateDisabled  = "self_update_disabled"
-	problemAgentUpToDate       = "agent_up_to_date"
-	problemUpdateInProgress    = "update_in_progress"
-	problemNothingToChange     = "nothing_to_change"
-	problemFoldNotOffered      = "fold_not_offered"
+	problemAgentsUnavailable      = "agents_unavailable"
+	problemAgentNotFound          = "agent_not_found"
+	problemAgentAlreadyRevoked    = "agent_already_revoked"
+	problemNotBlocked             = "not_blocked"
+	problemNoClusterChange        = "no_cluster_change"
+	problemClusterInUse           = "cluster_in_use"
+	problemAgentOffline           = "agent_offline"
+	problemNoManager              = "no_manager_connected"
+	problemSelfUpdateDisabled     = "self_update_disabled"
+	problemAgentUpToDate          = "agent_up_to_date"
+	problemUpdateInProgress       = "update_in_progress"
+	problemNothingToChange        = "nothing_to_change"
+	problemFoldNotOffered         = "fold_not_offered"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
@@ -421,8 +416,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
 			"TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
 			"and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, " +
-			"with its base path); 409 " + problemPublicURLRequired + " when TierPlan has neither, and 409 " + problemInsecureAgentURL +
-			" when that address is plain ws://: an http agent address is refused, because agents connect only over wss://. Nothing is created in either case. 422 invalid_name. " +
+			"with its base path); 409 " + problemPublicURLRequired + " when TierPlan has neither, and nothing is created then. 422 invalid_name. " +
 			"The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
@@ -579,9 +573,6 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 		return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
 			"TierPlan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
 	}
-	if tunnel.PlainAddressRefused(endpoint) {
-		return nil, insecureAgentURLProblem()
-	}
 	created, err := d.Agents.CreateEnvironment(ctx, p.AuditActor(), in.Body.Name, httpx.ClientIP(ctx), in.UserAgent)
 	if err != nil {
 		return nil, fail("add agent environment", err)
@@ -606,16 +597,6 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 		EnvironmentBody: environmentBody(e),
 		Install:         installBody(install),
 	}}, nil
-}
-
-// insecureAgentURLProblem is the 409 for an agent address agents would refuse. It
-// sits next to the empty-address check at add and rotate, before an environment or
-// a token is created, so nothing exists whose install is never shown. The detail is
-// fixed and does not repeat the address.
-func insecureAgentURLProblem() error {
-	return httpx.Problem(http.StatusConflict, problemInsecureAgentURL,
-		"The address agents are given is plain ws://. Agents connect only over wss://, so an http agent address is refused. "+
-			"Set an https public URL or agent URL in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
 }
 
 // installBody maps the built install to its API shape.

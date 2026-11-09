@@ -416,8 +416,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			"enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the " +
 			"install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents " +
 			"it carries the one-line rotate command. 404 environment_not_found; 409 " + problemPublicURLRequired + " when TierPlan has no " +
-			"address to give agents, and 409 " + problemInsecureAgentURL + " when that address is plain ws://: " +
-			"an http agent address is refused, because agents connect only over wss://; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
+			"address to give agents; the current token stays then. Needs environments.token. Audited as environment.token_rotated with the new generation.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsToken, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *TokenMutationInput) (*RotateTokenOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -436,9 +435,6 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		if endpoint == "" {
 			return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
 				"TierPlan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
-		}
-		if tunnel.PlainAddressRefused(endpoint) {
-			return nil, insecureAgentURLProblem()
 		}
 		rot, err := d.Agents.RotateToken(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {

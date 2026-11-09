@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -145,21 +144,6 @@ func (h *Hub) audience() (aud string, err error) {
 		return "", errors.New("the public URL is not set")
 	}
 	return authn.Audience(raw)
-}
-
-// PlainAddressRefused reports whether raw is a plain address (scheme http or ws,
-// any case) for any host, this machine included: agents connect only over wss://,
-// so TierPlan hands out no plain address (D-09). raw is an address agents are told
-// to dial, the agent base or the endpoint built from it. An https or wss address, an
-// empty value and one that does not parse are not refused here; the caller deals
-// with a missing address. Plans 13 and 14 make such addresses impossible, and this
-// rule exists only until the API stops checking for them (plan 16).
-func PlainAddressRefused(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "ws")
 }
 
 // secureTransport reports whether the connection reached TierPlan over TLS: only

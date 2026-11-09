@@ -549,29 +549,6 @@ func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *
 	}
 }
 
-func TestPlainAddressRefusedForEveryPlainAddress(t *testing.T) {
-	for _, c := range []struct {
-		raw  string
-		want bool
-	}{
-		{"http://10.0.0.5:7480", true},
-		{"ws://10.0.0.5:7480/agent/connect", true},
-		{"HTTP://TierPlan.Example", true},
-		{"http://localhost.example", true},
-		{"http://127.0.0.1:7480", true},
-		{"ws://[::1]:7480/agent/connect", true},
-		{"http://localhost:5173", true},
-		{"https://tierplan.example", false},
-		{"wss://tierplan.example/agent/connect", false},
-		{"", false},
-		{"http://[::1", false}, // url.Parse refuses it
-	} {
-		if got := tunnel.PlainAddressRefused(c.raw); got != c.want {
-			t.Errorf("PlainAddressRefused(%q) = %v, want %v", c.raw, got, c.want)
-		}
-	}
-}
-
 func TestWithNoPublicURLNoAgentIsAccepted(t *testing.T) {
 	f := newFixture(t, true, func(string) string { return "" })
 	_, resp, err := websocket.Dial(context.Background(), f.wsURL(), &websocket.DialOptions{HTTPClient: f.ts.Client(), Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself

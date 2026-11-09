@@ -10,8 +10,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // The names an installed agent identifies itself by. The self-update and uninstall
@@ -115,17 +113,10 @@ func AgentImage(serverVersion string) string {
 // SecretName is the Docker secret that holds generation g of the join token.
 func SecretName(g int) string { return SecretPrefix + strconv.Itoa(g) }
 
-// ErrPlainEndpointRefused is returned by BuildInstall for an endpoint that is plain
-// ws:// (or http), for any host: agents connect only over wss://, so no text may
-// point them at a plain address (D-09, G-02-R4-3). The API checks first and answers 409 insecure_agent_url, so reaching
-// this error from there is a server bug.
-var ErrPlainEndpointRefused = errors.New("the agent endpoint is plain, and agents connect only over wss://")
-
 // BuildInstall builds every install text for one join token. It refuses a token,
 // endpoint or pin that holds a quote, a control character or a space: they are
 // generated or normalised values and never contain one, so this is only a guard
-// against a shell or YAML injection if that ever changes (T-02-36). It also refuses
-// an endpoint agents would not dial (ErrPlainEndpointRefused).
+// against a shell or YAML injection if that ever changes (T-02-36).
 func BuildInstall(p InstallParams) (Install, error) {
 	if p.Generation < 1 {
 		return Install{}, fmt.Errorf("%w: the token generation starts at 1", ErrInstallValue)
@@ -137,9 +128,6 @@ func BuildInstall(p InstallParams) (Install, error) {
 		if !safeValue(v) {
 			return Install{}, fmt.Errorf("%w: the %s", ErrInstallValue, name)
 		}
-	}
-	if tunnel.PlainAddressRefused(p.Endpoint) {
-		return Install{}, ErrPlainEndpointRefused
 	}
 
 	image := AgentImage(p.ServerVersion)
@@ -218,9 +206,6 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 	case "standalone":
 		if p.Endpoint == "" {
 			return "" // a recreated container with no address to dial would never connect
-		}
-		if tunnel.PlainAddressRefused(p.Endpoint) {
-			return "" // the recreated agent would refuse the address and exit at start
 		}
 		return " docker pull " + image + " && docker rm -f " + ServiceName +
 			" && docker run -d --name " + ServiceName + " --restart unless-stopped" +

@@ -4,7 +4,6 @@
 package agents_test
 
 import (
-	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -554,39 +553,13 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration
 	}
 }
 
-// An install carries no allow-insecure line for any endpoint: agents connect only
-// over wss://, so a plain endpoint (this machine included) is one TierPlan builds no
-// text for. BuildInstall refuses it, and the standalone manual update and the update
-// hint built on it are empty. The swarm manual update carries no address (a service
-// update keeps the service's environment), so it stays. D-09, G-02-R4-3, T-02-144.
-func TestBuildInstallRefusesAPlainEndpointForEveryHost(t *testing.T) {
+// An install carries no allow-insecure line: agents connect only over wss://, and the
+// endpoint TierPlan hands out is always wss. D-09, T-02-144.
+func TestInstallCarriesNoAllowInsecureLine(t *testing.T) {
 	// The removed switch is spelled in two halves so a repository-wide gate for its name stays exact.
 	const switchName = "ALLOW_" + "INSECURE"
-	for _, endpoint := range []string{
-		"ws://10.0.0.5:7480/agent/connect", "ws://127.0.0.1:7480/agent/connect",
-		"ws://localhost:7480/agent/connect", "ws://[::1]:7480/agent/connect",
-	} {
-		p := goldenParams()
-		p.Endpoint = endpoint
-		if _, err := agents.BuildInstall(p); !errors.Is(err, agents.ErrPlainEndpointRefused) {
-			t.Fatalf("BuildInstall(%s) = %v, want ErrPlainEndpointRefused", endpoint, err)
-		}
-		image := agents.AgentImage(p.ServerVersion)
-		if got := agents.ManualUpdateCommand("standalone", image, p); got != "" {
-			t.Errorf("the standalone manual update for %s = %q, want none", endpoint, got)
-		}
-		if got := agents.UpdateHint(true, "standalone", p); got != "" {
-			t.Errorf("the update hint for %s = %q, want none", endpoint, got)
-		}
-		if got := agents.ManualUpdateCommand("swarm", image, p); got != " docker service update --image "+image+" tierplan-agent" {
-			t.Errorf("the swarm manual update = %q, want the service update", got)
-		}
-		if got := agents.UpdateHint(true, "swarm", p); !strings.Contains(got, "docker service update") {
-			t.Errorf("the swarm update hint = %q, want the service update", got)
-		}
-	}
 
-	// The wss endpoint builds, and no text carries an allow-insecure line.
+	// No text carries an allow-insecure line.
 	p := goldenParams()
 	p.Generation = 2
 	in := mustBuild(t, p)
