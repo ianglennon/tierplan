@@ -143,26 +143,22 @@ func TestPatchSettingsSwitchesTheOriginGuardImmediately(t *testing.T) {
 		t.Fatalf("public URL = %q secure = %v, want the normalised new origin and a Secure cookie", f.inst.PublicURL(), f.inst.Secure())
 	}
 
-	// The instance is https now, so the browser's bare cookie is no longer
-	// believed (WR-01): the switch signs sessions out once. The same session ID
-	// presented as the __Host- cookie a re-sign-in would set is still valid.
-	ack := func(origin string, secure bool) int {
+	// The session cookie is always the __Host- one, so the change of origin
+	// leaves the session valid; only the Origin guard moves.
+	ack := func(origin string) int {
 		req := httptest.NewRequest(http.MethodPost, "/api/warnings/key-backup/ack", strings.NewReader(""))
 		req.Header.Set("Origin", origin)
 		req.Header.Set("X-CSRF-Token", csrf)
 		req.RemoteAddr = authIP + ":40000"
-		req.AddCookie(&http.Cookie{Name: auth.CookieName(auth.CookieScope{Secure: secure}), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(auth.CookieScope{}), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it
 		rec := httptest.NewRecorder()
 		f.h.ServeHTTP(rec, req)
 		return rec.Code
 	}
-	if code := ack("https://old.example", true); code != http.StatusForbidden {
+	if code := ack("https://old.example"); code != http.StatusForbidden {
 		t.Fatalf("a POST from the old origin: %d, want 403", code)
 	}
-	if code := ack("https://new.example", false); code != http.StatusUnauthorized {
-		t.Fatalf("a POST from the new origin with the bare cookie: %d, want 401 (the scheme switch signs browsers out once)", code)
-	}
-	if code := ack("https://new.example", true); code != http.StatusNoContent {
+	if code := ack("https://new.example"); code != http.StatusNoContent {
 		t.Fatalf("a POST from the new origin: %d, want 204", code)
 	}
 

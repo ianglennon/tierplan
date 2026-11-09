@@ -112,7 +112,7 @@ func (f *setupFixture) setting(t *testing.T, key string) (string, bool) {
 
 func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "__Host-tierplan_session" || c.Name == "__Secure-tierplan_session" || c.Name == "tierplan_session" {
+		if c.Name == "__Host-tierplan_session" || c.Name == "__Secure-tierplan_session" {
 			return c
 		}
 	}
@@ -193,6 +193,35 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 	}
 	if f.gate.NeedsSetup() || f.gate.Verify(f.token) {
 		t.Fatal("the gate is still open after completion")
+	}
+}
+
+func TestSetupCompleteSetsAHostPrefixedSecureCookie(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t, config.Config{})
+	rec := f.complete(t, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var header string
+	for _, h := range rec.Header().Values("Set-Cookie") {
+		if strings.Contains(h, "tierplan_session=") {
+			header = h
+		}
+	}
+	if header == "" {
+		t.Fatalf("no session cookie in %v", rec.Header()["Set-Cookie"])
+	}
+	if !strings.HasPrefix(header, "__Host-tierplan_session=") {
+		t.Fatalf("Set-Cookie %q: want the __Host- name", header)
+	}
+	for _, want := range []string{"Secure", "HttpOnly", "SameSite=Lax", "Path=/"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("Set-Cookie %q lacks %q", header, want)
+		}
+	}
+	if strings.Contains(header, "Domain") {
+		t.Errorf("Set-Cookie %q carries a Domain", header)
 	}
 }
 

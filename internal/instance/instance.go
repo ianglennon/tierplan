@@ -235,10 +235,10 @@ func (i *Instance) BasePath() string {
 	return strings.TrimRight(u.EscapedPath(), "/")
 }
 
-// CookieScope is the scope the session cookie is named and scoped for: whether
-// the public URL is https and the path it is served under (D-50).
+// CookieScope is the scope the session cookie is named and scoped for: the path
+// the public URL is served under (D-50). The cookie is always Secure (TLS-11).
 func (i *Instance) CookieScope() auth.CookieScope {
-	return auth.CookieScope{Secure: i.Secure(), BasePath: i.BasePath()}
+	return auth.CookieScope{BasePath: i.BasePath()}
 }
 
 // Locked reports whether TIERPLAN_PUBLIC_URL fixes the public URL.

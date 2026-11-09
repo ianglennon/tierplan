@@ -127,8 +127,8 @@ func TestWatcherPollAppliesAPublicURLWrittenByAnotherHandle(t *testing.T) {
 	if inst.PublicURL() != "https://other.example.com:8443" {
 		t.Fatalf("PublicURL = %q", inst.PublicURL())
 	}
-	if !inst.Secure() || !inst.CookieScope().Secure {
-		t.Fatalf("not secure after the URL changed: Secure=%v CookieScope=%+v", inst.Secure(), inst.CookieScope())
+	if !inst.Secure() {
+		t.Fatalf("not secure after the URL changed: Secure=%v", inst.Secure())
 	}
 	if inst.PublicOrigin() != "https://other.example.com:8443" {
 		t.Fatalf("PublicOrigin = %q", inst.PublicOrigin())
