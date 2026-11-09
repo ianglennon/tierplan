@@ -6,8 +6,13 @@
 # docker:29-dind daemon through a unix socket that the two containers share, and
 # receiving one agent from a second dind daemon.
 #
-#   browser --https--> caddy (172.30.0.10) --http--> tierplan:7480
+#   browser --https--> caddy (172.30.0.10) --https--> tierplan:7480
 #   agenthost's agent --wss--> caddy (by IP, pinned) --> tierplan
+#
+# Both hops verify. The browser trusts the harness certificate only through the
+# SPKI pin in playwright.config.ts (no certificate errors are ignored), and Caddy
+# trusts TierPlan's own default self-signed certificate (TierPlan runs with no TLS
+# variable set), which it reads from TierPlan's data volume.
 #
 # TierPlan runs on the host's Docker and manages the dind daemon, so its own
 # container is not inside the managed engine. The run exercises the real unix
@@ -91,6 +96,9 @@ services:
 
   tierplan:
     image: tierplan:e2e
+    # The name Caddy dials, and a name in the certificate TierPlan makes for itself
+    # (a container-ID hostname is left out of it).
+    hostname: tierplan
     environment:
       DOCKER_HOST: unix:///shared/docker.sock
       # The address people use, and the one the browser's session cookie and the
@@ -138,6 +146,9 @@ services:
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../.devdata/e2e-tls:/certs:ro
+      # TierPlan's own certificate (tls/server.crt), which the upstream is verified
+      # against. Read-only; it exists once TierPlan is healthy, hence the depends_on.
+      - data:/tierplan-data:ro
     environment:
       TIERPLAN_E2E_HTTPS_PORT: ${TIERPLAN_E2E_HTTPS_PORT:-8443}
     ports:
@@ -167,9 +178,18 @@ services:
     init: true
     user: pwuser
     working_dir: /e2e
+    environment:
+      # page.request and context.request are made by this server's Node, not by Chromium, so
+      # the browser's SPKI flag does not cover them. Node takes the proxy's certificate (the
+      # one Caddy serves) as an extra root and still verifies its name and dates.
+      NODE_EXTRA_CA_CERTS: /certs/cert.pem
     volumes:
       - ./node_modules:/e2e/node_modules:ro
-    command: ["node", "node_modules/@playwright/test/cli.js", "run-server", "--port", "3333", "--host", "0.0.0.0"]
+      - ../.devdata/e2e-tls/cert.pem:/certs/cert.pem:ro
+    # --unsafe lets the runner's launch args reach this Chromium: without it the server
+    # drops them, and the SPKI pin the browser trusts the proxy certificate by
+    # (playwright.config.ts) would never arrive. The port is published on loopback only.
+    command: ["node", "node_modules/@playwright/test/cli.js", "run-server", "--port", "3333", "--host", "0.0.0.0", "--unsafe"]
     healthcheck:
       test: ["CMD", "node", "-e", "require('net').connect(3333, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
       interval: 2s

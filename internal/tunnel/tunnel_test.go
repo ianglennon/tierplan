@@ -156,7 +156,7 @@ func newFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string) *f
 
 // newConfiguredFixture is newFixture with the hub's logger chosen by the test and
 // a configure function applied to the hub before it serves, for the options that
-// must be set before the hub serves (WithAllowInsecure).
+// must be set before the hub serves.
 func newConfiguredFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string, log *slog.Logger, configure func(*tunnel.Hub) *tunnel.Hub) *fixture {
 	t.Helper()
 	f := &fixture{v: &fakeVerifier{}, o: newObserver()}
@@ -513,18 +513,24 @@ func TestPlainTransportIsRefusedWhenThePublicURLIsHTTPS(t *testing.T) {
 	}
 }
 
-// The httptest address is 127.0.0.1, so an http base on it is plain http on this
-// machine and needs no switch.
-func TestPlainTransportIsAcceptedWhenTheAgentAddressIsPlainHTTPOnThisMachine(t *testing.T) {
+// No plain connection is admitted, whatever the agent address says: an http base
+// on this machine used to be accepted, and is refused like any other.
+func TestPlainTransportIsRefusedEvenForAnAgentAddressOnThisMachine(t *testing.T) {
 	f := newFixture(t, false, sameAddr("http"))
-	ac := f.dial(t, hs{noEKM: true})
-	if ac.welcome == nil {
-		t.Fatalf("refused: %+v", ac.refuse)
+	_, resp, err := websocket.Dial(context.Background(), f.wsURL(), &websocket.DialOptions{Subprotocols: []string{wire.Subprotocol}}) //nolint:bodyclose // coder/websocket reads and closes the body of a refused upgrade itself
+	if err == nil {
+		t.Fatal("a plain ws:// connection was accepted")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("response = %v, want 403 insecure_transport", resp)
+	}
+	if f.v.callCount() != 0 {
+		t.Error("the verifier was asked about a refused connection")
 	}
 }
 
-// A plain http agent address for another host does not make plain transport
-// acceptable; only the development switch does (G-02-R4-3, T-02-139).
+// A plain http agent address for another host is refused like every plain
+// connection, with one warning that says it did not arrive over TLS.
 func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *testing.T) {
 	log, rec := newRecordingLogger()
 	f := newConfiguredFixture(t, false, func(string) string { return "http://10.0.0.5:7480" }, log, nil)
@@ -538,42 +544,8 @@ func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *
 	if f.v.callCount() != 0 {
 		t.Error("the verifier was asked about a refused connection")
 	}
-	if got := rec.containing("TIERPLAN_AGENT_ALLOW_INSECURE"); len(got) != 1 || got[0].level != slog.LevelWarn {
-		t.Errorf("records naming the switch = %+v, want exactly one Warn", got)
-	}
-}
-
-func TestPlainTransportToAnotherHostIsAcceptedWithTheSwitch(t *testing.T) {
-	f := newConfiguredFixture(t, false, func(string) string { return "http://10.0.0.5:7480" }, slog.New(slog.DiscardHandler),
-		func(h *tunnel.Hub) *tunnel.Hub { return h.WithAllowInsecure(true) })
-	ac := f.dial(t, hs{aud: "10.0.0.5:7480", noEKM: true})
-	if ac.welcome == nil {
-		t.Fatalf("refused: %+v", ac.refuse)
-	}
-}
-
-func TestPlainAddressRefusedOnlyForPlainAddressesToAnotherHostWithoutTheSwitch(t *testing.T) {
-	for _, c := range []struct {
-		raw   string
-		allow bool
-		want  bool
-	}{
-		{"http://10.0.0.5:7480", false, true},
-		{"http://10.0.0.5:7480", true, false},
-		{"ws://10.0.0.5:7480/agent/connect", false, true},
-		{"HTTP://TierPlan.Example", false, true},
-		{"http://localhost.example", false, true},
-		{"http://127.0.0.1:7480", false, false},
-		{"ws://[::1]:7480/agent/connect", false, false},
-		{"http://localhost:5173", false, false},
-		{"https://tierplan.example", false, false},
-		{"wss://tierplan.example/agent/connect", false, false},
-		{"", false, false},
-		{"http://[::1", false, false}, // url.Parse refuses it
-	} {
-		if got := tunnel.PlainAddressRefused(c.raw, c.allow); got != c.want {
-			t.Errorf("PlainAddressRefused(%q, %v) = %v, want %v", c.raw, c.allow, got, c.want)
-		}
+	if got := rec.containing("did not arrive over TLS"); len(got) != 1 || got[0].level != slog.LevelWarn {
+		t.Errorf("records saying the connection did not arrive over TLS = %+v, want exactly one Warn", got)
 	}
 }
 
@@ -739,8 +711,15 @@ type zeroReader struct{}
 func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 
 func TestUncappedLogsPassWhileOtherAnswersKeepTheCap(t *testing.T) {
-	const size = 65 << 20 // more than MaxResponseBytes
-	srv := timed(t, nil)
+	// The hub's cap is shrunk to 64 KiB and every answer is four times it. What is
+	// proved is the same as at the shipped 64 MiB (TestTooLargeResponseFailsTypedWhileEventsAreExemptAndTheSessionStaysUsable
+	// pins that figure): a log and an exec stream pass whole past the cap and a list
+	// does not. At 64 MiB the test moved about 200 MiB through the multiplexer under
+	// -race, which on a loaded runner outlasted the mux keepalive and dropped the
+	// agent; at this size the run is bounded by the bytes it moves, not by time.
+	const limit = 64 << 10
+	const size = 4 * limit
+	srv := timed(t, func(h *tunnel.Hub) *tunnel.Hub { return h.WithResponseLimit(limit) })
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 	srv.Events.WaitLen(t, 1)
 	s := srv.Hub.Session(c.Identity.AgentID)

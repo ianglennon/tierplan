@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BackupSchedule } from "@/api/backup";
 import { api, getCsrfToken, setCsrfToken, setUnauthorizedHandler } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { BackupPage } from "@/features/backup/backup-page";
@@ -39,6 +40,17 @@ const SUMMARY = {
   schema: 12,
 };
 
+// No schedule set up, as on a fresh instance.
+const NO_SCHEDULE: BackupSchedule = {
+  enabled: false,
+  frequency: "daily",
+  weekday: 0,
+  timeUtc: "03:00",
+  keep: 7,
+  passphraseSaved: false,
+  dir: "/data/backups",
+};
+
 let sent: Sent[];
 let answers: Record<string, () => Response | Promise<Response>>;
 
@@ -58,6 +70,11 @@ beforeEach(() => {
     "/api/backup/restore/check": () => Response.json(SUMMARY),
     "/api/backup/restore/apply": () => Response.json({ restarting: true }, { status: 202 }),
     "DELETE /api/backup/restore/upload": () => new Response(null, { status: 204 }),
+    // The page's Scheduled backups card loads too. Left to the 404 below, its schedule failed
+    // after the query's one retry, a real second later, and showed an alert of its own, which
+    // a findByRole("alert") here then also matched when the restore took longer than that.
+    "/api/backup/schedule": () => Response.json(NO_SCHEDULE),
+    "/api/backup/files": () => Response.json({ items: [] }),
   };
   vi.stubGlobal(
     "fetch",

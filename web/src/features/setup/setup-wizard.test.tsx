@@ -64,7 +64,11 @@ function stubApi(opts: {
       if (url === "/api/setup/token") {
         return (
           opts.token?.() ??
-          Response.json({ defaultInstanceName: "lab-box", publicUrl: "", publicUrlLocked: false })
+          Response.json({
+            defaultInstanceName: "lab-box",
+            publicUrl: "https://tierplan.example.com",
+            publicUrlLocked: false,
+          })
         );
       }
       return (
@@ -243,30 +247,115 @@ describe("SetupWizard", () => {
     expect(screen.getByRole("button", { name: "Hide password" })).toBeTruthy();
   });
 
-  it("pre-fills the instance name and the browser origin on step 3", async () => {
+  it("pre-fills the instance name and the server's public URL on step 3", async () => {
     stubApi({});
     await renderWizard();
     await passToken();
     fillAdmin();
     await screen.findByText("Name this instance");
     expect(field("Instance name").value).toBe("lab-box");
-    expect(field("Public URL").value).toBe(window.location.origin);
+    expect(field("Public URL").value).toBe("https://tierplan.example.com");
     expect(field("Public URL").readOnly).toBe(false);
     expect(field("Instance name").getAttribute("maxlength")).toBe("64");
   });
 
+  it("offers nothing for the public URL when the page was loaded over http", async () => {
+    // jsdom's page is http://localhost:3000. The wizard must not offer an
+    // address the form would refuse, so the field starts empty and an empty
+    // submit shows the required error instead of sending anything.
+    expect(window.location.protocol).toBe("http:");
+    stubApi({
+      token: () =>
+        Response.json({ defaultInstanceName: "lab-box", publicUrl: "", publicUrlLocked: false }),
+    });
+    await renderWizard();
+    await passToken();
+    fillAdmin();
+    await screen.findByText("Name this instance");
+    expect(field("Public URL").value).toBe("");
+    click("Create admin account");
+    await screen.findByText("Enter a full https address such as https://tierplan.example.com.");
+    expect(field("Public URL").getAttribute("aria-invalid")).toBe("true");
+    expect(calls.filter((c) => c.url === "/api/setup/complete")).toHaveLength(0);
+  });
+
+  it("pre-fills the browser origin when the page was loaded over https and accepts it", async () => {
+    vi.stubGlobal("location", {
+      ...window.location,
+      protocol: "https:",
+      origin: "https://tierplan.example.com",
+    });
+    stubApi({
+      token: () =>
+        Response.json({ defaultInstanceName: "lab-box", publicUrl: "", publicUrlLocked: false }),
+    });
+    await renderWizard();
+    await passToken();
+    fillAdmin();
+    await screen.findByText("Name this instance");
+    expect(field("Public URL").value).toBe("https://tierplan.example.com");
+    click("Create admin account");
+    await waitFor(() =>
+      expect(calls.filter((c) => c.url === "/api/setup/complete")).toHaveLength(1),
+    );
+  });
+
   it("pre-fills the public URL with the origin plus the base path under a base", async () => {
     announceBase("/tierplan");
+    vi.stubGlobal("location", {
+      ...window.location,
+      protocol: "https:",
+      origin: "https://tierplan.example.com",
+    });
     try {
-      stubApi({});
+      stubApi({
+        token: () =>
+          Response.json({ defaultInstanceName: "lab-box", publicUrl: "", publicUrlLocked: false }),
+      });
       await renderWizard();
       await passToken();
       fillAdmin();
       await screen.findByText("Name this instance");
-      expect(field("Public URL").value).toBe(`${window.location.origin}/tierplan`);
+      expect(field("Public URL").value).toBe("https://tierplan.example.com/tierplan");
     } finally {
       announceBase(null);
     }
+  });
+
+  it("refuses an http public URL with the https-only sentence and sends nothing", async () => {
+    stubApi({});
+    await renderWizard();
+    await passToken();
+    fillAdmin();
+    await screen.findByText("Name this instance");
+    type("Public URL", "http://tierplan.example.com");
+    click("Create admin account");
+    const err = await screen.findByText(
+      "TierPlan serves HTTPS only. Use an address that starts with https://, such as https://tierplan.example.com.",
+    );
+    const url = field("Public URL");
+    expect(url.getAttribute("aria-invalid")).toBe("true");
+    expect(url.getAttribute("aria-describedby")).toContain(err.id);
+    expect(err.closest('[data-slot="field-error"]')).toBeTruthy();
+    expect(calls.filter((c) => c.url === "/api/setup/complete")).toHaveLength(0);
+  });
+
+  it.each([
+    "tierplan.example.com",
+    "https://",
+    "https://admin:pw@tierplan.example.com",
+    "https://tierplan.example.com/?x=1",
+    "https://tierplan.example.com/#top",
+  ])("shows the generic public URL error for %s", async (value) => {
+    stubApi({});
+    await renderWizard();
+    await passToken();
+    fillAdmin();
+    await screen.findByText("Name this instance");
+    type("Public URL", value);
+    click("Create admin account");
+    await screen.findByText("Enter a full https address such as https://tierplan.example.com.");
+    expect(calls.filter((c) => c.url === "/api/setup/complete")).toHaveLength(0);
   });
 
   it("makes the public URL read-only with the locked helper when the environment sets it", async () => {
@@ -355,7 +444,7 @@ describe("SetupWizard", () => {
     fillAdmin();
     await screen.findByText("Name this instance");
     click("Create admin account");
-    await screen.findByText("Enter a full address such as https://tierplan.example.com.");
+    await screen.findByText("Enter a full https address such as https://tierplan.example.com.");
     expect(screen.getByText("Name this instance")).toBeTruthy();
   });
 

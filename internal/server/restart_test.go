@@ -97,6 +97,7 @@ type served struct {
 	t      *testing.T
 	srv    *Server
 	base   string
+	client *http.Client
 	cookie *http.Cookie
 	csrf   string
 	done   chan error
@@ -123,7 +124,8 @@ func (s *served) wait() error {
 
 func serveOn(t *testing.T, dir string) *served {
 	t.Helper()
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +136,7 @@ func serveOn(t *testing.T, dir string) *served {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &served{t: t, srv: srv, base: "http://" + ln.Addr().String(), done: make(chan error, 1), cancel: cancel}
+	s := &served{t: t, srv: srv, base: httpsBase(ln.Addr().String()), client: trustedClient(t, cfg), done: make(chan error, 1), cancel: cancel}
 	go func() { s.done <- srv.run(ctx, ln) }()
 	t.Cleanup(func() {
 		cancel()
@@ -178,7 +180,7 @@ func (s *served) raw(method, path, ctype string, cookie *http.Cookie, csrf strin
 	if csrf != "" {
 		req.Header.Set("X-CSRF-Token", csrf)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		s.t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -242,7 +244,7 @@ func TestRestoreRestartSwapsTheDatabaseKeepsTheLockUntilExecAndTheNextBuildServe
 	if err := s.wait(); !errors.Is(err, ErrRestart) || !errors.As(err, &re) {
 		t.Fatalf("Run returned %v, want ErrRestart", err)
 	}
-	if _, err := http.Get(s.base + "/readyz"); err == nil { //nolint:noctx,bodyclose // a refused connection is the answer
+	if _, err := s.client.Get(s.base + "/readyz"); err == nil { //nolint:noctx,bodyclose // a refused connection is the answer
 		t.Fatal("the server still answers after the restore")
 	}
 	// Nothing has been swapped yet: the database is the old one, and the lock is
@@ -522,5 +524,41 @@ func TestBootRollbackIsNotTriggeredByAFailureUnrelatedToTheRestoredData(t *testi
 	var n int
 	if err := st.Read.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'from_the_restore'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("the restored database was replaced: %d, %v", n, err)
+	}
+}
+
+// WR-01: the stored self-signed key is part of the restored database. When it cannot be opened the
+// start fails because of restored state, so the pending restore goes back to its snapshot.
+func TestBootRollbackWhenTheRestoredTLSKeyCannotBeOpened(t *testing.T) {
+	ctx := context.Background()
+	dir, _ := pendingRestore(t)
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make the restored database otherwise valid, then spoil only the stored TLS key.
+	for _, q := range []string{
+		`DELETE FROM goose_db_version WHERE version_id = 9999`,
+		`UPDATE tls_certs SET key_sealed = 'not an envelope'`,
+	} {
+		if _, err := st.Write.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("Build with a restore pending whose TLS key cannot be opened: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	var n int
+	if err := srv.Store().Read.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'from_the_restore'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the restored database is still in use: %d, %v", n, err)
+	}
+	if _, pending, _ := backup.ReadMarker(dir); pending {
+		t.Error("the marker survived the rollback")
 	}
 }

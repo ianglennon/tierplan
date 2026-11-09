@@ -1,17 +1,28 @@
 # Running TierPlan behind a reverse proxy
 
-TierPlan listens on port 7480 and speaks plain HTTP unless you give it a certificate. Most people put a proxy in front of it that ends TLS and gives it a proper host name. This page says what TierPlan needs from that proxy, and gives working configurations for Caddy, nginx and Traefik, each at the root of a host and at a subpath.
+TierPlan serves HTTPS only: it listens on port 7480 and answers with its own certificate unless you give it one. **A reverse proxy in front of it must talk HTTPS to it** (`https://tierplan:7480`), and most people use a proxy to end TLS for the browser with a proper host name. This page says what TierPlan needs from that proxy, and gives working configurations for Caddy, nginx and Traefik, each at the root of a host and at a subpath.
 
 The configurations on this page are the files in [`docs/proxy/`](proxy/). `make proxy-smoke` runs the built image behind all three, at both places, and checks what is listed under [Checking a setup](#checking-a-setup).
 
 ## The short version
 
-1. Give TierPlan its own host name, such as `tierplan.example.com`. A subpath works (see [Root or subpath](#root-or-subpath)), but a host name of its own is the setup to prefer.
-2. Set `TIERPLAN_PUBLIC_URL` to the address people type, for example `https://tierplan.example.com`.
-3. Set `TIERPLAN_TRUSTED_PROXIES` to the address or network of the proxy, for example `172.18.0.0/16`.
-4. In the proxy: pass `Host` through, send `X-Forwarded-For` and `X-Forwarded-Proto`, pass the WebSocket upgrade, do not buffer, and allow long-lived connections.
+1. Point the proxy at `https://tierplan:7480` (HTTPS upstream), not at `http://`. TierPlan does not answer plain HTTP. See [HTTPS to TierPlan](#https-to-tierplan).
+2. Give TierPlan its own host name, such as `tierplan.example.com`. A subpath works (see [Root or subpath](#root-or-subpath)), but a host name of its own is the setup to prefer.
+3. Set `TIERPLAN_PUBLIC_URL` to the address people type, for example `https://tierplan.example.com`.
+4. Set `TIERPLAN_TRUSTED_PROXIES` to the address or network of the proxy, for example `172.18.0.0/16`.
+5. In the proxy: pass `Host` through, send `X-Forwarded-For` and `X-Forwarded-Proto`, pass the WebSocket upgrade, do not buffer, and allow long-lived connections.
 
 If something is wrong, TierPlan tells admins in the bell at the top of the page. See [When the bell shows a proxy warning](#when-the-bell-shows-a-proxy-warning).
+
+## HTTPS to TierPlan
+
+TierPlan serves HTTPS and nothing else, on its own port, with its own certificate (a self-signed one it makes at first start, or the one you give it). The proxy ends TLS for the browser with the certificate for your host name and opens a second TLS connection to TierPlan. The public URL is the proxy's `https://` host; TierPlan keeps serving its own certificate on its port, which is also what agents and anyone connecting directly use.
+
+**Trust TierPlan's certificate in the proxy (recommended).** TierPlan keeps a copy of its certificate at `/data/tls/server.crt` in its data volume. Share that volume with the proxy read-only, or copy the file out, and tell the proxy to trust it and to check it for a host name the certificate carries. The simplest name is `tierplan`: give the TierPlan container that host name (`hostname: tierplan`), or use the host of its public URL. The three files below do this: `tls_trust_pool` and `tls_server_name` in Caddy, `proxy_ssl_trusted_certificate`, `proxy_ssl_verify on` and `proxy_ssl_name` in nginx, and a `serversTransport` with `rootCAs` and `serverName` in Traefik.
+
+**Skipping verification is your choice, not the default.** If you would rather not share the file, each proxy can be told to accept any certificate from TierPlan: `tls_insecure_skip_verify` inside Caddy's `transport http` block, `insecureSkipVerify: true` in Traefik's `serversTransport`, or `proxy_ssl_verify off;` in nginx. The traffic is still encrypted, but the proxy can no longer tell TierPlan from something else answering at that address on the network. The files in this repository never do it, and a check in the repository fails if they do.
+
+**Existing proxied installs must be reconfigured to HTTPS upstream.** Before this change TierPlan spoke plain HTTP behind a proxy, and the proxy was pointed at an `http://` address on port 7480. TierPlan no longer serves plain requests, so a proxy that still dials `http://` gets no answer. Switch the proxy to `https://tierplan:7480` as described above when you upgrade TierPlan. TierPlan also no longer counts a plain request marked `X-Forwarded-Proto: https` as secure: the connection to TierPlan itself must be TLS. `TIERPLAN_TRUSTED_PROXIES` still decides whose `X-Forwarded-For` and `X-Forwarded-Proto` TierPlan believes, over that TLS connection.
 
 ## The public URL decides everything
 
@@ -30,7 +41,7 @@ TierPlan believes forwarded headers only from the addresses in `TIERPLAN_TRUSTED
 | Header | What TierPlan does with it |
 |--------|---------------------------|
 | `X-Forwarded-For` | The client address, for the audit log and the rate limits. TierPlan takes the rightmost address that is not itself a trusted proxy, so a client cannot choose its address by sending the header first. |
-| `X-Forwarded-Proto` | The scheme the client used. `https` from a trusted proxy lets agents connect over `wss://` and tells TierPlan the request was secure, which is also what lets it send `Strict-Transport-Security` behind your proxy when the public URL is `https://`. With several values, the last one counts. |
+| `X-Forwarded-Proto` | The scheme the client used, for the links and cookies TierPlan builds. It never makes a plain connection count as secure: the connection from the proxy to TierPlan must itself be TLS. With several values, the last one counts. |
 
 TierPlan **ignores** `X-Forwarded-Host`, `X-Forwarded-Prefix` and the standard `Forwarded` header, from every peer. It also ignores `X-Forwarded-For` and `X-Forwarded-Proto` from any peer that is not trusted. Traefik adds `X-Forwarded-Prefix` when it strips a prefix; that is harmless.
 
@@ -46,9 +57,8 @@ The session cookie's name depends on how TierPlan is reached:
 |------------|--------|------|
 | `https://tierplan.example.com` | `__Host-tierplan_session` | `/` |
 | `https://example.com/tierplan` | `__Secure-tierplan_session` | `/tierplan` |
-| `http://…` | `tierplan_session` | the base path, or `/` |
 
-A cookie with the `__Host-` prefix must have the path `/`, so a subpath uses `__Secure-` instead. Changing the public URL's scheme or path changes the cookie, which signs everyone out once.
+A cookie with the `__Host-` prefix must have the path `/`, so a subpath uses `__Secure-` instead. Changing the public URL's path changes the cookie, which signs everyone out once.
 
 **Prefer a host name of its own.** A cookie is scoped by host, not by origin: another web application on the same host name can set or replace cookies for the `/tierplan` path, and its pages run on the same origin as TierPlan's. On a host name of its own nothing else can.
 
@@ -56,7 +66,7 @@ The configurations below have a site for each: a dedicated host name, `tierplan.
 
 ## Agents
 
-Agents dial the public URL with `/agent/connect` added, over `wss://`, so the proxy must pass WebSocket upgrades on that path. An agent that is refused with a message about the transport is reaching TierPlan over plain HTTP without a trusted proxy saying `https`: check `TIERPLAN_TRUSTED_PROXIES` and the `X-Forwarded-Proto` line.
+Agents dial the public URL with `/agent/connect` added, over `wss://`, so the proxy must pass WebSocket upgrades on that path, and it reaches TierPlan over TLS like every other request. An agent that is refused with a message about the transport did not arrive over TLS: check that the proxy dials `https://tierplan:7480`.
 
 When the hosts that run agents reach TierPlan at a different address than people do (for example an internal name or a LAN address), set the agent URL with `TIERPLAN_AGENT_URL`, such as `https://tierplan.internal:7480`. The install commands then carry that address, and TierPlan accepts agents that dial it. You can change it later in Settings, General. Agents connected over `wss://` are sent the new address straight away and dial it from their next connection. TierPlan then accepts agents only at the new host and port, with no fallback period. Agents that were offline or on plain `ws://` at that moment are refused until you reinstall them with the new address or change it back. See [Change TierPlan's agent address](agent.md#change-tierplans-agent-address).
 
@@ -80,28 +90,45 @@ The proxy smoke test (`make proxy-smoke`) checks that each of the three setups b
 
 ## Caddy
 
-Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto` and `Host` itself, passes WebSocket upgrades and flushes event streams as they arrive, and gets a certificate for a site address without a scheme. The file reads one environment variable, `TIERPLAN_SCHEME`, which is empty normally; the smoke test sets it to `http://` to run the same file without a certificate.
+Caddy sets `X-Forwarded-For` and `X-Forwarded-Proto` itself, passes WebSocket upgrades and flushes event streams as they arrive, and gets a certificate for a site address without a scheme. It dials TierPlan over HTTPS and checks TierPlan's certificate against the copy named in `tls_trust_pool`. `header_up Host {hostport}` passes on the host the browser sent, port included.
 
 ```
 # Caddy in front of TierPlan. See docs/reverse-proxy.md.
 #
-# Caddy gets and renews a certificate for any site address that has no scheme,
-# sets X-Forwarded-For, X-Forwarded-Proto and Host by itself, passes WebSocket
-# upgrades through and flushes text/event-stream responses at once, so there is
-# nothing else to add. TIERPLAN_SCHEME is empty in normal use. The smoke test
-# (scripts/proxy-smoke.sh) sets it to "http://" to run this same file without a
-# certificate.
+# TierPlan serves HTTPS only, so Caddy talks HTTPS to it and checks TierPlan's
+# certificate: tls_trust_pool names the copy of TierPlan's own certificate
+# (/data/tls/server.crt in TierPlan's data volume, shared read-only with Caddy or
+# copied out), and tls_server_name is a host name that certificate carries (give
+# TierPlan the host name tierplan, or use the host of its public URL).
+#
+# Caddy gets and renews a public certificate for any site address that has no
+# scheme, sets X-Forwarded-For and X-Forwarded-Proto by itself, passes WebSocket
+# upgrades through and flushes text/event-stream responses at once. Caddy replaces
+# Host when it dials an HTTPS upstream, so header_up Host passes on the one the
+# browser sent, port included: TierPlan compares it with its public URL.
 
 # A dedicated host name (recommended). Set TIERPLAN_PUBLIC_URL=https://tierplan.example.com.
-{$TIERPLAN_SCHEME}tierplan.example.com {
-	reverse_proxy tierplan:7480
+tierplan.example.com {
+	reverse_proxy https://tierplan:7480 {
+		header_up Host {hostport}
+		transport http {
+			tls_trust_pool file /tierplan-data/tls/server.crt
+			tls_server_name tierplan
+		}
+	}
 }
 
 # A subpath on a host you share. Set TIERPLAN_PUBLIC_URL=https://example.com/tierplan.
 # handle_path removes /tierplan before the request reaches TierPlan.
-{$TIERPLAN_SCHEME}example.com {
+example.com {
 	handle_path /tierplan/* {
-		reverse_proxy tierplan:7480
+		reverse_proxy https://tierplan:7480 {
+			header_up Host {hostport}
+			transport http {
+				tls_trust_pool file /tierplan-data/tls/server.crt
+				tls_server_name tierplan
+			}
+		}
 	}
 	redir /tierplan /tierplan/ permanent
 }
@@ -109,13 +136,19 @@ Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto` and `Host` itself, passes WebS
 
 ## nginx
 
-This is a complete `nginx.conf`. It listens on port 80; to end TLS in nginx, change each `listen 80;` to `listen 443 ssl;` and add `ssl_certificate` and `ssl_certificate_key`. `$scheme` then becomes `https` by itself. The `Upgrade` and `Connection` lines are what keep WebSockets working: without them nginx drops the upgrade, the agent endpoint answers `426`, and the bell shows "WebSocket connections are failing".
+This is a complete `nginx.conf`. It ends TLS on port 443 with your certificate (put it at the two `ssl_certificate` paths) and dials TierPlan over HTTPS, checking TierPlan's certificate (`proxy_ssl_verify on`). `$scheme` is `https`, so `X-Forwarded-Proto` says so by itself. The `Upgrade` and `Connection` lines are what keep WebSockets working: without them nginx drops the upgrade, the agent endpoint answers `426`, and the bell shows "WebSocket connections are failing".
 
 ```nginx
 # nginx in front of TierPlan. See docs/reverse-proxy.md. This is a complete
-# nginx.conf. It listens on port 80; to end TLS in nginx, change each
-# "listen 80;" to "listen 443 ssl;" and add ssl_certificate and
-# ssl_certificate_key. X-Forwarded-Proto then says https by itself.
+# nginx.conf. It ends TLS for the browser on port 443 and talks HTTPS to TierPlan,
+# which serves nothing else.
+#
+# Put your own certificate and key at the two ssl_certificate paths below.
+# proxy_ssl_trusted_certificate is the copy of TierPlan's own certificate
+# (/data/tls/server.crt in TierPlan's data volume, shared read-only with nginx or
+# copied out); proxy_ssl_verify makes nginx check it, and proxy_ssl_name is a host
+# name that certificate carries (give TierPlan the host name tierplan, or use the
+# host of its public URL).
 
 events {}
 
@@ -151,23 +184,33 @@ http {
     # does not run in a Docker network, use your own resolver.
     resolver 127.0.0.11 valid=10s;
 
+    # Check TierPlan's certificate. These apply to every location in this file.
+    proxy_ssl_verify on;
+    proxy_ssl_trusted_certificate /tierplan-data/tls/server.crt;
+    proxy_ssl_server_name on;
+    proxy_ssl_name tierplan;
+
     # A dedicated host name (recommended). Set TIERPLAN_PUBLIC_URL=https://tierplan.example.com.
     server {
-        listen 80;
+        listen 443 ssl;
         server_name tierplan.example.com;
+        ssl_certificate /etc/nginx/tls/cert.pem;
+        ssl_certificate_key /etc/nginx/tls/key.pem;
 
         location / {
-            set $tierplan http://tierplan:7480;
+            set $tierplan https://tierplan:7480;
             proxy_pass $tierplan;
         }
     }
 
     # A subpath on a host you share. Set TIERPLAN_PUBLIC_URL=https://example.com/tierplan.
     # The rewrite removes /tierplan/ before the request reaches TierPlan. (With a
-    # fixed host name, "proxy_pass http://tierplan:7480/;" does the same.)
+    # fixed host name, "proxy_pass https://tierplan:7480/;" does the same.)
     server {
-        listen 80;
+        listen 443 ssl;
         server_name example.com;
+        ssl_certificate /etc/nginx/tls/cert.pem;
+        ssl_certificate_key /etc/nginx/tls/key.pem;
 
         location = /tierplan {
             return 308 /tierplan/;
@@ -175,7 +218,7 @@ http {
 
         location /tierplan/ {
             # "break" ends the rewrite directives, so set comes first.
-            set $tierplan http://tierplan:7480;
+            set $tierplan https://tierplan:7480;
             rewrite ^/tierplan/(.*)$ /$1 break;
             proxy_pass $tierplan;
         }
@@ -185,40 +228,52 @@ http {
 
 ## Traefik
 
-This is Traefik's dynamic configuration for the file provider. Start Traefik with an entry point called `web` and this file:
+This is Traefik's dynamic configuration for the file provider. Start Traefik with an entry point called `websecure` and this file:
 
 ```sh
-traefik --entrypoints.web.address=:80 --providers.file.filename=/etc/traefik/tierplan.yml
+traefik --entrypoints.websecure.address=:443 --providers.file.filename=/etc/traefik/tierplan.yml
 ```
 
-To end TLS in Traefik, add an entry point for port 443 with a certificate resolver and name it in each router's `entryPoints`.
+The file ends TLS for the browser with the certificate at the two paths under `tls` (or use a certificate resolver instead), and the `serversTransport` checks TierPlan's certificate.
 
 ```yaml
 # Traefik in front of TierPlan. See docs/reverse-proxy.md. This is Traefik's
 # dynamic configuration for the file provider:
 #
-#   traefik --entrypoints.web.address=:80 \
+#   traefik --entrypoints.websecure.address=:443 \
 #           --providers.file.filename=/etc/traefik/tierplan.yml
 #
-# It uses an entry point called "web". To end TLS in Traefik, add an entry point
-# for port 443 with a certificate resolver and name it in each router's
-# entryPoints. Traefik passes WebSocket upgrades through by itself, flushes
-# text/event-stream responses at once, and sets X-Forwarded-For, X-Forwarded-Proto
-# and Host. It also adds X-Forwarded-Prefix when it strips a prefix; TierPlan
-# ignores that header, so the public URL stays the only source of the base path.
+# It uses an entry point called "websecure" that ends TLS for the browser, and talks
+# HTTPS to TierPlan, which serves nothing else. Put your own certificate and key at
+# the two paths under "tls", or use a certificate resolver instead. The
+# serversTransport checks TierPlan's certificate: rootCAs is the copy of TierPlan's
+# own certificate (/data/tls/server.crt in TierPlan's data volume, shared read-only
+# with Traefik or copied out), and serverName is a host name that certificate
+# carries (give TierPlan the host name tierplan, or use the host of its public URL).
+# Traefik passes WebSocket upgrades through by itself, flushes text/event-stream
+# responses at once, and sets X-Forwarded-For, X-Forwarded-Proto and Host. It also
+# adds X-Forwarded-Prefix when it strips a prefix; TierPlan ignores that header, so
+# the public URL stays the only source of the base path.
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/tls/cert.pem
+      keyFile: /etc/traefik/tls/key.pem
 
 http:
   routers:
     # A dedicated host name (recommended). Set TIERPLAN_PUBLIC_URL=https://tierplan.example.com.
     tierplan-root:
       rule: "Host(`tierplan.example.com`)"
-      entryPoints: [web]
+      entryPoints: [websecure]
+      tls: {}
       service: tierplan
 
     # A subpath on a host you share. Set TIERPLAN_PUBLIC_URL=https://example.com/tierplan.
     tierplan-sub:
       rule: "Host(`example.com`) && (Path(`/tierplan`) || PathPrefix(`/tierplan/`))"
-      entryPoints: [web]
+      entryPoints: [websecure]
+      tls: {}
       middlewares: [tierplan-strip]
       service: tierplan
 
@@ -227,11 +282,18 @@ http:
       stripPrefix:
         prefixes: ["/tierplan"]
 
+  serversTransports:
+    tierplan:
+      rootCAs:
+        - /tierplan-data/tls/server.crt
+      serverName: tierplan
+
   services:
     tierplan:
       loadBalancer:
+        serversTransport: tierplan
         servers:
-          - url: "http://tierplan:7480"
+          - url: "https://tierplan:7480"
 ```
 
 ## When the bell shows a proxy warning
@@ -252,15 +314,15 @@ Other symptoms:
 
 ## Checking a setup
 
-`make proxy-smoke` builds the image (`make e2e-image`), runs it behind Caddy, nginx and Traefik with the files above at the root of a host and at `/tierplan`, and prints a `PASS` or `FAIL` line for each check:
+`make proxy-smoke` builds the image (`make e2e-image`), runs it behind Caddy, nginx and Traefik with the files above at the root of a host and at `/tierplan`, with TLS on both sides (each proxy ends TLS with a generated certificate and checks TierPlan's own), and prints a `PASS` or `FAIL` line for each check:
 
 - the index carries the base path;
 - `/api/version` answers;
-- a WebSocket upgrade of `/agent/connect` with the subprotocol `tierplan.agent.v1` gets `101 Switching Protocols`;
+- a `wss://` upgrade of `/agent/connect` with the subprotocol `tierplan.agent.v1` gets `101 Switching Protocols`, reaching TierPlan over TLS;
 - the signed-in event stream sends its first frame at once, and without a session it answers `401` at once;
 - the shell's upgrade request (`shell_ws_reaches_tierplan`) and a log stream request (`log_stream_prompt`) reach TierPlan, which answers them itself;
 - TierPlan shows no proxy warning.
 
 The last two checks ask for an environment that does not exist, so they need no container. They show that the proxy forwards the shell's upgrade request, with the session and the origin, to TierPlan, which answers with its own `environment_not_found` problem and not a `400`, `426` or `502` from the proxy, and that the log stream request is answered within 3 seconds and not held back. They do not open a real shell or stream real log lines; the end-to-end suite does that in Chromium behind Caddy at `/tierplan`. Behind nginx and Traefik these two request-level checks are all there is.
 
-It then breaks nginx three ways, and checks that TierPlan notices each: without the `Upgrade` lines (the agent endpoint answers `426` and the bell shows the WebSocket warning), without the `Host` line (the public URL warning), and without `TIERPLAN_TRUSTED_PROXIES` (the untrusted address warning). It needs Docker, `curl` and `jq`, and removes everything it creates.
+It then breaks nginx three ways, and checks that TierPlan notices each: without the `Upgrade` lines (the agent endpoint answers `426` and the bell shows the WebSocket warning), without the `Host` line (the public URL warning), and without `TIERPLAN_TRUSTED_PROXIES` (the untrusted address warning). It needs Docker, Go, `curl` and `jq`, and removes everything it creates. `PROXY_SMOKE_ONLY=caddy-root,nginx-subpath make proxy-smoke` runs only the scenarios named (`KIND-SITE`, such as `traefik-root`, or `nginx-root-no_host_header` for a deliberate break).

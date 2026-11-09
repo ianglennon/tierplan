@@ -12,8 +12,8 @@ import (
 )
 
 // SettingsPollInterval is how often the running server re-reads the settings table
-// to see a change another process made (D-05). Three seconds is the longest an
-// operator waits for `tierplan https disable` to reach a running server.
+// to see a change another store handle made, such as a restore or a CLI user command
+// (D-05). Three seconds is the longest such a change waits to reach a running server.
 const SettingsPollInterval = 3 * time.Second
 
 // Clock is the time the watcher waits on. It is declared here so this package does

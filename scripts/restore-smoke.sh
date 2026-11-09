@@ -22,7 +22,14 @@
 #      the session from before the restore is refused, the admin and member1 sign in,
 #      member2 is refused, the pre-restore snapshot is in /data/backups, the
 #      restore-pending marker is gone, and `tierplan audit verify` prints
-#      "audit chain OK".
+#      "audit chain OK";
+#   6. serves HTTPS with its own certificate throughout: every request is
+#      `curl --cacert` on the certificate copied out of the container (D-10, no
+#      verification is switched off), the SPKI pin the server serves is recorded
+#      before the backup and must be the same after the restore, and the backup
+#      is then restored onto a NEW container with a fresh volume, which must
+#      first serve a different pin and afterwards the recorded one (TLS-09: a
+#      restore keeps the pin).
 #
 # The decision rule (plan 03-25): if this passes, exec stays the default of
 # TIERPLAN_RESTORE_RESTART. If the exec step fails in the image (the container
@@ -41,7 +48,7 @@
 # told is a fixed one that does not name it), RESTORE_WAIT (90) and RESTART_MODE (exec or exit; default exec). The
 # container and volume carry the label tierplan.ci.owner=$TIERPLAN_CI_OWNER
 # (local-<pid> when unset) so `make ci-clean` removes them after a cancelled CI job
-# (D-23). Needs Docker, curl, jq and tar. The passwords
+# (D-23). Needs Docker, curl, jq, openssl and tar. The passwords
 # belong to a container that is destroyed at the end; no repository secret is
 # involved.
 set -euo pipefail
@@ -57,7 +64,7 @@ case "${RESTART_MODE}" in
   *) echo "RESTORE SMOKE FAIL: RESTART_MODE must be exec or exit, not ${RESTART_MODE}" >&2; exit 1 ;;
 esac
 
-for tool in docker curl jq tar; do
+for tool in docker curl jq openssl tar; do
   command -v "${tool}" >/dev/null || { echo "RESTORE SMOKE FAIL: ${tool} is required" >&2; exit 1; }
 done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 \
@@ -65,11 +72,18 @@ docker image inspect "${IMAGE}" >/dev/null 2>&1 \
 
 NAME="tierplan-restore-smoke-$$"
 VOLUME="${NAME}"
+# NAME and VOLUME are re-pointed at the fresh container for step 5, so cleanup
+# removes the first container and volume by these.
+FIRST_NAME="${NAME}"
+FIRST_VOLUME="${VOLUME}"
+# The container and volume of the fresh-volume restore (step 6).
+FRESH_NAME="${NAME}-fresh"
+FRESH_VOLUME="${FRESH_NAME}"
 # The public URL the server is told is fixed, and is the Origin of every request. The
 # host port Docker assigns is never probed for beforehand (two runners share each VM,
 # so a port found free can be taken before docker run); refresh_host_url reads it
 # back, and requests go to HOST_URL.
-PUBLIC="http://127.0.0.1:7480"
+PUBLIC="https://127.0.0.1:7480"
 HOST_URL="" # set by refresh_host_url
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
@@ -80,8 +94,8 @@ BACKUP_PW='restore smoke passphrase'
 INSTANCE='Restore smoke'
 
 cleanup() {
-  docker rm -f "${NAME}" >/dev/null 2>&1 || true
-  docker volume rm -f "${VOLUME}" >/dev/null 2>&1 || true
+  docker rm -f "${FIRST_NAME}" "${FRESH_NAME}" >/dev/null 2>&1 || true
+  docker volume rm -f "${FIRST_VOLUME}" "${FRESH_VOLUME}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -90,6 +104,7 @@ trap 'exit 130' INT TERM
 pass() { echo "PASS: $*"; }
 
 fail() {
+  echo "FAIL: $1${2:+ ($2)}"
   echo "RESTORE SMOKE FAIL: $1${2:+ ($2)}" >&2
   echo "--- last 50 lines of ${NAME} ---" >&2
   docker logs --tail 50 "${NAME}" >&2 2>&1 || true
@@ -107,14 +122,38 @@ refresh_host_url() {
   local port
   port="$(docker port "${NAME}" 7480/tcp 2>/dev/null | head -n 1 | sed 's/.*://')" || return 1
   [ -n "${port}" ] || return 1
-  HOST_URL="http://127.0.0.1:${port}"
+  HOST_URL="https://127.0.0.1:${port}"
+}
+
+# tcurl is curl that trusts TierPlan's own certificate (copied out of the container
+# by fetch_cert) and nothing else.
+tcurl() { curl --cacert "${WORK}/server.crt" "$@"; }
+
+# fetch_cert copies the certificate TierPlan mirrors into its data volume. docker
+# cp needs no shell, which the distroless image does not have.
+fetch_cert() {
+  docker cp "${NAME}:/data/tls/server.crt" "${WORK}/server.crt" >/dev/null 2>&1 \
+    && grep -q 'BEGIN CERTIFICATE' "${WORK}/server.crt"
+}
+
+# pin_of PEMFILE prints the SPKI pin (base64 SHA-256 of the public key) of a certificate.
+pin_of() {
+  openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+}
+
+# served_pin prints the SPKI pin of the certificate the server presents on the
+# published port. It only reads the pin; trust is established by tcurl.
+served_pin() {
+  openssl s_client -connect "${HOST_URL#https://}" -servername 127.0.0.1 </dev/null 2>/dev/null \
+    | openssl x509 -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null \
+    | openssl dgst -sha256 -binary | base64
 }
 
 # api METHOD PATH [BODY] sends the session's cookie, CSRF token and Origin and
 # sets HTTP_CODE and API_BODY. It is not run in a subshell.
 COOKIE="" CSRF=""
 api() {
-  HTTP_CODE="$(curl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${PUBLIC}" \
+  HTTP_CODE="$(tcurl -sS -o "${WORK}/api.out" -w '%{http_code}' -X "$1" -H "Origin: ${PUBLIC}" \
     ${CSRF:+-H "X-CSRF-Token: ${CSRF}"} ${COOKIE:+-H "Cookie: ${COOKIE}"} ${3:+-H "${JSON_H}" -d "$3"} "${HOST_URL}$2")" || HTTP_CODE="curl-failed"
   API_BODY="$(cat "${WORK}/api.out" 2>/dev/null || true)"
 }
@@ -123,7 +162,7 @@ api() {
 # the server does not answer 200.
 login() {
   local code
-  code="$(curl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+  code="$(tcurl -sS -o "${WORK}/login.json" -D "${WORK}/login.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
     -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${HOST_URL}/api/auth/login")" || return 1
   [ "${code}" = "200" ] || return 1
   COOKIE="$(grep -i '^set-cookie:' "${WORK}/login.hdr" | head -n 1 | tr -d '\r' | sed 's/^[^:]*: *//; s/;.*//')"
@@ -140,7 +179,7 @@ new_member() {
   invite="$(printf '%s' "${API_BODY}" | jq -r .link.url)"
   token="${invite##*#token=}"
   [ -n "${token}" ] && [ "${token}" != "${invite}" ] || fail "user $1 created" "the invite link carries no token: ${invite}"
-  code="$(curl -sS -o "${WORK}/accept.out" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+  code="$(tcurl -sS -o "${WORK}/accept.out" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
     -d "{\"token\":\"${token}\",\"password\":\"$2\"}" "${HOST_URL}/api/invite/accept")" || code="curl-failed"
   [ "${code}" = "204" ] || fail "user $1 created" "accepting the invite returned ${code}: $(cat "${WORK}/accept.out")"
 }
@@ -175,11 +214,17 @@ docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
 refresh_host_url || fail "image starts" "docker assigned no host port for 7480"
 wait_healthy || fail "image healthy" "the container did not become healthy within 90 seconds"
 pass "image healthy (${IMAGE}, restart mode ${RESTART_MODE})"
+fetch_cert || fail "certificate copied" "could not copy /data/tls/server.crt out of the container"
+PIN_BEFORE="$(served_pin)"
+[ -n "${PIN_BEFORE}" ] || fail "tls pin recorded" "could not read the certificate the server presents"
+[ "${PIN_BEFORE}" = "$(pin_of "${WORK}/server.crt")" ] || fail "tls pin recorded" "the served certificate is not the one mirrored in /data/tls"
+[ "$(tcurl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/healthz")" = "200" ] || fail "verified https" "/healthz did not answer 200 with --cacert on the container's certificate"
+pass "served over verified https, tls pin recorded (${PIN_BEFORE})"
 
 # ---- 1. setup, two members and a backup in between ----
 
 TOKEN="$(docker exec "${NAME}" /usr/local/bin/tierplan setup-token)" || fail "setup token" "docker exec tierplan setup-token failed"
-code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+code="$(tcurl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${ADMIN_PW}\",\"instanceName\":\"${INSTANCE}\",\"publicUrl\":\"${PUBLIC}\"}" \
   "${HOST_URL}/api/setup/complete")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "setup done" "setup completion returned ${code}: $(cat "${WORK}/complete.json" 2>/dev/null)"
@@ -191,7 +236,7 @@ pass "setup done"
 new_member member1 "${M1_PW}"
 pass "user member1 created"
 
-code="$(curl -sS -o "${WORK}/backup.tierplan" -w '%{http_code}' -X POST -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+code="$(tcurl -sS -o "${WORK}/backup.tierplan" -w '%{http_code}' -X POST -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" -d "{\"passphrase\":\"${BACKUP_PW}\"}" "${HOST_URL}/api/backup/export")" || code="curl-failed"
 [ "${code}" = "200" ] || fail "backup exported" "POST /api/backup/export returned ${code}"
 [ -s "${WORK}/backup.tierplan" ] || fail "backup exported" "the downloaded file is empty"
@@ -209,7 +254,7 @@ BEFORE_RESTARTS="$(inspect '{{.RestartCount}}')"
 pass "container state recorded (pid ${BEFORE_PID}, started ${BEFORE_STARTED}, restarts ${BEFORE_RESTARTS})"
 OLD_COOKIE="${COOKIE}"
 
-code="$(curl -sS -o "${WORK}/upload.json" -w '%{http_code}' -X POST -H "Content-Type: application/octet-stream" -H "Origin: ${PUBLIC}" \
+code="$(tcurl -sS -o "${WORK}/upload.json" -w '%{http_code}' -X POST -H "Content-Type: application/octet-stream" -H "Origin: ${PUBLIC}" \
   -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" --data-binary "@${WORK}/backup.tierplan" "${HOST_URL}/api/backup/restore/upload")" || code="curl-failed"
 [ "${code}" = "201" ] || fail "backup uploaded" "upload returned ${code}: $(cat "${WORK}/upload.json" 2>/dev/null)"
 UPLOAD_ID="$(jq -r .uploadId "${WORK}/upload.json")"
@@ -226,20 +271,34 @@ api POST /api/backup/restore/apply "{\"uploadId\":\"${UPLOAD_ID}\",\"passphrase\
 [ "${HTTP_CODE}" = "202" ] || fail "restore accepted" "apply returned ${HTTP_CODE}: ${API_BODY}"
 pass "restore accepted (202)"
 
-# Wait for the restored TierPlan: the log says so, and it answers. The log is the
-# container's, so it holds the old process and the new one.
-RESTORED=false
-for _ in $(seq 1 "${RESTORE_WAIT}"); do
-  if docker logs "${NAME}" 2>&1 | grep -q '"restore completed"' \
-    && refresh_host_url \
-    && [ "$(curl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/readyz" 2>/dev/null || true)" = "200" ]; then
-    RESTORED=true
-    break
-  fi
-  sleep 1
-done
-[ "${RESTORED}" = true ] || fail "restarted into the restored state" "no \"restore completed\" and /readyz 200 within ${RESTORE_WAIT} seconds"
+# wait_restored waits for the restored TierPlan: the log says so, and it answers
+# over verified https. The log is the container's, so it holds the old process and
+# the new one. The certificate is copied again on every pass, because a restore onto a
+# volume with another identity changes the certificate the server presents.
+wait_restored() {
+  local _
+  for _ in $(seq 1 "${RESTORE_WAIT}"); do
+    # Read the logs in full first: under pipefail, grep -q stopping early kills
+    # docker logs with SIGPIPE and fails the pipeline.
+    if grep -q '"restore completed"' <<<"$(docker logs "${NAME}" 2>&1)" \
+      && refresh_host_url \
+      && fetch_cert \
+      && [ "$(tcurl -sS -o /dev/null -w '%{http_code}' "${HOST_URL}/readyz" 2>/dev/null || true)" = "200" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+wait_restored || fail "restarted into the restored state" "no \"restore completed\" and /readyz 200 within ${RESTORE_WAIT} seconds"
 pass "restarted into the restored state"
+
+# The identity is kept: the restart re-reads the same key, so the copy taken after it
+# is the same certificate and the server still presents the recorded pin.
+fetch_cert || fail "certificate copied after the restore" "could not copy /data/tls/server.crt out of the container"
+[ "$(served_pin)" = "${PIN_BEFORE}" ] || fail "same tls pin after the restore" "the server presents $(served_pin), was ${PIN_BEFORE}"
+[ "$(pin_of "${WORK}/server.crt")" = "${PIN_BEFORE}" ] || fail "same tls pin after the restore" "the mirrored certificate changed"
+pass "same tls pin after the restore"
 
 # ---- 3. what the restart did to the container ----
 
@@ -290,5 +349,53 @@ pass "restore marker removed"
 docker exec "${NAME}" /usr/local/bin/tierplan audit verify 2>&1 | tee "${WORK}/audit.out" \
   | grep -Eq '^audit chain OK: [0-9]+ entries$' || fail "audit verify" "$(cat "${WORK}/audit.out")"
 pass "audit verify (audit chain OK)"
+
+# ---- 5. the backup restored onto a fresh volume keeps the pin ----
+
+# A new container on a new volume makes its own certificate. After setup it takes
+# the backup, and from then on it serves the key stored in the backup (TLS-09).
+NAME="${FRESH_NAME}"
+VOLUME="${FRESH_VOLUME}"
+docker volume create --label "${OWNER_LABEL}" "${VOLUME}" >/dev/null
+docker run -d --name "${NAME}" --label "${OWNER_LABEL}" \
+  -p "127.0.0.1:${SMOKE_PORT:-}:7480" \
+  -v "${VOLUME}:/data" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" \
+  --health-interval 3s --health-start-period 0s --health-retries 5 \
+  ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} \
+  "${IMAGE}" >/dev/null || fail "fresh volume starts" "docker run failed"
+refresh_host_url || fail "fresh volume starts" "docker assigned no host port for 7480"
+wait_healthy || fail "fresh volume healthy" "the container did not become healthy within 90 seconds"
+fetch_cert || fail "fresh certificate copied" "could not copy /data/tls/server.crt out of the fresh container"
+FRESH_PIN="$(served_pin)"
+[ -n "${FRESH_PIN}" ] && [ "${FRESH_PIN}" != "${PIN_BEFORE}" ] \
+  || fail "fresh volume has its own tls pin" "the fresh install serves '${FRESH_PIN}', the first install served ${PIN_BEFORE}"
+pass "fresh volume serves its own, different tls pin"
+
+TOKEN="$(docker exec "${NAME}" /usr/local/bin/tierplan setup-token)" || fail "fresh setup token" "docker exec tierplan setup-token failed"
+code="$(tcurl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
+  -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${ADMIN_PW}\",\"instanceName\":\"${INSTANCE}\",\"publicUrl\":\"${PUBLIC}\"}" \
+  "${HOST_URL}/api/setup/complete")" || code="curl-failed"
+[ "${code}" = "200" ] || fail "fresh setup done" "setup completion returned ${code}: $(cat "${WORK}/complete.json" 2>/dev/null)"
+COOKIE="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | head -n 1 | tr -d '\r' | sed 's/^[^:]*: *//; s/;.*//')"
+CSRF="$(jq -r .csrfToken "${WORK}/complete.json")"
+[ -n "${COOKIE}" ] && [ "${CSRF}" != null ] || fail "fresh setup done" "setup completion returned no session or CSRF token"
+
+code="$(tcurl -sS -o "${WORK}/upload.json" -w '%{http_code}' -X POST -H "Content-Type: application/octet-stream" -H "Origin: ${PUBLIC}" \
+  -H "X-CSRF-Token: ${CSRF}" -H "Cookie: ${COOKIE}" --data-binary "@${WORK}/backup.tierplan" "${HOST_URL}/api/backup/restore/upload")" || code="curl-failed"
+[ "${code}" = "201" ] || fail "backup uploaded to the fresh volume" "upload returned ${code}: $(cat "${WORK}/upload.json" 2>/dev/null)"
+UPLOAD_ID="$(jq -r .uploadId "${WORK}/upload.json")"
+[ -n "${UPLOAD_ID}" ] && [ "${UPLOAD_ID}" != null ] || fail "backup uploaded to the fresh volume" "the answer carries no upload ID"
+api POST /api/backup/restore/apply "{\"uploadId\":\"${UPLOAD_ID}\",\"passphrase\":\"${BACKUP_PW}\",\"confirm\":\"${INSTANCE}\"}"
+[ "${HTTP_CODE}" = "202" ] || fail "restore onto the fresh volume accepted" "apply returned ${HTTP_CODE}: ${API_BODY}"
+wait_restored || fail "fresh volume restarted into the restored state" "no \"restore completed\" and /readyz 200 within ${RESTORE_WAIT} seconds"
+fetch_cert || fail "restored certificate copied" "could not copy /data/tls/server.crt out of the fresh container"
+[ "$(served_pin)" = "${PIN_BEFORE}" ] \
+  || fail "restored onto a fresh volume: same tls pin" "the fresh install serves $(served_pin), the backed-up install served ${PIN_BEFORE}"
+[ "$(pin_of "${WORK}/server.crt")" = "${PIN_BEFORE}" ] || fail "restored onto a fresh volume: same tls pin" "the mirrored certificate is not the backed-up one"
+COOKIE="" CSRF=""
+login member1 "${M1_PW}" || fail "restored onto a fresh volume: member1 sign-in" "member1 was in the backup and could not sign in on the fresh volume"
+pass "restored onto a fresh volume: same tls pin"
 
 echo "RESTORE SMOKE PASS"

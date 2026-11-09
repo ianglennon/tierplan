@@ -112,7 +112,7 @@ func (f *setupFixture) setting(t *testing.T, key string) (string, bool) {
 
 func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "__Host-tierplan_session" || c.Name == "__Secure-tierplan_session" || c.Name == "tierplan_session" {
+		if c.Name == "__Host-tierplan_session" || c.Name == "__Secure-tierplan_session" {
 			return c
 		}
 	}
@@ -196,6 +196,35 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 	}
 }
 
+func TestSetupCompleteSetsAHostPrefixedSecureCookie(t *testing.T) {
+	t.Parallel()
+	f := newSetupFixture(t, config.Config{})
+	rec := f.complete(t, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var header string
+	for _, h := range rec.Header().Values("Set-Cookie") {
+		if strings.Contains(h, "tierplan_session=") {
+			header = h
+		}
+	}
+	if header == "" {
+		t.Fatalf("no session cookie in %v", rec.Header()["Set-Cookie"])
+	}
+	if !strings.HasPrefix(header, "__Host-tierplan_session=") {
+		t.Fatalf("Set-Cookie %q: want the __Host- name", header)
+	}
+	for _, want := range []string{"Secure", "HttpOnly", "SameSite=Lax", "Path=/"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("Set-Cookie %q lacks %q", header, want)
+		}
+	}
+	if strings.Contains(header, "Domain") {
+		t.Errorf("Set-Cookie %q carries a Domain", header)
+	}
+}
+
 func TestSetupCompleteNeverEchoesOrLogsThePasswordAndIsNotCacheable(t *testing.T) {
 	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
@@ -247,16 +276,27 @@ func TestSetupCompleteMakesTheInstanceAndTheOriginGuardUseTheNewSettingsAtOnce(t
 	}
 }
 
-func TestSetupCompleteUsesAnUnprefixedCookieWhenThePublicURLIsHTTP(t *testing.T) {
+func TestSetupCompleteRefusesAnHTTPPublicURL(t *testing.T) {
 	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
 	rec := f.complete(t, map[string]any{"publicUrl": "http://10.0.0.5:7480"})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d: %s, want 422", rec.Code, rec.Body)
 	}
-	c := sessionCookie(rec)
-	if c == nil || c.Name != "tierplan_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("cookie = %+v", c)
+	if !strings.Contains(rec.Body.String(), "invalid_public_url") {
+		t.Fatalf("body = %s, want invalid_public_url", rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "HTTPS only") {
+		t.Fatalf("body = %s, want the reason: TierPlan serves HTTPS only", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Fatalf("body = %s echoes the submitted URL", rec.Body)
+	}
+	if c := sessionCookie(rec); c != nil {
+		t.Fatalf("a refused setup set a session cookie: %+v", c)
+	}
+	if v, ok := f.setting(t, "public_url"); ok {
+		t.Fatalf("a refused setup stored public_url %q", v)
 	}
 }
 
@@ -331,6 +371,7 @@ func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *
 		"instance name 65 chars":     {map[string]any{"instanceName": tooLong}, "body.instanceName", "instance_name_too_long"},
 		"public url relative":        {map[string]any{"publicUrl": "/tierplan"}, "body.publicUrl", "invalid_public_url"},
 		"public url no scheme":       {map[string]any{"publicUrl": "tierplan.example"}, "body.publicUrl", "invalid_public_url"},
+		"public url http":            {map[string]any{"publicUrl": "http://tierplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url wrong scheme":    {map[string]any{"publicUrl": "ftp://tierplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url with userinfo":   {map[string]any{"publicUrl": "https://user:" + "secret@tierplan.example"}, "body.publicUrl", "invalid_public_url"},
 		"public url with a query":    {map[string]any{"publicUrl": "https://tierplan.example/?a=b"}, "body.publicUrl", "invalid_public_url"},

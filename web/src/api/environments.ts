@@ -199,13 +199,6 @@ export class InstallRequestError extends Error {
   get publicUrlRequired(): boolean {
     return this.status === 409 && this.type === "public_url_required";
   }
-
-  // Agents would be given a plain ws:// address for another host, which they
-  // refuse. The admin fixes the URL in Settings (or, for development only,
-  // sets the server's TIERPLAN_AGENT_ALLOW_INSECURE).
-  get insecureAgentUrl(): boolean {
-    return this.status === 409 && this.type === "insecure_agent_url";
-  }
 }
 
 export interface CreatedAgentEnvironment {

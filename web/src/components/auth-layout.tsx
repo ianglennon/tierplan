@@ -2,28 +2,15 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { TierPlanLogo } from "@/components/tierplan-logo";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { VersionFooter } from "@/components/version-footer";
 import { useSignOut } from "@/features/account/sign-out";
 import { meQueryOptions } from "@/hooks/use-me";
 import { cn } from "@/lib/utils";
-
-// Hosts where plain http: is not a network exposure (D-12).
-const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
-
-// isPlainHttpRemote is true when the page was loaded over http: from a host
-// other than the machine itself, so typed passwords cross the network readable.
-export function isPlainHttpRemote(
-  loc: Pick<Location, "protocol" | "hostname"> = window.location,
-): boolean {
-  return loc.protocol === "http:" && !LOCAL_HOSTNAMES.has(loc.hostname);
-}
 
 interface AuthLayoutProps {
   title: string;
@@ -58,9 +45,10 @@ function SignedInBar() {
 
 // AuthLayout is the centered card used by every screen outside the signed-in
 // shell: /setup, /login, the error and not-found pages and, for a signed-in
-// user, /welcome. Title above the card, plain-HTTP notice inside it, version
-// footer under it (D-38, UI-SPEC "Auth screens"). The two pages a signed-in
-// user can reach here pass showSignOut.
+// user, /welcome. Title above the card, version footer under it (D-38, UI-SPEC
+// "Auth screens"). The two pages a signed-in user can reach here pass showSignOut.
+// The card exists only when there are children: no TierPlan page is served over
+// plain HTTP, so there is no insecure-connection notice to put in it (D-01).
 export function AuthLayout({
   title,
   subtitle,
@@ -69,7 +57,6 @@ export function AuthLayout({
   children,
 }: AuthLayoutProps) {
   const { t } = useTranslation();
-  const plainHttp = isPlainHttpRemote();
   // When the title is just the product name, the wordmark already says it: the logo is the
   // heading and the name is not written out again under it.
   const logoIsTitle = title === t("common.brand.wordmark");
@@ -98,17 +85,9 @@ export function AuthLayout({
             </div>
           </>
         )}
-        {plainHttp || children ? (
+        {children ? (
           <Card className="py-6">
-            <CardContent className="flex flex-col gap-4 px-6">
-              {plainHttp ? (
-                <Alert variant="warning">
-                  <TriangleAlert aria-hidden="true" />
-                  <AlertDescription>{t("common.plainHttp.warning")}</AlertDescription>
-                </Alert>
-              ) : null}
-              {children}
-            </CardContent>
+            <CardContent className="flex flex-col gap-4 px-6">{children}</CardContent>
           </Card>
         ) : null}
       </div>

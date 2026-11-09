@@ -4,11 +4,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,8 +21,8 @@ import (
 // every TLS mode, with every public URL, and while either is switched at runtime (TLS-07).
 
 const (
-	matrixHTTPURL  = "http://tierplan.example.com:7480"
-	matrixHTTPSURL = "https://tierplan.example.com:8443"
+	matrixHTTPSURL      = "https://tierplan.example.com:8443"
+	matrixOtherHTTPSURL = "https://other.example.com:9443"
 )
 
 // port is the port the server listens on, as the ":port" form the healthcheck reads from the
@@ -40,12 +42,6 @@ func (w *wireServer) probe(t *testing.T) error {
 	return Healthcheck(t.Context(), w.port(t), HealthcheckCertFile(w.cfg))
 }
 
-// plainProbe runs the healthcheck over plain HTTP, which /healthz answers on every install.
-func (w *wireServer) plainProbe(t *testing.T) error {
-	t.Helper()
-	return Healthcheck(t.Context(), w.port(t), "")
-}
-
 // modeEnv is the environment for one TLS mode. The certificate-file pair is written for host.
 func modeEnv(t *testing.T, mode, host string) map[string]string {
 	t.Helper()
@@ -62,8 +58,8 @@ func modeEnv(t *testing.T, mode, host string) map[string]string {
 }
 
 func TestHealthcheckMatrix(t *testing.T) {
-	for _, mode := range []string{"plain", "self-signed", "cert-file"} {
-		for name, pub := range map[string]string{"unset": "", "http": matrixHTTPURL, "https": matrixHTTPSURL} {
+	for _, mode := range []string{"default", "self-signed", "cert-file"} {
+		for name, pub := range map[string]string{"unset": "", "https": matrixHTTPSURL} {
 			t.Run(mode+"/"+name+" public URL", func(t *testing.T) {
 				env := modeEnv(t, mode, "tierplan.example.com")
 				if pub != "" {
@@ -73,51 +69,39 @@ func TestHealthcheckMatrix(t *testing.T) {
 				if err := w.probe(t); err != nil {
 					t.Errorf("the container healthcheck: %v", err)
 				}
-				// /healthz is exempt from the gate, so a plain probe passes against every install.
-				if err := w.plainProbe(t); err != nil {
-					t.Errorf("a plain-HTTP probe: %v", err)
-				}
 			})
 		}
 	}
 }
 
-func TestHealthcheckMatrixStaysGreenWhileTLSIsSwitched(t *testing.T) {
+func TestHealthcheckMatrixIsGreenOverTLSFromFirstStart(t *testing.T) {
 	w := startWire(t, nil, "")
 	if err := w.probe(t); err != nil {
-		t.Fatalf("before the certificate: %v", err)
+		t.Fatalf("a fresh install with no TLS variable: %v", err)
 	}
-
-	cert, leaf := genCert(t, "")
-	w.srv.https.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
-	if err := w.probe(t); err != nil {
-		t.Errorf("with the certificate installed: %v", err)
+	// The same port answers TLS, and /healthz is served over it to a client that trusts only the mirror.
+	mirror, err := os.ReadFile(HealthcheckCertFile(w.cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The same port now answers TLS as well, and /healthz is served over it.
 	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
+	if !pool.AppendCertsFromPEM(mirror) {
+		t.Fatal("the mirror holds no certificate")
+	}
 	tr := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12}}
 	t.Cleanup(tr.CloseIdleConnections)
 	resp := wireGet(t, &http.Client{Transport: tr}, "https://"+w.addr+"/healthz", "")
 	if resp.status != http.StatusOK {
-		t.Errorf("https GET /healthz with the certificate installed: status = %d, want 200", resp.status)
-	}
-
-	w.srv.https.Remove()
-	if err := w.probe(t); err != nil {
-		t.Errorf("after the certificate is removed: %v", err)
+		t.Errorf("https GET /healthz trusting only the mirror: status = %d, want 200", resp.status)
 	}
 }
 
 func TestHealthcheckMatrixStaysGreenWhileThePublicURLFlips(t *testing.T) {
 	w := startWire(t, map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true", "TIERPLAN_PUBLIC_URL": matrixHTTPSURL}, "")
-	for _, pub := range []string{matrixHTTPSURL, matrixHTTPURL, "", matrixHTTPSURL} {
+	for _, pub := range []string{matrixHTTPSURL, matrixOtherHTTPSURL, "", matrixHTTPSURL} {
 		w.srv.Instance().Apply("TierPlan", pub)
 		if err := w.probe(t); err != nil {
 			t.Errorf("public URL %q: the TLS probe: %v", pub, err)
-		}
-		if err := w.plainProbe(t); err != nil {
-			t.Errorf("public URL %q: the plain probe: %v", pub, err)
 		}
 	}
 }
@@ -138,5 +122,63 @@ func TestHealthcheckMatrixStillVerifiesTheCertificate(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "none.crt")
 	if err := Healthcheck(context.Background(), w.port(t), missing); err == nil || !strings.Contains(err.Error(), "none.crt") {
 		t.Errorf("a missing certificate file gave %v, want an error naming it", err)
+	}
+}
+
+func TestHealthcheckMatrixStaysGreenAfterALiveReSign(t *testing.T) {
+	clk := newStepClock(fixedNow)
+	w := startWire(t, nil, "", WithTLSRefreshClock(clk))
+	if err := w.probe(t); err != nil {
+		t.Fatalf("before the re-sign: %v", err)
+	}
+	// A saved public URL names a host the certificate lacks, so the refresh loop signs again and the
+	// mirror the probe trusts follows the certificate being served.
+	before, err := os.ReadFile(HealthcheckCertFile(w.cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.srv.Instance().Apply("TierPlan", matrixHTTPSURL)
+	clk.Tick(t, selfSignedNameCheck)
+	clk.WaitArmed(t)                                      // the loop arms again once Refresh has run
+	after, err := os.ReadFile(HealthcheckCertFile(w.cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(before, after) {
+		t.Fatal("the mirror still holds the certificate from before the re-sign, so nothing was signed")
+	}
+	if err := w.probe(t); err != nil {
+		t.Errorf("after a live re-sign: %v", err)
+	}
+}
+
+func TestHealthcheckMatrixStaysGreenAfterASuppliedPairIsReplaced(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	writePair(t, crt, key, "a.example.com")
+	clk := newStepClock(fixedNow)
+	w := startWire(t, map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key}, "", WithTLSRefreshClock(clk))
+	if err := w.probe(t); err != nil {
+		t.Fatalf("before the replacement: %v", err)
+	}
+	writePair(t, filepath.Join(dir, "b.pem"), filepath.Join(dir, "b.key"), "b.example.com")
+	if err := os.Rename(filepath.Join(dir, "b.pem"), crt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, "b.key"), key); err != nil {
+		t.Fatal(err)
+	}
+	clk.Tick(t, suppliedRecheck)
+	clk.WaitArmed(t) // the loop arms again once Refresh has run
+	if err := w.probe(t); err != nil {
+		t.Errorf("after the supplied pair was replaced: %v", err)
+	}
+}
+
+func TestHealthcheckWithNoCertificateFileNamesItAndProbesNothing(t *testing.T) {
+	w := startWire(t, nil, "")
+	err := Healthcheck(t.Context(), w.port(t), "")
+	if err == nil || !strings.Contains(err.Error(), "no certificate file") {
+		t.Errorf("an empty certificate file gave %v, want an error saying none was given", err)
 	}
 }

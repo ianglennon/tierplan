@@ -156,6 +156,53 @@ printf 'package p\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/web/node_modules
 expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfix}"
 printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
 expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
+
+# The same gate over everything that is not Go (D-10, TLS-12): e2e, Vite, scripts and
+# the shipped proxy configs. Every spelling is built from halves so this file does not
+# trip the gate it tests.
+nofix="${scratch}/tls-nongo-fixture"
+mkdir -p "${nofix}/e2e/specs" "${nofix}/e2e/node_modules/p" "${nofix}/web/node_modules/p" \
+  "${nofix}/scripts" "${nofix}/docs/proxy"
+printf 'export default { use: { baseURL: "https://x.test" } }\n' >"${nofix}/e2e/playwright.config.ts"
+printf 'services:\n  dind:\n    command: --insecure-registry 127.0.0.1:5000\n' >"${nofix}/e2e/compose.yaml"
+printf 'expect(cookie).toMatchObject({ secure: false, httpOnly: true })\n' >"${nofix}/e2e/specs/cookie.spec.ts"
+printf 'export default { server: { proxy: { "/api": { target: "https://127.0.0.1:7480" } } } }\n' >"${nofix}/web/vite.config.ts"
+printf 'curl --cacert "$CERT" https://127.0.0.1:7480/healthz\n' >"${nofix}/scripts/ok.sh"
+printf 'reverse_proxy https://tierplan:7480 {\n  transport http {\n    tls_trust_pool file /ca.pem\n  }\n}\n' >"${nofix}/docs/proxy/Caddyfile"
+expect pass "tls-gate-nongo-clean" scripts/insecure-tls-check.sh "${nofix}"
+
+# One seeded file per pattern: the gate must fail and name the file and the pattern.
+nogo_case() { # nogo_case <name> <relative path> <content>
+  mkdir -p "${nofix}/$(dirname "$2")"
+  printf '%s\n' "$3" >"${nofix}/$2"
+  expect fail "tls-gate-nongo-$1" scripts/insecure-tls-check.sh "${nofix}"
+  expect_out "tls-gate-nongo-$1 names the file" "INSECURE TLS: $2 uses"
+  rm -f "${nofix}/$2"
+}
+nogo_case ignore-https-errors e2e/specs/seeded.spec.ts "test.use({ ignoreHTTPS""Errors: true })"
+nogo_case reject-unauthorized e2e/seeded.mjs "https.get(url, { reject""Unauthorized: false })"
+nogo_case node-tls-env scripts/seeded.sh "NODE_TLS_REJECT""_UNAUTHORIZED=0 node check.mjs"
+nogo_case curl-short-flag scripts/seeded.sh "curl -""k https://127.0.0.1:7480/healthz"
+nogo_case curl-long-flag scripts/seeded.sh "curl -sS --insec""ure https://127.0.0.1:7480/healthz"
+nogo_case curl-combined-flags scripts/seeded.sh "curl -sS""k https://127.0.0.1:7480/healthz"
+nogo_case caddy-skip-verify docs/proxy/Caddyfile "  tls_insecure_skip""_verify"
+nogo_case traefik-skip-verify docs/proxy/traefik.yml "  insecure""SkipVerify: true"
+nogo_case nginx-ssl-verify-off docs/proxy/nginx.conf "  proxy_ssl_verify"" off;"
+nogo_case vite-secure-false web/vite.config.ts "export default { server: { proxy: { '/api': { secure: fal""se } } } }"
+nogo_case vite-secure-false-variant-file web/vite.dev.ts "export default { server: { proxy: { '/api': { secure : fal""se } } } }"
+
+# `secure: false` is a TLS setting only in the Vite config: the same text in an e2e spec passes.
+printf 'expect(cookie).toMatchObject({ secure: fal''se })\n' >"${nofix}/e2e/specs/seeded.spec.ts"
+expect pass "tls-gate-nongo-secure-false-outside-vite" scripts/insecure-tls-check.sh "${nofix}"
+rm -f "${nofix}/e2e/specs/seeded.spec.ts"
+# docker's --insecure-registry is about a registry, not about verifying TierPlan.
+printf 'dockerd --insecure-registry 127.0.0.1:5000\ncurl --cacert x --insecure-registry-note\n' >"${nofix}/scripts/registry.sh"
+expect pass "tls-gate-nongo-insecure-registry" scripts/insecure-tls-check.sh "${nofix}"
+rm -f "${nofix}/scripts/registry.sh"
+# Dependencies under e2e and web are not scanned.
+printf 'o = { ignoreHTTPS''Errors: true, reject''Unauthorized: false }\n' >"${nofix}/e2e/node_modules/p/x.js"
+printf 'o = { secure: fal''se }\n' >"${nofix}/web/node_modules/p/vite.config.ts"
+expect pass "tls-gate-nongo-skips-dependencies" scripts/insecure-tls-check.sh "${nofix}"
 expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 
 # --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
@@ -163,13 +210,13 @@ expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 # variables or the -n flag state into the make under test.
 mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
 expect pass "dev-go-default-public-url" mk dev-go
-expect_out "dev-go-default-public-url" "TIERPLAN_PUBLIC_URL='http://localhost:5173'"
-expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=http://dev.example.test:5173
-expect_out "dev-go-custom-public-url" "TIERPLAN_PUBLIC_URL='http://dev.example.test:5173'"
+expect_out "dev-go-default-public-url" "TIERPLAN_PUBLIC_URL='https://localhost:5173'"
+expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=https://dev.example.test:5173
+expect_out "dev-go-custom-public-url" "TIERPLAN_PUBLIC_URL='https://dev.example.test:5173'"
 expect pass "dev-go-empty-public-url" mk dev-go DEV_PUBLIC_URL=
 expect_out "dev-go-empty-public-url (unset, so not locked)" "TIERPLAN_PUBLIC_URL=''"
 expect pass "dev-web-default" mk dev-web
-expect_out "dev-web-default passes the public URL to Vite" "TIERPLAN_DEV_PUBLIC_URL='http://localhost:5173'"
+expect_out "dev-web-default passes the public URL to Vite" "TIERPLAN_DEV_PUBLIC_URL='https://localhost:5173'"
 if grep -qF -- "--host" <<<"${LAST_OUT}"; then
   echo "SCRIPT TEST FAIL: dev-web-default must not pass --host (Vite stays on loopback)"
   failures=$((failures + 1))
@@ -442,7 +489,7 @@ expect_out "test runs the web suite" "vitest run"
 expect pass "test-go-gotestsum" mk test-go
 expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
 expect_out "test-go keeps race, shuffle and a timeout from the budget" "-race -count=1 -shuffle=on -timeout \${left}s"
-expect_out "test-go shows its one budget" "TEST_BUDGET=30m"
+expect_out "test-go shows its one budget" "TEST_BUDGET=40m"
 # 06.1-46: the modules share one budget; a module with no time left fails, it is not skipped.
 expect fail "test-go-budget-used-up" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=0m TEST_RESULTS="${scratch}/go-results"
 expect_out "test-go-budget-used-up names the budget" "test-go: the 0m budget (TEST_GO_BUDGET) was used up before ."
@@ -632,7 +679,7 @@ vite_status() {
   echo "${code}"
 }
 dev_port="${DEV_LOOP_TEST_PORT:-5198}"
-expect pass "vite-allows-public-url-host" vite_status "http://dev.example.test:${dev_port}" "dev.example.test:${dev_port}"
+expect pass "vite-allows-public-url-host" vite_status "https://dev.example.test:${dev_port}" "dev.example.test:${dev_port}"
 if [ "${LAST_OUT##*$'\n'}" != "200" ]; then
   echo "SCRIPT TEST FAIL: vite-allows-public-url-host (want 200, got: ${LAST_OUT##*$'\n'})"
   failures=$((failures + 1))

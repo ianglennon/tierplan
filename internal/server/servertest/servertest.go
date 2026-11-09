@@ -139,10 +139,9 @@ func Start(t testing.TB, o Options) *Server {
 		s.URL = "https://" + net.JoinHostPort(o.Host, strconv.Itoa(port))
 
 		s.env = map[string]string{
-			"TIERPLAN_DATA_DIR":        dataDir,
-			"TIERPLAN_LISTEN":          "0.0.0.0:" + strconv.Itoa(port),
-			"TIERPLAN_PUBLIC_URL":      s.URL,
-			"TIERPLAN_TLS_SELF_SIGNED": "true",
+			"TIERPLAN_DATA_DIR":   dataDir,
+			"TIERPLAN_LISTEN":     "0.0.0.0:" + strconv.Itoa(port),
+			"TIERPLAN_PUBLIC_URL": s.URL,
 		}
 		for k, v := range o.Env {
 			s.env[k] = v
@@ -288,7 +287,7 @@ func (s *Server) Core() *server.Server { return s.srv }
 // certificate, which names the host, so the client verifies the connection
 // normally.
 func (s *Server) trustServerCertificate() *x509.CertPool {
-	raw, err := os.ReadFile(filepath.Join(s.DataDir, "tls", "selfsigned.crt"))
+	raw, err := os.ReadFile(filepath.Join(s.DataDir, "tls", "server.crt"))
 	if err != nil {
 		s.t.Fatalf("read the server's self-signed certificate: %v", err)
 	}

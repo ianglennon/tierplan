@@ -66,6 +66,9 @@ const (
 	// A git stack's webhook secret is sealed under the stack's ID (Phase 9), so a value copied into
 	// another stack's row does not open.
 	ContextGitWebhook = "git-webhook/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// A TLS private key of the server is sealed under its certificate row's ID (Phase 13.1), so a
+	// key copied into another row does not open.
+	ContextTLSKey = "tls-key/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "tierplan/key-id/v1"

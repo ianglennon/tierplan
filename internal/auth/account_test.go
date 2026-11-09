@@ -391,7 +391,7 @@ func TestDeletingAUserDeletesTheirSessions(t *testing.T) {
 
 func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", false, auth.CookieScope{Secure: true})
+	c := f.m.Cookie("rawid", false, auth.CookieScope{})
 	if c.Name != "__Host-tierplan_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
 		t.Fatalf("https cookie = %+v", c)
 	}
@@ -401,45 +401,41 @@ func TestCookieOverHTTPSIsHostPrefixedSecureAndHTTPOnly(t *testing.T) {
 	if c.MaxAge != 0 || !c.Expires.IsZero() {
 		t.Fatalf("a browser-session cookie must carry no lifetime: MaxAge %d, Expires %v", c.MaxAge, c.Expires)
 	}
-	if auth.CookieName(auth.CookieScope{Secure: true}) != "__Host-tierplan_session" {
-		t.Fatalf("CookieName(secure) = %q", auth.CookieName(auth.CookieScope{Secure: true}))
+	if auth.CookieName(auth.CookieScope{}) != "__Host-tierplan_session" {
+		t.Fatalf("CookieName(secure) = %q", auth.CookieName(auth.CookieScope{}))
 	}
 }
 
 func TestCookieWithRememberCarriesTheRememberLifetime(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", true, auth.CookieScope{Secure: true})
+	c := f.m.Cookie("rawid", true, auth.CookieScope{})
 	if want := int(testRemember / time.Second); c.MaxAge != want {
 		t.Fatalf("MaxAge = %d, want %d", c.MaxAge, want)
 	}
 }
 
-func TestCookieOverPlainHTTPDropsThePrefixAndSecure(t *testing.T) {
+func TestCookieUnderABasePathIsSecurePrefixedAndScopedToIt(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", false, auth.CookieScope{Secure: false})
-	if c.Name != "tierplan_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" {
-		t.Fatalf("http cookie = %+v", c)
+	c := f.m.Cookie("rawid", false, auth.CookieScope{BasePath: "/tierplan"})
+	if c.Name != "__Secure-tierplan_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/tierplan" || c.Domain != "" {
+		t.Fatalf("base-path cookie = %+v", c)
 	}
-	if auth.CookieName(auth.CookieScope{Secure: false}) != "tierplan_session" {
-		t.Fatalf("CookieName(plain) = %q", auth.CookieName(auth.CookieScope{Secure: false}))
+	clear := auth.ClearCookie(auth.CookieScope{BasePath: "/tierplan"})
+	if clear.Name != "__Secure-tierplan_session" || !clear.Secure || clear.Path != "/tierplan" || clear.MaxAge != -1 {
+		t.Fatalf("base-path clear cookie = %+v", clear)
 	}
 }
 
 func TestClearCookieExpiresTheSameNameImmediately(t *testing.T) {
-	for _, secure := range []bool{true, false} {
-		c := auth.ClearCookie(auth.CookieScope{Secure: secure})
-		if c.Name != auth.CookieName(auth.CookieScope{Secure: secure}) || c.MaxAge != -1 || c.Value != "" || c.Path != "/" || !c.HttpOnly {
-			t.Errorf("ClearCookie(%v) = %+v", secure, c)
-		}
-		if c.Secure != secure {
-			t.Errorf("ClearCookie(%v).Secure = %v", secure, c.Secure)
-		}
+	c := auth.ClearCookie(auth.CookieScope{})
+	if c.Name != "__Host-tierplan_session" || c.MaxAge != -1 || c.Value != "" || c.Path != "/" || !c.HttpOnly || !c.Secure {
+		t.Errorf("ClearCookie = %+v", c)
 	}
 }
 
 func TestCookieHeaderCarriesTheHardeningAttributesAndNoDomain(t *testing.T) {
 	f := newSessionFixture(t)
-	c := f.m.Cookie("rawid", true, auth.CookieScope{Secure: true})
+	c := f.m.Cookie("rawid", true, auth.CookieScope{})
 	s := c.String()
 	for _, want := range []string{"__Host-tierplan_session=rawid", "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "Max-Age=2592000"} {
 		if !strings.Contains(s, want) {

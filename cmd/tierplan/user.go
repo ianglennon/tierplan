@@ -73,7 +73,7 @@ type hostTools struct {
 }
 
 // openHostTools opens the data directory for a host-side subcommand such as
-// `user unlock` or `https disable`; command names it in the messages it prints.
+// `user unlock`; command names it in the messages it prints.
 // The returned func closes the store.
 func openHostTools(cmd *cobra.Command, command string) (*hostTools, func(), error) {
 	cfg, err := loadConfig(cmd)

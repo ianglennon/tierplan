@@ -3,23 +3,40 @@
 #
 # Caddy in front of TierPlan. See docs/reverse-proxy.md.
 #
-# Caddy gets and renews a certificate for any site address that has no scheme,
-# sets X-Forwarded-For, X-Forwarded-Proto and Host by itself, passes WebSocket
-# upgrades through and flushes text/event-stream responses at once, so there is
-# nothing else to add. TIERPLAN_SCHEME is empty in normal use. The smoke test
-# (scripts/proxy-smoke.sh) sets it to "http://" to run this same file without a
-# certificate.
+# TierPlan serves HTTPS only, so Caddy talks HTTPS to it and checks TierPlan's
+# certificate: tls_trust_pool names the copy of TierPlan's own certificate
+# (/data/tls/server.crt in TierPlan's data volume, shared read-only with Caddy or
+# copied out), and tls_server_name is a host name that certificate carries (give
+# TierPlan the host name tierplan, or use the host of its public URL).
+#
+# Caddy gets and renews a public certificate for any site address that has no
+# scheme, sets X-Forwarded-For and X-Forwarded-Proto by itself, passes WebSocket
+# upgrades through and flushes text/event-stream responses at once. Caddy replaces
+# Host when it dials an HTTPS upstream, so header_up Host passes on the one the
+# browser sent, port included: TierPlan compares it with its public URL.
 
 # A dedicated host name (recommended). Set TIERPLAN_PUBLIC_URL=https://tierplan.example.com.
-{$TIERPLAN_SCHEME}tierplan.example.com {
-	reverse_proxy tierplan:7480
+tierplan.example.com {
+	reverse_proxy https://tierplan:7480 {
+		header_up Host {hostport}
+		transport http {
+			tls_trust_pool file /tierplan-data/tls/server.crt
+			tls_server_name tierplan
+		}
+	}
 }
 
 # A subpath on a host you share. Set TIERPLAN_PUBLIC_URL=https://example.com/tierplan.
 # handle_path removes /tierplan before the request reaches TierPlan.
-{$TIERPLAN_SCHEME}example.com {
+example.com {
 	handle_path /tierplan/* {
-		reverse_proxy tierplan:7480
+		reverse_proxy https://tierplan:7480 {
+			header_up Host {hostport}
+			transport http {
+				tls_trust_pool file /tierplan-data/tls/server.crt
+				tls_server_name tierplan
+			}
+		}
 	}
 	redir /tierplan /tierplan/ permanent
 }

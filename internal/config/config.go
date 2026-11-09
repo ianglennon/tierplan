@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"golang.org/x/net/idna"
 )
 
 // The two agent timing settings are named in the table and in the check that
@@ -79,9 +80,14 @@ type Config struct {
 	// TierPlan's own host. Optional: when it is not there the check says so.
 	HostRouteFile string
 
-	TLSCertFile   string
-	TLSKeyFile    string
-	TLSSelfSigned bool
+	TLSCertFile string
+	TLSKeyFile  string
+	// TLSSelfSigned is the value of the deprecated TIERPLAN_TLS_SELF_SIGNED (true only for a
+	// value that reads as true). TierPlan serves HTTPS with a certificate of its own without it, so it
+	// changes nothing. TLSSelfSignedSet is whether the
+	// operator set it at all, to any value, so the server can say once that it is deprecated (D-14).
+	TLSSelfSigned    bool
+	TLSSelfSignedSet bool
 
 	// DockerGID overrides the detected socket group; nil when unset (D-17).
 	DockerGID *int
@@ -103,14 +109,9 @@ type Config struct {
 	// after the swarm accepted it (D-13). A service that has not settled by then reads
 	// "Timed out"; Docker may still finish it.
 	StackConvergeTimeout time.Duration
-	// AgentAllowInsecure lets agents connect over plain ws:// to an agent address
-	// that is not this machine; for development only. Join tokens and Docker
-	// answers then travel unencrypted, and install commands for a plain address
-	// also set it on the agent. A plain address on this machine needs no switch.
 	// AgentConnectBurst is how many connection attempts one client address may
 	// make at once.
-	AgentAllowInsecure bool
-	AgentConnectBurst  int
+	AgentConnectBurst int
 
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string
@@ -224,8 +225,14 @@ var settings = []setting{
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
 	{env: "TIERPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSKeyFile = raw; return nil }},
-	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", def: "false", desc: "serve a generated self-signed certificate",
-		apply: func(c *Config, raw string) (err error) { c.TLSSelfSigned, err = strconv.ParseBool(raw); return err }},
+	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", desc: "deprecated and without effect: TierPlan always serves HTTPS with a self-signed certificate unless a certificate file is supplied; any value is accepted and logged at start",
+		apply: func(c *Config, raw string) error {
+			// A stale value must never stop startup, so one that is not a boolean reads as not true.
+			c.TLSSelfSignedSet = raw != ""
+			on, err := strconv.ParseBool(raw)
+			c.TLSSelfSigned = err == nil && on
+			return nil
+		}},
 	{env: "TIERPLAN_DOCKER_GID", flag: "docker-gid", desc: "group ID of the Docker socket, overriding detection",
 		apply: func(c *Config, raw string) error {
 			if raw == "" {
@@ -264,11 +271,6 @@ var settings = []setting{
 			if err == nil && (c.StackConvergeTimeout < minConvergeTimeout || c.StackConvergeTimeout > maxConvergeTimeout) {
 				err = fmt.Errorf("%q must be between %s and %s", raw, minConvergeTimeout, maxConvergeTimeout)
 			}
-			return err
-		}},
-	{env: "TIERPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
-		apply: func(c *Config, raw string) (err error) {
-			c.AgentAllowInsecure, err = strconv.ParseBool(raw)
 			return err
 		}},
 	{env: "TIERPLAN_AGENT_CONNECT_BURST", flag: "agent-connect-burst", def: "200", desc: "how many connection attempts one client address may make at once on the agent endpoint; sized so a whole swarm behind one NAT can reconnect together",
@@ -362,23 +364,6 @@ func resolve(s setting, flags *pflag.FlagSet, env func(string) string, readFile 
 	}
 }
 
-// EnvTLS reports whether an environment variable (or its flag) turns TLS on for the
-// whole process: the self-signed switch or a certificate file. variable names the
-// setting for a message. It is the one place that decides this, so the listener, the
-// redirect gate, the health check and `tierplan https disable` cannot disagree (D-18).
-// A lone key file counts: Validate rejects it, but nothing here may treat it as plain.
-func (c Config) EnvTLS() (variable string, ok bool) {
-	switch {
-	case c.TLSSelfSigned:
-		return "TIERPLAN_TLS_SELF_SIGNED", true
-	case c.TLSCertFile != "":
-		return "TIERPLAN_TLS_CERT_FILE", true
-	case c.TLSKeyFile != "":
-		return "TIERPLAN_TLS_KEY_FILE", true
-	}
-	return "", false
-}
-
 // crossCheck validates combinations of settings.
 func (c Config) crossCheck() error {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
@@ -386,9 +371,6 @@ func (c Config) crossCheck() error {
 			return errors.New("TIERPLAN_TLS_KEY_FILE is set without TIERPLAN_TLS_CERT_FILE; set both or neither")
 		}
 		return errors.New("TIERPLAN_TLS_CERT_FILE is set without TIERPLAN_TLS_KEY_FILE; set both or neither")
-	}
-	if c.TLSSelfSigned && c.TLSCertFile != "" {
-		return errors.New("TIERPLAN_TLS_SELF_SIGNED conflicts with TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE; use one or the other")
 	}
 	// A window shorter than two heartbeats would call an agent offline after one
 	// late or lost heartbeat.
@@ -526,42 +508,45 @@ func reservedSegment(p string) string {
 func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
 
 // AgentEndpoint is the address an agent dials for the URL it is told to use, the
-// agent URL or else the public URL: the same host and base path, https as wss and
-// http as ws, with /agent/connect on the end (D-18). It is the one place that
-// builds the address, so the install commands, the welcome and Settings agree.
+// agent URL or else the public URL: the same host and base path, https as wss,
+// with /agent/connect on the end (D-18). Agents dial wss only (D-07), so any other
+// scheme, http included, is an error. It is the one place that builds the address,
+// so the install commands, the welcome and Settings agree.
 func AgentEndpoint(baseURL string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return "", fmt.Errorf("parse the URL: %w", err)
 	}
-	var scheme string
-	switch strings.ToLower(u.Scheme) {
-	case "https":
-		scheme = "wss"
-	case "http":
-		scheme = "ws"
-	default:
-		return "", fmt.Errorf("the URL %q is not http or https", baseURL)
+	if strings.ToLower(u.Scheme) != "https" {
+		return "", fmt.Errorf("the URL %q is not https: agents dial wss only", baseURL)
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("the URL %q has no host", baseURL)
 	}
-	out := url.URL{Scheme: scheme, Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
+	out := url.URL{Scheme: "wss", Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
 	return out.String(), nil
 }
 
-// normalisePublicURL accepts an absolute http or https URL and returns its
-// origin plus an optional path with no trailing slash. Empty stays empty.
+// ErrHTTPSOnly is the fixed reason an http public or agent URL is refused. It
+// carries no part of the submitted value, so an API answer may repeat it.
+var ErrHTTPSOnly = errors.New("must start with https://: TierPlan serves HTTPS only")
+
+// normalisePublicURL accepts an absolute https URL and returns its origin plus
+// an optional path with no trailing slash. TierPlan serves HTTPS only, so an
+// http URL is refused with the reason. Empty stays empty.
 func normalisePublicURL(raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("must be an absolute http or https URL: %w", err)
+		return "", fmt.Errorf("must be an absolute https URL: %w", err)
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", errors.New("must be an absolute http or https URL, for example https://tierplan.example.com")
+	if u.Scheme == "http" && u.Host != "" {
+		return "", ErrHTTPSOnly
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return "", errors.New("must be an absolute https URL, for example https://tierplan.example.com")
 	}
 	if u.User != nil {
 		return "", errors.New("must not contain a user name or password")
@@ -572,6 +557,41 @@ func normalisePublicURL(raw string) (string, error) {
 	if seg := reservedSegment(u.Path); seg != "" {
 		return "", fmt.Errorf("must not start with /%s, which TierPlan serves itself", seg)
 	}
+	host, err := asciiHost(u)
+	if err != nil {
+		return "", err
+	}
 	path := strings.TrimRight(u.EscapedPath(), "/")
-	return u.Scheme + "://" + strings.ToLower(u.Host) + path, nil
+	return u.Scheme + "://" + host + path, nil
 }
+
+// asciiHost is the host (and port) of u in lower case with a non-ASCII name converted to its
+// punycode form, so the stored URL, the origin check and the certificate all name the host the
+// same way, and a name that cannot be written in ASCII is refused here, not at certificate
+// signing. The profile does not apply the STD3 rules, so an underscore stays valid as before.
+func asciiHost(u *url.URL) (string, error) {
+	host := strings.ToLower(u.Host)
+	ascii := true
+	for i := 0; i < len(host); i++ {
+		if host[i] >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return host, nil
+	}
+	name, err := hostProfile.ToASCII(u.Hostname())
+	if err != nil || name == "" {
+		return "", errors.New("the host name is not a valid internationalised domain name")
+	}
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port := u.Port(); port != "" {
+		name += ":" + port
+	}
+	return strings.ToLower(name), nil
+}
+
+var hostProfile = idna.New(idna.MapForLookup(), idna.StrictDomainName(false))

@@ -574,6 +574,14 @@ type TeamMember struct {
 	CreatedAt int64
 }
 
+type TlsCert struct {
+	ID        string
+	CertPem   string
+	KeySealed string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
 type User struct {
 	ID                string
 	Username          string

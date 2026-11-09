@@ -262,8 +262,8 @@ func maintScript(t *testing.T) func(int, wire.Auth) reply {
 
 func TestOnASessionThatWasNotVerifiedAnUpdateAndAnUninstallAreRefusedAndNothingIsRunning(t *testing.T) {
 	svc := &stubMaint{}
-	a := newFakeServer(t, maintScript(t)) // plain ws://: the server was never verified
-	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: t.TempDir(), Maint: svc}, fastEnv())
+	a := newFakeServer(t, maintScript(t)) // reached through a client that reports no TLS state: never verified
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: t.TempDir(), Maint: svc, HTTPClient: unverifiedClient()}, fastEnv())
 
 	got := map[string]wire.UpdateResult{}
 	for range 2 {
@@ -306,7 +306,7 @@ func TestOnAVerifiedSessionAnUpdateAndAnUninstallRunAsTheyAlwaysDid(t *testing.T
 
 func TestAnUnverifiedSessionRefusesEvenWithoutSelfMaintenanceAndKeepsHeartbeating(t *testing.T) {
 	a := newFakeServer(t, maintScript(t))
-	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: t.TempDir()}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: t.TempDir(), HTTPClient: unverifiedClient()}, fastEnv())
 	for range 2 {
 		if res := nextResult(t, a); res.OK || res.Error != insecureSessionCode {
 			t.Fatalf("result = %+v, want insecure_session", res)

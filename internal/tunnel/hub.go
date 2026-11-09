@@ -341,16 +341,14 @@ type Hub struct {
 	muxKeepAlive    time.Duration
 	muxWriteTimeout time.Duration
 
-	// allowInsecure lets plain ws:// in. connect is the per-address budget of
-	// connection attempts, handshakes the semaphore of handshakes in flight and
+	// connect is the per-address budget of connection attempts, handshakes the semaphore of handshakes in flight and
 	// perAddr how many of those each client address holds (T-02-24).
 	// refusals records refused attempts, onUpgradeFailure hears of requests that
 	// were not an upgrade and maxResponse caps one Docker answer. All are set
 	// before the hub serves and read-only after.
-	allowInsecure bool
-	connect       *auth.IPLimiter
-	handshakes    chan struct{}
-	perAddr       *addrInflight
+	connect    *auth.IPLimiter
+	handshakes chan struct{}
+	perAddr    *addrInflight
 	// warnLimit lets one log line per address per minute through, for what is
 	// logged before a request is admitted (IN-B-02).
 	warnLimit        *auth.IPLimiter

@@ -54,6 +54,11 @@ var Tables = map[string]Class{
 	"agents":       Included,
 	"agent_blocks": Included,
 
+	// The server's own TLS certificates (Phase 13.1): the key is sealed under the row's ID and
+	// registered in vault.SealedColumns, so RewrapAll moves it on export and restore. That is what
+	// keeps the agent pin (the key's hash) across a restore.
+	"tls_certs": Included,
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key

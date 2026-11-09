@@ -24,11 +24,13 @@ To check a package yourself:
 
 ```sh
 # 20 shuffled race runs with every CPU busy beside the test
-scripts/with-load.sh auto -- go test ./internal/<pkg> -race -count=20 -shuffle=on -timeout 3h
+scripts/with-load.sh auto -- go test ./internal/<pkg> -race -count=20 -shuffle=on -timeout 6h
 
 # the same bar for one share of the whole suite (api, core, rest or agent-web)
 make test-stress STRESS_SHARD=api
 ```
+
+The `-timeout` covers the whole run, not one iteration, so it has to fit the slowest package. `internal/server` is that package: with a busy loop on every CPU one iteration takes 11 to 12 minutes, and the 20 took 3.9 hours (14002 s, measured on 2026-11-09). A `-timeout 3h` kills that run at 3h0m0s with no failing test. Six hours leaves room for a slower machine.
 
 `scripts/with-load.sh N -- command` starts N CPU busy loops (`auto` is one per CPU) and stops them when the command ends. The command runs in its own session and a signal reaches its whole process group, so the test binaries `go test` compiled and anything they started end with it. `make test-stress` runs the stability bar for one shard (see "Stress runs"); a shard takes hours, so run it on a machine you can leave alone.
 
@@ -84,6 +86,17 @@ The marker needs a reason; an empty one fails. A good reason says why the window
 What the gate cannot see is a short duration held somewhere else and used as a deadline later: a `within` parameter, a `timeout` variable, `Timeout: timeout`. The value is not on the line that uses it, and a rule that guessed would flag half the helpers in the tree. Keep those out by passing `testsupport.Deadline` (or nothing) from the caller, and mark the one place that must take a duration (the helper's own `context.WithTimeout(ctx, d)` line is checked, so it carries a marker saying the callers pass a long one). Review catches the rest.
 
 When a flake turns out to be a real race or ordering bug in the product, fix the product code and add a regression test that fails every time without the fix. A test-only workaround that hides a product race is not acceptable.
+
+## Tests run over verified TLS
+
+TierPlan serves HTTPS only, so no suite talks plain HTTP to it, and none turns certificate verification off:
+
+- **The dev loop.** `make dev` serves the Go server and the Vite dev server over https. Vite's proxy verifies the Go server's own certificate (the mirror at `<data>/tls/server.crt`) as its only trust anchor. `make dev-tls-check` proves this with a client that verifies: the API answers through the proxy, a different certificate is refused, and there is no plain dev UI.
+- **End to end.** `make e2e` runs Playwright through Caddy with both hops verified. Chromium trusts the harness proxy's certificate by SPKI pin only, and Caddy verifies TierPlan's own certificate. The agent golden path carries both TierPlan's pin and the proxy's pin in one `TIERPLAN_AGENT_PIN` list.
+- **Docker smokes.** The smoke, image, upgrade, restore and proxy scripts call TierPlan (or the proxy in front of it) with `curl --cacert`, trusting the certificate the server presents, which TierPlan also writes to `/data/tls/server.crt`.
+- **Go suites.** A test server uses the same certificate source as production, and the test client trusts only that server's `server.crt`. A plain connection is closed with no answer, and the tests assert that.
+
+**The insecure-TLS gate.** `scripts/insecure-tls-check.sh` (part of `make lint`) fails on any switch that turns verification off. In Go the one reviewed file allowed to name Go's skip-verification setting is `agent/internal/connect/tls.go`, where it is replaced by a check. The gate also scans `e2e/`, `scripts/` and `docs/proxy/`, and the Vite configs (`web/vite*.ts`), for the Playwright, Node, Caddy, Traefik, nginx and curl spellings of "do not verify". A new test helper trusts a pinned certificate or a generated CA instead.
 
 ## The swarm suite
 

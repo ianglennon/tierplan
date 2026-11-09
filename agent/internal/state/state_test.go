@@ -627,37 +627,31 @@ func TestStartURLsCapsTheListAtMaxURLs(t *testing.T) {
 	}
 }
 
-func TestDialableURLAllowsPlainWSOnlyToLoopbackOrWithTheSwitch(t *testing.T) {
+func TestDialableURLAllowsOnlyWSS(t *testing.T) {
 	for _, tc := range []struct {
-		url              string
-		without, withSwi bool
+		url  string
+		want bool
 	}{
-		{"wss://tierplan.example/agent/connect", true, true},
-		{"ws://tierplan.example/agent/connect", false, true},
-		{"ws://127.0.0.1:7480/agent/connect", true, true},
-		{"ws://127.1.2.3/agent/connect", true, true},
-		{"ws://[::1]:7480/agent/connect", true, true},
-		{"ws://[::ffff:127.0.0.1]/agent/connect", true, true},
-		{"ws://localhost:7480/agent/connect", true, true},
-		{"ws://LOCALHOST/agent/connect", true, true},
-		{"ws://192.168.1.10/agent/connect", false, true},
-		{"ws://[2001:db8::1]/agent/connect", false, true},
-		{"ws://[::ffff:192.168.1.10]/agent/connect", false, true},
-		{"ws://localhost.example/agent/connect", false, true},
-		{"ws://127.0.0.1.example/agent/connect", false, true},
-		// ValidURL refuses these, with or without the switch.
-		{"wss://user:pw@tierplan.example/agent/connect", false, false},
-		{"ws://user@127.0.0.1/agent/connect", false, false},
-		{"wss://tierplan.example/agent/connect?x=1", false, false},
-		{"wss://tierplan.example/agent/connect#f", false, false},
-		{"https://tierplan.example/agent/connect", false, false},
-		{"", false, false},
+		{"wss://tierplan.example/agent/connect", true},
+		{"wss://127.0.0.1:7480/agent/connect", true},
+		{"ws://tierplan.example/agent/connect", false},
+		{"ws://127.0.0.1:7480/agent/connect", false},
+		{"ws://127.1.2.3/agent/connect", false},
+		{"ws://[::1]:7480/agent/connect", false},
+		{"ws://[::ffff:127.0.0.1]/agent/connect", false},
+		{"ws://localhost:7480/agent/connect", false},
+		{"ws://LOCALHOST/agent/connect", false},
+		{"ws://192.168.1.10/agent/connect", false},
+		// ValidURL refuses these.
+		{"wss://user:pw@tierplan.example/agent/connect", false},
+		{"ws://user@127.0.0.1/agent/connect", false},
+		{"wss://tierplan.example/agent/connect?x=1", false},
+		{"wss://tierplan.example/agent/connect#f", false},
+		{"https://tierplan.example/agent/connect", false},
+		{"", false},
 	} {
-		if got := DialableURL(tc.url, false); got != tc.without {
-			t.Errorf("DialableURL(%q, false) = %v, want %v", tc.url, got, tc.without)
-		}
-		if got := DialableURL(tc.url, true); got != tc.withSwi {
-			t.Errorf("DialableURL(%q, true) = %v, want %v", tc.url, got, tc.withSwi)
+		if got := DialableURL(tc.url); got != tc.want {
+			t.Errorf("DialableURL(%q) = %v, want %v", tc.url, got, tc.want)
 		}
 	}
 }

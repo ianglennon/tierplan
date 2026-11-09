@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"io"
 	"net"
 	"slices"
@@ -90,10 +89,10 @@ func echo(t *testing.T, c *tls.Conn) {
 	}
 }
 
-func TestHTTPSRuntimeIsNotLiveUntilInstalled(t *testing.T) {
+func TestHTTPSRuntimeHasNoKindUntilInstalled(t *testing.T) {
 	rt := newHTTPSRuntime()
-	if rt.Live() || rt.Kind() != tlsKindNone || rt.ServerConfig() != nil {
-		t.Errorf("a new runtime: Live %v, Kind %v, ServerConfig %v; want not live, none and nil", rt.Live(), rt.Kind(), rt.ServerConfig())
+	if rt.Kind() != 0 || rt.ServerConfig() == nil || rt.ServerConfig() != rt.Config() {
+		t.Errorf("a new runtime: Kind %v, ServerConfig %v; want no kind and the stable config", rt.Kind(), rt.ServerConfig())
 	}
 	cfg := rt.Config()
 	if cfg == nil {
@@ -105,17 +104,11 @@ func TestHTTPSRuntimeIsNotLiveUntilInstalled(t *testing.T) {
 	if len(cfg.Certificates) != 0 {
 		t.Errorf("Certificates holds %d entries; it must stay empty so GetCertificate always answers", len(cfg.Certificates))
 	}
-	if cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); !errors.Is(err, errTLSNotLive) || cert != nil {
-		t.Errorf("GetCertificate = %v, %v; want errTLSNotLive", cert, err)
+	if cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil || cert != nil {
+		t.Errorf("GetCertificate = %v, %v; want an error and no certificate before an install", cert, err)
 	}
 	if rt.Pins() != nil || rt.Pin() != "" || rt.HSTSAllowed() {
 		t.Errorf("Pins %v, Pin %q, HSTSAllowed %v; want none, empty and false", rt.Pins(), rt.Pin(), rt.HSTSAllowed())
-	}
-	// A nil source, or the none kind, installs nothing.
-	rt.Install(tlsKindSupplied, nil)
-	rt.Install(tlsKindNone, getter(tls.Certificate{}))
-	if rt.Live() {
-		t.Error("Install with no source made the runtime live")
 	}
 }
 
@@ -143,33 +136,10 @@ func TestHTTPSRuntimeSwapReachesOnlyNewHandshakes(t *testing.T) {
 	}
 }
 
-func TestHTTPSRuntimeRemoveFailsAPendingHandshakeWithoutAPanic(t *testing.T) {
-	cert, leaf := genCert(t, "a.example.com")
-	rt := newHTTPSRuntime()
-	rt.Install(tlsKindSupplied, getter(cert))
-	captured := rt.ServerConfig()
-	rt.Remove()
-
-	client, server := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
-	handshook := make(chan error, 1)
-	go func() { handshook <- tls.Server(server, captured).Handshake() }()
-
-	roots := x509.NewCertPool()
-	roots.AddCert(leaf)
-	if err := tls.Client(client, &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}).Handshake(); err == nil {
-		t.Error("the client completed a handshake with a server that has no TLS")
-	}
-	err := testsupport.Await(t, "the server handshake to end", handshook)
-	if !errors.Is(err, errTLSNotLive) && (err == nil || !strings.Contains(err.Error(), errTLSNotLive.Error())) {
-		t.Errorf("server handshake error = %v, want one that names errTLSNotLive", err)
-	}
-}
-
 func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	rt := newHTTPSRuntime()
 
-	src, _, err := newCertSource(selfSignedConfig(t), "", "", nowFn(fixedNow))
+	src, _, err := newCertSource(context.Background(), selfSignedConfig(t), newMemCertStore(), nil, nil, nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,11 +166,6 @@ func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	}
 	if !rt.HSTSAllowed() {
 		t.Error("HSTS is not allowed over a supplied certificate")
-	}
-
-	rt.Remove()
-	if rt.Pins() != nil || rt.HSTSAllowed() || rt.Live() || rt.Kind() != tlsKindNone {
-		t.Errorf("after Remove: Pins %v, HSTSAllowed %v, Live %v, Kind %v; want none, false, false, none", rt.Pins(), rt.HSTSAllowed(), rt.Live(), rt.Kind())
 	}
 }
 

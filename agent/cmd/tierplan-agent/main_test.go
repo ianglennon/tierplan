@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"github.com/ianglennon/tierplan/agent/internal/privdrop"
 	"github.com/ianglennon/tierplan/agent/internal/selfmaint"
 	"github.com/ianglennon/tierplan/agent/internal/version"
+	"github.com/ianglennon/tierplan/proto/authn"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
 
@@ -358,40 +358,58 @@ func TestThePolicyFlagsReachTheConnection(t *testing.T) {
 	}
 }
 
-func TestTheAllowInsecureSwitchReachesTheConnection(t *testing.T) {
-	for _, tc := range []struct {
-		value string
-		want  bool
-	}{{"true", true}, {"", false}, {"false", false}} {
-		h := &harness{}
-		d := h.deps(map[string]string{
-			"TIERPLAN_AGENT_URL":            "ws://tierplan.example/agent/connect",
-			"TIERPLAN_AGENT_JOIN_TOKEN":     secret,
-			"TIERPLAN_AGENT_ALLOW_INSECURE": tc.value,
-		}, nil)
-		code := run(d)
-		if tc.want {
-			if code != 0 {
-				t.Fatalf("switch %q: exit %d, stderr: %s", tc.value, code, h.stderr.String())
+// removedSwitch is the variable the agent no longer reads, spelled in two halves
+// so the repository-wide gates for the removed switch stay exact.
+const removedSwitch = "TIERPLAN_AGENT_" + "ALLOW_INSECURE"
+
+func TestAPlainWSAddressStopsTheAgentBeforeAnythingElse(t *testing.T) {
+	for _, u := range []string{
+		"ws://tierplan.example/agent/connect",
+		"ws://127.0.0.1:7480/agent/connect",
+		"ws://localhost/agent/connect",
+	} {
+		// Setting the removed switch does not open the door either.
+		for _, extra := range []string{"", "true"} {
+			h := &harness{}
+			d := h.deps(map[string]string{
+				"TIERPLAN_AGENT_URL":        u,
+				"TIERPLAN_AGENT_JOIN_TOKEN": secret,
+				removedSwitch:               extra,
+			}, nil)
+			code := run(d)
+			if code != 2 || len(h.events) != 0 {
+				t.Errorf("URL %q switch %q: exit %d, events %v; want exit 2 and no effect at all", u, extra, code, h.events)
 			}
-			if !h.gotConn.AllowInsecure {
-				t.Errorf("switch %q: connect got AllowInsecure false, want true", tc.value)
+			if !strings.Contains(h.stderr.String(), "TIERPLAN_AGENT_URL must start with wss://") {
+				t.Errorf("URL %q: stderr does not say the agent needs wss://: %s", u, h.stderr.String())
 			}
-			if !strings.Contains(h.stderr.String(), "allow_insecure=true") {
-				t.Errorf("switch %q: the start line does not carry allow_insecure=true: %s", tc.value, h.stderr.String())
+			if strings.Contains(h.stderr.String(), secret) {
+				t.Fatalf("the token reached the output: %s", h.stderr.String())
 			}
-			continue
-		}
-		// Without the switch the same address never reaches the connection.
-		if code != 2 || h.gotConn.AllowInsecure || slices.Contains(h.events, "connect") {
-			t.Errorf("switch %q: exit %d, events %v; want exit 2 and no connect", tc.value, code, h.events)
 		}
 	}
-	// With an allowed (wss) URL and no switch, AllowInsecure is false and the line says so.
-	h := &harness{}
-	d := h.deps(map[string]string{"TIERPLAN_AGENT_URL": "wss://tierplan.example/agent/connect", "TIERPLAN_AGENT_JOIN_TOKEN": secret}, nil)
-	if code := run(d); code != 0 || h.gotConn.AllowInsecure || !strings.Contains(h.stderr.String(), "allow_insecure=false") {
-		t.Errorf("wss without the switch: exit %d, AllowInsecure %v, stderr %s", code, h.gotConn.AllowInsecure, h.stderr.String())
+}
+
+func TestAStaleAllowInsecureVariableWarnsOnceAndTheAgentStarts(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		warns int
+	}{{"true", 1}, {"false", 1}, {"", 0}} {
+		h := &harness{}
+		d := h.deps(map[string]string{
+			"TIERPLAN_AGENT_URL":        "wss://tierplan.example/agent/connect",
+			"TIERPLAN_AGENT_JOIN_TOKEN": secret,
+			removedSwitch:               tc.value,
+		}, nil)
+		if code := run(d); code != 0 || !slices.Contains(h.events, "connect") {
+			t.Fatalf("switch %q: exit %d, events %v, stderr: %s; want a normal start", tc.value, code, h.events, h.stderr.String())
+		}
+		if n := strings.Count(h.stderr.String(), removedSwitch+" was removed and has no effect"); n != tc.warns {
+			t.Errorf("switch %q: %d removed-variable warnings, want %d: %s", tc.value, n, tc.warns, h.stderr.String())
+		}
+		if strings.Contains(h.stderr.String(), "allow_insecure") {
+			t.Errorf("switch %q: the start line still carries allow_insecure: %s", tc.value, h.stderr.String())
+		}
 	}
 }
 
@@ -571,41 +589,17 @@ func TestTheRemoveVolumeHelperExitCodes(t *testing.T) {
 	}
 }
 
-// nonLoopbackIPv4 is an IPv4 address of an up interface of this machine that is
-// neither loopback nor link-local, or "" when there is none.
-func nonLoopbackIPv4(t *testing.T) string {
-	t.Helper()
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, a := range addrs {
-		ipn, ok := a.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		ip := ipn.IP.To4()
-		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-			continue
-		}
-		return ip.String()
-	}
-	return ""
-}
-
 // refusingServer answers every upgrade with the agent subprotocol and a refusal of
-// the join token, and counts the upgrades. It listens on host.
+// the join token, and counts the upgrades. It serves TLS with a certificate the
+// test lets the agent trust through the pin variable, or plain HTTP so a test can
+// show that the agent never dials it.
 type refusingServer struct {
 	ts       *httptest.Server
 	upgrades atomic.Int32
 }
 
-func newRefusingServer(t *testing.T, host string) *refusingServer {
+func newRefusingServer(t *testing.T, tlsServer bool) *refusingServer {
 	t.Helper()
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	s := &refusingServer{}
 	s.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.upgrades.Add(1)
@@ -618,31 +612,33 @@ func newRefusingServer(t *testing.T, host string) *refusingServer {
 		_ = c.Write(r.Context(), websocket.MessageText, b)
 		_ = c.Close(websocket.StatusPolicyViolation, wire.ReasonAuthRejected)
 	}))
-	s.ts.Listener = ln
-	s.ts.Start()
+	if tlsServer {
+		s.ts.StartTLS()
+	} else {
+		s.ts.Start()
+	}
 	t.Cleanup(s.ts.Close)
 	return s
 }
 
+// url is the agent address of the server: wss:// for a TLS server, ws:// for a plain one.
 func (s *refusingServer) url() string {
 	return "ws" + strings.TrimPrefix(s.ts.URL, "http") + "/agent/connect"
 }
 
-// TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch starts the agent through
-// run with the real configuration and the real connection code. A plain ws://
-// TIERPLAN_AGENT_URL for a host that is not loopback sends the join token and the
-// proof to a peer the agent never authenticated, so the agent refuses it, before
-// dropping privileges and without a dial, unless TIERPLAN_AGENT_ALLOW_INSECURE=true
-// is set on the agent itself; loopback needs no switch (T-02-31, WR-A05).
-func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
+// TestTheAgentStartsOverTLSAndNeverDialsAPlainServer starts the agent through run
+// with the real configuration and the real connection code. A TLS server whose
+// certificate the agent trusts through TIERPLAN_AGENT_PIN is dialed; a plain
+// ws:// address, loopback included, stops the agent before it drops privileges and
+// without a dial (D-09, T-02-31).
+func TestTheAgentStartsOverTLSAndNeverDialsAPlainServer(t *testing.T) {
 	start := func(t *testing.T, raw string, extra map[string]string) (*harness, int) {
 		t.Helper()
-		sockDir := t.TempDir()
 		env := map[string]string{
 			"TIERPLAN_AGENT_URL":        raw,
 			"TIERPLAN_AGENT_JOIN_TOKEN": secret,
 			"TIERPLAN_AGENT_STATE_DIR":  t.TempDir(),
-			"TIERPLAN_AGENT_SOCKET":     filepath.Join(sockDir, "missing.sock"),
+			"TIERPLAN_AGENT_SOCKET":     filepath.Join(t.TempDir(), "missing.sock"),
 		}
 		for k, v := range extra {
 			env[k] = v
@@ -653,20 +649,14 @@ func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
 		return h, run(d)
 	}
 
-	t.Run("without the switch the agent refuses to start and never dials", func(t *testing.T) {
-		ip := nonLoopbackIPv4(t)
-		if ip == "" {
-			t.Skip("this machine has no non-loopback IPv4 address")
-		}
-		srv := newRefusingServer(t, ip)
+	t.Run("a plain ws:// server is never dialed", func(t *testing.T) {
+		srv := newRefusingServer(t, false)
 		h, code := start(t, srv.url(), nil)
 		if code != 2 {
 			t.Fatalf("exit %d, want 2; stderr: %s", code, h.stderr.String())
 		}
-		for _, want := range []string{"TIERPLAN_AGENT_ALLOW_INSECURE", "wss://"} {
-			if !strings.Contains(h.stderr.String(), want) {
-				t.Errorf("stderr does not mention %s: %s", want, h.stderr.String())
-			}
+		if !strings.Contains(h.stderr.String(), "wss://") {
+			t.Errorf("stderr does not mention wss://: %s", h.stderr.String())
 		}
 		if n := srv.upgrades.Load(); n != 0 {
 			t.Errorf("the server saw %d upgrades, want none", n)
@@ -679,35 +669,17 @@ func TestAnAgentDialsPlainWSToAnotherHostOnlyWithTheSwitch(t *testing.T) {
 		}
 	})
 
-	t.Run("with the switch the agent dials and warns", func(t *testing.T) {
-		ip := nonLoopbackIPv4(t)
-		if ip == "" {
-			t.Skip("this machine has no non-loopback IPv4 address")
-		}
-		srv := newRefusingServer(t, ip)
-		h, code := start(t, srv.url(), map[string]string{"TIERPLAN_AGENT_ALLOW_INSECURE": "true"})
+	t.Run("a TLS server whose certificate is pinned is dialed", func(t *testing.T) {
+		srv := newRefusingServer(t, true)
+		h, code := start(t, srv.url(), map[string]string{"TIERPLAN_AGENT_PIN": authn.SPKIPin(srv.ts.Certificate())})
 		if code != 1 {
 			t.Fatalf("exit %d, want 1 (the server refused the first enrolment); stderr: %s", code, h.stderr.String())
 		}
 		if n := srv.upgrades.Load(); n != 1 {
 			t.Errorf("the server saw %d upgrades, want 1", n)
 		}
-		if !strings.Contains(h.stderr.String(), "plain ws://") {
-			t.Errorf("stderr has no plain ws:// warning: %s", h.stderr.String())
-		}
-		if strings.Contains(h.stderr.String(), secret) {
-			t.Fatalf("the token reached the output: %s", h.stderr.String())
-		}
-	})
-
-	t.Run("loopback needs no switch", func(t *testing.T) {
-		srv := newRefusingServer(t, "127.0.0.1")
-		h, code := start(t, srv.url(), nil)
-		if code != 1 {
-			t.Fatalf("exit %d, want 1; stderr: %s", code, h.stderr.String())
-		}
-		if n := srv.upgrades.Load(); n != 1 {
-			t.Errorf("the server saw %d upgrades, want 1", n)
+		if strings.Contains(h.stderr.String(), "plain ws://") {
+			t.Errorf("stderr mentions a plain connection: %s", h.stderr.String())
 		}
 		if strings.Contains(h.stderr.String(), secret) {
 			t.Fatalf("the token reached the output: %s", h.stderr.String())

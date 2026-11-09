@@ -426,16 +426,16 @@ func TestStoredPinsLetARestartedAgentConnectWithoutTheInstallPin(t *testing.T) {
 	}
 }
 
-func TestPinsFromAPlainSessionAreNeverStored(t *testing.T) {
+func TestPinsFromAnUnverifiedSessionAreNeverStored(t *testing.T) {
 	f := newFakeServer(t, func(int, wire.Auth) reply {
 		return reply{pins: []string{"sha256/" + strings.Repeat("Z", 43) + "="}}
 	})
 	dir := t.TempDir()
-	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", StateDir: dir, HTTPClient: unverifiedClient()}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 2) // the welcome was handled, and its pins ignored, before the first heartbeat
 	if _, err := os.Stat(filepath.Join(dir, state.PinsFile)); err == nil {
-		t.Fatal("pins from an unverified plain ws:// session were stored")
+		t.Fatal("pins from an unverified session were stored")
 	}
 }
 

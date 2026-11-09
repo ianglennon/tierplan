@@ -31,7 +31,6 @@ base.beforeAll(async ({ browser }) => {
   // test to the next.
   const context = await browser.newContext({
     baseURL: ORIGIN,
-    ignoreHTTPSErrors: true,
     locale: "en-GB",
   });
   page = await context.newPage();

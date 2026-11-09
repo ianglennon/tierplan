@@ -104,9 +104,10 @@ const (
 	UpdateErrFailed = "update_failed"
 	// UpdateErrNotImplemented means this agent does not implement the request.
 	UpdateErrNotImplemented = "not_implemented"
-	// UpdateErrInsecureSession means the agent's session is not TLS-verified (plain
-	// ws:// under TIERPLAN_AGENT_ALLOW_INSECURE), so it refused to update or uninstall
-	// itself on the word of a server it could not verify. It made no Docker call.
+	// UpdateErrInsecureSession means the agent's session is not TLS-verified, so it
+	// refused to update or uninstall itself on the word of a server it could not
+	// verify. It made no Docker call. Older agents could reach such a session over
+	// plain ws://; the constant stays because they still send it.
 	UpdateErrInsecureSession = "insecure_session"
 )
 

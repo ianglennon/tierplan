@@ -56,7 +56,7 @@ func TestDefaults(t *testing.T) {
 	if c.SessionIdleTimeout != 12*time.Hour || c.SessionRememberLifetime != 720*time.Hour {
 		t.Errorf("session defaults = %v/%v", c.SessionIdleTimeout, c.SessionRememberLifetime)
 	}
-	if c.AuditRetentionDays != 365 || c.SkipPreMigrateBackup || c.TLSSelfSigned {
+	if c.AuditRetentionDays != 365 || c.SkipPreMigrateBackup || c.TLSSelfSigned || c.TLSSelfSignedSet {
 		t.Errorf("audit/backup/tls defaults wrong: %+v", c)
 	}
 	if c.DockerGID != nil {
@@ -155,10 +155,8 @@ func TestPublicURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://tierplan.example.com/":       "https://tierplan.example.com",
 		"HTTPS://TierPlan.Example.com":        "https://tierplan.example.com",
-		"http://localhost:5173":               "http://localhost:5173",
 		"https://example.com/tierplan/":       "https://example.com/tierplan",
 		"https://example.com/sub/path":        "https://example.com/sub/path",
-		"http://192.168.1.10:7480":            "http://192.168.1.10:7480",
 		"https://tierplan.example.com:443///": "https://tierplan.example.com:443",
 	} {
 		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
@@ -174,6 +172,30 @@ func TestPublicURL(t *testing.T) {
 		if _, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": bad}, files{}); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}
+	}
+}
+
+func TestAnHTTPURLIsRefusedForBothVariablesAndEmptyStarts(t *testing.T) {
+	for _, name := range []string{"TIERPLAN_PUBLIC_URL", "TIERPLAN_AGENT_URL"} {
+		for _, in := range []string{"http://tierplan.test", "HTTP://X", "http://localhost:5173"} {
+			_, err := load(t, nil, envMap{name: in}, files{})
+			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "serves HTTPS only") {
+				t.Errorf("%s=%q: error = %v, want one naming the variable and saying TierPlan serves HTTPS only", name, in, err)
+			}
+		}
+		c, err := load(t, nil, envMap{name: "HTTPS://Tierplan.Example"}, files{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := c.PublicURL + c.AgentURL; got != "https://tierplan.example" {
+			t.Errorf("%s stored %q, want https://tierplan.example", name, got)
+		}
+		if _, err := load(t, nil, envMap{name: ""}, files{}); err != nil {
+			t.Errorf("%s empty: %v", name, err)
+		}
+	}
+	if _, err := config.NormalisePublicURL("http://x.example"); err == nil {
+		t.Error("NormalisePublicURL accepted an http URL")
 	}
 }
 
@@ -242,7 +264,6 @@ func TestInvalidValuesNameTheEnvVar(t *testing.T) {
 		"TIERPLAN_SESSION_REMEMBER_LIFETIME": "0s",
 		"TIERPLAN_AUDIT_RETENTION_DAYS":      "-3",
 		"TIERPLAN_SKIP_PRE_MIGRATE_BACKUP":   "maybe",
-		"TIERPLAN_TLS_SELF_SIGNED":           "perhaps",
 		"TIERPLAN_DOCKER_GID":                "abc",
 		"TIERPLAN_LOG_LEVEL":                 "loud",
 	} {
@@ -253,6 +274,21 @@ func TestInvalidValuesNameTheEnvVar(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), env) {
 			t.Errorf("error %q does not name %s", err, env)
+		}
+	}
+}
+
+func TestTLSSelfSignedIsAcceptedWhateverItsValue(t *testing.T) {
+	// It is deprecated and has no effect, so a stale value never stops startup (D-14); only the
+	// operator having set it is reported.
+	for value, wantOn := range map[string]bool{"true": true, "false": false, "perhaps": false, "1": true} {
+		c, err := load(t, nil, envMap{"TIERPLAN_TLS_SELF_SIGNED": value}, files{})
+		if err != nil {
+			t.Errorf("TIERPLAN_TLS_SELF_SIGNED=%q was rejected: %v", value, err)
+			continue
+		}
+		if !c.TLSSelfSignedSet || c.TLSSelfSigned != wantOn {
+			t.Errorf("TIERPLAN_TLS_SELF_SIGNED=%q gave Set=%v Self=%v, want Set=true Self=%v", value, c.TLSSelfSignedSet, c.TLSSelfSigned, wantOn)
 		}
 	}
 }
@@ -284,13 +320,16 @@ func TestTLSSettingsMustBeConsistent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_KEY_FILE") {
 		t.Errorf("cert without key error = %v", err)
 	}
-	_, err = load(t, nil, envMap{
+	// Cert files win over the deprecated switch: both set is accepted (D-14).
+	c, err := load(t, nil, envMap{
 		"TIERPLAN_TLS_CERT_FILE":   "/c.pem",
 		"TIERPLAN_TLS_KEY_FILE":    "/k.pem",
 		"TIERPLAN_TLS_SELF_SIGNED": "true",
 	}, files{})
-	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_TLS_SELF_SIGNED") {
-		t.Errorf("cert plus self-signed error = %v", err)
+	if err != nil {
+		t.Errorf("cert files plus the deprecated switch were rejected: %v", err)
+	} else if c.TLSCertFile != "/c.pem" || c.TLSKeyFile != "/k.pem" || !c.TLSSelfSignedSet {
+		t.Errorf("cert files plus the deprecated switch loaded as %+v", c)
 	}
 }
 
@@ -390,36 +429,54 @@ func TestTheOfflineWindowMustBeAtLeastTwiceTheHeartbeatInterval(t *testing.T) {
 
 func TestNamesListsTheAgentEndpointSettings(t *testing.T) {
 	names := strings.Join(config.Names(), " ")
-	for _, want := range []string{"TIERPLAN_AGENT_ALLOW_INSECURE", "TIERPLAN_AGENT_CONNECT_BURST"} {
-		if !strings.Contains(names, want) {
-			t.Errorf("Names() does not list %s", want)
-		}
+	if !strings.Contains(names, "TIERPLAN_AGENT_CONNECT_BURST") {
+		t.Errorf("Names() does not list TIERPLAN_AGENT_CONNECT_BURST")
+	}
+	if strings.Contains(names, removedAgentSwitch) {
+		t.Errorf("Names() lists %s, which is no longer a setting", removedAgentSwitch)
 	}
 }
 
-func TestTheAgentEndpointDefaultsAreSecureAndTwoHundred(t *testing.T) {
+// removedAgentSwitch is the development switch that let agents connect over plain
+// ws://. It is gone from the server, so it is spelled in two halves to keep the
+// repository-wide checks for it exact.
+const removedAgentSwitch = "TIERPLAN_AGENT_ALLOW_" + "INSECURE"
+
+func TestAStaleAgentSwitchIsIgnoredLikeAnyUnknownVariable(t *testing.T) {
+	c, err := load(t, nil, envMap{removedAgentSwitch: "true"}, files{})
+	if err != nil {
+		t.Fatalf("a stale %s failed Load: %v", removedAgentSwitch, err)
+	}
+	if c.AgentConnectBurst != 200 {
+		t.Errorf("burst = %d, want the default 200", c.AgentConnectBurst)
+	}
+	if strings.Contains(strings.Join(config.Names(), " "), removedAgentSwitch) {
+		t.Errorf("Names() lists %s", removedAgentSwitch)
+	}
+}
+
+func TestTheAgentEndpointDefaultIsTwoHundred(t *testing.T) {
 	c, err := load(t, nil, envMap{}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.AgentAllowInsecure || c.AgentConnectBurst != 200 {
-		t.Fatalf("allow insecure %v, burst %d; want false and 200", c.AgentAllowInsecure, c.AgentConnectBurst)
+	if c.AgentConnectBurst != 200 {
+		t.Fatalf("burst %d; want 200", c.AgentConnectBurst)
 	}
 }
 
 func TestTheAgentEndpointSettingsCanBeOverriddenAndBadValuesAreRefused(t *testing.T) {
-	c, err := load(t, nil, envMap{"TIERPLAN_AGENT_ALLOW_INSECURE": "true", "TIERPLAN_AGENT_CONNECT_BURST": "500"}, files{})
+	c, err := load(t, nil, envMap{"TIERPLAN_AGENT_CONNECT_BURST": "500"}, files{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.AgentAllowInsecure || c.AgentConnectBurst != 500 {
-		t.Fatalf("allow insecure %v, burst %d; want true and 500", c.AgentAllowInsecure, c.AgentConnectBurst)
+	if c.AgentConnectBurst != 500 {
+		t.Fatalf("burst %d; want 500", c.AgentConnectBurst)
 	}
 	for name, vars := range map[string]envMap{
-		"a zero burst":      {"TIERPLAN_AGENT_CONNECT_BURST": "0"},
-		"a negative burst":  {"TIERPLAN_AGENT_CONNECT_BURST": "-5"},
-		"a burst of text":   {"TIERPLAN_AGENT_CONNECT_BURST": "many"},
-		"insecure not bool": {"TIERPLAN_AGENT_ALLOW_INSECURE": "sometimes"},
+		"a zero burst":     {"TIERPLAN_AGENT_CONNECT_BURST": "0"},
+		"a negative burst": {"TIERPLAN_AGENT_CONNECT_BURST": "-5"},
+		"a burst of text":  {"TIERPLAN_AGENT_CONNECT_BURST": "many"},
 	} {
 		if _, err := load(t, nil, vars, files{}); err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_") {
 			t.Errorf("%s: error = %v, want one naming a TIERPLAN_AGENT_ variable", name, err)
@@ -435,7 +492,6 @@ func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://tierplan.internal:7480":  "https://tierplan.internal:7480",
 		"HTTPS://TierPlan.Internal:7480/": "https://tierplan.internal:7480",
-		"http://192.168.1.10:7480":        "http://192.168.1.10:7480",
 		"https://example.com/tierplan/":   "https://example.com/tierplan",
 	} {
 		c, err := load(t, nil, envMap{"TIERPLAN_AGENT_URL": in}, files{})
@@ -473,7 +529,6 @@ func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 		"https://example.com/tierplan":       "wss://example.com/tierplan/agent/connect",
 		"https://example.com/tierplan/":      "wss://example.com/tierplan/agent/connect",
 		"https://tierplan.lan:7480":          "wss://tierplan.lan:7480/agent/connect",
-		"http://192.168.1.10:7480":           "ws://192.168.1.10:7480/agent/connect",
 		"https://u:p@tierplan.example/x?q=1": "wss://tierplan.example/x/agent/connect",
 	} {
 		got, err := config.AgentEndpoint(in)
@@ -481,7 +536,7 @@ func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 			t.Errorf("AgentEndpoint(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "ftp://x", "not a url", "https://"} {
+	for _, bad := range []string{"", "ftp://x", "not a url", "https://", "http://192.168.1.10:7480", "ws://x.example"} {
 		if got, err := config.AgentEndpoint(bad); err == nil {
 			t.Errorf("AgentEndpoint(%q) = %q, want an error", bad, got)
 		}
@@ -713,52 +768,24 @@ func TestConfigHostRouteFile(t *testing.T) {
 	}
 }
 
-func TestEnvTLSNamesTheVariableThatTurnsTLSOn(t *testing.T) {
-	tests := []struct {
-		name         string
-		cfg          config.Config
-		wantVariable string
-		wantOK       bool
-	}{
-		{"nothing set", config.Config{}, "", false},
-		{"self-signed", config.Config{TLSSelfSigned: true}, "TIERPLAN_TLS_SELF_SIGNED", true},
-		{"certificate and key files", config.Config{TLSCertFile: "/c.pem", TLSKeyFile: "/k.pem"}, "TIERPLAN_TLS_CERT_FILE", true},
-		{"certificate file alone", config.Config{TLSCertFile: "/c.pem"}, "TIERPLAN_TLS_CERT_FILE", true},
-		{"key file alone is never plain", config.Config{TLSKeyFile: "/k.pem"}, "TIERPLAN_TLS_KEY_FILE", true},
-		{"self-signed wins over files (Validate rejects both)", config.Config{TLSSelfSigned: true, TLSCertFile: "/c.pem", TLSKeyFile: "/k.pem"}, "TIERPLAN_TLS_SELF_SIGNED", true},
+// A non-ASCII host is stored as punycode, so the stored URL, the Origin check and the certificate
+// all name the host one way (CR-01).
+func TestPublicURLStoresANonASCIIHostAsPunycode(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://bücher.example":           "https://xn--bcher-kva.example",
+		"https://Bücher.Example:8443/app/": "https://xn--bcher-kva.example:8443/app",
+		"https://tierplan.example:7480":    "https://tierplan.example:7480",
+	} {
+		got, err := config.NormalisePublicURL(in)
+		if err != nil || got != want {
+			t.Errorf("NormalisePublicURL(%q) = %q, %v; want %q", in, got, err, want)
+		}
+		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
+		if err != nil || c.PublicURL != want {
+			t.Errorf("TIERPLAN_PUBLIC_URL %q stored %q, %v; want %q", in, c.PublicURL, err, want)
+		}
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			variable, ok := tc.cfg.EnvTLS()
-			if variable != tc.wantVariable || ok != tc.wantOK {
-				t.Errorf("EnvTLS() = %q, %v; want %q, %v", variable, ok, tc.wantVariable, tc.wantOK)
-			}
-		})
-	}
-}
-
-func TestEnvTLSAgreesWithWhatLoadAccepts(t *testing.T) {
-	// A configuration Load accepts has TLS on exactly when EnvTLS says so, whichever way it was set.
-	tests := []struct {
-		name         string
-		env          envMap
-		wantVariable string
-	}{
-		{"plain", envMap{}, ""},
-		{"self-signed", envMap{"TIERPLAN_TLS_SELF_SIGNED": "true"}, "TIERPLAN_TLS_SELF_SIGNED"},
-		{"self-signed false", envMap{"TIERPLAN_TLS_SELF_SIGNED": "false"}, ""},
-		{"files", envMap{"TIERPLAN_TLS_CERT_FILE": "/c.pem", "TIERPLAN_TLS_KEY_FILE": "/k.pem"}, "TIERPLAN_TLS_CERT_FILE"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := load(t, nil, tc.env, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			variable, ok := cfg.EnvTLS()
-			if variable != tc.wantVariable || ok != (tc.wantVariable != "") {
-				t.Errorf("EnvTLS() = %q, %v; want %q", variable, ok, tc.wantVariable)
-			}
-		})
+	if got, err := config.NormalisePublicURL("https://bad\u200bhost\u2028.example"); err == nil {
+		t.Errorf("an unencodable host was accepted as %q", got)
 	}
 }

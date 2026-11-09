@@ -5,12 +5,10 @@ package server
 
 import (
 	"bufio"
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -123,19 +121,6 @@ func (e *matrixEnv) h1TLSClient(t *testing.T) *http.Client {
 	return newClient(t, &http.Transport{TLSClientConfig: cfg, Protocols: &p})
 }
 
-func (e *matrixEnv) plainClient(t *testing.T) *http.Client {
-	var p http.Protocols
-	p.SetHTTP1(true)
-	return newClient(t, &http.Transport{Protocols: &p})
-}
-
-// h2cClient speaks HTTP/2 over a plain connection with prior knowledge.
-func (e *matrixEnv) h2cClient(t *testing.T) *http.Client {
-	var p http.Protocols
-	p.SetUnencryptedHTTP2(true)
-	return newClient(t, &http.Transport{Protocols: &p})
-}
-
 // reply is what a client saw of a response whose body it has read and closed.
 type reply struct {
 	status int
@@ -159,7 +144,7 @@ func get(t *testing.T, c *http.Client, url string) (reply, error) {
 	return reply{status: resp.StatusCode, major: resp.ProtoMajor, proto: resp.Proto, body: string(body)}, err
 }
 
-func TestTLSMatrixServesBothBranchesOnOnePort(t *testing.T) {
+func TestTLSMatrixServesTLSAndClosesPlainOnOnePort(t *testing.T) {
 	env := newMatrixEnv(t)
 	cases := []struct {
 		name      string
@@ -170,7 +155,6 @@ func TestTLSMatrixServesBothBranchesOnOnePort(t *testing.T) {
 	}{
 		{"h2 over TLS", env.h2Client(t), "https", 2, "HTTP/2.0 tls=true alpn=h2"},
 		{"HTTP/1.1 over TLS", env.h1TLSClient(t), "https", 1, "HTTP/1.1 tls=true alpn=http/1.1"},
-		{"HTTP/1.1 plain", env.plainClient(t), "http", 1, "HTTP/1.1 tls=false alpn="},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,9 +170,15 @@ func TestTLSMatrixServesBothBranchesOnOnePort(t *testing.T) {
 			}
 		})
 	}
+	// The same port closes a plain connection with no bytes (D-01).
+	t.Run("HTTP/1.1 plain is closed", func(t *testing.T) {
+		if got := plainExchange(t, env.addr, "GET /proto HTTP/1.1\r\nHost: x\r\n\r\n"); got != "" {
+			t.Fatalf("a plain request was answered with %q, want no bytes", got)
+		}
+	})
 }
 
-func TestTLSMatrixWebSocketOnBothBranches(t *testing.T) {
+func TestTLSMatrixWebSocketOverTLS(t *testing.T) {
 	env := newMatrixEnv(t)
 	for _, tc := range []struct {
 		name   string
@@ -196,7 +186,6 @@ func TestTLSMatrixWebSocketOnBothBranches(t *testing.T) {
 		client *http.Client
 	}{
 		{"wss", "wss", env.h1TLSClient(t)},
-		{"ws", "ws", env.plainClient(t)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := testsupport.Context(t)
@@ -227,7 +216,6 @@ func TestTLSMatrixSSEOutlivesThePeekTimer(t *testing.T) {
 	}{
 		{"h2 over TLS", "https", (*matrixEnv).h2Client},
 		{"HTTP/1.1 over TLS", "https", (*matrixEnv).h1TLSClient},
-		{"plain", "http", (*matrixEnv).plainClient},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newMatrixEnv(t)
@@ -267,72 +255,16 @@ func TestTLSMatrixSSEOutlivesThePeekTimer(t *testing.T) {
 	}
 }
 
-func TestTLSMatrixRefusesH2CAndAnswersAClientHelloWhenNotLive(t *testing.T) {
+func TestTLSMatrixClosesH2CAndPlainWithNoBytes(t *testing.T) {
 	env := newMatrixEnv(t)
 
-	// D-17: HTTP/2 is served over TLS only. A client that speaks it in clear gets no HTTP/2.
-	if got, err := get(t, env.h2cClient(t), "http://"+env.addr+"/proto"); err == nil {
-		t.Fatalf("an h2c prior-knowledge request was answered: %v %q", got.proto, got.body)
+	// D-17: HTTP/2 is served over TLS only. The prior-knowledge preface in clear gets nothing at all.
+	const h2cPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+	if got := plainExchange(t, env.addr, h2cPreface); got != "" {
+		t.Fatalf("an h2c prior-knowledge preface was answered with %q, want no bytes", got)
 	}
-
-	// With TLS removed a ClientHello is answered as plain HTTP rather than left hanging, and a plain
-	// client is still served.
-	env.rt.Remove()
-	if _, err := get(t, env.h2Client(t), "https://"+env.addr+"/proto"); err == nil {
-		t.Fatal("a TLS request succeeded while TLS was not live")
-	}
-	got, err := get(t, env.plainClient(t), "http://"+env.addr+"/proto")
-	if err != nil || got.status != http.StatusOK || got.body != "HTTP/1.1 tls=false alpn=" {
-		t.Fatalf("plain request after Remove: %+v %v", got, err)
-	}
-}
-
-func TestTLSMatrixServeInstallsAndRemovesTLSLive(t *testing.T) {
-	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"})
-	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- srv.serve(ctx, ln) }()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-
-	cert, leaf := genCert(t, "")
-	env := &matrixEnv{pool: x509.NewCertPool()}
-	env.pool.AddCert(leaf)
-
-	healthz := func(scheme string, c *http.Client) (reply, error) {
-		t.Helper()
-		return get(t, c, scheme+"://"+addr+"/healthz")
-	}
-	if _, err := healthz("https", env.h2Client(t)); err == nil {
-		t.Fatal("https answered on a server started without TLS")
-	}
-	if got, err := healthz("http", env.plainClient(t)); err != nil || got.status != http.StatusOK {
-		t.Fatalf("plain /healthz before the install: %+v %v", got, err)
-	}
-
-	srv.https.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
-	got, err := healthz("https", env.h2Client(t))
-	if err != nil || got.status != http.StatusOK || got.major != 2 {
-		t.Fatalf("https /healthz after the install: %+v %v, want 200 over HTTP/2", got, err)
-	}
-
-	srv.https.Remove()
-	if _, err := healthz("https", env.h2Client(t)); err == nil {
-		t.Fatal("https still answered after the certificate was removed")
-	}
-	if got, err := healthz("http", env.plainClient(t)); err != nil || got.status != http.StatusOK {
-		t.Fatalf("plain /healthz after the removal: %+v %v", got, err)
+	// A plain HTTP/1.1 request gets nothing either.
+	if got := plainExchange(t, env.addr, "GET /proto HTTP/1.1\r\nHost: x\r\n\r\n"); got != "" {
+		t.Fatalf("a plain request was answered with %q, want no bytes", got)
 	}
 }

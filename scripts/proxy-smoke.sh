@@ -31,26 +31,32 @@
 # without the two Upgrade header lines the agent endpoint answers 426 and the
 # websocket_failing warning appears; without the Host line the url_mismatch
 # warning appears; with TierPlan not told to trust the proxy the
-# untrusted_forwarded warning appears. A fourth deliberate check, no_agent_switch,
-# leaves TierPlan's development switch off and expects the plain agent upgrade to be
-# refused 403 insecure_transport through the proxy.
+# untrusted_forwarded warning appears.
 #
-# The proxies listen on plain HTTP, so TierPlan's public URL is http://. The Caddy
-# file reads TIERPLAN_SCHEME, which this script sets to "http://" so that Caddy does
-# not look for a certificate. Requests go to the proxy's published port with the
-# Host header of the site, so no DNS entry is needed.
-#
-# That makes the agent address plain ws:// for a host that is not loopback
-# (tierplan.example.com), which TierPlan accepts only with
-# TIERPLAN_AGENT_ALLOW_INSECURE=true, a development-only switch. This script sets it
-# on TierPlan so that it can test that each proxy passes the upgrade, and only the
-# no_agent_switch variant leaves it off to check the refusal through a real proxy.
+# TLS is on both sides (D-04). TierPlan serves https with its own self-signed
+# certificate, and each proxy verifies it against the copy the script takes from
+# TierPlan's data volume, mounted read-only at /tierplan-data (so the shipped files
+# find it at /tierplan-data/tls/server.crt). The proxy ends TLS for the browser with a
+# certificate of its own: nginx and Traefik with one this script generates
+# (scripts/e2e-cert.go) and the shipped files read from /etc/<proxy>/tls, Caddy
+# with its own internal CA (a global local_certs option in a wrapper that imports the
+# shipped file), whose root the script takes from the container. The public URL is
+# https://<host><base> on the default port; curl reaches the proxy's published port
+# with --connect-to and verifies the proxy's certificate against that CA, so no
+# check is skipped anywhere. The agent upgrade is a TLS handshake plus the
+# WebSocket upgrade, which is what a wss:// agent sends.
 # The throwaway containers run on a private Docker network with ports published on
 # 127.0.0.1 only and hold no secrets.
 #
 # Environment: IMAGE (default tierplan:e2e), CADDY_IMAGE (caddy:2), NGINX_IMAGE
-# (nginx:stable-alpine), TRAEFIK_IMAGE (traefik:v3). Needs Docker, curl and jq.
-# Removes every container and the network it creates, by name, and labels them with
+# (nginx:stable-alpine), TRAEFIK_IMAGE (traefik:v3). Needs Docker, Go (for the
+# certificate), curl and jq.
+# PROXY_SMOKE_ONLY: a comma-separated list of the scenarios to run, empty or unset for
+# all of them. Names are KIND-SITE for the documented files (caddy-root, caddy-subpath,
+# nginx-root, nginx-subpath, traefik-root, traefik-subpath) and nginx-root-VARIANT for
+# the deliberate breaks (nginx-root-no_upgrade_headers, nginx-root-no_host_header,
+# nginx-root-untrusted_proxy, nginx-root-plain_port_closed). An unknown name fails before anything starts.
+# Removes every container, volume and the network it creates, by name, and labels them with
 # tierplan.ci.owner=$TIERPLAN_CI_OWNER (local-<pid> when unset) so that `make ci-clean`
 # in CI removes what a cancelled run left (D-23). The proxy's host port is assigned by
 # Docker and read back. Prints one PASS or FAIL line per check and exits 1 if any
@@ -64,9 +70,39 @@ CADDY_IMAGE="${CADDY_IMAGE:-caddy:2}"
 NGINX_IMAGE="${NGINX_IMAGE:-nginx:stable-alpine}"
 TRAEFIK_IMAGE="${TRAEFIK_IMAGE:-traefik:v3}"
 
-for tool in docker curl jq; do
+for tool in docker curl jq go; do
   command -v "${tool}" >/dev/null || { echo "FAIL: ${tool} is required" >&2; exit 1; }
 done
+
+# Every scenario this script can run, in the order it runs them.
+ALL_SCENARIOS=(caddy-root caddy-subpath nginx-root nginx-subpath traefik-root traefik-subpath
+  nginx-root-no_upgrade_headers nginx-root-no_host_header nginx-root-untrusted_proxy
+  nginx-root-plain_port_closed)
+ONLY="${PROXY_SMOKE_ONLY:-}"
+if [ -n "${ONLY}" ]; then
+  IFS=',' read -r -a only_names <<<"${ONLY}"
+  for name in "${only_names[@]}"; do
+    known=0
+    for s in "${ALL_SCENARIOS[@]}"; do
+      [ "${s}" = "${name}" ] && known=1
+    done
+    if [ "${known}" = 0 ]; then
+      echo "FAIL: PROXY_SMOKE_ONLY names no scenario: ${name}"
+      exit 1
+    fi
+  done
+fi
+
+# selected KIND SITE VARIANT: true when PROXY_SMOKE_ONLY is empty or names the scenario.
+selected() {
+  local name="$1-$2" n
+  [ "${3:-ok}" = ok ] || name="${name}-$3"
+  [ -n "${ONLY}" ] || return 0
+  for n in "${only_names[@]}"; do
+    [ "${n}" = "${name}" ] && return 0
+  done
+  return 1
+}
 docker image inspect "${IMAGE}" >/dev/null 2>&1 || { echo "FAIL: the image ${IMAGE} is not built; run make e2e-image" >&2; exit 1; }
 
 RUN_ID="$$"
@@ -77,11 +113,15 @@ JSON_H='Content-Type: application/json'
 PW='correct horse battery'
 FAILS=0
 CONTAINERS=()
+VOLUMES=()
 
 cleanup() {
   local c
   for c in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     docker rm -f "${c}" >/dev/null 2>&1 || true
+  done
+  for c in ${VOLUMES[@]+"${VOLUMES[@]}"}; do
+    docker volume rm -f "${c}" >/dev/null 2>&1 || true
   done
   docker network rm "${NET}" >/dev/null 2>&1 || true
   rm -rf "${WORK}"
@@ -90,6 +130,10 @@ trap cleanup EXIT
 
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*"; FAILS=$((FAILS + 1)); }
+
+# The certificate the nginx and Traefik proxies present to the browser, for the hosts
+# of the two sites. It is generated once, in this run's work directory.
+go run scripts/e2e-cert.go -out "${WORK}/proxy-tls" -dns tierplan.example.com,example.com >/dev/null
 
 docker network create --label "${OWNER_LABEL}" "${NET}" >/dev/null
 SUBNET="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}}' "${NET}")"
@@ -113,13 +157,15 @@ stop_container() {
 }
 
 # Per-scenario state, set by run_scenario.
-LABEL="" HOST="" BASE="" PUBLIC="" PORT="" SESSION="" PROXY_NAME="" TIERPLAN_NAME=""
+DATA_VOLUME="" LABEL="" HOST="" BASE="" PUBLIC="" PORT="" COOKIE="" PROXY_NAME="" TIERPLAN_NAME="" CACERT=""
 
-# curl_proxy PATH ARGS... talks to the proxy's published port as HOST.
+# curl_proxy PATH ARGS... talks to the proxy's published port as the public URL's host:
+# --connect-to sends https://HOST to the published port, the certificate is verified
+# against CACERT, and Host is HOST without a port, as the public URL says.
 curl_proxy() {
   local path="$1"
   shift
-  curl -sS -H "Host: ${HOST}" "$@" "http://127.0.0.1:${PORT}${BASE}${path}"
+  curl -sS --cacert "${CACERT}" --connect-to "${HOST}:443:127.0.0.1:${PORT}" "$@" "https://${HOST}${BASE}${path}"
 }
 
 # await_index waits until the proxy serves an index page that carries the tierplan-base
@@ -163,32 +209,53 @@ wait_proxy() {
   return 1
 }
 
-# start_proxy KIND CONFIG starts the proxy of KIND with CONFIG mounted.
+# start_proxy KIND CONFIG starts the proxy of KIND with CONFIG mounted, TierPlan's
+# certificate at /tierplan-data/tls/server.crt (where the shipped files look for it)
+# and the certificate the proxy presents to the browser, then sets PORT and CACERT.
 start_proxy() {
-  local kind="$1" conf="$2"
+  local kind="$1" conf="$2" _
   case "${kind}" in
     caddy)
-      start_container "${PROXY_NAME}" -p 127.0.0.1::80 -e TIERPLAN_SCHEME=http:// \
-        -v "${conf}:/etc/caddy/Caddyfile:ro" "${CADDY_IMAGE}" ;;
+      # Caddy gets its certificates from its own internal CA here. The shipped file
+      # is imported unchanged under a wrapper that turns that on.
+      printf '{\n\tlocal_certs\n}\nimport /etc/caddy/tierplan.Caddyfile\n' >"${WORK}/caddy-wrapper"
+      start_container "${PROXY_NAME}" -p 127.0.0.1::443 \
+        -v "${WORK}/caddy-wrapper:/etc/caddy/Caddyfile:ro" \
+        -v "${conf}:/etc/caddy/tierplan.Caddyfile:ro" \
+        -v "${DATA_VOLUME}:/tierplan-data:ro" "${CADDY_IMAGE}"
+      # The root of that CA appears once Caddy has loaded the file.
+      for _ in $(seq 1 60); do
+        docker cp "${PROXY_NAME}:/data/caddy/pki/authorities/local/root.crt" "${WORK}/caddy-root.crt" >/dev/null 2>&1 && break
+        sleep 0.5
+      done
+      CACERT="${WORK}/caddy-root.crt" ;;
     nginx)
-      start_container "${PROXY_NAME}" -p 127.0.0.1::80 \
-        -v "${conf}:/etc/nginx/nginx.conf:ro" "${NGINX_IMAGE}" ;;
+      start_container "${PROXY_NAME}" -p 127.0.0.1::443 \
+        -v "${conf}:/etc/nginx/nginx.conf:ro" \
+        -v "${WORK}/proxy-tls/cert.pem:/etc/nginx/tls/cert.pem:ro" \
+        -v "${WORK}/proxy-tls/key.pem:/etc/nginx/tls/key.pem:ro" \
+        -v "${DATA_VOLUME}:/tierplan-data:ro" "${NGINX_IMAGE}"
+      CACERT="${WORK}/proxy-tls/cert.pem" ;;
     traefik)
-      start_container "${PROXY_NAME}" -p 127.0.0.1::80 \
-        -v "${conf}:/etc/traefik/tierplan.yml:ro" "${TRAEFIK_IMAGE}" \
-        --entrypoints.web.address=:80 --providers.file.filename=/etc/traefik/tierplan.yml ;;
+      start_container "${PROXY_NAME}" -p 127.0.0.1::443 \
+        -v "${conf}:/etc/traefik/tierplan.yml:ro" \
+        -v "${WORK}/proxy-tls/cert.pem:/etc/traefik/tls/cert.pem:ro" \
+        -v "${WORK}/proxy-tls/key.pem:/etc/traefik/tls/key.pem:ro" \
+        -v "${DATA_VOLUME}:/tierplan-data:ro" "${TRAEFIK_IMAGE}" \
+        --entrypoints.websecure.address=:443 --providers.file.filename=/etc/traefik/tierplan.yml ;;
   esac
-  PORT="$(docker port "${PROXY_NAME}" 80/tcp | head -n 1 | sed 's/.*://')"
+  PORT="$(docker port "${PROXY_NAME}" 443/tcp | head -n 1 | sed 's/.*://')"
 }
 
 # upgrade_request sends the agent's WebSocket upgrade and leaves the response head
 # in ${WORK}/upgrade.out. The connection stays open after a 101, so curl is cut
 # off by its time limit; that is not a failure.
 upgrade_request() {
-  curl -sS -i --http1.1 --max-time 3 -o "${WORK}/upgrade.out" -H "Host: ${HOST}" \
+  curl -sS -i --http1.1 --max-time 3 -o "${WORK}/upgrade.out" \
+    --cacert "${CACERT}" --connect-to "${HOST}:443:127.0.0.1:${PORT}" \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
     -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Sec-WebSocket-Protocol: tierplan.agent.v1' \
-    "http://127.0.0.1:${PORT}${BASE}/agent/connect" 2>/dev/null || true
+    "https://${HOST}${BASE}/agent/connect" 2>/dev/null || true
   head -n 1 "${WORK}/upgrade.out" | tr -d '\r'
 }
 
@@ -205,17 +272,18 @@ MISSING_ENV="01980000-0000-7000-8000-0000000000ff"
 # shell_ws_request sends the upgrade request of a browser shell and leaves the head
 # and body of the answer in ${WORK}/shellws.out. The status line is printed.
 shell_ws_request() {
-  curl -sS -i --http1.1 --max-time 5 -o "${WORK}/shellws.out" -H "Host: ${HOST}" \
+  curl -sS -i --http1.1 --max-time 5 -o "${WORK}/shellws.out" \
+    --cacert "${CACERT}" --connect-to "${HOST}:443:127.0.0.1:${PORT}" \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: http://${HOST}" \
-    -H "Cookie: tierplan_session=${SESSION}" \
-    "http://127.0.0.1:${PORT}${BASE}/api/env/${MISSING_ENV}/shell-sessions/x/ws" 2>/dev/null || true
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: https://${HOST}" \
+    -H "Cookie: ${COOKIE}" \
+    "https://${HOST}${BASE}/api/env/${MISSING_ENV}/shell-sessions/x/ws" 2>/dev/null || true
   head -n 1 "${WORK}/shellws.out" | tr -d '\r'
 }
 
 # warnings prints the ids of the proxy warnings the signed-in admin sees, sorted.
 warnings() {
-  curl_proxy /api/warnings -H "Cookie: tierplan_session=${SESSION}" --max-time 5 \
+  curl_proxy /api/warnings -H "Cookie: ${COOKIE}" --max-time 5 \
     | jq -r '[.items[].id | select(startswith("proxy_"))] | sort | join(" ")'
 }
 
@@ -227,24 +295,27 @@ sign_in() {
     -H "${JSON_H}" --max-time 10 \
     -d "{\"token\":\"${token}\",\"username\":\"admin\",\"password\":\"${PW}\",\"instanceName\":\"Proxy smoke\",\"publicUrl\":\"${PUBLIC}\"}")"
   [ "${code}" = "200" ] || { cat "${WORK}/complete.json" >&2; return 1; }
-  SESSION="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | tr -d '\r' | sed 's/^[^=]*=//; s/;.*//')"
-  [ -n "${SESSION}" ]
+  # The cookie's name depends on the public URL (__Host- at the root of an https site,
+  # __Secure- under a base), so the whole name=value pair is kept.
+  COOKIE="$(grep -i '^set-cookie:' "${WORK}/complete.hdr" | head -n 1 | tr -d '\r' | sed 's/^[^:]*: *//; s/;.*//')"
+  [ -n "${COOKIE}" ]
 }
 
 # run_scenario KIND SITE VARIANT: KIND is caddy, nginx or traefik, SITE is root or
 # subpath, VARIANT is ok for the documented file or the name of a deliberate break.
 run_scenario() {
-  local kind="$1" site="$2" variant="${3:-ok}" conf trust agent_switch
+  local kind="$1" site="$2" variant="${3:-ok}" conf trust
+  selected "${kind}" "${site}" "${variant}" || return 0
   case "${site}" in
     root) HOST="tierplan.example.com" BASE="" ;;
     subpath) HOST="example.com" BASE="/tierplan" ;;
   esac
-  PUBLIC="http://${HOST}${BASE}"
+  PUBLIC="https://${HOST}${BASE}"
   LABEL="${kind} ${site}"
   [ "${variant}" = ok ] || LABEL="${LABEL} (${variant})"
   TIERPLAN_NAME="tierplan-psmoke-${RUN_ID}-tp"
   PROXY_NAME="tierplan-psmoke-${RUN_ID}-px"
-  SESSION=""
+  COOKIE=""
 
   case "${kind}" in
     caddy) conf="docs/proxy/Caddyfile" ;;
@@ -263,24 +334,47 @@ run_scenario() {
   trust="${SUBNET}"
   [ "${variant}" = untrusted_proxy ] && trust=""
 
-  # The proxies are plain HTTP for a host that is not loopback, the development-only
-  # case, so every variant but no_agent_switch sets TierPlan's development switch.
-  agent_switch=1
-  [ "${variant}" = no_agent_switch ] && agent_switch=""
-  start_container "${TIERPLAN_NAME}" --network-alias tierplan --tmpfs /data \
-    -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" ${trust:+-e "TIERPLAN_TRUSTED_PROXIES=${trust}"} \
-    ${agent_switch:+-e "TIERPLAN_AGENT_ALLOW_INSECURE=true"} \
+  # TierPlan serves https with its own self-signed certificate; hostname tierplan is
+  # a name that certificate carries, the one the proxies check it for.
+  # The data volume is shared read-only with the proxy, which finds TierPlan's
+  # certificate in it at /tierplan-data/tls/server.crt. (docker cp cannot read a tmpfs.)
+  DATA_VOLUME="${TIERPLAN_NAME}-data"
+  VOLUMES+=("${DATA_VOLUME}")
+  docker volume create --label "${OWNER_LABEL}" "${DATA_VOLUME}" >/dev/null
+  # plain_port_closed publishes TierPlan's own port so a plain request can be sent to it directly.
+  local publish=()
+  [ "${variant}" = plain_port_closed ] && publish=(-p 127.0.0.1::7480)
+  start_container "${TIERPLAN_NAME}" --network-alias tierplan --hostname tierplan -v "${DATA_VOLUME}:/data" \
+    ${publish[@]+"${publish[@]}"} -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" ${trust:+-e "TIERPLAN_TRUSTED_PROXIES=${trust}"} \
     --health-interval 2s --health-start-period 0s --health-retries 10 "${IMAGE}"
   if ! wait_tierplan; then
     fail "${LABEL}: TierPlan did not become healthy"
     stop_container "${TIERPLAN_NAME}"
     return
   fi
+  # The proxy starts after TierPlan is healthy, so its certificate exists.
   start_proxy "${kind}" "${conf}"
   if ! wait_proxy; then
     fail "${LABEL}: the proxy never passed /healthz through to TierPlan"
     stop_container "${PROXY_NAME}"
     stop_container "${TIERPLAN_NAME}"
+    return
+  fi
+
+  if [ "${variant}" = plain_port_closed ]; then
+    # plain_port_closed: TierPlan carries only the ACME challenge over plain HTTP (D-01, TLS-10).
+    # A plain request sent straight to its port, not through the proxy, gets an empty reply.
+    local direct rc=0
+    direct="$(docker port "${TIERPLAN_NAME}" 7480/tcp | head -n 1 | sed 's/.*://')"
+    curl -sS -o /dev/null --max-time 10 "http://127.0.0.1:${direct}/healthz" 2>/dev/null || rc=$?
+    if [ "${rc}" = 52 ]; then
+      pass "${LABEL}: plain_port_closed: a plain request straight to TierPlan's port gets an empty reply"
+    else
+      fail "${LABEL}: plain_port_closed: a plain request straight to TierPlan's port exited curl ${rc}, want 52 (empty reply)"
+    fi
+    stop_container "${PROXY_NAME}"
+    stop_container "${TIERPLAN_NAME}"
+    docker volume rm -f "${DATA_VOLUME}" >/dev/null 2>&1 || true
     return
   fi
 
@@ -304,7 +398,6 @@ run_scenario() {
   # The WebSocket upgrade of the agent endpoint.
   local status want="101"
   [ "${variant}" = no_upgrade_headers ] && want="426"
-  [ "${variant}" = no_agent_switch ] && want="403"
   status="$(upgrade_request)"
   case "${status}" in
     *" ${want} "*)
@@ -313,12 +406,6 @@ run_scenario() {
           pass "${LABEL}: ${BASE}/agent/connect upgrades to a WebSocket with tierplan.agent.v1 (${status})"
         else
           fail "${LABEL}: the upgrade was accepted without the tierplan.agent.v1 subprotocol"
-        fi
-      elif [ "${want}" = 403 ]; then
-        if grep -qa 'insecure_transport' "${WORK}/upgrade.out"; then
-          pass "${LABEL}: a plain agent upgrade without TIERPLAN_AGENT_ALLOW_INSECURE is refused with ${status} insecure_transport"
-        else
-          fail "${LABEL}: ${BASE}/agent/connect answered ${status} without insecure_transport in the body"
         fi
       else
         pass "${LABEL}: a proxy that drops the Upgrade headers gets ${status} from ${BASE}/agent/connect"
@@ -335,7 +422,7 @@ run_scenario() {
     fail "${LABEL}: the event stream without a session answered '${timing}', want 401 in under 3 s"
   fi
   if [ "${ok_signed}" = 1 ]; then
-    curl_proxy /api/environments/stream -H "Cookie: tierplan_session=${SESSION}" -N --max-time 4 >"${WORK}/sse.out" 2>/dev/null || true
+    curl_proxy /api/environments/stream -H "Cookie: ${COOKIE}" -N --max-time 4 >"${WORK}/sse.out" 2>/dev/null || true
     if grep -q '^event: snapshot' "${WORK}/sse.out"; then
       pass "${LABEL}: the event stream's first frame arrives within 4 s, unbuffered"
     else
@@ -360,7 +447,7 @@ run_scenario() {
       # log_stream_prompt: a log stream request is answered at once, not held back.
       local log_timing log_type
       log_timing="$(curl_proxy "/api/env/${MISSING_ENV}/containers/x/logs/stream?sid=abcdefghijklmnopqrstuv" \
-        -H "Cookie: tierplan_session=${SESSION}" -H 'Accept: text/event-stream' -N \
+        -H "Cookie: ${COOKIE}" -H 'Accept: text/event-stream' -N \
         -o "${WORK}/logstream.out" -w '%{http_code} %{time_total}' --max-time 5 || true)"
       log_type="$(problem_type "${WORK}/logstream.out")"
       if [ "${log_timing%% *}" = 404 ] && [ "${log_type}" = environment_not_found ] && awk -v t="${log_timing##* }" 'BEGIN { exit !(t < 3) }'; then
@@ -374,7 +461,7 @@ run_scenario() {
     local seen
     seen="$(warnings || true)"
     case "${variant}" in
-      ok | no_agent_switch)
+      ok)
         if [ -z "${seen}" ]; then pass "${LABEL}: TierPlan shows no proxy warning"; else fail "${LABEL}: TierPlan shows proxy warnings: ${seen}"; fi ;;
       no_upgrade_headers)
         if [ "${seen}" = proxy_websocket_failing ]; then pass "${LABEL}: TierPlan shows proxy_websocket_failing"; else fail "${LABEL}: warnings are '${seen}', want proxy_websocket_failing"; fi ;;
@@ -387,6 +474,7 @@ run_scenario() {
 
   stop_container "${PROXY_NAME}"
   stop_container "${TIERPLAN_NAME}"
+  docker volume rm -f "${DATA_VOLUME}" >/dev/null 2>&1 || true
 }
 
 # The guide embeds each file. A line of a file that is missing from the guide means
@@ -412,7 +500,7 @@ done
 run_scenario nginx root no_upgrade_headers
 run_scenario nginx root no_host_header
 run_scenario nginx root untrusted_proxy
-run_scenario nginx root no_agent_switch
+run_scenario nginx root plain_port_closed
 
 if [ "${FAILS}" -ne 0 ]; then
   echo "FAIL: ${FAILS} proxy smoke check(s) failed"

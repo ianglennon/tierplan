@@ -46,13 +46,15 @@ async function shot(page: Page, name: string): Promise<void> {
   });
 }
 
-// withPin puts the proxy certificate's pin in front of the image name, the way
-// docs/agent.md tells an operator with a private-CA proxy to.
+// withPin adds the proxy certificate's pin to the TIERPLAN_AGENT_PIN the command carries. The
+// command holds TierPlan's own pin, because every install serves its own certificate and
+// publishes it; the agent here dials Caddy, whose certificate is the harness's, so it needs that
+// pin as well. TIERPLAN_AGENT_PIN takes a comma-separated list (agent/internal/config), and a
+// proxy with a private CA needs its own pin there: docs/agent.md says so.
 function withPin(command: string, pin: string): string {
-  const image = command.trim().split(/\s+/).at(-1) ?? "";
-  expect(image, "the last word of the command is the agent image").toMatch(/tierplan-agent:/);
-  const at = command.lastIndexOf(image);
-  return `${command.slice(0, at)}-e 'TIERPLAN_AGENT_PIN=${pin}' ${command.slice(at)}`;
+  const own = /(TIERPLAN_AGENT_PIN=)(sha256\/[A-Za-z0-9+/]{43}=)/;
+  expect(command, "the command carries TierPlan's own pin").toMatch(own);
+  return command.replace(own, `$1$2,${pin}`);
 }
 
 test("a remote host joins through the proxy, shows online, opens, and is revoked", async ({
@@ -99,8 +101,9 @@ test("a remote host joins through the proxy, shows online, opens, and is revoked
     command = await page.evaluate(() => navigator.clipboard.readText());
     expect(command.trim()).toBe(((await code.textContent()) ?? "").trim());
     expect(command).toContain("docker run -d --name tierplan-agent");
-    // A private-CA proxy's pin is not in the command TierPlan shows.
-    expect(command).not.toContain("TIERPLAN_AGENT_PIN");
+    // Every install serves its own certificate and publishes its pin, so the command TierPlan shows
+    // carries TierPlan's own pin. withPin adds the proxy certificate's pin to that same variable.
+    expect(command).toContain("TIERPLAN_AGENT_PIN");
 
     await expect(dialog.getByRole("status").filter({ hasText: "Waiting for the first agent" })).toBeVisible();
     await shot(page, "1-waiting-for-the-first-agent");

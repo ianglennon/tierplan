@@ -11,20 +11,18 @@ import (
 	"github.com/ianglennon/tierplan/internal/auth"
 )
 
-// scopeCases is the D-50 table: https at the root keeps the __Host- prefix,
-// https under a base cannot (the prefix demands Path=/) and uses __Secure-, and
-// plain http uses the bare name at either base.
+// scopeCases is the D-50 table: the root keeps the __Host- prefix, a base path
+// cannot (the prefix demands Path=/) and uses __Secure-. The cookie is Secure
+// either way (TLS-11), and there is no bare name.
 var scopeCases = []struct {
 	name     string
 	scope    auth.CookieScope
 	wantName string
 	wantPath string
 }{
-	{"https at the root", auth.CookieScope{Secure: true}, "__Host-tierplan_session", "/"},
-	{"https under a base", auth.CookieScope{Secure: true, BasePath: "/tierplan"}, "__Secure-tierplan_session", "/tierplan"},
-	{"https under a nested base", auth.CookieScope{Secure: true, BasePath: "/tools/tierplan"}, "__Secure-tierplan_session", "/tools/tierplan"},
-	{"http at the root", auth.CookieScope{}, "tierplan_session", "/"},
-	{"http under a base", auth.CookieScope{BasePath: "/tierplan"}, "tierplan_session", "/tierplan"},
+	{"the root", auth.CookieScope{}, "__Host-tierplan_session", "/"},
+	{"under a base", auth.CookieScope{BasePath: "/tierplan"}, "__Secure-tierplan_session", "/tierplan"},
+	{"under a nested base", auth.CookieScope{BasePath: "/tools/tierplan"}, "__Secure-tierplan_session", "/tools/tierplan"},
 }
 
 func TestCookieScopeNames(t *testing.T) {
@@ -47,7 +45,7 @@ func TestCookieScopePathsAndFlags(t *testing.T) {
 				if c.Name != tc.wantName || c.Path != tc.wantPath {
 					t.Errorf("%s = name %q path %q, want %q %q", label, c.Name, c.Path, tc.wantName, tc.wantPath)
 				}
-				if c.Secure != tc.scope.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Domain != "" {
+				if !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Domain != "" {
 					t.Errorf("%s flags = %+v", label, c)
 				}
 			}
@@ -77,20 +75,20 @@ func TestCookieScopeAuthenticatorIgnoresACookieOfAnotherScope(t *testing.T) {
 	f.addUser(t, "admin")
 	res := f.mustLogin(t, "admin", false)
 
-	httpsUnderBase := auth.CookieScope{Secure: true, BasePath: "/tierplan"}
-	a := auth.NewAuthenticator(f.st, testIdle, func() auth.CookieScope { return httpsUnderBase }, f.clk.now)
+	underBase := auth.CookieScope{BasePath: "/tierplan"}
+	a := auth.NewAuthenticator(f.st, testIdle, func() auth.CookieScope { return underBase }, f.clk.now)
 
 	// A valid session ID under the root-https name is not believed under a base.
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(auth.CookieScope{Secure: true}), res.RawSessionID)
+	addCookie(req, auth.CookieName(auth.CookieScope{}), res.RawSessionID)
 	if p, err := a.Authenticate(req); err != nil || p != nil {
-		t.Fatalf("a __Host- cookie authenticated under https at /tierplan: %+v, %v", p, err)
+		t.Fatalf("a __Host- cookie authenticated under /tierplan: %+v, %v", p, err)
 	}
 	// Nor is the bare name.
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	addCookie(req, auth.CookieName(auth.CookieScope{}), res.RawSessionID)
+	addCookie(req, "tierplan_session", res.RawSessionID)
 	if p, err := a.Authenticate(req); err != nil || p != nil {
-		t.Fatalf("a bare cookie authenticated under https at /tierplan: %+v, %v", p, err)
+		t.Fatalf("a bare cookie authenticated under /tierplan: %+v, %v", p, err)
 	}
 	// The name of the current scope is.
 	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
@@ -109,14 +107,14 @@ func TestCookieScopeAuthenticatorFollowsTheScopeAtRunTime(t *testing.T) {
 	a := auth.NewAuthenticator(f.st, testIdle, func() auth.CookieScope { return scope }, f.clk.now)
 	req := func() *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-		addCookie(r, "tierplan_session", res.RawSessionID)
+		addCookie(r, "__Host-tierplan_session", res.RawSessionID)
 		return r
 	}
 	if p, err := a.Authenticate(req()); err != nil || p == nil {
-		t.Fatalf("plain http at the root: %+v, %v", p, err)
+		t.Fatalf("at the root: %+v, %v", p, err)
 	}
-	scope = auth.CookieScope{Secure: true, BasePath: "/tierplan"}
+	scope = auth.CookieScope{BasePath: "/tierplan"}
 	if p, err := a.Authenticate(req()); err != nil || p != nil {
-		t.Fatalf("after the public URL became https under /tierplan the old cookie still authenticated: %+v, %v", p, err)
+		t.Fatalf("after the public URL gained the base /tierplan the old cookie still authenticated: %+v, %v", p, err)
 	}
 }

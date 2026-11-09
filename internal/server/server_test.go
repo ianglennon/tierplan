@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -138,7 +139,8 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 }
 
 func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +158,7 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 
 	// Healthcheck succeeds while the server is up. The listen address may be
 	// ":port" or "host:port"; only the port matters.
-	if err := Healthcheck(context.Background(), ":"+port, ""); err != nil {
+	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(cfg)); err != nil {
 		t.Fatalf("Healthcheck while up: %v", err)
 	}
 
@@ -170,22 +172,26 @@ func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
 		t.Fatal("server did not shut down")
 	}
 
-	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil {
+	if err := Healthcheck(context.Background(), ":"+port, HealthcheckCertFile(cfg)); err == nil {
 		t.Fatal("Healthcheck after shutdown should fail")
 	}
 }
 
 func TestHealthcheckRejectsNon200AndBadListen(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer ts.Close()
-	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
-	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil || !strings.Contains(err.Error(), "503") {
+	certFile := writeServerCert(t, ts)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(ts.URL, "https://"))
+	if err := Healthcheck(context.Background(), ":"+port, certFile); err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("Healthcheck against a 503 = %v, want an error naming 503", err)
 	}
-	if err := Healthcheck(context.Background(), "no-port", ""); err == nil {
+	if err := Healthcheck(context.Background(), "no-port", certFile); err == nil {
 		t.Error("Healthcheck with an unusable listen address should fail")
+	}
+	if err := Healthcheck(context.Background(), ":"+port, ""); err == nil || !strings.Contains(err.Error(), "no certificate file") {
+		t.Errorf("Healthcheck with no certificate file = %v, want an error saying so", err)
 	}
 	if _, err := strconv.Atoi(port); err != nil {
 		t.Fatal(err)
@@ -755,7 +761,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := "http://" + ln.Addr().String()
+	base := httpsBase(ln.Addr().String())
 	sctx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- srv.serve(sctx, ln) }()
@@ -764,8 +770,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	// login connection is on its way back to the pool, and Shutdown waits up to
 	// 5s for a connection that never sent a request, which is not the stream
 	// this test is about.
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	t.Cleanup(client.CloseIdleConnections)
+	client := trustedClient(t, cfg)
 
 	loginReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -913,6 +918,16 @@ func TestBuildAggregatesAnAnonymousDenialFloodAndKeepsSignInWorking(t *testing.T
 // Strict-Transport-Security header, for a request that arrived over TLS or not.
 func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 	t.Helper()
+	return hstsFor(t, env, func(r *http.Request) {
+		if overTLS {
+			r.TLS = &tls.ConnectionState{}
+		}
+	})
+}
+
+// hstsFor is hstsOf with the request shaped by mutate: the peer address, a forwarded header or TLS.
+func hstsFor(t *testing.T, env map[string]string, mutate func(*http.Request)) string {
+	t.Helper()
 	env["TIERPLAN_DATA_DIR"] = t.TempDir() + "/data"
 	srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -920,9 +935,7 @@ func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	if overTLS {
-		req.TLS = &tls.ConnectionState{}
-	}
+	mutate(req)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	return rec.Header().Get("Strict-Transport-Security")
@@ -940,12 +953,10 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 
 	// A supplied certificate is the operator's own: HSTS is sent (D-37).
 	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
-		t.Fatal(err)
-	}
+	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
 	supplied := map[string]string{
-		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
-		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
+		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
+		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
 	}
 	if got := hstsOf(t, supplied, true); got != "max-age=31536000" {
 		t.Errorf("supplied certificate: Strict-Transport-Security = %q, want max-age=31536000", got)
@@ -957,21 +968,23 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 	}
 }
 
-func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
+func TestHSTSIsSentOnlyOverTLS(t *testing.T) {
 	const trustedPeer = "203.0.113.9:40000"
 	const untrustedPeer = "198.51.100.7:40000"
-	proto := func(v string) func(*http.Request) {
-		return func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", v) }
-	}
-	supplied := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: supplied, TLSSelfSigned: true}, "", "", nil); err != nil {
-		t.Fatal(err)
-	}
-	suppliedEnv := map[string]string{
-		"TIERPLAN_TLS_CERT_FILE": filepath.Join(supplied, "tls", "selfsigned.crt"),
-		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(supplied, "tls", "selfsigned.key"),
-	}
 	const hsts = "max-age=31536000"
+	forwarded := func(peer, proto string, overTLS bool) func(*http.Request) {
+		return func(r *http.Request) {
+			r.RemoteAddr = peer
+			if proto != "" {
+				r.Header.Set("X-Forwarded-Proto", proto)
+			}
+			if overTLS {
+				r.TLS = &tls.ConnectionState{}
+			}
+		}
+	}
+	src := t.TempDir()
+	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
 	withEnv := func(extra map[string]string) map[string]string {
 		env := map[string]string{
 			"TIERPLAN_PUBLIC_URL":      "https://tierplan.example",
@@ -982,99 +995,63 @@ func TestHSTSIsNeverSentOverPlainHTTPExceptBehindATrustedProxy(t *testing.T) {
 		}
 		return env
 	}
+	supplied := map[string]string{
+		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
+		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
+	}
 	tests := []struct {
 		name   string
 		env    map[string]string
-		target string
-		peer   string
 		mutate func(*http.Request)
 		want   string
 	}{
-		// Plain HTTP that TierPlan answers itself: never, whichever mode and whichever path.
-		{"healthz, no TLS, https public URL", withEnv(nil), "/healthz", untrustedPeer, nil, ""},
-		{"readyz, no TLS, https public URL", withEnv(nil), "/readyz", untrustedPeer, nil, ""},
-		{"healthz, supplied certificate, https public URL", withEnv(suppliedEnv), "/healthz", untrustedPeer, nil, ""},
-		{"healthz, self-signed, https public URL", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, nil, ""},
-		{"loopback request, supplied certificate", withEnv(suppliedEnv), "/api/version", "127.0.0.1:40000", nil, ""},
-		{"ACME challenge path, supplied certificate", withEnv(suppliedEnv), "/.well-known/acme-challenge/tok", untrustedPeer, nil, ""},
-		{"https public URL from a trusted proxy that did not say https", withEnv(nil), "/api/version", trustedPeer, nil, ""},
-		{"trusted proxy saying http", withEnv(nil), "/api/version", trustedPeer, proto("http"), ""},
-		{"untrusted peer claiming https is not believed", withEnv(nil), "/api/version", untrustedPeer, proto("https"), ""},
-		// A trusted proxy that ends TLS: unchanged.
-		{"trusted proxy saying https, https public URL", withEnv(nil), "/api/version", trustedPeer, proto("https"), hsts},
-		{"trusted proxy saying https on /healthz", withEnv(nil), "/healthz", trustedPeer, proto("https"), hsts},
-		{"trusted proxy saying https, http public URL", withEnv(map[string]string{"TIERPLAN_PUBLIC_URL": "http://tierplan.example"}), "/api/version", trustedPeer, proto("https"), ""},
-		// Over TLS: unchanged.
-		{"TLS with a supplied certificate", withEnv(suppliedEnv), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, hsts},
-		{"TLS with the self-signed certificate", withEnv(map[string]string{"TIERPLAN_TLS_SELF_SIGNED": "true"}), "/healthz", untrustedPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, ""},
+		// Without r.TLS there is no header, whatever a trusted or untrusted peer says.
+		{"no TLS, supplied certificate, no header from the peer", withEnv(supplied), forwarded(untrustedPeer, "", false), ""},
+		{"no TLS, trusted proxy saying https", withEnv(supplied), forwarded(trustedPeer, "https", false), ""},
+		{"no TLS, trusted proxy saying http", withEnv(supplied), forwarded(trustedPeer, "http", false), ""},
+		{"no TLS, untrusted peer claiming https", withEnv(supplied), forwarded(untrustedPeer, "https", false), ""},
+		{"no TLS, loopback peer", withEnv(supplied), forwarded("127.0.0.1:40000", "", false), ""},
+		{"no TLS, self-signed, trusted proxy saying https", withEnv(nil), forwarded(trustedPeer, "https", false), ""},
+		// Over TLS the certificate kind decides.
+		{"TLS with a supplied certificate", withEnv(supplied), forwarded(untrustedPeer, "", true), hsts},
+		{"TLS with a supplied certificate and a forwarded http", withEnv(supplied), forwarded(trustedPeer, "http", true), hsts},
+		{"TLS with the self-signed certificate", withEnv(nil), forwarded(untrustedPeer, "", true), ""},
+		{"TLS with the self-signed certificate and a trusted proxy saying https", withEnv(nil), forwarded(trustedPeer, "https", true), ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := gateServer(t, tc.env)
-			rec := plainFrom(srv, http.MethodGet, tc.target, tc.peer, tc.mutate)
-			if got := rec.Header().Get("Strict-Transport-Security"); got != tc.want {
-				t.Errorf("status %d: Strict-Transport-Security = %q, want %q", rec.Code, got, tc.want)
+			if got := hstsFor(t, tc.env, tc.mutate); got != tc.want {
+				t.Errorf("Strict-Transport-Security = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestHSTSIsNeverSentOnThePlainRedirectOrRefusal(t *testing.T) {
-	// A redirect or a refusal that carried HSTS could pin a browser to an address that does not
-	// answer yet (D-04), so the gate answers before the router adds it.
-	src := t.TempDir()
-	if _, err := TLSConfig(config.Config{DataDir: src, TLSSelfSigned: true}, "", "", nil); err != nil {
+// writeServerCert writes the certificate an httptest TLS server presents to a temporary PEM file and
+// returns its path: the file the healthcheck verifies against.
+func writeServerCert(t *testing.T, ts *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "server.crt")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ts.Certificate().Raw})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	supplied := func(extra map[string]string) map[string]string {
-		env := map[string]string{
-			"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
-			"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
-		}
-		for k, v := range extra {
-			env[k] = v
-		}
-		return env
-	}
-
-	srv := gateServer(t, supplied(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.example"}))
-	rec := plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, nil)
-	if rec.Code != http.StatusTemporaryRedirect {
-		t.Fatalf("redirect: status = %d, want 307", rec.Code)
-	}
-	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
-		t.Errorf("redirect: Strict-Transport-Security = %q, want none", got)
-	}
-
-	srv = gateServer(t, supplied(nil))
-	rec = plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("refusal: status = %d, want 400", rec.Code)
-	}
-	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
-		t.Errorf("refusal: Strict-Transport-Security = %q, want none", got)
-	}
-
-	// What the router serves over TLS still carries it.
-	rec = plainFrom(srv, http.MethodGet, "/api/version", nonLoopbackPeer, func(r *http.Request) { r.TLS = &tls.ConnectionState{} })
-	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
-		t.Errorf("served over TLS: Strict-Transport-Security = %q, want max-age=31536000", got)
-	}
+	return path
 }
 
-// healthyOn serves a 200 on ln and returns its port.
-func healthyOn(t *testing.T, ln net.Listener) string {
+// healthyOn serves a 200 over TLS on ln and returns its port and the certificate file to verify it.
+func healthyOn(t *testing.T, ln net.Listener) (port, certFile string) {
 	t.Helper()
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	_ = ts.Listener.Close()
 	ts.Listener = ln
-	ts.Start()
+	ts.StartTLS()
 	t.Cleanup(ts.Close)
 	_, port, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return port
+	return port, writeServerCert(t, ts)
 }
 
 func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
@@ -1085,8 +1062,8 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		if err != nil {
 			t.Skipf("cannot bind 127.0.0.2: %v", err)
 		}
-		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, ""); err != nil {
+		port, certFile := healthyOn(t, ln)
+		if err := Healthcheck(context.Background(), "127.0.0.2:"+port, certFile); err != nil {
 			t.Errorf("Healthcheck on the address the server is bound to: %v", err)
 		}
 	})
@@ -1095,8 +1072,8 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		if err != nil {
 			t.Skipf("no IPv6 loopback: %v", err)
 		}
-		port := healthyOn(t, ln)
-		if err := Healthcheck(context.Background(), "[::1]:"+port, ""); err != nil {
+		port, certFile := healthyOn(t, ln)
+		if err := Healthcheck(context.Background(), "[::1]:"+port, certFile); err != nil {
 			t.Errorf("Healthcheck on [::1]: %v", err)
 		}
 	})
@@ -1105,9 +1082,9 @@ func TestHealthcheckDialsTheConfiguredAddress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		port := healthyOn(t, ln)
+		port, certFile := healthyOn(t, ln)
 		for _, listen := range []string{":" + port, "0.0.0.0:" + port, "[::]:" + port} {
-			if err := Healthcheck(context.Background(), listen, ""); err != nil {
+			if err := Healthcheck(context.Background(), listen, certFile); err != nil {
 				t.Errorf("Healthcheck(%q): %v", listen, err)
 			}
 		}

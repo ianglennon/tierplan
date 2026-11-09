@@ -176,27 +176,6 @@ func TestTokenRotateWithoutAnAddressRefusesAndChangesNothing(t *testing.T) {
 	}
 }
 
-// A rotation whose install would point agents at a plain address for another host
-// is refused before anything changes: the current token stays and nothing is audited
-// (G-02-R4-3, T-02-144, T-02-145).
-func TestTokenRotateWithAPlainAddressForAnotherHostRefusesAndChangesNothing(t *testing.T) {
-	t.Parallel()
-	f := newEnvFix(t, dockertest.FakeConfig{})
-	id, _ := f.agentEnv(t)
-	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
-	_, rec := f.rotate(t, id)
-	if rec.code != http.StatusConflict || rec.ptyp != "insecure_agent_url" {
-		t.Fatalf("status = %d type %q: %s", rec.code, rec.ptyp, rec.body)
-	}
-	var n int
-	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM env_join_tokens WHERE env_id = ?`, id).Scan(&n); err != nil || n != 1 {
-		t.Errorf("%d token rows (%v), want the one the environment started with", n, err)
-	}
-	if got := len(f.audits(t, audit.ActionEnvironmentTokenRotated)); got != 0 {
-		t.Errorf("%d rotation entries after a refused rotation", got)
-	}
-}
-
 func TestTokenDisableAnswers204AuditsAndShowsInTheStatusUntilARotation(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
@@ -1106,92 +1085,46 @@ func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *test
 	}
 }
 
-// The rotate answer and the node list's manual update command follow the same rule
-// as the first install: the agent's switch only for a plain ws:// address while the
-// server's switch is on (T-02-31).
-func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
+// The rotate answer and the node list's manual update command carry no allow-insecure
+// line for any address (D-09). The switch's name is spelled in two halves so a
+// repository-wide gate for it stays exact.
+func TestRotateAndManualUpdateCarryNoRemovedSwitchLine(t *testing.T) {
 	t.Parallel()
-	const name = "TIERPLAN_AGENT_ALLOW_INSECURE"
-	cases := []struct {
-		label string
-		allow bool
-		url   string
-		want  bool
-	}{
-		{"switch off, http agent URL on this machine", false, "http://127.0.0.1:7480", false},
-		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
-		{"switch on, https agent URL", true, "https://tierplan.example.com", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			f := newAgentFix(t)
-			f.agentAllowInsecure = tc.allow
-			f.h = f.build(t)
-			f.inst.ApplyAgentURL(tc.url)
-
-			// The rotate answer: a new install for the same environment.
-			id, _ := f.agentEnv(t)
-			got, rec := f.rotate(t, id)
-			if rec.code != http.StatusOK || got.Install == nil {
-				t.Fatalf("rotate: %d %s", rec.code, rec.body)
-			}
-			for label, text := range map[string]string{
-				"swarm command": got.Install.Swarm.Command, "stack file": got.Install.Swarm.StackFile,
-				"standalone command": got.Install.Standalone.Command, "compose file": got.Install.Standalone.ComposeFile,
-				"rotate command": got.Install.Swarm.RotateCommand,
-			} {
-				want := tc.want && label != "rotate command" // a secret swap sets no environment
-				if has := strings.Contains(text, name); has != want {
-					t.Errorf("rotated %s carries the agent switch = %v, want %v:\n%s", label, has, want, text)
-				}
-			}
-
-			// The node list: a standalone agent behind the server on a host that refuses
-			// self-update is given the recreate command, a swarm node the service update.
-			env := f.srv.NewEnvironment(t, "Dev")
-			plain := f.connect(t, env, dockertest.FakeConfig{Hostname: "plain"}, &wire.Facts{
-				EngineID: "ENG:plain", Hostname: "plain", EngineReachable: true, Policy: wire.PolicyFacts{SelfUpdate: false}})
-			f.srv.Events.WaitLen(t, 1)
-			cmd := f.node(t, env.ID, plain.id).ManualUpdateCommand
-			if !strings.Contains(cmd, "docker run") {
-				t.Fatalf("a standalone agent's manual update is not a docker run: %q", cmd)
-			}
-			if has := strings.Contains(cmd, "-e '"+name+"=true'"); has != tc.want {
-				t.Errorf("the standalone manual update carries the agent switch = %v, want %v:\n%s", has, tc.want, cmd)
-			}
-			env2 := f.srv.NewEnvironment(t, "DevSwarm")
-			node := f.connect(t, env2, dockertest.FakeConfig{Hostname: "node", SwarmState: "active"}, swarmFacts("node", true, false))
-			f.srv.Events.WaitLen(t, 2)
-			if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") || strings.Contains(cmd, name) {
-				t.Errorf("the swarm manual update = %q, want a service update without the agent switch", cmd)
-			}
-		})
-	}
-}
-
-// The node list's manual update for a standalone agent that refuses self-update is
-// the recreate command, which carries the agent address. For a plain address on
-// another host with the switch off that is a command whose agent would exit at
-// start, so there is none; a swarm node's service update carries no address and
-// stays (G-02-R4-3, T-02-144).
-func TestTheNodeListOffersNoStandaloneManualUpdateForAPlainAddressForAnotherHost(t *testing.T) {
-	t.Parallel()
+	const name = "TIERPLAN_AGENT_ALLOW_" + "INSECURE"
 	f := newAgentFix(t)
-	f.inst.ApplyAgentURL("http://10.0.0.5:7480")
+	f.inst.ApplyAgentURL("https://tierplan.example.com")
 
+	// The rotate answer: a new install for the same environment.
+	id, _ := f.agentEnv(t)
+	got, rec := f.rotate(t, id)
+	if rec.code != http.StatusOK || got.Install == nil {
+		t.Fatalf("rotate: %d %s", rec.code, rec.body)
+	}
+	for label, text := range map[string]string{
+		"swarm command": got.Install.Swarm.Command, "stack file": got.Install.Swarm.StackFile,
+		"standalone command": got.Install.Standalone.Command, "compose file": got.Install.Standalone.ComposeFile,
+		"rotate command": got.Install.Swarm.RotateCommand,
+	} {
+		if strings.Contains(text, name) {
+			t.Errorf("rotated %s carries the removed agent switch:\n%s", label, text)
+		}
+	}
+
+	// The node list: a standalone agent behind the server on a host that refuses
+	// self-update is given the recreate command, a swarm node the service update.
 	env := f.srv.NewEnvironment(t, "Dev")
 	plain := f.connect(t, env, dockertest.FakeConfig{Hostname: "plain"}, &wire.Facts{
 		EngineID: "ENG:plain", Hostname: "plain", EngineReachable: true, Policy: wire.PolicyFacts{SelfUpdate: false}})
 	f.srv.Events.WaitLen(t, 1)
-	if cmd := f.node(t, env.ID, plain.id).ManualUpdateCommand; cmd != "" {
-		t.Errorf("a standalone agent's manual update for a refused address = %q, want none", cmd)
+	cmd := f.node(t, env.ID, plain.id).ManualUpdateCommand
+	if !strings.Contains(cmd, "docker run") || strings.Contains(cmd, name) {
+		t.Errorf("a standalone agent's manual update = %q, want a docker run without the removed switch", cmd)
 	}
-
 	env2 := f.srv.NewEnvironment(t, "DevSwarm")
 	node := f.connect(t, env2, dockertest.FakeConfig{Hostname: "node", SwarmState: "active"}, swarmFacts("node", true, false))
 	f.srv.Events.WaitLen(t, 2)
-	if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") {
-		t.Errorf("the swarm manual update = %q, want the service update", cmd)
+	if cmd := f.node(t, env2.ID, node.id).ManualUpdateCommand; !strings.Contains(cmd, "docker service update") || strings.Contains(cmd, name) {
+		t.Errorf("the swarm manual update = %q, want a service update without the removed switch", cmd)
 	}
 }
 

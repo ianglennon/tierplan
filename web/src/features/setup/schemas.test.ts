@@ -10,6 +10,7 @@ import {
   instanceSchema,
   routeServerError,
   routeServerFieldErrors,
+  settingsSchema,
   tokenSchema,
 } from "@/features/setup/schemas";
 
@@ -100,19 +101,21 @@ describe("instanceSchema", () => {
   });
 
   it("trims the name", () => {
-    const out = instanceSchema.parse({ instanceName: "  Home lab  ", publicUrl: "http://b.lan" });
+    const out = instanceSchema.parse({ instanceName: "  Home lab  ", publicUrl: "https://b.lan" });
     expect(out.instanceName).toBe("Home lab");
   });
 
-  it("rejects a public URL that is not an absolute http or https address", () => {
+  it("rejects a public URL that is not an absolute https address with the publicUrl key", () => {
     for (const bad of [
       "example.com",
       "",
       "ftp://example.com",
       "/relative",
+      "https://",
       "https://user:pw@example.com",
       "https://example.com/?q=1",
       "https://example.com/#top",
+      "http://example.com/?q=1",
     ]) {
       expect(issues(instanceSchema, { instanceName: "Lab", publicUrl: bad })).toEqual([
         "publicUrl:setup.errors.publicUrl",
@@ -120,14 +123,59 @@ describe("instanceSchema", () => {
     }
   });
 
-  it("accepts an https address, an http address with a port and a sub-path", () => {
+  it("refuses a well-formed http public URL with the https-only key, whatever the scheme case", () => {
+    for (const http of [
+      "http://tierplan.example.com",
+      "http://192.168.1.10:7480",
+      "HTTP://X",
+      "http://example.com/tierplan",
+    ]) {
+      expect(issues(instanceSchema, { instanceName: "Lab", publicUrl: http })).toEqual([
+        "publicUrl:setup.errors.publicUrlHttp",
+      ]);
+    }
+  });
+
+  it("accepts an https address, with a port and with a sub-path", () => {
     for (const ok of [
       "https://tierplan.example.com",
-      "http://192.168.1.10:7480",
-      "https://example.com/tierplan",
+      "https://192.168.1.10:7480",
+      "HTTPS://Example.com/tierplan",
     ]) {
       expect(issues(instanceSchema, { instanceName: "Lab", publicUrl: ok })).toEqual([]);
     }
+  });
+});
+
+describe("settingsSchema", () => {
+  const base = { instanceName: "Lab", publicUrl: "https://b.example", agentUrl: "" };
+
+  it("treats an empty agent URL as valid and an empty public URL as invalid", () => {
+    expect(issues(settingsSchema, base)).toEqual([]);
+    expect(issues(settingsSchema, { ...base, publicUrl: "" })).toEqual([
+      "publicUrl:setup.errors.publicUrl",
+    ]);
+  });
+
+  it("refuses an http agent URL with its own https-only key", () => {
+    expect(issues(settingsSchema, { ...base, agentUrl: "http://tierplan.internal:7480" })).toEqual([
+      "agentUrl:settings.general.agentUrl.httpsOnly",
+    ]);
+  });
+
+  it("refuses an http public URL with the shared https-only key", () => {
+    expect(issues(settingsSchema, { ...base, publicUrl: "http://b.example" })).toEqual([
+      "publicUrl:setup.errors.publicUrlHttp",
+    ]);
+  });
+
+  it("gives any other invalid agent URL the publicUrl key and accepts https", () => {
+    expect(issues(settingsSchema, { ...base, agentUrl: "tierplan.internal" })).toEqual([
+      "agentUrl:setup.errors.publicUrl",
+    ]);
+    expect(issues(settingsSchema, { ...base, agentUrl: "https://tierplan.internal:7480" })).toEqual(
+      [],
+    );
   });
 });
 

@@ -49,10 +49,6 @@ type AgentsDeps struct {
 	// TLSPin returns the SPKI pin of the self-signed certificate TierPlan serves, or
 	// "" when it serves none. Nil means none.
 	TLSPin func() string
-	// AgentAllowInsecure is the server's TIERPLAN_AGENT_ALLOW_INSECURE, a development
-	// switch. It only decides whether the install and the manual update command for a
-	// plain ws:// address also tell the agent to accept it (T-02-31).
-	AgentAllowInsecure bool
 	// Local says which node of an environment is the folded local host, so the node
 	// list can show it beside the agents. Nil means none is (D-48).
 	Local FoldedNodes
@@ -319,8 +315,8 @@ type updateView struct {
 
 // updates builds the view the node list uses from the route's dependencies. A
 // standalone agent's manual update command is empty (and the SPA shows none) when
-// the address agents are given is plain ws:// for another host with the switch off:
-// agents.ManualUpdateCommand answers "" there, so nothing is checked here.
+// TierPlan has no address to give agents: agents.ManualUpdateCommand answers ""
+// there, so nothing is checked here.
 func (d AgentsDeps) updates() updateView {
 	version := cmpOr(d.ServerVersion, buildinfo.Get().Version)
 	v := updateView{serverVersion: version, command: func(role string) string {
@@ -336,7 +332,7 @@ func (d AgentsDeps) updates() updateView {
 		if role == "leader" || role == "manager" || role == "worker" {
 			envType = agents.EnvTypeSwarm
 		}
-		return agents.ManualUpdateCommand(envType, agents.AgentImage(version), agents.InstallParams{Endpoint: endpoint, Pin: pin, ServerVersion: version, AllowInsecure: d.AgentAllowInsecure})
+		return agents.ManualUpdateCommand(envType, agents.AgentImage(version), agents.InstallParams{Endpoint: endpoint, Pin: pin, ServerVersion: version})
 	}}
 	if d.Updater != nil {
 		v.state = d.Updater.State
@@ -420,8 +416,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			"enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the " +
 			"install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents " +
 			"it carries the one-line rotate command. 404 environment_not_found; 409 " + problemPublicURLRequired + " when TierPlan has no " +
-			"address to give agents, and 409 " + problemInsecureAgentURL + " when that address is plain ws:// for a host that is not this machine " +
-			"and TIERPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
+			"address to give agents; the current token stays then. Needs environments.token. Audited as environment.token_rotated with the new generation.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsToken, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *TokenMutationInput) (*RotateTokenOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -441,9 +436,6 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
 				"TierPlan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
 		}
-		if tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure) {
-			return nil, insecureAgentURLProblem()
-		}
 		rot, err := d.Agents.RotateToken(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {
 			return nil, fail("rotate token", err)
@@ -454,7 +446,6 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		}
 		install, err := agents.BuildInstall(agents.InstallParams{
 			Token: rot.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: rot.Generation,
-			AllowInsecure: d.AgentAllowInsecure,
 		})
 		if err != nil {
 			// The token is retired and cannot be shown again. A value that breaks the

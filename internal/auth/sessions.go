@@ -20,16 +20,15 @@ import (
 	"github.com/ianglennon/tierplan/internal/vault"
 )
 
-// Cookie names (D-12, D-32, D-50). The __Host- prefix makes a browser accept the
-// cookie only with Secure, Path=/ and no Domain, so it is used whenever the
-// public URL is https and has no path. Under a base path the cookie needs
-// Path=<base>, which __Host- forbids, so https uses __Secure- (Secure is still
-// required, Path and Domain are free). Over plain http either prefix would make
-// the browser drop the cookie, so the bare name is used.
+// Cookie names (D-12, D-32, D-50, TLS-11). The public URL is always https, so
+// the cookie is always Secure and always prefixed. The __Host- prefix makes a
+// browser accept the cookie only with Secure, Path=/ and no Domain, so it is
+// used at the root. Under a base path the cookie needs Path=<base>, which
+// __Host- forbids, so __Secure- is used (Secure is still required, Path and
+// Domain are free). There is no bare name: it is neither issued nor accepted.
 const (
 	hostCookieName   = "__Host-tierplan_session"
 	secureCookieName = "__Secure-tierplan_session"
-	plainCookieName  = "tierplan_session"
 )
 
 // csrfLabel is the vault subkey label the CSRF tokens are keyed with (D-36).
@@ -108,28 +107,22 @@ func (m *Sessions) CreateTx(ctx context.Context, tx *sql.Tx, userID string, reme
 	return rawID, idHash, nil
 }
 
-// CookieScope is what decides the session cookie's name, Path and Secure flag:
-// whether the public URL is https, and the path of the public URL (D-50).
+// CookieScope is what decides the session cookie's name and Path: the path of
+// the public URL (D-50). The cookie is always Secure (TLS-11).
 type CookieScope struct {
-	// Secure is true when the public URL is https.
-	Secure bool
 	// BasePath is the path of the public URL, "" for the root.
 	BasePath string
 }
 
-// CookieName is the session cookie's name for the scope: __Host- for https at
-// the root, __Secure- for https under a base path, bare over http (D-50). The
-// authenticator reads only this name, so a cookie tossed under another name or
-// scope is ignored (T-02-12).
+// CookieName is the session cookie's name for the scope: __Host- at the root,
+// __Secure- under a base path (D-50). The authenticator reads only this name, so
+// a cookie tossed under another name or scope, the bare name included, is
+// ignored (T-02-12, T-13.1-25).
 func CookieName(scope CookieScope) string {
-	switch {
-	case scope.Secure && scope.BasePath == "":
+	if scope.BasePath == "" {
 		return hostCookieName
-	case scope.Secure:
-		return secureCookieName
-	default:
-		return plainCookieName
 	}
+	return secureCookieName
 }
 
 // cookiePath is "/" at the root and the base path under one, so a browser sends
@@ -145,31 +138,32 @@ func cookiePath(scope CookieScope) string {
 // can hand it to the response through a `header:"Set-Cookie"` output field.
 // Without remember there is no Max-Age, so the browser drops it when it closes;
 // with remember it lasts the remember lifetime. It is HttpOnly, SameSite=Lax,
-// Path=/ (or the base path, D-50) and never has a Domain.
+// Secure, Path=/ (or the base path, D-50) and never has a Domain.
 func (m *Sessions) Cookie(rawID string, remember bool, scope CookieScope) http.Cookie {
-	c := http.Cookie{ //nolint:gosec // Secure follows the public URL scheme (D-12): the __Host- prefix needs it, and over plain http a Secure cookie would never be stored
+	maxAge := 0
+	if remember {
+		maxAge = int(m.remember / time.Second)
+	}
+	return http.Cookie{
 		Name:     CookieName(scope),
 		Value:    rawID,
 		Path:     cookiePath(scope),
+		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   scope.Secure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	}
-	if remember {
-		c.MaxAge = int(m.remember / time.Second)
-	}
-	return c
 }
 
 // ClearCookie builds the cookie that makes a browser delete the session cookie.
 func ClearCookie(scope CookieScope) http.Cookie {
-	return http.Cookie{ //nolint:gosec // Secure must match the cookie being cleared (D-12)
+	return http.Cookie{
 		Name:     CookieName(scope),
 		Value:    "",
 		Path:     cookiePath(scope),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   scope.Secure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	}
 }

@@ -101,7 +101,6 @@ test("an invited user gets Viewer through a team, sees only that environment, an
   // sent the link.
   const context = await browser.newContext({
     baseURL: ORIGIN,
-    ignoreHTTPSErrors: true,
     storageState: { cookies: [], origins: [] },
     locale: "en-GB",
     timezoneId: "UTC",

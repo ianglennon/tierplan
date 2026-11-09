@@ -16,7 +16,9 @@
 #
 # The agent has no server to talk to, so a listener on the host accepts its
 # connection and never answers; the agent waits in the dial and stays up while
-# its process is inspected. The listener binds a kernel-assigned port and the agent
+# its process is inspected. It dials wss:// (the agent refuses plain ws:// to
+# anything but loopback, and every install serves TLS), so what arrives at the
+# listener is a TLS ClientHello that is never answered. The listener binds a kernel-assigned port and the agent
 # uses the host network, so no fixed port is involved. Environment: IMAGE (default
 # tierplan-agent:dev). Needs Docker, python3 and tar. Removes every container, volume
 # and process it creates; they carry the label tierplan.ci.owner=$TIERPLAN_CI_OWNER
@@ -60,7 +62,8 @@ fail() {
 user="$(docker image inspect -f '{{.Config.User}}' "${IMAGE}")"
 [ -z "${user}" ] || [ "${user}" = 0 ] || [ "${user}" = root ] || fail "the image sets USER '${user}'; the binary must start as root to read a root-only secret and drop itself"
 
-# A listener that accepts connections and never answers.
+# A listener that accepts TCP connections and holds them: the TLS ClientHello
+# the agent sends is never answered.
 python3 - "${WORK}/port" "${WORK}/accepted" <<'PY' &
 import socket, sys
 s = socket.socket()
@@ -78,7 +81,7 @@ HOLDER_PID=$!
 for _ in $(seq 1 50); do [ -s "${WORK}/port" ] && break; sleep 0.1; done
 [ -s "${WORK}/port" ] || fail "the listener did not start"
 PORT="$(cat "${WORK}/port")"
-URL="ws://127.0.0.1:${PORT}/agent/connect"
+URL="wss://127.0.0.1:${PORT}/agent/connect"
 
 # status_field PID FIELD prints the whole value line of /proc/PID/status.
 status_field() { awk -v f="$2:" '$1 == f { $1 = ""; sub(/^ /, ""); print }' "/proc/$1/status"; }

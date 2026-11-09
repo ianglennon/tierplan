@@ -4,11 +4,16 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"container/list"
 	"crypto/tls"
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/netip"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -73,8 +78,9 @@ func (c *prefixConn) CloseWrite() error {
 var _ interface{ CloseWrite() error } = (*prefixConn)(nil)
 
 // sniffListener is the one listener every mode serves through. It tells TLS from plain HTTP on each
-// connection by the first byte, so https:// and http:// are answered on the same port, and TLS can
-// be switched on and off while the process runs.
+// connection by the first byte. A TLS connection is handed to the TLS server; a plain one is read
+// only far enough to see its request head, and is handed on only for an ACME challenge. Any other
+// plain connection is closed with no bytes written.
 //
 // Accept never reads: a goroutine per connection waits for the first byte under a timer, so one
 // silent client cannot hold up the rest.
@@ -222,6 +228,16 @@ func (l *sniffListener) register(c net.Conn) (admitted bool, evicted net.Conn) {
 	return true, evicted
 }
 
+// isLoopbackPeer reports whether remoteAddr, the TCP peer, is a loopback address.
+// It is judged from the connection, never from a header.
+func isLoopbackPeer(remoteAddr string) bool {
+	ap, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	return ap.Addr().Unmap().IsLoopback()
+}
+
 // isLoopbackConn reports whether c's TCP peer is a loopback address.
 func isLoopbackConn(c net.Conn) bool {
 	a := c.RemoteAddr()
@@ -246,8 +262,10 @@ func (l *sniffListener) pendingCount() int {
 	return len(l.pending)
 }
 
-// classify reads the first byte of c and hands it on as a TLS connection or a plain one. It closes
-// quietly a connection that stays silent, or that the client drops, before the first byte.
+// classify reads the first byte of c and hands it on as a TLS connection, or reads a plain request
+// head and hands the connection on only when that head is an ACME challenge. Everything else is
+// closed with nothing written: no 400, no redirect, no error page (D-01). The connection stays in the
+// pending set, under the same timer, until it has been classified (Pitfalls 1, 6 and 7).
 func (l *sniffListener) classify(c net.Conn) {
 	defer l.wg.Done()
 	// The timer leaves the pending set before it closes, so the count is already down when the
@@ -256,27 +274,53 @@ func (l *sniffListener) classify(c net.Conn) {
 		l.forget(c)
 		_ = c.Close()
 	})
+	// drop closes c without writing, leaving the pending set exactly once.
+	drop := func() {
+		stop()
+		l.forget(c)
+		_ = c.Close()
+	}
 	var b [1]byte
 	_, err := io.ReadFull(c, b[:])
-	// stop runs before the connection is handed on, so the timer can never close a connection that
-	// is serving a request (an events stream outlives it).
-	if !stop() || err != nil {
+	if err != nil {
+		drop()
+		return
+	}
+	if b[0] == tlsHandshakeRecord {
+		// stop runs before the connection is handed on, so the timer can never close a connection
+		// that is serving a request (an events stream outlives it).
+		if !stop() {
+			l.forget(c)
+			_ = c.Close()
+			return
+		}
+		// It has spoken, so it is no longer waiting: leave the set before anything else, so a full
+		// limit can never close a connection that is already being handed on.
+		l.forget(c)
+		l.deliver(tls.Server(&prefixConn{Conn: c, b: b[0], has: true}, l.rt.ServerConfig()))
+		return
+	}
+	// Plain: read the request head ourselves, so net/http never gets the chance to write a
+	// 400, 431 or 501 to a connection that is not a challenge.
+	rec := &recorder{c: c}
+	rec.buf.WriteByte(b[0])
+	br := bufio.NewReader(io.MultiReader(bytes.NewReader(b[:]), io.LimitReader(rec, plainHeadLimit-1)))
+	req, err := http.ReadRequest(br)
+	if err != nil || !strings.HasPrefix(req.URL.Path, acmeChallengePrefix) {
+		drop()
+		return
+	}
+	if !stop() {
 		l.forget(c)
 		_ = c.Close()
 		return
 	}
-	// It has spoken, so it is no longer waiting: leave the set before anything else, so a full
-	// limit can never close a connection that is already being handed on.
 	l.forget(c)
-	pc := &prefixConn{Conn: c, b: b[0], has: true}
-	var out net.Conn = pc
-	if b[0] == tlsHandshakeRecord {
-		// A ClientHello while TLS is not live goes to the plain branch, which answers it as the
-		// malformed request it is.
-		if cfg := l.rt.ServerConfig(); cfg != nil {
-			out = tls.Server(pc, cfg)
-		}
-	}
+	l.deliver(newReplayConn(c, rec.buf.Bytes()))
+}
+
+// deliver queues a classified connection for Accept, or closes it when the listener is closed first.
+func (l *sniffListener) deliver(out net.Conn) {
 	select {
 	case l.ready <- out:
 	case <-l.done:

@@ -40,6 +40,12 @@ const NAME_MAX = 64;
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
+// Build-time source URL (Vite define). The docs ship with the source, so the proxy-pin hint
+// links to the section of docs/agent.md that says which pin to use behind a proxy.
+declare const __TIERPLAN_SOURCE_URL__: string;
+const PROXY_PIN_DOCS_PATH =
+  "/blob/main/docs/agent.md#a-proxy-with-its-own-certificate-tierplan_agent_pin";
+
 type EnvKind = "swarm" | "standalone";
 type View = "command" | "composeFile";
 
@@ -79,12 +85,11 @@ interface FlowProps {
 }
 
 // failureKey picks the sentence for a failed call, as a key under
-// install.errors. A missing address and an address agents would refuse are the
-// failures an admin can fix from here, so each says so.
+// install.errors. A missing address is the failure an admin can fix from here,
+// so it says so.
 function failureKey(error: unknown, fallback: "create" | "rotate"): string {
   if (error instanceof InstallRequestError) {
     if (error.publicUrlRequired) return "publicUrlRequired";
-    if (error.insecureAgentUrl) return "insecureAgentUrl";
   }
   return fallback;
 }
@@ -239,7 +244,21 @@ function InstallStep({ info, envId, envName, envType, hasAgents, onClose }: Inst
         {info.pin ? (
           <>
             <dt className="text-muted-foreground">{t("install.details.pin")}</dt>
-            <dd className="font-mono break-all">{info.pin}</dd>
+            <dd>
+              <span className="block font-mono break-all">{info.pin}</span>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {t("install.details.pinProxyHint.before")}{" "}
+                <a
+                  href={`${__TIERPLAN_SOURCE_URL__}${PROXY_PIN_DOCS_PATH}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-sm underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {t("install.details.pinProxyHint.link")}
+                </a>
+                {t("install.details.pinProxyHint.after")}
+              </p>
+            </dd>
           </>
         ) : null}
       </dl>
@@ -324,15 +343,15 @@ function NameForm({ pending, formError, onSubmit, onCancel }: NameFormProps) {
 // Considerations: install dialog creation or rotation fails).
 function FormFailure({ error }: { error: string }) {
   const t = useT();
-  if (error === "publicUrlRequired" || error === "insecureAgentUrl") {
+  if (error === "publicUrlRequired") {
     return (
       <Alert variant="destructive" role="alert">
         <AlertDescription>
-          {t(`install.errors.${error}.before`)}{" "}
+          {t("install.errors.publicUrlRequired.before")}{" "}
           <Link to="/settings/general" className="underline underline-offset-3">
-            {t(`install.errors.${error}.link`)}
+            {t("install.errors.publicUrlRequired.link")}
           </Link>
-          {t(`install.errors.${error}.after`)}
+          {t("install.errors.publicUrlRequired.after")}
         </AlertDescription>
       </Alert>
     );

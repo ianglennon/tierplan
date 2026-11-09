@@ -3,8 +3,8 @@
 
 // Package instance holds the instance settings every request reads: the display
 // name (D-03), the public URL that drives the Origin guard and the session
-// cookie's Secure flag (D-04), and the agent URL that tells agents where to dial
-// when it is not the public one (D-18).
+// cookie's name and Path (D-04; the cookie is always Secure), and the agent URL
+// that tells agents where to dial when it is not the public one (D-18).
 //
 // The values live in the settings table. This package caches them in atomics so
 // the Origin guard, which runs on every mutation, never touches the database,
@@ -216,12 +216,6 @@ func (i *Instance) PublicURL() string { return *i.url.Load() }
 // is set. httpx.Options.PublicOrigin reads it on every request.
 func (i *Instance) PublicOrigin() string { return httpx.OriginOf(i.PublicURL()) }
 
-// Secure reports whether the public URL is https, which decides the session
-// cookie's Secure flag and name (D-12).
-func (i *Instance) Secure() bool {
-	return strings.HasPrefix(i.PublicOrigin(), "https://")
-}
-
 // BasePath is the escaped path of the public URL, for example "/tierplan" for
 // https://example.com/tierplan, and "" when there is no public URL or it has no
 // path. It is the single source of the base every link, asset URL and cookie
@@ -235,10 +229,10 @@ func (i *Instance) BasePath() string {
 	return strings.TrimRight(u.EscapedPath(), "/")
 }
 
-// CookieScope is the scope the session cookie is named and scoped for: whether
-// the public URL is https and the path it is served under (D-50).
+// CookieScope is the scope the session cookie is named and scoped for: the path
+// the public URL is served under (D-50). The cookie is always Secure (TLS-11).
 func (i *Instance) CookieScope() auth.CookieScope {
-	return auth.CookieScope{Secure: i.Secure(), BasePath: i.BasePath()}
+	return auth.CookieScope{BasePath: i.BasePath()}
 }
 
 // Locked reports whether TIERPLAN_PUBLIC_URL fixes the public URL.

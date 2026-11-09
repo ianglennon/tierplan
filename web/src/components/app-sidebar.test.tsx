@@ -96,8 +96,16 @@ function mount(width: number, path = "/") {
   return router;
 }
 
+// The router draws the root outside act(), so the trigger can be in the page while the sidebar's
+// mount effects have not run yet: useIsMobile has not switched to the phone layout and AppSidebar
+// has not closed the drawer for the first path. A click then toggled the desktop sidebar, or
+// opened a drawer the pending effect closed again, which a loaded runner made happen. The desktop
+// sidebar is drawn only until useIsMobile says phone, and the closed drawer draws nothing, so its
+// absence beside the trigger means those effects have run.
 const openMenu = async () => {
-  fireEvent.click(await screen.findByRole("button", { name: "Toggle sidebar" }));
+  const trigger = await screen.findByRole("button", { name: "Toggle sidebar" });
+  await waitFor(() => expect(document.querySelector('[data-slot="sidebar"]')).toBeNull());
+  fireEvent.click(trigger);
   return screen.findByRole("dialog", { name: "Navigation" });
 };
 

@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -28,13 +29,11 @@ type sniffRig struct {
 	addr   string
 }
 
-func newSniffRig(t *testing.T, maxPending int, tlsLive bool) *sniffRig {
+func newSniffRig(t *testing.T, maxPending int) *sniffRig {
 	t.Helper()
 	rt := newHTTPSRuntime()
-	if tlsLive {
-		cert, _ := genCert(t, "")
-		rt.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
-	}
+	cert, _ := genCert(t, "")
+	rt.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil })
 	base, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -95,50 +94,83 @@ func readErr(t *testing.T, c net.Conn) error {
 	return testsupport.Await(t, "the connection to be closed", ch)
 }
 
+// challengeHead is a complete plain request head for an ACME challenge, with marker in the path so a
+// test can tell which connection it came from.
+func challengeHead(marker string) string {
+	return "GET " + acmeChallengePrefix + marker + " HTTP/1.1\r\nHost: x\r\n\r\n"
+}
+
+// wantHead reads len(want) bytes from c and fails unless they are exactly want.
+func wantHead(t *testing.T, c net.Conn, want string) {
+	t.Helper()
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != want {
+		t.Fatalf("the handed-over connection read %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestSniffClassifiesByFirstByte(t *testing.T) {
-	t.Run("a handshake byte with TLS live is a TLS connection", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
+	t.Run("a handshake byte is a TLS connection", func(t *testing.T) {
+		r := newSniffRig(t, maxPendingSniffs)
 		if _, err := r.dial(t).Write([]byte{tlsHandshakeRecord}); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := accept(t, r.l).(*tls.Conn); !ok {
-			t.Fatal("a ClientHello with TLS live was not handed over as a *tls.Conn")
+			t.Fatal("a ClientHello was not handed over as a *tls.Conn")
 		}
 	})
-	t.Run("a handshake byte with TLS removed is plain", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
-		r.rt.Remove()
-		if _, err := r.dial(t).Write([]byte{tlsHandshakeRecord}); err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := accept(t, r.l).(*prefixConn); !ok {
-			t.Fatal("a ClientHello with TLS not live was not handed over as a plain connection")
-		}
-	})
-	t.Run("any other byte is plain and replayed", func(t *testing.T) {
-		r := newSniffRig(t, maxPendingSniffs, true)
-		if _, err := r.dial(t).Write([]byte("GET")); err != nil {
+	t.Run("a challenge head is replayed byte for byte", func(t *testing.T) {
+		r := newSniffRig(t, maxPendingSniffs)
+		head := challengeHead("token")
+		if _, err := r.dial(t).Write([]byte(head)); err != nil {
 			t.Fatal(err)
 		}
 		c := accept(t, r.l)
-		pc, ok := c.(*prefixConn)
-		if !ok {
-			t.Fatalf("a request line was handed over as %T, want *prefixConn", c)
+		if _, ok := c.(*replayConn); !ok {
+			t.Fatalf("a challenge head was handed over as %T, want *replayConn", c)
 		}
-		var first [8]byte
-		n, err := pc.Read(first[:])
-		if err != nil || n != 1 || first[0] != 'G' {
-			t.Fatalf("first Read = %q, %v; want the peeked byte alone", first[:n], err)
+		wantHead(t, c, head)
+		if n := r.timers.Pending(); n != 0 {
+			t.Fatalf("%d peek timers are armed after the hand-over, want 0", n)
 		}
-		rest := make([]byte, 2)
-		if _, err := io.ReadFull(pc, rest); err != nil || string(rest) != "ET" {
-			t.Fatalf("the rest = %q, %v; want ET", rest, err)
+	})
+	t.Run("a non-challenge head is closed and never handed over", func(t *testing.T) {
+		r := newSniffRig(t, maxPendingSniffs)
+		c := r.dial(t)
+		accepted := acceptAsync(r.l)
+		if _, err := c.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := readErr(t, c); !errors.Is(err, io.EOF) {
+			t.Fatalf("a non-challenge head got %v, want it closed with no bytes", err)
+		}
+		select {
+		case got := <-accepted:
+			t.Fatalf("a non-challenge head reached Accept: %v %v", got.conn, got.err)
+		default:
+		}
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after the close, want 0", n)
+		}
+	})
+	t.Run("a head that never ends is closed when the timer fires", func(t *testing.T) {
+		// In-memory pipe: a close is seen at the other end as EOF whether or not the listener had read
+		// the part that was sent, so the test needs no ordering between the write and the timer.
+		r := newCapRig(t, maxPendingSniffs)
+		c := r.connect(t, publicAt(40001))
+		go func() { _, _ = c.Write([]byte("GET " + acmeChallengePrefix + "slow HTTP/1.1\r\n")) }()
+		r.timers.FireAll()
+		if err := readErr(t, c); !errors.Is(err, io.EOF) {
+			t.Fatalf("a half-sent head got %v, want it closed when the timer fired", err)
+		}
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending, want 0", n)
 		}
 	})
 }
 
 func TestSniffClosesASilentConnectionWhenItsTimerFires(t *testing.T) {
-	r := newSniffRig(t, maxPendingSniffs, true)
+	r := newSniffRig(t, maxPendingSniffs)
 	silent := r.dial(t)
 	if d := r.timers.WaitArmed(t); d != sniffTimeout {
 		t.Fatalf("the peek timer was armed for %v, want %v", d, sniffTimeout)
@@ -149,7 +181,8 @@ func TestSniffClosesASilentConnectionWhenItsTimerFires(t *testing.T) {
 		t.Fatalf("the silent client got %v, want EOF", err)
 	}
 	// The silent connection never reached Accept: the next one served is the one that spoke.
-	if _, err := r.dial(t).Write([]byte("G")); err != nil {
+	head := challengeHead("G")
+	if _, err := r.dial(t).Write([]byte(head)); err != nil {
 		t.Fatal(err)
 	}
 	got := testsupport.Await(t, "the listener to hand over the connection that spoke", accepted)
@@ -157,24 +190,19 @@ func TestSniffClosesASilentConnectionWhenItsTimerFires(t *testing.T) {
 		t.Fatal(got.err)
 	}
 	t.Cleanup(func() { _ = got.conn.Close() })
-	var b [1]byte
-	if _, err := io.ReadFull(got.conn, b[:]); err != nil || b[0] != 'G' {
-		t.Fatalf("Accept returned a connection that read %q, %v; want the one that sent G", b[:], err)
-	}
+	wantHead(t, got.conn, head)
 }
 
 func TestSniffHandsOverAConnectionWhileAnEarlierOneIsSilent(t *testing.T) {
-	r := newSniffRig(t, maxPendingSniffs, true)
+	r := newSniffRig(t, maxPendingSniffs)
 	_ = r.dial(t) // A: silent
 	r.timers.WaitArmed(t)
-	if _, err := r.dial(t).Write([]byte("B")); err != nil { // B: speaks
+	head := challengeHead("B")
+	if _, err := r.dial(t).Write([]byte(head)); err != nil { // B: speaks
 		t.Fatal(err)
 	}
 	c := accept(t, r.l)
-	var b [1]byte
-	if _, err := io.ReadFull(c, b[:]); err != nil || b[0] != 'B' {
-		t.Fatalf("Accept returned a connection that read %q, %v; want B's", b[:], err)
-	}
+	wantHead(t, c, head)
 	if n := r.timers.Pending(); n != 1 {
 		t.Fatalf("%d timers are armed, want only the silent connection's", n)
 	}
@@ -222,20 +250,19 @@ func (r *capRig) connect(t *testing.T, peer string) net.Conn {
 // publicAt is a public peer address with its own port, so a test can tell connections apart.
 func publicAt(port int) string { return "203.0.113.7:" + strconv.Itoa(port) }
 
-// speak sends one byte from client and returns the connection the listener hands over for it.
-func (r *capRig) speak(t *testing.T, client net.Conn, b byte) net.Conn {
+// speak sends a challenge head carrying marker from client and returns the connection the listener
+// hands over for it, after checking that the head arrives byte for byte.
+func (r *capRig) speak(t *testing.T, client net.Conn, marker string) net.Conn {
 	t.Helper()
+	head := challengeHead(marker)
 	accepted := acceptAsync(r.l)
-	go func() { _, _ = client.Write([]byte{b}) }()
+	go func() { _, _ = client.Write([]byte(head)) }()
 	got := testsupport.Await(t, "the listener to hand over the connection that spoke", accepted)
 	if got.err != nil {
 		t.Fatalf("Accept: %v", got.err)
 	}
 	t.Cleanup(func() { _ = got.conn.Close() })
-	var first [1]byte
-	if _, err := io.ReadFull(got.conn, first[:]); err != nil || first[0] != b {
-		t.Fatalf("Accept returned a connection that read %q, %v; want the one that sent %q", first[:], err, b)
-	}
+	wantHead(t, got.conn, head)
 	return got.conn
 }
 
@@ -255,13 +282,13 @@ func TestSniffFullCapEvictsTheOldestPendingConnectionAndServesTheNewOne(t *testi
 	if n := r.l.pendingCount(); n != 2 {
 		t.Fatalf("%d connections pending after the eviction, want the cap of 2", n)
 	}
-	r.speak(t, newest, 'N')
+	r.speak(t, newest, "N")
 	if n := r.l.pendingCount(); n != 1 {
 		t.Fatalf("%d connections pending after the newcomer spoke, want only the second", n)
 	}
 
 	// The second connection was spared, so it still works when it speaks.
-	r.speak(t, second, 'S')
+	r.speak(t, second, "S")
 	if n := r.l.pendingCount(); n != 0 {
 		t.Fatalf("%d connections pending, want 0", n)
 	}
@@ -280,10 +307,10 @@ func TestSniffEvictsInArrivalOrder(t *testing.T) {
 		t.Fatalf("the second connection got %v, want it evicted next", err)
 	}
 	// A connection that spoke has left the line: it is not evicted later in place of a silent one.
-	r.speak(t, third, 'T')
+	r.speak(t, third, "T")
 	fifth := r.connect(t, publicAt(40005))
-	r.speak(t, fourth, 'F')
-	r.speak(t, fifth, 'V')
+	r.speak(t, fourth, "F")
+	r.speak(t, fifth, "V")
 }
 
 func TestSniffFullCapStillAdmitsLoopbackPeers(t *testing.T) {
@@ -297,7 +324,7 @@ func TestSniffFullCapStillAdmitsLoopbackPeers(t *testing.T) {
 	if n := r.l.pendingCount(); n != 3 {
 		t.Fatalf("%d connections pending, want the two public ones and the loopback one", n)
 	}
-	r.speak(t, probe, 'P')
+	r.speak(t, probe, "P")
 
 	// Loopback connections do not use up the cap either: more of them leave the public ones alone.
 	for range 3 {
@@ -306,8 +333,8 @@ func TestSniffFullCapStillAdmitsLoopbackPeers(t *testing.T) {
 	if n := r.l.pendingCount(); n != 5 {
 		t.Fatalf("%d connections pending, want the two public ones and three loopback ones", n)
 	}
-	r.speak(t, a, 'A')
-	r.speak(t, b, 'B')
+	r.speak(t, a, "A")
+	r.speak(t, b, "B")
 }
 
 func TestSniffLoopbackPeersDoNotCrowdOutOthers(t *testing.T) {
@@ -320,7 +347,7 @@ func TestSniffLoopbackPeersDoNotCrowdOutOthers(t *testing.T) {
 	if n := r.l.pendingCount(); n != 5 {
 		t.Fatalf("%d connections pending, want all five", n)
 	}
-	r.speak(t, public, 'P')
+	r.speak(t, public, "P")
 }
 
 func TestSniffCapFreesWhenTheTimersFire(t *testing.T) {
@@ -337,11 +364,11 @@ func TestSniffCapFreesWhenTheTimersFire(t *testing.T) {
 		t.Fatalf("%d connections pending after the timers fired, want 0", n)
 	}
 	// Room again: the next connection is taken and served, with nothing evicted.
-	r.speak(t, r.connect(t, publicAt(40003)), 'N')
+	r.speak(t, r.connect(t, publicAt(40003)), "N")
 }
 
 func TestSniffCloseClosesPendingAndAcceptReturnsErrClosed(t *testing.T) {
-	r := newSniffRig(t, maxPendingSniffs, true)
+	r := newSniffRig(t, maxPendingSniffs)
 	silent := r.dial(t)
 	r.timers.WaitArmed(t)
 	accepted := acceptAsync(r.l)
@@ -434,7 +461,7 @@ func TestSniffForwardsAPermanentAcceptErrorAndRetriesATemporaryOne(t *testing.T)
 	server, client := net.Pipe()
 	t.Cleanup(func() { _ = client.Close() })
 	base.push(t, acceptResult{conn: server})
-	go func() { _, _ = client.Write([]byte("G")) }()
+	go func() { _, _ = client.Write([]byte(challengeHead("G"))) }()
 	got := testsupport.Await(t, "the listener to hand over the connection that followed the errors", accepted)
 	if got.err != nil {
 		t.Fatalf("Accept: %v", got.err)
@@ -461,7 +488,7 @@ func TestSniffForwardsAPermanentAcceptErrorAndRetriesATemporaryOne(t *testing.T)
 	}
 }
 
-func TestPrefixConnForwardsCloseWrite(t *testing.T) {
+func TestReplayConnForwardsCloseWrite(t *testing.T) {
 	base, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -479,7 +506,7 @@ func TestPrefixConnForwardsCloseWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = got.conn.Close() })
 
-	var conn net.Conn = &prefixConn{Conn: got.conn}
+	var conn net.Conn = newReplayConn(got.conn, nil)
 	cw, ok := conn.(interface{ CloseWrite() error })
 	if !ok {
 		t.Fatal("the plain-branch connection hides CloseWrite from net/http")
@@ -529,4 +556,155 @@ func TestServeShutdownClosesPendingSniffs(t *testing.T) {
 	if err := readErr(t, silent); err == nil {
 		t.Fatal("the silent connection was left open")
 	}
+}
+
+// TestPlainPeekTimerAndCapAccounting drives every way a plain connection can leave the listener and
+// checks the pending set is empty after each, so no slot leaks. The connections are in-memory pipes,
+// where a close is seen at the other end as EOF whatever was left unread, and the timers are fired by
+// hand: the assertions are on bytes and counts, never on elapsed time.
+func TestPlainPeekTimerAndCapAccounting(t *testing.T) {
+	// feed writes data in the background and returns a channel that closes when every byte has been
+	// taken by the listener or the pipe was closed under the write.
+	feed := func(c net.Conn, data string) <-chan struct{} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = c.Write([]byte(data))
+		}()
+		return done
+	}
+	tests := []struct {
+		name string
+		run  func(t *testing.T, r *capRig, c net.Conn)
+	}{
+		{"connects and sends nothing", func(t *testing.T, r *capRig, c net.Conn) {
+			r.timers.FireAll()
+		}},
+		{"sends only a CRLF", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "\r\n")
+			r.timers.FireAll()
+		}},
+		{"sends one byte at a time, never finishing the head", func(t *testing.T, r *capRig, c net.Conn) {
+			head := "GET " + acmeChallengePrefix + "slow HTTP/1.1\r\nHost: x\r\n"
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for i := range len(head) {
+					if _, err := c.Write([]byte{head[i]}); err != nil {
+						return
+					}
+				}
+			}()
+			testsupport.Await(t, "every trickled byte to be taken", done)
+			if n := r.l.pendingCount(); n != 1 {
+				t.Fatalf("%d connections pending while the head trickles, want 1", n)
+			}
+			r.timers.FireAll()
+		}},
+		{"sends a head over the limit", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GET / HTTP/1.1\r\nHost: x\r\nX-Pad: "+strings.Repeat("a", plainHeadLimit+1024)+"\r\n\r\n")
+		}},
+		{"sends garbage", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GARBAGE\r\n\r\n")
+		}},
+		{"sends the h2c preface", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+		}},
+		{"sends a complete head for another path", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+		}},
+		{"sends a head for the challenge directory without its slash", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GET /.well-known/acme-challenge HTTP/1.1\r\nHost: x\r\n\r\n")
+		}},
+		{"is closed by the listener while it waits", func(t *testing.T, r *capRig, c net.Conn) {
+			if err := r.l.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"is closed by the listener while it sends a partial head", func(t *testing.T, r *capRig, c net.Conn) {
+			done := feed(c, "GET "+acmeChallengePrefix+"x HTTP/1.1\r\n")
+			testsupport.Await(t, "the partial head to be taken", done)
+			if err := r.l.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCapRig(t, maxPendingSniffs)
+			c := r.connect(t, publicAt(40001))
+			tc.run(t, r, c)
+			if err := readErr(t, c); !errors.Is(err, io.EOF) {
+				t.Fatalf("got %v, want it closed with no bytes written", err)
+			}
+			if n := r.l.pendingCount(); n != 0 {
+				t.Fatalf("%d connections pending after the exit, want 0", n)
+			}
+			if n := r.timers.Pending(); n != 0 {
+				t.Fatalf("%d peek timers still armed after the exit, want 0", n)
+			}
+		})
+	}
+
+	t.Run("a client that closes at once frees its slot", func(t *testing.T) {
+		// A real socket, so the client can half-close and still read the listener's close.
+		r := newSniffRig(t, maxPendingSniffs)
+		c, ok := r.dial(t).(*net.TCPConn)
+		if !ok {
+			t.Fatal("not a TCP connection")
+		}
+		r.timers.WaitArmed(t)
+		if err := c.CloseWrite(); err != nil {
+			t.Fatal(err)
+		}
+		if err := readErr(t, c); !errors.Is(err, io.EOF) {
+			t.Fatalf("got %v, want the listener to close an end-of-stream client", err)
+		}
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after the client closed, want 0", n)
+		}
+	})
+
+	t.Run("a challenge head leaves the set when it is handed over", func(t *testing.T) {
+		r := newCapRig(t, maxPendingSniffs)
+		c := r.connect(t, publicAt(40001))
+		r.speak(t, c, "ok")
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after the hand-over, want 0", n)
+		}
+		if n := r.timers.Pending(); n != 0 {
+			t.Fatalf("%d peek timers armed after the hand-over, want 0", n)
+		}
+	})
+
+	t.Run("a partial plain head counts against the cap and is evicted oldest first", func(t *testing.T) {
+		r := newCapRig(t, 2)
+		partial := "GET " + acmeChallengePrefix + "p HTTP/1.1\r\n"
+		oldest := r.connect(t, publicAt(40001))
+		testsupport.Await(t, "the oldest partial head to be taken", feed(oldest, partial))
+		second := r.connect(t, publicAt(40002))
+		testsupport.Await(t, "the second partial head to be taken", feed(second, partial))
+		if n := r.l.pendingCount(); n != 2 {
+			t.Fatalf("%d connections pending, want the cap of 2", n)
+		}
+		third := r.connect(t, publicAt(40003))
+		if err := readErr(t, oldest); !errors.Is(err, io.EOF) {
+			t.Fatalf("the oldest mid-head connection got %v, want it closed to make room", err)
+		}
+		if n := r.l.pendingCount(); n != 2 {
+			t.Fatalf("%d connections pending after the eviction, want 2", n)
+		}
+		// Closing the listener in the middle of the peeks frees every slot.
+		if err := r.l.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range []net.Conn{second, third} {
+			if err := readErr(t, c); !errors.Is(err, io.EOF) {
+				t.Fatalf("a pending connection got %v after Close, want EOF", err)
+			}
+		}
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after Close, want 0", n)
+		}
+	})
 }

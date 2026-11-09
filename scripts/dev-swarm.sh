@@ -232,12 +232,14 @@ $(if ((${#dns_servers[@]} > 0)); then echo "The nodes' Docker daemons use DNS se
 Next:
   1. Start TierPlan so the nodes can reach it. The nodes see this machine as ${GATEWAY}:
        make dev DEV_LISTEN=0.0.0.0:7480
-     (dev-go tells agents to dial http://${GATEWAY}:7480 over plain ws://, which is for
-     development only. DEV_LISTEN=0.0.0.0:7480 is what lets the nodes reach the
-     server and makes it reachable from your network; the setup-token gate still
-     applies, but do not do this on a network you do not trust.)
-  2. In the UI at http://localhost:5173 choose Environments, Add environment, Agent.
-     From another machine add DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=http://<this machine's name>:5173
+     (dev-go tells agents to dial wss://${GATEWAY}:7480, and the install command TierPlan
+     shows carries the pin of the certificate the server made for itself, so the agents
+     verify it. DEV_LISTEN=0.0.0.0:7480 is what lets the nodes reach the server and makes
+     it reachable from your network; the setup-token gate still applies, but do not do
+     this on a network you do not trust.)
+  2. In the UI at https://localhost:5173 choose Environments, Add environment, Agent.
+     The browser trusts .devdata/dev-tls/ca.pem once, or click through the warning.
+     From another machine add DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=https://<this machine's name>:5173
      to the make dev command and open that address (see CONTRIBUTING.md).
   3. Paste the swarm command on a manager:
        docker exec -i ${m1} sh

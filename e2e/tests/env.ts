@@ -4,7 +4,7 @@
 // Paths and addresses shared by the config and the specs. Nothing here imports
 // Playwright, so the config can load it.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,6 +43,18 @@ export const AGENT_PIN = ((): string => {
     return "";
   }
 })();
+
+// The same hash without the "sha256/" prefix: the base64 SPKI hash that Chromium's
+// --ignore-certificate-errors-spki-list takes. It is how the browser trusts the
+// harness certificate and nothing else, in place of ignoring certificate errors.
+export const SPKI_HASH = AGENT_PIN.replace(/^sha256\//, "");
+
+// The proxy's certificate, written by `make e2e`. The browser trusts it by its SPKI pin (see
+// the config); the specs' own requests (page.request, context.request) are made by Node on the
+// host, which does not read that flag, so Node is given this one certificate as an extra root.
+// It still verifies the name and the dates; nothing is skipped.
+export const PROXY_CERT = resolve(HERE, "../../.devdata/e2e-tls/cert.pem");
+export const PROXY_CERT_PRESENT = existsSync(PROXY_CERT);
 
 // The signed-in browser state the first spec saves for the later ones. It lives
 // under .devdata/, which is git-ignored.

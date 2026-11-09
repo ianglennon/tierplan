@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -169,16 +169,24 @@ test-swarm: agent-image
 smoke:
 	scripts/smoke.sh
 
-# Dev loop (D-77): Go with live reload plus Vite with HMR. Open
-# http://localhost:5173/; Vite proxies /api to the Go server on 127.0.0.1:7480.
+# Dev loop (D-77, D-08): Go with live reload plus Vite with HMR, both over TLS. Open
+# https://localhost:5173/; Vite serves a development certificate (dev-cert) and
+# proxies /api and /hooks to the Go server on 127.0.0.1:7480 over https, checking the
+# certificate the Go server made for itself (.devdata/tls/server.crt). The browser
+# trusts .devdata/dev-tls/ca.pem once (import it, or click through the warning);
+# make dev-cert prints its fingerprint. The agents of the dev swarm dial wss with
+# TierPlan's pin from the install command, like a real install. There is no plain
+# path in this loop and no setting that adds one.
 #
 # From another machine, make Vite listen beyond loopback and tell both servers the
 # address the browser will use:
-#   make dev DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=http://<this machine's name>:5173
+#   make dev DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=https://dev.homelab.org.uk:5173
 # and open that address. The public URL must be the address in the browser's bar,
 # because the Origin check (D-36) compares the two and refuses every change from
-# any other origin. DEV_PUBLIC_URL= (empty) leaves the public URL unset, so the
-# setup wizard asks for it. Do not do this on a network you do not trust.
+# any other origin. Its host name is added to the development certificate; more
+# names go in DEV_CERT_NAMES (space separated). DEV_PUBLIC_URL= (empty) leaves the
+# public URL unset, so the setup wizard asks for it. Do not do this on a network
+# you do not trust.
 # DEV_LISTEN=0.0.0.0:7480 is a different thing: it lets the dev swarm's nodes reach
 # the Go server (make dev-swarm), and a remote browser does not need it.
 # The Go server on :7480 serves web/dist as the last `make web` or `pnpm -C web
@@ -191,24 +199,19 @@ dev:
 # overrides, so there is no .air.toml. The devspa tag serves the SPA from
 # web/dist on disk as it is at the moment (it is not rebuilt by Vite's dev server).
 #
-# The agent settings are for the local swarm (make dev-swarm) and for development
-# only. TIERPLAN_AGENT_URL is where agents dial: the dev swarm's network sees this
-# machine as DEV_SWARM_GATEWAY, and it is plain ws:// because there is no
-# certificate for an address like that. TIERPLAN_AGENT_ALLOW_INSECURE lets those
-# plain connections in, which sends join tokens and Docker answers unencrypted; the
-# server logs a warning at start while it is on. While it is on, the command TierPlan
-# shows also sets TIERPLAN_AGENT_ALLOW_INSECURE=true on the agents, which otherwise
-# refuse plain ws:// to another host. Neither belongs anywhere but this
-# target and the proxy smoke test (scripts/proxy-smoke.sh). To let the dev
-# swarm's nodes reach the server, listen on every interface:
+# The Go server runs in its default mode: it makes its own self-signed certificate,
+# so the install commands it shows carry its pin. TIERPLAN_AGENT_URL is where agents
+# dial: the dev swarm's network sees this machine as DEV_SWARM_GATEWAY. To let the
+# dev swarm's nodes reach the server, listen on every interface:
 # make dev DEV_LISTEN=0.0.0.0:7480 (the default stays loopback).
 DEV_LISTEN ?= 127.0.0.1:7480
-DEV_PUBLIC_URL ?= http://localhost:5173
+DEV_PUBLIC_URL ?= https://localhost:5173
 DEV_WEB_HOST ?=
 DEV_SWARM_GATEWAY ?= 172.31.250.1
+DEV_CERT_NAMES ?=
 dev-go:
 	TIERPLAN_LISTEN=$(DEV_LISTEN) TIERPLAN_DATA_DIR=./.devdata TIERPLAN_PUBLIC_URL='$(DEV_PUBLIC_URL)' \
-	TIERPLAN_AGENT_URL=http://$(DEV_SWARM_GATEWAY):7480 TIERPLAN_AGENT_ALLOW_INSECURE=true \
+	TIERPLAN_AGENT_URL=https://$(DEV_SWARM_GATEWAY):7480 \
 	go run github.com/air-verse/air@v1.67.4 \
 		-tmp_dir .devdata/air \
 		-build.cmd "go build -tags devspa -o .devdata/air/tierplan ./cmd/tierplan" \
@@ -217,10 +220,25 @@ dev-go:
 		-build.include_ext go \
 		-build.exclude_dir web,bin,.devdata,.git,.planning,.claude,scripts
 
+# The development CA and the certificate Vite serves (scripts/dev-cert.go): made once,
+# kept while valid, re-signed by the same CA when a name is added. The public URL's host
+# joins the names unless it is localhost.
+DEV_PUBLIC_HOST = $(filter-out localhost,$(firstword $(subst /, ,$(subst :, ,$(patsubst https://%,%,$(DEV_PUBLIC_URL))))))
+dev-cert:
+	go run scripts/dev-cert.go -out .devdata/dev-tls $(foreach n,$(DEV_PUBLIC_HOST) $(DEV_CERT_NAMES),-name $(n))
+
 # TIERPLAN_DEV_PUBLIC_URL lets the public URL's host name past Vite's host check
 # (web/vite.config.ts); without it Vite answers only localhost and IP addresses.
-dev-web:
-	TIERPLAN_DEV_PUBLIC_URL='$(DEV_PUBLIC_URL)' pnpm -C web dev $(if $(DEV_WEB_HOST),--host $(DEV_WEB_HOST))
+# TIERPLAN_DEV_TLS_DIR is the certificate Vite serves; TIERPLAN_DEV_SERVER_CERT is the Go
+# server's own certificate, which the proxy trusts for it and for nothing else.
+dev-web: dev-cert
+	TIERPLAN_DEV_PUBLIC_URL='$(DEV_PUBLIC_URL)' TIERPLAN_DEV_TLS_DIR=$(CURDIR)/.devdata/dev-tls \
+	TIERPLAN_DEV_SERVER_CERT=$(CURDIR)/.devdata/tls/server.crt \
+	pnpm -C web dev $(if $(DEV_WEB_HOST),--host $(DEV_WEB_HOST))
+
+# Starts the Go server and Vite over https on scratch ports and checks the verified proxy.
+dev-tls-check:
+	scripts/dev-tls-check.sh
 
 # A local Docker Swarm of three managers and a worker (docker:29-dind, privileged),
 # with the agent built from this tree loaded on every node (D-60). The command it
@@ -416,11 +434,17 @@ ci-clean:
 ci-preflight:
 	scripts/ci-preflight.sh
 
-# The upgrade proof (D-34, PLAT-02): run the previous build, put state into it (setup, an
-# agent environment with a real agent connected, and a user, a team and a grant when
-# that build has them), swap in the current image on the same volume and network alias,
-# and check sign-in, the first admin's instance-admin flag, the agent coming back
-# online by itself, the grant and the audit chain. One PASS or FAIL line per check.
+# The upgrade proof (D-34, PLAT-02, D-11, D-13): run the previous build in TierPlan's
+# self-signed mode (TIERPLAN_TLS_SELF_SIGNED=true) behind an https public URL, put state
+# into it (setup, an agent environment with a real agent connected over wss with the
+# pin from the install command, and a user, a team and a grant when that build has
+# them), swap in the current image on the same volume and network alias, and check that
+# the SPKI pin is the same, the certificate is valid for about 10 years, the legacy
+# /data/tls/selfsigned.key has been imported and removed, sign-in, the first admin's
+# instance-admin flag, the agent coming back online by itself, the grant and the audit
+# chain. Every request is over https with curl --cacert; no verification is switched
+# off. A plain-HTTP baseline is not supported, because upgrading a plain-HTTP install is
+# not (D-07). One PASS or FAIL line per check.
 #
 # The baseline is UPGRADE_BASE_REF, a commit (CI passes the pull request's base, or the
 # previous commit on a push). It is BUILT here from a detached git worktree with the

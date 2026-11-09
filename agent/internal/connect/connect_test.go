@@ -9,11 +9,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -82,24 +85,26 @@ func (rt *recordingTransport) seen() []string {
 	return append([]string(nil), rt.reqs...)
 }
 
-// A plain ws:// address for a host that is not loopback sends the join token to a
-// peer the agent never authenticated, so Run refuses it at once and never dials
-// unless the agent itself carries TIERPLAN_AGENT_ALLOW_INSECURE (T-02-31).
-func TestRunRefusesPlainWSToAnotherHostWithoutTheSwitchAndNeverDials(t *testing.T) {
-	rt := &recordingTransport{}
-	ctx := testsupport.Context(t)
-	err := Run(ctx, Config{
-		URL: "ws://tierplan.example/agent/connect", JoinToken: "tpjt_tok",
-		HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_ALLOW_INSECURE") || !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
-		t.Fatalf("Run = %v, want an error naming TIERPLAN_AGENT_URL and TIERPLAN_AGENT_ALLOW_INSECURE", err)
-	}
-	if strings.Contains(err.Error(), "tpjt_tok") {
-		t.Errorf("the error carries the token: %v", err)
-	}
-	if got := rt.seen(); len(got) != 0 {
-		t.Errorf("the agent made requests %v, want none", got)
+// A plain ws:// address sends the join token to a peer the agent never authenticated,
+// so Run refuses it at once and never dials, for every host, loopback included
+// (D-09, T-13.1-39).
+func TestRunRefusesPlainWSForEveryHostAndNeverDials(t *testing.T) {
+	for _, raw := range []string{"ws://tierplan.example/agent/connect", "ws://127.0.0.1:7480/agent/connect", "ws://localhost/agent/connect", "ws://[::1]:7480/agent/connect"} {
+		rt := &recordingTransport{}
+		ctx := testsupport.Context(t)
+		err := Run(ctx, Config{
+			URL: raw, JoinToken: "tpjt_tok",
+			HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
+		})
+		if err == nil || !strings.Contains(err.Error(), "wss://") || !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
+			t.Fatalf("Run(%s) = %v, want an error naming TIERPLAN_AGENT_URL and wss://", raw, err)
+		}
+		if strings.Contains(err.Error(), "tpjt_tok") {
+			t.Errorf("the error carries the token: %v", err)
+		}
+		if got := rt.seen(); len(got) != 0 {
+			t.Errorf("the agent made requests %v for %s, want none", got, raw)
+		}
 	}
 }
 
@@ -174,19 +179,63 @@ func newFakeCore(script func(n int, a wire.Auth) reply) *fakeServer {
 	return &fakeServer{script: script, changed: make(chan struct{}), beats: make(chan wire.Heartbeat, 256), denied: make(chan wire.Denied, 256), results: make(chan wire.UpdateResult, 64), started: make(chan int, 64), answered: make(chan struct{}, 64)}
 }
 
+// newFakeServer is a fake server over TLS with the certificate httptest makes. An
+// agent that startAgent runs for the same test trusts that certificate as a root,
+// so a test that is not about verification needs no pin. (The agent has no plain
+// transport, D-09.)
 func newFakeServer(t *testing.T, script func(n int, a wire.Auth) reply) *fakeServer {
 	t.Helper()
 	f := newFakeCore(script)
-	f.ts = httptest.NewServer(http.HandlerFunc(f.handle))
+	f.ts = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
+	f.ts.Config.ErrorLog = log.New(io.Discard, "", 0)
+	f.ts.StartTLS()
+	trustedTests.Store(t, struct{}{})
 	t.Cleanup(func() {
+		trustedTests.Delete(t)
 		f.ts.CloseClientConnections()
 		f.ts.Close()
 	})
 	return f
 }
 
+var (
+	// trustedTests are the tests whose agents trust httptest's certificate as a root.
+	trustedTests sync.Map
+	httptestOnce sync.Once
+	httptestPool *x509.CertPool
+)
+
+// httptestRoots is a pool holding the certificate every httptest TLS server uses.
+func httptestRoots() *x509.CertPool {
+	httptestOnce.Do(func() {
+		ts := httptest.NewTLSServer(http.NotFoundHandler())
+		defer ts.Close()
+		httptestPool = x509.NewCertPool()
+		httptestPool.AddCert(ts.Certificate())
+	})
+	return httptestPool
+}
+
+// unverifiedClient is a client for a TLS fake server that reports no TLS state on its
+// responses, which is how the agent tells a session whose server it did not verify
+// (a supplied HTTP client is the only way to one, since the agent's own client always
+// verifies). It still checks the certificate against httptest's root.
+func unverifiedClient() *http.Client {
+	return &http.Client{Transport: noTLSState{&http.Transport{TLSClientConfig: &tls.Config{RootCAs: httptestRoots(), MinVersion: tls.VersionTLS12}}}}
+}
+
+type noTLSState struct{ next http.RoundTripper }
+
+func (n noTLSState) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := n.next.RoundTrip(r)
+	if resp != nil {
+		resp.TLS = nil
+	}
+	return resp, err
+}
+
 func (f *fakeServer) url() string {
-	return "ws" + strings.TrimPrefix(f.ts.URL, "http") + "/agent/connect"
+	return "wss" + strings.TrimPrefix(f.ts.URL, "https") + "/agent/connect"
 }
 
 func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -392,6 +441,9 @@ func startAgent(t *testing.T, cfg Config, env runEnv) (cancel context.CancelFunc
 	}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = filepath.Join(t.TempDir(), "none.sock") // never the real Docker socket
+	}
+	if _, ok := trustedTests.Load(t); ok && cfg.HTTPClient == nil && env.roots == nil {
+		env.roots = httptestRoots()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan error, 1)
@@ -611,7 +663,7 @@ func runUntilSleeps(t *testing.T, cfg Config, stopAt int) (*sleeps, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
-	err := runWith(ctx, cfg, runEnv{sleep: sl.sleep, rnd: func() float64 { return 0.5 }})
+	err := runWith(ctx, cfg, runEnv{sleep: sl.sleep, rnd: func() float64 { return 0.5 }, roots: httptestRoots()})
 	return sl, err
 }
 
@@ -1097,9 +1149,11 @@ func TestBackoffUsesRealRandomnessByDefault(t *testing.T) {
 func TestARefusalOfTheVeryFirstEnrolmentEndsTheAgentSoAWrongTokenIsVisible(t *testing.T) {
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
 	ctx := testsupport.Context(t)
+	env := fastEnv()
+	env.roots = httptestRoots()
 	err := runWith(ctx, Config{
 		URL: srv.url(), JoinToken: "tpjt_wrong", SocketPath: filepath.Join(t.TempDir(), "none.sock"), Log: slog.New(slog.DiscardHandler),
-	}, fastEnv())
+	}, env)
 	var re *RefusedError
 	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected {
 		t.Fatalf("Run = %v, want the auth_rejected refusal; a token that is wrong stays wrong", err)
@@ -1129,7 +1183,7 @@ func TestATransientRefusalOfTheFirstEnrolmentIsRetried(t *testing.T) {
 func TestARefusalInPlaceOfTheChallengeIsReadAndItsRetryAfterIsHonoured(t *testing.T) {
 	var mu sync.Mutex
 	attempts := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{wire.Subprotocol}})
 		if err != nil {
 			return
@@ -1143,7 +1197,7 @@ func TestARefusalInPlaceOfTheChallengeIsReadAndItsRetryAfterIsHonoured(t *testin
 	}))
 	defer ts.Close()
 	sl, err := runUntilSleeps(t, Config{
-		URL: "ws" + strings.TrimPrefix(ts.URL, "http") + "/agent/connect", JoinToken: "tpjt_tok",
+		URL: "wss" + strings.TrimPrefix(ts.URL, "https") + "/agent/connect", JoinToken: "tpjt_tok",
 		SocketPath: filepath.Join(t.TempDir(), "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
 	}, 2)
 	if err != nil {
@@ -1173,8 +1227,8 @@ func TestTheHandshakeCarriesTheAgentsOwnClockAndTheExporterOfItsDial(t *testing.
 	if a.TS != fixed.UnixMilli() {
 		t.Errorf("ts = %d, want the agent's clock %d", a.TS, fixed.UnixMilli())
 	}
-	if len(a.EKM) != 0 {
-		t.Errorf("a plain ws:// dial carried an exporter value: %x", a.EKM)
+	if len(a.EKM) == 0 {
+		t.Error("a TLS dial carried no exporter value")
 	}
 }
 

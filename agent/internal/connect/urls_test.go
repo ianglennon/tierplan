@@ -4,6 +4,7 @@
 package connect
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -191,12 +192,12 @@ func TestAPushOverASessionThatWasNotVerifiedIsIgnored(t *testing.T) {
 	dir := t.TempDir()
 	other := "sha256/" + strings.Repeat("Q", 43) + "="
 	var b *fakeServer
-	a := newFakeServer(t, nil) // plain ws://, so nothing about the server was verified
+	a := newFakeServer(t, nil) // reached through a client that reports no TLS state, so nothing about the server was verified
 	b = newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
 	a.script = func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{pushLine(t, []string{other}, b.url()), fenceLine}}
 	}
-	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, HTTPClient: unverifiedClient()}, fastEnv())
 	a.authN(t, 1)
 	a.awaitFence(t) // the push before the fence has been handled, and ignored
 	for _, name := range []string{state.URLsFile, state.PinsFile} {
@@ -344,7 +345,7 @@ type hostRecorder struct {
 }
 
 func newHostRecorder(host string) *hostRecorder {
-	return &hostRecorder{host: host, next: &http.Transport{}}
+	return &hostRecorder{host: host, next: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: httptestRoots(), MinVersion: tls.VersionTLS12}}}
 }
 
 func (h *hostRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -356,7 +357,7 @@ func (h *hostRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func (h *hostRecorder) client() *http.Client { return &http.Client{Transport: h} }
 
-func TestAStoredPlainAddressForAnotherHostIsNeverDialedWithoutTheSwitch(t *testing.T) {
+func TestAStoredPlainAddressIsNeverDialed(t *testing.T) {
 	dir := t.TempDir()
 	enrolledState(t, dir)
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
@@ -374,7 +375,7 @@ func TestAStoredPlainAddressForAnotherHostIsNeverDialedWithoutTheSwitch(t *testi
 	if got := rec.rt.seen(); len(got) != 0 {
 		t.Errorf("the agent made requests %v to a stored plain address for another host", got)
 	}
-	if n := strings.Count(logs.String(), "ignored stored addresses"); n != 1 {
+	if n := strings.Count(logs.String(), "dropped stored addresses"); n != 1 {
 		t.Errorf("the agent logged the ignored stored address %d times, want once: %s", n, logs.String())
 	}
 	if strings.Contains(logs.String(), "skipped an address it cannot dial") {
@@ -382,24 +383,30 @@ func TestAStoredPlainAddressForAnotherHostIsNeverDialedWithoutTheSwitch(t *testi
 	}
 }
 
-func TestAStoredPlainAddressIsTriedWithTheSwitch(t *testing.T) {
+// A stored ws://127.0.0.1 address is dropped like any other plain one: loopback
+// has no exception any more (D-09, T-13.1-39).
+func TestAStoredLoopbackPlainAddressIsDroppedNotDialed(t *testing.T) {
 	dir := t.TempDir()
 	enrolledState(t, dir)
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
-	if err := state.SaveURLs(dir, []state.URLEntry{{URL: plainElsewhere}, {URL: srv.url()}}); err != nil {
+	const loopback = "ws://127.0.0.1:1/agent/connect"
+	if err := state.SaveURLs(dir, []state.URLEntry{{URL: loopback}, {URL: srv.url()}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.SaveEnvURL(dir, srv.url()); err != nil {
 		t.Fatal(err)
 	}
-	rec := newHostRecorder("plain.example")
-	startAgent(t, Config{URL: srv.url(), StateDir: dir, HTTPClient: rec.client(), AllowInsecure: true}, fastEnv())
-	srv.authN(t, 1) // dialed after the plain address, which came first
-	if len(rec.rt.seen()) == 0 {
-		t.Error("with the switch the stored plain address was never tried")
+	logs := &lockedBuffer{}
+	startAgent(t, Config{URL: srv.url(), StateDir: dir, Log: slog.New(slog.NewTextHandler(logs, nil))}, fastEnv())
+	srv.authN(t, 1)
+	if n := srv.attempts(); n != 1 {
+		t.Errorf("the server saw %d handshakes, want 1", n)
 	}
-	if got := urlsOnDisk(t, dir); len(got) != 2 || got[0].URL != plainElsewhere {
-		t.Errorf("urls.json = %+v, want both stored addresses untouched", got)
+	if strings.Contains(logs.String(), "skipped an address it cannot dial") {
+		t.Errorf("the stored plain address reached the dial list: %s", logs.String())
+	}
+	if n := strings.Count(logs.String(), "dropped stored addresses"); n != 1 {
+		t.Errorf("the agent logged the dropped address %d times, want once: %s", n, logs.String())
 	}
 }
 
@@ -433,26 +440,25 @@ func TestTheRecordedStartAddressIsNeverDialed(t *testing.T) {
 
 func TestNewTargetRefusesWhatDialableURLRefuses(t *testing.T) {
 	for _, tc := range []struct {
-		url        string
-		allowPlain bool
-		ok         bool
+		url string
+		ok  bool
 	}{
-		{"wss://tierplan.example/agent/connect", false, true},
-		{"ws://127.0.0.1:7480/agent/connect", false, true},
-		{plainElsewhere, false, false},
-		{plainElsewhere, true, true},
-		{"wss://user:pw@tierplan.example/agent/connect", true, false},
-		{"https://tierplan.example/agent/connect", true, false},
+		{"wss://tierplan.example/agent/connect", true},
+		{"ws://127.0.0.1:7480/agent/connect", false},
+		{"ws://localhost/agent/connect", false},
+		{plainElsewhere, false},
+		{"wss://user:pw@tierplan.example/agent/connect", false},
+		{"https://tierplan.example/agent/connect", false},
 	} {
-		_, err := newTarget(tc.url, tc.allowPlain)
+		_, err := newTarget(tc.url)
 		if (err == nil) != tc.ok {
-			t.Errorf("newTarget(%q, %v) = %v, want ok %v", tc.url, tc.allowPlain, err, tc.ok)
+			t.Errorf("newTarget(%q) = %v, want ok %v", tc.url, err, tc.ok)
 		}
 	}
 }
 
-func TestAPushedPlainAddressIsIgnoredEvenWithTheSwitch(t *testing.T) {
-	for _, allow := range []bool{false, true} {
+func TestAPushedPlainAddressIsIgnored(t *testing.T) {
+	{
 		dir := t.TempDir()
 		a := newFakeServerTLS(t, nil)
 		a.script = func(int, wire.Auth) reply {
@@ -461,11 +467,11 @@ func TestAPushedPlainAddressIsIgnoredEvenWithTheSwitch(t *testing.T) {
 				fenceLine,
 			}}
 		}
-		startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}, AllowInsecure: allow}, fastEnv())
+		startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 		a.authN(t, 1)
 		a.awaitFence(t) // the push before the fence has been handled
 		if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {
-			t.Errorf("switch %v: urls.json was written from a push of plain addresses: %+v", allow, urlsOnDisk(t, dir))
+			t.Errorf("urls.json was written from a push of plain addresses: %+v", urlsOnDisk(t, dir))
 		}
 	}
 }

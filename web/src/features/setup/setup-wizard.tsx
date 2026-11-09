@@ -52,6 +52,14 @@ const UNREACHABLE = "common.errors.unreachable";
 const TOUCH_HEIGHT = "h-11 md:h-8";
 const PRIMARY = cn("w-full", TOUCH_HEIGHT);
 
+// browserPublicUrl is the address the wizard offers for the public URL: the one
+// the browser used, with the base path. TierPlan serves HTTPS only (D-07), so a
+// page loaded over any other scheme offers nothing, instead of a value the form
+// would refuse.
+function browserPublicUrl(): string {
+  return window.location.protocol === "https:" ? window.location.origin + basePath() : "";
+}
+
 // None of the wizard's values (the setup token, the password, the instance
 // settings) is written to any browser storage API, a cookie or the URL.
 // They live in react-hook-form's in-memory state and the component state below
@@ -117,7 +125,7 @@ export function SetupWizard() {
   const instanceForm = useForm<InstanceInput, unknown, InstanceValues>({
     resolver: zodResolver(instanceSchema),
     mode: "onBlur",
-    defaultValues: { instanceName: "", publicUrl: window.location.origin + basePath() },
+    defaultValues: { instanceName: "", publicUrl: browserPublicUrl() },
   });
 
   // Every key starts with its namespace ("setup.errors.x", "common.errors.x").
@@ -213,7 +221,7 @@ export function SetupWizard() {
         instanceForm.reset(
           {
             instanceName: data.defaultInstanceName,
-            publicUrl: data.publicUrl || window.location.origin + basePath(),
+            publicUrl: data.publicUrl || browserPublicUrl(),
           },
           { keepDirtyValues: true },
         );

@@ -72,13 +72,12 @@ func TestBuildShutdownEndsAnOpenShellTellsItsBrowserWhyAndAuditsTheEnd(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := "http://" + ln.Addr().String()
+	base := httpsBase(ln.Addr().String())
 	sctx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- srv.serve(sctx, ln) }()
 
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	t.Cleanup(client.CloseIdleConnections)
+	client := trustedClient(t, cfg)
 	loginReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/auth/login", strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
 	loginReq.Header.Set("Origin", base)
@@ -117,9 +116,7 @@ func TestBuildShutdownEndsAnOpenShellTellsItsBrowserWhyAndAuditsTheEnd(t *testin
 
 	dctx, dcancel := context.WithTimeout(ctx, testsupport.Deadline)
 	defer dcancel()
-	conn, _, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(base, "http")+opened.WSPath, &websocket.DialOptions{ //nolint:bodyclose // a WebSocket upgrade response has no body to close
-		HTTPHeader: http.Header{"Cookie": {cookie.String()}, "Origin": {base}},
-	})
+	conn, _, err := websocket.Dial(dctx, "wss"+strings.TrimPrefix(base, "https")+opened.WSPath, trustedDialOptions(t, cfg, http.Header{"Cookie": {cookie.String()}, "Origin": {base}})) //nolint:bodyclose // a WebSocket upgrade response has no body to close
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}

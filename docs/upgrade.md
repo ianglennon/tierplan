@@ -69,9 +69,55 @@ When the new TierPlan finds a database from an older release it:
 Set `TIERPLAN_SKIP_PRE_MIGRATE_BACKUP=true` to skip the snapshot and the free-space check. Only
 do that when you already hold a backup.
 
+The first start on a release with always-on TLS also imports the key of an earlier self-signed
+certificate, if there is one. It moves from `/data/tls/selfsigned.key` into the database, sealed
+like the other secrets, and the old key and certificate files are removed only after the copy has
+been read back and checked. Nothing changes for your browser or your agents.
+
 Existing audit entries are never dropped or rewritten by an upgrade. If your database came from
 a release where one global Admin role held all authority, that Admin becomes an instance admin,
 and everyone else keeps what they had.
+
+## Upgrading from a plain-HTTP install
+
+TierPlan serves HTTPS only. An install that has been running over plain HTTP needs one manual
+step, because its stored public URL (and agent URL, if it has one) is an `http://` address.
+
+**What happens.** On start TierPlan reads the public URL and the agent URL. If either is `http://`
+it refuses to start and logs a line like `The stored public URL is http://tierplan.example.com:7480.
+TierPlan serves HTTPS only and will not start. Set TIERPLAN_PUBLIC_URL to the https address and
+keep it set, or see docs/upgrade.md, "Upgrading from a plain-HTTP install".` The same happens when
+you restore a backup that holds an `http://` address. A restore that cannot start is rolled back
+to the database you had before it.
+
+**The step.**
+
+1. Set `TIERPLAN_PUBLIC_URL` to the `https://` address people will use, for example
+   `https://tierplan.example.com:7480`, and keep it set. If you use `TIERPLAN_AGENT_URL`, set that
+   to an `https://` address too. A value set in the environment wins over the stored one, and the
+   stored `http://` value is ignored with a warning, so leave the variable in place.
+2. Start the new container on the same volume. TierPlan makes its own certificate on this first
+   start and logs its SHA-256 fingerprint.
+3. Open `https://HOST:7480`. Your browser warns that the certificate is not trusted. Compare the
+   fingerprint it shows with the one in `docker logs tierplan`, then continue and sign in.
+4. A reverse proxy in front of TierPlan must now use `https://` upstream. TierPlan does not
+   answer plain HTTP, so a proxy that still dials `http://` gets no answer. See
+   [reverse-proxy.md](reverse-proxy.md).
+5. Reinstall every agent that was installed with a plain `ws://` command. In **Add environment**
+   copy the command it shows now (it uses `wss://` and carries TierPlan's pin) and run it on the
+   host, as in [agent.md](agent.md). Agents installed with a `wss://` command keep working.
+
+Everyone is signed out once, because the session cookie is always `Secure` now and so has a
+different name.
+
+**An install that already used TierPlan's self-signed certificate** (`TIERPLAN_TLS_SELF_SIGNED=true`)
+upgrades in place. It keeps its key, so the pin is the same, and its agents reconnect on their own.
+Remove the variable from your configuration: it is deprecated and has no effect. An install that
+supplies its own certificate files keeps them. If its public URL is already `https://` there is
+nothing else to do.
+
+If you cannot set the variable right away, you can still go back: [Rolling back](#rolling-back)
+works as before.
 
 ## After the upgrade
 

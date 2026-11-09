@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -150,6 +151,9 @@ type Server struct {
 	// https is the live TLS state: every handshake, pin and HSTS decision reads
 	// it. Nothing but Build and tests calls Install (D-12).
 	https *httpsRuntime
+	// challenge answers a plain request for /.well-known/acme-challenge/. Nil means 404;
+	// Phase 14 sets it. It is the only thing a plain connection reaches.
+	challenge http.Handler
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -329,7 +333,7 @@ func WithTLSRefreshClock(c stackops.Clock) Option {
 }
 
 // WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
-// settings are read again to see a change another process made (`tierplan https disable`). It exists
+// settings are read again to see a change another store handle made, such as a restore. It exists
 // for tests, which move it by a poll interval instead of waiting for one. It is a Go option only,
 // like WithJanitorClock: no setting, flag or environment variable reaches it, so a production build,
 // which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
@@ -403,6 +407,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		"version", buildinfo.Get().Display,
 		"config", cfg.Redacted(),
 	)
+	if cfg.TLSSelfSignedSet {
+		log.Warn("TIERPLAN_TLS_SELF_SIGNED is deprecated and has no effect: TierPlan always serves HTTPS with a self-signed certificate unless you supply one. Remove it from your configuration.")
+	}
 
 	// DOCKER_HOST is honoured for unix:// only (D-21). Checking it before
 	// anything is written means a bad value stops startup with a clear message.
@@ -485,6 +492,50 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 		}
 	}
 	return srv, nil
+}
+
+// upgradeHTTPStep is where the operator reads the manual step for a stored http
+// URL. The heading is named here only, so the wording is changed in one place.
+const upgradeHTTPStep = `docs/upgrade.md, "Upgrading from a plain-HTTP install"`
+
+// refuseHTTPURLs stops startup when the public URL or the agent URL in effect is
+// http: TierPlan serves HTTPS only (D-07). An upgraded plain-HTTP install and a
+// restored backup can hold one in the settings. The refusal is a
+// restoredStateError, so a pending restore rolls back instead of leaving an
+// instance that cannot start. When TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL is
+// set it wins over the stored value; a stored http value is then read once, only
+// to say it is being ignored.
+func refuseHTTPURLs(ctx context.Context, st *store.Store, inst *instance.Instance, cfg config.Config, log *slog.Logger) error {
+	for _, u := range []struct {
+		what, variable, key, effective string
+		fixed                          bool
+	}{
+		{"public URL", "TIERPLAN_PUBLIC_URL", instance.SettingPublicURL, inst.PublicURL(), cfg.PublicURL != ""},
+		{"agent URL", "TIERPLAN_AGENT_URL", instance.SettingAgentURL, inst.AgentURL(), cfg.AgentURL != ""},
+	} {
+		if !u.fixed {
+			if isHTTPURL(u.effective) {
+				// A sentence for the operator, not a wrapped error, so it keeps its capital and full stop.
+				msg := fmt.Sprintf("The stored %s is %s. TierPlan serves HTTPS only and will not start. Set %s to the https address and keep it set, or see %s.",
+					u.what, u.effective, u.variable, upgradeHTTPStep)
+				return errors.New(msg)
+			}
+			continue
+		}
+		stored, err := st.RQ.GetSetting(ctx, u.key)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read the stored %s: %w", u.what, err)
+		}
+		if err == nil && isHTTPURL(stored) {
+			log.Warn("the stored "+u.what+" is http and is ignored while "+u.variable+" is set; TierPlan serves HTTPS only, so keep the variable set",
+				"stored", stored, "variable", u.variable)
+		}
+	}
+	return nil
+}
+
+func isHTTPURL(v string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "http://")
 }
 
 // errRestoredState marks a start failure that comes from the data a restore put
@@ -645,6 +696,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, restoredStateError{fmt.Errorf("load instance settings: %w", err)}
 	}
+	if err := refuseHTTPURLs(ctx, st, inst, cfg, log); err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{err}
+	}
 
 	// Revisions beyond the retention limit go once at startup, after the deploys that were running are ended
 	// (their revisions are failed now, none is pending): a lowered limit, a restored database and a stack
@@ -662,22 +717,25 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if tlsClock == nil {
 		tlsClock = stackops.RealClock()
 	}
-	tlsSrc, tlsSrcKind, err := newCertSource(cfg, inst.PublicURL(), inst.AgentURL(), tlsClock.Now)
+	tlsSrc, tlsSrcKind, err := newCertSource(ctx, cfg, sealedCertStore{st: st, v: vlt}, inst.PublicURL, inst.AgentURL, tlsClock.Now)
 	if err != nil {
 		_ = st.Close()
+		// The self-signed certificate lives in the database, so a row that cannot be opened or
+		// decoded, or a re-sign for the restored URLs that fails, comes from restored state and a
+		// pending restore goes back to its snapshot. A supplied pair comes from files the restore
+		// did not touch: that error stays plain and the restore keeps its try.
+		if cfg.TLSCertFile == "" && cfg.TLSKeyFile == "" {
+			return nil, restoredStateError{err}
+		}
 		return nil, err
 	}
 	rt := newHTTPSRuntime()
-	if tlsSrc != nil {
-		rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
-	}
+	rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
 	switch rt.Kind() {
-	case tlsKindNone:
-		log.Info("serving plain HTTP; set TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE, TIERPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
 	case tlsKindSelfSigned:
-		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
+		log.Info("TierPlan serves HTTPS with its own self-signed certificate. Your browser will warn about it: check that the warning shows this SHA-256 fingerprint before you continue",
 			"sha256", fingerprint(rt.Config()), "tls_pin", spkiPin(rt.Config()),
-			"certificate", filepath.Join(info.Path, selfSignedDir, selfSignedCertFile))
+			"certificate", filepath.Join(info.Path, selfSignedDir, mirrorCertFile))
 	default:
 		log.Info("serving HTTPS", "certificate_file", cfg.TLSCertFile, "sha256", fingerprint(rt.Config()))
 	}
@@ -767,20 +825,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		WithUpdateHint(func(tooOld bool, envType string) string {
 			return agents.UpdateHint(tooOld, envType, agents.InstallParams{
 				Endpoint: inst.AgentEndpoint(), Pin: tlsPin(), ServerVersion: buildinfo.Get().Version,
-				AllowInsecure: cfg.AgentAllowInsecure,
 			})
 		}).
-		WithAllowInsecure(cfg.AgentAllowInsecure).
 		WithConnectLimit(cfg.AgentConnectBurst).
 		WithRefusalAudit(agentAudit)
-	// Agents refuse a plain ws:// address for another host, and so does the hub,
-	// unless the development switch is on. Say so at start, because nothing could
-	// connect. The address is read at start only; the hub's own refusal line covers
-	// a later change in Settings (G-02-R4-3).
-	if base := inst.AgentBase(); tunnel.PlainAddressRefused(base, cfg.AgentAllowInsecure) {
-		log.Warn("agents cannot connect: the address they are given is plain http for a host that is not this machine, so agents refuse it and so does TierPlan. Set an https TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL (or change it in Settings); TIERPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only",
-			"agent_base", base)
-	}
 	// A revoke commits first and then closes the agent's live session through the hub.
 	agentSvc.WithKicker(tunnelHub)
 	// A re-initialised swarm that is recorded, or adopted, reaches every open
@@ -1037,21 +1085,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:          proxyObs,
 			PublicOrigin:   inst.PublicOrigin,
 			Logger:         log,
-			// Strict-Transport-Security when the request came over TLS, or a trusted
-			// proxy that ends TLS marked it X-Forwarded-Proto: https and the public
-			// URL is https (D-37). Never on a response TierPlan sends over plain
-			// HTTP itself: the health probes, a loopback request and the ACME
-			// challenge path. Not for TierPlan's own self-signed certificate: a
-			// browser pinned to it could not click through a regenerated one (WR-09).
-			HSTS: func(r *http.Request) bool {
-				if r.TLS != nil {
-					return rt.HSTSAllowed()
-				}
-				if httpx.EffectiveScheme(r.Context()) != "https" {
-					return false
-				}
-				return inst.Secure()
-			},
+			// Strict-Transport-Security only on a response to a request that came
+			// over TLS: no plain response exists to carry it, and an
+			// X-Forwarded-Proto header decides nothing here. Not for TierPlan's own
+			// self-signed certificate: a browser pinned to it could not click through
+			// a regenerated one (WR-09).
+			HSTS: func(r *http.Request) bool { return r.TLS != nil && rt.HSTSAllowed() },
 		},
 		System: api.SystemDeps{Ready: ready},
 		Setup:  setupDeps,
@@ -1088,9 +1127,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Log:       log,
 		},
 		LocalHost:     api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
+		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
-		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
+		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
 		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
@@ -1119,7 +1158,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
-		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, AgentAllowInsecure: cfg.AgentAllowInsecure, Log: log},
+		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
 		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
@@ -1181,14 +1220,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { audit.RunNightly(bg, srv.audit, cfg.AuditRetentionDays, log) })
 	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
 	// the handshake path, so a handshake never waits on the disk.
-	if tlsSrc != nil {
-		srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
-	}
-	// A setting another process wrote (`tierplan https disable`) is applied here within one poll,
-	// so the redirect gate, the cookie scope and the Origin check follow it without a restart. The
-	// watcher only reloads the instance's cached values: it pushes no address to agents. Connected
-	// wss agents stay valid because the hub compares the audience without the scheme, and a new
-	// ws:// endpoint must never be pushed.
+	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
+	// A setting another store handle wrote, such as a restore or a CLI user command, is applied here
+	// within one poll, so the redirect gate, the cookie scope and the Origin check follow it without
+	// a restart. The watcher only reloads the instance's cached values: it pushes no address to
+	// agents, and connected agents stay valid because the hub compares the audience without the
+	// scheme.
 	settingsClock := bo.settingsClock
 	if settingsClock == nil {
 		settingsClock = stackops.RealClock()
@@ -1366,15 +1403,8 @@ func (s *Server) Routes() []httpx.RouteRecord { return s.router.Routes() }
 // Handler is the root HTTP handler: the router behind StripBasePath, so a
 // request under the public URL's path reaches the same routes whether or not a
 // proxy stripped the prefix. It runs before chi and every middleware (D-50).
-//
-// The HTTPS gate runs inside the stripper and in front of the router, so
-// /healthz, /readyz and the redirect target are judged on the path below the
-// base, and what the gate answers never reaches the router's security headers
-// (no HSTS on a redirect or a refusal). This is a deliberate deviation from the
-// milestone architecture draft, which put the gate outside the stripper.
 func (s *Server) Handler() http.Handler {
-	gate := newHTTPSGate(s.https, s.inst.PublicURL, TLSEnabled(s.cfg), s.cfg.TrustedProxies)
-	return httpx.StripBasePath(s.inst.BasePath)(gate(s.router.Handler()))
+	return httpx.StripBasePath(s.inst.BasePath)(s.router.Handler())
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully within 10s. When
@@ -1420,9 +1450,10 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 }
 
 // httpServer is the http.Server the process serves with: production's read
-// timeout. TLS is not on it: the sniffing listener decides per connection.
+// timeout. TLS is not on it: the sniffing listener decides per connection. A plain request
+// reaches only the challenge handler; Handler() itself stays scheme-free.
 func (s *Server) httpServer() *http.Server {
-	return newHTTPServer(s.Handler(), nil, defaultReadTimeout)
+	return newHTTPServer(plainOrFull(s.Handler(), s.challenge), nil, defaultReadTimeout)
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -1444,11 +1475,8 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	srv.RegisterOnShutdown(s.tunnel.Close)
 	errc := make(chan error, 1)
 	// Every mode serves through the one sniffing listener, which tells TLS from plain HTTP on each
-	// connection (D-01). The scheme logged is the one at start; TLS can come and go while running.
-	scheme := "http"
-	if s.https.Live() {
-		scheme = "https"
-	}
+	// connection (D-01); plain carries only the ACME challenge, so the scheme is always https.
+	const scheme = "https"
 	go func() { errc <- srv.Serve(newSniffListener(ln, s.https, nil)) }()
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the

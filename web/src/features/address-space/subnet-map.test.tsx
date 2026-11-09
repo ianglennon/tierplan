@@ -47,6 +47,7 @@ interface MountProps {
   swarm?: boolean;
   search?: MapSearch;
   onSearchChange?: (patch: Partial<MapSearch>) => void;
+  renderCap?: number;
 }
 
 function mount(props: MountProps = {}) {
@@ -63,6 +64,7 @@ function mount(props: MountProps = {}) {
           kept={p.kept}
           search={p.search ?? {}}
           onSearchChange={p.onSearchChange ?? (() => {})}
+          renderCap={p.renderCap}
         />
       </TooltipProvider>
     </TestRouter>
@@ -287,19 +289,31 @@ describe("the map toolbar", () => {
 });
 
 describe("the 500-row cap", () => {
-  const many = Array.from({ length: 650 }, (_, i) =>
-    row(`net-${String(i).padStart(4, "0")}`, i, { subnets: [`10.${i >> 8}.${i & 255}.0/24`] }),
+  // The cap is drawn at 5 of 13 here. Drawing the real 500 rows took about 13 s on a quiet machine
+  // and over the 60 s test timeout on a loaded runner, and proved nothing more: the slicing and the
+  // notice are the same code at any cap, and the shipped figure is pinned on its own.
+  const many = Array.from({ length: 13 }, (_, i) =>
+    row(`net-${String(i).padStart(4, "0")}`, i, { subnets: [`10.0.${i}.0/24`] }),
   );
 
-  it("caps rendering at 500 and searches the rest", () => {
+  it("ships with a cap of 500", () => {
     expect(MAP_RENDER_CAP).toBe(500);
-    mount({ rows: many });
-    expect(names()).toHaveLength(500);
-    expect(screen.getByText("Showing the first 500 of 650. Search to find the rest.")).toBeTruthy();
-    expect(screen.queryByText("net-0600")).toBeNull();
+  });
+
+  it("caps rendering and searches the rest", () => {
+    mount({ rows: many, renderCap: 5 });
+    expect(names()).toEqual(["net-0000", "net-0001", "net-0002", "net-0003", "net-0004"]);
+    expect(screen.getByText("Showing the first 5 of 13. Search to find the rest.")).toBeTruthy();
+    expect(screen.queryByText("net-0012")).toBeNull();
     cleanup();
-    mount({ rows: many, search: { q: "net-0600" } });
-    expect(names()).toEqual(["net-0600"]);
+    mount({ rows: many, renderCap: 5, search: { q: "net-0012" } });
+    expect(names()).toEqual(["net-0012"]);
+    expect(screen.queryByText(/Showing the first/)).toBeNull();
+  });
+
+  it("draws every row when there are no more than the cap", () => {
+    mount({ rows: many.slice(0, 5), renderCap: 5 });
+    expect(names()).toHaveLength(5);
     expect(screen.queryByText(/Showing the first/)).toBeNull();
   });
 });

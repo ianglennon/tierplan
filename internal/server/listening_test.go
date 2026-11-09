@@ -5,11 +5,14 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -32,10 +35,11 @@ func pickAddress(t *testing.T) string {
 
 func TestListeningClosesOnceTheServerHasBoundItsAddress(t *testing.T) {
 	addr := pickAddress(t)
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{
+	cfg := testConfig(t, map[string]string{
 		"TIERPLAN_DATA_DIR": t.TempDir() + "/data",
 		"TIERPLAN_LISTEN":   addr,
-	}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,11 +59,11 @@ func TestListeningClosesOnceTheServerHasBoundItsAddress(t *testing.T) {
 
 	testsupport.Await(t, "the server to bind its address", srv.Listening())
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+"/readyz", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := trustedClient(t, cfg).Do(req)
 	if err != nil {
 		t.Fatalf("GET /readyz straight after Listening closed: %v", err)
 	}
@@ -118,15 +122,16 @@ func (w listeningLines) Write(p []byte) (int, error) {
 
 // WR-07, product half: a caller that binds port 0 learns the port from the
 // server's own log line, in the JSON form cmd/tierplan configures
-// ({"msg":"tierplan listening","addr":"127.0.0.1:<port>","scheme":"http"}), so
+// ({"msg":"tierplan listening","addr":"127.0.0.1:<port>","scheme":"https"}), so
 // scripts/smoke.sh does not probe for a free port and race the other runner on
 // the same VM.
 func TestTheListeningLogLineNamesTheAddressThatWasBound(t *testing.T) {
 	lines := listeningLines{addrs: make(chan string, 1)}
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{
+	cfg := testConfig(t, map[string]string{
 		"TIERPLAN_DATA_DIR": t.TempDir() + "/data",
 		"TIERPLAN_LISTEN":   "127.0.0.1:0",
-	}), slog.New(slog.NewJSONHandler(lines, nil)))
+	})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(lines, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,9 +145,9 @@ func TestTheListeningLogLineNamesTheAddressThatWasBound(t *testing.T) {
 	})
 
 	got := testsupport.Await(t, "the listening log line", lines.addrs)
-	base, found := strings.CutPrefix(got, "http://")
+	base, found := strings.CutPrefix(got, "https://")
 	if !found {
-		t.Fatalf("listening line = %q, want an http:// address (no TLS is configured)", got)
+		t.Fatalf("listening line = %q, want an https:// address (every install serves HTTPS)", got)
 	}
 	host, port, err := net.SplitHostPort(base)
 	if err != nil {
@@ -156,7 +161,17 @@ func TestTheListeningLogLineNamesTheAddressThatWasBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	mirror, err := os.ReadFile(HealthcheckCertFile(cfg)) //nolint:gosec // the mirror under the test's own data directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(mirror) {
+		t.Fatal("the mirror holds no certificate")
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(client.CloseIdleConnections)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET /readyz on the address the server logged: %v", err)
 	}
