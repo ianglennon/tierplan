@@ -711,8 +711,15 @@ type zeroReader struct{}
 func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 
 func TestUncappedLogsPassWhileOtherAnswersKeepTheCap(t *testing.T) {
-	const size = 65 << 20 // more than MaxResponseBytes
-	srv := timed(t, nil)
+	// The hub's cap is shrunk to 64 KiB and every answer is four times it. What is
+	// proved is the same as at the shipped 64 MiB (TestTooLargeResponseFailsTypedWhileEventsAreExemptAndTheSessionStaysUsable
+	// pins that figure): a log and an exec stream pass whole past the cap and a list
+	// does not. At 64 MiB the test moved about 200 MiB through the multiplexer under
+	// -race, which on a loaded runner outlasted the mux keepalive and dropped the
+	// agent; at this size the run is bounded by the bytes it moves, not by time.
+	const limit = 64 << 10
+	const size = 4 * limit
+	srv := timed(t, func(h *tunnel.Hub) *tunnel.Hub { return h.WithResponseLimit(limit) })
 	c := srv.Enrol(t, srv.NewEnvironment(t, "Production"))
 	srv.Events.WaitLen(t, 1)
 	s := srv.Hub.Session(c.Identity.AgentID)
