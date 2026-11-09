@@ -720,6 +720,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	tlsSrc, tlsSrcKind, err := newCertSource(ctx, cfg, sealedCertStore{st: st, v: vlt}, inst.PublicURL, inst.AgentURL, tlsClock.Now)
 	if err != nil {
 		_ = st.Close()
+		// The self-signed certificate lives in the database, so a row that cannot be opened or
+		// decoded, or a re-sign for the restored URLs that fails, comes from restored state and a
+		// pending restore goes back to its snapshot. A supplied pair comes from files the restore
+		// did not touch: that error stays plain and the restore keeps its try.
+		if cfg.TLSCertFile == "" && cfg.TLSKeyFile == "" {
+			return nil, restoredStateError{err}
+		}
 		return nil, err
 	}
 	rt := newHTTPSRuntime()
