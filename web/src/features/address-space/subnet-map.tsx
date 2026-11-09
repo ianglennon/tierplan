@@ -387,6 +387,9 @@ interface SubnetMapProps {
   search: MapSearch;
   // Writes the given keys to the URL; a key set to undefined is removed from it.
   onSearchChange: (patch: Partial<MapSearch>) => void;
+  // How many rows are drawn at most. Undefined keeps MAP_RENDER_CAP. Tests shrink it, so the cap
+  // is proved without drawing 500 rows; nothing else should set it.
+  renderCap?: number | undefined;
 }
 
 // The chip row: one choice of five, All being none. Pressing the chosen chip is All.
@@ -430,7 +433,7 @@ function ShowChips({
 
 // SubnetMap is the Subnet map card: every network of the environment in the server's address order,
 // with who owns it, what is attached and where it overlaps another (NET-01). The search, the chip,
-// the node and the sort come from the URL; at most MAP_RENDER_CAP rows are drawn.
+// the node and the sort come from the URL; at most MAP_RENDER_CAP rows (renderCap) are drawn.
 export function SubnetMap({
   envId,
   rows,
@@ -441,6 +444,7 @@ export function SubnetMap({
   kept,
   search,
   onSearchChange,
+  renderCap = MAP_RENDER_CAP,
 }: SubnetMapProps) {
   const t = useT();
   const nodeColumn = useNodeColumn<AddressMapRow>();
@@ -463,7 +467,7 @@ export function SubnetMap({
     () => [...new Set((all ?? []).map((r) => r.node).filter(Boolean))].sort(),
     [all],
   );
-  const drawn = matched.slice(0, MAP_RENDER_CAP);
+  const drawn = matched.slice(0, renderCap);
   const filtered =
     Boolean(q) || (show !== undefined && show !== "all") || (swarm && node !== undefined);
 
@@ -659,8 +663,8 @@ export function SubnetMap({
         ) : matched.length > 0 ? (
           <div className="flex flex-col gap-1 text-sm text-muted-foreground">
             <p className="tabular-nums">{t("addressSpace.map.count", { count: matched.length })}</p>
-            {matched.length > MAP_RENDER_CAP ? (
-              <p>{t("addressSpace.map.cap", { cap: MAP_RENDER_CAP, total: matched.length })}</p>
+            {matched.length > renderCap ? (
+              <p>{t("addressSpace.map.cap", { cap: renderCap, total: matched.length })}</p>
             ) : null}
             {truncated && !filtered ? (
               <p>{t("addressSpace.map.truncated", { rows: rows.length, total })}</p>
