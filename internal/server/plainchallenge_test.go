@@ -33,7 +33,9 @@ func plainExchange(t *testing.T, addr, request string) string {
 		stop()
 		_ = conn.Close()
 	})
-	if _, err := io.WriteString(conn, request); err != nil {
+	// A server that has already closed on a head it will not accept may reset the write of a long one.
+	// That is a close, not a failure: what the test asserts is the bytes read.
+	if _, err := io.WriteString(conn, request); err != nil && !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(conn)
@@ -107,6 +109,88 @@ func TestPlainSecondRequestOnAKeptAliveChallengeConnectionIsClosedUnanswered(t *
 	if len(rest) != 0 {
 		t.Fatalf("a second, non-challenge request on the connection was answered with %q", rest)
 	}
+}
+
+// wantOnly404 fails unless got is exactly one 404 response and nothing after it.
+func wantOnly404(t *testing.T, got string) {
+	t.Helper()
+	br := bufio.NewReader(strings.NewReader(got))
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("the reply %q is not a response: %v", got, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || string(body) != "404 page not found\n" {
+		t.Fatalf("got status %d body %q, want 404 and the not-found body", resp.StatusCode, body)
+	}
+	if _, err := br.Peek(1); !errors.Is(err, io.EOF) {
+		t.Fatalf("bytes follow the 404 response in %q", got)
+	}
+}
+
+func TestPlainWireMatrix(t *testing.T) {
+	loopback := startWire(t, nil, "")
+	proxied := startWire(t, map[string]string{"TIERPLAN_TRUSTED_PROXIES": "203.0.113.0/24"}, "203.0.113.9:40000")
+	const closeAfter = "Connection: close\r\n"
+	const challenge = "/.well-known/acme-challenge"
+	oversize := "GET / HTTP/1.1\r\nHost: x\r\nX-Pad: " + strings.Repeat("a", plainHeadLimit+1024) + "\r\n\r\n"
+	tests := []struct {
+		name    string
+		w       *wireServer
+		request string
+		want404 bool // otherwise the connection is closed with nothing written
+	}{
+		{"garbage", loopback, "GARBAGE\r\n\r\n", false},
+		{"a head over the limit", loopback, oversize, false},
+		{"the h2c preface", loopback, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", false},
+		{"healthz from loopback", loopback, "GET /healthz HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
+		{"readyz from loopback", loopback, "GET /readyz HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
+		{"healthz from a trusted proxy marked https", proxied, "GET /healthz HTTP/1.1\r\nHost: x\r\nX-Forwarded-Proto: https\r\n" + closeAfter + "\r\n", false},
+		{"the root from a trusted proxy marked https", proxied, "GET / HTTP/1.1\r\nHost: x\r\nX-Forwarded-Proto: https\r\n" + closeAfter + "\r\n", false},
+		{"a challenge token", loopback, "GET " + challenge + "/x HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", true},
+		{"a challenge token from a trusted proxy peer", proxied, "GET " + challenge + "/x HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", true},
+		{"the challenge directory without its slash", loopback, "GET " + challenge + " HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
+		{"a path that only extends the challenge name", loopback, "GET " + challenge + "X HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
+		{"absolute-form challenge target", loopback, "GET http://x" + challenge + "/t HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", true},
+		{"absolute-form target outside the challenge", loopback, "GET http://x/healthz HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
+		{"a challenge POST still gets only the challenge answer", loopback, "POST " + challenge + "/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n" + closeAfter + "\r\n", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := plainExchange(t, tc.w.addr, tc.request)
+			if tc.want404 {
+				wantOnly404(t, got)
+				return
+			}
+			if got != "" {
+				t.Fatalf("the plain request was answered with %q, want no bytes", got)
+			}
+		})
+	}
+
+	t.Run("a challenge request then a pipelined request outside the challenge", func(t *testing.T) {
+		got := plainExchange(t, loopback.addr, "GET "+challenge+"/a HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n")
+		wantOnly404(t, got)
+	})
+	t.Run("two pipelined challenge requests are both answered", func(t *testing.T) {
+		got := plainExchange(t, loopback.addr, "GET "+challenge+"/a HTTP/1.1\r\nHost: x\r\n\r\nGET "+challenge+"/b HTTP/1.1\r\nHost: x\r\n"+closeAfter+"\r\n")
+		br := bufio.NewReader(strings.NewReader(got))
+		for i := range 2 {
+			resp, err := http.ReadResponse(br, nil)
+			if err != nil {
+				t.Fatalf("response %d: %v", i, err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("response %d status %d, want 404", i, resp.StatusCode)
+			}
+		}
+		if _, err := br.Peek(1); !errors.Is(err, io.EOF) {
+			t.Fatalf("bytes follow the second response in %q", got)
+		}
+	})
 }
 
 func TestTLSStillServesHealthz(t *testing.T) {

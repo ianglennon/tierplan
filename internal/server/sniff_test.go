@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -555,4 +556,155 @@ func TestServeShutdownClosesPendingSniffs(t *testing.T) {
 	if err := readErr(t, silent); err == nil {
 		t.Fatal("the silent connection was left open")
 	}
+}
+
+// TestPlainPeekTimerAndCapAccounting drives every way a plain connection can leave the listener and
+// checks the pending set is empty after each, so no slot leaks. The connections are in-memory pipes,
+// where a close is seen at the other end as EOF whatever was left unread, and the timers are fired by
+// hand: the assertions are on bytes and counts, never on elapsed time.
+func TestPlainPeekTimerAndCapAccounting(t *testing.T) {
+	// feed writes data in the background and returns a channel that closes when every byte has been
+	// taken by the listener or the pipe was closed under the write.
+	feed := func(c net.Conn, data string) <-chan struct{} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = c.Write([]byte(data))
+		}()
+		return done
+	}
+	tests := []struct {
+		name string
+		run  func(t *testing.T, r *capRig, c net.Conn)
+	}{
+		{"connects and sends nothing", func(t *testing.T, r *capRig, c net.Conn) {
+			r.timers.FireAll()
+		}},
+		{"sends only a CRLF", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "\r\n")
+			r.timers.FireAll()
+		}},
+		{"sends one byte at a time, never finishing the head", func(t *testing.T, r *capRig, c net.Conn) {
+			head := "GET " + acmeChallengePrefix + "slow HTTP/1.1\r\nHost: x\r\n"
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for i := range len(head) {
+					if _, err := c.Write([]byte{head[i]}); err != nil {
+						return
+					}
+				}
+			}()
+			testsupport.Await(t, "every trickled byte to be taken", done)
+			if n := r.l.pendingCount(); n != 1 {
+				t.Fatalf("%d connections pending while the head trickles, want 1", n)
+			}
+			r.timers.FireAll()
+		}},
+		{"sends a head over the limit", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GET / HTTP/1.1\r\nHost: x\r\nX-Pad: "+strings.Repeat("a", plainHeadLimit+1024)+"\r\n\r\n")
+		}},
+		{"sends garbage", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GARBAGE\r\n\r\n")
+		}},
+		{"sends the h2c preface", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+		}},
+		{"sends a complete head for another path", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+		}},
+		{"sends a head for the challenge directory without its slash", func(t *testing.T, r *capRig, c net.Conn) {
+			feed(c, "GET /.well-known/acme-challenge HTTP/1.1\r\nHost: x\r\n\r\n")
+		}},
+		{"is closed by the listener while it waits", func(t *testing.T, r *capRig, c net.Conn) {
+			if err := r.l.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"is closed by the listener while it sends a partial head", func(t *testing.T, r *capRig, c net.Conn) {
+			done := feed(c, "GET "+acmeChallengePrefix+"x HTTP/1.1\r\n")
+			testsupport.Await(t, "the partial head to be taken", done)
+			if err := r.l.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCapRig(t, maxPendingSniffs)
+			c := r.connect(t, publicAt(40001))
+			tc.run(t, r, c)
+			if err := readErr(t, c); !errors.Is(err, io.EOF) {
+				t.Fatalf("got %v, want it closed with no bytes written", err)
+			}
+			if n := r.l.pendingCount(); n != 0 {
+				t.Fatalf("%d connections pending after the exit, want 0", n)
+			}
+			if n := r.timers.Pending(); n != 0 {
+				t.Fatalf("%d peek timers still armed after the exit, want 0", n)
+			}
+		})
+	}
+
+	t.Run("a client that closes at once frees its slot", func(t *testing.T) {
+		// A real socket, so the client can half-close and still read the listener's close.
+		r := newSniffRig(t, maxPendingSniffs)
+		c, ok := r.dial(t).(*net.TCPConn)
+		if !ok {
+			t.Fatal("not a TCP connection")
+		}
+		r.timers.WaitArmed(t)
+		if err := c.CloseWrite(); err != nil {
+			t.Fatal(err)
+		}
+		if err := readErr(t, c); !errors.Is(err, io.EOF) {
+			t.Fatalf("got %v, want the listener to close an end-of-stream client", err)
+		}
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after the client closed, want 0", n)
+		}
+	})
+
+	t.Run("a challenge head leaves the set when it is handed over", func(t *testing.T) {
+		r := newCapRig(t, maxPendingSniffs)
+		c := r.connect(t, publicAt(40001))
+		r.speak(t, c, "ok")
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after the hand-over, want 0", n)
+		}
+		if n := r.timers.Pending(); n != 0 {
+			t.Fatalf("%d peek timers armed after the hand-over, want 0", n)
+		}
+	})
+
+	t.Run("a partial plain head counts against the cap and is evicted oldest first", func(t *testing.T) {
+		r := newCapRig(t, 2)
+		partial := "GET " + acmeChallengePrefix + "p HTTP/1.1\r\n"
+		oldest := r.connect(t, publicAt(40001))
+		testsupport.Await(t, "the oldest partial head to be taken", feed(oldest, partial))
+		second := r.connect(t, publicAt(40002))
+		testsupport.Await(t, "the second partial head to be taken", feed(second, partial))
+		if n := r.l.pendingCount(); n != 2 {
+			t.Fatalf("%d connections pending, want the cap of 2", n)
+		}
+		third := r.connect(t, publicAt(40003))
+		if err := readErr(t, oldest); !errors.Is(err, io.EOF) {
+			t.Fatalf("the oldest mid-head connection got %v, want it closed to make room", err)
+		}
+		if n := r.l.pendingCount(); n != 2 {
+			t.Fatalf("%d connections pending after the eviction, want 2", n)
+		}
+		// Closing the listener in the middle of the peeks frees every slot.
+		if err := r.l.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range []net.Conn{second, third} {
+			if err := readErr(t, c); !errors.Is(err, io.EOF) {
+				t.Fatalf("a pending connection got %v after Close, want EOF", err)
+			}
+		}
+		if n := r.l.pendingCount(); n != 0 {
+			t.Fatalf("%d connections pending after Close, want 0", n)
+		}
+	})
 }
