@@ -35,10 +35,11 @@ func pickAddress(t *testing.T) string {
 
 func TestListeningClosesOnceTheServerHasBoundItsAddress(t *testing.T) {
 	addr := pickAddress(t)
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{
+	cfg := testConfig(t, map[string]string{
 		"TIERPLAN_DATA_DIR": t.TempDir() + "/data",
 		"TIERPLAN_LISTEN":   addr,
-	}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,11 +59,11 @@ func TestListeningClosesOnceTheServerHasBoundItsAddress(t *testing.T) {
 
 	testsupport.Await(t, "the server to bind its address", srv.Listening())
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+"/readyz", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := trustedClient(t, cfg).Do(req)
 	if err != nil {
 		t.Fatalf("GET /readyz straight after Listening closed: %v", err)
 	}

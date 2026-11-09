@@ -297,25 +297,6 @@ func startWire(t *testing.T, env map[string]string, peer string, opts ...Option)
 	return &wireServer{srv: srv, cfg: cfg, addr: ln.Addr().String()}
 }
 
-// tlsClient speaks TLS to the listener whatever name the URL carries, trusting exactly the
-// certificate TierPlan serves. Certificate verification stays on.
-func (w *wireServer) tlsClient(t *testing.T) *http.Client {
-	t.Helper()
-	cfg := trustedTLSConfig(t, w.cfg)
-	// The name comes from the URL being fetched, so a Location naming a host the certificate does
-	// not carry fails here.
-	cfg.ServerName = ""
-	tr := &http.Transport{
-		TLSClientConfig: cfg,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, w.addr)
-		},
-	}
-	t.Cleanup(tr.CloseIdleConnections)
-	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
 // wireReply is what a client saw of a response whose body it has read and closed.
 type wireReply struct {
 	status int
