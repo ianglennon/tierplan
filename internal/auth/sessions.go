@@ -140,18 +140,19 @@ func cookiePath(scope CookieScope) string {
 // with remember it lasts the remember lifetime. It is HttpOnly, SameSite=Lax,
 // Secure, Path=/ (or the base path, D-50) and never has a Domain.
 func (m *Sessions) Cookie(rawID string, remember bool, scope CookieScope) http.Cookie {
-	c := http.Cookie{
+	maxAge := 0
+	if remember {
+		maxAge = int(m.remember / time.Second)
+	}
+	return http.Cookie{
 		Name:     CookieName(scope),
 		Value:    rawID,
 		Path:     cookiePath(scope),
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	}
-	if remember {
-		c.MaxAge = int(m.remember / time.Second)
-	}
-	return c
 }
 
 // ClearCookie builds the cookie that makes a browser delete the session cookie.
