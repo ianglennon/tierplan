@@ -24,11 +24,13 @@ To check a package yourself:
 
 ```sh
 # 20 shuffled race runs with every CPU busy beside the test
-scripts/with-load.sh auto -- go test ./internal/<pkg> -race -count=20 -shuffle=on -timeout 3h
+scripts/with-load.sh auto -- go test ./internal/<pkg> -race -count=20 -shuffle=on -timeout 6h
 
 # the same bar for one share of the whole suite (api, core, rest or agent-web)
 make test-stress STRESS_SHARD=api
 ```
+
+The `-timeout` covers the whole run, not one iteration, so it has to fit the slowest package. `internal/server` is that package: with a busy loop on every CPU one iteration takes 11 to 12 minutes, and the 20 took 3.9 hours (14002 s, measured on 2026-11-09). A `-timeout 3h` kills that run at 3h0m0s with no failing test. Six hours leaves room for a slower machine.
 
 `scripts/with-load.sh N -- command` starts N CPU busy loops (`auto` is one per CPU) and stops them when the command ends. The command runs in its own session and a signal reaches its whole process group, so the test binaries `go test` compiled and anything they started end with it. `make test-stress` runs the stability bar for one shard (see "Stress runs"); a shard takes hours, so run it on a machine you can leave alone.
 
