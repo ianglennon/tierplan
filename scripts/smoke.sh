@@ -105,6 +105,15 @@ code="$(tcurl -sS -o "${WORK}/healthz.txt" -w '%{http_code}' "${BASE}/healthz")"
 [ "${code}" = "200" ] || fail "/healthz returned ${code}, want 200"
 [ "$(cat "${WORK}/healthz.txt")" = "ok" ] || fail "/healthz body is not exactly 'ok'"
 
+# Plain HTTP carries only the ACME challenge (D-01, TLS-10): any other plain request, probes
+# included, gets a closed connection with no bytes (curl exit 52, empty reply), and the challenge
+# path gets a 404 until an ACME client answers it.
+rc=0
+curl -sS -o /dev/null "http://127.0.0.1:${PORT}/healthz" 2>/dev/null || rc=$?
+[ "${rc}" = "52" ] || fail "a plain /healthz exited curl ${rc}, want 52 (empty reply)"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/.well-known/acme-challenge/smoke")"
+[ "${code}" = "404" ] || fail "the plain ACME challenge path returned ${code}, want 404"
+
 code="$(tcurl -sS -o "${WORK}/readyz.txt" -w '%{http_code}' "${BASE}/readyz")"
 [ "${code}" = "200" ] || fail "/readyz returned ${code}, want 200"
 [ "$(cat "${WORK}/readyz.txt")" = "ready" ] || fail "/readyz body is not exactly 'ready'"

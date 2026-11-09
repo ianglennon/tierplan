@@ -127,6 +127,10 @@ if docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${NAME}" | gre
 fi
 [ "$(tcurl -sS -o /dev/null -w '%{http_code}' "${BASE}/healthz")" = "200" ] || fail "/healthz did not answer 200 over verified https before setup"
 pass "healthy over https from first start, no TLS variable, before setup"
+rc=0
+curl -sS -o /dev/null "http://${BASE#https://}/healthz" 2>/dev/null || rc=$?
+[ "${rc}" = "52" ] || fail "a plain /healthz on the published port exited curl ${rc}, want 52 (empty reply)"
+pass "a plain request to the published port gets an empty reply"
 PIN_ONE="$(spki_pin "${WORK}/server.crt")"
 
 # 1. UID 1000 with no root process left: the privilege drop ran (D-17).

@@ -151,6 +151,9 @@ type Server struct {
 	// https is the live TLS state: every handshake, pin and HSTS decision reads
 	// it. Nothing but Build and tests calls Install (D-12).
 	https *httpsRuntime
+	// challenge answers a plain request for /.well-known/acme-challenge/. Nil means 404;
+	// Phase 14 sets it. It is the only thing a plain connection reaches.
+	challenge http.Handler
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -1460,9 +1463,10 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 }
 
 // httpServer is the http.Server the process serves with: production's read
-// timeout. TLS is not on it: the sniffing listener decides per connection.
+// timeout. TLS is not on it: the sniffing listener decides per connection. A plain request
+// reaches only the challenge handler; Handler() itself stays scheme-free.
 func (s *Server) httpServer() *http.Server {
-	return newHTTPServer(s.Handler(), nil, defaultReadTimeout)
+	return newHTTPServer(plainOrFull(s.Handler(), s.challenge), nil, defaultReadTimeout)
 }
 
 func (s *Server) serve(ctx context.Context, ln net.Listener) error {
@@ -1484,11 +1488,8 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	srv.RegisterOnShutdown(s.tunnel.Close)
 	errc := make(chan error, 1)
 	// Every mode serves through the one sniffing listener, which tells TLS from plain HTTP on each
-	// connection (D-01). The scheme logged is the one at start; TLS can come and go while running.
-	scheme := "http"
-	if s.https.Live() {
-		scheme = "https"
-	}
+	// connection (D-01); plain carries only the ACME challenge, so the scheme is always https.
+	const scheme = "https"
 	go func() { errc <- srv.Serve(newSniffListener(ln, s.https, nil)) }()
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the

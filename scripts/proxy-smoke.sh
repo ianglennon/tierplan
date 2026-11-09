@@ -55,7 +55,7 @@
 # all of them. Names are KIND-SITE for the documented files (caddy-root, caddy-subpath,
 # nginx-root, nginx-subpath, traefik-root, traefik-subpath) and nginx-root-VARIANT for
 # the deliberate breaks (nginx-root-no_upgrade_headers, nginx-root-no_host_header,
-# nginx-root-untrusted_proxy). An unknown name fails before anything starts.
+# nginx-root-untrusted_proxy, nginx-root-plain_port_closed). An unknown name fails before anything starts.
 # Removes every container, volume and the network it creates, by name, and labels them with
 # tierplan.ci.owner=$TIERPLAN_CI_OWNER (local-<pid> when unset) so that `make ci-clean`
 # in CI removes what a cancelled run left (D-23). The proxy's host port is assigned by
@@ -76,7 +76,8 @@ done
 
 # Every scenario this script can run, in the order it runs them.
 ALL_SCENARIOS=(caddy-root caddy-subpath nginx-root nginx-subpath traefik-root traefik-subpath
-  nginx-root-no_upgrade_headers nginx-root-no_host_header nginx-root-untrusted_proxy)
+  nginx-root-no_upgrade_headers nginx-root-no_host_header nginx-root-untrusted_proxy
+  nginx-root-plain_port_closed)
 ONLY="${PROXY_SMOKE_ONLY:-}"
 if [ -n "${ONLY}" ]; then
   IFS=',' read -r -a only_names <<<"${ONLY}"
@@ -340,8 +341,11 @@ run_scenario() {
   DATA_VOLUME="${TIERPLAN_NAME}-data"
   VOLUMES+=("${DATA_VOLUME}")
   docker volume create --label "${OWNER_LABEL}" "${DATA_VOLUME}" >/dev/null
+  # plain_port_closed publishes TierPlan's own port so a plain request can be sent to it directly.
+  local publish=()
+  [ "${variant}" = plain_port_closed ] && publish=(-p 127.0.0.1::7480)
   start_container "${TIERPLAN_NAME}" --network-alias tierplan --hostname tierplan -v "${DATA_VOLUME}:/data" \
-    -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" ${trust:+-e "TIERPLAN_TRUSTED_PROXIES=${trust}"} \
+    ${publish[@]+"${publish[@]}"} -e "TIERPLAN_PUBLIC_URL=${PUBLIC}" ${trust:+-e "TIERPLAN_TRUSTED_PROXIES=${trust}"} \
     --health-interval 2s --health-start-period 0s --health-retries 10 "${IMAGE}"
   if ! wait_tierplan; then
     fail "${LABEL}: TierPlan did not become healthy"
@@ -354,6 +358,23 @@ run_scenario() {
     fail "${LABEL}: the proxy never passed /healthz through to TierPlan"
     stop_container "${PROXY_NAME}"
     stop_container "${TIERPLAN_NAME}"
+    return
+  fi
+
+  if [ "${variant}" = plain_port_closed ]; then
+    # plain_port_closed: TierPlan carries only the ACME challenge over plain HTTP (D-01, TLS-10).
+    # A plain request sent straight to its port, not through the proxy, gets an empty reply.
+    local direct rc=0
+    direct="$(docker port "${TIERPLAN_NAME}" 7480/tcp | head -n 1 | sed 's/.*://')"
+    curl -sS -o /dev/null --max-time 10 "http://127.0.0.1:${direct}/healthz" 2>/dev/null || rc=$?
+    if [ "${rc}" = 52 ]; then
+      pass "${LABEL}: plain_port_closed: a plain request straight to TierPlan's port gets an empty reply"
+    else
+      fail "${LABEL}: plain_port_closed: a plain request straight to TierPlan's port exited curl ${rc}, want 52 (empty reply)"
+    fi
+    stop_container "${PROXY_NAME}"
+    stop_container "${TIERPLAN_NAME}"
+    docker volume rm -f "${DATA_VOLUME}" >/dev/null 2>&1 || true
     return
   fi
 
@@ -479,6 +500,7 @@ done
 run_scenario nginx root no_upgrade_headers
 run_scenario nginx root no_host_header
 run_scenario nginx root untrusted_proxy
+run_scenario nginx root plain_port_closed
 
 if [ "${FAILS}" -ne 0 ]; then
   echo "FAIL: ${FAILS} proxy smoke check(s) failed"

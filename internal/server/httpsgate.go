@@ -11,11 +11,6 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 )
 
-// acmeChallengePrefix is where an ACME HTTP-01 challenge is fetched. It is served,
-// never redirected, so a certificate authority that starts on plain HTTP is not
-// sent to an address it cannot validate.
-const acmeChallengePrefix = "/.well-known/acme-challenge/"
-
 // gateAction is what the gate does with one request.
 type gateAction uint8
 
