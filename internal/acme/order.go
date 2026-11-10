@@ -161,38 +161,64 @@ func (r *orderRun) run(ctx context.Context) (Issued, error) {
 	r.core = core
 	r.steps.Skipped(StepAccount, "Account already registered.")
 
-	r.steps.Running(StepOrder, "Asking the certificate authority for an order.")
-	ord, err := r.create(ctx)
+	r.steps.Running(StepOrder, "Looking for an order to pick up, or asking the certificate authority for a new one.")
+	ord, err := r.open(ctx)
 	if err != nil {
 		return Issued{}, r.fail(StepOrder, err)
 	}
 	r.steps.Done(StepOrder)
 
-	r.steps.Running(StepChallenge, "Making the challenge answerable.")
-	if err := r.challenges(ctx, ord); err != nil {
-		return Issued{}, r.fail(StepChallenge, err)
+	// From here the CA's own account of the order decides what is left to do, not the stage this
+	// side stored: the two differ exactly when a run was cut short (RESEARCH Pitfall 3).
+	if ord.Status == legoacme.StatusInvalid {
+		r.steps.Running(StepValidate, "Reading why the certificate authority ended the order.")
+		return Issued{}, r.fail(StepValidate, r.invalid(ctx, ord))
 	}
-	if err := r.o.store.UpdateOrder(ctx, r.row.ID, StageChallengeSubmitted, r.row.ResumeCount, r.o.clock.Now()); err != nil {
-		return Issued{}, r.fail(StepChallenge, err)
-	}
-	r.steps.Done(StepChallenge)
 
-	r.steps.Running(StepValidate, "Waiting for the certificate authority to check the challenge.")
-	ord, err = r.awaitValidation(ctx)
-	if err != nil {
-		return Issued{}, r.fail(StepValidate, err)
-	}
-	if err := r.o.store.UpdateOrder(ctx, r.row.ID, StageReady, r.row.ResumeCount, r.o.clock.Now()); err != nil {
-		return Issued{}, r.fail(StepValidate, err)
-	}
-	r.steps.Done(StepValidate)
+	if ord.Status == legoacme.StatusPending {
+		r.steps.Running(StepChallenge, "Making the challenge answerable.")
+		if err := r.challenges(ctx, ord); err != nil {
+			return Issued{}, r.fail(StepChallenge, err)
+		}
+		if err := r.o.store.UpdateOrder(ctx, r.row.ID, StageChallengeSubmitted, r.row.ResumeCount, r.o.clock.Now()); err != nil {
+			return Issued{}, r.fail(StepChallenge, err)
+		}
+		r.steps.Done(StepChallenge)
 
-	r.steps.Running(StepFinalize, "Sending the certificate request.")
-	ord, err = r.finalize(ctx, ord)
+		r.steps.Running(StepValidate, "Waiting for the certificate authority to check the challenge.")
+		ord, err = r.awaitValidation(ctx)
+		if err != nil {
+			return Issued{}, r.fail(StepValidate, err)
+		}
+		r.steps.Done(StepValidate)
+	} else {
+		r.steps.Skipped(StepChallenge, "The challenge was already answered.")
+		r.steps.Skipped(StepValidate, "The certificate authority already checked the challenge.")
+	}
+
+	skippedFinalize := ord.Status == legoacme.StatusValid
+	switch ord.Status {
+	case legoacme.StatusReady:
+		if err := r.o.store.UpdateOrder(ctx, r.row.ID, StageReady, r.row.ResumeCount, r.o.clock.Now()); err != nil {
+			return Issued{}, r.fail(StepFinalize, err)
+		}
+		r.steps.Running(StepFinalize, "Sending the certificate request.")
+		ord, err = r.finalize(ctx, ord)
+	case legoacme.StatusProcessing:
+		// The CSR left on an earlier run: only wait for the result, never send it again.
+		r.steps.Running(StepFinalize, "Waiting for the certificate authority to issue the certificate.")
+		ord, err = r.settle(ctx, ord)
+	case legoacme.StatusValid:
+		r.steps.Skipped(StepFinalize, "The certificate was already issued.")
+	default:
+		err = fmt.Errorf("the order is %s where a validated order was expected", ord.Status)
+	}
 	if err != nil {
 		return Issued{}, r.fail(StepFinalize, err)
 	}
-	r.steps.Done(StepFinalize)
+	if !skippedFinalize {
+		r.steps.Done(StepFinalize)
+	}
 
 	r.steps.Running(StepStored, "Checking and saving the certificate.")
 	issued, err := r.download(ctx, ord)
@@ -201,6 +227,71 @@ func (r *orderRun) run(ctx context.Context) (Issued, error) {
 	}
 	r.steps.Done(StepStored)
 	return issued, nil
+}
+
+// open resumes the order the store holds open when it still fits the request, and otherwise closes
+// it and creates a new one. An open order that no longer fits is one nobody is waiting for: other
+// names, another kind of order or profile, another directory, or a CA that would no longer honour it.
+func (r *orderRun) open(ctx context.Context) (legoacme.ExtendedOrder, error) {
+	row, key, found, err := r.o.store.OpenOrder(ctx)
+	if err != nil {
+		return legoacme.ExtendedOrder{}, err
+	}
+	if !found {
+		return r.create(ctx)
+	}
+	now := r.o.clock.Now()
+	if r.stale(row, now) {
+		if err := r.o.store.CloseOrder(ctx, row.ID, StageFailed, now); err != nil {
+			return legoacme.ExtendedOrder{}, err
+		}
+		return r.create(ctx)
+	}
+	if row.ResumeCount >= MaxResumes {
+		if err := r.o.store.CloseOrder(ctx, row.ID, StageFailed, now); err != nil {
+			return legoacme.ExtendedOrder{}, err
+		}
+		return legoacme.ExtendedOrder{}, ErrTooManyResumes
+	}
+
+	row.ResumeCount++
+	if err := r.o.store.UpdateOrder(ctx, row.ID, row.Stage, row.ResumeCount, now); err != nil {
+		return legoacme.ExtendedOrder{}, err
+	}
+	r.row, r.key = row, key
+	ord, err := r.core.Orders.Get(ctx, row.URL)
+	if err != nil {
+		return legoacme.ExtendedOrder{}, fmt.Errorf("read the ACME order: %w", err)
+	}
+	return ord, nil
+}
+
+// stale reports whether the open order cannot serve this request.
+func (r *orderRun) stale(row Order, now time.Time) bool {
+	switch {
+	case row.DirectoryURL != r.o.client.dir.URL:
+		return true
+	case row.Kind != r.req.Kind, row.Profile != r.req.Profile:
+		return true
+	case !sameNames(row.Names, r.req.Names):
+		return true
+	case !row.ExpiresAt.IsZero() && !row.ExpiresAt.After(now):
+		return true
+	}
+	return false
+}
+
+// sameNames reports whether a and b hold the same names, in any order and any case.
+func sameNames(a, b []string) bool {
+	norm := func(in []string) []string {
+		out := make([]string, len(in))
+		for i, n := range in {
+			out[i] = strings.ToLower(n)
+		}
+		slices.Sort(out)
+		return out
+	}
+	return slices.Equal(norm(a), norm(b))
 }
 
 // create opens a new order at the CA and stores it with its fresh certificate key before anything
