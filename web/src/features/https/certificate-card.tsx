@@ -119,7 +119,13 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
 function LetsEncryptRows({ acme, active }: { acme: HTTPSACME; active: boolean }) {
   const t = useT();
   const issued = active ? acme.certificate : undefined;
-  const paused = active && acme.pausedReason === "restore";
+  // Nothing renews while Let's Encrypt is paused, whatever date the server still holds. A restore pause
+  // ends with Resume; a certificate-files pause only when the variables are removed and TierPlan restarts.
+  const paused = active && acme.pausedReason !== "";
+  const pausedText =
+    acme.pausedReason === "cert_files"
+      ? t("https.certificate.pausedNextFiles")
+      : t("https.certificate.pausedNext");
   const renewal = active ? acme.renewal : undefined;
   const error = acme.lastError;
 
@@ -151,7 +157,7 @@ function LetsEncryptRows({ acme, active }: { acme: HTTPSACME; active: boolean })
           </dt>
           <dd className="min-w-0 break-all text-sm">
             {paused ? (
-              t("https.certificate.pausedNext")
+              pausedText
             ) : renewal ? (
               <span className="inline-flex flex-wrap items-baseline gap-x-2">
                 <span>{formatAbsolute(renewal.nextAt)}</span>

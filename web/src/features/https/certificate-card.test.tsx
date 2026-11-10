@@ -14,6 +14,7 @@ import "@/i18n";
 import { formatAbsolute } from "@/lib/format";
 import {
   acmeLastError,
+  httpsCertFilesKeptStatus,
   httpsFallbackStatus,
   httpsLetsEncryptStatus,
   httpsStatus,
@@ -266,6 +267,21 @@ describe("Certificate in use card: Let's Encrypt", () => {
     renderCard();
     await card().findByText("Source");
     expect(rowValue("Next renewal").textContent).toBe("Paused until you resume");
+  });
+
+  it("says renewals are paused by certificate files, with no date, though the server still plans one", async () => {
+    // The server keeps the mode active and sends the planned renewal; the scheduler does nothing.
+    answer = () =>
+      Response.json(
+        httpsCertFilesKeptStatus({
+          renewal: { basis: "ari", nextAt: NEXT_AT },
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Next renewal").textContent).toBe("Paused while certificate files are set");
+    expect(card().queryByText(formatAbsolute(NEXT_AT))).toBeNull();
+    expect(card().queryByText("Chosen by Let's Encrypt")).toBeNull();
   });
 
   it("shows the classified headline, when it happened and a link to the details below", async () => {

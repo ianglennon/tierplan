@@ -28,6 +28,7 @@
       "issuedWhen": "Issued {{when}}",
       "renewedWhen": "Renewed {{when}}",
       "pausedNext": "Paused until you resume",
+      "pausedNextFiles": "Paused while certificate files are set",
       "noError": "None",
       "detailsBelow": "Details below"
     },
