@@ -6,6 +6,9 @@ package acme
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"maps"
@@ -801,5 +804,255 @@ func TestManagerInstallFailureKeepsTheStoredCertificate(t *testing.T) {
 	}
 	if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
 		t.Errorf("runs = %+v, want the run recorded as succeeded: the CA part worked", runs)
+	}
+}
+
+func TestManagerStartServesAStoredCertificate(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+	e.issue()
+
+	// A restarted process: a new manager over the same stored state.
+	inst := &recInstaller{}
+	if err := e.manager(inst, false).Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if inst.served() != 1 || string(inst.chains[0]) != string(e.inst.chains[0]) {
+		t.Fatalf("Start installed %d certificates, want the stored chain once", inst.served())
+	}
+	key, err := decodeKey(inst.keys[0])
+	if err != nil {
+		t.Fatalf("the key given to the installer does not decode: %v", err)
+	}
+	if pub, ok := leafOf(t, inst.chains[0]).PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(key.Public()) {
+		t.Error("the key given to the installer is not the stored certificate's")
+	}
+
+	// Stopped: nothing is served at start.
+	if err := e.mgr.Stop(ctx, "user:1"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	off := &recInstaller{}
+	if err := e.manager(off, false).Start(ctx); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+	if off.served() != 0 {
+		t.Errorf("Start installed a certificate while Let's Encrypt is off")
+	}
+}
+
+func TestManagerStartNeverServesAnExpiredCertificate(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+	e.issue()
+	leaf := leafOf(t, e.inst.chains[0])
+
+	e.clock.Advance(leaf.NotAfter.Sub(e.clock.Now()))
+	inst := &recInstaller{}
+	m := e.manager(inst, false)
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if inst.served() != 0 {
+		t.Error("Start installed an expired certificate")
+	}
+	status, err := m.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.Fallback || !status.ExpiredAt.Equal(leaf.NotAfter) || status.Mode != ModeActive {
+		t.Errorf("Status = fallback %v, expired %v, mode %q; want a fall back at %v with Let's Encrypt still in use",
+			status.Fallback, status.ExpiredAt, status.Mode, leaf.NotAfter)
+	}
+
+	// One second earlier the same certificate is still good.
+	e.clock.Advance(-time.Second)
+	if err := m.Start(ctx); err != nil || inst.served() != 1 {
+		t.Errorf("Start one second before expiry = %v, installed %d, want the certificate served", err, inst.served())
+	}
+}
+
+func TestManagerStartClosesInterruptedRuns(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+	if err := e.store.InsertRun(ctx, Run{
+		ID: "left-running", Kind: KindIssue, Trigger: TriggerAdmin, Names: []string{testHost},
+		StartedAt: testNow, Outcome: OutcomeRunning,
+	}); err != nil {
+		t.Fatalf("InsertRun: %v", err)
+	}
+	if err := e.mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	runs := e.runs()
+	if len(runs) != 1 || runs[0].Outcome != OutcomeFailed || runs[0].ErrorClass != ClassInternal || runs[0].FinishedAt.IsZero() {
+		t.Errorf("runs = %+v, want the run closed as failed with class internal", runs)
+	}
+	if e.inst.served() != 0 {
+		t.Error("Start installed a certificate with Let's Encrypt off")
+	}
+}
+
+func TestManagerCertFilesRefusesEverything(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+	e.issue()
+	inst := &recInstaller{}
+	m := e.manager(inst, true)
+	before := counts(e)
+
+	if _, err := m.Register(ctx, "", true); !errors.Is(err, ErrCertFiles) {
+		t.Errorf("Register = %v, want ErrCertFiles", err)
+	}
+	if _, err := m.Issue(ctx, "user:1"); !errors.Is(err, ErrCertFiles) {
+		t.Errorf("Issue = %v, want ErrCertFiles", err)
+	}
+	if _, err := m.RenewNow(ctx, "user:1"); !errors.Is(err, ErrCertFiles) {
+		t.Errorf("RenewNow = %v, want ErrCertFiles", err)
+	}
+	if err := m.SetProfile(ctx, "classic"); !errors.Is(err, ErrCertFiles) {
+		t.Errorf("SetProfile = %v, want ErrCertFiles", err)
+	}
+	if err := m.Stop(ctx, "user:1"); !errors.Is(err, ErrCertFiles) {
+		t.Errorf("Stop = %v, want ErrCertFiles", err)
+	}
+	if err := m.Resume(ctx, "user:1"); !errors.Is(err, ErrCertFiles) {
+		t.Errorf("Resume = %v, want ErrCertFiles", err)
+	}
+	e.noCARequests(before)
+
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if inst.served() != 0 || inst.selfSignedCount() != 0 {
+		t.Errorf("Start with certificate files set touched the listener (%d served, %d self-signed)", inst.served(), inst.selfSignedCount())
+	}
+	status, err := m.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.CertFiles || !status.HasState || status.PausedReason != PausedCertFiles {
+		t.Errorf("Status = files %v, state %v, paused %q; want paused by the files (D-13)", status.CertFiles, status.HasState, status.PausedReason)
+	}
+
+	// An account and nothing else is not Let's Encrypt state (D-12).
+	bare := newMgrEnv(t)
+	bareStatus, err := bare.manager(&recInstaller{}, true).Status(ctx)
+	if err != nil {
+		t.Fatalf("Status without state: %v", err)
+	}
+	if bareStatus.HasState || bareStatus.PausedReason != "" || !bareStatus.CertFiles || bareStatus.Account == nil {
+		t.Errorf("Status = %+v, want an account, no state and no pause", bareStatus)
+	}
+}
+
+func TestManagerStatusIsLocalAndComplete(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+
+	// Before anything is issued.
+	status, err := e.mgr.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Mode != ModeOff || status.Account == nil || status.Certificate != nil || status.HasState || status.LastRun != nil ||
+		status.DirectoryURL != e.fake.DirectoryURL() || !status.DirectoryOverridden || status.ChallengeType != ChallengeHTTP01 ||
+		!slices.Equal(status.Names, []string{testHost}) || len(status.Refusals) != 0 || status.Block != nil {
+		t.Errorf("Status before an issue = %+v", status)
+	}
+
+	e.issue()
+	if status, err = e.mgr.Status(ctx); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Mode != ModeActive || !status.HasState || status.Certificate == nil || status.NamesMismatch || status.Fallback ||
+		status.RenewAt.IsZero() || status.RenewBasis != BasisTwoThirds || status.LastError != nil || status.Failures != 0 {
+		t.Errorf("Status after an issue = %+v", status)
+	}
+
+	// Names, refusals and the mismatch follow the URLs as they are now.
+	e.urls.setPublic("https://192.0.2.1")
+	if status, err = e.mgr.Status(ctx); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.NamesMismatch || len(status.Refusals) == 0 || status.Refusals[0].Code != RefuseNamesIP {
+		t.Errorf("Status with an IP public URL = mismatch %v, refusals %+v, want names_ip", status.NamesMismatch, status.Refusals)
+	}
+	e.urls.setPublic("https://" + testHost)
+
+	// A failed renewal the CA told us to wait after.
+	e.fake.FailNext(acmetest.EndpointNewOrder, acmetest.Problem{Status: 429, Type: "rateLimited", RetryAfterSeconds: 3600})
+	rs, err := e.mgr.RenewNow(ctx, "user:1")
+	if err != nil {
+		t.Fatalf("RenewNow: %v", err)
+	}
+	e.wait(rs)
+
+	before := counts(e)
+	for i := 0; i < 3; i++ {
+		if status, err = e.mgr.Status(ctx); err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+	}
+	e.noCARequests(before)
+	if status.Failures != 1 || !status.NextAttemptAt.Equal(testNow.Add(time.Minute)) {
+		t.Errorf("Status ledger = %d failures, next %v", status.Failures, status.NextAttemptAt)
+	}
+	if b := status.Block; b == nil || b.Reason != BlockToldToWait || !b.Until.Equal(testNow.Add(time.Hour)) {
+		t.Errorf("Status.Block = %+v, want told_to_wait for an hour", b)
+	}
+	if le := status.LastError; le == nil || le.Class != ClassRateLimited {
+		t.Errorf("Status.LastError = %+v, want rate_limited", le)
+	}
+	if lr := status.LastRun; lr == nil || lr.JobID != rs.JobID || lr.Outcome != OutcomeFailed || lr.Kind != KindRenew || lr.FinishedAt.IsZero() {
+		t.Errorf("Status.LastRun = %+v, want the failed renewal %s", lr, rs.JobID)
+	}
+	if status.ActiveRun != nil {
+		t.Errorf("Status.ActiveRun = %+v, want none", status.ActiveRun)
+	}
+}
+
+func TestManagerJobMessagesCarryNoSecrets(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+	e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "RAW-CA-TEXT-9f3a unreachable"})
+
+	rs, err := e.mgr.Issue(ctx, "user:1")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	failedJob := e.wait(rs)
+	st := e.state()
+	if !strings.Contains(st.LastErrorDetail, "RAW-CA-TEXT-9f3a") {
+		t.Fatalf("the ledger's detail = %q, want the raw CA text kept there", st.LastErrorDetail)
+	}
+	assertClean(t, "the failed job", failedJob, e.hub, "RAW-CA-TEXT-9f3a")
+
+	// A successful job carries no key either: not its PEM header, and not its base64 body.
+	ok := newMgrEnv(t)
+	okJob := ok.issue()
+	block, _ := pem.Decode(ok.inst.keys[0])
+	if block == nil {
+		t.Fatal("the installed key is not PEM")
+	}
+	assertClean(t, "the successful job", okJob, ok.hub, base64.StdEncoding.EncodeToString(block.Bytes)[:40])
+}
+
+// assertClean fails if the job, its items or its output log hold key material or any of the texts.
+func assertClean(t *testing.T, what string, job jobs.Job, hub *jobs.Hub, texts ...string) {
+	t.Helper()
+	b, err := json.Marshal(job)
+	if err != nil {
+		t.Fatalf("marshal %s: %v", what, err)
+	}
+	all := string(b)
+	if lines, _ := hub.Output(job.ID); len(lines) > 0 {
+		out, _ := json.Marshal(lines)
+		all += string(out)
+	}
+	for _, bad := range append([]string{"PRIVATE KEY"}, texts...) {
+		if strings.Contains(all, bad) {
+			t.Errorf("%s carries %q: %s", what, bad, all)
+		}
 	}
 }
