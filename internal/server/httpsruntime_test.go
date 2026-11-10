@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/proto/authn"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -166,6 +167,39 @@ func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	}
 	if !rt.HSTSAllowed() {
 		t.Error("HSTS is not allowed over a supplied certificate")
+	}
+}
+
+func TestServedReportsTheInstalledKind(t *testing.T) {
+	rt := newHTTPSRuntime()
+	if got := rt.served(); got.Leaf != nil || got.Source != "" {
+		t.Errorf("served with nothing installed = %q, leaf %v; want no source and no leaf", got.Source, got.Leaf)
+	}
+
+	certA, a := genCert(t, "a.example.com")
+	certB, b := genCert(t, "b.example.com")
+
+	rt.Install(tlsKindSelfSigned, getter(certA))
+	got := rt.served()
+	if got.Source != api.SourceSelfSigned || got.Leaf == nil || got.Leaf.SerialNumber.Cmp(a.SerialNumber) != 0 {
+		t.Errorf("self-signed served = %q, leaf %v; want %q and certificate A", got.Source, got.Leaf, api.SourceSelfSigned)
+	}
+
+	// The leaf is read through GetCertificate each time, so a swap shows at once.
+	rt.Install(tlsKindSupplied, getter(certB))
+	got = rt.served()
+	if got.Source != api.SourceCertFiles || got.Leaf == nil || got.Leaf.SerialNumber.Cmp(b.SerialNumber) != 0 {
+		t.Errorf("supplied served = %q, leaf %v; want %q and certificate B", got.Source, got.Leaf, api.SourceCertFiles)
+	}
+
+	// A source that answers an error, or bytes that are not a certificate, leaves the leaf nil.
+	rt.Install(tlsKindSupplied, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, io.ErrUnexpectedEOF })
+	if got := rt.served(); got.Leaf != nil {
+		t.Error("served returned a leaf from a source that failed")
+	}
+	rt.Install(tlsKindSupplied, getter(tls.Certificate{Certificate: [][]byte{[]byte("not a certificate")}}))
+	if got := rt.served(); got.Leaf != nil {
+		t.Error("served returned a leaf from bytes that are not a certificate")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +106,95 @@ func TestHTTPSStatusShowsTheServedCertificate(t *testing.T) {
 	}
 	if got.CertFiles {
 		t.Error("certFiles is true without certificate files")
+	}
+}
+
+func TestHTTPSStatusForCertificateFiles(t *testing.T) {
+	t.Parallel()
+	leaf := httpsLeaf(t, pkix.Name{CommonName: "Example CA"}, []string{"xn--bcher-kva.example", "b.example.com"}, nil)
+	rec, got := httpsStatus(t, api.HTTPSDeps{
+		CertFiles: true,
+		Served: func() api.ServedCertificate {
+			return api.ServedCertificate{Source: api.SourceCertFiles, Leaf: leaf}
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if got.Certificate.Source != "cert_files" || !got.CertFiles {
+		t.Errorf("source %q certFiles %v, want cert_files and true", got.Certificate.Source, got.CertFiles)
+	}
+	// Names are returned exactly as the certificate carries them: A-labels stay A-labels.
+	if want := []string{"xn--bcher-kva.example", "b.example.com"}; !slices.Equal(got.Certificate.Names, want) {
+		t.Errorf("names = %v, want %v", got.Certificate.Names, want)
+	}
+}
+
+func TestHTTPSStatusIssuerUnknownAndIPOnlyNames(t *testing.T) {
+	t.Parallel()
+	leaf := httpsLeaf(t, pkix.Name{}, nil, []net.IP{net.ParseIP("192.0.2.7"), net.ParseIP("2001:db8::1")})
+	rec, got := httpsStatus(t, api.HTTPSDeps{Served: func() api.ServedCertificate {
+		return api.ServedCertificate{Source: api.SourceSelfSigned, Leaf: leaf}
+	}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if got.Certificate.Issuer != "" {
+		t.Errorf("issuer = %q, want empty", got.Certificate.Issuer)
+	}
+	if want := []string{"192.0.2.7", "2001:db8::1"}; !slices.Equal(got.Certificate.Names, want) {
+		t.Errorf("names = %v, want %v", got.Certificate.Names, want)
+	}
+	if !strings.Contains(rec.Body.String(), `"issuer":""`) {
+		t.Errorf("issuer is not in the body as an empty string: %s", rec.Body)
+	}
+
+	// The organisation names the issuer when there is no common name.
+	org := httpsLeaf(t, pkix.Name{Organization: []string{"Example Trust"}}, []string{"a.example.com"}, nil)
+	_, got = httpsStatus(t, api.HTTPSDeps{Served: func() api.ServedCertificate {
+		return api.ServedCertificate{Source: api.SourceCertFiles, Leaf: org}
+	}})
+	if got.Certificate.Issuer != "Example Trust" {
+		t.Errorf("issuer = %q, want the organisation", got.Certificate.Issuer)
+	}
+}
+
+func TestHTTPSStatusNeedsSettingsRead(t *testing.T) {
+	t.Parallel()
+	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"localhost"}, nil)
+	f := newAuthFixture(t, config.Config{})
+	f.https = api.HTTPSDeps{Served: func() api.ServedCertificate {
+		return api.ServedCertificate{Source: api.SourceSelfSigned, Leaf: leaf}
+	}}
+	f.h = f.build(t)
+	f.addUser(t, "viewer", false) // no role at all
+
+	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/https/status"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous GET: %d, want 401", rec.Code)
+	}
+
+	viewer, _ := f.signIn(t, "viewer", false)
+	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/https/status", cookie: viewer}); rec.Code != http.StatusForbidden {
+		t.Errorf("GET without settings.read: %d, want 403", rec.Code)
+	}
+
+	admin, _ := f.signIn(t, "admin", false)
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/https/status", cookie: admin})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin GET: %d: %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	if strings.Contains(rec.Body.String(), "PRIVATE KEY") {
+		t.Error("the status body holds key material")
+	}
+}
+
+func TestHTTPSStatusWithoutACertificateIsUnavailable(t *testing.T) {
+	t.Parallel()
+	rec, _ := httpsStatus(t, api.HTTPSDeps{Served: func() api.ServedCertificate { return api.ServedCertificate{} }})
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "https_unavailable") {
+		t.Errorf("status = %d: %s, want 503 https_unavailable", rec.Code, rec.Body)
 	}
 }
