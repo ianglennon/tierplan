@@ -448,8 +448,16 @@ func readState(ctx context.Context, q *sqlc.Queries) (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("read the ACME state: %w", err)
 	}
+	resolvers := []string{}
+	if err := json.Unmarshal([]byte(row.DnsResolvers), &resolvers); err != nil {
+		return State{}, fmt.Errorf("read the DNS resolvers of the ACME state: %w", err)
+	}
+	if resolvers == nil {
+		resolvers = []string{}
+	}
 	return State{
 		Mode: row.Mode, ChallengeType: row.ChallengeType, Profile: row.Profile, PausedReason: row.PausedReason,
+		DNSProvider: row.DnsProvider, DNSResolvers: resolvers, ValidationUntested: row.ValidationUntested != 0,
 		ConsecutiveFailures: int(row.ConsecutiveFailures),
 		LastAttemptAt:       fromNanos(row.LastAttemptAt), NextAttemptAt: fromNanos(row.NextAttemptAt),
 		RetryAfterUntil: fromNanos(row.RetryAfterUntil), RenewAt: fromNanos(row.RenewAt),
@@ -507,7 +515,7 @@ func (s *Store) SaveState(ctx context.Context, st State) error {
 
 func stateParams(st State) sqlc.UpdateACMEStateParams {
 	return sqlc.UpdateACMEStateParams{
-		Mode: st.Mode, ChallengeType: st.ChallengeType, Profile: st.Profile, PausedReason: st.PausedReason,
+		Mode: st.Mode, Profile: st.Profile, PausedReason: st.PausedReason,
 		ConsecutiveFailures: int64(st.ConsecutiveFailures),
 		LastAttemptAt:       toNanos(st.LastAttemptAt), NextAttemptAt: toNanos(st.NextAttemptAt),
 		RetryAfterUntil: toNanos(st.RetryAfterUntil), RenewAt: toNanos(st.RenewAt),
@@ -525,9 +533,14 @@ func (s *Store) InsertRun(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
+	challenge := r.ChallengeType
+	if challenge == "" {
+		challenge = ChallengeHTTP01 // a run that names no challenge used the original one
+	}
 	if err := s.st.Q.InsertACMERun(ctx, sqlc.InsertACMERunParams{
 		ID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Actor: r.Actor, Names: names,
 		StartedAt: toNanos(r.StartedAt), FinishedAt: toNanos(r.FinishedAt), Outcome: r.Outcome, ErrorClass: r.ErrorClass,
+		ChallengeType: challenge,
 	}); err != nil {
 		return fmt.Errorf("insert the ACME run %q: %w", r.ID, err)
 	}
@@ -579,7 +592,7 @@ func readRuns(ctx context.Context, q *sqlc.Queries, limit int) ([]Run, error) {
 		runs = append(runs, Run{
 			ID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Actor: r.Actor, Names: names,
 			StartedAt: fromNanos(r.StartedAt), FinishedAt: fromNanos(r.FinishedAt),
-			Outcome: r.Outcome, ErrorClass: r.ErrorClass,
+			Outcome: r.Outcome, ErrorClass: r.ErrorClass, ChallengeType: r.ChallengeType,
 		})
 	}
 	return runs, nil

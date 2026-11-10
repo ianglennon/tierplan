@@ -15,8 +15,10 @@ DELETE FROM acme_account WHERE directory_url = ?;
 SELECT * FROM acme_state WHERE id = 1;
 
 -- name: UpdateACMEState :exec
+-- Never writes the validation settings (the challenge, the DNS provider and resolvers, the untested
+-- flag): only the validation save does (acme_dns.sql), so a stale read cannot undo a saved choice.
 UPDATE acme_state SET
-    mode = ?, challenge_type = ?, profile = ?, paused_reason = ?, consecutive_failures = ?,
+    mode = ?, profile = ?, paused_reason = ?, consecutive_failures = ?,
     last_attempt_at = ?, next_attempt_at = ?, retry_after_until = ?, renew_at = ?,
     ari_window_start = ?, ari_window_end = ?, ari_checked_at = ?, ari_next_check_at = ?,
     last_error_at = ?, last_success_at = ?, renew_basis = ?, last_error_class = ?,
@@ -48,8 +50,8 @@ UPDATE acme_orders SET stage = ?, resume_count = ?, updated_at = ? WHERE id = ?;
 UPDATE acme_orders SET status = 'closed', stage = ?, updated_at = ? WHERE id = ?;
 
 -- name: InsertACMERun :exec
-INSERT INTO acme_runs (id, kind, trigger, actor, names, started_at, finished_at, outcome, error_class)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO acme_runs (id, kind, trigger, actor, names, started_at, finished_at, outcome, error_class, challenge_type)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: FinishACMERun :exec
 UPDATE acme_runs SET outcome = ?, error_class = ?, finished_at = ? WHERE id = ?;
@@ -59,8 +61,12 @@ UPDATE acme_runs SET outcome = ?, error_class = ?, finished_at = ? WHERE id = ?;
 SELECT * FROM acme_runs ORDER BY started_at DESC, id DESC LIMIT ?;
 
 -- name: ListACMEFailedRunsSince :many
--- The start times of the failed runs at or after a time, oldest first.
-SELECT started_at FROM acme_runs WHERE outcome = 'failed' AND started_at >= ? ORDER BY started_at ASC;
+-- The start times of the failed runs at or after a time, oldest first. A run that failed on the DNS
+-- provider's side (an error class starting dns_) is left out: it failed before the CA was asked, so it
+-- must not block Renew now once the admin has fixed the token.
+SELECT started_at FROM acme_runs
+WHERE outcome = 'failed' AND started_at >= ? AND error_class NOT LIKE 'dns\_%' ESCAPE '\'
+ORDER BY started_at ASC;
 
 -- name: PruneACMERuns :exec
 -- Keeps the newest 50 runs.

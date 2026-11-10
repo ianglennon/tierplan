@@ -6,9 +6,12 @@ package acme
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/internal/vault"
@@ -209,33 +212,137 @@ func dnsRecord(r sqlc.AcmeDnsRecord) DNSRecord {
 	}
 }
 
-var errNotImplemented = errors.New("not implemented")
-
 // ValidationWrite is one save of the validation settings. Token is nil to keep the saved token.
 type ValidationWrite struct {
+	// ChallengeType, Provider and Resolvers are the challenge to use and, for DNS-01, the provider and
+	// the normalised resolver list.
 	ChallengeType, Provider string
 	Resolvers               []string
-	Token                   *string
-	Untested                bool
-	CloseOpenOrder          bool
-	ResetDNSFailures        bool
-	Now                     time.Time
+	// Token is the new token to seal and store for Provider, or nil to leave the saved one alone.
+	Token *string
+	// Untested records that the challenge type changed and no run has proved the new one yet.
+	Untested bool
+	// CloseOpenOrder closes every open order as failed, so an order made under the old challenge is
+	// not resumed under the new one.
+	CloseOpenOrder bool
+	// ResetDNSFailures clears the backoff that a DNS-side failure put in force.
+	ResetDNSFailures bool
+	Now              time.Time
 }
 
-// SaveValidation writes the validation settings in one transaction.
+// SaveValidation writes the validation settings in one transaction: the challenge type, the provider,
+// the resolver list and the untested flag, the sealed token when there is one, the closing of an open
+// order and the reset of a DNS-side failure. A token that cannot be sealed, or any failed write, leaves
+// the previous settings whole. The result is durable when SaveValidation returns.
 func (s *Store) SaveValidation(ctx context.Context, w ValidationWrite) error {
-	return errNotImplemented
+	var sealed string
+	if w.Token != nil {
+		var err error
+		if sealed, err = s.v.Seal(vault.ContextACMEDNSToken+w.Provider, []byte(*w.Token)); err != nil {
+			return fmt.Errorf("seal the %s DNS token: %w", w.Provider, err)
+		}
+	}
+	resolvers := w.Resolvers
+	if resolvers == nil {
+		resolvers = []string{}
+	}
+	encoded, err := json.Marshal(resolvers)
+	if err != nil {
+		return fmt.Errorf("encode the DNS resolvers: %w", err)
+	}
+	ts := toNanos(w.Now)
+
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	var untested int64
+	if w.Untested {
+		untested = 1
+	}
+	if err := q.SetACMEValidation(ctx, sqlc.SetACMEValidationParams{
+		ChallengeType: w.ChallengeType, DnsProvider: w.Provider, DnsResolvers: string(encoded),
+		ValidationUntested: untested, UpdatedAt: ts,
+	}); err != nil {
+		return fmt.Errorf("save the validation settings: %w", err)
+	}
+	if w.Token != nil {
+		if err := q.UpsertACMEDNSCredential(ctx, sqlc.UpsertACMEDNSCredentialParams{
+			Provider: w.Provider, TokenSealed: sealed, CreatedAt: ts,
+		}); err != nil {
+			return fmt.Errorf("store the %s DNS token: %w", w.Provider, err)
+		}
+	}
+	if w.CloseOpenOrder {
+		if err := q.CloseOpenACMEOrders(ctx, sqlc.CloseOpenACMEOrdersParams{Stage: StageFailed, UpdatedAt: ts}); err != nil {
+			return fmt.Errorf("close the open ACME order: %w", err)
+		}
+	}
+	if w.ResetDNSFailures {
+		if err := q.ResetACMEDNSFailures(ctx, ts); err != nil {
+			return fmt.Errorf("reset the DNS failures: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return s.checkpoint(ctx, "the validation settings")
 }
 
-// SetValidationUntested sets or clears the untested flag.
+// SetValidationUntested sets or clears the flag that says the saved challenge type has not been proved
+// by a run yet. It writes nothing else.
 func (s *Store) SetValidationUntested(ctx context.Context, untested bool, now time.Time) error {
-	return errNotImplemented
+	var flag int64
+	if untested {
+		flag = 1
+	}
+	if err := s.st.Q.SetACMEValidationUntested(ctx, sqlc.SetACMEValidationUntestedParams{
+		ValidationUntested: flag, UpdatedAt: toNanos(now),
+	}); err != nil {
+		return fmt.Errorf("save the untested flag: %w", err)
+	}
+	return nil
 }
 
-// InstallID returns this install's ID.
-func (s *Store) InstallID(ctx context.Context) (string, error) { return "", errNotImplemented }
+// InstallID returns this install's ID, minting it (a UUIDv7, kept in app_meta) on the first call. It
+// goes into the comment of every DNS record TierPlan creates. A restored backup drops app_meta, so a
+// restored clone mints its own and never claims the source install's records. Concurrent first calls
+// all return the one ID that won.
+func (s *Store) InstallID(ctx context.Context) (string, error) {
+	id, err := s.st.RQ.GetACMEInstallID(ctx)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("read the install ID: %w", err)
+	}
+	minted, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("mint the install ID: %w", err)
+	}
+	if err := s.st.Q.InsertACMEInstallID(ctx, sqlc.InsertACMEInstallIDParams{
+		Value: minted.String(), UpdatedAt: time.Now().UnixNano(),
+	}); err != nil {
+		return "", fmt.Errorf("store the install ID: %w", err)
+	}
+	// Read back: a concurrent first call may have inserted its own ID first, and its ID is the one.
+	if id, err = s.st.Q.GetACMEInstallID(ctx); err != nil {
+		return "", fmt.Errorf("read the install ID: %w", err)
+	}
+	return id, s.checkpoint(ctx, "the install ID")
+}
 
-// OpenOrderID returns the open order's ID.
+// OpenOrderID returns the ID of the newest open order without opening its sealed key. found is false,
+// with a nil error, when no order is open.
 func (s *Store) OpenOrderID(ctx context.Context) (string, bool, error) {
-	return "", false, errNotImplemented
+	id, err := s.st.RQ.GetOpenACMEOrderID(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read the open ACME order ID: %w", err)
+	}
+	return id, true, nil
 }
