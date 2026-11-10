@@ -131,6 +131,8 @@ func (m *Manager) syncServed(ctx context.Context) {
 			"expired_at", w.leaf.NotAfter)
 		if err := m.d.Installer.ServeSelfSigned(); err != nil {
 			m.log.Error("the self-signed certificate could not be served after the Let's Encrypt one expired", "error", err)
+		} else {
+			m.noteLapsed(w.leaf.NotAfter)
 		}
 	}
 }
@@ -170,6 +172,9 @@ type servedCert struct {
 	// leaf is the Let's Encrypt leaf being served; nil when it is self-signed, or in the unlikely
 	// case that a chain the Installer accepted cannot be parsed here.
 	leaf *x509.Certificate
+	// lapsed is set while the self-signed certificate is served in place of a Let's Encrypt one that
+	// expired (D-15): when that one expired.
+	lapsed time.Time
 }
 
 // is reports whether leaf is the Let's Encrypt certificate being served.
@@ -192,6 +197,41 @@ func (m *Manager) setWire(w servedCert) {
 	if w.acme {
 		m.installErr = ""
 	}
+}
+
+// noteLapsed records that the self-signed certificate now served stands in for a Let's Encrypt
+// certificate that expired at expiredAt. The next swap clears it.
+func (m *Manager) noteLapsed(expiredAt time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.wire.acme {
+		m.wire.lapsed = expiredAt
+	}
+}
+
+// fallback reports whether the self-signed certificate is served, or is about to be, because the Let's
+// Encrypt certificate expired, and when that one expired (D-15). Like syncServed it is judged on the
+// certificate being served, not on the stored one: a stored renewal that could not be switched to does
+// not hide that the older certificate lapsed. stored is the stored leaf, nil when there is none.
+func (m *Manager) fallback(stored *x509.Certificate, now time.Time) (bool, time.Time) {
+	w := m.onWire()
+	switch {
+	case w.acme && w.leaf != nil:
+		// A Let's Encrypt certificate is served. Once it has expired, the scheduler's next round
+		// serves the self-signed one in its place.
+		if !now.Before(w.leaf.NotAfter) {
+			return true, w.leaf.NotAfter
+		}
+		return false, time.Time{}
+	case w.acme:
+		return false, time.Time{}
+	case !w.lapsed.IsZero():
+		return true, w.lapsed
+	case stored != nil && !now.Before(stored.NotAfter):
+		// Self-signed has been served from the start: an expired stored certificate is never installed.
+		return true, stored.NotAfter
+	}
+	return false, time.Time{}
 }
 
 // trackedInstaller tells the manager what the Installer serves after every swap that succeeded.

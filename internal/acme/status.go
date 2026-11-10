@@ -41,8 +41,10 @@ type Status struct {
 	// active.
 	RenewAt    time.Time
 	RenewBasis RenewBasis
-	// Fallback is true when Let's Encrypt is in use but its certificate has expired, so the
-	// self-signed one is served (D-15); ExpiredAt is when it expired.
+	// Fallback is true when Let's Encrypt is in use but the certificate it served has expired, so the
+	// self-signed one is served in its place (D-15), from the scheduler's next round at the latest;
+	// ExpiredAt is when it expired. It is judged on the certificate being served, not the stored one,
+	// and is never set while certificate files are served.
 	Fallback      bool
 	ExpiredAt     time.Time
 	LastError     *ErrorView
@@ -163,9 +165,9 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 			IssuedAt: issuedAt, Renewed: st.LastSuccessKind == KindRenew,
 		}
 		out.NamesMismatch = !SameNames(leaf.DNSNames, ns.Names)
-		if st.Mode == ModeActive && !now.Before(leaf.NotAfter) {
-			out.Fallback, out.ExpiredAt = true, leaf.NotAfter
-		}
+	}
+	if st.Mode == ModeActive && !m.d.CertFiles {
+		out.Fallback, out.ExpiredAt = m.fallback(leaf, now)
 	}
 	if st.Mode == ModeActive {
 		out.RenewAt, out.RenewBasis = st.RenewAt, RenewBasis(st.RenewBasis)

@@ -1010,3 +1010,112 @@ func TestSchedulerFallsBackWhenTheServedCertificateLapsesBeforeTheStoredOne(t *t
 	}
 	s.quiet(2)
 }
+
+// fallbackOf is what the status says of the fallback to self-signed.
+func (s *schedEnv) fallbackOf(m *Manager) (bool, time.Time) {
+	s.t.Helper()
+	status, err := m.Status(context.Background())
+	if err != nil {
+		s.t.Fatalf("Status: %v", err)
+	}
+	return status.Fallback, status.ExpiredAt
+}
+
+// The status reports the fallback to self-signed from the certificate being served, as the scheduler
+// judges it: when a renewal was stored but could not be switched to, the older certificate lapses and
+// self-signed is served while the stored renewal is still valid, and the card says so; once the renewal
+// is served it no longer does.
+func TestStatusFallbackIsJudgedOnTheServedCertificate(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	first := leafOf(t, s.inst.chains[0])
+	s.schedule(s.mgr)
+	setServeErr := func(err error) {
+		s.inst.mu.Lock()
+		defer s.inst.mu.Unlock()
+		s.inst.serveErr = err
+	}
+	setServeErr(errTestInstall)
+	s.stepTo(s.state().RenewAt)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal ended %q, want succeeded (stored, not switched to)", got)
+	}
+
+	s.stepTo(first.NotAfter.Add(-time.Minute))
+	if on, at := s.fallbackOf(s.mgr); on {
+		t.Errorf("Status.Fallback = true (expired %v) while the served certificate is valid", at)
+	}
+	s.stepTo(first.NotAfter)
+	if n := s.inst.selfSignedCount(); n != 1 {
+		t.Fatalf("self-signed was served %d times when the served certificate lapsed, want once", n)
+	}
+	status, err := s.mgr.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.Fallback || !status.ExpiredAt.Equal(first.NotAfter) {
+		t.Errorf("Status.Fallback = %v, ExpiredAt = %v; want true at %v", status.Fallback, status.ExpiredAt, first.NotAfter)
+	}
+	if status.Certificate == nil || !status.Certificate.NotAfter.After(s.clock.Now()) {
+		t.Fatalf("Status.Certificate = %+v, want the stored renewal, still valid", status.Certificate)
+	}
+	s.step(Tick)
+	if on, at := s.fallbackOf(s.mgr); !on || !at.Equal(first.NotAfter) {
+		t.Errorf("Status.Fallback = %v at %v a round later, want true at %v", on, at, first.NotAfter)
+	}
+
+	// The Installer works again: the next round serves the stored renewal, and the fallback is over.
+	setServeErr(nil)
+	s.step(Tick)
+	if s.inst.served() != 2 {
+		t.Fatalf("ServeACME succeeded %d times, want the stored renewal served", s.inst.served())
+	}
+	if on, at := s.fallbackOf(s.mgr); on {
+		t.Errorf("Status.Fallback = true (expired %v) with the renewal served", at)
+	}
+}
+
+// The other ways the served certificate and the stored one relate: an expired certificate still served
+// until the next round, an expired stored certificate never installed after a restart, a valid stored
+// certificate the Installer refused (self-signed, but nothing expired), and certificate files.
+func TestStatusFallbackWithoutAScheduledRound(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	first := leafOf(t, s.inst.chains[0])
+
+	// A valid stored certificate the Installer refused at start: self-signed is served, but nothing
+	// has expired.
+	refused := s.build(s.hub, &recInstaller{serveErr: errTestInstall}, false)
+	if err := refused.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if on, at := s.fallbackOf(refused); on {
+		t.Errorf("Status.Fallback = true (expired %v) for a valid certificate the Installer refused", at)
+	}
+
+	// The served certificate expires before any round runs: it is reported at once.
+	s.clock.Advance(first.NotAfter.Sub(s.clock.Now()))
+	if on, at := s.fallbackOf(s.mgr); !on || !at.Equal(first.NotAfter) {
+		t.Errorf("Status.Fallback = %v at %v with the served certificate expired, want true at %v", on, at, first.NotAfter)
+	}
+
+	// After a restart the expired stored certificate is never installed: self-signed stands in for it.
+	restarted := s.build(s.hub, &recInstaller{}, false)
+	if err := restarted.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if on, at := s.fallbackOf(restarted); !on || !at.Equal(first.NotAfter) {
+		t.Errorf("Status.Fallback = %v at %v after a restart, want true at %v", on, at, first.NotAfter)
+	}
+
+	// Certificate files are what is served: there is no fallback to report.
+	files := s.build(s.hub, &recInstaller{}, true)
+	if err := files.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if on, at := s.fallbackOf(files); on {
+		t.Errorf("Status.Fallback = true (expired %v) while certificate files are served", at)
+	}
+}
