@@ -51,6 +51,10 @@ const (
 	MaxResumes = 5
 )
 
+// ErrTooManyResumes is returned when an open order has already been resumed MaxResumes times. The
+// order is closed as failed; the caller counts the run as one failure.
+var ErrTooManyResumes = errors.New("the ACME order was resumed too many times and has been given up on")
+
 // StepReporter is told, as they happen, how the steps of an order go. The messages it receives are
 // fixed hints written here: they never carry a token, a key authorization or text from the CA. The
 // error given to Failed is the real error, for the caller to classify; it is not for display.

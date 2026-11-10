@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -15,9 +16,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	legoacme "github.com/go-acme/lego/v5/acme"
+	"github.com/go-acme/lego/v5/acme/api"
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // orderEnv is everything an order test needs: a fake CA whose validation GETs reach a real HTTP-01
@@ -205,5 +211,386 @@ func TestOrderRefusesAMalformedRequestAndAMissingAccount(t *testing.T) {
 	}
 	if got := steps.all(); !slices.Equal(got, []string{"account:failed"}) {
 		t.Errorf("steps = %v, want just the account failing", got)
+	}
+}
+
+// runResult is how an asynchronous Run ended.
+type runResult struct {
+	issued Issued
+	err    error
+}
+
+// runAsync starts Run on its own goroutine and returns the channel its result arrives on.
+func (e *orderEnv) runAsync(ctx context.Context, req OrderRequest, steps StepReporter) <-chan runResult {
+	done := make(chan runResult, 1)
+	go func() {
+		issued, err := e.orderer().Run(ctx, req, steps)
+		done <- runResult{issued, err}
+	}()
+	return done
+}
+
+// crashHeld runs req against a CA that keeps the challenge processing, and stops the run as soon as
+// it starts waiting for validation: the order is left open at the CA and in the store, as a restart
+// at that moment would leave it. The returned function lets the CA validate what it holds.
+func (e *orderEnv) crashHeld(req OrderRequest) (release func()) {
+	e.t.Helper()
+	release = e.fake.HoldValidation()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := e.orderer().Run(ctx, req, cancelOn(cancel, StepValidate)); !errors.Is(err, context.Canceled) {
+		e.t.Fatalf("the interrupted run ended with %v, want context.Canceled", err)
+	}
+	return release
+}
+
+// openOrder is the open order and its key; the test fails if there is none.
+func (e *orderEnv) openOrder() (Order, *ecdsa.PrivateKey) {
+	e.t.Helper()
+	o, key, found, err := e.store.OpenOrder(context.Background())
+	if err != nil || !found {
+		e.t.Fatalf("OpenOrder = found %v, %v; want an open order", found, err)
+	}
+	return o, key
+}
+
+// noOpenOrder fails the test if an order is still open.
+func (e *orderEnv) noOpenOrder() {
+	e.t.Helper()
+	if o, _, found, err := e.store.OpenOrder(context.Background()); err != nil || found {
+		e.t.Fatalf("OpenOrder = %+v, found %v, %v; want no open order", o, found, err)
+	}
+}
+
+// stages lists the stage of every order the store holds, oldest first.
+func (e *orderEnv) stages() []string {
+	e.t.Helper()
+	rows, err := e.store.st.Read.QueryContext(context.Background(), `SELECT stage FROM acme_orders ORDER BY created_at, id`)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var stage string
+		if err := rows.Scan(&stage); err != nil {
+			e.t.Fatal(err)
+		}
+		out = append(out, stage)
+	}
+	if err := rows.Err(); err != nil {
+		e.t.Fatal(err)
+	}
+	return out
+}
+
+// requireStoredKey checks that the stored certificate was issued for key, the one the order kept
+// before the interruption, and that the stored private key is that key.
+func (e *orderEnv) requireStoredKey(key *ecdsa.PrivateKey) {
+	e.t.Helper()
+	chain, stored, found, err := e.store.Certificate(context.Background())
+	if err != nil || !found {
+		e.t.Fatalf("Certificate = found %v, %v; want it stored", found, err)
+	}
+	pub, ok := leafOf(e.t, chain).PublicKey.(*ecdsa.PublicKey)
+	if !ok || !pub.Equal(key.Public()) {
+		e.t.Error("the stored certificate is not for the key the order kept before the interruption")
+	}
+	if !stored.Equal(key) {
+		e.t.Error("the stored private key is not the key the order kept before the interruption")
+	}
+}
+
+var orderReq = OrderRequest{Kind: KindIssue, Names: []string{"tierplan.example.com"}, Profile: "classic"}
+
+func TestOrderResumesAfterACrashWithoutANewOrder(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+	release := e.crashHeld(orderReq)
+
+	open, key := e.openOrder()
+	if open.Stage != StageChallengeSubmitted || open.ResumeCount != 0 {
+		t.Errorf("after the crash the order is %+v, want stage %s and no resumes", open, StageChallengeSubmitted)
+	}
+	if n := e.tokens.Len(); n != 0 {
+		t.Errorf("%d tokens survive the stopped run, want 0", n)
+	}
+
+	// A new Orderer, as after a restart: it must find the order, answer the challenge again without
+	// submitting it, and wait for the CA.
+	steps := &stepLog{}
+	done := e.runAsync(ctx, orderReq, steps)
+	e.clock.WaitArmed(t) // the run has read the order, presented the token and is waiting on the clock
+	release()
+	e.clock.Advance(PollInterval)
+	res := testsupport.Await(t, "the resumed run to finish", done)
+	if res.err != nil {
+		t.Fatalf("the resumed run: %v", res.err)
+	}
+
+	if n := e.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Errorf("newOrder requests = %d, want 1: a resume must not open a new order", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointChallenge); n != 1 {
+		t.Errorf("challenge submissions = %d, want 1: a processing challenge is never submitted again", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointFinalize); n != 1 {
+		t.Errorf("finalize requests = %d, want 1", n)
+	}
+	e.requireStoredKey(key)
+	if !res.issued.Key.Equal(key) {
+		t.Error("the resumed run issued for another key")
+	}
+	if got := steps.all(); !slices.Contains(got, "stored:done") {
+		t.Errorf("steps = %v, want the run to end stored", got)
+	}
+	if n := e.tokens.Len(); n != 0 {
+		t.Errorf("%d tokens are still answerable after the run, want 0", n)
+	}
+}
+
+func TestOrderResumesFromReadyAndFinalizesOnce(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+
+	// Validation succeeds at once, so the order is ready when finalizing starts; the run is stopped
+	// right there, before the request leaves.
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if _, err := e.orderer().Run(cctx, orderReq, cancelOn(cancel, StepFinalize)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the interrupted run ended with %v, want context.Canceled", err)
+	}
+	if n := e.fake.Count(acmetest.EndpointFinalize); n != 0 {
+		t.Fatalf("finalize requests = %d, want 0 before the resume", n)
+	}
+	open, key := e.openOrder()
+	if open.Stage != StageReady {
+		t.Errorf("after the interruption the order is at stage %q, want %q", open.Stage, StageReady)
+	}
+
+	res := <-e.runAsync(ctx, orderReq, nil)
+	if res.err != nil {
+		t.Fatalf("the resumed run: %v", res.err)
+	}
+	if n := e.fake.Count(acmetest.EndpointFinalize); n != 1 {
+		t.Errorf("finalize requests = %d, want 1", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Errorf("newOrder requests = %d, want 1", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointChallenge); n != 1 {
+		t.Errorf("challenge submissions = %d, want 1", n)
+	}
+	e.requireStoredKey(key)
+}
+
+func TestOrderResumeOfAProcessingOrderOnlyPolls(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+	release := e.fake.HoldFinalize()
+
+	// The first run sends the CSR, sees the CA processing it, and is stopped while it polls.
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	first := e.runAsync(cctx, orderReq, nil)
+	e.clock.WaitArmed(t)
+	cancel()
+	if res := testsupport.Await(t, "the interrupted run to stop", first); !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("the interrupted run ended with %v, want context.Canceled", res.err)
+	}
+	if n := e.fake.Count(acmetest.EndpointFinalize); n != 1 {
+		t.Fatalf("finalize requests = %d, want 1 before the resume", n)
+	}
+	open, key := e.openOrder()
+	if open.Stage != StageFinalizing {
+		t.Errorf("after the interruption the order is at stage %q, want %q", open.Stage, StageFinalizing)
+	}
+
+	second := e.runAsync(ctx, orderReq, nil)
+	e.clock.WaitArmed(t) // the resumed run has seen the order processing and is polling
+	release()
+	e.clock.Advance(PollInterval)
+	res := testsupport.Await(t, "the resumed run to finish", second)
+	if res.err != nil {
+		t.Fatalf("the resumed run: %v", res.err)
+	}
+	if n := e.fake.Count(acmetest.EndpointFinalize); n != 1 {
+		t.Errorf("finalize requests = %d, want 1: a processing order is only polled", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Errorf("newOrder requests = %d, want 1", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointChallenge); n != 1 {
+		t.Errorf("challenge submissions = %d, want 1", n)
+	}
+	e.requireStoredKey(key)
+}
+
+func TestOrderFailedAuthorizationIsTerminal(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+	e.fake.FailValidation("tierplan.example.com", acmetest.Problem{Type: "connection", Detail: "timeout during connect"})
+
+	steps := &stepLog{}
+	_, err := e.orderer().Run(ctx, orderReq, steps)
+	var ce *ChallengeError
+	if !errors.As(err, &ce) || ce.Host != "tierplan.example.com" {
+		t.Fatalf("Run = %v, want a ChallengeError for tierplan.example.com", err)
+	}
+	f := Classify(err, ClassifyInput{ChallengeType: ChallengeHTTP01, Profile: "classic"})
+	if f.Class != ClassValidationUnreachable || f.Host != "tierplan.example.com" {
+		t.Errorf("Classify = %+v, want validation_unreachable for tierplan.example.com", f)
+	}
+
+	e.noOpenOrder()
+	if got := e.stages(); !slices.Equal(got, []string{StageFailed}) {
+		t.Errorf("order stages = %v, want [%s]", got, StageFailed)
+	}
+	if got := steps.all(); got[len(got)-1] != "validate:failed" {
+		t.Errorf("steps = %v, want the run to end with validate failing", got)
+	}
+	if n := e.fake.Count(acmetest.EndpointFinalize); n != 0 {
+		t.Errorf("finalize requests = %d, want 0 for a failed authorization", n)
+	}
+	if n := e.tokens.Len(); n != 0 {
+		t.Errorf("%d tokens are still answerable after the run, want 0", n)
+	}
+}
+
+func TestOrderReplacesAStaleOpenOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		second  OrderRequest
+		advance time.Duration
+	}{
+		{"other names", OrderRequest{Kind: KindIssue, Names: []string{"other.example.com"}, Profile: "classic"}, 0},
+		{"other kind", OrderRequest{Kind: KindRenew, Names: orderReq.Names, Profile: "classic"}, 0},
+		{"expired", orderReq, 8 * 24 * time.Hour},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := newOrderEnv(t)
+			release := e.crashHeld(orderReq)
+			release() // the CA may validate what it holds; the new order must not wait on it
+			e.clock.Advance(tc.advance)
+
+			res := <-e.runAsync(ctx, tc.second, nil)
+			if res.err != nil {
+				t.Fatalf("Run: %v", res.err)
+			}
+			if n := e.fake.Count(acmetest.EndpointNewOrder); n != 2 {
+				t.Errorf("newOrder requests = %d, want 2: the stale order is replaced", n)
+			}
+			if got := e.stages(); !slices.Equal(got, []string{StageFailed, StageStored}) {
+				t.Errorf("order stages = %v, want the stale order closed as failed and the new one stored", got)
+			}
+			if !slices.Equal(res.issued.Leaf.DNSNames, tc.second.Names) || res.issued.Kind != tc.second.Kind {
+				t.Errorf("issued %v as %q, want %v as %q", res.issued.Leaf.DNSNames, res.issued.Kind, tc.second.Names, tc.second.Kind)
+			}
+		})
+	}
+}
+
+func TestOrderStopsAfterMaxResumes(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+	release := e.crashHeld(orderReq)
+	defer release()
+
+	for i := 1; i <= MaxResumes; i++ {
+		cctx, cancel := context.WithCancel(ctx)
+		_, err := e.orderer().Run(cctx, orderReq, cancelOn(cancel, StepValidate))
+		cancel()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("resume %d ended with %v, want context.Canceled", i, err)
+		}
+		if open, _ := e.openOrder(); open.ResumeCount != i {
+			t.Fatalf("after resume %d the order records %d resumes", i, open.ResumeCount)
+		}
+	}
+
+	_, err := e.orderer().Run(ctx, orderReq, nil)
+	if !errors.Is(err, ErrTooManyResumes) {
+		t.Fatalf("resume %d = %v, want ErrTooManyResumes", MaxResumes+1, err)
+	}
+	e.noOpenOrder()
+	if got := e.stages(); !slices.Equal(got, []string{StageFailed}) {
+		t.Errorf("order stages = %v, want [%s]", got, StageFailed)
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Errorf("newOrder requests = %d, want 1: giving up on an order does not open another", n)
+	}
+	if n := e.fake.Count(acmetest.EndpointChallenge); n != 1 {
+		t.Errorf("challenge submissions = %d, want 1", n)
+	}
+}
+
+func TestOrderSendsProfileAndReplaces(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+
+	first, err := e.orderer().Run(ctx, orderReq, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	ariID, err := api.MakeARICertID(first.Leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed, err := e.orderer().Run(ctx, OrderRequest{Kind: KindRenew, Names: orderReq.Names, Profile: "shortlived", Replaces: ariID}, nil)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+
+	seen := e.fake.Orders()
+	if len(seen) != 2 {
+		t.Fatalf("the CA saw %d orders, want 2", len(seen))
+	}
+	if seen[0].Profile != "classic" || seen[0].Replaces != "" {
+		t.Errorf("first order = %+v, want profile classic and no replaces", seen[0])
+	}
+	if seen[1].Profile != "shortlived" || seen[1].Replaces != ariID {
+		t.Errorf("renewal order = %+v, want profile shortlived and replaces %q", seen[1], ariID)
+	}
+	if life := renewed.Leaf.NotAfter.Sub(renewed.Leaf.NotBefore); life != 160*time.Hour {
+		t.Errorf("the renewed certificate lives %v, want the shortlived profile's 160h", life)
+	}
+	if renewed.Kind != KindRenew {
+		t.Errorf("Issued.Kind = %q, want %q", renewed.Kind, KindRenew)
+	}
+
+	// An order that names no profile sends none, and the CA picks its default.
+	if _, err := e.orderer().Run(ctx, OrderRequest{Kind: KindIssue, Names: []string{"two.example.com"}}, nil); err != nil {
+		t.Fatalf("default profile: %v", err)
+	}
+	if got := e.fake.Orders()[2].Profile; got != "" {
+		t.Errorf("an order with no profile sent %q, want none", got)
+	}
+}
+
+func TestOrderUnknownProfileIsClassified(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+
+	steps := &stepLog{}
+	_, err := e.orderer().Run(ctx, OrderRequest{Kind: KindIssue, Names: orderReq.Names, Profile: "nope"}, steps)
+	if err == nil {
+		t.Fatal("Run with an unknown profile succeeded")
+	}
+	var pd *legoacme.ProblemDetails
+	if !errors.As(err, &pd) {
+		t.Errorf("Run = %v, want the CA's problem in the chain", err)
+	}
+	f := Classify(err, ClassifyInput{ChallengeType: ChallengeHTTP01, Profile: "nope"})
+	if f.Class != ClassProfileInvalid || f.Profile != "nope" {
+		t.Errorf("Classify = %+v, want profile_invalid for nope", f)
+	}
+	e.noOpenOrder()
+	if got := e.stages(); len(got) != 0 {
+		t.Errorf("order stages = %v, want no order stored for a refused request", got)
+	}
+	if got, want := steps.all(), []string{"account:skipped", "order:running", "order:failed"}; !slices.Equal(got, want) {
+		t.Errorf("steps = %v, want %v", got, want)
 	}
 }
