@@ -5,18 +5,26 @@
 package acmetest_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -122,10 +130,31 @@ func (p *pebbleServer) awaitRun(t *testing.T, job string) {
 		case acme.OutcomeSucceeded:
 			return true, ""
 		case acme.OutcomeFailed, acme.OutcomeCancelled:
-			t.Fatalf("the run ended %s; last error: %s", run.Outcome, st.ACME.LastError)
+			t.Fatalf("the run ended %s; last error: %s; runs: %s", run.Outcome, st.ACME.LastError, p.runHistory(t))
 		}
 		return false, "outcome " + run.Outcome
 	})
+}
+
+// runHistory is the run table and the open orders as text, for a failure message.
+func (p *pebbleServer) runHistory(t *testing.T) string {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	rows, err := p.s.Core().Store().Read.QueryContext(ctx,
+		`SELECT id, kind, outcome, error_class FROM acme_runs ORDER BY started_at`)
+	if err != nil {
+		return "unreadable: " + err.Error()
+	}
+	defer func() { _ = rows.Close() }()
+	var out string
+	for rows.Next() {
+		var id, kind, outcome, class string
+		if err := rows.Scan(&id, &kind, &outcome, &class); err != nil {
+			return out + "unreadable: " + err.Error()
+		}
+		out += "[" + id + " " + kind + " " + outcome + " " + class + "]"
+	}
+	return out
 }
 
 // presented is the certificate the server presents to a new handshake for publicName, verified against
@@ -191,5 +220,137 @@ func TestPebbleIssueOverHTTP01ThroughTheListener(t *testing.T) {
 	st := p.status(t)
 	if st.Certificate.Source != "lets_encrypt" || !st.Certificate.TestCA {
 		t.Errorf("certificate source %q testCA %v; want lets_encrypt and true", st.Certificate.Source, st.Certificate.TestCA)
+	}
+}
+
+// cutSolver is the solver of a process that dies mid-order: the tokens it presented are not withdrawn,
+// because a process that died withdraws nothing. Pebble checks a submitted challenge on its own time, so
+// withdrawing them when the run is cut would race with that check.
+type cutSolver struct{ *acme.Challenges }
+
+func (cutSolver) CleanUp(context.Context, string, string, string) error { return nil }
+
+// cutAt is a step reporter that cancels the run's context when step starts.
+type cutAt struct {
+	step   string
+	cancel context.CancelFunc
+}
+
+func (c cutAt) Running(step, _ string) {
+	if step == c.step {
+		c.cancel()
+	}
+}
+func (cutAt) Done(string)            {}
+func (cutAt) Skipped(string, string) {}
+func (cutAt) Failed(string, error)   {}
+
+// TestPebbleResumeAfterACut: a run cut short after its challenge was submitted is picked up by a new
+// Orderer over the same store, with the same order URL and no second order row.
+func TestPebbleResumeAfterACut(t *testing.T) {
+	ctx := testsupport.Context(t)
+
+	// The token handler is the relay's target: a plain HTTP server, as the sniffing listener hands it.
+	tokens := acme.NewChallenges()
+	web := httptest.NewServer(tokens.Handler())
+	t.Cleanup(web.Close)
+	relay := acmetest.NewRelay(t)
+	relay.SetTarget(web.Listener.Addr().String())
+	pebble := acmetest.StartPebble(t, acmetest.PebbleOptions{HTTPPort: relay.Port(), Hosts: []string{publicName}})
+
+	v, err := vault.LoadOrCreate("", t.TempDir(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := storetest.New(t)
+	store := acme.NewStore(db, v)
+	dir, err := acme.NewDirectory(config.Config{ACMEDirectoryURL: pebble.DirectoryURL(), ACMECAFile: pebble.CAFile()})
+	if err != nil {
+		t.Fatalf("NewDirectory: %v", err)
+	}
+	client := acme.NewClient(dir, store, stackops.RealClock(), "tierplan-test/0")
+	if _, err := client.Register(ctx, "", true); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	req := acme.OrderRequest{Kind: acme.KindIssue, Names: []string{publicName}, Profile: profile}
+	solver := cutSolver{tokens}
+
+	cutCtx, cut := context.WithCancel(ctx)
+	defer cut()
+	_, err = acme.NewOrderer(client, store, solver, stackops.RealClock()).Run(cutCtx, req, cutAt{step: acme.StepValidate, cancel: cut})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("the cut run returned %v; want the context's cancellation", err)
+	}
+	open, _, found, err := store.OpenOrder(ctx)
+	if err != nil || !found {
+		t.Fatalf("OpenOrder after the cut = found %v, %v; want the order kept open", found, err)
+	}
+	if open.Stage != acme.StageChallengeSubmitted {
+		t.Errorf("the open order is at stage %q; want %q", open.Stage, acme.StageChallengeSubmitted)
+	}
+
+	// What a restarted process builds: a new Orderer over the same store and the same answers.
+	issued, err := acme.NewOrderer(client, store, solver, stackops.RealClock()).Run(ctx, req, nil)
+	if err != nil {
+		t.Fatalf("the resumed run: %v", err)
+	}
+	if err := issued.Leaf.VerifyHostname(publicName); err != nil {
+		t.Errorf("the resumed run issued a certificate not for %s: %v", publicName, err)
+	}
+
+	rows, err := db.Read.QueryContext(ctx, `SELECT order_url FROM acme_orders`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var urls []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatal(err)
+		}
+		urls = append(urls, u)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 1 || urls[0] != open.URL {
+		t.Errorf("order rows after the resume = %v; want exactly the order URL from before the cut, %s", urls, open.URL)
+	}
+	if _, _, found, err := store.OpenOrder(ctx); found || err != nil {
+		t.Errorf("OpenOrder after the resume = found %v, %v; want the order closed", found, err)
+	}
+}
+
+// TestPebbleRenewNowReplaces: Renew now is a replacement order Pebble accepts, and the new certificate
+// is the one served.
+func TestPebbleRenewNowReplaces(t *testing.T) {
+	p := startPebbleServer(t)
+	first := p.issue(t)
+
+	start, err := p.mgr.RenewNow(testsupport.Context(t), actor)
+	if err != nil {
+		t.Fatalf("RenewNow: %v", err)
+	}
+	p.awaitRun(t, start.JobID)
+
+	second := p.presented(t)
+	if second.SerialNumber.Cmp(first.SerialNumber) == 0 {
+		t.Errorf("the served certificate still has serial %s after Renew now", first.SerialNumber)
+	}
+	if err := second.VerifyHostname(publicName); err != nil {
+		t.Errorf("the renewed certificate is not for %s: %v", publicName, err)
+	}
+	if run := p.status(t).ACME.LastRun; run == nil || run.Kind != acme.KindRenew {
+		t.Errorf("the last run = %+v; want a renewal", run)
+	}
+	var replaces string
+	row := p.s.Core().Store().Read.QueryRowContext(testsupport.Context(t),
+		`SELECT replaces FROM acme_orders WHERE kind = ? ORDER BY created_at DESC LIMIT 1`, acme.KindRenew)
+	if err := row.Scan(&replaces); err != nil {
+		t.Fatalf("read the renewal order: %v", err)
+	}
+	if replaces == "" {
+		t.Error("the renewal order names no certificate it replaces")
 	}
 }

@@ -133,6 +133,23 @@ func StartPebble(t testing.TB, o PebbleOptions) *Pebble {
 	if err != nil {
 		t.Fatalf("acmetest: start %s: %v", PebbleImage, err)
 	}
+	// Registered after the container's own clean-up, so it runs before it: a failed test shows what
+	// Pebble logged, which is the only place its reason for refusing a request is written.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		logCtx, stop := context.WithTimeout(context.Background(), time.Minute)
+		defer stop()
+		rd, err := ctr.Logs(logCtx)
+		if err != nil {
+			t.Logf("acmetest: read Pebble's log: %v", err)
+			return
+		}
+		defer func() { _ = rd.Close() }()
+		out, _ := io.ReadAll(rd)
+		t.Logf("acmetest: Pebble's log:\n%s", out)
+	})
 	acmePort, err := ctr.MappedPort(ctx, pebbleACMEPort)
 	if err != nil {
 		t.Fatalf("acmetest: find Pebble's ACME port: %v", err)
