@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -598,7 +599,11 @@ func TestACMEStreamRefusesOtherJobsAndCarriesNoSecrets(t *testing.T) {
 		t.Fatalf("Certificate = found %v, %v", found, err)
 	}
 	var secrets []string
-	for _, d := range [][]byte{acctKey.D.Bytes(), certKey.D.Bytes()} {
+	for _, k := range []*ecdsa.PrivateKey{acctKey, certKey} {
+		d, err := k.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
 		secrets = append(secrets, hex.EncodeToString(d), base64.StdEncoding.EncodeToString(d), base64.RawURLEncoding.EncodeToString(d))
 	}
 	for _, k := range []any{acctKey, certKey} {

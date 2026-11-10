@@ -245,9 +245,16 @@ func startWireWithChallenge(t *testing.T, challenge http.Handler) string {
 	return ln.Addr().String()
 }
 
-// plainResponse sends one challenge GET on a fresh plain connection and returns the response
-// with its body read.
-func plainResponse(t *testing.T, addr, path string) (*http.Response, string) {
+// plainReply is what a plain challenge GET was answered with: the status and headers of the
+// response and its body, already read and closed.
+type plainReply struct {
+	StatusCode int
+	Header     http.Header
+}
+
+// plainResponse sends one challenge GET on a fresh plain connection and returns the reply and
+// its body.
+func plainResponse(t *testing.T, addr, path string) (plainReply, string) {
 	t.Helper()
 	got := plainExchange(t, addr, "GET "+path+" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(got)), nil)
@@ -256,7 +263,7 @@ func plainResponse(t *testing.T, addr, path string) (*http.Response, string) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	return resp, string(body)
+	return plainReply{StatusCode: resp.StatusCode, Header: resp.Header}, string(body)
 }
 
 func TestPlainChallengeServesAPresentedToken(t *testing.T) {

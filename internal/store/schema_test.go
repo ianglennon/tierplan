@@ -192,7 +192,7 @@ func upTo37(t *testing.T) fstest.MapFS {
 	t.Helper()
 	m := fstest.MapFS{}
 	for _, f := range []string{"00036_baseline.sql", "00037_tls_certs.sql"} {
-		data, err := os.ReadFile("migrations/" + f)
+		data, err := os.ReadFile("migrations/" + f) //nolint:gosec // a test reads the embedded migration files by their fixed names
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -52,14 +52,14 @@ var (
 	ErrRunActive = errors.New("a certificate run is already in progress")
 	// ErrPaused means Let's Encrypt is paused after a restore until an admin resumes it. No request
 	// is made to the CA while it is.
-	ErrPaused = errors.New("Let's Encrypt is paused after a restore")
+	ErrPaused = errors.New("Let's Encrypt is paused after a restore") //nolint:staticcheck // ST1005: Let\'s Encrypt is a proper name, and this is the text the screens show
 	// ErrCertFiles means TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set: the files are
 	// served and the ACME setup is disabled (D-12, D-13).
 	ErrCertFiles = errors.New("certificate files are configured, so Let's Encrypt is disabled")
 	// ErrNotActive means there is no Let's Encrypt certificate in use to renew or stop.
-	ErrNotActive = errors.New("Let's Encrypt is not in use")
+	ErrNotActive = errors.New("Let's Encrypt is not in use") //nolint:staticcheck // ST1005: Let\'s Encrypt is a proper name, and this is the text the screens show
 	// ErrNotPaused means there is nothing to resume.
-	ErrNotPaused = errors.New("Let's Encrypt is not paused")
+	ErrNotPaused = errors.New("Let's Encrypt is not paused") //nolint:staticcheck // ST1005: Let\'s Encrypt is a proper name, and this is the text the screens show
 	// ErrProfileUnknown means the directory does not offer the profile.
 	ErrProfileUnknown = errors.New("the certificate authority does not offer that profile")
 )
@@ -174,7 +174,7 @@ func NewManager(d Deps) *Manager {
 		d.Rand = mrand.Int64N
 	}
 	if d.Jitter == nil {
-		d.Jitter = func() float64 { return (mrand.Float64()*2 - 1) * maxJitter }
+		d.Jitter = func() float64 { return (mrand.Float64()*2 - 1) * maxJitter } //nolint:gosec // G404: spreads the renewal time of one install; it is not a secret and needs no cryptographic randomness
 	}
 	log := d.Log
 	if log == nil {

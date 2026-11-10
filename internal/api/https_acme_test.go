@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -638,10 +639,11 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 		t.Fatalf("Certificate = found %v, %v", found, err)
 	}
 	var secrets []string
-	for _, k := range []interface {
-		Bytes() []byte
-	}{acctKey.D, certKey.D} {
-		b := k.Bytes()
+	for _, k := range []*ecdsa.PrivateKey{acctKey, certKey} {
+		b, err := k.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
 		secrets = append(secrets, hex.EncodeToString(b), base64.StdEncoding.EncodeToString(b), base64.RawURLEncoding.EncodeToString(b))
 	}
 	for _, k := range []any{acctKey, certKey} {

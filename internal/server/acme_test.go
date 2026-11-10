@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -238,7 +239,11 @@ func (r *acmeRig) handshake(roots *x509.CertPool) (*x509.Certificate, error) {
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	return conn.(*tls.Conn).ConnectionState().PeerCertificates[0], nil
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil, fmt.Errorf("the dialer returned a %T, not a TLS connection", conn)
+	}
+	return tc.ConnectionState().PeerCertificates[0], nil
 }
 
 // mirrorPool is a pool holding the certificates of the healthcheck mirror.
