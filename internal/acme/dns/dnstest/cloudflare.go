@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +50,40 @@ type Request struct {
 	LegacyAuth bool
 }
 
+// Operations a FakeResponse can be scripted for.
+const (
+	// OpZones is a zone lookup by name: GET /zones?name=...
+	OpZones = "zones"
+	// OpZonesAll is the unfiltered zone list: GET /zones
+	OpZonesAll = "zones_all"
+	OpCreate   = "create"
+	OpGet      = "get"
+	OpDelete   = "delete"
+)
+
+// FakeResponse is a scripted answer. It replaces the fake's own answer to the operation it is
+// scripted for.
+type FakeResponse struct {
+	// Status is the HTTP status.
+	Status int
+	// Code and Message are the one entry of the errors array; Chain, when set, is the code of one
+	// entry in its error_chain.
+	Code    int
+	Message string
+	Chain   int
+	// RetryAfter, when set, is sent as the Retry-After header.
+	RetryAfter string
+	// Body, when set, is sent as is instead of a Cloudflare error document.
+	Body string
+	// Times is how many calls get this answer; 0 means every call.
+	Times int
+}
+
+type scripted struct {
+	FakeResponse
+	used int
+}
+
 // FakeCloudflare is an in-memory Cloudflare v4 API on an httptest TLS server.
 type FakeCloudflare struct {
 	// Token is the one bearer the fake accepts.
@@ -62,6 +97,12 @@ type FakeCloudflare struct {
 	zones   []FakeZone
 	records []FakeRecord
 	reqs    []Request
+
+	scripts  map[string][]*scripted
+	limited  bool
+	visible  map[string]bool
+	redirect string
+	huge     map[string]bool
 }
 
 // NewFakeCloudflare starts the fake. It is closed when the test ends.
@@ -106,6 +147,54 @@ func (f *FakeCloudflare) AddForeignTXT(name, content string) string {
 	return r.ID
 }
 
+// RemoveZone removes a zone, so its ID becomes one Cloudflare does not know.
+func (f *FakeCloudflare) RemoveZone(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name = strings.ToLower(name)
+	f.zones = slices.DeleteFunc(f.zones, func(z FakeZone) bool { return z.Name == name })
+}
+
+// LimitZones makes the token a zone-scoped one: the filtered and the unfiltered zone lists show
+// only the named zones. With no names it sees no zone at all.
+func (f *FakeCloudflare) LimitZones(names ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.limited = true
+	f.visible = map[string]bool{}
+	for _, n := range names {
+		f.visible[strings.ToLower(n)] = true
+	}
+}
+
+// Script answers op with r from now on (or for r.Times calls). Scripts for one op are used in the
+// order they were added.
+func (f *FakeCloudflare) Script(op string, r FakeResponse) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.scripts == nil {
+		f.scripts = map[string][]*scripted{}
+	}
+	f.scripts[op] = append(f.scripts[op], &scripted{FakeResponse: r})
+}
+
+// RedirectTo makes every request answer 302 to url.
+func (f *FakeCloudflare) RedirectTo(url string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.redirect = url
+}
+
+// HugeBody makes op answer with a body over 1 MiB.
+func (f *FakeCloudflare) HugeBody(op string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.huge == nil {
+		f.huge = map[string]bool{}
+	}
+	f.huge[op] = true
+}
+
 // Records is a copy of every record the fake holds.
 func (f *FakeCloudflare) Records() []FakeRecord {
 	f.mu.Lock()
@@ -128,8 +217,16 @@ func (f *FakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 		Bearer:     strings.HasPrefix(auth, "Bearer "),
 		LegacyAuth: r.Header.Get("X-Auth-Key") != "" || r.Header.Get("X-Auth-Email") != "",
 	})
+	redirect := f.redirect
 	f.mu.Unlock()
 
+	if redirect != "" {
+		http.Redirect(w, r, redirect, http.StatusFound)
+		return
+	}
+	if f.intercept(w, r) {
+		return
+	}
 	if auth != "Bearer "+f.Token {
 		writeErr(w, http.StatusForbidden, 9109, "Invalid access token")
 		return
@@ -151,12 +248,77 @@ func (f *FakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// opOf names the operation a request is.
+func opOf(r *http.Request) string {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/client/v4"), "/"), "/")
+	switch {
+	case len(parts) == 1 && parts[0] == "zones" && r.URL.Query().Get("name") != "":
+		return OpZones
+	case len(parts) == 1 && parts[0] == "zones":
+		return OpZonesAll
+	case len(parts) == 3 && r.Method == http.MethodPost:
+		return OpCreate
+	case len(parts) == 4 && r.Method == http.MethodGet:
+		return OpGet
+	case len(parts) == 4 && r.Method == http.MethodDelete:
+		return OpDelete
+	}
+	return ""
+}
+
+// intercept answers a request from a script or the huge-body switch. It reports whether it did.
+func (f *FakeCloudflare) intercept(w http.ResponseWriter, r *http.Request) bool {
+	op := opOf(r)
+	f.mu.Lock()
+	var hit *FakeResponse
+	for _, sc := range f.scripts[op] {
+		if sc.Times > 0 && sc.used >= sc.Times {
+			continue
+		}
+		sc.used++
+		hit = &sc.FakeResponse
+		break
+	}
+	huge := f.huge[op]
+	f.mu.Unlock()
+
+	switch {
+	case hit != nil:
+		if hit.RetryAfter != "" {
+			w.Header().Set("Retry-After", hit.RetryAfter)
+		}
+		if hit.Body != "" {
+			w.WriteHeader(hit.Status)
+			_, _ = w.Write([]byte(hit.Body))
+			return true
+		}
+		e := map[string]any{"code": hit.Code, "message": hit.Message}
+		if hit.Chain != 0 {
+			e["error_chain"] = []any{map[string]any{"code": hit.Chain, "message": "chain"}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(hit.Status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []any{e}, "messages": []any{}, "result": nil})
+		return true
+	case huge:
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[],"pad":"`))
+		_, _ = w.Write([]byte(strings.Repeat("a", 2<<20)))
+		_, _ = w.Write([]byte(`"}`))
+		return true
+	}
+	return false
+}
+
 func (f *FakeCloudflare) listZones(w http.ResponseWriter, r *http.Request) {
 	name := strings.ToLower(r.URL.Query().Get("name"))
 	f.mu.Lock()
 	out := []map[string]any{}
 	for _, z := range f.zones {
 		if name != "" && z.Name != name {
+			continue
+		}
+		if f.limited && !f.visible[z.Name] {
 			continue
 		}
 		out = append(out, map[string]any{"id": z.ID, "name": z.Name, "name_servers": z.NameServers, "status": "active"})
@@ -191,6 +353,13 @@ func (f *FakeCloudflare) createRecord(w http.ResponseWriter, r *http.Request, zo
 		f.mu.Unlock()
 		writeErr(w, http.StatusNotFound, 7003, "Could not route to /zones/"+zoneID+"/dns_records, perhaps your object identifier is invalid?")
 		return
+	}
+	for _, have := range f.records {
+		if have.Zone == zoneID && strings.EqualFold(have.Name, in.Name) && have.Value() == unquote(in.Content) {
+			f.mu.Unlock()
+			writeErr(w, http.StatusBadRequest, 81058, "An identical record already exists.")
+			return
+		}
 	}
 	rec := FakeRecord{ID: randHex(16), Zone: zoneID, Name: in.Name, Content: in.Content, Comment: in.Comment}
 	f.records = append(f.records, rec)
