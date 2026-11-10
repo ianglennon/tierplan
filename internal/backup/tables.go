@@ -59,6 +59,17 @@ var Tables = map[string]Class{
 	// keeps the agent pin (the key's hash) across a restore.
 	"tls_certs": Included,
 
+	// Let's Encrypt over HTTP-01 (Phase 14). The account key is sealed under its directory URL and
+	// registered in vault.SealedColumns, so RewrapAll moves it with the rest; the state row carries the
+	// ledger and the pause a restore sets; the runs are the history. An open order is the in-flight
+	// work of the source instance, and a restore must not resurrect it: it is left out, and its
+	// sealed certificate key (also registered) goes with it. The issued certificate is the tls_certs
+	// row "acme", covered above.
+	"acme_account": Included, // key_sealed is re-wrapped by RewrapAll
+	"acme_state":   Included, // the ledger, the mode and the pause
+	"acme_runs":    Included, // history
+	"acme_orders":  Excluded, // an in-flight order never comes back with a restore
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key

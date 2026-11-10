@@ -67,3 +67,31 @@ func (q *Queries) UpdateTLSCert(ctx context.Context, arg UpdateTLSCertParams) er
 	_, err := q.db.ExecContext(ctx, updateTLSCert, arg.CertPem, arg.UpdatedAt, arg.ID)
 	return err
 }
+
+const upsertTLSCert = `-- name: UpsertTLSCert :exec
+INSERT INTO tls_certs (id, cert_pem, key_sealed, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET cert_pem = excluded.cert_pem, key_sealed = excluded.key_sealed,
+                               updated_at = excluded.updated_at
+`
+
+type UpsertTLSCertParams struct {
+	ID        string
+	CertPem   string
+	KeySealed string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
+// Writes the certificate and sealed key of a row that may or may not exist yet (the ACME
+// certificate is replaced at every renewal). created_at keeps the first value.
+func (q *Queries) UpsertTLSCert(ctx context.Context, arg UpsertTLSCertParams) error {
+	_, err := q.db.ExecContext(ctx, upsertTLSCert,
+		arg.ID,
+		arg.CertPem,
+		arg.KeySealed,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}

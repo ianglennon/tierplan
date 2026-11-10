@@ -69,6 +69,11 @@ const (
 	// A TLS private key of the server is sealed under its certificate row's ID (Phase 13.1), so a
 	// key copied into another row does not open.
 	ContextTLSKey = "tls-key/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// The ACME account key is sealed under the account's directory URL, and the fresh certificate key
+	// of an open ACME order under the order's ID (Phase 14), so a key copied into another account or
+	// order does not open. A key that has been issued a certificate moves to the tls_certs row "acme".
+	ContextACMEAccountKey = "acme-account/v1/"   //nolint:gosec // G101: a sealing context label, not a credential
+	ContextACMEOrderKey   = "acme-order-key/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "tierplan/key-id/v1"

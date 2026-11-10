@@ -8,6 +8,68 @@ import (
 	"database/sql"
 )
 
+type AcmeAccount struct {
+	DirectoryUrl string
+	AccountUrl   string
+	KeySealed    string
+	Contact      string
+	TosUrl       string
+	CreatedAt    int64
+}
+
+type AcmeOrder struct {
+	ID            string
+	DirectoryUrl  string
+	OrderUrl      string
+	Kind          string
+	Names         string
+	Profile       string
+	Replaces      string
+	CertKeySealed string
+	Stage         string
+	Status        string
+	ResumeCount   int64
+	ExpiresAt     int64
+	CreatedAt     int64
+	UpdatedAt     int64
+}
+
+type AcmeRun struct {
+	ID         string
+	Kind       string
+	Trigger    string
+	Actor      string
+	Names      string
+	StartedAt  int64
+	FinishedAt int64
+	Outcome    string
+	ErrorClass string
+}
+
+type AcmeState struct {
+	ID                  int64
+	Mode                string
+	ChallengeType       string
+	Profile             string
+	PausedReason        string
+	ConsecutiveFailures int64
+	LastAttemptAt       int64
+	NextAttemptAt       int64
+	RetryAfterUntil     int64
+	RenewAt             int64
+	AriWindowStart      int64
+	AriWindowEnd        int64
+	AriCheckedAt        int64
+	AriNextCheckAt      int64
+	LastErrorAt         int64
+	LastSuccessAt       int64
+	RenewBasis          string
+	LastErrorClass      string
+	LastErrorDetail     string
+	LastSuccessKind     string
+	UpdatedAt           int64
+}
+
 type Agent struct {
 	ID              string
 	EnvID           string
