@@ -24,6 +24,10 @@ const (
 	// tlsKindSupplied is a certificate the operator provided or obtained. HSTS
 	// is allowed over it and no pin is published.
 	tlsKindSupplied
+	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No pin is
+	// published (the certificate chains to the public roots, and agents keep the pin of the
+	// self-signed key they were installed with), and HSTS is not sent in this phase.
+	tlsKindACME
 )
 
 // liveTLS is one installed certificate source.
@@ -39,8 +43,8 @@ type liveTLS struct {
 // with a certificate. Nothing in it takes a lock or touches a file: the handshake
 // answers from memory.
 //
-// Nothing but Build and tests calls Install (D-12): no setting, flag or
-// environment variable reaches it.
+// Only Build and the ACME installer (acmeserve.go) call Install (D-12): no setting,
+// flag or environment variable reaches it.
 type httpsRuntime struct {
 	cur atomic.Pointer[liveTLS]
 	cfg *tls.Config
@@ -121,6 +125,8 @@ func (r *httpsRuntime) served() api.ServedCertificate {
 		s.Source = api.SourceSelfSigned
 	case tlsKindSupplied:
 		s.Source = api.SourceCertFiles
+	case tlsKindACME:
+		s.Source = api.SourceLetsEncrypt
 	default:
 		return s
 	}

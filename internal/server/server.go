@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/access"
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/agents"
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -149,11 +150,13 @@ type Server struct {
 	updater *agents.Updater
 	router  *httpx.Router
 	// https is the live TLS state: every handshake, pin and HSTS decision reads
-	// it. Nothing but Build and tests calls Install (D-12).
+	// it. Only Build and the ACME installer call Install (D-12).
 	https *httpsRuntime
-	// challenge answers a plain request for /.well-known/acme-challenge/. Nil means 404;
-	// Phase 14 sets it. It is the only thing a plain connection reaches.
+	// challenge answers a plain request for /.well-known/acme-challenge/: the ACME manager's
+	// token store. Nil means 404. It is the only thing a plain connection reaches.
 	challenge http.Handler
+	// acme is the Let's Encrypt manager: issue, renew, stop and the status.
+	acme *acme.Manager
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -296,6 +299,7 @@ type buildOptions struct {
 	addressClock    func() time.Time
 	janitorClock    stackops.Clock
 	tlsRefreshClock stackops.Clock
+	acmeClock       stackops.Clock
 	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
@@ -332,6 +336,15 @@ func WithJanitorClock(c stackops.Clock) Option {
 // which calls Build without it, always waits on the wall clock. A nil clock keeps the wall clock.
 func WithTLSRefreshClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.tlsRefreshClock = c }
+}
+
+// WithACMEClock replaces the clock the Let's Encrypt manager, its scheduler and its client judge time
+// by: when a certificate is due for renewal, how long a failure backs off, when an order expires. It
+// exists for tests, which move it past a renewal instead of waiting for one. It is a Go option only,
+// like WithTLSRefreshClock: no setting, flag or environment variable reaches it, so a production
+// build, which calls Build without it, always reads the real time. A nil clock keeps the wall clock.
+func WithACMEClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.acmeClock = c }
 }
 
 // WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
@@ -917,6 +930,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The job hub holds the pulls in progress. It is memory only; the audit log is the
 	// record, and Close ends every running job before the database closes (D-26).
 	jobHub := jobs.New(jobs.Options{})
+	// Let's Encrypt: the manager swaps the live certificate through the installer and answers the
+	// HTTP-01 check from its token store on the existing listener (D-01, D-02). A bad directory
+	// setting stops start-up.
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock)
+	if err != nil {
+		jobHub.Close()
+		tunnelHub.Close()
+		_ = st.Close()
+		return nil, err
+	}
 	// One sampler hub serves every viewer of any container's stats (D-29 to D-31).
 	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)
@@ -1183,6 +1206,17 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	// A stored Let's Encrypt certificate is served before the server listens (ACME-04).
+	if err := acmeWire.mgr.Start(ctx); err != nil {
+		jobHub.Close()
+		statsHub.Close()
+		tunnelHub.Close()
+		aggregator.Close()
+		hub.Close()
+		monitor.StopAll()
+		_ = st.Close()
+		return nil, fmt.Errorf("start Let's Encrypt: %w", err)
+	}
 	srv = &Server{
 		unlock:     unlock,
 		restart:    restart,
@@ -1215,6 +1249,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		updater:    updater,
 		router:     router,
 		https:      rt,
+		acme:       acmeWire.mgr,
+		challenge:  acmeWire.challenges.Handler(),
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -1224,6 +1260,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
 	// the handshake path, so a handshake never waits on the disk.
 	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
+	// Renewals, the expiry fallback and the resume of an open order run on the ACME clock.
+	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
 	// A setting another store handle wrote, such as a restore or a CLI user command, is applied here
 	// within one poll, so the redirect gate, the cookie scope and the Origin check follow it without
 	// a restart. The watcher only reloads the instance's cached values: it pushes no address to
@@ -1285,6 +1323,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { updateRecovery.Run(bg) })
 	return srv, nil
 }
+
+// ACME is the Let's Encrypt manager, for the routes and for tests that drive it.
+func (s *Server) ACME() *acme.Manager { return s.acme }
 
 // Store is the migrated database, for the dependencies later plans add.
 func (s *Server) Store() *store.Store { return s.store }
