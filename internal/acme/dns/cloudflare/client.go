@@ -14,10 +14,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +43,31 @@ const (
 	// recordTTL is the TTL of a challenge record: 60 seconds, the shortest Cloudflare allows
 	// for a proxied-or-not record on every plan.
 	recordTTL = 60
+
+	// retryAfterDefault is the wait assumed when a 429 gives no usable Retry-After, and
+	// retryAfterMax is the longest wait honoured, so a hostile value cannot park a run for hours.
+	retryAfterDefault = 60 * time.Second
+	retryAfterMax     = 5 * time.Minute
+)
+
+// The operations a failure can come from.
+const (
+	opFindZone = "find zone"
+	opCreate   = "create record"
+	opRead     = "read record"
+	opDelete   = "delete record"
+)
+
+// Cloudflare error codes the classification keys on (RESEARCH Pattern 6). The first group was read
+// from the live API with dummy tokens; the others are documented or reported and fall back safely.
+const (
+	codeBadAuthHeader  = 6003  // malformed Authorization header (chain code 6111)
+	codeBadAuthFormat  = 6111  // "Invalid format for Authorization header"
+	codeInvalidToken   = 9109  // "Invalid access token"
+	codeIdentical      = 81058 // an identical record already exists
+	codeCNAMEExists    = 81053 // a CNAME record at that name
+	codeCNAMEExistsToo = 81054 // a CNAME record at that name
+	codeNoRecord       = 81044 // the record does not exist
 )
 
 // Options configure New.
@@ -163,19 +191,74 @@ func (p *provider) do(ctx context.Context, op, method, path string, query url.Va
 
 // errorCause is err without the *url.Error wrapper, which holds the request URL.
 func errorCause(err error) error {
-	if ue, ok := err.(*url.Error); ok && ue.Err != nil { //nolint:errorlint // only the outermost wrapper is removed
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
 		return ue.Err
 	}
 	return err
 }
 
-// failure is the error for an answer that is not a success. Task 2 gives it a class.
-func (p *provider) failure(op string, res response) error {
-	e := &dns.Error{Provider: providerName, Op: op, Status: res.status}
+// failure turns an answer that is not a success into one *dns.Error, keyed on the HTTP status and
+// the Cloudflare error codes. An answer this build does not know gets the safest class its status
+// allows, and a 4xx with no known meaning gets none (Classify then reports it as internal). The text
+// of the error holds the operation, status and code only; no message, header or body is kept.
+func (p *provider) failure(op string, res response, host, zone string) error {
+	e := &dns.Error{Provider: providerName, Op: op, Status: res.status, Host: host, Zone: zone}
 	if len(res.env.Errors) > 0 {
 		e.Code = res.env.Errors[0].Code
 	}
+	has := func(codes ...int) bool {
+		for _, ae := range res.env.Errors {
+			if slices.Contains(codes, ae.Code) {
+				return true
+			}
+			for _, c := range ae.ErrorChain {
+				if slices.Contains(codes, c.Code) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	switch {
+	case res.status == http.StatusTooManyRequests:
+		e.Class = dns.ClassRateLimited
+		e.RetryAfter = retryAfter(res.header.Get("Retry-After"))
+	case res.status >= 500 || (res.status >= 300 && res.status < 400):
+		e.Class = dns.ClassUnavailable
+	case res.status == http.StatusUnauthorized:
+		e.Class = dns.ClassTokenInvalid
+	case res.decodeFail, res.status >= 200 && res.status < 300:
+		// An answer that cannot be read, or that says success:false under a 2xx.
+		e.Class = dns.ClassUnavailable
+	case has(codeIdentical):
+		e.Err = dns.ErrIdentical
+	case has(codeCNAMEExists, codeCNAMEExistsToo):
+		e.Class = dns.ClassDelegationTarget
+	case res.status == http.StatusBadRequest && has(codeBadAuthHeader, codeBadAuthFormat):
+		e.Class = dns.ClassTokenInvalid
+	case res.status == http.StatusForbidden && has(codeInvalidToken):
+		e.Class = dns.ClassTokenInvalid
+	case res.status == http.StatusForbidden:
+		// A token that lacks Zone:Zone:Read or Zone:DNS:Edit, or a code this build does not know.
+		e.Class = dns.ClassTokenScope
+	case res.status == http.StatusNotFound && has(codeNoRecord):
+		e.Class = dns.ClassUnavailable
+	case res.status == http.StatusNotFound && (op == opCreate || op == opRead):
+		// The zone ID is gone (codes 7000 and 7003, or no code).
+		e.Class = dns.ClassZoneNotFound
+	}
 	return e
+}
+
+// retryAfter reads a Retry-After given as whole seconds. Anything else, or a wait of nothing, is
+// retryAfterDefault, and a long wait is cut to retryAfterMax.
+func retryAfter(v string) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return retryAfterDefault
+	}
+	return min(time.Duration(n)*time.Second, retryAfterMax)
 }
 
 func (p *provider) ok(res response) bool {
@@ -194,19 +277,19 @@ func (p *provider) Zone(ctx context.Context, fqdn string) (dns.Zone, error) {
 	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(fqdn), "."))
 	floor, err := publicsuffix.EffectiveTLDPlusOne(name)
 	if err != nil || !(name == floor || strings.HasSuffix(name, "."+floor)) {
-		return dns.Zone{}, &dns.Error{Provider: providerName, Op: "find zone", Class: dns.ClassZoneNotFound, Host: name}
+		return dns.Zone{}, &dns.Error{Provider: providerName, Op: opFindZone, Class: dns.ClassZoneNotFound, Host: name}
 	}
 	for candidate := name; ; {
-		res, err := p.do(ctx, "find zone", http.MethodGet, "/zones", url.Values{"name": {candidate}}, nil)
+		res, err := p.do(ctx, opFindZone, http.MethodGet, "/zones", url.Values{"name": {candidate}}, nil)
 		if err != nil {
 			return dns.Zone{}, err
 		}
 		if !p.ok(res) {
-			return dns.Zone{}, p.failure("find zone", res)
+			return dns.Zone{}, p.failure(opFindZone, res, name, "")
 		}
 		var zones []zoneJSON
 		if err := json.Unmarshal(res.env.Result, &zones); err != nil {
-			return dns.Zone{}, &dns.Error{Provider: providerName, Op: "find zone", Status: res.status, Class: dns.ClassUnavailable}
+			return dns.Zone{}, &dns.Error{Provider: providerName, Op: opFindZone, Status: res.status, Class: dns.ClassUnavailable}
 		}
 		for _, z := range zones {
 			if strings.EqualFold(strings.TrimSuffix(z.Name, "."), candidate) {
@@ -222,7 +305,44 @@ func (p *provider) Zone(ctx context.Context, fqdn string) (dns.Zone, error) {
 		}
 		candidate = candidate[strings.IndexByte(candidate, '.')+1:]
 	}
-	return dns.Zone{}, &dns.Error{Provider: providerName, Op: "find zone", Class: dns.ClassZoneNotFound, Host: name}
+	return dns.Zone{}, p.noZone(ctx, name)
+}
+
+// noZone explains why no candidate matched. A token that lists no zone at all is not scoped to any
+// (it lacks Zone:Zone:Read or was narrowed to nothing); one that lists some zones is scoped to
+// others, so the name is simply in none of them.
+func (p *provider) noZone(ctx context.Context, name string) error {
+	res, err := p.do(ctx, opFindZone, http.MethodGet, "/zones", url.Values{"per_page": {"5"}}, nil)
+	if err != nil {
+		return err
+	}
+	if !p.ok(res) {
+		return p.failure(opFindZone, res, name, "")
+	}
+	var zones []zoneJSON
+	if err := json.Unmarshal(res.env.Result, &zones); err != nil {
+		return &dns.Error{Provider: providerName, Op: opFindZone, Status: res.status, Class: dns.ClassUnavailable, Host: name}
+	}
+	if len(zones) == 0 {
+		return &dns.Error{Provider: providerName, Op: opFindZone, Status: res.status, Class: dns.ClassTokenScope, Host: name}
+	}
+	return &dns.Error{Provider: providerName, Op: opFindZone, Class: dns.ClassZoneNotFound, Host: name}
+}
+
+// known is the zone name and host this provider learned for ref, for an error that holds IDs only.
+// It falls back to the zone ID, and to the zone for the host.
+func (p *provider) known(ref dns.RecordRef) (zone, host string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	zone = p.zoneNames[ref.ZoneID]
+	if zone == "" {
+		zone = ref.ZoneID
+	}
+	host = p.hosts[ref]
+	if host == "" {
+		host = zone
+	}
+	return zone, host
 }
 
 type recordJSON struct {
@@ -241,16 +361,16 @@ func (p *provider) CreateTXT(ctx context.Context, z dns.Zone, fqdn, value, comme
 		"ttl":     recordTTL,
 		"comment": comment,
 	}
-	res, err := p.do(ctx, "create record", http.MethodPost, "/zones/"+url.PathEscape(z.ID)+"/dns_records", nil, body)
+	res, err := p.do(ctx, opCreate, http.MethodPost, "/zones/"+url.PathEscape(z.ID)+"/dns_records", nil, body)
 	if err != nil {
 		return dns.RecordRef{}, err
 	}
 	if !p.ok(res) {
-		return dns.RecordRef{}, p.failure("create record", res)
+		return dns.RecordRef{}, p.failure(opCreate, res, fqdn, z.Name)
 	}
 	var rec recordJSON
 	if err := json.Unmarshal(res.env.Result, &rec); err != nil || rec.ID == "" {
-		return dns.RecordRef{}, &dns.Error{Provider: providerName, Op: "create record", Status: res.status, Class: dns.ClassUnavailable}
+		return dns.RecordRef{}, &dns.Error{Provider: providerName, Op: opCreate, Status: res.status, Class: dns.ClassUnavailable}
 	}
 	ref := dns.RecordRef{ZoneID: z.ID, RecordID: rec.ID}
 	p.mu.Lock()
@@ -262,23 +382,24 @@ func (p *provider) CreateTXT(ctx context.Context, z dns.Zone, fqdn, value, comme
 
 // GetTXT reads the record back and removes the one pair of double quotes around its content.
 func (p *provider) GetTXT(ctx context.Context, ref dns.RecordRef) (dns.Record, error) {
-	res, err := p.do(ctx, "read record", http.MethodGet, recordPath(ref), nil, nil)
+	res, err := p.do(ctx, opRead, http.MethodGet, recordPath(ref), nil, nil)
 	if err != nil {
 		return dns.Record{}, err
 	}
 	if !p.ok(res) {
-		return dns.Record{}, p.failure("read record", res)
+		zone, host := p.known(ref)
+		return dns.Record{}, p.failure(opRead, res, host, zone)
 	}
 	var rec recordJSON
 	if err := json.Unmarshal(res.env.Result, &rec); err != nil {
-		return dns.Record{}, &dns.Error{Provider: providerName, Op: "read record", Status: res.status, Class: dns.ClassUnavailable}
+		return dns.Record{}, &dns.Error{Provider: providerName, Op: opRead, Status: res.status, Class: dns.ClassUnavailable}
 	}
 	return dns.Record{Name: rec.Name, Content: unquote(rec.Content), Comment: rec.Comment}, nil
 }
 
 // DeleteTXT deletes the record by its ID.
 func (p *provider) DeleteTXT(ctx context.Context, ref dns.RecordRef) error {
-	res, err := p.do(ctx, "delete record", http.MethodDelete, recordPath(ref), nil, nil)
+	res, err := p.do(ctx, opDelete, http.MethodDelete, recordPath(ref), nil, nil)
 	if err != nil {
 		return err
 	}
@@ -286,7 +407,8 @@ func (p *provider) DeleteTXT(ctx context.Context, ref dns.RecordRef) error {
 		return nil // already gone
 	}
 	if !p.ok(res) {
-		return p.failure("delete record", res)
+		zone, host := p.known(ref)
+		return p.failure(opDelete, res, host, zone)
 	}
 	return nil
 }

@@ -336,6 +336,14 @@ func TestCloudflareZoneWalk(t *testing.T) {
 			t.Fatalf("got %+v, want dns_token_scope", de)
 		}
 	})
+	t.Run("the unfiltered list failing is classified too", func(t *testing.T) {
+		fake := dnstest.NewFakeCloudflare(t)
+		fake.Script(dnstest.OpZonesAll, dnstest.FakeResponse{Status: 403, Code: 0, Message: "requires permission"})
+		_, err := newProvider(fake).Zone(ctx, challengeName)
+		if de := asDNS(t, err); de.Class != dns.ClassTokenScope || de.Status != 403 {
+			t.Fatalf("got %+v, want dns_token_scope 403", de)
+		}
+	})
 	t.Run("a zone-scoped token asked about another zone", func(t *testing.T) {
 		fake := dnstest.NewFakeCloudflare(t)
 		fake.AddZone("example.com")
