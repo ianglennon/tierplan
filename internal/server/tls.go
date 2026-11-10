@@ -113,6 +113,13 @@ type certSource struct {
 	// current one.
 	refresh  func(now time.Time, current *x509.Certificate) (*tls.Certificate, error)
 	interval time.Duration
+
+	// ownsMirror says whether this source's certificate is the one the healthcheck mirror holds.
+	// It is true for the self-signed source from its creation; the ACME installer clears it while
+	// a Let's Encrypt certificate is served, so the source's own name re-sign keeps updating its
+	// database row but never overwrites the mirror (D-16). Whoever flips it holds mu, which Refresh
+	// also holds around the re-sign, so a re-sign and a flip cannot interleave.
+	ownsMirror atomic.Bool
 }
 
 func (c *certSource) set(cert tls.Certificate, now time.Time) error {
@@ -177,6 +184,7 @@ func newSelfSignedSource(ctx context.Context, store tlsCertStore, dataDir string
 		return nil, err
 	}
 	src := &certSource{now: now, interval: selfSignedNameCheck}
+	src.ownsMirror.Store(true)
 	if err := src.set(cert, t0); err != nil {
 		return nil, err
 	}
@@ -194,8 +202,12 @@ func newSelfSignedSource(ctx context.Context, store tlsCertStore, dataDir string
 		if err := store.UpdateCert(checkCtx, selfSignedID, certPEM, at); err != nil {
 			return nil, err
 		}
-		if err := writeMirror(dataDir, certPEM); err != nil {
-			return nil, err
+		// While a Let's Encrypt certificate is served the mirror holds that one, and the
+		// healthcheck must keep trusting what the listener presents.
+		if src.ownsMirror.Load() {
+			if err := writeMirror(dataDir, certPEM); err != nil {
+				return nil, err
+			}
 		}
 		return &next, nil
 	}

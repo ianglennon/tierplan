@@ -8,10 +8,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +51,8 @@ type acmeRig struct {
 	env      map[string]string
 	cfg      config.Config
 	opts     []Option
+	// host is the name the public URL carries; base is the public URL itself, with no path.
+	host, base string
 
 	mu   sync.Mutex
 	addr string
@@ -76,6 +80,12 @@ func newACMERig(t *testing.T, fakeOpts acmetest.Options, extra map[string]string
 		r.env[k] = v
 	}
 	r.cfg = testConfig(t, r.env)
+	r.base = r.env["TIERPLAN_PUBLIC_URL"]
+	pub, err := url.Parse(r.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.host = pub.Hostname()
 	r.opts = append([]Option{WithACMEClock(r.clock), WithTLSRefreshClock(r.tlsClock)}, opts...)
 	t.Cleanup(r.stop)
 	return r
@@ -196,7 +206,7 @@ func (r *acmeRig) handshake(roots *x509.CertPool) (*x509.Certificate, error) {
 	r.t.Helper()
 	// The certificate is judged at the ACME clock's time: a test that ages the clock by months
 	// would otherwise present a certificate that is not valid yet by the wall clock.
-	conn, err := (&tls.Dialer{Config: &tls.Config{ServerName: acmeHost, RootCAs: roots, MinVersion: tls.VersionTLS12, Time: r.clock.Now}}).
+	conn, err := (&tls.Dialer{Config: &tls.Config{ServerName: r.host, RootCAs: roots, MinVersion: tls.VersionTLS12, Time: r.clock.Now}}).
 		DialContext(testsupport.Context(r.t), "tcp", r.address())
 	if err != nil {
 		return nil, err
@@ -260,7 +270,7 @@ func (r *acmeRig) signIn(c *http.Client) *http.Cookie {
 	if err := tx.Commit(); err != nil {
 		r.t.Fatal(err)
 	}
-	resp, err := c.Post("https://"+acmeHost+"/api/auth/login", "application/json",
+	resp, err := c.Post(r.base+"/api/auth/login", "application/json",
 		strings.NewReader(`{"username":"admin","password":"`+password+`"}`))
 	if err != nil {
 		r.t.Fatal(err)
@@ -272,10 +282,32 @@ func (r *acmeRig) signIn(c *http.Client) *http.Cookie {
 	return resp.Cookies()[0]
 }
 
+// csrf is the CSRF token the signed-in session sends on a change.
+func (r *acmeRig) csrf(c *http.Client, cookie *http.Cookie) string {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodGet, r.base+"/api/me", nil)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	req.AddCookie(cookie)
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var got struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil || got.CSRFToken == "" {
+		r.t.Fatalf("no CSRF token from /api/me: %v", err)
+	}
+	return got.CSRFToken
+}
+
 // meStatus is the status of an authenticated GET with the cookie.
 func (r *acmeRig) meStatus(c *http.Client, cookie *http.Cookie) int {
 	r.t.Helper()
-	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodGet, "https://"+acmeHost+"/api/me", nil)
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodGet, r.base+"/api/me", nil)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -298,7 +330,7 @@ func (r *acmeRig) healthy() {
 
 // issuedBy reports whether leaf was issued by the fake CA, judged at the ACME clock's time.
 func (r *acmeRig) issuedBy(leaf *x509.Certificate) bool {
-	_, err := leaf.Verify(x509.VerifyOptions{DNSName: acmeHost, Roots: r.fake.IssuerPool(), CurrentTime: r.clock.Now()})
+	_, err := leaf.Verify(x509.VerifyOptions{DNSName: r.host, Roots: r.fake.IssuerPool(), CurrentTime: r.clock.Now()})
 	return err == nil
 }
 

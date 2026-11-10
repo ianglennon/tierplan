@@ -305,6 +305,19 @@ func (f *Fake) CAFile(t testing.TB) string {
 	return path
 }
 
+// IssuerFile writes the certificate of the CA that signs the certificates the fake issues as PEM to a
+// file in the test's temporary directory and returns its path. A process under test that must trust
+// what the fake issues, such as an agent given SSL_CERT_FILE, reads it as its public roots.
+func (f *Fake) IssuerFile(t testing.TB) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fake-acme-issuer.pem")
+	block := &pem.Block{Type: "CERTIFICATE", Bytes: f.caCert.Raw}
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatalf("acmetest: write issuer file: %v", err)
+	}
+	return path
+}
+
 // IssuerPool trusts the CA that signs the certificates the fake issues.
 func (f *Fake) IssuerPool() *x509.CertPool {
 	pool := x509.NewCertPool()

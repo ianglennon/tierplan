@@ -61,10 +61,15 @@ func (i *acmeInstaller) ServeACME(chainPEM, keyPEM []byte) error {
 		return fmt.Errorf("read the Let's Encrypt certificate: %w", err)
 	}
 	pair.Leaf = leaf
-	// The mirror first: a failed write returns here and the current certificate stays.
+	// The mirror first: a failed write returns here and the current certificate stays. The
+	// self-signed source's lock keeps its name re-sign from writing the mirror between this write
+	// and the flag that tells it the mirror is no longer its own.
+	i.self.mu.Lock()
+	defer i.self.mu.Unlock()
 	if err := writeMirror(i.dataDir, chainPEM); err != nil {
 		return fmt.Errorf("mirror the Let's Encrypt certificate for the healthcheck: %w", err)
 	}
+	i.self.ownsMirror.Store(false)
 	i.cert.Store(&pair)
 	i.rt.Install(tlsKindACME, i.get)
 	sum := sha256.Sum256(pair.Certificate[0])
@@ -78,6 +83,10 @@ func (i *acmeInstaller) ServeSelfSigned() error {
 	if i.files {
 		return errACMECertFiles
 	}
+	// Under the source's lock, so a name re-sign in progress has finished and the certificate read
+	// here is the one it serves.
+	i.self.mu.Lock()
+	defer i.self.mu.Unlock()
 	cur := i.self.cert.Load()
 	if cur == nil || len(cur.Certificate) == 0 {
 		return errors.New("the self-signed certificate is not available")
@@ -86,6 +95,7 @@ func (i *acmeInstaller) ServeSelfSigned() error {
 	if err := writeMirror(i.dataDir, certPEM); err != nil {
 		return fmt.Errorf("mirror the self-signed certificate for the healthcheck: %w", err)
 	}
+	i.self.ownsMirror.Store(true)
 	i.rt.Install(tlsKindSelfSigned, i.self.GetCertificate)
 	i.log.Info("serving the self-signed certificate again")
 	return nil
