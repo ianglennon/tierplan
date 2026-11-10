@@ -847,3 +847,36 @@ func (f *Fake) renewalInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Retry-After", strconv.Itoa(21600))
 	f.reply(w, http.StatusOK, map[string]any{"suggestedWindow": window})
 }
+
+// The scripting and observation surface. Not implemented yet (RED).
+
+// FailNext makes the next call to endpoint answer with p.
+func (f *Fake) FailNext(endpoint string, p Problem) {}
+
+// BadNonceOnce makes the next signed request answer badNonce.
+func (f *Fake) BadNonceOnce() {}
+
+// FailValidation makes the validation of host fail with p.
+func (f *Fake) FailValidation(host string, p Problem) {}
+
+// HoldValidation leaves challenges processing until the returned function is called.
+func (f *Fake) HoldValidation() (release func()) { return func() {} }
+
+// HoldFinalize leaves finalized orders processing until the returned function is called.
+func (f *Fake) HoldFinalize() (release func()) { return func() {} }
+
+// SetRenewalWindow scripts the renewalInfo answer for leaf.
+func (f *Fake) SetRenewalWindow(leaf *x509.Certificate, start, end time.Time, retryAfter time.Duration) {
+}
+
+// ForgetAccounts makes every account unknown.
+func (f *Fake) ForgetAccounts() {}
+
+// Count is the number of calls that reached endpoint.
+func (f *Fake) Count(endpoint string) int { return -1 }
+
+// Orders lists the accepted newOrder requests.
+func (f *Fake) Orders() []OrderSeen { return nil }
+
+// ValidationHits is the number of http-01 GETs made for token.
+func (f *Fake) ValidationHits(token string) int { return -1 }
