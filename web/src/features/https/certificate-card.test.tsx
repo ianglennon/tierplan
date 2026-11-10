@@ -11,7 +11,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { CertificateCard } from "@/features/https/certificate-card";
 import { HttpsPage } from "@/features/https/https-page";
 import "@/i18n";
-import { httpsStatus } from "@/test-https";
+import { formatAbsolute } from "@/lib/format";
+import {
+  acmeLastError,
+  httpsFallbackStatus,
+  httpsLetsEncryptStatus,
+  httpsStatus,
+  httpsTestCAStatus,
+} from "@/test-https";
 import { TestRouter } from "@/test-router";
 
 let answer: () => Response | Promise<Response>;
@@ -179,6 +186,178 @@ describe("Certificate in use card", () => {
         .getAllByRole("term")
         .map((dt) => dt.textContent),
     ).toEqual(["Source", "Issuer", "Names", "Expires"]);
+  });
+});
+
+const NEXT_AT = "2027-01-05T09:30:00Z";
+const labels = () =>
+  card()
+    .getAllByRole("term")
+    .map((dt) => dt.textContent);
+
+describe("Certificate in use card: Let's Encrypt", () => {
+  it("shows a first issue with its rows: Issued, the next renewal and its basis, no error", async () => {
+    answer = () =>
+      Response.json(httpsLetsEncryptStatus({ renewal: { basis: "two_thirds", nextAt: NEXT_AT } }));
+    renderCard();
+    await card().findByText("Source");
+    expect(within(rowValue("Source")).getByText("Let's Encrypt")).toBeTruthy();
+    expect(within(rowValue("Source")).queryByText("Test CA")).toBeNull();
+    expect(labels()).toEqual([
+      "Source",
+      "Issuer",
+      "Names",
+      "Expires",
+      "Last renewed",
+      "Next renewal",
+      "Last error",
+    ]);
+    expect(rowValue("Last renewed").textContent).toMatch(/^Issued /);
+    expect(rowValue("Next renewal").textContent).toBe(
+      `${formatAbsolute(NEXT_AT)}Two thirds through the certificate's life`,
+    );
+    expect(rowValue("Last error").textContent).toBe("None");
+    expect(card().queryByText(/made this certificate/)).toBeNull();
+  });
+
+  it("says Renewed once the newest issue was a renewal", async () => {
+    answer = () =>
+      Response.json(
+        httpsLetsEncryptStatus({
+          certificate: {
+            issuedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+            names: ["tierplan.example.com"],
+            notAfter: new Date(Date.now() + 88 * 86_400_000).toISOString(),
+            notBefore: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+            renewed: true,
+          },
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Last renewed").textContent).toMatch(/^Renewed /);
+  });
+
+  it.each([
+    ["ari", "Chosen by Let's Encrypt"],
+    ["two_thirds", "Two thirds through the certificate's life"],
+    ["half", "Half way through the certificate's life"],
+  ] as const)("words the %s basis of the next renewal", async (basis, words) => {
+    answer = () => Response.json(httpsLetsEncryptStatus({ renewal: { basis, nextAt: NEXT_AT } }));
+    renderCard();
+    await card().findByText("Source");
+    expect(within(rowValue("Next renewal")).getByText(words)).toBeTruthy();
+    expect(within(rowValue("Next renewal")).getByText(formatAbsolute(NEXT_AT))).toBeTruthy();
+  });
+
+  it("marks a certificate from the test directory with a destructive Test CA badge", async () => {
+    answer = () => Response.json(httpsTestCAStatus());
+    renderCard();
+    await card().findByText("Source");
+    const source = within(rowValue("Source"));
+    expect(source.getByText("Let's Encrypt")).toBeTruthy();
+    const badge = source.getByText("Test CA");
+    expect(badge.getAttribute("data-variant")).toBe("destructive");
+  });
+
+  it("says the renewals are paused after a restore, with no date", async () => {
+    answer = () =>
+      Response.json(httpsLetsEncryptStatus({ pausedReason: "restore", renewal: undefined }));
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Next renewal").textContent).toBe("Paused until you resume");
+  });
+
+  it("shows the classified headline, when it happened and a link to the details below", async () => {
+    answer = () =>
+      Response.json(
+        httpsLetsEncryptStatus({
+          failures: 2,
+          lastError: acmeLastError({ code: "caa_forbids", host: "tp.example.org" }),
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    const value = rowValue("Last error");
+    expect(value.textContent).toContain("A CAA record forbids Let's Encrypt for tp.example.org.");
+    expect(value.querySelector("time")).toBeTruthy();
+    expect(within(value).getByRole("link", { name: "Details below" }).getAttribute("href")).toBe(
+      "#lets-encrypt-last-run",
+    );
+  });
+
+  it("shows an unknown class as the internal headline", async () => {
+    answer = () =>
+      Response.json(
+        httpsLetsEncryptStatus({
+          lastError: acmeLastError({ code: "from_the_future" as never }),
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Last error").textContent).toContain("Something went wrong inside TierPlan.");
+  });
+
+  it("shows the self-signed badge, no self-signed note and the last error after an expiry fallback", async () => {
+    answer = () => Response.json(httpsFallbackStatus());
+    renderCard();
+    await card().findByText("Source");
+    expect(within(rowValue("Source")).getByText("Self-signed")).toBeTruthy();
+    expect(card().queryByText(/made this certificate/)).toBeNull();
+    expect(rowValue("Last error").textContent).toContain(
+      "Let's Encrypt couldn't reach http://tierplan.example.com/.well-known/acme-challenge/.",
+    );
+    // The fallback serves no Let's Encrypt renewal date.
+    expect(card().queryByText("Next renewal")).toBeNull();
+  });
+
+  it("has no Let's Encrypt rows when it is stopped, and keeps the self-signed note", async () => {
+    answer = () =>
+      Response.json(
+        httpsStatus({
+          acme: httpsLetsEncryptStatus({ mode: "off", renewal: undefined }).acme,
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires"]);
+    expect(card().getByText(/made this certificate/)).toBeTruthy();
+  });
+
+  it("has no Let's Encrypt rows when the status carries no Let's Encrypt block", async () => {
+    answer = () => Response.json({ ...httpsStatus(), acme: undefined });
+    renderCard();
+    await card().findByText("Source");
+    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires"]);
+  });
+
+  it("says 'Not renewing' on a certificate close to its end while renewals are failing", async () => {
+    const soon = new Date(Date.now() + 3.5 * 86_400_000).toISOString();
+    const status = httpsLetsEncryptStatus({ failures: 2, lastError: acmeLastError() });
+    answer = () =>
+      Response.json({ ...status, certificate: { ...status.certificate, notAfter: soon } });
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Expires").textContent).toContain("Not renewing");
+  });
+
+  it("does not say 'Not renewing' while nothing has failed", async () => {
+    const soon = new Date(Date.now() + 3.5 * 86_400_000).toISOString();
+    const status = httpsLetsEncryptStatus();
+    answer = () =>
+      Response.json({ ...status, certificate: { ...status.certificate, notAfter: soon } });
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Expires").textContent).not.toContain("Not renewing");
+  });
+
+  it("wraps a long headline instead of widening the column", async () => {
+    const host = `${"a".repeat(60)}.${"b".repeat(60)}.example.com`;
+    answer = () => Response.json(httpsLetsEncryptStatus({ lastError: acmeLastError({ host }) }));
+    renderCard();
+    await card().findByText("Source");
+    expect(rowValue("Last error").className).toContain("break-all");
+    expect(rowValue("Last error").textContent).toContain(host);
   });
 });
 
