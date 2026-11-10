@@ -297,7 +297,7 @@ func (m *Manager) resumeRound(ctx context.Context) bool {
 		// one, and the certificate it named is that account's: the new account may not replace it.
 		req.Replaces = ""
 	}
-	if _, err := m.startRun(runParams{trigger: TriggerResume, req: req}); err != nil {
+	if _, err := m.startRun(runParams{trigger: TriggerResume, challenge: challengeOf(st), req: req}); err != nil {
 		if !errors.Is(err, ErrRunActive) {
 			m.log.Error("the scheduler could not continue the open order", "error", err)
 		}
@@ -356,7 +356,7 @@ func (m *Manager) renewalRound(ctx context.Context, st State, leaf *x509.Certifi
 	}
 	req := m.renewRequest(ctx, st, leaf)
 	m.log.Info("starting a scheduled renewal of the Let's Encrypt certificate", "renew_at", st.RenewAt)
-	if _, err := m.startRun(runParams{trigger: TriggerSchedule, req: req}); err != nil && !errors.Is(err, ErrRunActive) {
+	if _, err := m.startRun(runParams{trigger: TriggerSchedule, challenge: challengeOf(st), req: req}); err != nil && !errors.Is(err, ErrRunActive) {
 		m.log.Error("the scheduler could not start a renewal", "error", err)
 	}
 }

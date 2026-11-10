@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	mrand "math/rand/v2"
 	"slices"
 	"strings"
@@ -19,6 +20,9 @@ import (
 
 	"github.com/go-acme/lego/v5/acme/api"
 
+	"github.com/ianglennon/tierplan/internal/acme/dns"
+	"github.com/ianglennon/tierplan/internal/acme/dns/cloudflare"
+	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
@@ -119,7 +123,9 @@ type Deps struct {
 	DialHosts func() []string
 	// CertFiles is whether TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set.
 	CertFiles bool
-	Log       *slog.Logger
+	// DNS is what DNS-01 works with; its nil fields take the production defaults.
+	DNS DNSDeps
+	Log *slog.Logger
 	// Rand picks in [0, n), for the scheduler's choice inside an ARI window; nil is math/rand/v2.
 	Rand func(n int64) int64
 	// Jitter is the backoff jitter in [-0.1, 0.1]; nil is math/rand/v2.
@@ -143,10 +149,11 @@ type RunStart struct {
 // Manager is the admin's way into ACME: register, issue, renew now, stop, resume and read the status.
 // It runs one order at a time, in the background, and applies the ledger around every run.
 type Manager struct {
-	d       Deps
-	clock   stackops.Clock
-	log     *slog.Logger
-	orderer *Orderer
+	d     Deps
+	clock stackops.Clock
+	log   *slog.Logger
+	// checker asks DNS servers whether a TXT record shows and whether a name is delegated.
+	checker *dnscheck.Checker
 
 	// opMu serialises the admin's mutations, so two requests cannot both pass the guards.
 	opMu sync.Mutex
@@ -167,7 +174,9 @@ type Manager struct {
 // activeRun is the one run in progress.
 type activeRun struct {
 	jobID, kind, trigger string
-	startedAt            time.Time
+	// challenge is the challenge type the run answers.
+	challenge string
+	startedAt time.Time
 }
 
 // NewManager is a Manager over d. Nil optional fields take their defaults.
@@ -184,13 +193,22 @@ func NewManager(d Deps) *Manager {
 	if d.Jitter == nil {
 		d.Jitter = func() float64 { return (mrand.Float64()*2 - 1) * maxJitter } //nolint:gosec // G404: spreads the renewal time of one install; it is not a secret and needs no cryptographic randomness
 	}
+	if d.DNS.Providers == nil {
+		d.DNS.Providers = map[string]dns.Factory{defaultDNSProvider: cloudflare.New(cloudflare.Options{UserAgent: "TierPlan"})}
+	}
+	if d.DNS.Querier == nil {
+		d.DNS.Querier = dnscheck.NewQuerier()
+	}
 	log := d.Log
 	if log == nil {
 		log = slog.Default()
 	}
 	m := &Manager{
 		d: d, clock: d.Clock, log: log.With("component", "acme"),
-		orderer: NewOrderer(d.Client, d.Store, d.Challenges, d.Clock),
+		checker: &dnscheck.Checker{
+			Q: d.DNS.Querier, Clock: d.Clock, LookupIP: d.DNS.LookupIP,
+			NameserverAddrs: d.DNS.NameserverAddrs, ResolvConf: d.DNS.ResolvConf,
+		},
 	}
 	if d.Installer != nil {
 		// Every swap goes through the tracker, so the scheduler knows what is being served.
@@ -222,15 +240,19 @@ func (m *Manager) dialHosts() []string {
 
 // preflight decides the names and every refusal, from the URLs as they are now.
 func (m *Manager) preflight(st State) (NameSet, []Refusal) {
-	ct := st.ChallengeType
-	if ct == "" {
-		ct = ChallengeHTTP01
-	}
 	return Preflight(PreflightInput{
 		PublicURL: m.publicURL(), AgentURL: m.agentURL(), BasePath: m.basePath(),
-		ChallengeType: ct, DirectoryOverridden: m.d.Client.Directory().Overridden,
+		ChallengeType: challengeOf(st), DirectoryOverridden: m.d.Client.Directory().Overridden,
 		DialHosts: m.dialHosts(),
 	})
+}
+
+// challengeOf is the challenge type the saved state asks for; a state that names none is HTTP-01.
+func challengeOf(st State) string {
+	if st.ChallengeType == "" {
+		return ChallengeHTTP01
+	}
+	return st.ChallengeType
 }
 
 // mutable reads the state for an action that changes something or asks the CA: it is refused when
@@ -383,7 +405,7 @@ func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
 		return rs, err
 	}
 	return m.startRun(runParams{
-		trigger: TriggerAdmin, actor: actor,
+		trigger: TriggerAdmin, actor: actor, challenge: challengeOf(st),
 		req: OrderRequest{Kind: KindIssue, Names: slices.Clone(ns.Names), Profile: st.Profile},
 	})
 }
@@ -417,7 +439,7 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 		return RunStart{}, err
 	}
 	return m.startRun(runParams{
-		trigger: TriggerAdmin, actor: actor,
+		trigger: TriggerAdmin, actor: actor, challenge: challengeOf(st),
 		req: m.renewRequest(ctx, st, leaf),
 	})
 }
@@ -652,11 +674,19 @@ type errorDoc struct {
 	Host     string `json:"host,omitempty"`
 	Profile  string `json:"profile,omitempty"`
 	TermsURL string `json:"terms_url,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	// Zone, Target and Resolvers are the DNS facts a DNS failure's copy needs.
+	Zone      string   `json:"zone,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	Resolvers []string `json:"resolvers,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
 }
 
 func encodeError(f Failure) string {
-	b, err := json.Marshal(errorDoc{V: 1, Host: f.Host, Profile: f.Profile, TermsURL: f.TermsURL, Detail: f.Detail})
+	doc := errorDoc{V: 1, Host: f.Host, Profile: f.Profile, TermsURL: f.TermsURL, Zone: jobs.Clean(f.Zone, nil), Target: jobs.Clean(f.Target, nil), Detail: f.Detail}
+	for _, r := range f.Resolvers {
+		doc.Resolvers = append(doc.Resolvers, jobs.Clean(r, nil))
+	}
+	b, err := json.Marshal(doc)
 	if err != nil {
 		return f.Detail
 	}
@@ -698,6 +728,8 @@ const (
 	messageFailed      = "This step did not finish. The error is shown below."
 	messageNotReached  = "Not reached."
 	messageNotSwitched = "The certificate was saved, but switching to it failed. It is used at the next start."
+
+	messageNothingToRemove = "Nothing to remove."
 )
 
 // jobSteps maps an Orderer's step reports onto the items of a job. The last step, stored, is held
@@ -707,16 +739,33 @@ const (
 type jobSteps struct {
 	r  *jobs.Reporter
 	in ClassifyInput
+	// items are the job's own items, in the order they are reported.
+	items []jobs.ItemSpec
 
 	mu   sync.Mutex
 	held string // what the stored step ended as: "", ItemDone, ItemFailed or ItemSkipped
 	code string // the class code of a failed stored step
+	// created is how many DNS records the run wrote and leftOver how many of them it could not delete.
+	created, leftOver int
 }
+
+// dns01 reports whether the run is a DNS-01 run, which has the propagation and clean-up steps.
+func (s *jobSteps) dns01() bool { return s.in.ChallengeType == ChallengeDNS01 }
 
 func (s *jobSteps) Running(step, hint string) {
 	s.r.Update(step, func(it *jobs.Item) {
 		it.State = jobs.ItemRunning
 		it.Message = hint
+	})
+}
+
+// RunningWith is Running that also sets the values the page shows for the step: the host, the record,
+// the delegation target and the resolvers. They are names only, never anything the DNS provider said.
+func (s *jobSteps) RunningWith(step, hint string, values map[string]string) {
+	s.r.Update(step, func(it *jobs.Item) {
+		it.State = jobs.ItemRunning
+		it.Message = hint
+		it.Result = maps.Clone(values)
 	})
 }
 
@@ -726,6 +775,10 @@ func (s *jobSteps) Done(step string) {
 		return
 	}
 	s.r.Finish(step, jobs.ItemDone, "", "", nil)
+	if step == StepChallenge && s.dns01() {
+		// One propagation step covers every name's record, and the order moves on once they all show.
+		s.r.Finish(StepPropagation, jobs.ItemDone, "", "", nil)
+	}
 }
 
 func (s *jobSteps) Skipped(step, message string) {
@@ -734,6 +787,9 @@ func (s *jobSteps) Skipped(step, message string) {
 		return
 	}
 	s.r.Finish(step, jobs.ItemSkipped, "", message, nil)
+	if step == StepChallenge && s.dns01() {
+		s.r.Finish(StepPropagation, jobs.ItemSkipped, "", message, nil)
+	}
 }
 
 // Failed ends the step as failed with the error's class and every step that was not reached as
@@ -750,9 +806,9 @@ func (s *jobSteps) Failed(step string, err error) {
 		s.r.Finish(step, jobs.ItemFailed, class, messageFailed, nil)
 		s.hold(jobs.ItemSkipped, "")
 	}
-	for _, id := range stepItems {
-		if id.ID != step && id.ID != StepStored {
-			s.r.Finish(id.ID, jobs.ItemSkipped, "", messageNotReached, nil)
+	for _, it := range s.items {
+		if it.ID != step && it.ID != StepStored {
+			s.r.Finish(it.ID, jobs.ItemSkipped, "", messageNotReached, nil)
 		}
 	}
 }
@@ -761,6 +817,25 @@ func (s *jobSteps) hold(state, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.held, s.code = state, code
+}
+
+// recordCreated counts a DNS record the run wrote, so the clean-up step knows it has something to do.
+func (s *jobSteps) recordCreated() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.created++
+}
+
+// recordLeftOver counts a DNS record the run could not delete.
+func (s *jobSteps) recordLeftOver() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.leftOver++
+}
+
+// cleanupRunning shows the clean-up step as running.
+func (s *jobSteps) cleanupRunning() {
+	s.Running(StepCleanup, hintCleanup)
 }
 
 // finishStored ends the stored step. installErr is why the new certificate could not be switched to.
@@ -778,12 +853,31 @@ func (s *jobSteps) finishStored(installErr error) {
 	default:
 		s.r.Finish(StepStored, jobs.ItemSkipped, "", messageNotReached, nil)
 	}
+	s.finishCleanup()
+}
+
+// finishCleanup ends the clean-up step of a run that has one: skipped when the run wrote no record,
+// otherwise done.
+func (s *jobSteps) finishCleanup() {
+	if !s.dns01() {
+		return
+	}
+	s.mu.Lock()
+	created := s.created
+	s.mu.Unlock()
+	if created == 0 {
+		s.r.Finish(StepCleanup, jobs.ItemSkipped, "", messageNothingToRemove, nil)
+		return
+	}
+	s.r.Finish(StepCleanup, jobs.ItemDone, "", "", nil)
 }
 
 // runParams is what starts a run.
 type runParams struct {
 	trigger, actor string
 	req            OrderRequest
+	// challenge is the challenge type the run answers, as saved when the run was started.
+	challenge string
 }
 
 // startRun starts the one background run. The caller has checked that none is active; the check is
@@ -801,11 +895,14 @@ func (m *Manager) startRun(p runParams) (RunStart, error) {
 	if m.unrecorded != nil {
 		return RunStart{}, errRunUnrecorded
 	}
-	ar := &activeRun{kind: p.req.Kind, trigger: p.trigger, startedAt: m.clock.Now()}
+	if p.challenge == "" {
+		p.challenge = ChallengeHTTP01
+	}
+	ar := &activeRun{kind: p.req.Kind, trigger: p.trigger, challenge: p.challenge, startedAt: m.clock.Now()}
 	job, err := m.d.Jobs.Start(jobs.Spec{
 		Kind: JobKind, Owner: owner,
-		Meta:  map[string]string{"kind": p.req.Kind, "trigger": p.trigger},
-		Items: slices.Clone(stepItems),
+		Meta:  map[string]string{"kind": p.req.Kind, "trigger": p.trigger, "challenge": p.challenge},
+		Items: itemsFor(p.challenge),
 	}, func(ctx context.Context, r *jobs.Reporter) { m.runBody(ctx, r, ar, p) })
 	if err != nil {
 		return RunStart{}, fmt.Errorf("start the certificate run: %w", err)
@@ -843,11 +940,11 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 	x := &run{m: m, ar: ar, id: r.JobID()}
 	defer x.end(OutcomeFailed) // a panic still frees the slot
 	bg := context.WithoutCancel(ctx)
-	steps := &jobSteps{r: r, in: ClassifyInput{ChallengeType: ChallengeHTTP01, Profile: p.req.Profile}}
+	steps := &jobSteps{r: r, in: ClassifyInput{ChallengeType: p.challenge, Profile: p.req.Profile}, items: itemsFor(p.challenge)}
 
 	if err := m.d.Store.InsertRun(bg, Run{
 		ID: x.id, Kind: p.req.Kind, Trigger: p.trigger, Actor: p.actor, Names: p.req.Names,
-		StartedAt: m.clock.Now(), Outcome: OutcomeRunning,
+		StartedAt: m.clock.Now(), Outcome: OutcomeRunning, ChallengeType: p.challenge,
 	}); err != nil {
 		m.log.Error("record the start of a certificate run", "error", err)
 		steps.Failed(StepAccount, err)
@@ -856,12 +953,34 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 		return
 	}
 
-	issued, err := m.orderer.Run(ctx, p.req, steps)
+	solver, err := m.newSolver(bg, steps, p.challenge)
+	if err != nil {
+		m.failed(ctx, bg, x, steps, err, p)
+		return
+	}
+	issued, err := NewOrderer(m.d.Client, m.d.Store, solver, m.clock).Run(ctx, p.req, steps)
 	if err != nil {
 		m.failed(ctx, bg, x, steps, err, p)
 		return
 	}
 	m.succeeded(bg, x, steps, issued, p)
+}
+
+// newSolver is the solver for a run of challenge: the token store for HTTP-01, and for DNS-01 a solver of
+// its own over the provider and resolvers saved now. The order code is the same for both.
+func (m *Manager) newSolver(ctx context.Context, steps *jobSteps, challenge string) (Solver, error) {
+	if challenge != ChallengeDNS01 {
+		return m.d.Challenges, nil
+	}
+	st, err := m.d.Store.State(ctx)
+	if err != nil {
+		return nil, err
+	}
+	provider := st.DNSProvider
+	if provider == "" {
+		provider = defaultDNSProvider
+	}
+	return &dnsSolver{m: m, steps: steps, provider: provider, servers: dnscheck.Resolvers(st.DNSResolvers)}, nil
 }
 
 // failed records a run that did not end in a certificate. What is served is not touched.
