@@ -1206,6 +1206,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	challenges := acmeWire.challenges
 	// A stored Let's Encrypt certificate is served before the server listens (ACME-04).
 	if err := acmeWire.mgr.Start(ctx); err != nil {
 		jobHub.Close()
@@ -1250,7 +1251,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		router:     router,
 		https:      rt,
 		acme:       acmeWire.mgr,
-		challenge:  acmeWire.challenges.Handler(),
+		challenge:  challenges.Handler(),
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
