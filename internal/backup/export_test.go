@@ -254,6 +254,9 @@ func (f *exportFixture) seedExcluded(t *testing.T) {
 	f.exec(t, `INSERT INTO stack_git_state (stack_id) VALUES ('stack-1')`)
 	// When the janitor first saw an image without a name is derived: a restored instance starts the clock again.
 	f.exec(t, `INSERT INTO image_dangling_seen (env_id, node_id, image_id, first_seen_at) VALUES ('env-1', 'env-1', 'sha256:a', 1)`)
+	// An open ACME order is the in-flight work of this instance: a restore must not resurrect it (Phase 14).
+	f.exec(t, `INSERT INTO acme_orders (id, directory_url, order_url, kind, names, cert_key_sealed, stage, created_at, updated_at)
+		VALUES ('order-1', 'https://acme.example/directory', 'https://acme.example/order/1', 'issue', '["a.example.org"]', 'v1.k1-x.sealed', 'created', 1, 1)`)
 }
 
 func (f *exportFixture) liveCount(t *testing.T, table string) int {

@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"database/sql"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -250,61 +251,279 @@ func decodeKey(data []byte) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// The rest of the Store is written in the next commit.
-
-var errNotImplemented = errors.New("acme: not implemented")
-
-// InsertOrder stores a new open order and seals its certificate key.
-func (s *Store) InsertOrder(context.Context, Order, *ecdsa.PrivateKey) error {
-	return errNotImplemented
+// InsertOrder stores a new open order and seals its fresh certificate key under the order's ID. The
+// key is durable when InsertOrder returns, which is before any finalize can happen: a certificate
+// issued for a key that was then lost could never be installed (RESEARCH Pitfall 2).
+func (s *Store) InsertOrder(ctx context.Context, o Order, key *ecdsa.PrivateKey) error {
+	keyPEM, err := encodeKey(key)
+	if err != nil {
+		return err
+	}
+	sealed, err := s.v.Seal(vault.ContextACMEOrderKey+o.ID, keyPEM)
+	if err != nil {
+		return fmt.Errorf("seal the ACME order key %q: %w", o.ID, err)
+	}
+	names, err := encodeNames(o.Names)
+	if err != nil {
+		return err
+	}
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	if err := s.st.Q.WithTx(tx).InsertACMEOrder(ctx, sqlc.InsertACMEOrderParams{
+		ID: o.ID, DirectoryUrl: o.DirectoryURL, OrderUrl: o.URL, Kind: o.Kind, Names: names,
+		Profile: o.Profile, Replaces: o.Replaces, CertKeySealed: sealed, Stage: o.Stage,
+		ResumeCount: int64(o.ResumeCount), ExpiresAt: toNanos(o.ExpiresAt),
+		CreatedAt: toNanos(o.CreatedAt), UpdatedAt: toNanos(o.UpdatedAt),
+	}); err != nil {
+		return fmt.Errorf("insert the ACME order %q: %w", o.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return s.checkpoint(ctx, "the ACME order key")
 }
 
-// OpenOrder returns the newest open order and its key.
-func (s *Store) OpenOrder(context.Context) (Order, *ecdsa.PrivateKey, bool, error) {
-	return Order{}, nil, false, errNotImplemented
+// OpenOrder returns the newest open order and its certificate key. found is false, with a nil error,
+// only when no order is open: a key that does not open is an error.
+func (s *Store) OpenOrder(ctx context.Context) (Order, *ecdsa.PrivateKey, bool, error) {
+	row, err := s.st.RQ.GetOpenACMEOrder(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Order{}, nil, false, nil
+	}
+	if err != nil {
+		return Order{}, nil, false, fmt.Errorf("read the open ACME order: %w", err)
+	}
+	keyPEM, err := s.v.Open(vault.ContextACMEOrderKey+row.ID, row.CertKeySealed)
+	if err != nil {
+		return Order{}, nil, false, fmt.Errorf("open the ACME order key %q: %w", row.ID, err)
+	}
+	key, err := decodeKey(keyPEM)
+	if err != nil {
+		return Order{}, nil, false, fmt.Errorf("decode the ACME order key %q: %w", row.ID, err)
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(row.Names), &names); err != nil {
+		return Order{}, nil, false, fmt.Errorf("read the names of the ACME order %q: %w", row.ID, err)
+	}
+	return Order{
+		ID: row.ID, DirectoryURL: row.DirectoryUrl, URL: row.OrderUrl, Kind: row.Kind, Names: names,
+		Profile: row.Profile, Replaces: row.Replaces, Stage: row.Stage, Status: row.Status,
+		ResumeCount: int(row.ResumeCount), ExpiresAt: fromNanos(row.ExpiresAt),
+		CreatedAt: fromNanos(row.CreatedAt), UpdatedAt: fromNanos(row.UpdatedAt),
+	}, key, true, nil
 }
 
-// UpdateOrder moves an order to a stage.
-func (s *Store) UpdateOrder(context.Context, string, string, int, time.Time) error {
-	return errNotImplemented
+// UpdateOrder moves an order to a stage and records how many times it has been resumed.
+func (s *Store) UpdateOrder(ctx context.Context, id, stage string, resumeCount int, now time.Time) error {
+	if err := s.st.Q.UpdateACMEOrderStage(ctx, sqlc.UpdateACMEOrderStageParams{
+		Stage: stage, ResumeCount: int64(resumeCount), UpdatedAt: toNanos(now), ID: id,
+	}); err != nil {
+		return fmt.Errorf("update the ACME order %q: %w", id, err)
+	}
+	return nil
 }
 
-// CloseOrder closes an order.
-func (s *Store) CloseOrder(context.Context, string, string, time.Time) error {
-	return errNotImplemented
+// CloseOrder closes an order in a final stage. The order and its sealed key stay for the record, and
+// OpenOrder no longer returns it.
+func (s *Store) CloseOrder(ctx context.Context, id, stage string, now time.Time) error {
+	if err := s.st.Q.CloseACMEOrder(ctx, sqlc.CloseACMEOrderParams{Stage: stage, UpdatedAt: toNanos(now), ID: id}); err != nil {
+		return fmt.Errorf("close the ACME order %q: %w", id, err)
+	}
+	return nil
 }
 
-// StoreIssued stores the issued certificate and closes its order.
-func (s *Store) StoreIssued(context.Context, string, []byte, *ecdsa.PrivateKey, time.Time) error {
-	return errNotImplemented
+// StoreIssued writes the issued chain and its key into the tls_certs row CertID, with the key sealed
+// under the tls-key context the server reads it with, and closes the order as stored, in one
+// transaction: a failure keeps neither. The self-signed row is not touched. The certificate is
+// durable when StoreIssued returns.
+func (s *Store) StoreIssued(ctx context.Context, orderID string, chainPEM []byte, key *ecdsa.PrivateKey, now time.Time) error {
+	keyPEM, err := encodeKey(key)
+	if err != nil {
+		return err
+	}
+	sealed, err := s.v.Seal(vault.ContextTLSKey+CertID, keyPEM)
+	if err != nil {
+		return fmt.Errorf("seal the TLS key %q: %w", CertID, err)
+	}
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	ts := toNanos(now)
+	if err := q.UpsertTLSCert(ctx, sqlc.UpsertTLSCertParams{
+		ID: CertID, CertPem: string(chainPEM), KeySealed: sealed, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return fmt.Errorf("store the TLS certificate %q: %w", CertID, err)
+	}
+	if err := q.CloseACMEOrder(ctx, sqlc.CloseACMEOrderParams{Stage: StageStored, UpdatedAt: ts, ID: orderID}); err != nil {
+		return fmt.Errorf("close the ACME order %q: %w", orderID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return s.checkpoint(ctx, "the issued certificate")
 }
 
-// Certificate returns the stored certificate chain and key.
-func (s *Store) Certificate(context.Context) ([]byte, *ecdsa.PrivateKey, bool, error) {
-	return nil, nil, false, errNotImplemented
+// Certificate returns the stored Let's Encrypt chain and its key. found is false, with a nil error,
+// only before the first certificate is issued.
+func (s *Store) Certificate(ctx context.Context) (chainPEM []byte, key *ecdsa.PrivateKey, found bool, err error) {
+	row, err := s.st.RQ.GetTLSCert(ctx, CertID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("read the TLS certificate %q: %w", CertID, err)
+	}
+	keyPEM, err := s.v.Open(vault.ContextTLSKey+CertID, row.KeySealed)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("open the TLS key %q: %w", CertID, err)
+	}
+	key, err = decodeKey(keyPEM)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("decode the TLS key %q: %w", CertID, err)
+	}
+	return []byte(row.CertPem), key, true, nil
 }
 
-// State returns the ledger.
-func (s *Store) State(context.Context) (State, error) { return State{}, errNotImplemented }
-
-// SaveState stores the ledger.
-func (s *Store) SaveState(context.Context, State) error { return errNotImplemented }
-
-// InsertRun records a new run.
-func (s *Store) InsertRun(context.Context, Run) error { return errNotImplemented }
-
-// FinishRun finishes a run and stores the ledger.
-func (s *Store) FinishRun(context.Context, string, string, string, time.Time, State) error {
-	return errNotImplemented
+// State returns the ledger. A database that has never run ACME reads as mode off with no instants
+// set, which the ledger treats as no backoff being in force.
+func (s *Store) State(ctx context.Context) (State, error) {
+	row, err := s.st.RQ.GetACMEState(ctx)
+	if err != nil {
+		return State{}, fmt.Errorf("read the ACME state: %w", err)
+	}
+	return State{
+		Mode: row.Mode, ChallengeType: row.ChallengeType, Profile: row.Profile, PausedReason: row.PausedReason,
+		ConsecutiveFailures: int(row.ConsecutiveFailures),
+		LastAttemptAt:       fromNanos(row.LastAttemptAt), NextAttemptAt: fromNanos(row.NextAttemptAt),
+		RetryAfterUntil: fromNanos(row.RetryAfterUntil), RenewAt: fromNanos(row.RenewAt),
+		AriWindowStart: fromNanos(row.AriWindowStart), AriWindowEnd: fromNanos(row.AriWindowEnd),
+		AriCheckedAt: fromNanos(row.AriCheckedAt), AriNextCheckAt: fromNanos(row.AriNextCheckAt),
+		LastErrorAt: fromNanos(row.LastErrorAt), LastSuccessAt: fromNanos(row.LastSuccessAt),
+		RenewBasis: row.RenewBasis, LastErrorClass: row.LastErrorClass, LastErrorDetail: row.LastErrorDetail,
+		LastSuccessKind: row.LastSuccessKind, UpdatedAt: fromNanos(row.UpdatedAt),
+	}, nil
 }
 
-// Runs returns the newest runs.
-func (s *Store) Runs(context.Context, int) ([]Run, error) { return nil, errNotImplemented }
-
-// FailedRunsSince returns the start times of the failed runs since a time.
-func (s *Store) FailedRunsSince(context.Context, time.Time) ([]time.Time, error) {
-	return nil, errNotImplemented
+// SaveState stores the ledger. The row always exists (the migration seeds it), so this is an update.
+func (s *Store) SaveState(ctx context.Context, st State) error {
+	if err := s.st.Q.UpdateACMEState(ctx, stateParams(st)); err != nil {
+		return fmt.Errorf("save the ACME state: %w", err)
+	}
+	return nil
 }
 
-// InterruptRunning marks the runs still running as failed.
-func (s *Store) InterruptRunning(context.Context, time.Time) error { return errNotImplemented }
+func stateParams(st State) sqlc.UpdateACMEStateParams {
+	return sqlc.UpdateACMEStateParams{
+		Mode: st.Mode, ChallengeType: st.ChallengeType, Profile: st.Profile, PausedReason: st.PausedReason,
+		ConsecutiveFailures: int64(st.ConsecutiveFailures),
+		LastAttemptAt:       toNanos(st.LastAttemptAt), NextAttemptAt: toNanos(st.NextAttemptAt),
+		RetryAfterUntil: toNanos(st.RetryAfterUntil), RenewAt: toNanos(st.RenewAt),
+		AriWindowStart: toNanos(st.AriWindowStart), AriWindowEnd: toNanos(st.AriWindowEnd),
+		AriCheckedAt: toNanos(st.AriCheckedAt), AriNextCheckAt: toNanos(st.AriNextCheckAt),
+		LastErrorAt: toNanos(st.LastErrorAt), LastSuccessAt: toNanos(st.LastSuccessAt),
+		RenewBasis: st.RenewBasis, LastErrorClass: st.LastErrorClass, LastErrorDetail: st.LastErrorDetail,
+		LastSuccessKind: st.LastSuccessKind, UpdatedAt: toNanos(st.UpdatedAt),
+	}
+}
+
+// InsertRun records a new run, normally with outcome "running".
+func (s *Store) InsertRun(ctx context.Context, r Run) error {
+	names, err := encodeNames(r.Names)
+	if err != nil {
+		return err
+	}
+	if err := s.st.Q.InsertACMERun(ctx, sqlc.InsertACMERunParams{
+		ID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Actor: r.Actor, Names: names,
+		StartedAt: toNanos(r.StartedAt), FinishedAt: toNanos(r.FinishedAt), Outcome: r.Outcome, ErrorClass: r.ErrorClass,
+	}); err != nil {
+		return fmt.Errorf("insert the ACME run %q: %w", r.ID, err)
+	}
+	return nil
+}
+
+// FinishRun records how a run ended and stores the ledger that results from it, in one transaction, so
+// the history and the backoff never disagree. It then prunes the history to the newest 50 runs.
+func (s *Store) FinishRun(ctx context.Context, runID, outcome, errorClass string, finishedAt time.Time, st State) error {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	if err := q.FinishACMERun(ctx, sqlc.FinishACMERunParams{
+		Outcome: outcome, ErrorClass: errorClass, FinishedAt: toNanos(finishedAt), ID: runID,
+	}); err != nil {
+		return fmt.Errorf("finish the ACME run %q: %w", runID, err)
+	}
+	if err := q.UpdateACMEState(ctx, stateParams(st)); err != nil {
+		return fmt.Errorf("save the ACME state: %w", err)
+	}
+	if err := q.PruneACMERuns(ctx); err != nil {
+		return fmt.Errorf("prune the ACME runs: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// Runs returns up to limit runs, newest first.
+func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
+	rows, err := s.st.RQ.ListACMERuns(ctx, int64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list the ACME runs: %w", err)
+	}
+	runs := make([]Run, 0, len(rows))
+	for _, r := range rows {
+		var names []string
+		if err := json.Unmarshal([]byte(r.Names), &names); err != nil {
+			return nil, fmt.Errorf("read the names of the ACME run %q: %w", r.ID, err)
+		}
+		runs = append(runs, Run{
+			ID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Actor: r.Actor, Names: names,
+			StartedAt: fromNanos(r.StartedAt), FinishedAt: fromNanos(r.FinishedAt),
+			Outcome: r.Outcome, ErrorClass: r.ErrorClass,
+		})
+	}
+	return runs, nil
+}
+
+// FailedRunsSince returns when the failed runs at or after since started, oldest first.
+func (s *Store) FailedRunsSince(ctx context.Context, since time.Time) ([]time.Time, error) {
+	rows, err := s.st.RQ.ListACMEFailedRunsSince(ctx, toNanos(since))
+	if err != nil {
+		return nil, fmt.Errorf("list the failed ACME runs: %w", err)
+	}
+	starts := make([]time.Time, len(rows))
+	for i, n := range rows {
+		starts[i] = fromNanos(n)
+	}
+	return starts, nil
+}
+
+// InterruptRunning closes every run still marked running as failed with the class internal. It is for
+// startup: a run that is running while no process is running was cut short.
+func (s *Store) InterruptRunning(ctx context.Context, now time.Time) error {
+	if err := s.st.Q.InterruptACMERuns(ctx, toNanos(now)); err != nil {
+		return fmt.Errorf("interrupt the running ACME runs: %w", err)
+	}
+	return nil
+}
+
+// encodeNames is the stored form of a list of names: a JSON array, in order, never null.
+func encodeNames(names []string) (string, error) {
+	if names == nil {
+		names = []string{}
+	}
+	b, err := json.Marshal(names)
+	if err != nil {
+		return "", fmt.Errorf("encode the names: %w", err)
+	}
+	return string(b), nil
+}
