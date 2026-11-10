@@ -3,9 +3,10 @@
 
 //go:build tools
 
-// Keeps github.com/go-acme/lego/v5 in go.mod until Phase 14 imports it for real (go mod tidy removes
-// a requirement nothing imports). Not part of any build: the tag is never set, so the binary, the
-// licence scan and the notices are unchanged.
+// The acme packages are linked for real from Phase 14 (client.go and the code that follows it), so the
+// licence scan and the third-party notices cover them. This file only keeps github.com/go-acme/lego/v5/lego
+// and the Cloudflare DNS provider in go.mod until Phase 15 imports them (go mod tidy removes a requirement
+// nothing imports). Not part of any build: the tag is never set.
 
 package acme
 

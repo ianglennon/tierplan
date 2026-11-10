@@ -100,6 +100,12 @@ type OrderSeen struct {
 	Replaces string
 }
 
+// AccountSeen is what the fake was asked for in one newAccount request that created an account.
+type AccountSeen struct {
+	Contact              []string
+	TermsOfServiceAgreed bool
+}
+
 // Fake is a running fake ACME directory.
 type Fake struct {
 	tb    testing.TB
@@ -132,6 +138,7 @@ type Fake struct {
 	replacedBy map[string]*order        // per ARI certificate id, the order that replaces it
 	counts     map[string]int
 	seen       []OrderSeen
+	accountsIn []AccountSeen
 	hits       map[string]int
 }
 
@@ -518,6 +525,7 @@ func (f *Fake) newAccount(q *request) {
 		return
 	}
 	a := &account{kid: f.srv.URL + "/acct/" + f.nextID(), key: q.jwk, thumb: thumb}
+	f.accountsIn = append(f.accountsIn, AccountSeen{Contact: slices.Clone(req.Contact), TermsOfServiceAgreed: req.TermsOfServiceAgreed})
 	f.accounts[a.kid] = a
 	q.w.Header().Set("Location", a.kid)
 	f.reply(q.w, http.StatusCreated, f.accountView(a))
@@ -1062,6 +1070,14 @@ func (f *Fake) Orders() []OrderSeen {
 		out[i].Names = slices.Clone(out[i].Names)
 	}
 	return out
+}
+
+// AccountsSeen lists the newAccount requests that created an account, in order, with the contact and
+// terms agreement each carried.
+func (f *Fake) AccountsSeen() []AccountSeen {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.accountsIn)
 }
 
 // ValidationHits is the number of http-01 GETs the fake made for token.

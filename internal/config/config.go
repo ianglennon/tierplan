@@ -37,6 +37,12 @@ const (
 	envAgentOfflineAfter      = "TIERPLAN_AGENT_OFFLINE_AFTER"
 )
 
+// The two ACME override settings are named in the table and in the check that ties them together.
+const (
+	envACMEDirectoryURL = "TIERPLAN_ACME_DIRECTORY_URL"
+	envACMECAFile       = "TIERPLAN_ACME_CA_FILE"
+)
+
 // redactedMark replaces the value of a set secret in Redacted.
 const redactedMark = "[redacted]"
 
@@ -82,6 +88,12 @@ type Config struct {
 
 	TLSCertFile string
 	TLSKeyFile  string
+	// ACMEDirectoryURL overrides the ACME directory TierPlan talks to, and ACMECAFile is the PEM of the
+	// CA that signs that directory's HTTPS certificate. Both are test-only and unsupported (Pebble and
+	// other test CAs): unset means Let's Encrypt production, and nothing in the UI or the API can change
+	// either (D-19).
+	ACMEDirectoryURL string
+	ACMECAFile       string
 	// TLSSelfSigned is the value of the deprecated TIERPLAN_TLS_SELF_SIGNED (true only for a
 	// value that reads as true). TierPlan serves HTTPS with a certificate of its own without it, so it
 	// changes nothing. TLSSelfSignedSet is whether the
@@ -225,6 +237,21 @@ var settings = []setting{
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
 	{env: "TIERPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSKeyFile = raw; return nil }},
+	{env: envACMEDirectoryURL, flag: "acme-directory-url", desc: "ACME directory URL. Testing only and unsupported; unset means Let's Encrypt production",
+		apply: func(c *Config, raw string) error {
+			if raw == "" {
+				c.ACMEDirectoryURL = ""
+				return nil
+			}
+			u, err := url.Parse(raw)
+			if err != nil || u.Scheme != "https" || u.Host == "" {
+				return fmt.Errorf("%q must be an https:// URL", raw)
+			}
+			c.ACMEDirectoryURL = raw
+			return nil
+		}},
+	{env: envACMECAFile, flag: "acme-ca-file", desc: "PEM file of the CA that signs the ACME directory's HTTPS certificate. Testing only and unsupported",
+		apply: func(c *Config, raw string) error { c.ACMECAFile = raw; return nil }},
 	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", desc: "deprecated and without effect: TierPlan always serves HTTPS with a self-signed certificate unless a certificate file is supplied; any value is accepted and logged at start",
 		apply: func(c *Config, raw string) error {
 			// A stale value must never stop startup, so one that is not a boolean reads as not true.
@@ -371,6 +398,9 @@ func (c Config) crossCheck() error {
 			return errors.New("TIERPLAN_TLS_KEY_FILE is set without TIERPLAN_TLS_CERT_FILE; set both or neither")
 		}
 		return errors.New("TIERPLAN_TLS_CERT_FILE is set without TIERPLAN_TLS_KEY_FILE; set both or neither")
+	}
+	if c.ACMECAFile != "" && c.ACMEDirectoryURL == "" {
+		return fmt.Errorf("%s is set without %s; the CA file only applies to a directory you name", envACMECAFile, envACMEDirectoryURL)
 	}
 	// A window shorter than two heartbeats would call an agent offline after one
 	// late or lost heartbeat.
