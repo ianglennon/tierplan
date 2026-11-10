@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1184,7 +1185,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
-		HTTPS:         api.HTTPSDeps{Served: rt.served, CertFiles: cfg.TLSCertFile != "", Log: log},
+		HTTPS:         api.HTTPSDeps{Served: rt.served, CertFiles: cfg.TLSCertFile != "", Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
 		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
@@ -1581,3 +1582,16 @@ func (a settingsAgents) PushURLs(urls, pins []string) int { return a.hub.PushURL
 func (a settingsAgents) Pins() []string                   { return a.hub.Pins() }
 
 var _ api.SettingsAgents = settingsAgents{}
+
+// listenPort is the port in a listen address such as ":7480" or "0.0.0.0:7480"; 0 when it has none.
+func listenPort(addr string) int {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 0 || n > 65535 {
+		return 0
+	}
+	return n
+}

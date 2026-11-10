@@ -1,0 +1,413 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+)
+
+// The problem types the Let's Encrypt routes answer with. The browser maps each to its own copy.
+const (
+	problemACMETOSRequired    = "acme_tos_required"
+	problemACMEContactInvalid = "acme_contact_invalid"
+	problemACMEAccountExists  = "acme_account_exists"
+	problemACMEPaused         = "acme_paused"
+	problemACMECertFiles      = "acme_cert_files"
+	problemACMEProfileUnknown = "acme_profile_unknown"
+	problemACMERunActive      = "acme_run_active"
+	problemACMECAError        = "acme_ca_error"
+)
+
+// HTTPSACME is the Let's Encrypt manager as the HTTPS routes use it. *acme.Manager is the one
+// implementation; the run actions are used by the run routes.
+type HTTPSACME interface {
+	Status(ctx context.Context) (acme.Status, error)
+	Register(ctx context.Context, email string, agreeTOS bool) (acme.Account, error)
+	Directory(ctx context.Context) (acme.DirectoryMeta, error)
+	SetProfile(ctx context.Context, profile string) error
+	Issue(ctx context.Context, actor string) (acme.RunStart, error)
+	RenewNow(ctx context.Context, actor string) (acme.RunStart, error)
+	Resume(ctx context.Context, actor string) error
+	Stop(ctx context.Context, actor string) error
+}
+
+var _ HTTPSACME = (*acme.Manager)(nil)
+
+// HTTPSACMEAccountBody is the registered account. The account key is never part of it.
+type HTTPSACMEAccountBody struct {
+	RegisteredAt      time.Time `json:"registeredAt" doc:"When the account was registered"`
+	Contact           string    `json:"contact" doc:"The contact email address, empty when none was given"`
+	TermsOfServiceURL string    `json:"termsOfServiceUrl" doc:"Where the terms of service the account agreed to can be read, empty when the CA names none"`
+}
+
+// HTTPSACMENameBody is one name the certificate would carry.
+type HTTPSACMENameBody struct {
+	Name    string `json:"name" doc:"The host name or address, in its ASCII form"`
+	Refused bool   `json:"refused" doc:"True when this name cannot be ordered, for example an IP address"`
+}
+
+// HTTPSACMERefusalBody is one reason an order cannot start. It carries data only; the browser writes the words.
+type HTTPSACMERefusalBody struct {
+	Code  string   `json:"code" enum:"names_ip,agent_url_ip,names_wildcard,names_not_public,base_path,agent_dial_host" doc:"Why the order is refused"`
+	Host  string   `json:"host,omitempty" doc:"The host the refusal is about"`
+	Path  string   `json:"path,omitempty" doc:"The path the public address is served under (base_path)"`
+	Count int      `json:"count,omitempty" doc:"How many connected agents dialed a host the certificate would not cover (agent_dial_host)"`
+	Hosts []string `json:"hosts,omitempty" doc:"The hosts those agents dialed (agent_dial_host)"`
+}
+
+// HTTPSACMECertificateBody is the stored Let's Encrypt certificate, whether or not it is being served.
+type HTTPSACMECertificateBody struct {
+	Names     []string  `json:"names" doc:"The names it covers"`
+	NotBefore time.Time `json:"notBefore" doc:"When it became valid"`
+	NotAfter  time.Time `json:"notAfter" doc:"When it expires"`
+	IssuedAt  time.Time `json:"issuedAt" doc:"When it was issued"`
+	Renewed   bool      `json:"renewed" doc:"True when the newest issue was a renewal"`
+}
+
+// HTTPSACMERenewalBody is when the certificate is next renewed and why then.
+type HTTPSACMERenewalBody struct {
+	NextAt time.Time `json:"nextAt" doc:"When the next renewal is due"`
+	Basis  string    `json:"basis" enum:"ari,two_thirds,half" doc:"What the time was worked out from: the CA's renewal information, two thirds of the certificate's life, or half of it"`
+}
+
+// HTTPSACMEFallbackBody says the Let's Encrypt certificate has expired and the self-signed one is served.
+type HTTPSACMEFallbackBody struct {
+	ExpiredAt time.Time `json:"expiredAt" doc:"When the Let's Encrypt certificate expired"`
+}
+
+// HTTPSACMEErrorBody is the last failure. Detail is the CA's own text, cleaned and cut to a fixed size.
+type HTTPSACMEErrorBody struct {
+	Code     string    `json:"code" enum:"rate_limited,validation_unreachable,validation_dns,caa_forbids,identifier_rejected,contact_invalid,tos_action_required,account_gone,profile_invalid,ca_unavailable,ca_untrusted,internal" doc:"The class of the failure"`
+	At       time.Time `json:"at" doc:"When it happened"`
+	Host     string    `json:"host,omitempty" doc:"The host a validation failure is about"`
+	Profile  string    `json:"profile,omitempty" doc:"The profile the CA refused"`
+	TermsURL string    `json:"termsUrl,omitempty" doc:"Where to read the terms the CA wants accepted"`
+	Detail   string    `json:"detail,omitempty" doc:"The CA's problem document as text, for a Details disclosure. Untrusted text: show it as text only"`
+}
+
+// HTTPSACMEBlockBody says a manual attempt is refused for now.
+type HTTPSACMEBlockBody struct {
+	Until  time.Time `json:"until" doc:"When an attempt is allowed again"`
+	Reason string    `json:"reason" enum:"told_to_wait,failure_guard" doc:"The CA asked us to wait, or three runs failed within the hour"`
+}
+
+// HTTPSACMERunBody is one certificate run.
+type HTTPSACMERunBody struct {
+	JobID      string     `json:"jobId" doc:"The run's job; GET /api/jobs/{jobId} reads its steps"`
+	Kind       string     `json:"kind" enum:"issue,renew" doc:"A first issue or a renewal"`
+	Trigger    string     `json:"trigger" enum:"admin,schedule,resume" doc:"What started it"`
+	Outcome    string     `json:"outcome" enum:"running,succeeded,failed,cancelled,reused" doc:"How it went"`
+	StartedAt  time.Time  `json:"startedAt" doc:"When it started"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty" doc:"When it ended; left out while it runs"`
+}
+
+// HTTPSACMEBody is everything the Let's Encrypt page shows. It is read from local state and makes no
+// request to the CA. It never holds a key or a key authorization.
+type HTTPSACMEBody struct {
+	DirectoryURL        string                    `json:"directoryUrl" doc:"The CA directory in use"`
+	DirectoryOverridden bool                      `json:"directoryOverridden" doc:"True when the test-only directory override is set; its certificates are not trusted by browsers"`
+	Mode                string                    `json:"mode" enum:"off,active" doc:"active when Let's Encrypt is in use"`
+	PausedReason        string                    `json:"pausedReason" enum:",restore,cert_files" doc:"Why renewals are paused: a backup was restored, or certificate files are set. Empty when they run"`
+	HasState            bool                      `json:"hasState" doc:"True when a Let's Encrypt certificate or an open order is stored"`
+	ChallengeType       string                    `json:"challengeType" doc:"The challenge used to prove the names"`
+	ListenPort          int                       `json:"listenPort" doc:"The port TierPlan listens on"`
+	PublicHost          string                    `json:"publicHost" doc:"The host of the public address, empty when none is set"`
+	Account             *HTTPSACMEAccountBody     `json:"account,omitempty" doc:"The registered account; left out before registration"`
+	Names               []HTTPSACMENameBody       `json:"names" doc:"The names a certificate would carry now"`
+	Refusals            []HTTPSACMERefusalBody    `json:"refusals" doc:"Every reason an order cannot start, empty when one could"`
+	Certificate         *HTTPSACMECertificateBody `json:"certificate,omitempty" doc:"The stored Let's Encrypt certificate"`
+	NamesMismatch       bool                      `json:"namesMismatch" doc:"True when the stored certificate's names are not the names wanted now"`
+	Profile             string                    `json:"profile" doc:"The profile orders ask for; empty is the CA's default"`
+	Renewal             *HTTPSACMERenewalBody     `json:"renewal,omitempty" doc:"The next renewal; left out unless Let's Encrypt is in use"`
+	Fallback            *HTTPSACMEFallbackBody    `json:"fallback,omitempty" doc:"Set when the certificate has expired and the self-signed one is served"`
+	LastError           *HTTPSACMEErrorBody       `json:"lastError,omitempty" doc:"The last failure, until a run succeeds"`
+	Failures            int                       `json:"failures" doc:"Consecutive failed runs"`
+	NextAttemptAt       *time.Time                `json:"nextAttemptAt,omitempty" doc:"When the next automatic attempt is due after a failure"`
+	Blocked             *HTTPSACMEBlockBody       `json:"blocked,omitempty" doc:"Set while a manual attempt is refused"`
+	ActiveRun           *HTTPSACMERunBody         `json:"activeRun,omitempty" doc:"The run in progress"`
+	LastRun             *HTTPSACMERunBody         `json:"lastRun,omitempty" doc:"The run that ended last"`
+}
+
+// acmeStatusBody maps the manager's status onto the contract.
+func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
+	b := &HTTPSACMEBody{
+		DirectoryURL: st.DirectoryURL, DirectoryOverridden: st.DirectoryOverridden, Mode: st.Mode,
+		PausedReason: st.PausedReason, HasState: st.HasState, ChallengeType: st.ChallengeType, ListenPort: listenPort,
+		NamesMismatch: st.NamesMismatch, Profile: st.Profile, Failures: st.Failures,
+		Names:    make([]HTTPSACMENameBody, 0, len(st.Names)),
+		Refusals: make([]HTTPSACMERefusalBody, 0, len(st.Refusals)),
+	}
+	if b.Mode == "" {
+		b.Mode = acme.ModeOff
+	}
+	refusedHost := map[string]bool{}
+	noPublicURL := false
+	for _, r := range st.Refusals {
+		b.Refusals = append(b.Refusals, HTTPSACMERefusalBody{Code: r.Code, Host: r.Host, Path: r.Path, Count: r.Count, Hosts: slices.Clone(r.Hosts)})
+		switch r.Code {
+		case acme.RefuseNamesIP, acme.RefuseAgentURLIP, acme.RefuseNamesWildcard, acme.RefuseNamesNotPublic:
+			if r.Host == "" {
+				noPublicURL = true
+			} else {
+				refusedHost[r.Host] = true
+			}
+		}
+	}
+	for _, n := range st.Names {
+		b.Names = append(b.Names, HTTPSACMENameBody{Name: n, Refused: refusedHost[n]})
+	}
+	// The public address' host is the first name; with no public address the first name is the agent's.
+	if len(st.Names) > 0 && !noPublicURL {
+		b.PublicHost = st.Names[0]
+	}
+	if a := st.Account; a != nil {
+		b.Account = &HTTPSACMEAccountBody{
+			RegisteredAt: a.RegisteredAt.UTC(), Contact: strings.TrimPrefix(a.Contact, "mailto:"), TermsOfServiceURL: a.TermsOfService,
+		}
+	}
+	if c := st.Certificate; c != nil {
+		b.Certificate = &HTTPSACMECertificateBody{
+			Names: append([]string{}, c.Names...), NotBefore: c.NotBefore.UTC(), NotAfter: c.NotAfter.UTC(),
+			IssuedAt: c.IssuedAt.UTC(), Renewed: c.Renewed,
+		}
+	}
+	if !st.RenewAt.IsZero() {
+		b.Renewal = &HTTPSACMERenewalBody{NextAt: st.RenewAt.UTC(), Basis: string(st.RenewBasis)}
+	}
+	if st.Fallback {
+		b.Fallback = &HTTPSACMEFallbackBody{ExpiredAt: st.ExpiredAt.UTC()}
+	}
+	if e := st.LastError; e != nil {
+		b.LastError = &HTTPSACMEErrorBody{Code: e.Class, At: e.At.UTC(), Host: e.Host, Profile: e.Profile, TermsURL: e.TermsURL, Detail: e.Detail}
+	}
+	if !st.NextAttemptAt.IsZero() {
+		t := st.NextAttemptAt.UTC()
+		b.NextAttemptAt = &t
+	}
+	if bl := st.Block; bl != nil {
+		b.Blocked = &HTTPSACMEBlockBody{Until: bl.Until.UTC(), Reason: bl.Reason}
+	}
+	b.ActiveRun = acmeRunBody(st.ActiveRun)
+	b.LastRun = acmeRunBody(st.LastRun)
+	return b
+}
+
+func acmeRunBody(r *acme.RunView) *HTTPSACMERunBody {
+	if r == nil {
+		return nil
+	}
+	b := &HTTPSACMERunBody{JobID: r.JobID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome, StartedAt: r.StartedAt.UTC()}
+	if !r.FinishedAt.IsZero() {
+		t := r.FinishedAt.UTC()
+		b.FinishedAt = &t
+	}
+	return b
+}
+
+// RegisterACMEAccountInput is the body of the registration.
+type RegisterACMEAccountInput struct {
+	Body struct {
+		Email    string `json:"email,omitempty" maxLength:"254" doc:"Where the CA may send expiry and account notices. Optional: without one no contact is sent"`
+		AgreeTOS bool   `json:"agreeTos,omitempty" doc:"Must be true: the person registering agrees to the CA's terms of service"`
+	}
+}
+
+// RegisterACMEAccountOutput is the registered account.
+type RegisterACMEAccountOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         HTTPSACMEAccountBody
+}
+
+// HTTPSACMEProfileBody is one certificate profile the CA offers.
+type HTTPSACMEProfileBody struct {
+	Name        string `json:"name" doc:"The profile name"`
+	Description string `json:"description" doc:"What the CA says about it. Untrusted text: show it as text only"`
+}
+
+// HTTPSACMEDirectoryBody is what the CA says about itself.
+type HTTPSACMEDirectoryBody struct {
+	URL               string                 `json:"url" doc:"The CA directory in use"`
+	Overridden        bool                   `json:"overridden" doc:"True when the test-only directory override is set"`
+	TermsOfServiceURL string                 `json:"termsOfServiceUrl" doc:"Where the terms of service can be read, empty when the CA names none"`
+	Profiles          []HTTPSACMEProfileBody `json:"profiles" doc:"The certificate profiles the CA offers, sorted by name; empty when it offers none"`
+}
+
+// HTTPSACMEDirectoryOutput wraps HTTPSACMEDirectoryBody for huma.
+type HTTPSACMEDirectoryOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         HTTPSACMEDirectoryBody
+}
+
+// PutACMEProfileInput is the body of the profile save.
+type PutACMEProfileInput struct {
+	Body struct {
+		Profile string `json:"profile" maxLength:"64" pattern:"^[a-z0-9._-]*$" doc:"The profile to order with; empty is the CA's default"`
+	}
+}
+
+// HTTPSACMEProfileOutput is the saved profile.
+type HTTPSACMEProfileOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         struct {
+		Profile string `json:"profile" doc:"The profile orders ask for now; empty is the CA's default"`
+	}
+}
+
+// registerHTTPSACME wires the Let's Encrypt setup routes. Reads need settings.read and every change needs
+// settings.write (D-10); no new permission exists.
+func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
+	read := rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}
+	write := rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "registerACMEAccount",
+		Method:        http.MethodPost,
+		Path:          "/api/https/acme/account",
+		DefaultStatus: http.StatusCreated,
+		Summary:       "Register the Let's Encrypt account",
+		Description: "Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. " +
+			"The account key is created and sealed on the server and never returned. 422 " + problemACMETOSRequired + " when agreeTos is not true; " +
+			"422 " + problemACMEContactInvalid + " (field body.email) for an address the CA or TierPlan refuses; 409 " + problemACMEAccountExists +
+			" when one is registered already; 409 " + problemACMEPaused + " after a restore, until it is resumed; 409 " + problemACMECertFiles +
+			" while certificate files are set; 502 " + problemACMECAError + " when the CA fails, with its class in the first error's message. Needs settings.write.",
+		Tags: []string{"https"},
+	}, write, func(ctx context.Context, in *RegisterACMEAccountInput) (*RegisterACMEAccountOutput, error) {
+		if d.ACME == nil {
+			return nil, acmeUnavailable()
+		}
+		acct, err := d.ACME.Register(ctx, strings.TrimSpace(in.Body.Email), in.Body.AgreeTOS)
+		if err != nil {
+			return nil, acmeProblem(d.Log, "register the Let's Encrypt account", err)
+		}
+		return &RegisterACMEAccountOutput{CacheControl: "no-store", Body: HTTPSACMEAccountBody{
+			RegisteredAt: acct.CreatedAt.UTC(), Contact: strings.TrimPrefix(acct.Contact, "mailto:"), TermsOfServiceURL: acct.TermsOfService,
+		}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getACMEDirectory",
+		Method:      http.MethodGet,
+		Path:        "/api/https/acme/directory",
+		Summary:     "Read the CA's terms and profiles",
+		Description: "The certificate authority's terms of service URL and the certificate profiles it offers, read from its directory " +
+			"(kept for a day). 409 " + problemACMEPaused + " after a restore, 409 " + problemACMECertFiles + " while certificate files are set, " +
+			"502 " + problemACMECAError + " when the directory cannot be read. Needs settings.read.",
+		Tags: []string{"https"},
+	}, read, func(ctx context.Context, _ *struct{}) (*HTTPSACMEDirectoryOutput, error) {
+		if d.ACME == nil {
+			return nil, acmeUnavailable()
+		}
+		st, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
+		if st.CertFiles {
+			return nil, acmeProblem(d.Log, "read the directory", acme.ErrCertFiles)
+		}
+		meta, err := d.ACME.Directory(ctx)
+		if err != nil {
+			return nil, acmeProblem(d.Log, "read the directory", err)
+		}
+		out := &HTTPSACMEDirectoryOutput{CacheControl: "no-store", Body: HTTPSACMEDirectoryBody{
+			URL: st.DirectoryURL, Overridden: st.DirectoryOverridden, TermsOfServiceURL: meta.TermsOfService,
+			Profiles: make([]HTTPSACMEProfileBody, 0, len(meta.Profiles)),
+		}}
+		for name, desc := range meta.Profiles {
+			out.Body.Profiles = append(out.Body.Profiles, HTTPSACMEProfileBody{Name: name, Description: desc})
+		}
+		slices.SortFunc(out.Body.Profiles, func(a, b HTTPSACMEProfileBody) int { return strings.Compare(a.Name, b.Name) })
+		return out, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "putACMEProfile",
+		Method:      http.MethodPut,
+		Path:        "/api/https/acme/profile",
+		Summary:     "Choose the certificate profile",
+		Description: "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 " +
+			problemACMEProfileUnknown + " when its directory can be read, and kept as given when it cannot. 409 " + problemACMERunActive +
+			" while a run is in progress, 409 " + problemACMEPaused + " after a restore, 409 " + problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+		Tags: []string{"https"},
+	}, write, func(ctx context.Context, in *PutACMEProfileInput) (*HTTPSACMEProfileOutput, error) {
+		if d.ACME == nil {
+			return nil, acmeUnavailable()
+		}
+		if err := d.ACME.SetProfile(ctx, in.Body.Profile); err != nil {
+			return nil, acmeProblem(d.Log, "save the Let's Encrypt profile", err)
+		}
+		out := &HTTPSACMEProfileOutput{CacheControl: "no-store"}
+		out.Body.Profile = in.Body.Profile
+		return out, nil
+	})
+}
+
+// acmeUnavailable answers a Let's Encrypt route on a server built without the manager.
+func acmeUnavailable() error {
+	return httpx.Problem(http.StatusServiceUnavailable, problemHTTPSUnavailable, "Let's Encrypt is not available on this server.")
+}
+
+// acmeInternal logs an error nobody can act on from the page and answers a plain 500.
+func acmeInternal(log *slog.Logger, what string, err error) error {
+	if log != nil {
+		log.Error("a Let's Encrypt request failed", "step", what, "error", err)
+	}
+	return huma.Error500InternalServerError("internal error")
+}
+
+// fieldProblem is a 422 whose type is the stable code and whose first error names the field.
+func fieldProblem(code, location, detail string) error {
+	return &huma.ErrorModel{
+		Type: code, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity, Detail: detail,
+		Errors: []*huma.ErrorDetail{{Location: location, Message: code}},
+	}
+}
+
+// acmeProblem maps an error from the Let's Encrypt manager to the problem the page reads. Anything the
+// manager does not name is classified: a CA failure is 502 acme_ca_error with its class in the first
+// error, and an internal failure is logged and answered as 500.
+func acmeProblem(log *slog.Logger, what string, err error) error {
+	switch {
+	case errors.Is(err, acme.ErrPaused):
+		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
+	case errors.Is(err, acme.ErrCertFiles):
+		return httpx.Problem(http.StatusConflict, problemACMECertFiles, "Certificate files are set, so Let's Encrypt is turned off.")
+	case errors.Is(err, acme.ErrAccountExists):
+		return httpx.Problem(http.StatusConflict, problemACMEAccountExists, "A Let's Encrypt account is already registered.")
+	case errors.Is(err, acme.ErrRunActive):
+		return httpx.Problem(http.StatusConflict, problemACMERunActive, "A certificate run is in progress. Wait for it to end.")
+	case errors.Is(err, acme.ErrTOSNotAccepted):
+		return fieldProblem(problemACMETOSRequired, "body.agreeTos", "Agree to the certificate authority's terms of service to register.")
+	case errors.Is(err, acme.ErrContactInvalid):
+		return fieldProblem(problemACMEContactInvalid, "body.email", "Enter an email address such as you@example.com, or leave it empty.")
+	case errors.Is(err, acme.ErrProfileUnknown):
+		return fieldProblem(problemACMEProfileUnknown, "body.profile", "The certificate authority does not offer that profile.")
+	}
+	f := acme.Classify(err, acme.ClassifyInput{})
+	switch f.Class {
+	case acme.ClassContactInvalid:
+		return fieldProblem(problemACMEContactInvalid, "body.email", "The certificate authority did not accept that email address.")
+	case acme.ClassInternal:
+		return acmeInternal(log, what, err)
+	}
+	detail := "The certificate authority could not be used: " + f.Class + "."
+	if f.Detail != "" {
+		detail = f.Detail
+	}
+	return &huma.ErrorModel{
+		Type: problemACMECAError, Title: http.StatusText(http.StatusBadGateway), Status: http.StatusBadGateway, Detail: detail,
+		Errors: []*huma.ErrorDetail{{Location: "class", Message: f.Class}},
+	}
+}

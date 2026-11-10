@@ -4156,6 +4156,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/https/acme/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register the Let's Encrypt account
+         * @description Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. The account key is created and sealed on the server and never returned. 422 acme_tos_required when agreeTos is not true; 422 acme_contact_invalid (field body.email) for an address the CA or TierPlan refuses; 409 acme_account_exists when one is registered already; 409 acme_paused after a restore, until it is resumed; 409 acme_cert_files while certificate files are set; 502 acme_ca_error when the CA fails, with its class in the first error's message. Needs settings.write.
+         */
+        post: operations["registerACMEAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/acme/directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the CA's terms and profiles
+         * @description The certificate authority's terms of service URL and the certificate profiles it offers, read from its directory (kept for a day). 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 502 acme_ca_error when the directory cannot be read. Needs settings.read.
+         */
+        get: operations["getACMEDirectory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/acme/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the certificate profile
+         * @description Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. Needs settings.write.
+         */
+        put: operations["putACMEProfile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/https/status": {
         parameters: {
             query?: never;
@@ -4165,7 +4225,7 @@ export interface paths {
         };
         /**
          * Get the certificate the server serves
-         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. 503 https_unavailable when no certificate can be read. Needs settings.read.
+         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
          */
         get: operations["getHTTPSStatus"];
         put?: never;
@@ -8528,6 +8588,223 @@ export interface components {
              */
             role: "viewer" | "operator" | "admin";
         };
+        HTTPSACMEAccountBody: {
+            /** @description The contact email address, empty when none was given */
+            contact: string;
+            /**
+             * Format: date-time
+             * @description When the account was registered
+             */
+            registeredAt: string;
+            /** @description Where the terms of service the account agreed to can be read, empty when the CA names none */
+            termsOfServiceUrl: string;
+        };
+        HTTPSACMEBlockBody: {
+            /**
+             * @description The CA asked us to wait, or three runs failed within the hour
+             * @enum {string}
+             */
+            reason: "told_to_wait" | "failure_guard";
+            /**
+             * Format: date-time
+             * @description When an attempt is allowed again
+             */
+            until: string;
+        };
+        HTTPSACMEBody: {
+            /** @description The registered account; left out before registration */
+            account?: components["schemas"]["HTTPSACMEAccountBody"];
+            /** @description The run in progress */
+            activeRun?: components["schemas"]["HTTPSACMERunBody"];
+            /** @description Set while a manual attempt is refused */
+            blocked?: components["schemas"]["HTTPSACMEBlockBody"];
+            /** @description The stored Let's Encrypt certificate */
+            certificate?: components["schemas"]["HTTPSACMECertificateBody"];
+            /** @description The challenge used to prove the names */
+            challengeType: string;
+            /** @description True when the test-only directory override is set; its certificates are not trusted by browsers */
+            directoryOverridden: boolean;
+            /** @description The CA directory in use */
+            directoryUrl: string;
+            /**
+             * Format: int64
+             * @description Consecutive failed runs
+             */
+            failures: number;
+            /** @description Set when the certificate has expired and the self-signed one is served */
+            fallback?: components["schemas"]["HTTPSACMEFallbackBody"];
+            /** @description True when a Let's Encrypt certificate or an open order is stored */
+            hasState: boolean;
+            /** @description The last failure, until a run succeeds */
+            lastError?: components["schemas"]["HTTPSACMEErrorBody"];
+            /** @description The run that ended last */
+            lastRun?: components["schemas"]["HTTPSACMERunBody"];
+            /**
+             * Format: int64
+             * @description The port TierPlan listens on
+             */
+            listenPort: number;
+            /**
+             * @description active when Let's Encrypt is in use
+             * @enum {string}
+             */
+            mode: "off" | "active";
+            /** @description The names a certificate would carry now */
+            names: components["schemas"]["HTTPSACMENameBody"][] | null;
+            /** @description True when the stored certificate's names are not the names wanted now */
+            namesMismatch: boolean;
+            /**
+             * Format: date-time
+             * @description When the next automatic attempt is due after a failure
+             */
+            nextAttemptAt?: string;
+            /**
+             * @description Why renewals are paused: a backup was restored, or certificate files are set. Empty when they run
+             * @enum {string}
+             */
+            pausedReason: "" | "restore" | "cert_files";
+            /** @description The profile orders ask for; empty is the CA's default */
+            profile: string;
+            /** @description The host of the public address, empty when none is set */
+            publicHost: string;
+            /** @description Every reason an order cannot start, empty when one could */
+            refusals: components["schemas"]["HTTPSACMERefusalBody"][] | null;
+            /** @description The next renewal; left out unless Let's Encrypt is in use */
+            renewal?: components["schemas"]["HTTPSACMERenewalBody"];
+        };
+        HTTPSACMECertificateBody: {
+            /**
+             * Format: date-time
+             * @description When it was issued
+             */
+            issuedAt: string;
+            /** @description The names it covers */
+            names: string[] | null;
+            /**
+             * Format: date-time
+             * @description When it expires
+             */
+            notAfter: string;
+            /**
+             * Format: date-time
+             * @description When it became valid
+             */
+            notBefore: string;
+            /** @description True when the newest issue was a renewal */
+            renewed: boolean;
+        };
+        HTTPSACMEDirectoryBody: {
+            /** @description True when the test-only directory override is set */
+            overridden: boolean;
+            /** @description The certificate profiles the CA offers, sorted by name; empty when it offers none */
+            profiles: components["schemas"]["HTTPSACMEProfileBody"][] | null;
+            /** @description Where the terms of service can be read, empty when the CA names none */
+            termsOfServiceUrl: string;
+            /** @description The CA directory in use */
+            url: string;
+        };
+        HTTPSACMEErrorBody: {
+            /**
+             * Format: date-time
+             * @description When it happened
+             */
+            at: string;
+            /**
+             * @description The class of the failure
+             * @enum {string}
+             */
+            code: "rate_limited" | "validation_unreachable" | "validation_dns" | "caa_forbids" | "identifier_rejected" | "contact_invalid" | "tos_action_required" | "account_gone" | "profile_invalid" | "ca_unavailable" | "ca_untrusted" | "internal";
+            /** @description The CA's problem document as text, for a Details disclosure. Untrusted text: show it as text only */
+            detail?: string;
+            /** @description The host a validation failure is about */
+            host?: string;
+            /** @description The profile the CA refused */
+            profile?: string;
+            /** @description Where to read the terms the CA wants accepted */
+            termsUrl?: string;
+        };
+        HTTPSACMEFallbackBody: {
+            /**
+             * Format: date-time
+             * @description When the Let's Encrypt certificate expired
+             */
+            expiredAt: string;
+        };
+        HTTPSACMENameBody: {
+            /** @description The host name or address, in its ASCII form */
+            name: string;
+            /** @description True when this name cannot be ordered, for example an IP address */
+            refused: boolean;
+        };
+        HTTPSACMEProfileBody: {
+            /** @description What the CA says about it. Untrusted text: show it as text only */
+            description: string;
+            /** @description The profile name */
+            name: string;
+        };
+        HTTPSACMEProfileOutputBody: {
+            /** @description The profile orders ask for now; empty is the CA's default */
+            profile: string;
+        };
+        HTTPSACMERefusalBody: {
+            /**
+             * @description Why the order is refused
+             * @enum {string}
+             */
+            code: "names_ip" | "agent_url_ip" | "names_wildcard" | "names_not_public" | "base_path" | "agent_dial_host";
+            /**
+             * Format: int64
+             * @description How many connected agents dialed a host the certificate would not cover (agent_dial_host)
+             */
+            count?: number;
+            /** @description The host the refusal is about */
+            host?: string;
+            /** @description The hosts those agents dialed (agent_dial_host) */
+            hosts?: string[] | null;
+            /** @description The path the public address is served under (base_path) */
+            path?: string;
+        };
+        HTTPSACMERenewalBody: {
+            /**
+             * @description What the time was worked out from: the CA's renewal information, two thirds of the certificate's life, or half of it
+             * @enum {string}
+             */
+            basis: "ari" | "two_thirds" | "half";
+            /**
+             * Format: date-time
+             * @description When the next renewal is due
+             */
+            nextAt: string;
+        };
+        HTTPSACMERunBody: {
+            /**
+             * Format: date-time
+             * @description When it ended; left out while it runs
+             */
+            finishedAt?: string;
+            /** @description The run's job; GET /api/jobs/{jobId} reads its steps */
+            jobId: string;
+            /**
+             * @description A first issue or a renewal
+             * @enum {string}
+             */
+            kind: "issue" | "renew";
+            /**
+             * @description How it went
+             * @enum {string}
+             */
+            outcome: "running" | "succeeded" | "failed" | "cancelled" | "reused";
+            /**
+             * Format: date-time
+             * @description When it started
+             */
+            startedAt: string;
+            /**
+             * @description What started it
+             * @enum {string}
+             */
+            trigger: "admin" | "schedule" | "resume";
+        };
         HTTPSCertificateBody: {
             /** @description Who issued it: the issuer's common name, else its organisation, else empty */
             issuer: string;
@@ -8548,8 +8825,12 @@ export interface components {
              * @enum {string}
              */
             source: "self_signed" | "cert_files" | "lets_encrypt";
+            /** @description True when the certificate comes from Let's Encrypt but the directory was overridden for testing, so browsers will not trust it */
+            testCA: boolean;
         };
         HTTPSStatusBody: {
+            /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */
+            acme?: components["schemas"]["HTTPSACMEBody"];
             /** @description Whether certificate files from the environment fix the certificate */
             certFiles: boolean;
             /** @description The certificate the listener serves now */
@@ -10921,6 +11202,10 @@ export interface components {
             /** @description True when the environment is a swarm and a pull may name nodes */
             swarm: boolean;
         };
+        PutACMEProfileInputBody: {
+            /** @description The profile to order with; empty is the CA's default */
+            profile: string;
+        };
         PutBackupScheduleInputBody: {
             /** @description Turn scheduled backups on or off */
             enabled: boolean;
@@ -10955,6 +11240,12 @@ export interface components {
         RecentEnvironmentsBody: {
             /** @description Up to 3 environment IDs, most recently used first */
             environmentIds: string[] | null;
+        };
+        RegisterACMEAccountInputBody: {
+            /** @description Must be true: the person registering agrees to the CA's terms of service */
+            agreeTos?: boolean;
+            /** @description Where the CA may send expiry and account notices. Optional: without one no contact is sent */
+            email?: string;
         };
         RemovalPreviewBody: {
             /** @description The configs that carry this stack's own labels, by name on the swarm */
@@ -24470,6 +24761,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    registerACMEAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterACMEAccountInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMEAccountBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getACMEDirectory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMEDirectoryBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putACMEProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutACMEProfileInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMEProfileOutputBody"];
                 };
             };
             /** @description Error */
