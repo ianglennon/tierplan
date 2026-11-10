@@ -271,7 +271,8 @@ func TestPropagationComparesTheValueByteForByte(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &Checker{Clock: newClock(), Q: answers{"192.0.2.1:53": func(string, uint16) (*mdns.Msg, error) {
+			clock := newClock()
+			c := &Checker{Clock: clock, Q: answers{"192.0.2.1:53": func(string, uint16) (*mdns.Msg, error) {
 				return reply(tc.rrs...), nil
 			}}}
 			// A timeout of one interval: one look, one wait, one more look.
@@ -279,7 +280,7 @@ func TestPropagationComparesTheValueByteForByte(t *testing.T) {
 				return c.WaitVisible(t.Context(), testFQDN, testValue, []Server{ipServer("ns", "192.0.2.1")}, PropagationInterval)
 			})
 			if !tc.want {
-				c.Clock.(*countingClock).Tick(t, PropagationInterval)
+				clock.Tick(t, PropagationInterval)
 			}
 			err := testsupport.Await(t, "WaitVisible to finish", done)
 			if (err == nil) != tc.want {
@@ -290,14 +291,15 @@ func TestPropagationComparesTheValueByteForByte(t *testing.T) {
 }
 
 func TestPropagationAnUnreachableServerIsNotVisible(t *testing.T) {
-	c := &Checker{Clock: newClock(), Q: answers{
+	clock := newClock()
+	c := &Checker{Clock: clock, Q: answers{
 		"192.0.2.1:53": func(string, uint16) (*mdns.Msg, error) { return reply(txtRR(testFQDN+".", testValue)), nil },
 	}}
 	servers := []Server{ipServer("up", "192.0.2.1"), ipServer("down", "192.0.2.2")}
 	done := result(func() error {
 		return c.WaitVisible(t.Context(), testFQDN, testValue, servers, PropagationInterval)
 	})
-	c.Clock.(*countingClock).Tick(t, PropagationInterval)
+	clock.Tick(t, PropagationInterval)
 	var nv *NotVisibleError
 	if err := testsupport.Await(t, "WaitVisible to finish", done); !errors.As(err, &nv) || !slices.Equal(nv.Servers, []string{"down"}) {
 		t.Errorf("WaitVisible = %v, want a *NotVisibleError naming only down", err)
@@ -310,11 +312,12 @@ func TestPropagationARefusingServerIsNotVisible(t *testing.T) {
 		m.Rcode = mdns.RcodeRefused
 		return m, nil
 	}
-	c := &Checker{Clock: newClock(), Q: answers{"192.0.2.1:53": refused}}
+	clock := newClock()
+	c := &Checker{Clock: clock, Q: answers{"192.0.2.1:53": refused}}
 	done := result(func() error {
 		return c.WaitVisible(t.Context(), testFQDN, testValue, []Server{ipServer("ns", "192.0.2.1")}, PropagationInterval)
 	})
-	c.Clock.(*countingClock).Tick(t, PropagationInterval)
+	clock.Tick(t, PropagationInterval)
 	var nv *NotVisibleError
 	if err := testsupport.Await(t, "WaitVisible to finish", done); !errors.As(err, &nv) {
 		t.Errorf("WaitVisible = %v, want a *NotVisibleError", err)
@@ -360,11 +363,12 @@ func TestObserveReportsNotSeen(t *testing.T) {
 }
 
 func TestObserveNeverReturnsAnErrorForAnUnreachableServer(t *testing.T) {
-	c := &Checker{Clock: newClock(), Q: answers{}}
+	clock := newClock()
+	c := &Checker{Clock: clock, Q: answers{}}
 	done := result(func() Observation {
 		return c.Observe(t.Context(), testFQDN, testValue, []Server{ipServer("down", "192.0.2.9")}, PropagationInterval)
 	})
-	c.Clock.(*countingClock).Tick(t, PropagationInterval)
+	clock.Tick(t, PropagationInterval)
 	if got := testsupport.Await(t, "Observe to finish", done); got.Seen || !slices.Equal(got.Servers, []string{"down"}) {
 		t.Errorf("Observe = %+v, want not seen, naming down", got)
 	}
@@ -488,7 +492,7 @@ func TestCNAMEChainAndLoops(t *testing.T) {
 	})
 	t.Run("a server that cannot answer a later hop ends the chain there", func(t *testing.T) {
 		c := &Checker{Clock: newClock(), Q: answers{"192.0.2.1:53": func(name string, _ uint16) (*mdns.Msg, error) {
-			if name == mdns.Fqdn(testFQDN) {
+			if name == testFQDN {
 				return reply(cnameRR(testFQDN+".", "t.example.test.")), nil
 			}
 			m := reply()

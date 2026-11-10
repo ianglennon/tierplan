@@ -148,7 +148,8 @@ func dnsKey(name string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 }
 
-const maxChain = 32
+// maxChain bounds the CNAME records one answer carries, so a loop in the test's records ends.
+const maxChain = 16
 
 func (s *DNSServer) serve(w mdns.ResponseWriter, r *mdns.Msg) {
 	resp := new(mdns.Msg)
@@ -169,6 +170,7 @@ func (s *DNSServer) serve(w mdns.ResponseWriter, r *mdns.Msg) {
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, DNSQuery{Name: name, Type: q.Qtype, Recursive: r.RecursionDesired, Net: netw})
 
+	resp.Compress = true
 	resp.Authoritative = !r.RecursionDesired
 	resp.RecursionAvailable = r.RecursionDesired
 	if s.truncate && netw == "udp" {

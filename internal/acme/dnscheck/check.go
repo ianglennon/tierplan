@@ -276,16 +276,119 @@ type Observation struct {
 // Observe is WaitVisible for information only: it reports whether, and after how long, every
 // server showed the record within limit, and never returns an error.
 func (c *Checker) Observe(ctx context.Context, fqdn, value string, servers []Server, limit time.Duration) Observation {
-	for range 10 {
-		_ = c.Clock.After(0) // declaration only: the RED commit's stand-in
+	if len(servers) == 0 {
+		return Observation{}
 	}
-	return Observation{}
+	start := c.Clock.Now()
+	deadline := start.Add(limit)
+	for {
+		missing := c.round(ctx, fqdn, value, servers)
+		now := c.Clock.Now()
+		if len(missing) == 0 {
+			return Observation{Seen: true, Servers: serverNames(servers), After: now.Sub(start)}
+		}
+		if !now.Before(deadline) || c.pause(ctx) != nil {
+			return Observation{Servers: missing, After: c.Clock.Now().Sub(start)}
+		}
+	}
 }
 
-// FollowCNAME follows the _acme-challenge CNAME chain at fqdn.
+// FollowCNAME follows the CNAME chain at fqdn and returns the name it ends at, with delegated true
+// when it moved at all. The first server that answers is believed at each step. A chain that loops,
+// is longer than MaxCNAMEHops or leads to something that is not a DNS name is a *DelegationError. No
+// server answering the first question is ErrNoAnswer, so the caller can ask other servers; a later
+// hop that no server can answer ends the chain there, because the name may live in a zone these
+// servers know nothing about.
 func (c *Checker) FollowCNAME(ctx context.Context, fqdn string, servers []Server) (final string, delegated bool, err error) {
-	return "", false, nil
+	cur := canonical(fqdn)
+	seen := map[string]bool{cur: true}
+	hops := 0
+	for {
+		msg, err := c.askFirst(ctx, servers, cur, mdns.TypeCNAME)
+		if err != nil {
+			if hops == 0 {
+				return "", false, ErrNoAnswer
+			}
+			return cur, true, nil
+		}
+		moved := false
+		// A resolver's answer carries the whole chain, an authoritative server's one link.
+		for {
+			target, ok := cnameFrom(msg, cur)
+			if !ok {
+				break
+			}
+			target = canonical(target)
+			if _, valid := mdns.IsDomainName(target); !valid || target == "" || seen[target] {
+				return "", false, &DelegationError{Target: target}
+			}
+			hops++
+			if hops > MaxCNAMEHops {
+				return "", false, &DelegationError{Target: target}
+			}
+			seen[target] = true
+			cur, moved = target, true
+		}
+		if !moved {
+			return cur, hops > 0, nil
+		}
+	}
 }
 
-// SystemServers are the system resolvers.
-func (c *Checker) SystemServers() ([]Server, error) { return nil, nil }
+// SystemServers are the system resolvers, asked recursively. They are for a name whose zone is not
+// on the provider when the admin has set no resolvers of their own (D-15), never for the verdict on
+// a record in a zone the provider holds.
+func (c *Checker) SystemServers() ([]Server, error) {
+	read := c.ResolvConf
+	if read == nil {
+		read = systemResolvConf
+	}
+	entries, err := read()
+	if err != nil {
+		return nil, fmt.Errorf("read the system resolvers: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, errors.New("the system has no resolver configured")
+	}
+	return Resolvers(entries), nil
+}
+
+func systemResolvConf() ([]string, error) {
+	cfg, err := mdns.ClientConfigFromFile("/etc/resolv.conf")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(cfg.Servers))
+	for _, s := range cfg.Servers {
+		out = append(out, net.JoinHostPort(s, cfg.Port))
+	}
+	return out, nil
+}
+
+// askFirst asks the servers in order and returns the first reply.
+func (c *Checker) askFirst(ctx context.Context, servers []Server, name string, qtype uint16) (*mdns.Msg, error) {
+	for _, s := range servers {
+		if msg, err := c.ask(ctx, s, name, qtype); err == nil {
+			return msg, nil
+		}
+	}
+	return nil, ErrNoAnswer
+}
+
+// cnameFrom is the target of the CNAME record owned by owner in the reply.
+func cnameFrom(msg *mdns.Msg, owner string) (string, bool) {
+	for _, rr := range msg.Answer {
+		if cn, ok := rr.(*mdns.CNAME); ok && canonical(cn.Hdr.Name) == owner {
+			return cn.Target, true
+		}
+	}
+	return "", false
+}
+
+func serverNames(servers []Server) []string {
+	out := make([]string, 0, len(servers))
+	for _, s := range servers {
+		out = append(out, s.Name)
+	}
+	return out
+}
