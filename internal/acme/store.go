@@ -249,3 +249,62 @@ func decodeKey(data []byte) (*ecdsa.PrivateKey, error) {
 	}
 	return key, nil
 }
+
+// The rest of the Store is written in the next commit.
+
+var errNotImplemented = errors.New("acme: not implemented")
+
+// InsertOrder stores a new open order and seals its certificate key.
+func (s *Store) InsertOrder(context.Context, Order, *ecdsa.PrivateKey) error {
+	return errNotImplemented
+}
+
+// OpenOrder returns the newest open order and its key.
+func (s *Store) OpenOrder(context.Context) (Order, *ecdsa.PrivateKey, bool, error) {
+	return Order{}, nil, false, errNotImplemented
+}
+
+// UpdateOrder moves an order to a stage.
+func (s *Store) UpdateOrder(context.Context, string, string, int, time.Time) error {
+	return errNotImplemented
+}
+
+// CloseOrder closes an order.
+func (s *Store) CloseOrder(context.Context, string, string, time.Time) error {
+	return errNotImplemented
+}
+
+// StoreIssued stores the issued certificate and closes its order.
+func (s *Store) StoreIssued(context.Context, string, []byte, *ecdsa.PrivateKey, time.Time) error {
+	return errNotImplemented
+}
+
+// Certificate returns the stored certificate chain and key.
+func (s *Store) Certificate(context.Context) ([]byte, *ecdsa.PrivateKey, bool, error) {
+	return nil, nil, false, errNotImplemented
+}
+
+// State returns the ledger.
+func (s *Store) State(context.Context) (State, error) { return State{}, errNotImplemented }
+
+// SaveState stores the ledger.
+func (s *Store) SaveState(context.Context, State) error { return errNotImplemented }
+
+// InsertRun records a new run.
+func (s *Store) InsertRun(context.Context, Run) error { return errNotImplemented }
+
+// FinishRun finishes a run and stores the ledger.
+func (s *Store) FinishRun(context.Context, string, string, string, time.Time, State) error {
+	return errNotImplemented
+}
+
+// Runs returns the newest runs.
+func (s *Store) Runs(context.Context, int) ([]Run, error) { return nil, errNotImplemented }
+
+// FailedRunsSince returns the start times of the failed runs since a time.
+func (s *Store) FailedRunsSince(context.Context, time.Time) ([]time.Time, error) {
+	return nil, errNotImplemented
+}
+
+// InterruptRunning marks the runs still running as failed.
+func (s *Store) InterruptRunning(context.Context, time.Time) error { return errNotImplemented }
