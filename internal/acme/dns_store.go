@@ -95,38 +95,116 @@ type DNSRecord struct {
 	LastErrorClass       string
 }
 
-var errNotImplemented = errors.New("not implemented")
-
-// InsertDNSRecord stores a ledger row and does not return before it is durable.
-func (s *Store) InsertDNSRecord(ctx context.Context, r DNSRecord) error { return errNotImplemented }
+// InsertDNSRecord stores a ledger row and does not return before it is durable: the provider's record
+// ID is on disk before the CA is asked to validate, so a crash after this call can still delete the
+// record.
+func (s *Store) InsertDNSRecord(ctx context.Context, r DNSRecord) error {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	if err := s.st.Q.WithTx(tx).InsertACMEDNSRecord(ctx, sqlc.InsertACMEDNSRecordParams{
+		ID: r.ID, Provider: r.Provider, ZoneID: r.ZoneID, RecordID: r.RecordID, Name: r.Name, Value: r.Value,
+		Comment: r.Comment, OwnerKind: r.OwnerKind, OwnerID: r.OwnerID, Token: r.Token,
+		CreatedAt: toNanos(r.CreatedAt), Attempts: int64(r.Attempts), LastTryAt: toNanos(r.LastTryAt),
+		NextTryAt: toNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,
+	}); err != nil {
+		return fmt.Errorf("insert the DNS record %q: %w", r.ID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return s.checkpoint(ctx, "the DNS record ID")
+}
 
 // DNSRecordsFor returns the rows of one owner for one ACME challenge token, oldest first.
 func (s *Store) DNSRecordsFor(ctx context.Context, ownerKind, ownerID, token string) ([]DNSRecord, error) {
-	return nil, errNotImplemented
+	rows, err := s.st.RQ.ListACMEDNSRecordsByOwner(ctx, sqlc.ListACMEDNSRecordsByOwnerParams{
+		OwnerKind: ownerKind, OwnerID: ownerID, Token: token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the DNS records of %s %q: %w", ownerKind, ownerID, err)
+	}
+	return dnsRecords(rows), nil
 }
 
-// PendingDNSRecord finds a row holding exactly this record at the provider.
+// PendingDNSRecord finds a row holding exactly this record at the provider (newest first), so a resumed
+// order reuses the record it already made instead of creating a second one.
 func (s *Store) PendingDNSRecord(ctx context.Context, provider, zoneID, name, value string) (DNSRecord, bool, error) {
-	return DNSRecord{}, false, errNotImplemented
+	row, err := s.st.RQ.GetPendingACMEDNSRecord(ctx, sqlc.GetPendingACMEDNSRecordParams{
+		Provider: provider, ZoneID: zoneID, Name: name, Value: value,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return DNSRecord{}, false, nil
+	}
+	if err != nil {
+		return DNSRecord{}, false, fmt.Errorf("find the DNS record %q: %w", name, err)
+	}
+	return dnsRecord(row), true, nil
 }
 
-// RestampDNSRecord moves a row to a new owner and token.
+// RestampDNSRecord hands a row to a new owner and ACME token and clears its retry state, because the
+// record is in use again.
 func (s *Store) RestampDNSRecord(ctx context.Context, id, ownerKind, ownerID, token string) error {
-	return errNotImplemented
+	if err := s.st.Q.RestampACMEDNSRecord(ctx, sqlc.RestampACMEDNSRecordParams{
+		OwnerKind: ownerKind, OwnerID: ownerID, Token: token, ID: id,
+	}); err != nil {
+		return fmt.Errorf("restamp the DNS record %q: %w", id, err)
+	}
+	return nil
 }
 
-// DeleteDNSRecord removes exactly one row by TierPlan's row ID.
-func (s *Store) DeleteDNSRecord(ctx context.Context, id string) error { return errNotImplemented }
+// DeleteDNSRecord removes exactly one row by TierPlan's row ID. A row that is not there is not an error.
+func (s *Store) DeleteDNSRecord(ctx context.Context, id string) error {
+	if err := s.st.Q.DeleteACMEDNSRecord(ctx, id); err != nil {
+		return fmt.Errorf("delete the DNS record %q: %w", id, err)
+	}
+	return nil
+}
 
-// MarkDNSRecordFailed stamps a failed delete on a row.
+// MarkDNSRecordFailed stamps a failed delete: how many tries so far, when this one was and the next is,
+// and the class of its error.
 func (s *Store) MarkDNSRecordFailed(ctx context.Context, id string, attempts int, lastTry, nextTry time.Time, class string) error {
-	return errNotImplemented
+	if err := s.st.Q.MarkACMEDNSRecordFailed(ctx, sqlc.MarkACMEDNSRecordFailedParams{
+		Attempts: int64(attempts), LastTryAt: toNanos(lastTry), NextTryAt: toNanos(nextTry), LastErrorClass: class, ID: id,
+	}); err != nil {
+		return fmt.Errorf("mark the DNS record %q failed: %w", id, err)
+	}
+	return nil
 }
 
-// DueDNSRecords returns the rows whose next try has come, oldest first.
+// DueDNSRecords returns the rows whose next try has come (next_try_at at or before now), oldest first.
 func (s *Store) DueDNSRecords(ctx context.Context, now time.Time) ([]DNSRecord, error) {
-	return nil, errNotImplemented
+	rows, err := s.st.RQ.ListDueACMEDNSRecords(ctx, toNanos(now))
+	if err != nil {
+		return nil, fmt.Errorf("list the due DNS records: %w", err)
+	}
+	return dnsRecords(rows), nil
 }
 
-// DNSRecords returns every row, oldest first.
-func (s *Store) DNSRecords(ctx context.Context) ([]DNSRecord, error) { return nil, errNotImplemented }
+// DNSRecords returns every row, oldest first and, for the same instant, by id.
+func (s *Store) DNSRecords(ctx context.Context) ([]DNSRecord, error) {
+	rows, err := s.st.RQ.ListACMEDNSRecords(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list the DNS records: %w", err)
+	}
+	return dnsRecords(rows), nil
+}
+
+func dnsRecords(rows []sqlc.AcmeDnsRecord) []DNSRecord {
+	out := make([]DNSRecord, len(rows))
+	for i, r := range rows {
+		out[i] = dnsRecord(r)
+	}
+	return out
+}
+
+func dnsRecord(r sqlc.AcmeDnsRecord) DNSRecord {
+	return DNSRecord{
+		ID: r.ID, Provider: r.Provider, ZoneID: r.ZoneID, RecordID: r.RecordID, Name: r.Name, Value: r.Value,
+		Comment: r.Comment, OwnerKind: r.OwnerKind, OwnerID: r.OwnerID, Token: r.Token,
+		CreatedAt: fromNanos(r.CreatedAt), Attempts: int(r.Attempts), LastTryAt: fromNanos(r.LastTryAt),
+		NextTryAt: fromNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,
+	}
+}
