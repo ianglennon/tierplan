@@ -89,12 +89,25 @@ type RunView struct {
 }
 
 // Status reads the page's state. It makes no request to the CA.
+//
+// The state row, the run history and the failed-run count come from one read transaction, so a status
+// taken as a run ends shows the run's outcome and its last error together or neither. The run in
+// progress is read before that snapshot and dropped when the snapshot already shows it ended.
 func (m *Manager) Status(ctx context.Context) (Status, error) {
-	st, err := m.d.Store.State(ctx)
+	now := m.clock.Now()
+	var active *RunView
+	m.mu.Lock()
+	if ar := m.active; ar != nil {
+		active = &RunView{
+			JobID: ar.jobID, Kind: ar.kind, Trigger: ar.trigger, Outcome: OutcomeRunning, StartedAt: ar.startedAt,
+		}
+	}
+	m.mu.Unlock()
+	snap, err := m.d.Store.ReadSnapshot(ctx, 5, now.Add(-FailureGuardWindow))
 	if err != nil {
 		return Status{}, err
 	}
-	now := m.clock.Now()
+	st := snap.State
 	dir := m.d.Client.Directory()
 	ns, refusals := m.preflight(st)
 
@@ -164,35 +177,25 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		}
 	}
 
-	failed, err := m.d.Store.FailedRunsSince(ctx, now.Add(-FailureGuardWindow))
-	if err != nil {
-		return Status{}, err
-	}
-	if until, reason := ManualBlock(ledgerOf(st), failed, now); reason != "" {
+	if until, reason := ManualBlock(ledgerOf(st), snap.FailedStarts, now); reason != "" {
 		out.Block = &BlockView{Until: until, Reason: reason}
 	}
 
-	m.mu.Lock()
-	if ar := m.active; ar != nil {
-		out.ActiveRun = &RunView{
-			JobID: ar.jobID, Kind: ar.kind, Trigger: ar.trigger, Outcome: OutcomeRunning, StartedAt: ar.startedAt,
+	for _, r := range snap.Runs {
+		if active != nil && r.ID == active.JobID && r.Outcome != OutcomeRunning {
+			// The run ended between reading the slot and the snapshot.
+			active = nil
 		}
-	}
-	m.mu.Unlock()
-
-	runs, err := m.d.Store.Runs(ctx, 5)
-	if err != nil {
-		return Status{}, err
-	}
-	for _, r := range runs {
 		if r.Outcome == OutcomeRunning {
 			continue
 		}
-		out.LastRun = &RunView{
-			JobID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome,
-			StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		if out.LastRun == nil {
+			out.LastRun = &RunView{
+				JobID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome,
+				StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+			}
 		}
-		break
 	}
+	out.ActiveRun = active
 	return out, nil
 }

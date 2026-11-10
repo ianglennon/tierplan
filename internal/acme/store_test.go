@@ -533,3 +533,50 @@ func TestACMEKeysSurviveRewrap(t *testing.T) {
 		t.Error("the old vault still opens the account key after the re-wrap")
 	}
 }
+
+// A snapshot taken as a run ends shows the run's outcome and the state it wrote together or neither,
+// even when the run ends between the read of the state row and the read of the runs (the status read
+// them separately and could miss the last error).
+func TestACMEReadSnapshotIsOneInstant(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := newTestStore(t)
+	base := time.Unix(1_800_000_000, 0)
+	if err := s.InsertRun(ctx, Run{ID: "run-1", Kind: "issue", Trigger: "admin", StartedAt: base, Outcome: OutcomeRunning}); err != nil {
+		t.Fatal(err)
+	}
+	failedState := State{
+		Mode: ModeActive, ChallengeType: "http-01", ConsecutiveFailures: 1,
+		LastErrorClass: ClassValidationDNS, LastErrorAt: base.Add(time.Minute), UpdatedAt: base.Add(time.Minute),
+	}
+
+	finishes := 0
+	s.afterStateRead = func() {
+		finishes++
+		if err := s.FinishRun(ctx, "run-1", OutcomeFailed, ClassValidationDNS, base.Add(time.Minute), failedState); err != nil {
+			t.Errorf("FinishRun: %v", err)
+		}
+	}
+	snap, err := s.ReadSnapshot(ctx, 5, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finishes != 1 {
+		t.Fatalf("the run was finished %d times between the reads; want once", finishes)
+	}
+	// The run ended after the snapshot began: the state row and the run are both from before.
+	if snap.State.LastErrorClass != "" || len(snap.Runs) != 1 || snap.Runs[0].Outcome != OutcomeRunning || len(snap.FailedStarts) != 0 {
+		t.Fatalf("snapshot mixes instants: error class %q, runs %+v, failed starts %v; want the state and the run from before the finish",
+			snap.State.LastErrorClass, snap.Runs, snap.FailedStarts)
+	}
+
+	// The next snapshot sees both the outcome and the error.
+	s.afterStateRead = nil
+	snap, err = s.ReadSnapshot(ctx, 5, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.State.LastErrorClass != ClassValidationDNS || snap.Runs[0].Outcome != OutcomeFailed || len(snap.FailedStarts) != 1 {
+		t.Fatalf("snapshot after the finish: error class %q, runs %+v, failed starts %v; want the failure with its error",
+			snap.State.LastErrorClass, snap.Runs, snap.FailedStarts)
+	}
+}

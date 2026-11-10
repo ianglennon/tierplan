@@ -117,6 +117,10 @@ type Run struct {
 type Store struct {
 	st *store.Store
 	v  *vault.Vault
+
+	// afterStateRead is a test seam: ReadSnapshot calls it between reading the state row and reading
+	// the runs, so a test can finish a run at exactly that point.
+	afterStateRead func()
 }
 
 // NewStore returns the Store over st, sealing with v.
@@ -393,7 +397,11 @@ func (s *Store) Certificate(ctx context.Context) (chainPEM []byte, key *ecdsa.Pr
 // State returns the ledger. A database that has never run ACME reads as mode off with no instants
 // set, which the ledger treats as no backoff being in force.
 func (s *Store) State(ctx context.Context) (State, error) {
-	row, err := s.st.RQ.GetACMEState(ctx)
+	return readState(ctx, s.st.RQ)
+}
+
+func readState(ctx context.Context, q *sqlc.Queries) (State, error) {
+	row, err := q.GetACMEState(ctx)
 	if err != nil {
 		return State{}, fmt.Errorf("read the ACME state: %w", err)
 	}
@@ -408,6 +416,42 @@ func (s *Store) State(ctx context.Context) (State, error) {
 		RenewBasis: row.RenewBasis, LastErrorClass: row.LastErrorClass, LastErrorDetail: row.LastErrorDetail,
 		LastSuccessKind: row.LastSuccessKind, UpdatedAt: fromNanos(row.UpdatedAt),
 	}, nil
+}
+
+// Snapshot is the state row, the newest runs and the starts of the recent failed runs as they stood
+// at one instant.
+type Snapshot struct {
+	State State
+	// Runs are the newest runs, newest first.
+	Runs []Run
+	// FailedStarts are when the failed runs since the asked instant started, oldest first.
+	FailedStarts []time.Time
+}
+
+// ReadSnapshot reads the state row, up to runLimit runs and the failed runs since failedSince in one
+// read transaction. FinishRun writes a run's outcome and the state in one transaction, so a snapshot
+// never holds the new outcome with the old last error, or the other way round.
+func (s *Store) ReadSnapshot(ctx context.Context, runLimit int, failedSince time.Time) (Snapshot, error) {
+	tx, err := s.st.Read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a read transaction has nothing to commit
+	q := s.st.RQ.WithTx(tx)
+	var snap Snapshot
+	if snap.State, err = readState(ctx, q); err != nil {
+		return Snapshot{}, err
+	}
+	if s.afterStateRead != nil {
+		s.afterStateRead()
+	}
+	if snap.Runs, err = readRuns(ctx, q, runLimit); err != nil {
+		return Snapshot{}, err
+	}
+	if snap.FailedStarts, err = readFailedRunsSince(ctx, q, failedSince); err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
 }
 
 // SaveState stores the ledger. The row always exists (the migration seeds it), so this is an update.
@@ -475,7 +519,11 @@ func (s *Store) FinishRun(ctx context.Context, runID, outcome, errorClass string
 
 // Runs returns up to limit runs, newest first.
 func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
-	rows, err := s.st.RQ.ListACMERuns(ctx, int64(limit))
+	return readRuns(ctx, s.st.RQ, limit)
+}
+
+func readRuns(ctx context.Context, q *sqlc.Queries, limit int) ([]Run, error) {
+	rows, err := q.ListACMERuns(ctx, int64(limit))
 	if err != nil {
 		return nil, fmt.Errorf("list the ACME runs: %w", err)
 	}
@@ -496,7 +544,11 @@ func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
 
 // FailedRunsSince returns when the failed runs at or after since started, oldest first.
 func (s *Store) FailedRunsSince(ctx context.Context, since time.Time) ([]time.Time, error) {
-	rows, err := s.st.RQ.ListACMEFailedRunsSince(ctx, toNanos(since))
+	return readFailedRunsSince(ctx, s.st.RQ, since)
+}
+
+func readFailedRunsSince(ctx context.Context, q *sqlc.Queries, since time.Time) ([]time.Time, error) {
+	rows, err := q.ListACMEFailedRunsSince(ctx, toNanos(since))
 	if err != nil {
 		return nil, fmt.Errorf("list the failed ACME runs: %w", err)
 	}
