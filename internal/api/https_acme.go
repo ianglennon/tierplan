@@ -106,7 +106,7 @@ type HTTPSACMEBlockBody struct {
 
 // HTTPSACMERunBody is one certificate run.
 type HTTPSACMERunBody struct {
-	JobID      string     `json:"jobId" doc:"The run's job; GET /api/jobs/{jobId} reads its steps"`
+	JobID      string     `json:"jobId" doc:"The run's job; follow its steps on GET /api/https/acme/runs/{jobId}/stream while the server still holds the run"`
 	Kind       string     `json:"kind" enum:"issue,renew" doc:"A first issue or a renewal"`
 	Trigger    string     `json:"trigger" enum:"admin,schedule,resume" doc:"What started it"`
 	Outcome    string     `json:"outcome" enum:"running,succeeded,failed,cancelled,reused" doc:"How it went"`

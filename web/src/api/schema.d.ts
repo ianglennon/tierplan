@@ -8862,7 +8862,7 @@ export interface components {
              * @description When it ended; left out while it runs
              */
             finishedAt?: string;
-            /** @description The run's job; GET /api/jobs/{jobId} reads its steps */
+            /** @description The run's job; follow its steps on GET /api/https/acme/runs/{jobId}/stream while the server still holds the run */
             jobId: string;
             /**
              * @description A first issue or a renewal
