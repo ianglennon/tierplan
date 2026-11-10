@@ -118,6 +118,8 @@ type orderRun struct {
 	req   OrderRequest
 	steps StepReporter
 	core  *api.Core
+	// account is the URL of the account the run signs as.
+	account string
 
 	row  Order
 	key  *ecdsa.PrivateKey
@@ -154,11 +156,11 @@ func (r *orderRun) fail(step string, err error) error {
 }
 
 func (r *orderRun) run(ctx context.Context) (Issued, error) {
-	core, _, _, err := r.o.client.core(ctx)
+	core, acct, _, err := r.o.client.core(ctx)
 	if err != nil {
 		return Issued{}, r.fail(StepAccount, err)
 	}
-	r.core = core
+	r.core, r.account = core, acct.URL
 	r.steps.Skipped(StepAccount, "Account already registered.")
 
 	r.steps.Running(StepOrder, "Looking for an order to pick up, or asking the certificate authority for a new one.")
@@ -231,7 +233,8 @@ func (r *orderRun) run(ctx context.Context) (Issued, error) {
 
 // open resumes the order the store holds open when it still fits the request, and otherwise closes
 // it and creates a new one. An open order that no longer fits is one nobody is waiting for: other
-// names, another kind of order or profile, another directory, or a CA that would no longer honour it.
+// names, another kind of order or profile, another directory or account, or a CA that would no longer
+// honour it.
 func (r *orderRun) open(ctx context.Context) (legoacme.ExtendedOrder, error) {
 	row, key, found, err := r.o.store.OpenOrder(ctx)
 	if err != nil {
@@ -271,6 +274,10 @@ func (r *orderRun) stale(row Order, now time.Time) bool {
 	switch {
 	case row.DirectoryURL != r.o.client.dir.URL:
 		return true
+	case row.AccountURL != r.account:
+		// The CA forgot the account the order was placed under and a new one was registered: the
+		// order is not this account's to read, so resuming it could only fail, every time.
+		return true
 	case row.Kind != r.req.Kind, row.Profile != r.req.Profile:
 		return true
 	case !sameNames(row.Names, r.req.Names):
@@ -296,12 +303,23 @@ func sameNames(a, b []string) bool {
 
 // create opens a new order at the CA and stores it with its fresh certificate key before anything
 // else can happen to it (RESEARCH Pitfall 2).
+//
+// A renewal that names the certificate it replaces is ordered once more without naming it when the CA
+// refuses the replacement as not this account's (an unauthorized problem): the certificate was issued
+// to an account the CA has since forgotten, and naming it is only a hint. Without that the renewal
+// would fail the same way for ever. lego already orders again without it when the certificate was
+// already replaced (alreadyReplaced), so that case is not handled here.
 func (r *orderRun) create(ctx context.Context) (legoacme.ExtendedOrder, error) {
 	key, err := newKey()
 	if err != nil {
 		return legoacme.ExtendedOrder{}, err
 	}
-	ord, err := r.core.Orders.New(ctx, r.req.Names, &api.OrderOptions{Profile: r.req.Profile, ReplacesCertID: r.req.Replaces})
+	replaces := r.req.Replaces
+	ord, err := r.core.Orders.New(ctx, r.req.Names, &api.OrderOptions{Profile: r.req.Profile, ReplacesCertID: replaces})
+	if err != nil && replaces != "" && replacementRefused(err) {
+		replaces = ""
+		ord, err = r.core.Orders.New(ctx, r.req.Names, &api.OrderOptions{Profile: r.req.Profile})
+	}
 	if err != nil {
 		return legoacme.ExtendedOrder{}, fmt.Errorf("create an ACME order: %w", err)
 	}
@@ -315,7 +333,7 @@ func (r *orderRun) create(ctx context.Context) (legoacme.ExtendedOrder, error) {
 	now := r.o.clock.Now()
 	row := Order{
 		ID: id.String(), DirectoryURL: r.o.client.dir.URL, URL: ord.Location, Kind: r.req.Kind,
-		Names: slices.Clone(r.req.Names), Profile: r.req.Profile, Replaces: r.req.Replaces,
+		Names: slices.Clone(r.req.Names), Profile: r.req.Profile, Replaces: replaces, AccountURL: r.account,
 		Stage: StageCreated, ExpiresAt: parseExpiry(ord.Expires), CreatedAt: now, UpdatedAt: now,
 	}
 	if err := r.o.store.InsertOrder(ctx, row, key); err != nil {
@@ -323,6 +341,13 @@ func (r *orderRun) create(ctx context.Context) (legoacme.ExtendedOrder, error) {
 	}
 	r.row, r.key = row, key
 	return ord, nil
+}
+
+// replacementRefused reports whether a newOrder naming a certificate to replace was refused as not
+// authorized: the answer a CA gives when that certificate was issued to another account.
+func replacementRefused(err error) bool {
+	var problem *legoacme.ProblemDetails
+	return errors.As(err, &problem) && problem.Type == legoacme.UnauthorizedErrorType
 }
 
 // parseExpiry reads an order's expiry; an order the CA gave none for never expires on our side.

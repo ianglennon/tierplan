@@ -23,10 +23,19 @@ UPDATE acme_state SET
     last_error_detail = ?, last_success_kind = ?, updated_at = ?
 WHERE id = 1;
 
+-- name: GetACMECertAccountURL :one
+-- The account the stored certificate was issued to; empty when not known.
+SELECT cert_account_url FROM acme_state WHERE id = 1;
+
+-- name: SetACMECertAccountFromOrder :exec
+-- Records the account of the order whose certificate is being stored, with the certificate.
+UPDATE acme_state SET cert_account_url = COALESCE((SELECT account_url FROM acme_orders WHERE acme_orders.id = ?), '')
+WHERE acme_state.id = 1;
+
 -- name: InsertACMEOrder :exec
 INSERT INTO acme_orders (id, directory_url, order_url, kind, names, profile, replaces, cert_key_sealed,
-                         stage, status, resume_count, expires_at, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?);
+                         stage, status, resume_count, expires_at, created_at, updated_at, account_url)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?);
 
 -- name: GetOpenACMEOrder :one
 -- The newest open order. Only one is ever open; the order makes a leftover harmless.

@@ -423,15 +423,37 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 }
 
 // renewRequest is the order that renews leaf: its own names, the saved profile, and the certificate
-// it replaces when the directory offers renewalInfo.
+// it replaces when the directory offers renewalInfo and leaf was issued to the account that orders the
+// renewal. A CA refuses to let one account replace a certificate issued to another, so after the CA
+// forgot the account and a new one was registered the renewal names nothing; so does a certificate
+// whose account is not known.
 func (m *Manager) renewRequest(ctx context.Context, st State, leaf *x509.Certificate) OrderRequest {
 	req := OrderRequest{Kind: KindRenew, Names: slices.Clone(leaf.DNSNames), Profile: st.Profile}
-	if meta, err := m.d.Client.Meta(ctx); err == nil && meta.RenewalInfo {
-		if id, err := api.MakeARICertID(leaf); err == nil {
-			req.Replaces = id
-		}
+	if meta, err := m.d.Client.Meta(ctx); err != nil || !meta.RenewalInfo {
+		return req
+	}
+	if !m.issuedToCurrentAccount(ctx) {
+		return req
+	}
+	if id, err := api.MakeARICertID(leaf); err == nil {
+		req.Replaces = id
 	}
 	return req
+}
+
+// issuedToCurrentAccount reports whether the stored certificate was issued to the account registered
+// with the directory now. A failure to tell is a no.
+func (m *Manager) issuedToCurrentAccount(ctx context.Context) bool {
+	acct, found, err := m.d.Store.AccountInfo(ctx, m.d.Client.Directory().URL)
+	if err != nil || !found || acct.URL == "" {
+		return false
+	}
+	issuedTo, err := m.d.Store.CertAccountURL(ctx)
+	if err != nil {
+		m.log.Warn("the account of the stored certificate cannot be read, so the renewal names no certificate to replace", "error", err)
+		return false
+	}
+	return issuedTo == acct.URL
 }
 
 // Resume clears the pause a restore set (ACME-08). Nothing is ordered by it.

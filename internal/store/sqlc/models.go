@@ -32,6 +32,7 @@ type AcmeOrder struct {
 	ExpiresAt     int64
 	CreatedAt     int64
 	UpdatedAt     int64
+	AccountUrl    string
 }
 
 type AcmeRun struct {
@@ -68,6 +69,7 @@ type AcmeState struct {
 	LastErrorDetail     string
 	LastSuccessKind     string
 	UpdatedAt           int64
+	CertAccountUrl      string
 }
 
 type Agent struct {

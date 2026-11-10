@@ -75,8 +75,20 @@ func (q *Queries) GetACMEAccount(ctx context.Context, directoryUrl string) (Acme
 	return i, err
 }
 
+const getACMECertAccountURL = `-- name: GetACMECertAccountURL :one
+SELECT cert_account_url FROM acme_state WHERE id = 1
+`
+
+// The account the stored certificate was issued to; empty when not known.
+func (q *Queries) GetACMECertAccountURL(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getACMECertAccountURL)
+	var cert_account_url string
+	err := row.Scan(&cert_account_url)
+	return cert_account_url, err
+}
+
 const getACMEState = `-- name: GetACMEState :one
-SELECT id, mode, challenge_type, profile, paused_reason, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, renew_at, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, last_error_at, last_success_at, renew_basis, last_error_class, last_error_detail, last_success_kind, updated_at FROM acme_state WHERE id = 1
+SELECT id, mode, challenge_type, profile, paused_reason, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, renew_at, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, last_error_at, last_success_at, renew_basis, last_error_class, last_error_detail, last_success_kind, updated_at, cert_account_url FROM acme_state WHERE id = 1
 `
 
 func (q *Queries) GetACMEState(ctx context.Context) (AcmeState, error) {
@@ -104,12 +116,13 @@ func (q *Queries) GetACMEState(ctx context.Context) (AcmeState, error) {
 		&i.LastErrorDetail,
 		&i.LastSuccessKind,
 		&i.UpdatedAt,
+		&i.CertAccountUrl,
 	)
 	return i, err
 }
 
 const getOpenACMEOrder = `-- name: GetOpenACMEOrder :one
-SELECT id, directory_url, order_url, kind, names, profile, replaces, cert_key_sealed, stage, status, resume_count, expires_at, created_at, updated_at FROM acme_orders WHERE status = 'open' ORDER BY created_at DESC, id DESC LIMIT 1
+SELECT id, directory_url, order_url, kind, names, profile, replaces, cert_key_sealed, stage, status, resume_count, expires_at, created_at, updated_at, account_url FROM acme_orders WHERE status = 'open' ORDER BY created_at DESC, id DESC LIMIT 1
 `
 
 // The newest open order. Only one is ever open; the order makes a leftover harmless.
@@ -131,6 +144,7 @@ func (q *Queries) GetOpenACMEOrder(ctx context.Context) (AcmeOrder, error) {
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountUrl,
 	)
 	return i, err
 }
@@ -163,8 +177,8 @@ func (q *Queries) InsertACMEAccount(ctx context.Context, arg InsertACMEAccountPa
 
 const insertACMEOrder = `-- name: InsertACMEOrder :exec
 INSERT INTO acme_orders (id, directory_url, order_url, kind, names, profile, replaces, cert_key_sealed,
-                         stage, status, resume_count, expires_at, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+                         stage, status, resume_count, expires_at, created_at, updated_at, account_url)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
 `
 
 type InsertACMEOrderParams struct {
@@ -181,6 +195,7 @@ type InsertACMEOrderParams struct {
 	ExpiresAt     int64
 	CreatedAt     int64
 	UpdatedAt     int64
+	AccountUrl    string
 }
 
 func (q *Queries) InsertACMEOrder(ctx context.Context, arg InsertACMEOrderParams) error {
@@ -198,6 +213,7 @@ func (q *Queries) InsertACMEOrder(ctx context.Context, arg InsertACMEOrderParams
 		arg.ExpiresAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.AccountUrl,
 	)
 	return err
 }
@@ -319,6 +335,17 @@ DELETE FROM acme_runs WHERE id NOT IN (
 // Keeps the newest 50 runs.
 func (q *Queries) PruneACMERuns(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, pruneACMERuns)
+	return err
+}
+
+const setACMECertAccountFromOrder = `-- name: SetACMECertAccountFromOrder :exec
+UPDATE acme_state SET cert_account_url = COALESCE((SELECT account_url FROM acme_orders WHERE acme_orders.id = ?), '')
+WHERE acme_state.id = 1
+`
+
+// Records the account of the order whose certificate is being stored, with the certificate.
+func (q *Queries) SetACMECertAccountFromOrder(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, setACMECertAccountFromOrder, id)
 	return err
 }
 

@@ -651,9 +651,7 @@ func TestSchedulerDoesNothingWithCertificateFiles(t *testing.T) {
 // count toward the manual-attempt guard that then refuses the admin's Issue after registering again.
 func TestSchedulerDoesNotRenewWithoutAnAccount(t *testing.T) {
 	ctx := context.Background()
-	// Without renewal information, so the renewal names no certificate to replace: the CA refuses to
-	// replace a certificate issued to the account that was forgotten.
-	s := newSchedEnv(t, acmetest.Options{NoRenewalInfo: true})
+	s := newSchedEnv(t, acmetest.Options{})
 	s.issueFirst()
 	if err := s.client.Forget(ctx); err != nil {
 		t.Fatalf("Forget: %v", err)
@@ -682,6 +680,150 @@ func TestSchedulerDoesNotRenewWithoutAnAccount(t *testing.T) {
 	if got := s.awaitRun(); got != OutcomeSucceeded {
 		t.Fatalf("the renewal after registering again ended %q, want succeeded (state %+v)", got, s.state())
 	}
+}
+
+// After the CA forgot the account a certificate was issued to and the admin registered a new one, the
+// renewal is ordered by the new account and names no certificate to replace: the CA would refuse to let
+// it replace the old account's certificate. It succeeds at the first attempt, nothing is charged to the
+// ledger, and the renewed certificate is the new account's, so the renewal after it names it again.
+func TestSchedulerRenewsUnderANewAccountWithoutReplaces(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	first := leafOf(t, s.inst.chains[0])
+	accountA, _, err := s.client.Account(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The CA forgets the account, and TierPlan forgets it as a run told so would; the admin registers
+	// again, with a new key and so a new account.
+	s.fake.ForgetAccounts()
+	if err := s.client.Forget(ctx); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	accountB, err := s.client.Register(ctx, "", true)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if accountB.URL == accountA.URL {
+		t.Fatal("the new account has the old account's URL")
+	}
+
+	s.schedule(s.mgr)
+	if st := s.state(); st.RenewBasis != string(BasisARI) {
+		t.Fatalf("renew basis = %q, want the CA's renewal information in use", st.RenewBasis)
+	}
+	orders := s.fake.Count(acmetest.EndpointNewOrder)
+	s.stepTo(s.state().RenewAt)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal under the new account ended %q, want succeeded (state %+v)", got, s.state())
+	}
+	if n := s.fake.Count(acmetest.EndpointNewOrder) - orders; n != 1 {
+		t.Errorf("the renewal made %d newOrder requests, want 1 (none refused)", n)
+	}
+	seen := s.fake.Orders()
+	if last := seen[len(seen)-1]; last.Replaces != "" || !slices.Equal(last.Names, first.DNSNames) {
+		t.Errorf("the renewal ordered %v replacing %q, want %v replacing nothing", last.Names, last.Replaces, first.DNSNames)
+	}
+	if st := s.state(); st.ConsecutiveFailures != 0 || !st.NextAttemptAt.IsZero() || st.LastErrorClass != "" ||
+		st.LastSuccessKind != KindRenew {
+		t.Errorf("state = %+v, want a renewal as the last success and nothing charged to the ledger", st)
+	}
+	if failed, err := s.store.FailedRunsSince(ctx, time.Time{}); err != nil || len(failed) != 0 {
+		t.Errorf("FailedRunsSince = %v, %v; want no failed run", failed, err)
+	}
+	if got, err := s.store.CertAccountURL(ctx); err != nil || got != accountB.URL {
+		t.Errorf("CertAccountURL = %q, %v; want the new account %q", got, err, accountB.URL)
+	}
+
+	// The renewed certificate is the new account's: its own renewal names it.
+	renewed := leafOf(t, s.inst.chains[len(s.inst.chains)-1])
+	renewedID, err := api.MakeARICertID(renewed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.step(Tick) // the round after a success asks the CA about the new certificate
+	s.stepTo(s.state().RenewAt)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the next renewal ended %q, want succeeded", got)
+	}
+	seen = s.fake.Orders()
+	if last := seen[len(seen)-1]; last.Replaces != renewedID {
+		t.Errorf("the next renewal replaces %q, want %q", last.Replaces, renewedID)
+	}
+}
+
+// An order left open under an account the CA has since forgotten is not resumed under the new account,
+// and the certificate it named is not named again: the resume places a new order that replaces nothing,
+// succeeds, and charges nothing to the ledger. It cannot loop on the CA refusing the old account's order
+// or its replacement.
+func TestSchedulerResumeUnderANewAccountPlacesANewOrderWithoutReplaces(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	first := leafOf(t, s.inst.chains[0])
+	firstID, err := api.MakeARICertID(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := s.fake.HoldValidation()
+	stop := s.schedule(s.mgr)
+
+	// A scheduled renewal places its order, naming the certificate it replaces, and the process stops
+	// while it waits on validation.
+	s.stepTo(s.state().RenewAt)
+	s.clock.WaitArmed(t)
+	stop()
+	s.hub.Close()
+	if got := s.awaitRun(); got != OutcomeFailed {
+		t.Fatalf("the cut-short run ended %q, want failed", got)
+	}
+	release()
+	left, _, open, err := s.store.OpenOrder(ctx)
+	if err != nil || !open || left.Replaces != firstID {
+		t.Fatalf("OpenOrder = %+v, open %v, %v; want the renewal left open replacing %q", left, open, err, firstID)
+	}
+
+	// The CA forgets the account; the admin registers a new one.
+	s.fake.ForgetAccounts()
+	if err := s.client.Forget(ctx); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if _, err := s.client.Register(ctx, "", true); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	hub := jobs.New(jobs.Options{Now: s.clock.Now})
+	t.Cleanup(hub.Close)
+	restarted := s.build(hub, s.inst, false)
+	s.mgr = restarted
+	if err := restarted.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	orders := s.fake.Count(acmetest.EndpointNewOrder)
+	s.schedule(restarted)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the resumed run ended %q, want succeeded (state %+v)", got, s.state())
+	}
+	if n := s.fake.Count(acmetest.EndpointNewOrder) - orders; n != 1 {
+		t.Errorf("the resume made %d newOrder requests, want one new order, none refused", n)
+	}
+	seen := s.fake.Orders()
+	if last := seen[len(seen)-1]; last.Replaces != "" {
+		t.Errorf("the new order replaces %q, want nothing", last.Replaces)
+	}
+	runs := s.runs()
+	if len(runs) < 1 || runs[0].Trigger != TriggerResume || runs[0].Outcome != OutcomeSucceeded {
+		t.Errorf("runs = %+v, want the newest to be a succeeded resume", runs)
+	}
+	if st := s.state(); st.ConsecutiveFailures != 0 || !st.NextAttemptAt.IsZero() || st.LastErrorClass != "" {
+		t.Errorf("state = %+v, want nothing charged to the ledger", st)
+	}
+	if _, _, open, err := s.store.OpenOrder(ctx); err != nil || open {
+		t.Errorf("OpenOrder = open %v, %v; want no order left open", open, err)
+	}
+	s.idle(15*time.Minute, len(runs))
 }
 
 // breakRunEnds makes every write of a run's end fail, as a full disk or a read-only mount would, until

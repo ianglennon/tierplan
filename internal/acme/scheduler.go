@@ -252,6 +252,11 @@ func (m *Manager) resumeRound(ctx context.Context) bool {
 	}
 	m.log.Info("continuing a Let's Encrypt order that was left open", "kind", ord.Kind)
 	req := OrderRequest{Kind: ord.Kind, Names: ord.Names, Profile: ord.Profile, Replaces: ord.Replaces}
+	if acct, found, err := m.d.Store.AccountInfo(ctx, m.d.Client.Directory().URL); err != nil || !found || acct.URL != ord.AccountURL {
+		// The order was placed under an account the CA has since forgotten, so the run places a new
+		// one, and the certificate it named is that account's: the new account may not replace it.
+		req.Replaces = ""
+	}
 	if _, err := m.startRun(runParams{trigger: TriggerResume, req: req}); err != nil {
 		if !errors.Is(err, ErrRunActive) {
 			m.log.Error("the scheduler could not continue the open order", "error", err)

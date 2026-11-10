@@ -90,12 +90,14 @@ type Order struct {
 	Names        []string
 	Profile      string
 	Replaces     string
-	Stage        string
-	Status       string // "open" or "closed"
-	ResumeCount  int
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// AccountURL is the ACME account the order was created under.
+	AccountURL  string
+	Stage       string
+	Status      string // "open" or "closed"
+	ResumeCount int
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Run is one entry of the run history.
@@ -297,7 +299,7 @@ func (s *Store) InsertOrder(ctx context.Context, o Order, key *ecdsa.PrivateKey)
 		ID: o.ID, DirectoryUrl: o.DirectoryURL, OrderUrl: o.URL, Kind: o.Kind, Names: names,
 		Profile: o.Profile, Replaces: o.Replaces, CertKeySealed: sealed, Stage: o.Stage,
 		ResumeCount: int64(o.ResumeCount), ExpiresAt: toNanos(o.ExpiresAt),
-		CreatedAt: toNanos(o.CreatedAt), UpdatedAt: toNanos(o.UpdatedAt),
+		CreatedAt: toNanos(o.CreatedAt), UpdatedAt: toNanos(o.UpdatedAt), AccountUrl: o.AccountURL,
 	}); err != nil {
 		return fmt.Errorf("insert the ACME order %q: %w", o.ID, err)
 	}
@@ -331,7 +333,7 @@ func (s *Store) OpenOrder(ctx context.Context) (Order, *ecdsa.PrivateKey, bool, 
 	}
 	return Order{
 		ID: row.ID, DirectoryURL: row.DirectoryUrl, URL: row.OrderUrl, Kind: row.Kind, Names: names,
-		Profile: row.Profile, Replaces: row.Replaces, Stage: row.Stage, Status: row.Status,
+		Profile: row.Profile, Replaces: row.Replaces, AccountURL: row.AccountUrl, Stage: row.Stage, Status: row.Status,
 		ResumeCount: int(row.ResumeCount), ExpiresAt: fromNanos(row.ExpiresAt),
 		CreatedAt: fromNanos(row.CreatedAt), UpdatedAt: fromNanos(row.UpdatedAt),
 	}, key, true, nil
@@ -357,9 +359,10 @@ func (s *Store) CloseOrder(ctx context.Context, id, stage string, now time.Time)
 }
 
 // StoreIssued writes the issued chain and its key into the tls_certs row CertID, with the key sealed
-// under the tls-key context the server reads it with, and closes the order as stored, in one
-// transaction: a failure keeps neither. The self-signed row is not touched. The certificate is
-// durable when StoreIssued returns.
+// under the tls-key context the server reads it with, records the order's account as the one the
+// certificate was issued to (CertAccountURL), and closes the order as stored, in one transaction: a
+// failure keeps none of it. The self-signed row is not touched. The certificate is durable when
+// StoreIssued returns.
 func (s *Store) StoreIssued(ctx context.Context, orderID string, chainPEM []byte, key *ecdsa.PrivateKey, now time.Time) error {
 	keyPEM, err := encodeKey(key)
 	if err != nil {
@@ -380,6 +383,9 @@ func (s *Store) StoreIssued(ctx context.Context, orderID string, chainPEM []byte
 		ID: CertID, CertPem: string(chainPEM), KeySealed: sealed, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return fmt.Errorf("store the TLS certificate %q: %w", CertID, err)
+	}
+	if err := q.SetACMECertAccountFromOrder(ctx, orderID); err != nil {
+		return fmt.Errorf("record the account of the ACME order %q: %w", orderID, err)
 	}
 	if err := q.CloseACMEOrder(ctx, sqlc.CloseACMEOrderParams{Stage: StageStored, UpdatedAt: ts, ID: orderID}); err != nil {
 		return fmt.Errorf("close the ACME order %q: %w", orderID, err)
@@ -409,6 +415,17 @@ func (s *Store) Certificate(ctx context.Context) (chainPEM []byte, key *ecdsa.Pr
 		return nil, nil, false, fmt.Errorf("decode the TLS key %q: %w", CertID, err)
 	}
 	return []byte(row.CertPem), key, true, nil
+}
+
+// CertAccountURL is the URL of the ACME account the stored certificate was issued to, as StoreIssued
+// recorded it; empty when there is no certificate or the account is not known. Only StoreIssued writes
+// it: SaveState leaves it alone, so a state read before a certificate was stored cannot undo it.
+func (s *Store) CertAccountURL(ctx context.Context) (string, error) {
+	u, err := s.st.RQ.GetACMECertAccountURL(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read the account of the stored certificate: %w", err)
+	}
+	return u, nil
 }
 
 // State returns the ledger. A database that has never run ACME reads as mode off with no instants

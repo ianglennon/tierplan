@@ -580,3 +580,43 @@ func TestACMEReadSnapshotIsOneInstant(t *testing.T) {
 			snap.State.LastErrorClass, snap.Runs, snap.FailedStarts)
 	}
 }
+
+// The account an order was placed under is kept with it, and becomes the account of the certificate
+// it stores, in StoreIssued's transaction. A full write of the state row does not touch it.
+func TestStoreIssuedRecordsTheOrdersAccount(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := newTestStore(t)
+	t0 := time.Unix(1_700_000_000, 0)
+	if got, err := s.CertAccountURL(ctx); err != nil || got != "" {
+		t.Fatalf("CertAccountURL before any certificate = %q, %v; want empty", got, err)
+	}
+
+	key, _ := newKey()
+	o := newTestOrder("order-1", t0)
+	o.AccountURL = "https://acme.example/acct/7"
+	if err := s.InsertOrder(ctx, o, key); err != nil {
+		t.Fatal(err)
+	}
+	open, _, found, err := s.OpenOrder(ctx)
+	if err != nil || !found || open.AccountURL != o.AccountURL {
+		t.Fatalf("OpenOrder = %+v, %v, %v; want the account %q kept", open, found, err, o.AccountURL)
+	}
+	st, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StoreIssued(ctx, "order-1", []byte("chain"), key, t0.Add(time.Minute)); err != nil {
+		t.Fatalf("StoreIssued: %v", err)
+	}
+	if got, err := s.CertAccountURL(ctx); err != nil || got != o.AccountURL {
+		t.Errorf("CertAccountURL = %q, %v; want %q", got, err, o.AccountURL)
+	}
+	// A state read before the certificate was stored, written after it, leaves the account alone.
+	st.Mode = ModeActive
+	if err := s.SaveState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.CertAccountURL(ctx); err != nil || got != o.AccountURL {
+		t.Errorf("CertAccountURL after SaveState = %q, %v; want %q", got, err, o.AccountURL)
+	}
+}

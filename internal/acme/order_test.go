@@ -602,3 +602,109 @@ func TestOrderUnknownProfileIsClassified(t *testing.T) {
 		t.Errorf("steps = %v, want %v", got, want)
 	}
 }
+
+// A renewal that names a certificate issued to another account (the CA forgot the account that was
+// issued it, and a new one was registered) is refused as unauthorized. The order is placed once more
+// without naming it, the run succeeds, and the stored certificate is recorded as the new account's.
+// Only one more order is tried: a second refusal is the run's failure.
+func TestOrderDropsAReplacesTheCARefusesAsAnotherAccounts(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+	first, err := e.orderer().Run(ctx, orderReq, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	ariID, err := api.MakeARICertID(first.Leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountA, _, err := e.client.Account(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.store.CertAccountURL(ctx); err != nil || got != accountA.URL {
+		t.Fatalf("CertAccountURL = %q, %v; want the issuing account %q", got, err, accountA.URL)
+	}
+	if err := e.client.Forget(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountB, err := e.client.Register(ctx, "", true)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if accountB.URL == accountA.URL {
+		t.Fatal("the new account has the old account's URL")
+	}
+
+	orders := e.fake.Count(acmetest.EndpointNewOrder)
+	renew := OrderRequest{Kind: KindRenew, Names: orderReq.Names, Profile: orderReq.Profile, Replaces: ariID}
+	if _, err := e.orderer().Run(ctx, renew, nil); err != nil {
+		t.Fatalf("renew under the new account: %v", err)
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder) - orders; n != 2 {
+		t.Errorf("the renewal made %d newOrder requests, want the refused one and one without replaces", n)
+	}
+	if seen := e.fake.Orders(); seen[len(seen)-1].Replaces != "" {
+		t.Errorf("the accepted renewal replaces %q, want nothing", seen[len(seen)-1].Replaces)
+	}
+	if got, err := e.store.CertAccountURL(ctx); err != nil || got != accountB.URL {
+		t.Errorf("CertAccountURL = %q, %v; want the new account %q", got, err, accountB.URL)
+	}
+
+	// The retry is made once: when the CA refuses the order without replaces too, the run fails.
+	unauthorized := acmetest.Problem{Status: http.StatusForbidden, Type: "unauthorized", Detail: "scripted refusal"}
+	e.fake.FailNext(acmetest.EndpointNewOrder, unauthorized)
+	e.fake.FailNext(acmetest.EndpointNewOrder, unauthorized)
+	orders = e.fake.Count(acmetest.EndpointNewOrder)
+	_, err = e.orderer().Run(ctx, renew, nil)
+	var pd *legoacme.ProblemDetails
+	if !errors.As(err, &pd) || pd.Type != legoacme.UnauthorizedErrorType {
+		t.Errorf("Run = %v, want the CA's unauthorized refusal", err)
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder) - orders; n != 2 {
+		t.Errorf("a renewal refused twice made %d newOrder requests, want 2", n)
+	}
+
+	// Any other refusal of a renewal is not retried.
+	e.fake.FailNext(acmetest.EndpointNewOrder, acmetest.Problem{Status: http.StatusBadRequest, Type: "malformed", Detail: "scripted refusal"})
+	orders = e.fake.Count(acmetest.EndpointNewOrder)
+	if _, err := e.orderer().Run(ctx, renew, nil); err == nil {
+		t.Error("Run succeeded although the CA refused the order")
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder) - orders; n != 1 {
+		t.Errorf("a renewal refused as malformed made %d newOrder requests, want 1", n)
+	}
+}
+
+// An open order placed under an account the CA has since forgotten is not resumed under the new one,
+// which may not read it: it is closed and a new order is placed.
+func TestOrderDoesNotResumeAnotherAccountsOrder(t *testing.T) {
+	ctx := context.Background()
+	e := newOrderEnv(t)
+	e.crashHeld(orderReq)()
+	left, _ := e.openOrder()
+	accountA, _, err := e.client.Account(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left.AccountURL != accountA.URL {
+		t.Errorf("the order's account = %q, want %q", left.AccountURL, accountA.URL)
+	}
+
+	if err := e.client.Forget(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.client.Register(ctx, "", true); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	orders := e.fake.Count(acmetest.EndpointNewOrder)
+	if _, err := e.orderer().Run(ctx, orderReq, nil); err != nil {
+		t.Fatalf("Run under the new account: %v", err)
+	}
+	if n := e.fake.Count(acmetest.EndpointNewOrder) - orders; n != 1 {
+		t.Errorf("the run made %d newOrder requests, want a new order in place of the old account's", n)
+	}
+	if got := e.stages(); !slices.Contains(got, StageFailed) {
+		t.Errorf("order stages = %v, want the old account's order closed as failed", got)
+	}
+}
