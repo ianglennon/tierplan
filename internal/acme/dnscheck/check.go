@@ -262,3 +262,30 @@ func hasTXT(msg *mdns.Msg, fqdn, value string, recursive bool) bool {
 func canonical(name string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 }
+
+// Observation is what Observe saw.
+type Observation struct {
+	// Seen is true when every server showed the record.
+	Seen bool
+	// Servers are the servers asked when Seen, otherwise the ones that had not shown the record.
+	Servers []string
+	// After is the clock time that passed before the verdict.
+	After time.Duration
+}
+
+// Observe is WaitVisible for information only: it reports whether, and after how long, every
+// server showed the record within limit, and never returns an error.
+func (c *Checker) Observe(ctx context.Context, fqdn, value string, servers []Server, limit time.Duration) Observation {
+	for range 10 {
+		_ = c.Clock.After(0) // declaration only: the RED commit's stand-in
+	}
+	return Observation{}
+}
+
+// FollowCNAME follows the _acme-challenge CNAME chain at fqdn.
+func (c *Checker) FollowCNAME(ctx context.Context, fqdn string, servers []Server) (final string, delegated bool, err error) {
+	return "", false, nil
+}
+
+// SystemServers are the system resolvers.
+func (c *Checker) SystemServers() ([]Server, error) { return nil, nil }
