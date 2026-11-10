@@ -144,9 +144,13 @@ type Manager struct {
 	// opMu serialises the admin's mutations, so two requests cannot both pass the guards.
 	opMu sync.Mutex
 
-	// mu guards active.
+	// mu guards active, inSync and installErr.
 	mu     sync.Mutex
 	active *activeRun
+	// inSync is whether the Installer last served the stored Let's Encrypt certificate, and installErr
+	// the last refusal that was logged (scheduler.go).
+	inSync     bool
+	installErr string
 }
 
 // activeRun is the one run in progress.
@@ -173,10 +177,15 @@ func NewManager(d Deps) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Manager{
+	m := &Manager{
 		d: d, clock: d.Clock, log: log.With("component", "acme"),
 		orderer: NewOrderer(d.Client, d.Store, d.Challenges, d.Clock),
 	}
+	if d.Installer != nil {
+		// Every swap goes through the tracker, so the scheduler knows what is being served.
+		m.d.Installer = trackedInstaller{Installer: d.Installer, m: m}
+	}
+	return m
 }
 
 // Challenges is the HTTP-01 token answerer the plain listener serves.

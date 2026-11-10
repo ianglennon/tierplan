@@ -36,18 +36,25 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// round is one look at the certificate. With certificate files set it does nothing (D-13). While
-// paused after a restore, or while a run is in progress, it makes no request to the CA.
+// round is one look at the certificate. With certificate files set it does nothing (D-13), and while a
+// run is in progress it leaves everything to the run. What is served is put right first, because that
+// is local and a lapsed certificate must not wait on anything (D-15). While paused after a restore
+// nothing more is done: no request to the CA is made, whether to ask for renewal information, to
+// renew or to continue an order (ACME-08).
 func (m *Manager) round(ctx context.Context) {
-	if m.d.CertFiles || ctx.Err() != nil {
+	if m.d.CertFiles || ctx.Err() != nil || m.runActive() {
 		return
 	}
+	m.syncServed(ctx)
 	st, err := m.d.Store.State(ctx)
 	if err != nil {
 		m.log.Error("the scheduler could not read the ACME state", "error", err)
 		return
 	}
-	if st.PausedReason != "" || m.runActive() {
+	if st.PausedReason != "" {
+		return
+	}
+	if m.resumeRound(ctx) {
 		return
 	}
 	if st.Mode != ModeActive {
@@ -62,6 +69,154 @@ func (m *Manager) round(ctx context.Context) {
 		return
 	}
 	m.renewalRound(ctx, st, leaf)
+}
+
+// syncServed makes what is served follow what is stored (D-15). A Let's Encrypt certificate that has
+// reached its NotAfter is replaced by the self-signed one, once; renewals carry on, and the one that
+// works is served by the run that made it. A valid stored certificate that is not being served, because
+// the Installer refused it, is offered again. It reads the clock and the database and nothing else, so
+// it never depends on the CA being reachable.
+func (m *Manager) syncServed(ctx context.Context) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	if m.runActive() {
+		return
+	}
+	st, err := m.d.Store.State(ctx)
+	if err != nil {
+		m.log.Error("the scheduler could not read the ACME state", "error", err)
+		return
+	}
+	if st.Mode != ModeActive {
+		return
+	}
+	leaf, found, err := m.storedLeaf(ctx)
+	if err != nil {
+		m.log.Error("the scheduler could not read the stored Let's Encrypt certificate", "error", err)
+		return
+	}
+	if !found {
+		return
+	}
+	switch inSync := m.served(); {
+	case !m.clock.Now().Before(leaf.NotAfter):
+		if !inSync {
+			return
+		}
+		m.log.Warn("the Let's Encrypt certificate has expired, so the self-signed certificate is served until it is renewed",
+			"expired_at", leaf.NotAfter)
+		if err := m.d.Installer.ServeSelfSigned(); err != nil {
+			m.log.Error("the self-signed certificate could not be served after the Let's Encrypt one expired", "error", err)
+		}
+	case !inSync:
+		chain, key, found, err := m.d.Store.Certificate(ctx)
+		if err != nil || !found {
+			m.log.Error("the scheduler could not open the stored Let's Encrypt certificate", "error", err)
+			return
+		}
+		keyPEM, err := encodeKey(key)
+		if err == nil {
+			err = m.d.Installer.ServeACME(chain, keyPEM)
+		}
+		if err != nil {
+			m.noteInstallFailure(err)
+			return
+		}
+		m.log.Info("the stored Let's Encrypt certificate is served again")
+	}
+}
+
+// noteInstallFailure logs a failure to serve the stored certificate, once for each distinct message, so
+// a refusal that lasts does not fill the log at one line a minute.
+func (m *Manager) noteInstallFailure(err error) {
+	m.mu.Lock()
+	same := m.installErr == err.Error()
+	m.installErr = err.Error()
+	m.mu.Unlock()
+	if !same {
+		m.log.Error("the stored Let's Encrypt certificate could not be served", "error", err)
+	}
+}
+
+// served reports whether the certificate the server serves is the stored Let's Encrypt one, as far as
+// this manager has seen: true after a successful ServeACME, false after ServeSelfSigned or a refusal.
+func (m *Manager) served() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.inSync
+}
+
+func (m *Manager) setServed(v bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inSync = v
+	if v {
+		m.installErr = ""
+	}
+}
+
+// trackedInstaller tells the manager what the Installer was last asked to serve and whether it did.
+type trackedInstaller struct {
+	Installer
+	m *Manager
+}
+
+func (t trackedInstaller) ServeACME(chainPEM, keyPEM []byte) error {
+	err := t.Installer.ServeACME(chainPEM, keyPEM)
+	t.m.setServed(err == nil)
+	return err
+}
+
+func (t trackedInstaller) ServeSelfSigned() error {
+	err := t.Installer.ServeSelfSigned()
+	if err == nil {
+		t.m.setServed(false)
+	}
+	return err
+}
+
+// resumeRound continues an order that was left open, as a resume run, with no new order: the first
+// round the ledger allows after a restart cut a run short, or after a failure that left the order
+// open. It is the same continuation a retry makes, started without waiting for renew_at. An order
+// whose run a person cancelled is left alone, and the pause is checked again under the admin lock. It
+// reports whether a run was started.
+func (m *Manager) resumeRound(ctx context.Context) bool {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	st, err := m.d.Store.State(ctx)
+	if err != nil {
+		m.log.Error("the scheduler could not read the ACME state", "error", err)
+		return false
+	}
+	if st.PausedReason != "" || m.runActive() {
+		return false
+	}
+	ord, _, found, err := m.d.Store.OpenOrder(ctx)
+	if err != nil {
+		m.log.Error("the scheduler could not read the open ACME order", "error", err)
+		return false
+	}
+	if !found || !AutomaticAllowed(ledgerOf(st), m.clock.Now()) {
+		return false
+	}
+	if runs, err := m.d.Store.Runs(ctx, 1); err == nil && len(runs) > 0 && runs[0].Outcome == OutcomeCancelled {
+		return false
+	}
+	if err := m.needAccount(ctx); err != nil {
+		if !errors.Is(err, ErrNoAccount) {
+			m.log.Error("the scheduler could not read the ACME account", "error", err)
+		}
+		return false
+	}
+	m.log.Info("continuing a Let's Encrypt order that was left open", "kind", ord.Kind)
+	req := OrderRequest{Kind: ord.Kind, Names: ord.Names, Profile: ord.Profile, Replaces: ord.Replaces}
+	if _, err := m.startRun(runParams{trigger: TriggerResume, req: req}); err != nil {
+		if !errors.Is(err, ErrRunActive) {
+			m.log.Error("the scheduler could not continue the open order", "error", err)
+		}
+		return false
+	}
+	return true
 }
 
 // renewalRound keeps renew_at current from the CA's renewal information, and starts the renewal when
