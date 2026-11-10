@@ -12,6 +12,7 @@ import { CertificateCard } from "@/features/https/certificate-card";
 import { HttpsPage } from "@/features/https/https-page";
 import "@/i18n";
 import { httpsStatus } from "@/test-https";
+import { TestRouter } from "@/test-router";
 
 let answer: () => Response | Promise<Response>;
 
@@ -186,7 +187,9 @@ describe("HTTPS page", () => {
     render(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <HttpsPage />
+          <TestRouter>
+            <HttpsPage />
+          </TestRouter>
         </TooltipProvider>
       </QueryClientProvider>,
     );

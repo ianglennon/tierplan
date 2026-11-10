@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { AcmeCard } from "@/features/https/acme-card";
 import { CertificateCard } from "@/features/https/certificate-card";
 import { useT } from "@/i18n/use-t";
 
@@ -16,7 +17,7 @@ export function HttpsPage() {
         <p className="text-sm text-muted-foreground">{t("https.description")}</p>
       </div>
       <CertificateCard />
-      {/* The Let's Encrypt card is mounted here. */}
+      <AcmeCard />
     </div>
   );
 }

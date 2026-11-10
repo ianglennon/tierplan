@@ -21,6 +21,99 @@
         "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files.",
         "cert_files": "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE."
       }
+    },
+    "acme": {
+      "title": "Let's Encrypt",
+      "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",
+      "method": {
+        "label": "Validation method",
+        "value": "HTTP-01"
+      },
+      "portNote": "Let's Encrypt checks your domain over plain HTTP on port 80. Port 80 on {{host}} must reach TierPlan, for example by starting the container with {{flag}}. TierPlan answers the check on its usual port, so there is nothing else to run.",
+      "publicHostFallback": "the public host"
+    },
+    "names": {
+      "title": "Names on the certificate",
+      "helper": "The host of the public URL, plus the host of the agent URL when it is different. Change them in {{link}}. IP addresses and wildcards can't be used.",
+      "link": "Settings > General",
+      "notAllowed": "Not allowed",
+      "onCertificate": "On the certificate",
+      "neededNow": "Needed now",
+      "none": "No public URL is set yet. Set it in {{link}}."
+    },
+    "account": {
+      "title": "Account",
+      "empty": "Let's Encrypt needs an account for this install. TierPlan keeps its key encrypted and never shows it.",
+      "email": {
+        "label": "Contact email (optional)",
+        "helper": "Let's Encrypt uses it to reach you about problems with the account. You can leave it empty.",
+        "error": "Enter a valid email address, or leave it empty."
+      },
+      "terms": {
+        "label": "I agree to the Let's Encrypt {{link}}",
+        "link": "Subscriber Agreement",
+        "error": "Accept the Subscriber Agreement to register."
+      },
+      "register": "Register account",
+      "registering": "Registering...",
+      "done": "Account registered.",
+      "registeredLabel": "Registered",
+      "contactLabel": "Contact:",
+      "noContact": "No contact email.",
+      "keyNote": "TierPlan keeps the account key encrypted and never shows it."
+    },
+    "error": {
+      "rate_limited": {
+        "headline": "Let's Encrypt is limiting requests.",
+        "fix": "TierPlan waits until {{time}} before it tries again. There is nothing to do.",
+        "fixNoTime": "TierPlan waits before it tries again. There is nothing to do."
+      },
+      "validation_unreachable": {
+        "headline": "Let's Encrypt couldn't reach http://{{host}}/.well-known/acme-challenge/.",
+        "fix": "Port 80 on {{host}} must reach TierPlan, for example with -p 80:{{port}}. Check your firewall and router, then try again."
+      },
+      "validation_dns": {
+        "headline": "The DNS records for {{host}} don't point at this host.",
+        "fix": "Make the A and AAAA records for {{host}} point at this host. Remove an old AAAA record if you have no IPv6. Then try again."
+      },
+      "caa_forbids": {
+        "headline": "A CAA record forbids Let's Encrypt for {{host}}.",
+        "fix": "Add a CAA record that allows letsencrypt.org, or remove the one that blocks it."
+      },
+      "identifier_rejected": {
+        "headline": "Let's Encrypt won't issue for {{host}}.",
+        "fix": "Use a public DNS name under a domain you own as the public URL."
+      },
+      "contact_invalid": {
+        "headline": "Let's Encrypt rejected the contact email.",
+        "fix": "Register again with a valid address, or leave it empty."
+      },
+      "tos_action_required": {
+        "headline": "Let's Encrypt changed its terms.",
+        "fix": "Read the current terms at {{url}}, then try again."
+      },
+      "account_gone": {
+        "headline": "Let's Encrypt doesn't know this account.",
+        "fix": "Register the account again in the Account section."
+      },
+      "profile_invalid": {
+        "headline": "Let's Encrypt doesn't offer the profile {{profile}}.",
+        "fix": "Choose another profile under Advanced, or go back to the CA default."
+      },
+      "ca_unavailable": {
+        "headline": "Let's Encrypt couldn't be reached.",
+        "fix": "TierPlan tries again on its own schedule, next at {{time}}. If it keeps failing, check this host's internet access.",
+        "fixNoTime": "TierPlan tries again on its own schedule. If it keeps failing, check this host's internet access."
+      },
+      "ca_untrusted": {
+        "headline": "TierPlan doesn't trust the certificate authority's certificate.",
+        "fix": "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE."
+      },
+      "internal": {
+        "headline": "Something went wrong inside TierPlan.",
+        "fix": "Open Details and check the server log. TierPlan tries again at {{time}}.",
+        "fixNoTime": "Open Details and check the server log."
+      }
     }
   }
 }
