@@ -58,8 +58,15 @@ type Account struct {
 // State is the singleton acme_state row. Every instant is the zero time.Time when it is not set, and
 // the zero State is the empty ledger: mode off, no pause, no failures, no backoff in force.
 type State struct {
-	Mode                string
-	ChallengeType       string
+	Mode          string
+	ChallengeType string
+	// DNSProvider is the provider that answers a DNS-01 challenge; DNSResolvers are the normalised
+	// host[:port] entries that replace the authoritative nameservers for the propagation check, never nil.
+	// ValidationUntested is set when the challenge type was changed and no run has proved it yet. None
+	// of the three is written by SaveState: only SaveValidation and SetValidationUntested write them.
+	DNSProvider         string
+	DNSResolvers        []string
+	ValidationUntested  bool
 	Profile             string
 	PausedReason        string
 	ConsecutiveFailures int
@@ -111,6 +118,8 @@ type Run struct {
 	FinishedAt time.Time
 	Outcome    string
 	ErrorClass string
+	// ChallengeType is the challenge type the run used.
+	ChallengeType string
 }
 
 // Store keeps everything ACME persists: the account, the state and ledger, the open order, the run

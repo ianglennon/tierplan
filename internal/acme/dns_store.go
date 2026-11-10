@@ -208,3 +208,34 @@ func dnsRecord(r sqlc.AcmeDnsRecord) DNSRecord {
 		NextTryAt: fromNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,
 	}
 }
+
+var errNotImplemented = errors.New("not implemented")
+
+// ValidationWrite is one save of the validation settings. Token is nil to keep the saved token.
+type ValidationWrite struct {
+	ChallengeType, Provider string
+	Resolvers               []string
+	Token                   *string
+	Untested                bool
+	CloseOpenOrder          bool
+	ResetDNSFailures        bool
+	Now                     time.Time
+}
+
+// SaveValidation writes the validation settings in one transaction.
+func (s *Store) SaveValidation(ctx context.Context, w ValidationWrite) error {
+	return errNotImplemented
+}
+
+// SetValidationUntested sets or clears the untested flag.
+func (s *Store) SetValidationUntested(ctx context.Context, untested bool, now time.Time) error {
+	return errNotImplemented
+}
+
+// InstallID returns this install's ID.
+func (s *Store) InstallID(ctx context.Context) (string, error) { return "", errNotImplemented }
+
+// OpenOrderID returns the open order's ID.
+func (s *Store) OpenOrderID(ctx context.Context) (string, bool, error) {
+	return "", false, errNotImplemented
+}

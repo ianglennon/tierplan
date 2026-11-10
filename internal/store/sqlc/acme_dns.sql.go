@@ -9,6 +9,21 @@ import (
 	"context"
 )
 
+const closeOpenACMEOrders = `-- name: CloseOpenACMEOrders :exec
+UPDATE acme_orders SET status = 'closed', stage = ?, updated_at = ? WHERE status = 'open'
+`
+
+type CloseOpenACMEOrdersParams struct {
+	Stage     string
+	UpdatedAt int64
+}
+
+// Closes every open order: a changed validation setting must not resume an order made under the old one.
+func (q *Queries) CloseOpenACMEOrders(ctx context.Context, arg CloseOpenACMEOrdersParams) error {
+	_, err := q.db.ExecContext(ctx, closeOpenACMEOrders, arg.Stage, arg.UpdatedAt)
+	return err
+}
+
 const countACMEDNSCredential = `-- name: CountACMEDNSCredential :one
 SELECT COUNT(*) FROM acme_dns_credentials WHERE provider = ?
 `
@@ -48,6 +63,29 @@ func (q *Queries) GetACMEDNSCredential(ctx context.Context, provider string) (Ac
 	var i AcmeDnsCredential
 	err := row.Scan(&i.Provider, &i.TokenSealed, &i.CreatedAt)
 	return i, err
+}
+
+const getACMEInstallID = `-- name: GetACMEInstallID :one
+SELECT value FROM app_meta WHERE key = 'acme_install_id'
+`
+
+func (q *Queries) GetACMEInstallID(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getACMEInstallID)
+	var value string
+	err := row.Scan(&value)
+	return value, err
+}
+
+const getOpenACMEOrderID = `-- name: GetOpenACMEOrderID :one
+SELECT id FROM acme_orders WHERE status = 'open' ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+// The newest open order's id, without opening its sealed key.
+func (q *Queries) GetOpenACMEOrderID(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getOpenACMEOrderID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getPendingACMEDNSRecord = `-- name: GetPendingACMEDNSRecord :one
@@ -133,6 +171,21 @@ func (q *Queries) InsertACMEDNSRecord(ctx context.Context, arg InsertACMEDNSReco
 		arg.NextTryAt,
 		arg.LastErrorClass,
 	)
+	return err
+}
+
+const insertACMEInstallID = `-- name: InsertACMEInstallID :exec
+INSERT INTO app_meta (key, value, updated_at) VALUES ('acme_install_id', ?, ?) ON CONFLICT (key) DO NOTHING
+`
+
+type InsertACMEInstallIDParams struct {
+	Value     string
+	UpdatedAt int64
+}
+
+// Mints the install id once: a second insert changes nothing.
+func (q *Queries) InsertACMEInstallID(ctx context.Context, arg InsertACMEInstallIDParams) error {
+	_, err := q.db.ExecContext(ctx, insertACMEInstallID, arg.Value, arg.UpdatedAt)
 	return err
 }
 
@@ -296,6 +349,19 @@ func (q *Queries) MarkACMEDNSRecordFailed(ctx context.Context, arg MarkACMEDNSRe
 	return err
 }
 
+const resetACMEDNSFailures = `-- name: ResetACMEDNSFailures :exec
+UPDATE acme_state SET consecutive_failures = 0, next_attempt_at = 0, retry_after_until = 0, updated_at = ?
+WHERE id = 1 AND last_error_class GLOB 'dns_*'
+`
+
+// Clears the backoff a Cloudflare-side failure put in force, and only that: a CA-side failure (any
+// other class) keeps its backoff. GLOB, not LIKE: the underscore is literal in a GLOB pattern, and sqlc's
+// SQLite parser does not accept LIKE ... ESCAPE in an UPDATE.
+func (q *Queries) ResetACMEDNSFailures(ctx context.Context, updatedAt int64) error {
+	_, err := q.db.ExecContext(ctx, resetACMEDNSFailures, updatedAt)
+	return err
+}
+
 const restampACMEDNSRecord = `-- name: RestampACMEDNSRecord :exec
 UPDATE acme_dns_records SET owner_kind = ?, owner_id = ?, token = ?, attempts = 0, last_try_at = 0,
     next_try_at = 0, last_error_class = ''
@@ -317,6 +383,46 @@ func (q *Queries) RestampACMEDNSRecord(ctx context.Context, arg RestampACMEDNSRe
 		arg.Token,
 		arg.ID,
 	)
+	return err
+}
+
+const setACMEValidation = `-- name: SetACMEValidation :exec
+UPDATE acme_state SET challenge_type = ?, dns_provider = ?, dns_resolvers = ?, validation_untested = ?, updated_at = ?
+WHERE id = 1
+`
+
+type SetACMEValidationParams struct {
+	ChallengeType      string
+	DnsProvider        string
+	DnsResolvers       string
+	ValidationUntested int64
+	UpdatedAt          int64
+}
+
+// The only statement that writes the challenge type, the provider, the resolvers and the untested
+// flag; the state row's full update never does, so a stale read cannot undo a saved choice.
+func (q *Queries) SetACMEValidation(ctx context.Context, arg SetACMEValidationParams) error {
+	_, err := q.db.ExecContext(ctx, setACMEValidation,
+		arg.ChallengeType,
+		arg.DnsProvider,
+		arg.DnsResolvers,
+		arg.ValidationUntested,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const setACMEValidationUntested = `-- name: SetACMEValidationUntested :exec
+UPDATE acme_state SET validation_untested = ?, updated_at = ? WHERE id = 1
+`
+
+type SetACMEValidationUntestedParams struct {
+	ValidationUntested int64
+	UpdatedAt          int64
+}
+
+func (q *Queries) SetACMEValidationUntested(ctx context.Context, arg SetACMEValidationUntestedParams) error {
+	_, err := q.db.ExecContext(ctx, setACMEValidationUntested, arg.ValidationUntested, arg.UpdatedAt)
 	return err
 }
 
