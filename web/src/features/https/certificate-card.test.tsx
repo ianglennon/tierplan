@@ -324,6 +324,47 @@ describe("Certificate in use card: Let's Encrypt", () => {
     expect(card().getByText(/made this certificate/)).toBeTruthy();
   });
 
+  it("shows only the Last error row after a failed first issue, which leaves the mode off", async () => {
+    answer = () =>
+      Response.json(
+        httpsStatus({
+          acme: httpsLetsEncryptStatus({
+            mode: "off",
+            renewal: undefined,
+            certificate: undefined,
+            failures: 1,
+            lastError: acmeLastError(),
+          }).acme,
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires", "Last error"]);
+    expect(rowValue("Last error").textContent).toContain(
+      "Let's Encrypt couldn't reach http://tierplan.example.com/.well-known/acme-challenge/.",
+    );
+    const link = within(rowValue("Last error")).getByRole("link", { name: "Details below" });
+    expect(link.getAttribute("href")).toBe("#lets-encrypt-last-run");
+    expect(card().getByText(/made this certificate/)).toBeTruthy();
+  });
+
+  it("keeps a stopped certificate's dates out of the rows when an issue after Stop failed", async () => {
+    answer = () =>
+      Response.json(
+        httpsStatus({
+          acme: httpsLetsEncryptStatus({
+            mode: "off",
+            renewal: undefined,
+            failures: 1,
+            lastError: acmeLastError(),
+          }).acme,
+        }),
+      );
+    renderCard();
+    await card().findByText("Source");
+    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires", "Last error"]);
+  });
+
   it("has no Let's Encrypt rows when the status carries no Let's Encrypt block", async () => {
     answer = () => Response.json({ ...httpsStatus(), acme: undefined });
     renderCard();

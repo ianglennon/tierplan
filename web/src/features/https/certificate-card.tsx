@@ -49,7 +49,9 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
   const acme = status.acme;
   // The Let's Encrypt rows are for an install that uses it; a stopped or never-used one has none. The
   // fallback alert explains a self-signed certificate served after an expiry, so no note repeats it.
+  // A first issue that failed leaves the mode off but has an error to tell: only its row is drawn.
   const lets = acme?.mode === "active" ? acme : null;
+  const failedOff = lets === null && acme?.lastError ? acme : null;
   const note =
     cert.source === "self_signed" && !lets?.fallback
       ? t("https.certificate.note.self_signed")
@@ -102,7 +104,8 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
           </span>
         </dd>
 
-        {lets ? <LetsEncryptRows acme={lets} /> : null}
+        {lets ? <LetsEncryptRows acme={lets} active /> : null}
+        {failedOff ? <LetsEncryptRows acme={failedOff} active={false} /> : null}
       </dl>
       {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
     </>
@@ -110,12 +113,14 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
 }
 
 // The rows only a Let's Encrypt install has (UI-SPEC "Certificate in use card"): when the served
-// certificate was issued, when the next renewal is planned and why then, and the last failure.
-function LetsEncryptRows({ acme }: { acme: HTTPSACME }) {
+// certificate was issued, when the next renewal is planned and why then, and the last failure. With
+// Let's Encrypt not in use (active false) a kept certificate is not served and nothing is planned, so
+// only the last failure is drawn.
+function LetsEncryptRows({ acme, active }: { acme: HTTPSACME; active: boolean }) {
   const t = useT();
-  const issued = acme.certificate;
-  const paused = acme.pausedReason === "restore";
-  const renewal = acme.renewal;
+  const issued = active ? acme.certificate : undefined;
+  const paused = active && acme.pausedReason === "restore";
+  const renewal = active ? acme.renewal : undefined;
   const error = acme.lastError;
 
   return (

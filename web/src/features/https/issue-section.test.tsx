@@ -16,6 +16,7 @@ import "@/i18n";
 import { formatClock } from "@/lib/format";
 import {
   acmeActiveRun,
+  acmeLastError,
   acmeRunFrame,
   acmeStep,
   acmeSteps,
@@ -233,6 +234,49 @@ describe("issuing a certificate and watching it", () => {
     await waitFor(() => expect(toasts()).toEqual(["Certificate issued."]));
     await card().findByText(/Now serving a certificate valid until/);
     expect(stream().closed).toBe(true);
+  });
+});
+
+describe("a first issue that fails (W-CR-01)", () => {
+  it("shows the classified error panel, announced once, though Let's Encrypt stays off", async () => {
+    await ready();
+    fireEvent.click(issueButton() as HTMLElement);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => stream().sendFrame("snapshot", acmeRunFrame()));
+    await card().findByText("Issuing certificate");
+
+    // The run fails: the server records the error and the ledger, and leaves the mode off.
+    status = () =>
+      withACME({
+        hasState: true,
+        mode: "off",
+        failures: 1,
+        nextAttemptAt: new Date(Date.now() + 600_000).toISOString(),
+        lastError: acmeLastError(),
+      });
+    act(() =>
+      stream().sendFrame(
+        "done",
+        acmeRunFrame({
+          state: "failed",
+          items: acmeSteps({
+            account: "done",
+            order: "done",
+            challenge: "done",
+            validate: "failed",
+          }),
+        }),
+        "9",
+      ),
+    );
+    await card().findByText("Issuing failed.");
+    const headline = await card().findByText(
+      "Let's Encrypt couldn't reach http://tierplan.example.com/.well-known/acme-challenge/.",
+    );
+    const panel = headline.closest('[data-slot="alert"]') as HTMLElement;
+    await waitFor(() => expect(panel.getAttribute("role")).toBe("alert"));
+    expect(panel.textContent).not.toContain("Next automatic attempt");
+    expect(toasts()).toEqual([]);
   });
 });
 

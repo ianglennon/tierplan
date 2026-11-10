@@ -109,12 +109,15 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
         canWrite={canWrite}
         onRunFailed={setFreshFailure}
       />
-      {acme.mode === "active" && acme.lastError ? (
+      {/* Drawn whatever the mode: a failed first issue leaves Let's Encrypt off, and Stop clears the
+          error, so an error the status carries is always one to explain. With the mode off nothing
+          retries by itself, so no next automatic attempt is promised. */}
+      {acme.lastError ? (
         <ErrorPanel
           error={acme.lastError}
           failures={acme.failures}
           values={errorValues(t, acme.lastError, acme)}
-          quiet={paused || acme.blocked !== undefined}
+          quiet={paused || acme.blocked !== undefined || acme.mode !== "active"}
           fresh={freshFailure}
         />
       ) : null}

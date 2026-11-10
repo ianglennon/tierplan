@@ -17,7 +17,7 @@ import {
   deriveCardState,
 } from "@/features/https/card-state";
 import "@/i18n";
-import { acmeDirectory, httpsACME, httpsStatus } from "@/test-https";
+import { acmeDirectory, acmeLastError, httpsACME, httpsStatus } from "@/test-https";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
@@ -424,6 +424,55 @@ describe("Without settings.write", () => {
   it("does not show the read-only line to an admin", async () => {
     await ready();
     expect(card().queryByText("You can view these settings but not change them.")).toBeNull();
+  });
+});
+
+describe("the last-run error panel", () => {
+  const HEADLINE =
+    "Let's Encrypt couldn't reach http://tierplan.example.com/.well-known/acme-challenge/.";
+
+  it("explains a failed first issue, which leaves Let's Encrypt off (state F, mode off)", async () => {
+    status = () =>
+      Response.json(
+        withACME({
+          account: accountOf(),
+          hasState: true,
+          mode: "off",
+          failures: 1,
+          // The ledger plans a back-off, but nothing retries while the mode is off.
+          nextAttemptAt: new Date(Date.now() + 600_000).toISOString(),
+          lastError: acmeLastError(),
+        }),
+      );
+    await ready();
+    const panel = await card().findByText(HEADLINE);
+    const alert = panel.closest('[data-slot="alert"]') as HTMLElement;
+    expect(alert.id).toBe("lets-encrypt-last-run");
+    // Read from the ledger on load: a note, not an announcement.
+    expect(alert.getAttribute("role")).toBe("note");
+    expect(alert.textContent).toContain("Port 80 on tierplan.example.com must reach TierPlan");
+    expect(alert.textContent).toContain("1 failed attempt in a row.");
+    expect(alert.textContent).not.toContain("Next automatic attempt");
+    expect(within(alert).getByRole("button", { name: "Details" })).toBeTruthy();
+  });
+
+  it("still promises the next automatic attempt while Let's Encrypt is in use", async () => {
+    const next = new Date(Date.now() + 600_000).toISOString();
+    status = () =>
+      Response.json(
+        withACME({
+          account: accountOf(),
+          hasState: true,
+          mode: "active",
+          failures: 2,
+          nextAttemptAt: next,
+          lastError: acmeLastError(),
+        }),
+      );
+    await ready();
+    const panel = await card().findByText(HEADLINE);
+    const alert = panel.closest('[data-slot="alert"]') as HTMLElement;
+    expect(alert.textContent).toContain("Next automatic attempt");
   });
 });
 
