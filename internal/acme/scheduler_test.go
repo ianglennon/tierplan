@@ -645,3 +645,41 @@ func TestSchedulerDoesNothingWithCertificateFiles(t *testing.T) {
 			n, s.inst.served(), served)
 	}
 }
+
+// A-WR-01: with the account forgotten (the CA said it was gone), a due renewal is not started. Such a
+// run could only fail before reaching the CA, and every failure would be charged to the ledger and
+// count toward the manual-attempt guard that then refuses the admin's Issue after registering again.
+func TestSchedulerDoesNotRenewWithoutAnAccount(t *testing.T) {
+	ctx := context.Background()
+	// Without renewal information, so the renewal names no certificate to replace: the CA refuses to
+	// replace a certificate issued to the account that was forgotten.
+	s := newSchedEnv(t, acmetest.Options{NoRenewalInfo: true})
+	s.issueFirst()
+	if err := s.client.Forget(ctx); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	orders := s.fake.Count(acmetest.EndpointNewOrder)
+	s.schedule(s.mgr)
+
+	s.stepTo(s.state().RenewAt)
+	s.quiet(1)
+	s.idle(15*time.Minute, 1)
+	if st := s.state(); st.ConsecutiveFailures != 0 || !st.NextAttemptAt.IsZero() || st.LastErrorClass != "" {
+		t.Errorf("state = %+v, want nothing charged to the ledger without an account", st)
+	}
+	if n := s.fake.Count(acmetest.EndpointNewOrder); n != orders {
+		t.Errorf("the CA saw %d new orders, want %d", n, orders)
+	}
+	if err := s.mgr.manualBlock(ctx, s.state()); err != nil {
+		t.Errorf("manualBlock = %v, want the admin's next attempt allowed", err)
+	}
+
+	// The admin registers again: the next round renews.
+	if _, err := s.client.Register(ctx, "", true); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	s.step(Tick)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal after registering again ended %q, want succeeded (state %+v)", got, s.state())
+	}
+}

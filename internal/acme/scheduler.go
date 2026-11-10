@@ -258,6 +258,15 @@ func (m *Manager) renewalRound(ctx context.Context, st State, leaf *x509.Certifi
 	if now.Before(st.RenewAt) || !AutomaticAllowed(ledgerOf(st), now) {
 		return
 	}
+	// Without an account (the CA said it was gone, so it was forgotten) a run could only fail before
+	// reaching the CA, and every such failure would be charged to the ledger and count toward the
+	// manual-attempt guard. The renewal waits for an admin to register again, as a resume does.
+	if err := m.needAccount(ctx); err != nil {
+		if !errors.Is(err, ErrNoAccount) {
+			m.log.Error("the scheduler could not read the ACME account", "error", err)
+		}
+		return
+	}
 	req := m.renewRequest(ctx, st, leaf)
 	m.log.Info("starting a scheduled renewal of the Let's Encrypt certificate", "renew_at", st.RenewAt)
 	if _, err := m.startRun(runParams{trigger: TriggerSchedule, req: req}); err != nil && !errors.Is(err, ErrRunActive) {
