@@ -4,6 +4,7 @@
 package acme
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -87,11 +88,13 @@ func (m *Manager) settled(ctx context.Context) bool {
 	return true
 }
 
-// syncServed makes what is served follow what is stored (D-15). A Let's Encrypt certificate that has
-// reached its NotAfter is replaced by the self-signed one, once; renewals carry on, and the one that
-// works is served by the run that made it. A valid stored certificate that is not being served, because
-// the Installer refused it, is offered again. It reads the clock and the database and nothing else, so
-// it never depends on the CA being reachable.
+// syncServed makes what is served follow what is stored (D-15). A valid stored certificate that is not
+// the one being served, because the Installer refused it, is offered again. A Let's Encrypt certificate
+// being served that has reached its NotAfter is replaced by the self-signed one, once; renewals carry
+// on, and the one that works is served by the run that made it. Expiry is judged on the certificate
+// being served, not the stored one: when a renewal was stored but could not be switched to, the older
+// certificate is still served, and it lapses first. It reads the clock and the database and nothing
+// else, so it never depends on the CA being reachable.
 func (m *Manager) syncServed(ctx context.Context) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -114,32 +117,38 @@ func (m *Manager) syncServed(ctx context.Context) {
 	if !found {
 		return
 	}
-	switch inSync := m.served(); {
-	case !m.clock.Now().Before(leaf.NotAfter):
-		if !inSync {
+	now := m.clock.Now()
+	if now.Before(leaf.NotAfter) && !m.onWire().is(leaf) {
+		err = m.serveStored(ctx)
+		if err == nil {
+			m.log.Info("the stored Let's Encrypt certificate is served again")
 			return
 		}
-		m.log.Warn("the Let's Encrypt certificate has expired, so the self-signed certificate is served until it is renewed",
-			"expired_at", leaf.NotAfter)
+		m.noteInstallFailure(err)
+	}
+	if w := m.onWire(); w.acme && w.leaf != nil && !now.Before(w.leaf.NotAfter) {
+		m.log.Warn("the Let's Encrypt certificate being served has expired, so the self-signed certificate is served until it is renewed",
+			"expired_at", w.leaf.NotAfter)
 		if err := m.d.Installer.ServeSelfSigned(); err != nil {
 			m.log.Error("the self-signed certificate could not be served after the Let's Encrypt one expired", "error", err)
 		}
-	case !inSync:
-		chain, key, found, err := m.d.Store.Certificate(ctx)
-		if err != nil || !found {
-			m.log.Error("the scheduler could not open the stored Let's Encrypt certificate", "error", err)
-			return
-		}
-		keyPEM, err := encodeKey(key)
-		if err == nil {
-			err = m.d.Installer.ServeACME(chain, keyPEM)
-		}
-		if err != nil {
-			m.noteInstallFailure(err)
-			return
-		}
-		m.log.Info("the stored Let's Encrypt certificate is served again")
 	}
+}
+
+// serveStored asks the Installer to serve the stored Let's Encrypt certificate.
+func (m *Manager) serveStored(ctx context.Context) error {
+	chain, key, found, err := m.d.Store.Certificate(ctx)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("no Let's Encrypt certificate is stored")
+	}
+	keyPEM, err := encodeKey(key)
+	if err != nil {
+		return err
+	}
+	return m.d.Installer.ServeACME(chain, keyPEM)
 }
 
 // noteInstallFailure logs a failure to serve the stored certificate, once for each distinct message, so
@@ -154,41 +163,58 @@ func (m *Manager) noteInstallFailure(err error) {
 	}
 }
 
-// served reports whether the certificate the server serves is the stored Let's Encrypt one, as far as
-// this manager has seen: true after a successful ServeACME, false after ServeSelfSigned or a refusal.
-func (m *Manager) served() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.inSync
+// servedCert is the certificate the Installer serves: a Let's Encrypt one, with its leaf, or the
+// self-signed one.
+type servedCert struct {
+	acme bool
+	// leaf is the Let's Encrypt leaf being served; nil when it is self-signed, or in the unlikely
+	// case that a chain the Installer accepted cannot be parsed here.
+	leaf *x509.Certificate
 }
 
-func (m *Manager) setServed(v bool) {
+// is reports whether leaf is the Let's Encrypt certificate being served.
+func (w servedCert) is(leaf *x509.Certificate) bool {
+	return w.acme && w.leaf != nil && bytes.Equal(w.leaf.Raw, leaf.Raw)
+}
+
+// onWire is what the server serves, as far as this manager has seen. Only a swap that succeeded changes
+// it: a refused swap leaves the certificate that was served before (Installer).
+func (m *Manager) onWire() servedCert {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.inSync = v
-	if v {
+	return m.wire
+}
+
+func (m *Manager) setWire(w servedCert) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.wire = w
+	if w.acme {
 		m.installErr = ""
 	}
 }
 
-// trackedInstaller tells the manager what the Installer was last asked to serve and whether it did.
+// trackedInstaller tells the manager what the Installer serves after every swap that succeeded.
 type trackedInstaller struct {
 	Installer
 	m *Manager
 }
 
 func (t trackedInstaller) ServeACME(chainPEM, keyPEM []byte) error {
-	err := t.Installer.ServeACME(chainPEM, keyPEM)
-	t.m.setServed(err == nil)
-	return err
+	if err := t.Installer.ServeACME(chainPEM, keyPEM); err != nil {
+		return err
+	}
+	leaf, _ := leafOfChain(chainPEM)
+	t.m.setWire(servedCert{acme: true, leaf: leaf})
+	return nil
 }
 
 func (t trackedInstaller) ServeSelfSigned() error {
-	err := t.Installer.ServeSelfSigned()
-	if err == nil {
-		t.m.setServed(false)
+	if err := t.Installer.ServeSelfSigned(); err != nil {
+		return err
 	}
-	return err
+	t.m.setWire(servedCert{})
+	return nil
 }
 
 // resumeRound continues an order that was left open, as a resume run, with no new order: the first

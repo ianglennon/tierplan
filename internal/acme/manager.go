@@ -95,7 +95,8 @@ func (e *BlockedError) Error() string {
 }
 
 // Installer swaps the certificate the server serves. The server implements it (mirror first, then the
-// live swap); this package never touches a listener.
+// live swap); this package never touches a listener. A swap that returns an error has changed nothing:
+// the certificate served before it is still the one served.
 type Installer interface {
 	// ServeACME serves the Let's Encrypt chain and key (PEM) from now on.
 	ServeACME(chainPEM, keyPEM []byte) error
@@ -150,16 +151,16 @@ type Manager struct {
 	// opMu serialises the admin's mutations, so two requests cannot both pass the guards.
 	opMu sync.Mutex
 
-	// mu guards active, unrecorded, inSync and installErr.
+	// mu guards active, unrecorded, wire and installErr.
 	mu     sync.Mutex
 	active *activeRun
 	// unrecorded is the end of a run that could not be written when the run ended. Until it is, the
 	// stored ledger does not know about that run, so no run starts and every admin change writes it
 	// first.
 	unrecorded *runEnd
-	// inSync is whether the Installer last served the stored Let's Encrypt certificate, and installErr
-	// the last refusal that was logged (scheduler.go).
-	inSync     bool
+	// wire is what the Installer serves, as far as this manager has seen, and installErr the last
+	// refusal that was logged (scheduler.go).
+	wire       servedCert
 	installErr string
 }
 

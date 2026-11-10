@@ -811,3 +811,60 @@ func TestStopRecordsAnUnrecordedSuccessFirst(t *testing.T) {
 		t.Error("the success is still unrecorded after Stop")
 	}
 }
+
+// S-WR-01: a renewal that is stored but cannot be switched to leaves the older certificate on the wire.
+// The expiry fallback is judged on that one, so it is replaced by the self-signed certificate when it
+// lapses, even though the stored renewal is still valid; the renewal is offered again every round and
+// served once the Installer takes it.
+func TestSchedulerFallsBackWhenTheServedCertificateLapsesBeforeTheStoredOne(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	first := leafOf(t, s.inst.chains[0])
+	s.schedule(s.mgr)
+
+	// From here every switch to a Let's Encrypt certificate fails, as with an unwritable data directory.
+	setServeErr := func(err error) {
+		s.inst.mu.Lock()
+		defer s.inst.mu.Unlock()
+		s.inst.serveErr = err
+	}
+	setServeErr(errTestInstall)
+	s.stepTo(s.state().RenewAt)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal ended %q, want succeeded (stored, not switched to)", got)
+	}
+	chain, _, found, err := s.store.Certificate(ctx)
+	if err != nil || !found {
+		t.Fatalf("Certificate = %v, %v; want the renewal stored", found, err)
+	}
+	renewed := leafOf(t, chain)
+	if renewed.Equal(first) || !renewed.NotAfter.After(first.NotAfter) {
+		t.Fatalf("the stored certificate ends %v, want a renewal that outlives %v", renewed.NotAfter, first.NotAfter)
+	}
+
+	s.stepTo(first.NotAfter.Add(-time.Minute))
+	if n := s.inst.selfSignedCount(); n != 0 {
+		t.Errorf("self-signed was served %d times while the served certificate was valid", n)
+	}
+	s.stepTo(first.NotAfter)
+	if n := s.inst.selfSignedCount(); n != 1 {
+		t.Errorf("self-signed was served %d times when the served certificate lapsed, want once", n)
+	}
+	s.step(Tick)
+	if n := s.inst.selfSignedCount(); n != 1 {
+		t.Errorf("self-signed was served %d times, want still once", n)
+	}
+
+	// The Installer works again: the next round serves the stored renewal.
+	setServeErr(nil)
+	s.step(Tick)
+	if s.inst.served() != 2 || !leafOf(t, s.inst.chains[1]).Equal(renewed) {
+		t.Errorf("ServeACME succeeded %d times, want the stored renewal served", s.inst.served())
+	}
+	s.step(Tick)
+	if s.inst.served() != 2 || s.inst.selfSignedCount() != 1 {
+		t.Errorf("ServeACME %d, self-signed %d after the renewal was served; want 2 and 1", s.inst.served(), s.inst.selfSignedCount())
+	}
+	s.quiet(2)
+}
