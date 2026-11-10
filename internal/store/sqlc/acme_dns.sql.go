@@ -30,6 +30,15 @@ func (q *Queries) DeleteACMEDNSCredential(ctx context.Context, provider string) 
 	return err
 }
 
+const deleteACMEDNSRecord = `-- name: DeleteACMEDNSRecord :exec
+DELETE FROM acme_dns_records WHERE id = ?
+`
+
+func (q *Queries) DeleteACMEDNSRecord(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteACMEDNSRecord, id)
+	return err
+}
+
 const getACMEDNSCredential = `-- name: GetACMEDNSCredential :one
 SELECT provider, token_sealed, created_at FROM acme_dns_credentials WHERE provider = ?
 `
@@ -39,6 +48,276 @@ func (q *Queries) GetACMEDNSCredential(ctx context.Context, provider string) (Ac
 	var i AcmeDnsCredential
 	err := row.Scan(&i.Provider, &i.TokenSealed, &i.CreatedAt)
 	return i, err
+}
+
+const getPendingACMEDNSRecord = `-- name: GetPendingACMEDNSRecord :one
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class FROM acme_dns_records WHERE provider = ? AND zone_id = ? AND name = ? AND value = ?
+ORDER BY created_at DESC, id DESC LIMIT 1
+`
+
+type GetPendingACMEDNSRecordParams struct {
+	Provider string
+	ZoneID   string
+	Name     string
+	Value    string
+}
+
+// A row that already holds this exact record at the provider, newest first, so a resumed order reuses it.
+func (q *Queries) GetPendingACMEDNSRecord(ctx context.Context, arg GetPendingACMEDNSRecordParams) (AcmeDnsRecord, error) {
+	row := q.db.QueryRowContext(ctx, getPendingACMEDNSRecord,
+		arg.Provider,
+		arg.ZoneID,
+		arg.Name,
+		arg.Value,
+	)
+	var i AcmeDnsRecord
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.ZoneID,
+		&i.RecordID,
+		&i.Name,
+		&i.Value,
+		&i.Comment,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.Token,
+		&i.CreatedAt,
+		&i.Attempts,
+		&i.LastTryAt,
+		&i.NextTryAt,
+		&i.LastErrorClass,
+	)
+	return i, err
+}
+
+const insertACMEDNSRecord = `-- name: InsertACMEDNSRecord :exec
+INSERT INTO acme_dns_records (id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id,
+                              token, created_at, attempts, last_try_at, next_try_at, last_error_class)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertACMEDNSRecordParams struct {
+	ID             string
+	Provider       string
+	ZoneID         string
+	RecordID       string
+	Name           string
+	Value          string
+	Comment        string
+	OwnerKind      string
+	OwnerID        string
+	Token          string
+	CreatedAt      int64
+	Attempts       int64
+	LastTryAt      int64
+	NextTryAt      int64
+	LastErrorClass string
+}
+
+func (q *Queries) InsertACMEDNSRecord(ctx context.Context, arg InsertACMEDNSRecordParams) error {
+	_, err := q.db.ExecContext(ctx, insertACMEDNSRecord,
+		arg.ID,
+		arg.Provider,
+		arg.ZoneID,
+		arg.RecordID,
+		arg.Name,
+		arg.Value,
+		arg.Comment,
+		arg.OwnerKind,
+		arg.OwnerID,
+		arg.Token,
+		arg.CreatedAt,
+		arg.Attempts,
+		arg.LastTryAt,
+		arg.NextTryAt,
+		arg.LastErrorClass,
+	)
+	return err
+}
+
+const listACMEDNSRecords = `-- name: ListACMEDNSRecords :many
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class FROM acme_dns_records ORDER BY created_at, id
+`
+
+func (q *Queries) ListACMEDNSRecords(ctx context.Context) ([]AcmeDnsRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listACMEDNSRecords)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AcmeDnsRecord
+	for rows.Next() {
+		var i AcmeDnsRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.ZoneID,
+			&i.RecordID,
+			&i.Name,
+			&i.Value,
+			&i.Comment,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.Token,
+			&i.CreatedAt,
+			&i.Attempts,
+			&i.LastTryAt,
+			&i.NextTryAt,
+			&i.LastErrorClass,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listACMEDNSRecordsByOwner = `-- name: ListACMEDNSRecordsByOwner :many
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class FROM acme_dns_records WHERE owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id
+`
+
+type ListACMEDNSRecordsByOwnerParams struct {
+	OwnerKind string
+	OwnerID   string
+	Token     string
+}
+
+// The rows of one owner (an order or a test) for one ACME challenge token, oldest first.
+func (q *Queries) ListACMEDNSRecordsByOwner(ctx context.Context, arg ListACMEDNSRecordsByOwnerParams) ([]AcmeDnsRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listACMEDNSRecordsByOwner, arg.OwnerKind, arg.OwnerID, arg.Token)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AcmeDnsRecord
+	for rows.Next() {
+		var i AcmeDnsRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.ZoneID,
+			&i.RecordID,
+			&i.Name,
+			&i.Value,
+			&i.Comment,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.Token,
+			&i.CreatedAt,
+			&i.Attempts,
+			&i.LastTryAt,
+			&i.NextTryAt,
+			&i.LastErrorClass,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueACMEDNSRecords = `-- name: ListDueACMEDNSRecords :many
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class FROM acme_dns_records WHERE next_try_at <= ? ORDER BY created_at, id
+`
+
+// The rows whose next try has come, oldest first.
+func (q *Queries) ListDueACMEDNSRecords(ctx context.Context, nextTryAt int64) ([]AcmeDnsRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listDueACMEDNSRecords, nextTryAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AcmeDnsRecord
+	for rows.Next() {
+		var i AcmeDnsRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.ZoneID,
+			&i.RecordID,
+			&i.Name,
+			&i.Value,
+			&i.Comment,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.Token,
+			&i.CreatedAt,
+			&i.Attempts,
+			&i.LastTryAt,
+			&i.NextTryAt,
+			&i.LastErrorClass,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markACMEDNSRecordFailed = `-- name: MarkACMEDNSRecordFailed :exec
+UPDATE acme_dns_records SET attempts = ?, last_try_at = ?, next_try_at = ?, last_error_class = ? WHERE id = ?
+`
+
+type MarkACMEDNSRecordFailedParams struct {
+	Attempts       int64
+	LastTryAt      int64
+	NextTryAt      int64
+	LastErrorClass string
+	ID             string
+}
+
+func (q *Queries) MarkACMEDNSRecordFailed(ctx context.Context, arg MarkACMEDNSRecordFailedParams) error {
+	_, err := q.db.ExecContext(ctx, markACMEDNSRecordFailed,
+		arg.Attempts,
+		arg.LastTryAt,
+		arg.NextTryAt,
+		arg.LastErrorClass,
+		arg.ID,
+	)
+	return err
+}
+
+const restampACMEDNSRecord = `-- name: RestampACMEDNSRecord :exec
+UPDATE acme_dns_records SET owner_kind = ?, owner_id = ?, token = ?, attempts = 0, last_try_at = 0,
+    next_try_at = 0, last_error_class = ''
+WHERE id = ?
+`
+
+type RestampACMEDNSRecordParams struct {
+	OwnerKind string
+	OwnerID   string
+	Token     string
+	ID        string
+}
+
+// Hands a row to a new owner and token, and clears its retry state: it is in use again.
+func (q *Queries) RestampACMEDNSRecord(ctx context.Context, arg RestampACMEDNSRecordParams) error {
+	_, err := q.db.ExecContext(ctx, restampACMEDNSRecord,
+		arg.OwnerKind,
+		arg.OwnerID,
+		arg.Token,
+		arg.ID,
+	)
+	return err
 }
 
 const upsertACMEDNSCredential = `-- name: UpsertACMEDNSCredential :exec

@@ -14,3 +14,36 @@ DELETE FROM acme_dns_credentials WHERE provider = ?;
 -- name: CountACMEDNSCredential :one
 -- Whether a token is saved, without opening it.
 SELECT COUNT(*) FROM acme_dns_credentials WHERE provider = ?;
+
+-- name: InsertACMEDNSRecord :exec
+INSERT INTO acme_dns_records (id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id,
+                              token, created_at, attempts, last_try_at, next_try_at, last_error_class)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListACMEDNSRecordsByOwner :many
+-- The rows of one owner (an order or a test) for one ACME challenge token, oldest first.
+SELECT * FROM acme_dns_records WHERE owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id;
+
+-- name: GetPendingACMEDNSRecord :one
+-- A row that already holds this exact record at the provider, newest first, so a resumed order reuses it.
+SELECT * FROM acme_dns_records WHERE provider = ? AND zone_id = ? AND name = ? AND value = ?
+ORDER BY created_at DESC, id DESC LIMIT 1;
+
+-- name: RestampACMEDNSRecord :exec
+-- Hands a row to a new owner and token, and clears its retry state: it is in use again.
+UPDATE acme_dns_records SET owner_kind = ?, owner_id = ?, token = ?, attempts = 0, last_try_at = 0,
+    next_try_at = 0, last_error_class = ''
+WHERE id = ?;
+
+-- name: DeleteACMEDNSRecord :exec
+DELETE FROM acme_dns_records WHERE id = ?;
+
+-- name: MarkACMEDNSRecordFailed :exec
+UPDATE acme_dns_records SET attempts = ?, last_try_at = ?, next_try_at = ?, last_error_class = ? WHERE id = ?;
+
+-- name: ListDueACMEDNSRecords :many
+-- The rows whose next try has come, oldest first.
+SELECT * FROM acme_dns_records WHERE next_try_at <= ? ORDER BY created_at, id;
+
+-- name: ListACMEDNSRecords :many
+SELECT * FROM acme_dns_records ORDER BY created_at, id;
