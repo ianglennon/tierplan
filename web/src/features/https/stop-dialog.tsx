@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 
-import { useStopACME } from "@/api/https";
+import { ACMEControlError, useStopACME } from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -30,7 +30,8 @@ interface StopDialogProps {
 // StopDialog is "Stop using Let's Encrypt?" (D-14). Nothing is lost by stopping (the account stays,
 // issuing again is one click, nobody is signed out), so there is nothing to type. Focus starts on
 // "Keep Let's Encrypt", and nothing closes the dialog while the request is in flight. A failure stays
-// in the dialog; a success closes it once the status says the certificate is self-signed again.
+// in the dialog; a success closes it once the status says the certificate is self-signed again, and a
+// 409 (the page was out of date) closes it so the re-read card can say why.
 export function StopDialog({ open, onOpenChange }: StopDialogProps) {
   const t = useT();
   const stop = useStopACME();
@@ -48,7 +49,13 @@ export function StopDialog({ open, onOpenChange }: StopDialogProps) {
     setFailed(false);
     try {
       await stop.mutateAsync();
-    } catch {
+    } catch (error) {
+      // A 409 means the page was out of date (a run started, or Let's Encrypt was already stopped).
+      // The status has been read again and the card says what it is now, so the dialog just closes.
+      if (error instanceof ACMEControlError && error.status === 409) {
+        onOpenChange(false);
+        return;
+      }
       setFailed(true);
       return;
     }

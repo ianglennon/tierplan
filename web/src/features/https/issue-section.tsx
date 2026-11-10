@@ -72,13 +72,23 @@ interface IssueSectionProps {
   // Told whether the run this page followed has just ended in failure and the status has been read
   // again, so the card can announce the error panel once (role alert) instead of on every reload.
   onRunFailed?: (failed: boolean) => void;
+  // Told whether a run is active as this page sees it: the status's run, or one the page has started or
+  // is following before the status lists it. The Stop button is disabled by it.
+  onRunActive?: (active: boolean) => void;
 }
 
 // IssueSection is the "Run and actions" part of the Let's Encrypt card (ACME-04, ACME-06, ACME-07,
 // ACME-10, D-09): the list of what stops an order, the Issue certificate and Renew now buttons with
 // their waits, and the live panel of the run. A run started elsewhere (another tab, the scheduler, a
 // resume after a restart) is picked up from the status and followed the same way.
-export function IssueSection({ status, acme, state, canWrite, onRunFailed }: IssueSectionProps) {
+export function IssueSection({
+  status,
+  acme,
+  state,
+  canWrite,
+  onRunFailed,
+  onRunActive,
+}: IssueSectionProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const now = useNow();
@@ -180,6 +190,9 @@ export function IssueSection({ status, acme, state, canWrite, onRunFailed }: Iss
   const pending = issue.isPending || renew.isPending;
   const streamLive = jobId !== null && !(current && stream.finished);
   const runActive = state === "C" || streamLive;
+  useEffect(() => {
+    onRunActive?.(runActive);
+  }, [runActive, onRunActive]);
 
   // Why the buttons cannot be used, in the order the card's rules give them. Each reason is a line
   // the buttons are described by, so it is read when they are focused.

@@ -172,19 +172,25 @@ describe("Stop using Let's Encrypt dialog (D-14)", () => {
     expect(stops()).toHaveLength(2);
   });
 
-  it("a 409 (the page was out of date) also stays open and reads the status again", async () => {
-    stop = () =>
-      Response.json(
-        { type: "acme_not_active", title: "x", status: 409, detail: "d" },
-        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+  it.each(["acme_run_active", "acme_not_active"])(
+    "a 409 %s (the page was out of date) closes, reads the status again and toasts nothing",
+    async (type) => {
+      stop = () =>
+        Response.json(
+          { type, title: "x", status: 409, detail: "d" },
+          { status: 409, headers: { "Content-Type": "application/problem+json" } },
+        );
+      renderDialog();
+      await waitFor(() => expect(sent.some((s) => s.path === "/api/https/status")).toBe(true));
+      const before = sent.filter((s) => s.path === "/api/https/status").length;
+      fireEvent.click(confirmButton());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(closed).toBe(1);
+      expect(screen.queryByText("Something went wrong. Try again.")).toBeNull();
+      expect(successToast).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(sent.filter((s) => s.path === "/api/https/status").length).toBeGreaterThan(before),
       );
-    renderDialog();
-    await waitFor(() => expect(sent.some((s) => s.path === "/api/https/status")).toBe(true));
-    const before = sent.filter((s) => s.path === "/api/https/status").length;
-    fireEvent.click(confirmButton());
-    await dialog().findByText("Something went wrong. Try again.");
-    await waitFor(() =>
-      expect(sent.filter((s) => s.path === "/api/https/status").length).toBeGreaterThan(before),
-    );
-  });
+    },
+  );
 });

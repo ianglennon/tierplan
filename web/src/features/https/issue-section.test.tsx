@@ -712,6 +712,34 @@ describe("a run started elsewhere", () => {
   });
 });
 
+describe("the Stop button while a run starts (W-WR-03)", () => {
+  const stopButton = () => card().getByRole("button", { name: "Stop using Let's Encrypt" });
+
+  it("is disabled as soon as the page follows a run, before the status lists it", async () => {
+    status = () => served();
+    await ready();
+    expect(isDisabled(stopButton())).toBe(false);
+    // The status still says nothing runs (D): only the page knows the renewal has started.
+    fireEvent.click(renewButton() as HTMLElement);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await waitFor(() => expect(isDisabled(stopButton())).toBe(true));
+    expect(describedBy(stopButton())).toBe("A run is already in progress.");
+    fireEvent.click(stopButton());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // The run ends: Stop can be used again.
+    act(() =>
+      stream().sendFrame(
+        "done",
+        acmeRunFrame({ kind: "renew", state: "done", items: acmeSteps({ stored: "done" }) }),
+        "9",
+      ),
+    );
+    await card().findByText("Certificate renewed.");
+    await waitFor(() => expect(isDisabled(stopButton())).toBe(false));
+  });
+});
+
 describe("after Stop (W-WR-01)", () => {
   // Stop using Let's Encrypt through the card's own button and dialog. The server goes back to the
   // self-signed certificate and keeps the Let's Encrypt one (state L).

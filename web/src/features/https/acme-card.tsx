@@ -57,6 +57,8 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
   const acme = status.acme;
   // True right after a run of this session failed; a failure read from the ledger is only a note.
   const [freshFailure, setFreshFailure] = useState(false);
+  // True while a run is active as the issue section sees it, which is sooner than the status says C.
+  const [runActive, setRunActive] = useState(false);
   if (!acme) return null;
   const state = deriveCardState(status);
   // A restore pause with no account yet keeps the registration form, but the server refuses it.
@@ -108,6 +110,7 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
         state={state}
         canWrite={canWrite}
         onRunFailed={setFreshFailure}
+        onRunActive={setRunActive}
       />
       {/* Drawn whatever the mode: a failed first issue leaves Let's Encrypt off, and Stop clears the
           error, so an error the status carries is always one to explain. With the mode off nothing
@@ -123,7 +126,7 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
       ) : null}
 
       {canWrite && acme.mode === "active" && state !== "I" && state !== "J" ? (
-        <StopRow running={state === "C"} />
+        <StopRow running={state === "C" || runActive} />
       ) : null}
 
       {canWrite ? null : (
