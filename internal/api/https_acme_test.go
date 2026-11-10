@@ -742,3 +742,18 @@ func TestHTTPSACMERoutesDeclareTheirPermissions(t *testing.T) {
 		}
 	}
 }
+
+// The profile is not changed under a run in progress.
+func TestPutACMEProfileDuringARunIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newACMEFix(t, acmeOpts{})
+	f.register(t, "")
+	f.fake.HoldFinalize() // the run stays in progress until the fixture's hub is closed
+	if _, err := f.mgr.Issue(context.Background(), "user:test"); err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	acmeProblemOf(t, f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":"shortlived"}`), 409, "acme_run_active")
+	if got := f.status(t).ACME; got.Profile != "" || got.ActiveRun == nil || got.ActiveRun.Outcome != "running" {
+		t.Errorf("profile %q active run %+v, want the profile unchanged and the run shown as running", got.Profile, got.ActiveRun)
+	}
+}
