@@ -36,7 +36,9 @@ function devHttps(): { key: Buffer; cert: Buffer } | undefined {
 // (<DataDir>/tls/server.crt). It is read again for every new upstream connection, so a Go server
 // that starts after Vite, or one that signed a new certificate, is trusted without restarting
 // Vite. It is the only trust anchor the proxy has: Node accepts a self-signed certificate that is
-// listed as its own anchor, and still checks the name and the dates.
+// listed as its own anchor, and still checks the name and the dates. When Let's Encrypt (or Pebble
+// in the dev UAT) is served, the file holds the leaf and its intermediate but not the CA's root, so
+// allowPartialTrustChain lets a certificate in that file be the anchor; nothing else is trusted.
 const upstreamCertFile =
   process.env.TIERPLAN_DEV_SERVER_CERT ??
   decodeURIComponent(new URL("../.devdata/tls/server.crt", import.meta.url).pathname);
@@ -53,7 +55,7 @@ class VerifiedUpstreamAgent extends https.Agent {
       process.nextTick(() => socket.destroy(err as Error));
       return socket;
     }
-    return tls.connect({ ...options, ca }, callback);
+    return tls.connect({ ...options, ca, allowPartialTrustChain: true }, callback);
   }
 }
 
