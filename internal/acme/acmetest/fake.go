@@ -18,6 +18,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -58,6 +59,12 @@ const (
 
 // problemNS is the prefix of an ACME problem type (RFC 8555 section 6.7).
 const problemNS = "urn:ietf:params:acme:error:"
+
+// The challenge types the fake can offer.
+const (
+	challengeHTTP01 = "http-01"
+	challengeDNS01  = "dns-01"
+)
 
 // Problem is an ACME problem document the fake answers with.
 type Problem struct {
@@ -146,6 +153,7 @@ type Fake struct {
 	seen       []OrderSeen
 	accountsIn []AccountSeen
 	hits       map[string]int
+	txtLookups map[string]int // per fqdn, the dns-01 TXT lookups made
 }
 
 // renewalWindow is a scripted renewalInfo answer.
@@ -221,6 +229,12 @@ func NewFake(t testing.TB, o Options) *Fake {
 		replacedBy: map[string]*order{},
 		counts:     map[string]int{},
 		hits:       map[string]int{},
+		txtLookups: map[string]int{},
+	}
+	switch o.ChallengeType {
+	case "", challengeHTTP01, challengeDNS01:
+	default:
+		t.Fatalf("acmetest: ChallengeType %q is not http-01 or dns-01", o.ChallengeType)
 	}
 	f.newCA(t)
 
@@ -572,7 +586,7 @@ func (f *Fake) newOrder(q *request) {
 			f.problem(q.w, Problem{Type: "unsupportedIdentifier", Detail: fmt.Sprintf("identifier type %q is not supported", id.Type)})
 			return
 		case id.Value == "" || strings.HasPrefix(id.Value, "*."):
-			f.problem(q.w, Problem{Type: "rejectedIdentifier", Detail: fmt.Sprintf("name %q cannot be validated by http-01", id.Value)})
+			f.problem(q.w, Problem{Type: "rejectedIdentifier", Detail: fmt.Sprintf("name %q cannot be validated by %s", id.Value, f.challengeType())})
 			return
 		}
 		names = append(names, strings.ToLower(id.Value))
@@ -683,9 +697,17 @@ func (f *Fake) orderView(o *order) acme.Order {
 	return v
 }
 
+// challengeType is the type every authorization offers.
+func (f *Fake) challengeType() string {
+	if f.opts.ChallengeType == "" {
+		return challengeHTTP01
+	}
+	return f.opts.ChallengeType
+}
+
 func (f *Fake) challengeView(a *authz) acme.Challenge {
 	c := acme.Challenge{
-		Type: "http-01", URL: f.srv.URL + "/chall/" + a.id, Status: a.chall, Token: a.token,
+		Type: f.challengeType(), URL: f.srv.URL + "/chall/" + a.id, Status: a.chall, Token: a.token,
 		Validated: a.validated,
 	}
 	if a.problem != nil && a.chall == acme.StatusInvalid {
@@ -773,10 +795,18 @@ func (f *Fake) prepare(c *check) {
 		c.scripted = &p
 		return
 	}
-	if f.opts.Validate != nil {
+	switch {
+	case f.challengeType() == challengeDNS01:
+		if f.opts.LookupTXT != nil {
+			f.txtLookups[challengeRecord(c.host)]++
+		}
+	case f.opts.Validate != nil:
 		f.hits[c.token]++
 	}
 }
+
+// challengeRecord is the name a dns-01 challenge for host looks its TXT record up at.
+func challengeRecord(host string) string { return "_acme-challenge." + host }
 
 // attempt performs the http-01 validation (RFC 8555 section 8.3): a GET of the challenge path over
 // plain HTTP at the address the test maps the name to, whose body must be the key authorization. It
@@ -784,6 +814,9 @@ func (f *Fake) prepare(c *check) {
 func (f *Fake) attempt(c check) *Problem {
 	if c.scripted != nil {
 		return c.scripted
+	}
+	if f.challengeType() == challengeDNS01 {
+		return f.attemptDNS(c)
 	}
 	if f.opts.Validate == nil {
 		return nil
@@ -813,6 +846,22 @@ func (f *Fake) attempt(c check) *Problem {
 		return &Problem{Type: "incorrectResponse", Detail: fmt.Sprintf("the response from %s was not the key authorization", url)}
 	}
 	return nil
+}
+
+// attemptDNS performs the dns-01 validation (RFC 8555 section 8.4): a TXT record at
+// _acme-challenge.<name> must hold base64url(sha256(key authorization)). It returns nil when the
+// challenge holds. mu is not held.
+func (f *Fake) attemptDNS(c check) *Problem {
+	if f.opts.LookupTXT == nil {
+		return nil
+	}
+	record := challengeRecord(c.host)
+	sum := sha256.Sum256([]byte(c.token + "." + c.thumb))
+	want := base64.RawURLEncoding.EncodeToString(sum[:])
+	if slices.Contains(f.opts.LookupTXT(record), want) {
+		return nil
+	}
+	return &Problem{Status: http.StatusForbidden, Type: "unauthorized", Detail: "no TXT record at " + record + " holds the expected value"}
 }
 
 // apply records the outcome of a validation. The caller holds mu.
@@ -1106,5 +1155,10 @@ func (f *Fake) ValidationHits(token string) int {
 	return f.hits[token]
 }
 
-// TXTLookups is the number of TXT lookups the fake made for fqdn.
-func (f *Fake) TXTLookups(fqdn string) int { return 0 }
+// TXTLookups is the number of dns-01 TXT lookups the fake made for fqdn. A failure scripted with
+// FailValidation makes none.
+func (f *Fake) TXTLookups(fqdn string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.txtLookups[strings.ToLower(strings.TrimSuffix(fqdn, "."))]
+}
