@@ -19,12 +19,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/auth"
 	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/authn"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -99,7 +102,26 @@ func (r *acmeRig) start(ln net.Listener) *Server {
 	done := make(chan error, 1)
 	go func() { done <- srv.serve(ctx, ln) }()
 	r.srv, r.cancel, r.done = srv, cancel, done
+	// The scheduler runs its first round and arms its next timer: from here it is waiting on the
+	// clock, and step moves it on.
+	r.clock.WaitArmed(r.t)
 	return srv
+}
+
+// step moves the ACME clock on by d, which wakes the scheduler, and returns once its round is over
+// and it waits on the clock again. A run that round started may still be going: awaitRuns waits for it.
+func (r *acmeRig) step(d time.Duration) {
+	r.t.Helper()
+	r.clock.Advance(d)
+	r.clock.WaitArmed(r.t)
+}
+
+// awaitRuns waits for every certificate run the server has started to end.
+func (r *acmeRig) awaitRuns() {
+	r.t.Helper()
+	for _, j := range r.srv.jobs.List(func(j jobs.Job) bool { return j.Kind == acme.JobKind }) {
+		r.waitJob(j.ID)
+	}
 }
 
 // startNew serves a server on a fresh loopback port.
@@ -135,19 +157,30 @@ func (r *acmeRig) issue() {
 	if err != nil {
 		r.t.Fatalf("Issue: %v", err)
 	}
-	r.waitJob(rs.JobID)
+	if id := rs.JobID; id == "" {
+		r.t.Fatal("no job was started")
+	} else {
+		r.waitJob(id)
+	}
+	r.requireNoFailedStep(rs.JobID)
 }
 
 // waitJob waits for a job of the server to end.
-func (r *acmeRig) waitJob(id string) {
+func (r *acmeRig) waitJob(id string) jobs.Job {
 	r.t.Helper()
-	if id == "" {
-		r.t.Fatal("no job was started")
-	}
-	ctx := testsupport.Context(r.t)
-	job, err := r.srv.jobs.Wait(ctx, id)
+	job, err := r.srv.jobs.Wait(testsupport.Context(r.t), id)
 	if err != nil {
 		r.t.Fatalf("wait for job %s: %v", id, err)
+	}
+	return job
+}
+
+// requireNoFailedStep fails the test when a step of the finished job failed.
+func (r *acmeRig) requireNoFailedStep(id string) {
+	r.t.Helper()
+	job, ok := r.srv.jobs.Get(id)
+	if !ok {
+		r.t.Fatalf("job %s is gone", id)
 	}
 	for _, it := range job.Items {
 		if it.State == "failed" {
@@ -161,7 +194,9 @@ func (r *acmeRig) waitJob(id string) {
 // certificate.
 func (r *acmeRig) handshake(roots *x509.CertPool) (*x509.Certificate, error) {
 	r.t.Helper()
-	conn, err := (&tls.Dialer{Config: &tls.Config{ServerName: acmeHost, RootCAs: roots, MinVersion: tls.VersionTLS12}}).
+	// The certificate is judged at the ACME clock's time: a test that ages the clock by months
+	// would otherwise present a certificate that is not valid yet by the wall clock.
+	conn, err := (&tls.Dialer{Config: &tls.Config{ServerName: acmeHost, RootCAs: roots, MinVersion: tls.VersionTLS12, Time: r.clock.Now}}).
 		DialContext(testsupport.Context(r.t), "tcp", r.address())
 	if err != nil {
 		return nil, err
@@ -261,9 +296,9 @@ func (r *acmeRig) healthy() {
 	}
 }
 
-// issuedBy reports whether leaf was issued by the fake CA.
+// issuedBy reports whether leaf was issued by the fake CA, judged at the ACME clock's time.
 func (r *acmeRig) issuedBy(leaf *x509.Certificate) bool {
-	_, err := leaf.Verify(x509.VerifyOptions{DNSName: acmeHost, Roots: r.fake.IssuerPool()})
+	_, err := leaf.Verify(x509.VerifyOptions{DNSName: acmeHost, Roots: r.fake.IssuerPool(), CurrentTime: r.clock.Now()})
 	return err == nil
 }
 
@@ -363,4 +398,134 @@ func TestACMEIssueSwap(t *testing.T) {
 	if _, err := r.handshake(r.fake.IssuerPool()); err != nil {
 		t.Errorf("the handshake after a restart: %v", err)
 	}
+}
+
+// After a Let's Encrypt certificate was served, Stop puts the self-signed certificate back with the
+// pin it always had, so every agent installed with that pin still connects (D-16, T-14-28).
+func TestACMEStopReturnsToTheSelfSignedPin(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	srv := r.startNew()
+	pinBefore := srv.https.Pin()
+	if pinBefore == "" {
+		t.Fatal("the self-signed certificate publishes no pin")
+	}
+	r.issue()
+	if srv.https.Kind() != tlsKindACME || srv.https.Pin() != "" {
+		t.Fatalf("after the issue kind = %d and pin = %q, want Let's Encrypt and no pin", srv.https.Kind(), srv.https.Pin())
+	}
+
+	if err := srv.acme.Stop(context.Background(), "test"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	leaf, err := r.handshake(r.mirrorPool())
+	if err != nil {
+		t.Fatalf("the handshake after Stop does not verify against the mirror: %v", err)
+	}
+	if r.issuedBy(leaf) {
+		t.Error("the handshake after Stop still presents the Let's Encrypt certificate")
+	}
+	if got := authn.SPKIPin(leaf); got != pinBefore {
+		t.Errorf("pin after Stop = %q, want the pin from before the issue, %q", got, pinBefore)
+	}
+	if got := srv.https.Pins(); len(got) != 1 || got[0] != pinBefore {
+		t.Errorf("Pins() after Stop = %v, want [%s]", got, pinBefore)
+	}
+	if srv.https.HSTSAllowed() {
+		t.Error("HSTS is allowed over the self-signed certificate")
+	}
+	mirrorMatchesServed(t, srv, r.cfg.DataDir)
+	r.healthy()
+}
+
+// When the Let's Encrypt certificate reaches its end while renewals keep failing, the self-signed
+// certificate is served by itself with the pin it always had, the mirror follows and the healthcheck
+// stays green; the renewal that works later puts Let's Encrypt back (D-15).
+func TestACMEExpiryFallsBackToSelfSigned(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	srv := r.startNew()
+	pinBefore := srv.https.Pin()
+	r.issue()
+	first := leafOf(t, srv.https.Config())
+
+	// One renewal fails; the clock jumps past the end of the certificate.
+	r.fake.FailNext(acmetest.EndpointNewOrder, acmetest.Problem{Status: 400, Type: "malformed", Detail: "scripted refusal"})
+	r.step(first.NotAfter.Sub(r.clock.Now()) + time.Hour)
+	r.awaitRuns()
+
+	leaf, err := r.handshake(r.mirrorPool())
+	if err != nil {
+		t.Fatalf("the handshake after the expiry does not verify against the mirror: %v", err)
+	}
+	if got := authn.SPKIPin(leaf); got != pinBefore || r.issuedBy(leaf) {
+		t.Errorf("after the expiry the handshake presents pin %q (issued by the fake CA: %v), want the self-signed pin %q", got, r.issuedBy(leaf), pinBefore)
+	}
+	if got := srv.https.Pins(); len(got) != 1 || got[0] != pinBefore {
+		t.Errorf("Pins() after the expiry = %v, want [%s]", got, pinBefore)
+	}
+	st, err := srv.acme.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !st.Fallback {
+		t.Error("Status.Fallback = false after the certificate expired, want true")
+	}
+	mirrorMatchesServed(t, srv, r.cfg.DataDir)
+	r.healthy()
+
+	// The next renewal works and Let's Encrypt is served again. The healthcheck is not asked here: it
+	// judges the certificate by the wall clock, and this one was issued for a clock months ahead.
+	r.step(2 * time.Minute)
+	r.awaitRuns()
+	renewed, err := r.handshake(r.fake.IssuerPool())
+	if err != nil {
+		t.Fatalf("the handshake after the renewal: %v", err)
+	}
+	if renewed.SerialNumber.Cmp(first.SerialNumber) == 0 || !r.issuedBy(renewed) {
+		t.Errorf("after the renewal the handshake presents serial %v, want a new certificate from the fake CA", renewed.SerialNumber)
+	}
+	if srv.https.Kind() != tlsKindACME || srv.https.Pins() != nil {
+		t.Errorf("after the renewal kind = %d and pins = %v, want Let's Encrypt and none", srv.https.Kind(), srv.https.Pins())
+	}
+	mirrorMatchesServed(t, srv, r.cfg.DataDir)
+}
+
+// While a Let's Encrypt certificate is served, an agent URL change (the public URL is fixed by the environment in these tests) makes the self-signed source sign
+// again for its row, but the mirror the healthcheck trusts keeps the certificate being served.
+func TestSelfSignedRefreshDoesNotOverwriteTheACMEMirror(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	srv := r.startNew()
+	r.issue()
+	ctx := context.Background()
+	rows := sealedCertStore{st: srv.Store(), v: srv.Vault()}
+	before, _, found, err := rows.Load(ctx, selfSignedID)
+	if err != nil || !found {
+		t.Fatalf("the self-signed row: %v (found %v)", err, found)
+	}
+
+	// The public URL is fixed by the environment here, so the agent URL is what changes the names.
+	srv.Instance().ApplyAgentURL("https://agent.other.test")
+	r.tlsClock.Tick(t, selfSignedNameCheck)
+	r.tlsClock.WaitArmed(t) // the loop arms again once Refresh has run
+
+	after, _, _, err := rows.Load(ctx, selfSignedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(before, after) {
+		t.Fatal("the self-signed row was not signed again for the new name, so the test did not reach the refresh")
+	}
+	block, _ := pem.Decode(after)
+	signed, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := signed.VerifyHostname("agent.other.test"); err != nil {
+		t.Errorf("the self-signed row does not cover the new name: %v", err)
+	}
+	mirrorMatchesServed(t, srv, r.cfg.DataDir)
+	if !r.issuedBy(r.mirrorLeaf()) {
+		t.Error("the mirror no longer holds the Let's Encrypt certificate")
+	}
+	r.healthy()
 }
