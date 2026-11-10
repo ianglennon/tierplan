@@ -82,6 +82,9 @@ func (e *RefusedError) Error() string {
 type BlockedError struct {
 	Until  time.Time
 	Reason string
+	// Wait is how long from the moment of the refusal until Until, by the manager's own clock; the
+	// API sends it as Retry-After.
+	Wait time.Duration
 }
 
 func (e *BlockedError) Error() string {
@@ -507,7 +510,7 @@ func (m *Manager) manualBlock(ctx context.Context, st State) error {
 		return err
 	}
 	if until, reason := ManualBlock(ledgerOf(st), failed, now); reason != "" {
-		return &BlockedError{Until: until, Reason: reason}
+		return &BlockedError{Until: until, Reason: reason, Wait: max(until.Sub(now), 0)}
 	}
 	return nil
 }

@@ -136,4 +136,6 @@ func RegisterHTTPS(r *httpx.Router, d HTTPSDeps) {
 	// The routes are always registered so the published contract does not depend on the build; a server
 	// without a manager answers them 503.
 	registerHTTPSACME(r, d)
+	registerHTTPSACMERuns(r, d)
+	registerHTTPSACMEStream(r, d)
 }

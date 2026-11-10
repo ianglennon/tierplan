@@ -379,6 +379,9 @@ func fieldProblem(code, location, detail string) error {
 // manager does not name is classified: a CA failure is 502 acme_ca_error with its class in the first
 // error, and an internal failure is logged and answered as 500.
 func acmeProblem(log *slog.Logger, what string, err error) error {
+	if p := runProblem(err); p != nil {
+		return p
+	}
 	switch {
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")

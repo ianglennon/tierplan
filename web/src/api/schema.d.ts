@@ -4196,6 +4196,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/https/acme/issue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get a Let's Encrypt certificate for the public address
+         * @description Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
+         */
+        post: operations["issueACMECertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/https/acme/profile": {
         parameters: {
             query?: never;
@@ -4210,6 +4230,66 @@ export interface paths {
          */
         put: operations["putACMEProfile"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/acme/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Renew the Let's Encrypt certificate now
+         * @description Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
+         */
+        post: operations["renewACMECertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/acme/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Let's Encrypt after a restore
+         * @description Lifts the pause a restore puts on renewals, once the person has seen what was restored. 204. 409 acme_not_paused when nothing is paused; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.
+         */
+        post: operations["resumeACME"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/acme/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop using Let's Encrypt
+         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.
+         */
+        post: operations["stopACME"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8804,6 +8884,17 @@ export interface components {
              * @enum {string}
              */
             trigger: "admin" | "schedule" | "resume";
+        };
+        HTTPSACMERunStartBody: {
+            /** @description The run's job; follow it on GET /api/https/acme/runs/{jobId}/stream. Left out when reused */
+            jobId?: string;
+            /** @description True when the stored certificate already covers the names and is not yet due for renewal, so no order was placed */
+            reused: boolean;
+            /**
+             * Format: date-time
+             * @description When that certificate expires; set only when reused
+             */
+            validUntil?: string;
         };
         HTTPSCertificateBody: {
             /** @description Who issued it: the issuer's common name, else its organisation, else empty */
@@ -24838,6 +24929,36 @@ export interface operations {
             };
         };
     };
+    issueACMECertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMERunStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     putACMEProfile: {
         parameters: {
             query?: never;
@@ -24860,6 +24981,90 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPSACMEProfileOutputBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    renewACMECertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMERunStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resumeACME: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    stopACME: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

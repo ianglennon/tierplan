@@ -7974,6 +7974,28 @@
         ],
         "type": "object"
       },
+      "HTTPSACMERunStartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The run's job; follow it on GET /api/https/acme/runs/{jobId}/stream. Left out when reused",
+            "type": "string"
+          },
+          "reused": {
+            "description": "True when the stored certificate already covers the names and is not yet due for renewal, so no order was placed",
+            "type": "boolean"
+          },
+          "validUntil": {
+            "description": "When that certificate expires; set only when reused",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reused"
+        ],
+        "type": "object"
+      },
       "HTTPSCertificateBody": {
         "additionalProperties": false,
         "properties": {
@@ -40758,6 +40780,45 @@
         ]
       }
     },
+    "/api/https/acme/issue": {
+      "post": {
+        "description": "Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.",
+        "operationId": "issueACMECertificate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMERunStartBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get a Let's Encrypt certificate for the public address",
+        "tags": [
+          "https"
+        ]
+      }
+    },
     "/api/https/acme/profile": {
       "put": {
         "description": "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. Needs settings.write.",
@@ -40802,6 +40863,95 @@
           }
         },
         "summary": "Choose the certificate profile",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/renew": {
+      "post": {
+        "description": "Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.",
+        "operationId": "renewACMECertificate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMERunStartBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Renew the Let's Encrypt certificate now",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/resume": {
+      "post": {
+        "description": "Lifts the pause a restore puts on renewals, once the person has seen what was restored. 204. 409 acme_not_paused when nothing is paused; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.",
+        "operationId": "resumeACME",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Resume Let's Encrypt after a restore",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/stop": {
+      "post": {
+        "description": "Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.",
+        "operationId": "stopACME",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop using Let's Encrypt",
         "tags": [
           "https"
         ]
