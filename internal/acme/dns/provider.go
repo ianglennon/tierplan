@@ -122,17 +122,20 @@ type Error struct {
 
 // Error is built from the provider, the operation, the status, the code and the class only.
 func (e *Error) Error() string {
-	s := strings.TrimSpace(e.Provider+" "+e.Op) + ":"
+	var parts []string
+	if where := strings.TrimSpace(e.Provider + " " + e.Op); where != "" {
+		parts = append(parts, where+":")
+	}
 	if e.Status != 0 {
-		s += fmt.Sprintf(" HTTP %d", e.Status)
+		parts = append(parts, fmt.Sprintf("HTTP %d", e.Status))
 		if e.Code != 0 {
-			s += fmt.Sprintf(" code %d", e.Code)
+			parts = append(parts, fmt.Sprintf("code %d", e.Code))
 		}
 	}
 	if e.Class != "" {
-		s += " (" + e.Class + ")"
+		parts = append(parts, "("+e.Class+")")
 	}
-	return s
+	return strings.Join(parts, " ")
 }
 
 // Unwrap returns the underlying cause.

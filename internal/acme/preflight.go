@@ -8,12 +8,14 @@ import (
 	"strings"
 )
 
-// The challenge types an install can issue through, declared here in one place. The values are the
-// ones ACME defines, so they match Challenge.Type in a CA's authorization.
-const (
-	ChallengeHTTP01 = "http-01"
-	ChallengeDNS01  = "dns-01"
-)
+// ChallengeHTTP01 and ChallengeDNS01 are the challenge types an install can issue through, declared
+// here in one place. The values are the ones ACME defines, so they match Challenge.Type in a CA's
+// authorization.
+const ChallengeHTTP01 = "http-01"
+
+// ChallengeDNS01 is the DNS-01 challenge: a TXT record at _acme-challenge.<name>. A public URL with
+// a base path is refused for HTTP-01 only, never for this one (D-04).
+const ChallengeDNS01 = "dns-01"
 
 // Refusal codes: each is one reason an issue is refused before any order is made.
 const (

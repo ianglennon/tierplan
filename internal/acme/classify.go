@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -120,9 +121,21 @@ func Classify(err error, in ClassifyInput) Failure {
 		return f
 	}
 
+	// A DNS provider failure is classified before any CA branch: it happened on our side of the
+	// challenge, before the CA was asked to look.
+	var de *dns.Error
+	if errors.As(err, &de) && de != nil {
+		return classifyDNS(f, de)
+	}
+
 	var pd *legoacme.ProblemDetails
 	if errors.As(err, &pd) && pd != nil {
 		class, host := classifyProblem(pd)
+		if in.ChallengeType == ChallengeDNS01 && (class == ClassValidationUnreachable || class == ClassValidationDNS) {
+			// The CA looked for the TXT record and did not find the answer: the class is about the
+			// record whichever way the CA words it (UI-SPEC J7).
+			class = ClassValidationTXT
+		}
 		if class == "" {
 			if pd.HTTPStatus >= 500 {
 				class = ClassCAUnavailable
@@ -155,6 +168,27 @@ func Classify(err error, in ClassifyInput) Failure {
 	case isNetworkFailure(err):
 		f.Class = ClassCAUnavailable
 	}
+	return f
+}
+
+// classifyDNS gives f the class of a DNS provider failure and the values its copy needs. A failure
+// with no class, or one this build does not know, is internal: it is not shown as a DNS problem the
+// page has no words for. The detail is the error's own text, which holds the provider, operation,
+// status, code and class only.
+func classifyDNS(f Failure, de *dns.Error) Failure {
+	switch de.Class {
+	case ClassDNSTokenInvalid, ClassDNSTokenScope, ClassDNSZoneNotFound, ClassDNSDelegationTarget,
+		ClassDNSNotVisible, ClassDNSRateLimited, ClassDNSUnavailable:
+		f.Class = de.Class
+	default:
+		f.Class = ClassInternal
+		return f
+	}
+	if de.Host != "" {
+		f.Host = de.Host
+	}
+	f.Zone, f.Target, f.RetryAfter = de.Zone, de.Target, de.RetryAfter
+	f.Resolvers = slices.Clone(de.Resolvers)
 	return f
 }
 
