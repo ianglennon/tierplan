@@ -14,6 +14,7 @@ import (
 	"maps"
 	mrand "math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -730,6 +731,9 @@ const (
 	messageNotSwitched = "The certificate was saved, but switching to it failed. It is used at the next start."
 
 	messageNothingToRemove = "Nothing to remove."
+
+	// codeLeftOver is the code of a Clean-up step that ended with records still at the provider.
+	codeLeftOver = "left_over"
 )
 
 // jobSteps maps an Orderer's step reports onto the items of a job. The last step, stored, is held
@@ -800,14 +804,22 @@ func (s *jobSteps) Failed(step string, err error) {
 		return
 	}
 	class := Classify(err, s.in).Class
-	if step == StepStored {
+	switch {
+	case step == StepStored:
 		s.hold(jobs.ItemFailed, class)
-	} else {
+	case s.dns01() && step == StepChallenge && class == dns.ClassNotVisible:
+		// The record was written, so the challenge itself is done; the wait for it to show is what failed.
+		s.r.Finish(StepChallenge, jobs.ItemDone, "", "", nil)
+		s.r.Finish(StepPropagation, jobs.ItemFailed, class, messageFailed, nil)
+		s.hold(jobs.ItemSkipped, "")
+	default:
 		s.r.Finish(step, jobs.ItemFailed, class, messageFailed, nil)
 		s.hold(jobs.ItemSkipped, "")
 	}
 	for _, it := range s.items {
-		if it.ID != step && it.ID != StepStored {
+		// Stored ends with the run, and Clean-up reports its own state: neither is a step this failure
+		// stopped from being reached.
+		if it.ID != step && it.ID != StepStored && it.ID != StepCleanup {
 			s.r.Finish(it.ID, jobs.ItemSkipped, "", messageNotReached, nil)
 		}
 	}
@@ -863,13 +875,20 @@ func (s *jobSteps) finishCleanup() {
 		return
 	}
 	s.mu.Lock()
-	created := s.created
+	created, leftOver := s.created, s.leftOver
 	s.mu.Unlock()
-	if created == 0 {
+	switch {
+	case created == 0:
 		s.r.Finish(StepCleanup, jobs.ItemSkipped, "", messageNothingToRemove, nil)
-		return
+	case leftOver > 0:
+		// Done, not failed: a record that could not be deleted is retried by TierPlan and never changes
+		// what the run achieved. A failed step would turn a certificate that issued into a failed run.
+		s.r.Finish(StepCleanup, jobs.ItemDone, codeLeftOver,
+			fmt.Sprintf("Couldn't remove %d TXT record(s). TierPlan keeps trying.", leftOver),
+			map[string]string{"left_over": strconv.Itoa(leftOver)})
+	default:
+		s.r.Finish(StepCleanup, jobs.ItemDone, "", "", nil)
 	}
-	s.r.Finish(StepCleanup, jobs.ItemDone, "", "", nil)
 }
 
 // runParams is what starts a run.

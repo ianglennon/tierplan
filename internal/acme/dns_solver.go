@@ -59,27 +59,71 @@ type challengeTarget struct {
 }
 
 // resolveChallengeTarget finds where the TXT record for name goes: the zone of
-// _acme-challenge.<name> on the provider, and the name any CNAME there delegates to.
-func (m *Manager) resolveChallengeTarget(ctx context.Context, p dns.Provider, name string, _ []dnscheck.Server) (challengeTarget, error) {
+// _acme-challenge.<name> on the provider, and the name any CNAME there delegates to (locked D-14 as
+// amended, D-15).
+//
+// For a name whose zone the provider holds, the CNAME is asked of that zone's own nameservers first: a
+// recursive resolver asked first could cache the answer "no such name" for the very name the TXT is then
+// checked at. The custom resolvers are asked only when no nameserver of the zone answers. For a name whose
+// zone the provider does not hold, the custom resolvers are asked, else the system's: a delegation into
+// a provider zone is the only way such a name validates.
+func (m *Manager) resolveChallengeTarget(ctx context.Context, p dns.Provider, name string, custom []dnscheck.Server) (challengeTarget, error) {
 	fqdn := dns.ChallengeFQDN(name)
 	t := challengeTarget{Name: name, FQDN: fqdn}
-	zone, err := p.Zone(ctx, fqdn)
-	if err != nil {
-		return t, err
+	zone, zoneErr := p.Zone(ctx, fqdn)
+	onProvider := zoneErr == nil
+	if zoneErr != nil && !isDNSClass(zoneErr, dns.ClassZoneNotFound) {
+		return t, zoneErr
 	}
-	t.Zone, t.OwnZone = zone, zone.Name
-	final, delegated, err := m.checker.FollowCNAME(ctx, fqdn, dnscheck.Authoritative(zone.NameServers))
-	if err != nil && !errors.Is(err, dnscheck.ErrNoAnswer) {
-		return t, err
-	}
-	if delegated {
-		tz, err := p.Zone(ctx, final)
-		if err != nil {
-			return t, err
+
+	var final string
+	var delegated bool
+	var err error
+	if onProvider {
+		t.Zone, t.OwnZone = zone, zone.Name
+		final, delegated, err = m.checker.FollowCNAME(ctx, fqdn, dnscheck.Authoritative(zone.NameServers))
+		if errors.Is(err, dnscheck.ErrNoAnswer) && len(custom) > 0 {
+			final, delegated, err = m.checker.FollowCNAME(ctx, fqdn, custom)
 		}
-		t.FQDN, t.Zone, t.DelegatedTo = final, tz, final
+	} else {
+		servers := custom
+		if len(servers) == 0 {
+			// No system resolver is no answer, and a name nobody can place is a zone not found.
+			servers, _ = m.checker.SystemServers()
+		}
+		final, delegated, err = m.checker.FollowCNAME(ctx, fqdn, servers)
 	}
+	var loop *dnscheck.DelegationError
+	switch {
+	case errors.As(err, &loop):
+		return t, &dns.Error{Class: dns.ClassDelegationTarget, Host: name, Target: loop.Target}
+	case errors.Is(err, dnscheck.ErrNoAnswer):
+		delegated = false // nobody answered, so nothing is known to be delegated
+	case err != nil:
+		return t, err
+	}
+
+	if !delegated {
+		if !onProvider {
+			return t, zoneErr
+		}
+		return t, nil
+	}
+	tz, err := p.Zone(ctx, final)
+	if err != nil {
+		if isDNSClass(err, dns.ClassZoneNotFound) {
+			return t, &dns.Error{Class: dns.ClassDelegationTarget, Host: name, Target: final}
+		}
+		return t, err
+	}
+	t.FQDN, t.Zone, t.DelegatedTo = final, tz, final
 	return t, nil
+}
+
+// isDNSClass reports whether err is a *dns.Error of class.
+func isDNSClass(err error, class string) bool {
+	var de *dns.Error
+	return errors.As(err, &de) && de.Class == class
 }
 
 // dnsSolver answers DNS-01 challenges for one run: it writes the TXT record through the provider,
@@ -164,8 +208,9 @@ func (s *dnsSolver) rowID() (string, error) {
 }
 
 // Present writes the TXT record that answers the challenge for domain and does not return before it
-// is visible.
-func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) error {
+// is visible. A Present that fails after the record was created deletes it before it returns, because
+// the order code never calls CleanUp for a Present that failed.
+func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) (err error) {
 	name := strings.ToLower(strings.TrimSuffix(domain, "."))
 	s.steps.RunningWith(StepChallenge, hintAddingRecord, map[string]string{"host": name, "record": dns.ChallengeFQDN(name)})
 	p, err := s.open(ctx)
@@ -195,29 +240,54 @@ func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) 
 		return err
 	}
 	s.steps.recordCreated()
+	var row *DNSRecord // set once the ledger holds the record's ID
+	defer func() {
+		if err != nil {
+			s.rollback(ctx, p, ref, t.FQDN, row)
+		}
+	}()
+
 	id, err := s.rowID()
 	if err != nil {
 		return err
 	}
-	row := DNSRecord{
+	r := DNSRecord{
 		ID: id, Provider: p.Name(), ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
 		Comment: comment, OwnerKind: OwnerOrder, OwnerID: orderID, Token: token, CreatedAt: s.m.clock.Now(),
 	}
 	// The ID is durable before the CA is asked to look (D-16).
-	if err := s.m.d.Store.InsertDNSRecord(ctx, row); err != nil {
+	if err = s.m.d.Store.InsertDNSRecord(ctx, r); err != nil {
 		return err
 	}
+	row = &r
 
 	servers, hint, resolvers := s.propagationServers(t)
 	s.steps.RunningWith(StepPropagation, hint, map[string]string{"host": name, "record": t.FQDN, "resolvers": resolvers})
-	if err := s.m.checker.WaitVisible(ctx, t.FQDN, value, servers, dnscheck.PropagationTimeout); err != nil {
+	if err = s.m.checker.WaitVisible(ctx, t.FQDN, value, servers, dnscheck.PropagationTimeout); err != nil {
 		var nv *dnscheck.NotVisibleError
 		if errors.As(err, &nv) {
-			return &dns.Error{Class: dns.ClassNotVisible, Host: name, Zone: t.Zone.Name, Resolvers: nv.Servers}
+			err = &dns.Error{Class: dns.ClassNotVisible, Host: name, Zone: t.Zone.Name, Resolvers: nv.Servers}
 		}
 		return err
 	}
 	return nil
+}
+
+// rollback deletes the record a failed Present created, even when the run was cancelled. With a ledger
+// row the delete goes through it, so a failure keeps the row for the sweep; without one (the ledger
+// write itself failed) the record is deleted by the reference the create returned. A record that
+// cannot be deleted is counted as left over.
+func (s *dnsSolver) rollback(ctx context.Context, p dns.Provider, ref dns.RecordRef, fqdn string, row *DNSRecord) {
+	var err error
+	if row != nil {
+		err = s.m.deleteRecord(ctx, p, *row)
+	} else {
+		err = p.DeleteTXT(context.WithoutCancel(ctx), ref)
+	}
+	if err != nil {
+		s.steps.recordLeftOver()
+		s.m.log.Warn("a DNS record made for a failed challenge could not be deleted", "name", fqdn, "class", deleteClass(err))
+	}
 }
 
 // propagationServers are the servers the propagation check asks, the hint for it and the resolvers it

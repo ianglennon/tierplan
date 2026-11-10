@@ -647,8 +647,10 @@ func TestDNSTwoNamesToOneTargetGetTwoRecords(t *testing.T) {
 
 func TestDNSJobItemsCarryNoSecrets(t *testing.T) {
 	scenarios := map[string]func(e *dnsEnv){
-		"issued":            func(e *dnsEnv) {},
-		"validation failed": func(e *dnsEnv) { e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "no answer"}) },
+		"issued": func(e *dnsEnv) {},
+		"validation failed": func(e *dnsEnv) {
+			e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "no answer"})
+		},
 		"left over": func(e *dnsEnv) {
 			e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
 		},
