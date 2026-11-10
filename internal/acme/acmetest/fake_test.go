@@ -532,19 +532,21 @@ func TestFakeForgetsAccounts(t *testing.T) {
 	if !errors.As(err, &pd) || pd.Type != acme.AccountDoesNotExistErrorType {
 		t.Fatalf("new order after the account was forgotten: %v, want accountDoesNotExist", err)
 	}
-	// Looking the key up without creating anything also finds nothing.
-	_, err = f.core.Accounts.New(f.ctx, acme.Account{OnlyReturnExisting: true})
+	// Looking the key up without creating anything also finds nothing. A newAccount request is signed
+	// with the embedded key, so it goes through a Core that has no account URL yet.
+	fresh := f.newCore(t, f.key, "")
+	_, err = fresh.Accounts.New(f.ctx, acme.Account{OnlyReturnExisting: true})
 	if !errors.As(err, &pd) || pd.Type != acme.AccountDoesNotExistErrorType {
 		t.Fatalf("onlyReturnExisting after the account was forgotten: %v, want accountDoesNotExist", err)
 	}
-	again, err := f.core.Accounts.New(f.ctx, acme.Account{TermsOfServiceAgreed: true})
+	again, err := fresh.Accounts.New(f.ctx, acme.Account{TermsOfServiceAgreed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if again.Location == f.acct.Location {
 		t.Fatalf("the re-registered account kept the old URL %s", again.Location)
 	}
-	if _, err := f.core.Orders.New(f.ctx, []string{"tierplan.example.com"}, nil); err != nil {
+	if _, err := fresh.Orders.New(f.ctx, []string{"tierplan.example.com"}, nil); err != nil {
 		t.Fatalf("new order after registering again: %v", err)
 	}
 }

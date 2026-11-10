@@ -119,6 +119,26 @@ type Fake struct {
 	authzs   map[string]*authz
 	certs    map[string]*issued // by certificate id (the /cert/<id> path)
 	byARI    map[string]*issued // by ARI certificate id
+
+	// Scripting and observation (mu guards all of it).
+	scripted   map[string][]Problem     // per endpoint, answered in turn
+	badNonce   bool                     // the next signed request answers badNonce
+	failVal    map[string]Problem       // per name, the validation fails with this
+	holdVal    bool                     // challenges stay processing
+	heldVal    []check                  // the challenges held
+	holdFin    bool                     // finalized orders stay processing
+	heldFin    []*order                 // the orders held
+	windows    map[string]renewalWindow // per ARI certificate id
+	replacedBy map[string]*order        // per ARI certificate id, the order that replaces it
+	counts     map[string]int
+	seen       []OrderSeen
+	hits       map[string]int
+}
+
+// renewalWindow is a scripted renewalInfo answer.
+type renewalWindow struct {
+	start, end time.Time
+	retryAfter time.Duration
 }
 
 type account struct {
@@ -136,6 +156,7 @@ type order struct {
 	expires    time.Time
 	authzs     []*authz
 	finalizing bool
+	csr        *x509.CertificateRequest // the CSR of an order held in processing
 	cert       *issued
 }
 
@@ -180,6 +201,13 @@ func NewFake(t testing.TB, o Options) *Fake {
 		authzs:   map[string]*authz{},
 		certs:    map[string]*issued{},
 		byARI:    map[string]*issued{},
+
+		scripted:   map[string][]Problem{},
+		failVal:    map[string]Problem{},
+		windows:    map[string]renewalWindow{},
+		replacedBy: map[string]*order{},
+		counts:     map[string]int{},
+		hits:       map[string]int{},
 	}
 	f.newCA(t)
 
@@ -311,14 +339,33 @@ type request struct {
 
 type handler func(q *request)
 
-// plain wraps an unsigned GET: it holds mu for the handler.
+// plain wraps an unsigned GET: it counts the call, answers a scripted failure, and holds mu for
+// the handler.
 func (f *Fake) plain(endpoint string, h func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		_ = endpoint
+		if p, ok := f.reach(endpoint); ok {
+			f.problem(w, p)
+			return
+		}
 		h(w, r)
 	}
+}
+
+// reach counts a call to endpoint and returns the failure scripted for it, if any. The caller holds
+// mu. An empty endpoint is not counted or scripted.
+func (f *Fake) reach(endpoint string) (Problem, bool) {
+	if endpoint == "" {
+		return Problem{}, false
+	}
+	f.counts[endpoint]++
+	queue := f.scripted[endpoint]
+	if len(queue) == 0 {
+		return Problem{}, false
+	}
+	f.scripted[endpoint] = queue[1:]
+	return queue[0], true
 }
 
 // signed wraps a POST: it reads the JWS, checks the nonce, the URL and the signature, and hands the
@@ -338,6 +385,11 @@ func (f *Fake) signed(endpoint string, embeddedKey bool, h handler) http.Handler
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.badNonce {
+			f.badNonce = false
+			f.problem(w, Problem{Type: "badNonce", Detail: "JWS has an invalid anti-replay nonce (scripted)"})
+			return
+		}
 		if _, ok := f.nonces[req.nonce]; !ok {
 			f.problem(w, Problem{Type: "badNonce", Detail: "JWS has an invalid anti-replay nonce"})
 			return
@@ -345,6 +397,12 @@ func (f *Fake) signed(endpoint string, embeddedKey bool, h handler) http.Handler
 		delete(f.nonces, req.nonce)
 		if want := f.srv.URL + r.URL.Path; req.url != want {
 			f.problem(w, Problem{Status: http.StatusUnauthorized, Type: "unauthorized", Detail: fmt.Sprintf("JWS url %q does not match the request URL %q", req.url, want)})
+			return
+		}
+		// A call that got this far reached the endpoint: it is counted, and a failure scripted for it
+		// is answered, before the account is looked up.
+		if p, ok := f.reach(endpoint); ok {
+			f.problem(w, p)
 			return
 		}
 		q := &request{w: w, r: r}
@@ -372,7 +430,6 @@ func (f *Fake) signed(endpoint string, embeddedKey bool, h handler) http.Handler
 			return
 		}
 		q.payload = payload
-		_ = endpoint
 		h(q)
 	}
 }
@@ -511,6 +568,12 @@ func (f *Fake) newOrder(q *request) {
 			f.problem(q.w, Problem{Status: http.StatusForbidden, Type: "unauthorized", Detail: "the certificate to replace was issued to another account"})
 			return
 		}
+		if other := f.replacedBy[req.Replaces]; other != nil {
+			if status, _ := f.orderStatus(other); status != acme.StatusInvalid {
+				f.problem(q.w, Problem{Status: http.StatusConflict, Type: "alreadyReplaced", Detail: "another order already replaces that certificate"})
+				return
+			}
+		}
 	}
 	o := &order{
 		id: f.nextID(), owner: q.acct.thumb, names: names, profile: profile, replaces: req.Replaces,
@@ -525,6 +588,10 @@ func (f *Fake) newOrder(q *request) {
 		f.authzs[a.id] = a
 	}
 	f.orders[o.id] = o
+	if req.Replaces != "" {
+		f.replacedBy[req.Replaces] = o
+	}
+	f.seen = append(f.seen, OrderSeen{Names: slices.Clone(names), Profile: req.Profile, Replaces: req.Replaces})
 	q.w.Header().Set("Location", f.srv.URL+"/order/"+o.id)
 	f.reply(q.w, http.StatusCreated, f.orderView(o))
 }
@@ -661,20 +728,36 @@ func (f *Fake) getAuthz(q *request) {
 
 // check is what a validation needs, taken while mu is held so the GET can run without it.
 type check struct {
-	a     *authz
-	host  string
-	token string
-	thumb string
+	a        *authz
+	host     string
+	token    string
+	thumb    string
+	scripted *Problem // set by prepare: the failure scripted for the name
 }
 
 func (f *Fake) snapshot(a *authz, thumb string) check {
 	return check{a: a, host: a.name, token: a.token, thumb: thumb}
 }
 
+// prepare settles what a validation will do, at the moment it runs: a failure scripted for the name
+// wins, and a GET about to be made is counted. The caller holds mu.
+func (f *Fake) prepare(c *check) {
+	if p, ok := f.failVal[c.host]; ok {
+		c.scripted = &p
+		return
+	}
+	if f.opts.Validate != nil {
+		f.hits[c.token]++
+	}
+}
+
 // attempt performs the http-01 validation (RFC 8555 section 8.3): a GET of the challenge path over
 // plain HTTP at the address the test maps the name to, whose body must be the key authorization. It
 // returns nil when the challenge holds. mu is not held.
 func (f *Fake) attempt(c check) *Problem {
+	if c.scripted != nil {
+		return c.scripted
+	}
 	if f.opts.Validate == nil {
 		return nil
 	}
@@ -725,12 +808,18 @@ func (f *Fake) postChallenge(q *request) {
 	}
 	a.chall = acme.StatusProcessing
 	chk := f.snapshot(a, q.acct.thumb)
+	q.w.Header().Add("Link", "<"+f.srv.URL+"/authz/"+a.id+`>;rel="up"`)
+	if f.holdVal {
+		f.heldVal = append(f.heldVal, chk)
+		f.reply(q.w, http.StatusOK, f.challengeView(a))
+		return
+	}
+	f.prepare(&chk)
 	// The GET is to the test's own server, never back to the fake, but it is I/O: mu is not held.
 	f.mu.Unlock()
 	prob := f.attempt(chk)
 	f.mu.Lock()
 	f.apply(a, prob)
-	q.w.Header().Add("Link", "<"+f.srv.URL+"/authz/"+a.id+`>;rel="up"`)
 	f.reply(q.w, http.StatusOK, f.challengeView(a))
 }
 
@@ -770,6 +859,12 @@ func (f *Fake) finalize(q *request) {
 	slices.Sort(want)
 	if len(csr.IPAddresses) > 0 || len(csr.EmailAddresses) > 0 || !slices.Equal(got, want) {
 		f.problem(q.w, Problem{Type: "badCSR", Detail: fmt.Sprintf("the CSR names %v, the order names %v", got, want)})
+		return
+	}
+	if f.holdFin {
+		o.finalizing, o.csr = true, csr
+		f.heldFin = append(f.heldFin, o)
+		f.reply(q.w, http.StatusOK, f.orderView(o))
 		return
 	}
 	if err := f.issue(o, csr); err != nil {
@@ -834,49 +929,144 @@ func (f *Fake) getCert(q *request) {
 }
 
 // renewalInfo answers RFC 9773 renewal information. By default the suggested window is two thirds
-// of the lifetime, a day either side.
+// of the lifetime, a day either side, and the client is told to ask again in six hours; a window set
+// with SetRenewalWindow replaces both. Retry-After is always delta-seconds.
 func (f *Fake) renewalInfo(w http.ResponseWriter, r *http.Request) {
-	c, ok := f.byARI[r.PathValue("id")]
-	if f.opts.NoRenewalInfo || !ok {
+	id := r.PathValue("id")
+	c, known := f.byARI[id]
+	script, scripted := f.windows[id]
+	if f.opts.NoRenewalInfo || (!known && !scripted) {
 		f.problem(w, Problem{Status: http.StatusNotFound, Type: "malformed", Detail: "no renewal information for that certificate"})
 		return
 	}
-	life := c.leaf.NotAfter.Sub(c.leaf.NotBefore)
-	mid := c.leaf.NotBefore.Add(life * 2 / 3)
-	window := map[string]any{"start": mid.Add(-24 * time.Hour), "end": mid.Add(24 * time.Hour)}
-	w.Header().Set("Retry-After", strconv.Itoa(21600))
-	f.reply(w, http.StatusOK, map[string]any{"suggestedWindow": window})
+	start, end, retry := script.start, script.end, script.retryAfter
+	if !scripted {
+		life := c.leaf.NotAfter.Sub(c.leaf.NotBefore)
+		mid := c.leaf.NotBefore.Add(life * 2 / 3)
+		start, end, retry = mid.Add(-24*time.Hour), mid.Add(24*time.Hour), 6*time.Hour
+	}
+	if secs := int(retry / time.Second); secs > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+	}
+	f.reply(w, http.StatusOK, map[string]any{"suggestedWindow": map[string]any{"start": start, "end": end}})
 }
 
-// The scripting and observation surface. Not implemented yet (RED).
+// The scripting and observation surface. Every method is safe to call while the fake serves.
 
-// FailNext makes the next call to endpoint answer with p.
-func (f *Fake) FailNext(endpoint string, p Problem) {}
+// FailNext makes the next call that reaches endpoint (one of the Endpoint constants) answer with p,
+// once. Calls queue: a second FailNext answers the call after that.
+func (f *Fake) FailNext(endpoint string, p Problem) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripted[endpoint] = append(f.scripted[endpoint], p)
+}
 
-// BadNonceOnce makes the next signed request answer badNonce.
-func (f *Fake) BadNonceOnce() {}
+// BadNonceOnce makes the next signed request, whatever its endpoint, answer badNonce. A client that
+// retries (lego does) then succeeds. The refused request is not counted.
+func (f *Fake) BadNonceOnce() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.badNonce = true
+}
 
-// FailValidation makes the validation of host fail with p.
-func (f *Fake) FailValidation(host string, p Problem) {}
+// FailValidation makes the validation of host fail with p: the challenge and its authorization go
+// invalid and the challenge carries the problem. No GET is made for a scripted failure.
+func (f *Fake) FailValidation(host string, p Problem) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failVal[strings.ToLower(host)] = p
+}
 
-// HoldValidation leaves challenges processing until the returned function is called.
-func (f *Fake) HoldValidation() (release func()) { return func() {} }
+// HoldValidation leaves every challenge submitted from now on in processing, with no GET made, until
+// the returned function is called. The release validates the held challenges. Nothing waits on a
+// timer: the test decides when validation happens.
+func (f *Fake) HoldValidation() (release func()) {
+	f.mu.Lock()
+	f.holdVal = true
+	f.mu.Unlock()
+	return func() {
+		f.mu.Lock()
+		f.holdVal = false
+		held := f.heldVal
+		f.heldVal = nil
+		for i := range held {
+			f.prepare(&held[i])
+		}
+		f.mu.Unlock()
+		for _, c := range held {
+			prob := f.attempt(c)
+			f.mu.Lock()
+			f.apply(c.a, prob)
+			f.mu.Unlock()
+		}
+	}
+}
 
-// HoldFinalize leaves finalized orders processing until the returned function is called.
-func (f *Fake) HoldFinalize() (release func()) { return func() {} }
+// HoldFinalize leaves every order finalized from now on in processing, without a certificate, until
+// the returned function is called. The release issues the held certificates.
+func (f *Fake) HoldFinalize() (release func()) {
+	f.mu.Lock()
+	f.holdFin = true
+	f.mu.Unlock()
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.holdFin = false
+		held := f.heldFin
+		f.heldFin = nil
+		for _, o := range held {
+			if err := f.issue(o, o.csr); err != nil {
+				f.tb.Errorf("acmetest: issue a held order: %v", err)
+			}
+		}
+	}
+}
 
-// SetRenewalWindow scripts the renewalInfo answer for leaf.
+// SetRenewalWindow sets the renewalInfo answer for leaf: the suggested window and the delta-seconds
+// Retry-After (none when retryAfter is under a second).
 func (f *Fake) SetRenewalWindow(leaf *x509.Certificate, start, end time.Time, retryAfter time.Duration) {
+	f.tb.Helper()
+	id, err := api.MakeARICertID(leaf)
+	if err != nil {
+		f.tb.Fatalf("acmetest: renewal id of the certificate: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.windows[id] = renewalWindow{start: start, end: end, retryAfter: retryAfter}
 }
 
-// ForgetAccounts makes every account unknown.
-func (f *Fake) ForgetAccounts() {}
+// ForgetAccounts makes every account unknown: a request naming one answers accountDoesNotExist, and
+// registering the same key again creates a new account at a new URL. Certificates already issued
+// stay issued.
+func (f *Fake) ForgetAccounts() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	clear(f.accounts)
+}
 
-// Count is the number of calls that reached endpoint.
-func (f *Fake) Count(endpoint string) int { return -1 }
+// Count is the number of calls that reached endpoint, including the ones a scripted failure
+// refused. A signed request refused earlier (badNonce, a bad signature) is not counted.
+func (f *Fake) Count(endpoint string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.counts[endpoint]
+}
 
-// Orders lists the accepted newOrder requests.
-func (f *Fake) Orders() []OrderSeen { return nil }
+// Orders lists the newOrder requests the fake accepted, in order. Profile is the one the request
+// named (empty when it named none).
+func (f *Fake) Orders() []OrderSeen {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := slices.Clone(f.seen)
+	for i := range out {
+		out[i].Names = slices.Clone(out[i].Names)
+	}
+	return out
+}
 
-// ValidationHits is the number of http-01 GETs made for token.
-func (f *Fake) ValidationHits(token string) int { return -1 }
+// ValidationHits is the number of http-01 GETs the fake made for token.
+func (f *Fake) ValidationHits(token string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hits[token]
+}
