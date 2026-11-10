@@ -249,6 +249,28 @@ func TestMetaWithoutRenewalInfoAndFailuresCachedForAMinute(t *testing.T) {
 	}
 }
 
+// A-WR-02: a caller whose context has ended gets its error, and the next caller reads the directory:
+// one caller going away is not a directory failure to remember for a minute.
+func TestMetaDoesNotCacheACallersCancellation(t *testing.T) {
+	c, fake, _, _ := newFakeClient(t, acmetest.Options{})
+
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.Meta(gone); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Meta with an ended context = %v, want context.Canceled", err)
+	}
+	m, err := c.Meta(context.Background())
+	if err != nil {
+		t.Fatalf("Meta after a caller went away = %v, want the directory read", err)
+	}
+	if !m.RenewalInfo || len(m.Profiles) == 0 {
+		t.Errorf("Meta = %+v, want the directory's renewal information and profiles", m)
+	}
+	if n := fake.Count(acmetest.EndpointDirectory); n != 1 {
+		t.Errorf("directory requests = %d, want 1", n)
+	}
+}
+
 func TestClientTrustsOnlyTheConfiguredCA(t *testing.T) {
 	ctx := context.Background()
 	fake := acmetest.NewFake(t, acmetest.Options{})

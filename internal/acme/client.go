@@ -128,6 +128,11 @@ func (c *Client) Meta(ctx context.Context) (DirectoryMeta, error) {
 		return cloneMeta(c.meta), c.metaErr
 	}
 	m, err := c.fetchMeta(ctx)
+	if err != nil && ctx.Err() != nil {
+		// The caller went away: that says nothing about the directory, so the cache is left as it was
+		// for the callers that are still there.
+		return DirectoryMeta{}, err
+	}
 	c.meta, c.metaErr = m, err
 	if err != nil {
 		c.metaTil = now.Add(metaErrTTL)
