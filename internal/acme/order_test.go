@@ -40,6 +40,13 @@ type orderEnv struct {
 
 func newOrderEnv(t *testing.T) *orderEnv {
 	t.Helper()
+	return newOrderEnvWith(t, acmetest.Options{})
+}
+
+// newOrderEnvWith is newOrderEnv over a fake CA with the given behaviour (its clock and validation are
+// the environment's own).
+func newOrderEnvWith(t *testing.T, opts acmetest.Options) *orderEnv {
+	t.Helper()
 	tokens := NewChallenges()
 	var hits atomic.Int32
 	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +57,8 @@ func newOrderEnv(t *testing.T) *orderEnv {
 	addr := web.Listener.Addr().String()
 
 	clock := acmetest.NewClock(testNow)
-	fake := acmetest.NewFake(t, acmetest.Options{Clock: clock, Validate: func(string) string { return addr }})
+	opts.Clock, opts.Validate = clock, func(string) string { return addr }
+	fake := acmetest.NewFake(t, opts)
 	dir, err := NewDirectory(config.Config{ACMEDirectoryURL: fake.DirectoryURL(), ACMECAFile: fake.CAFile(t)})
 	if err != nil {
 		t.Fatalf("NewDirectory: %v", err)
