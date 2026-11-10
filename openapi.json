@@ -7483,6 +7483,70 @@
         ],
         "type": "object"
       },
+      "HTTPSCertificateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer": {
+            "description": "Who issued it: the issuer's common name, else its organisation, else empty",
+            "type": "string"
+          },
+          "names": {
+            "description": "Every name the certificate covers, as it carries them: DNS names first, then IP addresses",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notAfter": {
+            "description": "When it expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "notBefore": {
+            "description": "When it becomes valid",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the certificate comes from: the one TierPlan generated, the files you supplied, or Let's Encrypt",
+            "enum": [
+              "self_signed",
+              "cert_files",
+              "lets_encrypt"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "issuer",
+          "names",
+          "notBefore",
+          "notAfter"
+        ],
+        "type": "object"
+      },
+      "HTTPSStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "certFiles": {
+            "description": "Whether certificate files from the environment fix the certificate",
+            "type": "boolean"
+          },
+          "certificate": {
+            "$ref": "#/components/schemas/HTTPSCertificateBody",
+            "description": "The certificate the listener serves now"
+          }
+        },
+        "required": [
+          "certificate",
+          "certFiles"
+        ],
+        "type": "object"
+      },
       "ImageDetailBody": {
         "additionalProperties": false,
         "properties": {
@@ -40073,6 +40137,45 @@
         "summary": "Trust an SSH host key for an instance git repository",
         "tags": [
           "git"
+        ]
+      }
+    },
+    "/api/https/status": {
+      "get": {
+        "description": "The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. 503 https_unavailable when no certificate can be read. Needs settings.read.",
+        "operationId": "getHTTPSStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the certificate the server serves",
+        "tags": [
+          "https"
         ]
       }
     },

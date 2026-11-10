@@ -117,6 +117,8 @@ type authFixture struct {
 	fleet *api.FleetDeps
 	// localHost feeds GET /api/local-host (plan 15).
 	localHost api.LocalHostDeps
+	// https feeds the HTTPS routes (phase 14); a test sets it and calls build again.
+	https api.HTTPSDeps
 	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
 	// that talks to a registry of its own sets one that trusts that registry's certificate.
 	registryEgress registry.EgressPolicy
@@ -357,6 +359,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Limiter: inviteLimiter, AnonAudit: f.inviteAudit, Now: f.clk.now, Log: log,
 	})
 	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, Log: log})
+	api.RegisterHTTPS(r, f.https)
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,

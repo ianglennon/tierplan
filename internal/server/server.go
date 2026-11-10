@@ -219,6 +219,7 @@ type RouterDeps struct {
 	Recent        api.RecentDeps
 	Audit         api.AuditDeps
 	Settings      api.SettingsDeps
+	HTTPS         api.HTTPSDeps
 	Backup        api.BackupDeps
 	Restore       api.RestoreDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
@@ -245,6 +246,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterAccount(r, d.Account)
 	api.RegisterAccess(r, d.Access)
 	api.RegisterSettings(r, d.Settings)
+	api.RegisterHTTPS(r, d.HTTPS)
 	api.RegisterLocalHost(r, d.LocalHost)
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
@@ -1159,6 +1161,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
+		HTTPS:         api.HTTPSDeps{Served: rt.served, CertFiles: cfg.TLSCertFile != "", Log: log},
 		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,

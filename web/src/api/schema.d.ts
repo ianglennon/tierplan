@@ -4156,6 +4156,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/https/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the certificate the server serves
+         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. 503 https_unavailable when no certificate can be read. Needs settings.read.
+         */
+        get: operations["getHTTPSStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instance": {
         parameters: {
             query?: never;
@@ -8507,6 +8527,33 @@ export interface components {
              * @enum {string}
              */
             role: "viewer" | "operator" | "admin";
+        };
+        HTTPSCertificateBody: {
+            /** @description Who issued it: the issuer's common name, else its organisation, else empty */
+            issuer: string;
+            /** @description Every name the certificate covers, as it carries them: DNS names first, then IP addresses */
+            names: string[] | null;
+            /**
+             * Format: date-time
+             * @description When it expires
+             */
+            notAfter: string;
+            /**
+             * Format: date-time
+             * @description When it becomes valid
+             */
+            notBefore: string;
+            /**
+             * @description Where the certificate comes from: the one TierPlan generated, the files you supplied, or Let's Encrypt
+             * @enum {string}
+             */
+            source: "self_signed" | "cert_files" | "lets_encrypt";
+        };
+        HTTPSStatusBody: {
+            /** @description Whether certificate files from the environment fix the certificate */
+            certFiles: boolean;
+            /** @description The certificate the listener serves now */
+            certificate: components["schemas"]["HTTPSCertificateBody"];
         };
         ImageDetailBody: {
             /** @description The CPU architecture the image is built for */
@@ -24423,6 +24470,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getHTTPSStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSStatusBody"];
                 };
             };
             /** @description Error */

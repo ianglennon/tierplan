@@ -5,8 +5,11 @@ package server
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"sync/atomic"
+
+	"github.com/ianglennon/tierplan/internal/api"
 )
 
 // tlsKind says where the live certificate comes from. It decides whether a pin
@@ -106,6 +109,32 @@ func (r *httpsRuntime) Pin() string {
 // Strict-Transport-Security: only with a supplied certificate, never with the
 // generated one that a browser cannot be asked to trust for a year (D-04).
 func (r *httpsRuntime) HSTSAllowed() bool { return r.Kind() == tlsKindSupplied }
+
+// served is the certificate a browser receives now: the installed kind mapped
+// to a source and the leaf parsed from what GetCertificate answers, never a
+// stored copy. Nothing installed, or a certificate that cannot be parsed, gives
+// a nil Leaf.
+func (r *httpsRuntime) served() api.ServedCertificate {
+	var s api.ServedCertificate
+	switch r.Kind() {
+	case tlsKindSelfSigned:
+		s.Source = api.SourceSelfSigned
+	case tlsKindSupplied:
+		s.Source = api.SourceCertFiles
+	default:
+		return s
+	}
+	cert, err := r.cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+		return s
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return s
+	}
+	s.Leaf = leaf
+	return s
+}
 
 func (r *httpsRuntime) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	l := r.cur.Load()
