@@ -276,7 +276,7 @@ type zoneJSON struct {
 func (p *provider) Zone(ctx context.Context, fqdn string) (dns.Zone, error) {
 	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(fqdn), "."))
 	floor, err := publicsuffix.EffectiveTLDPlusOne(name)
-	if err != nil || !(name == floor || strings.HasSuffix(name, "."+floor)) {
+	if err != nil || (name != floor && !strings.HasSuffix(name, "."+floor)) {
 		return dns.Zone{}, &dns.Error{Provider: providerName, Op: opFindZone, Class: dns.ClassZoneNotFound, Host: name}
 	}
 	for candidate := name; ; {

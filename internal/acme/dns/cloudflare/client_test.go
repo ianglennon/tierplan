@@ -420,7 +420,7 @@ func TestCloudflareNeverFollowsRedirects(t *testing.T) {
 // TestCloudflareTokenNeverInErrors checks T-15-01: for every failure a call can end in, the token
 // is absent from the error however it is printed.
 func TestCloudflareTokenNeverInErrors(t *testing.T) {
-	const secret = "cf-SECRET-token-7c1e9a52f0b8d3"
+	const secret = "cf-SECRET-token-7c1e9a52f0b8d3" //nolint:gosec // G101: a fake token the test asserts never leaks
 	ctx := context.Background()
 	scripts := []struct {
 		op   string

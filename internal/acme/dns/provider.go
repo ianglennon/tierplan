@@ -26,10 +26,10 @@ import (
 const (
 	// ClassTokenInvalid is a token the provider does not accept at all: malformed, unknown,
 	// expired or revoked.
-	ClassTokenInvalid = "dns_token_invalid"
+	ClassTokenInvalid = "dns_token_invalid" //nolint:gosec // G101: an error class name, not a credential
 	// ClassTokenScope is a token the provider accepts but that may not do what TierPlan needs:
 	// it lacks the permission to list zones or to edit DNS records, or it sees no zone at all.
-	ClassTokenScope = "dns_token_scope"
+	ClassTokenScope = "dns_token_scope" //nolint:gosec // G101: an error class name, not a credential
 	// ClassZoneNotFound is a name no zone the token can see holds.
 	ClassZoneNotFound = "dns_zone_not_found"
 	// ClassDelegationTarget is a name whose _acme-challenge record is delegated to a place the
