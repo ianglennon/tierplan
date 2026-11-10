@@ -88,7 +88,7 @@ func (q *Queries) GetACMECertAccountURL(ctx context.Context) (string, error) {
 }
 
 const getACMEState = `-- name: GetACMEState :one
-SELECT id, mode, challenge_type, profile, paused_reason, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, renew_at, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, last_error_at, last_success_at, renew_basis, last_error_class, last_error_detail, last_success_kind, updated_at, cert_account_url FROM acme_state WHERE id = 1
+SELECT id, mode, challenge_type, profile, paused_reason, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, renew_at, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, last_error_at, last_success_at, renew_basis, last_error_class, last_error_detail, last_success_kind, updated_at, cert_account_url, dns_provider, dns_resolvers, validation_untested FROM acme_state WHERE id = 1
 `
 
 func (q *Queries) GetACMEState(ctx context.Context) (AcmeState, error) {
@@ -117,6 +117,9 @@ func (q *Queries) GetACMEState(ctx context.Context) (AcmeState, error) {
 		&i.LastSuccessKind,
 		&i.UpdatedAt,
 		&i.CertAccountUrl,
+		&i.DnsProvider,
+		&i.DnsResolvers,
+		&i.ValidationUntested,
 	)
 	return i, err
 }
@@ -289,7 +292,7 @@ func (q *Queries) ListACMEFailedRunsSince(ctx context.Context, startedAt int64) 
 }
 
 const listACMERuns = `-- name: ListACMERuns :many
-SELECT id, kind, "trigger", actor, names, started_at, finished_at, outcome, error_class FROM acme_runs ORDER BY started_at DESC, id DESC LIMIT ?
+SELECT id, kind, "trigger", actor, names, started_at, finished_at, outcome, error_class, challenge_type FROM acme_runs ORDER BY started_at DESC, id DESC LIMIT ?
 `
 
 // Newest first; the same started_at is ordered by id.
@@ -312,6 +315,7 @@ func (q *Queries) ListACMERuns(ctx context.Context, limit int64) ([]AcmeRun, err
 			&i.FinishedAt,
 			&i.Outcome,
 			&i.ErrorClass,
+			&i.ChallengeType,
 		); err != nil {
 			return nil, err
 		}

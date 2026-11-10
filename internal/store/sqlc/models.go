@@ -17,6 +17,30 @@ type AcmeAccount struct {
 	CreatedAt    int64
 }
 
+type AcmeDnsCredential struct {
+	Provider    string
+	TokenSealed string
+	CreatedAt   int64
+}
+
+type AcmeDnsRecord struct {
+	ID             string
+	Provider       string
+	ZoneID         string
+	RecordID       string
+	Name           string
+	Value          string
+	Comment        string
+	OwnerKind      string
+	OwnerID        string
+	Token          string
+	CreatedAt      int64
+	Attempts       int64
+	LastTryAt      int64
+	NextTryAt      int64
+	LastErrorClass string
+}
+
 type AcmeOrder struct {
 	ID            string
 	DirectoryUrl  string
@@ -36,15 +60,16 @@ type AcmeOrder struct {
 }
 
 type AcmeRun struct {
-	ID         string
-	Kind       string
-	Trigger    string
-	Actor      string
-	Names      string
-	StartedAt  int64
-	FinishedAt int64
-	Outcome    string
-	ErrorClass string
+	ID            string
+	Kind          string
+	Trigger       string
+	Actor         string
+	Names         string
+	StartedAt     int64
+	FinishedAt    int64
+	Outcome       string
+	ErrorClass    string
+	ChallengeType string
 }
 
 type AcmeState struct {
@@ -70,6 +95,9 @@ type AcmeState struct {
 	LastSuccessKind     string
 	UpdatedAt           int64
 	CertAccountUrl      string
+	DnsProvider         string
+	DnsResolvers        string
+	ValidationUntested  int64
 }
 
 type Agent struct {
