@@ -133,6 +133,22 @@ export function IssueSection({ status, acme, state, canWrite, onRunFailed }: Iss
     onRunFailed?.(failedNow);
   }, [failedNow, onRunFailed]);
 
+  // Let's Encrypt was stopped: the last run's panel and notes speak of a certificate that is no longer
+  // served (UI-SPEC state L: the status card is back on Self-signed), so they are put away. The section
+  // is not keyed on the mode, since a first issue turns it on and its "Certificate issued." stays.
+  const prevMode = useRef(acme.mode);
+  useEffect(() => {
+    if (prevMode.current === "active" && acme.mode === "off") {
+      if (jobId) abandoned.current.add(jobId);
+      setJobId(null);
+      setStartedBy(null);
+      setReused(null);
+      setFailed(false);
+      setRefreshed(null);
+    }
+    prevMode.current = acme.mode;
+  }, [acme.mode, jobId]);
+
   // The server no longer has the run, or this person may not read it: nothing more can be followed.
   // The status says how it ended.
   const lost = jobId !== null && (stream.gone || stream.accessLost);
@@ -326,7 +342,7 @@ export function IssueSection({ status, acme, state, canWrite, onRunFailed }: Iss
           stream={stream}
           names={namesText}
           host={hostText}
-          validUntil={refreshed === jobId ? acme.certificate?.notAfter : undefined}
+          validUntil={refreshed === jobId && served ? acme.certificate?.notAfter : undefined}
         />
       ) : null}
     </div>

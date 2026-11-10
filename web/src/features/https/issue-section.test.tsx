@@ -133,6 +133,9 @@ beforeEach(() => {
       }
       if (path === "/api/https/acme/issue" && req.method === "POST") return issueAnswer();
       if (path === "/api/https/acme/renew" && req.method === "POST") return renewAnswer();
+      if (path === "/api/https/acme/stop" && req.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -706,6 +709,65 @@ describe("a run started elsewhere", () => {
       ).toBeTruthy(),
     );
     expect(card().getByText("Certificate issued.")).toBeTruthy();
+  });
+});
+
+describe("after Stop (W-WR-01)", () => {
+  // Stop using Let's Encrypt through the card's own button and dialog. The server goes back to the
+  // self-signed certificate and keeps the Let's Encrypt one (state L).
+  async function stopLetsEncrypt() {
+    status = () => {
+      const kept = served({ mode: "off" });
+      return { ...kept, certificate: httpsStatus().certificate };
+    };
+    fireEvent.click(card().getByRole("button", { name: "Stop using Let's Encrypt" }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    fireEvent.click(dialog.getByRole("button", { name: "Stop using Let's Encrypt" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  }
+
+  it("puts away the last renewal's panel, which no longer describes what is served", async () => {
+    status = () => served();
+    await ready();
+    fireEvent.click(renewButton() as HTMLElement);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => stream().sendFrame("snapshot", acmeRunFrame({ kind: "renew" })));
+    act(() =>
+      stream().sendFrame(
+        "done",
+        acmeRunFrame({ kind: "renew", state: "done", items: acmeSteps({ stored: "done" }) }),
+        "9",
+      ),
+    );
+    await card().findByText("Certificate renewed.");
+    await card().findByText(/Now serving a certificate valid until/);
+
+    await stopLetsEncrypt();
+    await waitFor(() => expect(card().queryByText("Certificate renewed.")).toBeNull());
+    expect(card().queryByText(/Now serving a certificate valid until/)).toBeNull();
+    expect(document.querySelector("[data-run-state]")).toBeNull();
+    // State L: Issue certificate is offered again, with no spinner left from the renewal.
+    expect(issueButton()?.textContent).toBe("Issue certificate");
+  });
+
+  it("puts away a failed renewal's panel too", async () => {
+    status = () => served();
+    await ready();
+    fireEvent.click(renewButton() as HTMLElement);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    status = () => served({ failures: 1, lastError: acmeLastError() });
+    act(() =>
+      stream().sendFrame(
+        "done",
+        acmeRunFrame({ kind: "renew", state: "failed", items: acmeSteps({ order: "failed" }) }),
+        "9",
+      ),
+    );
+    await card().findByText("Renewing failed.");
+
+    await stopLetsEncrypt();
+    await waitFor(() => expect(card().queryByText("Renewing failed.")).toBeNull());
+    expect(document.querySelector("[data-run-state]")).toBeNull();
   });
 });
 
