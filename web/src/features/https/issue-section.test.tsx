@@ -799,6 +799,42 @@ describe("after Stop (W-WR-01)", () => {
   });
 });
 
+describe("the spinner belongs to the run it started (W-WR-04)", () => {
+  it("puts no spinner on Renew now for a later run the scheduler started", async () => {
+    status = () => served();
+    await ready();
+    fireEvent.click(renewButton() as HTMLElement);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await waitFor(() => expect(renewButton()?.textContent).toBe("Renewing..."));
+    act(() =>
+      stream().sendFrame(
+        "done",
+        acmeRunFrame({ kind: "renew", state: "done", items: acmeSteps({ stored: "done" }) }),
+        "9",
+      ),
+    );
+    await card().findByText("Certificate renewed.");
+    await waitFor(() => expect(renewButton()?.textContent).toBe("Renew now"));
+
+    // Later the scheduler renews by itself, and the page picks the run up from the status.
+    status = () =>
+      served({ activeRun: acmeActiveRun({ jobId: "job-2", kind: "renew", trigger: "schedule" }) });
+    await act(() => queryClient.invalidateQueries({ queryKey: ["https", "status"] }));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+    act(() =>
+      stream().sendFrame(
+        "snapshot",
+        acmeRunFrame({ jobId: "job-2", kind: "renew", trigger: "schedule" }),
+      ),
+    );
+    await card().findByText("Renewing certificate automatically");
+    const renew = renewButton() as HTMLElement;
+    expect(isDisabled(renew)).toBe(true);
+    expect(renew.textContent).toBe("Renew now");
+    expect(renew.querySelector('[data-slot="spinner"]')).toBeNull();
+  });
+});
+
 describe("a dropped stream", () => {
   afterEach(() => {
     vi.useRealTimers();

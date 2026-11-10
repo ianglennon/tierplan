@@ -96,7 +96,9 @@ export function IssueSection({
   const renew = useRenewNow();
 
   const [jobId, setJobId] = useState<string | null>(null);
-  const [startedBy, setStartedBy] = useState<Which | null>(null);
+  // The button this page pressed, and the run it started once the server has answered. The spinner
+  // stays on that button for that run only: a later run (the scheduler, another tab) gets none.
+  const [startedBy, setStartedBy] = useState<{ which: Which; jobId: string | null } | null>(null);
   // What the server refused when a button was used, shown like the status's own list (the SPA never
   // makes a refusal up). It belongs to the names it was refused for.
   const [refused, setRefused] = useState<{ refusals: ACMERefusal[]; names: string } | null>(null);
@@ -217,7 +219,7 @@ export function IssueSection({
     setReused(null);
     setRefused(null);
     setTold(null);
-    setStartedBy(which);
+    setStartedBy({ which, jobId: null });
     (which === "issue" ? issue : renew).mutate(undefined, {
       onSuccess: (started) => {
         if (started.reused) {
@@ -225,6 +227,7 @@ export function IssueSection({
           setReused(started.validUntil ?? "");
         } else if (started.jobId) {
           abandoned.current.delete(started.jobId);
+          setStartedBy({ which, jobId: started.jobId });
           setJobId(started.jobId);
         }
       },
@@ -261,8 +264,10 @@ export function IssueSection({
 
   if (state === "I" || state === "J") return null;
 
-  const issueBusy = startedBy === "issue" && (pending || runActive);
-  const renewBusy = startedBy === "renew" && (pending || runActive);
+  // Busy while the press is in flight, then while the run it started is the one followed and active.
+  const ownRun = startedBy?.jobId != null && startedBy.jobId === jobId && runActive;
+  const issueBusy = startedBy?.which === "issue" && (pending || ownRun);
+  const renewBusy = startedBy?.which === "renew" && (pending || ownRun);
   // Only the button that can be used is the card's one filled button (UI-SPEC one-primary rule).
   const issueVariant = issueDisabled ? "outline" : "default";
 
