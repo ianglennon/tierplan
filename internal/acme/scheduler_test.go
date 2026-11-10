@@ -683,3 +683,131 @@ func TestSchedulerDoesNotRenewWithoutAnAccount(t *testing.T) {
 		t.Fatalf("the renewal after registering again ended %q, want succeeded (state %+v)", got, s.state())
 	}
 }
+
+// breakRunEnds makes every write of a run's end fail, as a full disk or a read-only mount would, until
+// the returned repair is called. Starting a run still works.
+func (s *schedEnv) breakRunEnds() (repair func()) {
+	s.t.Helper()
+	ctx := context.Background()
+	if _, err := s.store.st.Write.ExecContext(ctx, `CREATE TRIGGER test_run_end_fails BEFORE UPDATE OF outcome ON acme_runs
+		BEGIN SELECT RAISE(ABORT, 'scripted write failure'); END`); err != nil {
+		s.t.Fatalf("create the failing trigger: %v", err)
+	}
+	return func() {
+		s.t.Helper()
+		if _, err := s.store.st.Write.ExecContext(ctx, `DROP TRIGGER test_run_end_fails`); err != nil {
+			s.t.Fatalf("drop the failing trigger: %v", err)
+		}
+	}
+}
+
+// A-WR-03: a failed run whose end cannot be written is not forgotten. Nothing starts until the end is
+// recorded (so the backoff and the manual-attempt guard still apply), an admin's attempt gets the
+// store's error, and the first round that can write it does, as it was when the run ended.
+func TestSchedulerStartsNothingWhileAFailedRunIsUnrecorded(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	s.failOrders(1, refusal)
+	repair := s.breakRunEnds()
+	s.schedule(s.mgr)
+
+	s.stepTo(s.state().RenewAt)
+	if got := s.awaitRun(); got != OutcomeFailed {
+		t.Fatalf("the renewal ended %q, want failed", got)
+	}
+	failedAt := s.clock.Now()
+	if st := s.state(); st.ConsecutiveFailures != 0 {
+		t.Fatalf("state = %+v, want the failure unrecorded (the write was scripted to fail)", st)
+	}
+	orders := s.fake.Count(acmetest.EndpointNewOrder)
+	s.idle(15*time.Minute, 2)
+	if n := s.fake.Count(acmetest.EndpointNewOrder); n != orders {
+		t.Errorf("the CA saw %d new orders while the failure was unrecorded, want %d", n, orders)
+	}
+	if rs, err := s.mgr.Issue(ctx, "user:1"); err == nil {
+		t.Errorf("Issue while the failure is unrecorded = %+v, want the store's error", rs)
+	}
+	s.quiet(2)
+
+	// The store works again: the next round records the failure as it was, then renews.
+	repair()
+	s.step(Tick)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal after the failure was recorded ended %q, want succeeded", got)
+	}
+	runs := s.runs()
+	if len(runs) != 3 || runs[1].Outcome != OutcomeFailed || !runs[1].FinishedAt.Equal(failedAt) ||
+		runs[0].Outcome != OutcomeSucceeded {
+		t.Errorf("runs = %+v, want the failure recorded as at %v, then a succeeded renewal", runs, failedAt)
+	}
+}
+
+// A-WR-03: a renewal that succeeded but whose end cannot be written leaves renew_at in the past in the
+// database. Rounds must not take that as due and issue another certificate every minute.
+func TestSchedulerRenewsOnceWhenASuccessIsUnrecorded(t *testing.T) {
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	repair := s.breakRunEnds()
+	s.schedule(s.mgr)
+
+	renewAt := s.state().RenewAt
+	s.stepTo(renewAt)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal ended %q, want succeeded", got)
+	}
+	if st := s.state(); !st.RenewAt.Equal(renewAt) {
+		t.Fatalf("renew_at = %v, want %v unchanged (the write was scripted to fail)", st.RenewAt, renewAt)
+	}
+	if s.inst.served() != 2 {
+		t.Errorf("ServeACME was called %d times, want the renewed certificate served", s.inst.served())
+	}
+	orders := s.fake.Count(acmetest.EndpointNewOrder)
+	s.idle(10*time.Minute, 2)
+	if n := s.fake.Count(acmetest.EndpointNewOrder); n != orders {
+		t.Errorf("the CA saw %d new orders after the unrecorded success, want %d", n, orders)
+	}
+
+	repair()
+	s.step(Tick)
+	s.quiet(2)
+	st := s.state()
+	if !st.RenewAt.After(s.clock.Now()) || st.LastSuccessKind != KindRenew || st.ConsecutiveFailures != 0 {
+		t.Errorf("state = %+v, want the renewal recorded with renew_at ahead", st)
+	}
+	if runs := s.runs(); runs[0].Outcome != OutcomeSucceeded {
+		t.Errorf("runs = %+v, want the renewal recorded as succeeded", runs)
+	}
+}
+
+// A-WR-03: Stop writes an unrecorded success first, so the success cannot make the mode active again
+// after the stop, and refuses while it cannot.
+func TestStopRecordsAnUnrecordedSuccessFirst(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	repair := s.breakRunEnds()
+	s.issueFirst()
+	if st := s.state(); st.Mode == ModeActive {
+		t.Fatalf("state = %+v, want the success unrecorded (the write was scripted to fail)", st)
+	}
+	if err := s.mgr.Stop(ctx, "user:1"); err == nil {
+		t.Error("Stop while the success is unrecorded = nil, want the store's error")
+	}
+
+	repair()
+	if err := s.mgr.Stop(ctx, "user:1"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if st := s.state(); st.Mode != ModeOff || st.LastSuccessKind != KindIssue {
+		t.Errorf("state = %+v, want the issue recorded and then stopped", st)
+	}
+	if runs := s.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+		t.Errorf("runs = %+v, want the issue recorded as succeeded", runs)
+	}
+	s.mgr.mu.Lock()
+	left := s.mgr.unrecorded
+	s.mgr.mu.Unlock()
+	if left != nil {
+		t.Error("the success is still unrecorded after Stop")
+	}
+}

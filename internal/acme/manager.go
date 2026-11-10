@@ -62,6 +62,9 @@ var (
 	ErrNotPaused = errors.New("Let's Encrypt is not paused") //nolint:staticcheck // ST1005: Let\'s Encrypt is a proper name, and this is the text the screens show
 	// ErrProfileUnknown means the directory does not offer the profile.
 	ErrProfileUnknown = errors.New("the certificate authority does not offer that profile")
+	// errRunUnrecorded means the end of the last run is not stored yet, so the ledger cannot be trusted
+	// to say whether another may start.
+	errRunUnrecorded = errors.New("the end of the last certificate run is not recorded yet")
 )
 
 // RefusedError is returned by Issue when a preflight check refuses to order: every refusal at once,
@@ -147,9 +150,13 @@ type Manager struct {
 	// opMu serialises the admin's mutations, so two requests cannot both pass the guards.
 	opMu sync.Mutex
 
-	// mu guards active, inSync and installErr.
+	// mu guards active, unrecorded, inSync and installErr.
 	mu     sync.Mutex
 	active *activeRun
+	// unrecorded is the end of a run that could not be written when the run ended. Until it is, the
+	// stored ledger does not know about that run, so no run starts and every admin change writes it
+	// first.
+	unrecorded *runEnd
 	// inSync is whether the Installer last served the stored Let's Encrypt certificate, and installErr
 	// the last refusal that was logged (scheduler.go).
 	inSync     bool
@@ -230,6 +237,9 @@ func (m *Manager) preflight(st State) (NameSet, []Refusal) {
 func (m *Manager) mutable(ctx context.Context) (State, error) {
 	if m.d.CertFiles {
 		return State{}, ErrCertFiles
+	}
+	if err := m.settle(ctx); err != nil {
+		return State{}, err
 	}
 	st, err := m.d.Store.State(ctx)
 	if err != nil {
@@ -430,6 +440,9 @@ func (m *Manager) Resume(ctx context.Context, actor string) error {
 	if m.d.CertFiles {
 		return ErrCertFiles
 	}
+	if err := m.settle(ctx); err != nil {
+		return err
+	}
 	st, err := m.d.Store.State(ctx)
 	if err != nil {
 		return err
@@ -460,6 +473,10 @@ func (m *Manager) Stop(ctx context.Context, actor string) error {
 	}
 	if m.runActive() {
 		return ErrRunActive
+	}
+	// A success not yet written would make the mode active again after this stop.
+	if err := m.settle(ctx); err != nil {
+		return err
 	}
 	st, err := m.d.Store.State(ctx)
 	if err != nil {
@@ -758,6 +775,9 @@ func (m *Manager) startRun(p runParams) (RunStart, error) {
 	if m.active != nil {
 		return RunStart{}, ErrRunActive
 	}
+	if m.unrecorded != nil {
+		return RunStart{}, errRunUnrecorded
+	}
 	ar := &activeRun{kind: p.req.Kind, trigger: p.trigger, startedAt: m.clock.Now()}
 	job, err := m.d.Jobs.Start(jobs.Spec{
 		Kind: JobKind, Owner: owner,
@@ -842,8 +862,10 @@ func (m *Manager) failed(ctx, bg context.Context, x *run, steps *jobSteps, runEr
 		lifetime = leaf.NotAfter.Sub(leaf.NotBefore)
 	}
 	now := m.clock.Now()
+	// Drawn once, so a write made again later charges the same backoff.
+	jitter := m.d.Jitter()
 	m.finishRun(bg, x.id, OutcomeFailed, f.Class, func(st State) State {
-		st = withLedger(st, RecordFailure(ledgerOf(st), now, f.RetryAfter, lifetime, m.d.Jitter()))
+		st = withLedger(st, RecordFailure(ledgerOf(st), now, f.RetryAfter, lifetime, jitter))
 		st.LastErrorAt, st.LastErrorClass, st.LastErrorDetail = now, f.Class, encodeError(f)
 		return st
 	})
@@ -891,18 +913,55 @@ func (m *Manager) succeeded(bg context.Context, x *run, steps *jobSteps, issued 
 	steps.finishStored(installErr)
 }
 
+// runEnd is the end of a run as it is stored: the outcome, and the change it makes to the ledger.
+type runEnd struct {
+	id, outcome, class string
+	at                 time.Time
+	change             func(State) State
+}
+
 // finishRun reads the ledger, lets change adjust it, and stores it with the run's outcome in one
-// transaction. A failure to write is logged: the run has nothing better to do with it.
+// transaction. A failure to write is not only logged: the end is kept in memory, no run starts until
+// it is written, and the scheduler and every admin change write it again first (settle). Without that
+// a failed run would not be charged, so the next tick could try again at once, and a successful
+// renewal would leave renew_at in the past, so every tick would issue another certificate.
 func (m *Manager) finishRun(bg context.Context, id, outcome, class string, change func(State) State) {
-	st, err := m.d.Store.State(bg)
+	end := &runEnd{id: id, outcome: outcome, class: class, at: m.clock.Now(), change: change}
+	if err := m.writeEnd(bg, end); err != nil {
+		m.log.Error("record the end of a certificate run; no run starts until it is recorded", "error", err)
+		m.mu.Lock()
+		m.unrecorded = end
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) writeEnd(ctx context.Context, end *runEnd) error {
+	st, err := m.d.Store.State(ctx)
 	if err != nil {
-		m.log.Error("read the ACME state to finish a run", "error", err)
-		return
+		return err
 	}
-	now := m.clock.Now()
-	st = change(st)
-	st.UpdatedAt = now
-	if err := m.d.Store.FinishRun(bg, id, outcome, class, now, st); err != nil {
-		m.log.Error("record the end of a certificate run", "error", err)
+	st = end.change(st)
+	st.UpdatedAt = end.at
+	return m.d.Store.FinishRun(ctx, end.id, end.outcome, end.class, end.at, st)
+}
+
+// settle writes the end of a run that could not be written when the run ended, if there is one. The
+// caller holds opMu, so two writes of it never race. An error means it is still not written.
+func (m *Manager) settle(ctx context.Context) error {
+	m.mu.Lock()
+	end := m.unrecorded
+	m.mu.Unlock()
+	if end == nil {
+		return nil
 	}
+	if err := m.writeEnd(ctx, end); err != nil {
+		return fmt.Errorf("record the end of the last certificate run: %w", err)
+	}
+	m.mu.Lock()
+	if m.unrecorded == end {
+		m.unrecorded = nil
+	}
+	m.mu.Unlock()
+	m.log.Info("the end of the last certificate run is recorded", "outcome", end.outcome)
+	return nil
 }

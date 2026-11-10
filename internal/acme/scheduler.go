@@ -46,6 +46,9 @@ func (m *Manager) round(ctx context.Context) {
 		return
 	}
 	m.syncServed(ctx)
+	if !m.settled(ctx) {
+		return
+	}
 	st, err := m.d.Store.State(ctx)
 	if err != nil {
 		m.log.Error("the scheduler could not read the ACME state", "error", err)
@@ -69,6 +72,19 @@ func (m *Manager) round(ctx context.Context) {
 		return
 	}
 	m.renewalRound(ctx, st, leaf)
+}
+
+// settled writes the end of a run that could not be written when it ended, and reports whether
+// nothing is left unwritten. Until it is written the stored ledger does not know that run, so the
+// round starts nothing.
+func (m *Manager) settled(ctx context.Context) bool {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	if err := m.settle(ctx); err != nil {
+		m.log.Error("the scheduler could not record the end of the last certificate run, so it starts nothing", "error", err)
+		return false
+	}
+	return true
 }
 
 // syncServed makes what is served follow what is stored (D-15). A Let's Encrypt certificate that has
