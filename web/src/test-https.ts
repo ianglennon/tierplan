@@ -175,3 +175,43 @@ export function httpsFallbackStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus 
   });
   return { ...lets, certificate: httpsStatus().certificate };
 }
+
+// An install restored from a backup: Let's Encrypt is served as before, but nothing is asked of the
+// CA until an admin resumes (D-20).
+export function httpsRestoredStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsLetsEncryptStatus({ pausedReason: "restore", renewal: undefined, ...acme });
+}
+
+// Certificate files are set and Let's Encrypt was never set up: the card is disabled (D-12).
+export function httpsCertFilesStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const base = httpsStatus();
+  return {
+    ...base,
+    certFiles: true,
+    certificate: { ...base.certificate, source: "cert_files", issuer: "Corporate CA" },
+    acme: httpsACME({ pausedReason: "cert_files", ...acme }),
+  };
+}
+
+// Certificate files are set and the Let's Encrypt certificate, order and account are kept (D-13).
+export function httpsCertFilesKeptStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const lets = httpsLetsEncryptStatus({ pausedReason: "cert_files", renewal: undefined, ...acme });
+  return {
+    ...lets,
+    certFiles: true,
+    certificate: { ...lets.certificate, source: "cert_files", issuer: "Corporate CA" },
+  };
+}
+
+// The public URL moved to another host after the certificate was issued (D-05): the certificate keeps
+// its old names until an admin issues again.
+export function httpsNamesChangedStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsLetsEncryptStatus({
+    namesMismatch: true,
+    names: [
+      { name: "tierplan.example.org", refused: false },
+      { name: "agents.example.org", refused: false },
+    ],
+    ...acme,
+  });
+}

@@ -232,6 +232,41 @@
       "attempts_other": "{{count}} failed attempts in a row.",
       "next": "Next automatic attempt {{time}}.",
       "details": "Details"
+    },
+    "alerts": {
+      "certFilesOnly": "Remove TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE to use Let's Encrypt.",
+      "certFilesKept": {
+        "title": "Paused by certificate files",
+        "body": "Let's Encrypt is paused because TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set. TierPlan keeps your Let's Encrypt certificate, order and account. Remove both variables and restart to pick them up again."
+      },
+      "restore": {
+        "title": "Paused after restore",
+        "body": "This instance was restored from a backup. TierPlan makes no Let's Encrypt requests until you resume, so a copy can't use up the original's limits. The certificate being served is unchanged.",
+        "resume": "Resume Let's Encrypt",
+        "resuming": "Resuming...",
+        "resumed": "Let's Encrypt resumed."
+      },
+      "namesChanged": {
+        "title": "The names have changed",
+        "body": "The certificate covers {{old}}. The public URL and agent URL now need {{new}}. TierPlan keeps renewing the old names until you issue again."
+      },
+      "fallback": {
+        "title": "Serving the self-signed certificate",
+        "body": "The Let's Encrypt certificate expired on {{date}} because renewal kept failing. TierPlan is serving its self-signed certificate until a renewal works, and keeps trying. Browsers warn about it. Agents that use the self-signed pin stay connected."
+      },
+      "testDirectory": {
+        "title": "Test certificate authority",
+        "body": "TIERPLAN_ACME_DIRECTORY_URL is set, so TierPlan talks to {{url}} instead of Let's Encrypt. This is for testing only and isn't supported. Certificates from it aren't trusted by browsers."
+      }
+    },
+    "stop": {
+      "action": "Stop using Let's Encrypt",
+      "title": "Stop using Let's Encrypt?",
+      "body": "TierPlan goes back to its own self-signed certificate right away, with no restart, and stops renewing. Browsers will warn again. Agents that use the self-signed pin keep working. Your Let's Encrypt account is kept, so you can issue again with one click.",
+      "cancel": "Keep Let's Encrypt",
+      "confirm": "Stop using Let's Encrypt",
+      "pending": "Stopping...",
+      "done": "Back on the self-signed certificate."
     }
   }
 }

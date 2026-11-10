@@ -18,6 +18,7 @@ import { IssueSection } from "@/features/https/issue-section";
 import { NamesSection } from "@/features/https/names-section";
 import { ProfileSection } from "@/features/https/profile-section";
 import { Sentence, SLOT } from "@/features/https/sentence";
+import { StateAlerts } from "@/features/https/state-alerts";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -98,6 +99,7 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
       )}
 
       <Separator />
+      <StateAlerts status={status} canWrite={canWrite} />
       <IssueSection
         status={status}
         acme={acme}

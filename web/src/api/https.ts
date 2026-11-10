@@ -252,3 +252,57 @@ export function useRenewNow() {
     },
   });
 }
+
+// ACMEControlError is a resume or stop the server refused. type is the problem type
+// ("acme_not_paused", "acme_not_active", "acme_cert_files", "acme_run_active"), when it sent one.
+export class ACMEControlError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+
+  constructor(what: "resume" | "stop", status: number, type?: string) {
+    super(`POST /api/https/acme/${what} failed with ${status}`);
+    this.name = "ACMEControlError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+async function control(what: "resume" | "stop"): Promise<void> {
+  const path = what === "resume" ? "/api/https/acme/resume" : "/api/https/acme/stop";
+  const { error, response } = await api.POST(path);
+  if (response.ok) return;
+  throw new ACMEControlError(what, response.status, readProblem(error, response).type);
+}
+
+// useResumeACME lifts the pause a restore puts on Let's Encrypt. The mutation stays pending until the
+// status has been read again, so the paused alert is gone when it ends. A 409 means the page was out
+// of date, and the status is read again to say what the card is now.
+export function useResumeACME() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => control("resume"),
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (error instanceof ACMEControlError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+      }
+    },
+  });
+}
+
+// useStopACME goes back to the self-signed certificate with no restart. The mutation stays pending
+// until the status has been read again, so the status card already says Self-signed when it ends.
+export function useStopACME() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => control("stop"),
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (error instanceof ACMEControlError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+      }
+    },
+  });
+}
