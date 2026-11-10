@@ -5,7 +5,9 @@ package store_test
 
 import (
 	"context"
+	"os"
 	"testing"
+	"testing/fstest"
 
 	"github.com/ianglennon/tierplan/internal/store"
 )
@@ -182,5 +184,95 @@ func assertTLSCertsTableWorks(t *testing.T, s *store.Store) {
 	}
 	if _, err := s.Write.ExecContext(ctx, `INSERT INTO tls_certs (id, cert_pem, created_at, updated_at) VALUES ('nokey', 'c', 1, 1)`); err == nil {
 		t.Error("a row without a sealed key was accepted")
+	}
+}
+
+// upTo37 is the embedded migrations as far as 00037, which is what a build before Phase 14 knew.
+func upTo37(t *testing.T) fstest.MapFS {
+	t.Helper()
+	m := fstest.MapFS{}
+	for _, f := range []string{"00036_baseline.sql", "00037_tls_certs.sql"} {
+		data, err := os.ReadFile("migrations/" + f) //nolint:gosec // a test reads the embedded migration files by their fixed names
+		if err != nil {
+			t.Fatal(err)
+		}
+		m[f] = &fstest.MapFile{Data: data}
+	}
+	return m
+}
+
+func TestACMETablesExistInAFreshDatabase(t *testing.T) {
+	s := migratedFresh(t)
+	assertACMETablesWork(t, s)
+}
+
+// A database as the build before Let's Encrypt left it (migrated to 00037) gains the ACME tables, and
+// the self-signed certificate row it already held is untouched.
+func TestACMETablesArriveOnA00037Database(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.1.0", DataDir: dir, Migrations: upTo37(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if hasTable(t, s, "acme_state") {
+		t.Fatal("a database at 00037 already has acme_state")
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO tls_certs (id, cert_pem, key_sealed, created_at, updated_at) VALUES ('selfsigned', 'cert', 'v1.k1-x.sealed', 11, 12)`); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.2.0", DataDir: dir})
+	if err != nil {
+		t.Fatalf("migrate from 00037: %v", err)
+	}
+	if res.From != 37 || res.To < 38 {
+		t.Errorf("From, To = %d, %d; want 37 and at least 38", res.From, res.To)
+	}
+	var cert, sealed string
+	var created, updated int64
+	if err := s.Read.QueryRowContext(ctx, `SELECT cert_pem, key_sealed, created_at, updated_at FROM tls_certs WHERE id = 'selfsigned'`).Scan(&cert, &sealed, &created, &updated); err != nil {
+		t.Fatalf("the selfsigned row after migrating: %v", err)
+	}
+	if cert != "cert" || sealed != "v1.k1-x.sealed" || created != 11 || updated != 12 {
+		t.Errorf("the selfsigned row changed: %q %q %d %d", cert, sealed, created, updated)
+	}
+	assertACMETablesWork(t, s)
+}
+
+// assertACMETablesWork checks the four tables exist, the state singleton is seeded empty and the
+// CHECK constraints refuse what the code never writes.
+func assertACMETablesWork(t *testing.T, s *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	for _, table := range []string{"acme_account", "acme_state", "acme_orders", "acme_runs"} {
+		if !hasTable(t, s, table) {
+			t.Errorf("%s is missing", table)
+		}
+	}
+	var n int
+	var mode, paused string
+	var failures, lastAttempt int64
+	if err := s.Read.QueryRowContext(ctx, `SELECT COUNT(*), MIN(mode), MIN(paused_reason), MIN(consecutive_failures), MIN(last_attempt_at) FROM acme_state`).Scan(&n, &mode, &paused, &failures, &lastAttempt); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || mode != "off" || paused != "" || failures != 0 || lastAttempt != 0 {
+		t.Errorf("acme_state = %d rows, mode %q, pause %q, %d failures, last attempt %d; want one empty row in mode off", n, mode, paused, failures, lastAttempt)
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO acme_state (id) VALUES (2)`); err == nil {
+		t.Error("a second acme_state row was accepted")
+	}
+	if _, err := s.Write.ExecContext(ctx, `UPDATE acme_state SET mode = 'sometimes'`); err == nil {
+		t.Error("a mode outside off and active was accepted")
+	}
+	const order = `INSERT INTO acme_orders (id, directory_url, order_url, kind, names, cert_key_sealed, stage, status, created_at, updated_at) VALUES (?, 'd', 'o', ?, '[]', 'k', 'created', ?, 1, 1)`
+	if _, err := s.Write.ExecContext(ctx, order, "o-1", "issue", "open"); err != nil {
+		t.Errorf("a valid order was refused: %v", err)
+	}
+	if _, err := s.Write.ExecContext(ctx, order, "o-2", "other", "open"); err == nil {
+		t.Error("an order of a kind other than issue and renew was accepted")
+	}
+	if _, err := s.Write.ExecContext(ctx, order, "o-3", "renew", "pending"); err == nil {
+		t.Error("an order status other than open and closed was accepted")
 	}
 }

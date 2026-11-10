@@ -192,6 +192,11 @@ type Session struct {
 	Facts          wire.Facts
 	IP             string
 	ConnectedAt    time.Time
+	// DialHost is the host the agent dialed, lower-case and without the port or IPv6
+	// brackets. It is proved by the handshake, which refused any audience other than the
+	// one the server expected, and an agent cannot set it. It is empty for a session
+	// recorded before this field existed.
+	DialHost string
 
 	ym   *yamux.Session
 	ws   *websocket.Conn

@@ -11,6 +11,7 @@ import { queryClient } from "@/api/query-client";
 import { Toaster } from "@/components/ui/sonner";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
+import { httpsStatus } from "@/test-https";
 import { makeMe } from "@/test-me";
 
 const SOCKET = "/var/run/docker.sock";
@@ -122,6 +123,7 @@ beforeEach(() => {
       if (path === "/api/users") return Response.json(users);
       if (path === "/api/env/e1" && req.method === "PATCH") return patchAnswer(call.body ?? {});
       if (path === "/api/environments/e1" && req.method === "DELETE") return deleteAnswer();
+      if (path === "/api/https/status") return Response.json(httpsStatus());
       if (path === "/api/version") {
         return Response.json({
           commit: "",
@@ -275,6 +277,51 @@ describe("Settings layout", () => {
   });
 });
 
+describe("HTTPS tab", () => {
+  it("lists HTTPS right after General for an instance admin", async () => {
+    renderAt("/settings/general");
+    await screen.findByRole("tab", { name: "HTTPS" });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "General",
+      "HTTPS",
+      "Environments",
+      "Access",
+      "Backup",
+      "About",
+    ]);
+  });
+
+  it("opens the HTTPS page from its tab", async () => {
+    const router = renderAt("/settings/general");
+    const tab = await screen.findByRole("tab", { name: "HTTPS" });
+    expect(tab.getAttribute("href")).toBe("/settings/https");
+    await act(async () => {
+      fireEvent.click(tab);
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/https"));
+    expect((await screen.findByRole("tab", { name: "HTTPS" })).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(await screen.findByRole("region", { name: "Certificate in use" })).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe("HTTPS · Lab"));
+  });
+
+  it("hides HTTPS without settings.read and says so on a direct visit", async () => {
+    me = makeMe({ allEnvironments: "admin" });
+    me = { ...me, permissions: { global: [], environments: { "*": ["environments.configure"] } } };
+    renderAt("/settings/environments");
+    await screen.findByRole("tab", { name: "Environments" });
+    expect(screen.queryByRole("tab", { name: "HTTPS" })).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    renderAt("/settings/https");
+    expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Certificate in use" })).toBeNull();
+    expect(calls.some((c) => c.path === "/api/https/status")).toBe(false);
+  });
+});
+
 describe("Backup tab", () => {
   it("shows the Backup tab to an instance admin and opens the page", async () => {
     const router = renderAt("/settings/backup");
@@ -309,6 +356,7 @@ describe("Access tab", () => {
     await screen.findByRole("tab", { name: "Access" });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "General",
+      "HTTPS",
       "Environments",
       "Access",
       "Backup",

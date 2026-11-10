@@ -1,0 +1,273 @@
+{
+  "https": {
+    "tabTitle": "HTTPS",
+    "title": "HTTPS",
+    "description": "TierPlan always serves HTTPS. See the certificate it is using, or get a free one from Let's Encrypt that browsers trust.",
+    "certificate": {
+      "title": "Certificate in use",
+      "rows": {
+        "source": "Source",
+        "issuer": "Issuer",
+        "names": "Names",
+        "expires": "Expires",
+        "lastRenewed": "Last renewed",
+        "nextRenewal": "Next renewal",
+        "lastError": "Last error"
+      },
+      "source": {
+        "self_signed": "Self-signed",
+        "cert_files": "Certificate files",
+        "lets_encrypt": "Let's Encrypt"
+      },
+      "issuerUnknown": "Unknown",
+      "note": {
+        "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files.",
+        "cert_files": "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE."
+      },
+      "testCA": "Test CA",
+      "issuedWhen": "Issued {{when}}",
+      "renewedWhen": "Renewed {{when}}",
+      "pausedNext": "Paused until you resume",
+      "pausedNextFiles": "Paused while certificate files are set",
+      "noError": "None",
+      "detailsBelow": "Details below"
+    },
+    "acme": {
+      "title": "Let's Encrypt",
+      "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",
+      "method": {
+        "label": "Validation method",
+        "value": "HTTP-01"
+      },
+      "portNote": "Let's Encrypt checks your domain over plain HTTP on port 80. Port 80 on {{host}} must reach TierPlan, for example by starting the container with {{flag}}. TierPlan answers the check on its usual port, so there is nothing else to run.",
+      "publicHostFallback": "the public host"
+    },
+    "names": {
+      "title": "Names on the certificate",
+      "helper": "The host of the public URL, plus the host of the agent URL when it is different. Change them in {{link}}. IP addresses and wildcards can't be used.",
+      "link": "Settings > General",
+      "notAllowed": "Not allowed",
+      "onCertificate": "On the certificate",
+      "neededNow": "Needed now",
+      "none": "No public URL is set yet. Set it in {{link}}."
+    },
+    "account": {
+      "title": "Account",
+      "empty": "Let's Encrypt needs an account for this install. TierPlan keeps its key encrypted and never shows it.",
+      "email": {
+        "label": "Contact email (optional)",
+        "helper": "Let's Encrypt uses it to reach you about problems with the account. You can leave it empty.",
+        "error": "Enter a valid email address, or leave it empty."
+      },
+      "terms": {
+        "label": "I agree to the Let's Encrypt {{link}}",
+        "link": "Subscriber Agreement",
+        "error": "Accept the Subscriber Agreement to register."
+      },
+      "register": "Register account",
+      "registering": "Registering...",
+      "done": "Account registered.",
+      "registeredLabel": "Registered",
+      "contactLabel": "Contact:",
+      "noContact": "No contact email.",
+      "keyNote": "TierPlan keeps the account key encrypted and never shows it."
+    },
+    "profile": {
+      "advanced": "Advanced",
+      "label": "Certificate profile",
+      "caDefault": "CA default",
+      "notOffered": "{{name}} (not offered now)",
+      "helper": "The default is right for most installs. A profile sets how long certificates last and what they are for. It applies from the next order and doesn't change the certificate in use.",
+      "none": "This directory offers no profiles. The CA default is used.",
+      "unreadable": "Let's Encrypt's list of profiles couldn't be read. You can still save the profile shown.",
+      "save": "Save profile",
+      "saving": "Saving...",
+      "done": "Profile saved."
+    },
+    "error": {
+      "rate_limited": {
+        "headline": "Let's Encrypt is limiting requests.",
+        "fix": "TierPlan waits until {{time}} before it tries again. There is nothing to do.",
+        "fixNoTime": "TierPlan waits before it tries again. There is nothing to do."
+      },
+      "validation_unreachable": {
+        "headline": "Let's Encrypt couldn't reach http://{{host}}/.well-known/acme-challenge/.",
+        "fix": "Port 80 on {{host}} must reach TierPlan, for example with -p 80:{{port}}. Check your firewall and router, then try again."
+      },
+      "validation_dns": {
+        "headline": "The DNS records for {{host}} don't point at this host.",
+        "fix": "Make the A and AAAA records for {{host}} point at this host. Remove an old AAAA record if you have no IPv6. Then try again."
+      },
+      "caa_forbids": {
+        "headline": "A CAA record forbids Let's Encrypt for {{host}}.",
+        "fix": "Add a CAA record that allows letsencrypt.org, or remove the one that blocks it."
+      },
+      "identifier_rejected": {
+        "headline": "Let's Encrypt won't issue for {{host}}.",
+        "fix": "Use a public DNS name under a domain you own as the public URL."
+      },
+      "contact_invalid": {
+        "headline": "Let's Encrypt rejected the contact email.",
+        "fix": "Register again with a valid address, or leave it empty."
+      },
+      "tos_action_required": {
+        "headline": "Let's Encrypt changed its terms.",
+        "fix": "Read the current terms at {{url}}, then try again."
+      },
+      "account_gone": {
+        "headline": "Let's Encrypt doesn't know this account.",
+        "fix": "Register the account again in the Account section."
+      },
+      "profile_invalid": {
+        "headline": "Let's Encrypt doesn't offer the profile {{profile}}.",
+        "fix": "Choose another profile under Advanced, or go back to the CA default."
+      },
+      "ca_unavailable": {
+        "headline": "Let's Encrypt couldn't be reached.",
+        "fix": "TierPlan tries again on its own schedule, next at {{time}}. If it keeps failing, check this host's internet access.",
+        "fixNoTime": "TierPlan tries again on its own schedule. If it keeps failing, check this host's internet access."
+      },
+      "ca_untrusted": {
+        "headline": "TierPlan doesn't trust the certificate authority's certificate.",
+        "fix": "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE."
+      },
+      "internal": {
+        "headline": "Something went wrong inside TierPlan.",
+        "fix": "Open Details and check the server log. TierPlan tries again at {{time}}.",
+        "fixNoTime": "Open Details and check the server log."
+      }
+    },
+    "issue": {
+      "helper": "TierPlan switches to the new certificate as soon as it is ready. Nothing restarts and nobody is signed out.",
+      "issue": "Issue certificate",
+      "issuing": "Issuing...",
+      "renew": "Renew now",
+      "renewing": "Renewing...",
+      "noAccount": "Register a Let's Encrypt account first.",
+      "runActive": "A run is already in progress.",
+      "paused": "Resume Let's Encrypt first.",
+      "toldToWait": "Let's Encrypt asked TierPlan to wait. You can try again at {{time}}.",
+      "failureGuard": "Three attempts failed in the last hour. TierPlan waits so it doesn't use up Let's Encrypt's limits. You can try again at {{time}}.",
+      "reused": "These names already have a valid certificate until {{date}}. Nothing was ordered. Use Renew now to get a new one.",
+      "issued": "Certificate issued.",
+      "renewed": "Certificate renewed."
+    },
+    "refusal": {
+      "title": "Can't issue yet",
+      "names_ip": {
+        "reason": "The public URL uses an IP address ({{host}}).",
+        "fix": "Set the public URL in Settings > General to a DNS name that points to this host."
+      },
+      "agent_url_ip": {
+        "reason": "The agent URL uses an IP address ({{host}}).",
+        "fix": "Set the agent URL to a DNS name, or clear it to use the public URL."
+      },
+      "names_wildcard": {
+        "reason": "{{host}} is a wildcard name.",
+        "fix": "Use a plain host name. Wildcard certificates aren't supported."
+      },
+      "names_not_public": {
+        "reason": "{{host}} isn't a public DNS name. It has no dot, or ends in a private suffix such as .lan or .home.arpa.",
+        "fix": "Use a name under a domain you own, such as tierplan.example.com. Nothing was sent to Let's Encrypt."
+      },
+      "base_path": {
+        "reason": "The public URL has a path ({{path}}).",
+        "fix": "HTTP-01 needs TierPlan at the root of its host. Remove the path from the public URL, or give TierPlan its own host name."
+      },
+      "agent_dial_host": {
+        "reason_one": "{{count}} connected agent reaches TierPlan at {{hosts}}, which isn't on the certificate.",
+        "reason_other": "{{count}} connected agents reach TierPlan at {{hosts}}, which isn't on the certificate.",
+        "fix": "Reinstall those agents with a new install command, or set the agent URL to the host they use. Only agents that are connected now are checked."
+      }
+    },
+    "run": {
+      "issuing": "Issuing certificate",
+      "renewing": "Renewing certificate",
+      "renewingAuto": "Renewing certificate automatically",
+      "started": "Started {{when}}.",
+      "issued": "Certificate issued.",
+      "renewed": "Certificate renewed.",
+      "validUntil": "Now serving a certificate valid until {{date}}.",
+      "issueFailed": "Issuing failed.",
+      "renewFailed": "Renewing failed.",
+      "issueStopped": "Issuing stopped.",
+      "renewStopped": "Renewing stopped.",
+      "reconnecting": "Reconnecting...",
+      "steps": "Steps",
+      "step": {
+        "account": "Account",
+        "order": "Order",
+        "challenge": "Challenge",
+        "validate": "Validation",
+        "finalize": "Finalize",
+        "stored": "Stored"
+      },
+      "hint": {
+        "account": "Checking the Let's Encrypt account.",
+        "order": "Asking for a certificate for {{names}}.",
+        "challenge": "Serving the HTTP-01 token on port 80.",
+        "validate": "Waiting for Let's Encrypt to check {{host}}.",
+        "finalize": "Sending the certificate request.",
+        "stored": "Saving the certificate and switching to it.",
+        "accountSkipped": "Account already registered."
+      },
+      "state": {
+        "waiting": "Not started",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "cancelled": "Stopped",
+        "skipped": "Skipped"
+      }
+    },
+    "renewal": {
+      "basis": {
+        "ari": "Chosen by Let's Encrypt",
+        "two_thirds": "Two thirds through the certificate's life",
+        "half": "Half way through the certificate's life"
+      }
+    },
+    "lastRun": {
+      "failed": "Failed {{when}}.",
+      "attempts_one": "{{count}} failed attempt in a row.",
+      "attempts_other": "{{count}} failed attempts in a row.",
+      "next": "Next automatic attempt {{time}}.",
+      "details": "Details"
+    },
+    "alerts": {
+      "certFilesOnly": "Remove TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE to use Let's Encrypt.",
+      "certFilesKept": {
+        "title": "Paused by certificate files",
+        "body": "Let's Encrypt is paused because TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set. TierPlan keeps your Let's Encrypt certificate, order and account. Remove both variables and restart to pick them up again."
+      },
+      "restore": {
+        "title": "Paused after restore",
+        "body": "This instance was restored from a backup. TierPlan makes no Let's Encrypt requests until you resume, so a copy can't use up the original's limits. The certificate being served is unchanged.",
+        "resume": "Resume Let's Encrypt",
+        "resuming": "Resuming...",
+        "resumed": "Let's Encrypt resumed."
+      },
+      "namesChanged": {
+        "title": "The names have changed",
+        "body": "The certificate covers {{old}}. The public URL and agent URL now need {{new}}. TierPlan keeps renewing the old names until you issue again."
+      },
+      "fallback": {
+        "title": "Serving the self-signed certificate",
+        "body": "The Let's Encrypt certificate expired on {{date}} because renewal kept failing. TierPlan is serving its self-signed certificate until a renewal works, and keeps trying. Browsers warn about it. Agents that use the self-signed pin stay connected."
+      },
+      "testDirectory": {
+        "title": "Test certificate authority",
+        "body": "TIERPLAN_ACME_DIRECTORY_URL is set, so TierPlan talks to {{url}} instead of Let's Encrypt. This is for testing only and isn't supported. Certificates from it aren't trusted by browsers."
+      }
+    },
+    "stop": {
+      "action": "Stop using Let's Encrypt",
+      "title": "Stop using Let's Encrypt?",
+      "body": "TierPlan goes back to its own self-signed certificate right away, with no restart, and stops renewing. Browsers will warn again. Agents that use the self-signed pin keep working. Your Let's Encrypt account is kept, so you can issue again with one click.",
+      "cancel": "Keep Let's Encrypt",
+      "confirm": "Stop using Let's Encrypt",
+      "pending": "Stopping...",
+      "done": "Back on the self-signed certificate."
+    }
+  }
+}

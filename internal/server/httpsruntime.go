@@ -5,8 +5,11 @@ package server
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"sync/atomic"
+
+	"github.com/ianglennon/tierplan/internal/api"
 )
 
 // tlsKind says where the live certificate comes from. It decides whether a pin
@@ -21,6 +24,10 @@ const (
 	// tlsKindSupplied is a certificate the operator provided or obtained. HSTS
 	// is allowed over it and no pin is published.
 	tlsKindSupplied
+	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No pin is
+	// published (the certificate chains to the public roots, and agents keep the pin of the
+	// self-signed key they were installed with), and HSTS is not sent in this phase.
+	tlsKindACME
 )
 
 // liveTLS is one installed certificate source.
@@ -36,8 +43,8 @@ type liveTLS struct {
 // with a certificate. Nothing in it takes a lock or touches a file: the handshake
 // answers from memory.
 //
-// Nothing but Build and tests calls Install (D-12): no setting, flag or
-// environment variable reaches it.
+// Only Build and the ACME installer (acmeserve.go) call Install (D-12): no setting,
+// flag or environment variable reaches it.
 type httpsRuntime struct {
 	cur atomic.Pointer[liveTLS]
 	cfg *tls.Config
@@ -106,6 +113,34 @@ func (r *httpsRuntime) Pin() string {
 // Strict-Transport-Security: only with a supplied certificate, never with the
 // generated one that a browser cannot be asked to trust for a year (D-04).
 func (r *httpsRuntime) HSTSAllowed() bool { return r.Kind() == tlsKindSupplied }
+
+// served is the certificate a browser receives now: the installed kind mapped
+// to a source and the leaf parsed from what GetCertificate answers, never a
+// stored copy. Nothing installed, or a certificate that cannot be parsed, gives
+// a nil Leaf.
+func (r *httpsRuntime) served() api.ServedCertificate {
+	var s api.ServedCertificate
+	switch r.Kind() {
+	case tlsKindSelfSigned:
+		s.Source = api.SourceSelfSigned
+	case tlsKindSupplied:
+		s.Source = api.SourceCertFiles
+	case tlsKindACME:
+		s.Source = api.SourceLetsEncrypt
+	default:
+		return s
+	}
+	cert, err := r.cfg.GetCertificate(&tls.ClientHelloInfo{})
+	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+		return s
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return s
+	}
+	s.Leaf = leaf
+	return s
+}
 
 func (r *httpsRuntime) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	l := r.cur.Load()

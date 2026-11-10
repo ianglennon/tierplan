@@ -27,3 +27,6 @@ func ClassifyStreamRequest(p []byte) (kind string, ok bool) {
 	}
 	return "other", ok
 }
+
+// DialHostOf exposes dialHost to the black-box tests.
+func DialHostOf(aud string) string { return dialHost(aud) }

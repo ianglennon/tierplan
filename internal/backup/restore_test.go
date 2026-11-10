@@ -591,3 +591,126 @@ func TestSwapWithMarkerThatCannotWriteTheMarkerDoesNotReplaceTheDatabase(t *test
 		t.Fatalf("live users = %q: the database was replaced without a rollback record", got)
 	}
 }
+
+// --- the Let's Encrypt pause (ACME-08) ---------------------------------------------
+
+const acmeDirectory = "https://acme.example/directory"
+
+// addACMEAccount puts a Let's Encrypt account in the instance being backed up, its key sealed under
+// the live key as the application does.
+func (f *exportFixture) addACMEAccount(t *testing.T) {
+	t.Helper()
+	sealed, err := f.live.Seal(vault.ContextACMEAccountKey+acmeDirectory, []byte("account private key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `INSERT INTO acme_account (directory_url, account_url, key_sealed, contact, tos_url, created_at)
+		VALUES (?, 'https://acme.example/acct/1', ?, 'mailto:admin@example.org', '', 1)`, acmeDirectory, sealed)
+}
+
+// acmePause is what the restored database says about the pause.
+func acmePause(t *testing.T, dataDir string) (reason string, updatedAt int64) {
+	t.Helper()
+	st, err := store.Open(context.Background(), dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.Read.QueryRow(`SELECT paused_reason, updated_at FROM acme_state WHERE id = 1`).Scan(&reason, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	return reason, updatedAt
+}
+
+func TestRestorePausesACMEWhenTheBackupHasAnAccount(t *testing.T) {
+	f := newExportFixture(t)
+	f.addACMEAccount(t)
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	staged, err := backup.Stage(ctx, bytes.NewReader(file), []byte(exportPass), dataDir, schemaOfBinary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.Discard()
+	o := restoreOptions
+	o.Now = func() time.Time { return at }
+	if err := staged.Prepare(ctx, targetVault(t), o); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, err := staged.Swap(ctx, dataDir, at); err != nil {
+		t.Fatalf("Swap: %v", err)
+	}
+
+	reason, updatedAt := acmePause(t, dataDir)
+	if reason != "restore" || updatedAt != at.UnixNano() {
+		t.Errorf("acme_state = paused %q, updated_at %d; want paused \"restore\" at %d", reason, updatedAt, at.UnixNano())
+	}
+}
+
+func TestRestoreDoesNotPauseACMEWithoutAnAccount(t *testing.T) {
+	f := newExportFixture(t)
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	if _, err := restoreInto(t, file, dataDir, targetVault(t)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if reason, _ := acmePause(t, dataDir); reason != "" {
+		t.Errorf("paused_reason = %q on an instance with no Let's Encrypt account, want none", reason)
+	}
+}
+
+// TestRestorePauseIsInTheRestoreTransaction gives the staged database a trigger that breaks the
+// transaction at commit when the pause is written. The restore then fails whole, with nothing staged
+// and the live database untouched: the pause is written by the same transaction that commits the
+// restore, never after it. An instance with no account never writes the pause and restores fine.
+func TestRestorePauseIsInTheRestoreTransaction(t *testing.T) {
+	f := newExportFixture(t)
+	f.addACMEAccount(t)
+	f.exec(t, `CREATE TABLE tripwire_parent (id INTEGER PRIMARY KEY)`)
+	f.exec(t, `CREATE TABLE tripwire_child (parent_id INTEGER REFERENCES tripwire_parent(id) DEFERRABLE INITIALLY DEFERRED)`)
+	f.exec(t, `CREATE TRIGGER tripwire AFTER UPDATE OF paused_reason ON acme_state
+		BEGIN INSERT INTO tripwire_child (parent_id) VALUES (999); END`)
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir, target, before := liveInstall(t)
+	staged, err := backup.Stage(context.Background(), bytes.NewReader(file), []byte(exportPass), dir, schemaOfBinary(t))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := staged.Prepare(context.Background(), target, restoreOptions); err == nil {
+		t.Fatal("Prepare succeeded although the transaction that writes the pause cannot commit")
+	}
+	if _, err := os.Stat(staged.Dir); err == nil {
+		t.Error("the staging directory survived a failed Prepare")
+	}
+	assertNoStaging(t, dir)
+	if got := hashDatabase(t, dir); got != before {
+		t.Error("the live database changed")
+	}
+
+	// With no account the pause is not written, the trigger never fires, and the same backup restores.
+	f2 := newExportFixture(t)
+	f2.exec(t, `CREATE TABLE tripwire_parent (id INTEGER PRIMARY KEY)`)
+	f2.exec(t, `CREATE TABLE tripwire_child (parent_id INTEGER REFERENCES tripwire_parent(id) DEFERRABLE INITIALLY DEFERRED)`)
+	f2.exec(t, `CREATE TRIGGER tripwire AFTER UPDATE OF paused_reason ON acme_state
+		BEGIN INSERT INTO tripwire_child (parent_id) VALUES (999); END`)
+	_, file2, err := f2.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restoreInto(t, file2, t.TempDir(), targetVault(t)); err != nil {
+		t.Errorf("a backup with no account failed to restore: %v", err)
+	}
+}

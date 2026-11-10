@@ -7483,6 +7483,592 @@
         ],
         "type": "object"
       },
+      "HTTPSACMEAccountBody": {
+        "additionalProperties": false,
+        "properties": {
+          "contact": {
+            "description": "The contact email address, empty when none was given",
+            "type": "string"
+          },
+          "registeredAt": {
+            "description": "When the account was registered",
+            "format": "date-time",
+            "type": "string"
+          },
+          "termsOfServiceUrl": {
+            "description": "Where the terms of service the account agreed to can be read, empty when the CA names none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "registeredAt",
+          "contact",
+          "termsOfServiceUrl"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEBlockBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "The CA asked us to wait, or three runs failed within the hour",
+            "enum": [
+              "told_to_wait",
+              "failure_guard"
+            ],
+            "type": "string"
+          },
+          "until": {
+            "description": "When an attempt is allowed again",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "until",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEBody": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/HTTPSACMEAccountBody",
+            "description": "The registered account; left out before registration"
+          },
+          "activeRun": {
+            "$ref": "#/components/schemas/HTTPSACMERunBody",
+            "description": "The run in progress"
+          },
+          "blocked": {
+            "$ref": "#/components/schemas/HTTPSACMEBlockBody",
+            "description": "Set while a manual attempt is refused"
+          },
+          "certificate": {
+            "$ref": "#/components/schemas/HTTPSACMECertificateBody",
+            "description": "The stored Let's Encrypt certificate"
+          },
+          "challengeType": {
+            "description": "The challenge used to prove the names",
+            "type": "string"
+          },
+          "directoryOverridden": {
+            "description": "True when the test-only directory override is set; its certificates are not trusted by browsers",
+            "type": "boolean"
+          },
+          "directoryUrl": {
+            "description": "The CA directory in use",
+            "type": "string"
+          },
+          "failures": {
+            "description": "Consecutive failed runs",
+            "format": "int64",
+            "type": "integer"
+          },
+          "fallback": {
+            "$ref": "#/components/schemas/HTTPSACMEFallbackBody",
+            "description": "Set when the certificate has expired and the self-signed one is served"
+          },
+          "hasState": {
+            "description": "True when a Let's Encrypt certificate or an open order is stored",
+            "type": "boolean"
+          },
+          "lastError": {
+            "$ref": "#/components/schemas/HTTPSACMEErrorBody",
+            "description": "The last failure, until a run succeeds"
+          },
+          "lastRun": {
+            "$ref": "#/components/schemas/HTTPSACMERunBody",
+            "description": "The run that ended last"
+          },
+          "listenPort": {
+            "description": "The port TierPlan listens on",
+            "format": "int64",
+            "type": "integer"
+          },
+          "mode": {
+            "description": "active when Let's Encrypt is in use",
+            "enum": [
+              "off",
+              "active"
+            ],
+            "type": "string"
+          },
+          "names": {
+            "description": "The names a certificate would carry now",
+            "items": {
+              "$ref": "#/components/schemas/HTTPSACMENameBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "namesMismatch": {
+            "description": "True when the stored certificate's names are not the names wanted now",
+            "type": "boolean"
+          },
+          "nextAttemptAt": {
+            "description": "When the next automatic attempt is due after a failure",
+            "format": "date-time",
+            "type": "string"
+          },
+          "pausedReason": {
+            "description": "Why renewals are paused: a backup was restored, or certificate files are set. Empty when they run",
+            "enum": [
+              "",
+              "restore",
+              "cert_files"
+            ],
+            "type": "string"
+          },
+          "profile": {
+            "description": "The profile orders ask for; empty is the CA's default",
+            "type": "string"
+          },
+          "publicHost": {
+            "description": "The host of the public address, empty when none is set",
+            "type": "string"
+          },
+          "refusals": {
+            "description": "Every reason an order cannot start, empty when one could",
+            "items": {
+              "$ref": "#/components/schemas/HTTPSACMERefusalBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "renewal": {
+            "$ref": "#/components/schemas/HTTPSACMERenewalBody",
+            "description": "The next renewal; left out unless Let's Encrypt is in use"
+          }
+        },
+        "required": [
+          "directoryUrl",
+          "directoryOverridden",
+          "mode",
+          "pausedReason",
+          "hasState",
+          "challengeType",
+          "listenPort",
+          "publicHost",
+          "names",
+          "refusals",
+          "namesMismatch",
+          "profile",
+          "failures"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMECertificateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "issuedAt": {
+            "description": "When it was issued",
+            "format": "date-time",
+            "type": "string"
+          },
+          "names": {
+            "description": "The names it covers",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notAfter": {
+            "description": "When it expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "notBefore": {
+            "description": "When it became valid",
+            "format": "date-time",
+            "type": "string"
+          },
+          "renewed": {
+            "description": "True when the newest issue was a renewal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "names",
+          "notBefore",
+          "notAfter",
+          "issuedAt",
+          "renewed"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEDirectoryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "overridden": {
+            "description": "True when the test-only directory override is set",
+            "type": "boolean"
+          },
+          "profiles": {
+            "description": "The certificate profiles the CA offers, sorted by name; empty when it offers none",
+            "items": {
+              "$ref": "#/components/schemas/HTTPSACMEProfileBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "termsOfServiceUrl": {
+            "description": "Where the terms of service can be read, empty when the CA names none",
+            "type": "string"
+          },
+          "url": {
+            "description": "The CA directory in use",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "overridden",
+          "termsOfServiceUrl",
+          "profiles"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When it happened",
+            "format": "date-time",
+            "type": "string"
+          },
+          "code": {
+            "description": "The class of the failure",
+            "enum": [
+              "rate_limited",
+              "validation_unreachable",
+              "validation_dns",
+              "caa_forbids",
+              "identifier_rejected",
+              "contact_invalid",
+              "tos_action_required",
+              "account_gone",
+              "profile_invalid",
+              "ca_unavailable",
+              "ca_untrusted",
+              "internal"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "description": "The CA's problem document as text, for a Details disclosure. Untrusted text: show it as text only",
+            "type": "string"
+          },
+          "host": {
+            "description": "The host a validation failure is about",
+            "type": "string"
+          },
+          "profile": {
+            "description": "The profile the CA refused",
+            "type": "string"
+          },
+          "termsUrl": {
+            "description": "Where to read the terms the CA wants accepted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "at"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEFallbackBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expiredAt": {
+            "description": "When the Let's Encrypt certificate expired",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiredAt"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMENameBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The host name or address, in its ASCII form",
+            "type": "string"
+          },
+          "refused": {
+            "description": "True when this name cannot be ordered, for example an IP address",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "refused"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEProfileBody": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "description": "What the CA says about it. Untrusted text: show it as text only",
+            "type": "string"
+          },
+          "name": {
+            "description": "The profile name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEProfileOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "description": "The profile orders ask for now; empty is the CA's default",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMERefusalBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why the order is refused",
+            "enum": [
+              "names_ip",
+              "agent_url_ip",
+              "names_wildcard",
+              "names_not_public",
+              "base_path",
+              "agent_dial_host"
+            ],
+            "type": "string"
+          },
+          "count": {
+            "description": "How many connected agents dialed a host the certificate would not cover (agent_dial_host)",
+            "format": "int64",
+            "type": "integer"
+          },
+          "host": {
+            "description": "The host the refusal is about",
+            "type": "string"
+          },
+          "hosts": {
+            "description": "The hosts those agents dialed (agent_dial_host)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The path the public address is served under (base_path)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMERenewalBody": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "description": "What the time was worked out from: the CA's renewal information, two thirds of the certificate's life, or half of it",
+            "enum": [
+              "ari",
+              "two_thirds",
+              "half"
+            ],
+            "type": "string"
+          },
+          "nextAt": {
+            "description": "When the next renewal is due",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nextAt",
+          "basis"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMERunBody": {
+        "additionalProperties": false,
+        "properties": {
+          "finishedAt": {
+            "description": "When it ended; left out while it runs",
+            "format": "date-time",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The run's job; follow its steps on GET /api/https/acme/runs/{jobId}/stream while the server still holds the run",
+            "type": "string"
+          },
+          "kind": {
+            "description": "A first issue or a renewal",
+            "enum": [
+              "issue",
+              "renew"
+            ],
+            "type": "string"
+          },
+          "outcome": {
+            "description": "How it went",
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "reused"
+            ],
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When it started",
+            "format": "date-time",
+            "type": "string"
+          },
+          "trigger": {
+            "description": "What started it",
+            "enum": [
+              "admin",
+              "schedule",
+              "resume"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "kind",
+          "trigger",
+          "outcome",
+          "startedAt"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMERunStartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The run's job; follow it on GET /api/https/acme/runs/{jobId}/stream. Left out when reused",
+            "type": "string"
+          },
+          "reused": {
+            "description": "True when the stored certificate already covers the names and is not yet due for renewal, so no order was placed",
+            "type": "boolean"
+          },
+          "validUntil": {
+            "description": "When that certificate expires; set only when reused",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reused"
+        ],
+        "type": "object"
+      },
+      "HTTPSCertificateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer": {
+            "description": "Who issued it: the issuer's common name, else its organisation, else empty",
+            "type": "string"
+          },
+          "names": {
+            "description": "Every name the certificate covers, as it carries them: DNS names first, then IP addresses",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notAfter": {
+            "description": "When it expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "notBefore": {
+            "description": "When it becomes valid",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the certificate comes from: the one TierPlan generated, the files you supplied, or Let's Encrypt",
+            "enum": [
+              "self_signed",
+              "cert_files",
+              "lets_encrypt"
+            ],
+            "type": "string"
+          },
+          "testCA": {
+            "description": "True when the certificate comes from Let's Encrypt but the directory was overridden for testing, so browsers will not trust it",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source",
+          "issuer",
+          "names",
+          "notBefore",
+          "notAfter",
+          "testCA"
+        ],
+        "type": "object"
+      },
+      "HTTPSStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "acme": {
+            "$ref": "#/components/schemas/HTTPSACMEBody",
+            "description": "The Let's Encrypt state; left out when this build has no Let's Encrypt support"
+          },
+          "certFiles": {
+            "description": "Whether certificate files from the environment fix the certificate",
+            "type": "boolean"
+          },
+          "certificate": {
+            "$ref": "#/components/schemas/HTTPSCertificateBody",
+            "description": "The certificate the listener serves now"
+          }
+        },
+        "required": [
+          "certificate",
+          "certFiles"
+        ],
+        "type": "object"
+      },
       "ImageDetailBody": {
         "additionalProperties": false,
         "properties": {
@@ -13309,6 +13895,21 @@
         ],
         "type": "object"
       },
+      "PutACMEProfileInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "description": "The profile to order with; empty is the CA's default",
+            "maxLength": 64,
+            "pattern": "^[a-z0-9._-]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
       "PutBackupScheduleInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -13403,6 +14004,21 @@
         "required": [
           "environmentIds"
         ],
+        "type": "object"
+      },
+      "RegisterACMEAccountInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agreeTos": {
+            "description": "Must be true: the person registering agrees to the CA's terms of service",
+            "type": "boolean"
+          },
+          "email": {
+            "description": "Where the CA may send expiry and account notices. Optional: without one no contact is sent",
+            "maxLength": 254,
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "RemovalPreviewBody": {
@@ -40073,6 +40689,310 @@
         "summary": "Trust an SSH host key for an instance git repository",
         "tags": [
           "git"
+        ]
+      }
+    },
+    "/api/https/acme/account": {
+      "post": {
+        "description": "Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. The account key is created and sealed on the server and never returned. 422 acme_tos_required when agreeTos is not true; 422 acme_contact_invalid (field body.email) for an address the CA or TierPlan refuses; 409 acme_account_exists when one is registered already; 409 acme_paused after a restore, until it is resumed; 409 acme_cert_files while certificate files are set; 502 acme_ca_error when the CA fails, with its class in the first error's message. Needs settings.write.",
+        "operationId": "registerACMEAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterACMEAccountInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMEAccountBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Register the Let's Encrypt account",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/directory": {
+      "get": {
+        "description": "The certificate authority's terms of service URL and the certificate profiles it offers, read from its directory (kept for a day). 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 502 acme_ca_error when the directory cannot be read. Needs settings.read.",
+        "operationId": "getACMEDirectory",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMEDirectoryBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the CA's terms and profiles",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/issue": {
+      "post": {
+        "description": "Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.",
+        "operationId": "issueACMECertificate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMERunStartBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get a Let's Encrypt certificate for the public address",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/profile": {
+      "put": {
+        "description": "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "operationId": "putACMEProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutACMEProfileInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMEProfileOutputBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Choose the certificate profile",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/renew": {
+      "post": {
+        "description": "Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.",
+        "operationId": "renewACMECertificate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMERunStartBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Renew the Let's Encrypt certificate now",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/resume": {
+      "post": {
+        "description": "Lifts the pause a restore puts on renewals, once the person has seen what was restored. 204. 409 acme_not_paused when nothing is paused; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.",
+        "operationId": "resumeACME",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Resume Let's Encrypt after a restore",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/stop": {
+      "post": {
+        "description": "Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.",
+        "operationId": "stopACME",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop using Let's Encrypt",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/status": {
+      "get": {
+        "description": "The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.",
+        "operationId": "getHTTPSStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get the certificate the server serves",
+        "tags": [
+          "https"
         ]
       }
     },

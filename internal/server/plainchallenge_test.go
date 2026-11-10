@@ -8,12 +8,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"syscall"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -154,7 +156,6 @@ func TestPlainWireMatrix(t *testing.T) {
 		{"a path that only extends the challenge name", loopback, "GET " + challenge + "X HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
 		{"absolute-form challenge target", loopback, "GET http://x" + challenge + "/t HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", true},
 		{"absolute-form target outside the challenge", loopback, "GET http://x/healthz HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
-		{"a challenge POST still gets only the challenge answer", loopback, "POST " + challenge + "/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n" + closeAfter + "\r\n", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,6 +170,24 @@ func TestPlainWireMatrix(t *testing.T) {
 		})
 	}
 
+	t.Run("a challenge POST still gets only the challenge answer", func(t *testing.T) {
+		// The token store, which answers the challenge path since Phase 14, refuses any method but GET
+		// and HEAD with 405. That is the challenge handler's own answer, and nothing follows it.
+		got := plainExchange(t, loopback.addr, "POST "+challenge+"/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n"+closeAfter+"\r\n")
+		br := bufio.NewReader(strings.NewReader(got))
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("the reply %q is not a response: %v", got, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("got status %d, want 405 from the challenge handler", resp.StatusCode)
+		}
+		if _, err := br.Peek(1); !errors.Is(err, io.EOF) {
+			t.Fatalf("bytes follow the response in %q", got)
+		}
+	})
 	t.Run("a challenge request then a pipelined request outside the challenge", func(t *testing.T) {
 		got := plainExchange(t, loopback.addr, "GET "+challenge+"/a HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n")
 		wantOnly404(t, got)
@@ -198,5 +217,84 @@ func TestTLSStillServesHealthz(t *testing.T) {
 	got := wireGet(t, trustedClient(t, w.cfg), httpsBase(w.addr)+"/healthz", "")
 	if got.status != http.StatusOK {
 		t.Fatalf("https /healthz = %d, want 200", got.status)
+	}
+}
+
+// startWireWithChallenge is startWire with an HTTP-01 handler installed before the listener
+// starts serving, so the real sniffing listener routes the challenge prefix to it.
+func startWireWithChallenge(t *testing.T, challenge http.Handler) string {
+	t.Helper()
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"})
+	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	srv.challenge = challenge
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.serve(ctx, ln) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return ln.Addr().String()
+}
+
+// plainReply is what a plain challenge GET was answered with: the status and headers of the
+// response and its body, already read and closed.
+type plainReply struct {
+	StatusCode int
+	Header     http.Header
+}
+
+// plainResponse sends one challenge GET on a fresh plain connection and returns the reply and
+// its body.
+func plainResponse(t *testing.T, addr, path string) (plainReply, string) {
+	t.Helper()
+	got := plainExchange(t, addr, "GET "+path+" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(got)), nil)
+	if err != nil {
+		t.Fatalf("the reply %q to %s is not a response: %v", got, path, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return plainReply{StatusCode: resp.StatusCode, Header: resp.Header}, string(body)
+}
+
+func TestPlainChallengeServesAPresentedToken(t *testing.T) {
+	ch := acme.NewChallenges()
+	addr := startWireWithChallenge(t, ch.Handler())
+	const token, keyAuth = "tok_en-1", "tok_en-1.thumbprint"
+	if err := ch.Present(t.Context(), "tierplan.example.com", token, keyAuth); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		resp, body := plainResponse(t, addr, acmeChallengePrefix+token)
+		if resp.StatusCode != http.StatusOK || body != keyAuth {
+			t.Fatalf("request %d = %d %q, want 200 and the key authorization", i, resp.StatusCode, body)
+		}
+		if got := resp.Header.Get("Content-Type"); got != "text/plain" {
+			t.Fatalf("Content-Type = %q, want text/plain", got)
+		}
+		if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("Cache-Control = %q, want no-store", got)
+		}
+	}
+	if resp, _ := plainResponse(t, addr, acmeChallengePrefix+"unknown"); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("an unknown token = %d, want 404", resp.StatusCode)
+	}
+	if err := ch.CleanUp(t.Context(), "tierplan.example.com", token, keyAuth); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := plainResponse(t, addr, acmeChallengePrefix+token); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("a cleaned-up token = %d, want 404", resp.StatusCode)
+	}
+	if got := plainExchange(t, addr, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"); got != "" {
+		t.Fatalf("a plain request outside the challenge was answered with %q, want no bytes", got)
 	}
 }

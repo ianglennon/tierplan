@@ -4,6 +4,7 @@
     "tabsLabel": "Settings sections",
     "tabs": {
       "general": "General",
+      "https": "HTTPS",
       "environments": "Environments",
       "access": "Access",
       "backup": "Backup",

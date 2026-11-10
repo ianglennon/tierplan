@@ -789,3 +789,54 @@ func TestPublicURLStoresANonASCIIHostAsPunycode(t *testing.T) {
 		t.Errorf("an unencodable host was accepted as %q", got)
 	}
 }
+
+func TestACMEDirectoryOverrideSettings(t *testing.T) {
+	// Unset means Let's Encrypt production: both fields stay empty.
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ACMEDirectoryURL != "" || c.ACMECAFile != "" {
+		t.Errorf("defaults = %q/%q, want both empty", c.ACMEDirectoryURL, c.ACMECAFile)
+	}
+
+	// Both set, from the environment.
+	c, err = load(t, nil, envMap{
+		"TIERPLAN_ACME_DIRECTORY_URL": "https://pebble.test:14000/dir",
+		"TIERPLAN_ACME_CA_FILE":       "/pebble.pem",
+	}, files{})
+	if err != nil {
+		t.Fatalf("a directory with its CA file was rejected: %v", err)
+	}
+	if c.ACMEDirectoryURL != "https://pebble.test:14000/dir" || c.ACMECAFile != "/pebble.pem" {
+		t.Errorf("got %q/%q", c.ACMEDirectoryURL, c.ACMECAFile)
+	}
+
+	// A directory alone is allowed: its certificate may chain to a public root.
+	if c, err = load(t, nil, envMap{"TIERPLAN_ACME_DIRECTORY_URL": "https://ca.example/dir"}, files{}); err != nil || c.ACMEDirectoryURL == "" {
+		t.Errorf("a directory without a CA file = %q, %v; want it accepted", c.ACMEDirectoryURL, err)
+	}
+
+	// The flags work too.
+	c, err = load(t, []string{"--acme-directory-url", "https://ca.example/dir", "--acme-ca-file", "/ca.pem"}, envMap{}, files{})
+	if err != nil || c.ACMEDirectoryURL != "https://ca.example/dir" || c.ACMECAFile != "/ca.pem" {
+		t.Errorf("flags gave %q/%q, %v", c.ACMEDirectoryURL, c.ACMECAFile, err)
+	}
+
+	// Each bad combination stops start-up and names the variable.
+	for name, tc := range map[string]struct {
+		env  envMap
+		want string
+	}{
+		"CA file without a directory": {envMap{"TIERPLAN_ACME_CA_FILE": "/ca.pem"}, "TIERPLAN_ACME_DIRECTORY_URL"},
+		"CA file names itself":        {envMap{"TIERPLAN_ACME_CA_FILE": "/ca.pem"}, "TIERPLAN_ACME_CA_FILE"},
+		"plain http":                  {envMap{"TIERPLAN_ACME_DIRECTORY_URL": "http://ca.example/dir"}, "TIERPLAN_ACME_DIRECTORY_URL"},
+		"no scheme":                   {envMap{"TIERPLAN_ACME_DIRECTORY_URL": "ca.example/dir"}, "TIERPLAN_ACME_DIRECTORY_URL"},
+		"no host":                     {envMap{"TIERPLAN_ACME_DIRECTORY_URL": "https:///dir"}, "TIERPLAN_ACME_DIRECTORY_URL"},
+		"does not parse":              {envMap{"TIERPLAN_ACME_DIRECTORY_URL": "https://ca.example/%zz"}, "TIERPLAN_ACME_DIRECTORY_URL"},
+	} {
+		if _, err := load(t, nil, tc.env, files{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want one naming %s", name, err, tc.want)
+		}
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,6 +69,15 @@ type Options struct {
 	// JanitorSchedule lets the janitor's scheduler run, on JanitorClock when that is set. By default it
 	// does not, so that no test depends on the time of day it runs at (server.WithoutJanitorScheduler).
 	JanitorSchedule bool
+	// PublicHost, when set, is the name in the public URL in place of Host: https://<PublicHost>:<port>.
+	// The test client resolves that name to Host itself, so it connects to Host and checks the
+	// certificate against the public name, as a browser at that name would. The server's own
+	// certificate then covers the name. For a test that needs a certificate authority to reach the
+	// server by name (Let's Encrypt, Pebble).
+	PublicHost string
+	// ACMEClock moves the clock the Let's Encrypt manager, its scheduler and its client judge time by
+	// (server.WithACMEClock). Nil keeps real time. It is kept across Restart.
+	ACMEClock stackops.Clock
 }
 
 // Server is a running TierPlan with an admin signed in.
@@ -82,6 +92,13 @@ type Server struct {
 	http   *http.Client
 	cookie *http.Cookie
 	csrf   string
+
+	// roots is the pool the client verifies the server with; dial maps the public name to the
+	// address the server listens on. Both are read by every new connection, so TrustCertificates
+	// can add to them while the client is in use.
+	rootsMu sync.Mutex
+	roots   *x509.CertPool
+	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// env is the TIERPLAN_* settings the server was built from, kept so Restart builds
 	// the same one on the same address. cancel and done stop the running server.
@@ -117,6 +134,9 @@ func Start(t testing.TB, o Options) *Server {
 	if o.JanitorClock != nil {
 		s.opts = append(s.opts, server.WithJanitorClock(o.JanitorClock))
 	}
+	if o.ACMEClock != nil {
+		s.opts = append(s.opts, server.WithACMEClock(o.ACMEClock))
+	}
 	if !o.JanitorSchedule {
 		s.opts = append(s.opts, server.WithoutJanitorScheduler())
 	}
@@ -136,7 +156,12 @@ func Start(t testing.TB, o Options) *Server {
 			t.Fatalf("pick a port: %v is not a TCP address", ln.Addr())
 		}
 		port := addr.Port
-		s.URL = "https://" + net.JoinHostPort(o.Host, strconv.Itoa(port))
+		urlHost := o.Host
+		if o.PublicHost != "" {
+			urlHost = o.PublicHost
+		}
+		s.URL = "https://" + net.JoinHostPort(urlHost, strconv.Itoa(port))
+		s.dial = dialerFor(o.PublicHost, net.JoinHostPort(o.Host, strconv.Itoa(port)))
 
 		s.env = map[string]string{
 			"TIERPLAN_DATA_DIR":   dataDir,
@@ -156,13 +181,67 @@ func Start(t testing.TB, o Options) *Server {
 	}
 	t.Cleanup(s.stop)
 
-	s.http = &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
-		RootCAs: s.trustServerCertificate(),
-	}}}
+	s.roots = s.trustServerCertificate()
+	s.http = &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{DialTLSContext: s.dialTLS}}
 	t.Cleanup(s.http.CloseIdleConnections)
 	s.waitReady()
 	s.signIn()
 	return s
+}
+
+// dialerFor is the dialer of the test client: a connection to the public name goes to listen, the
+// address the server is on, and any other address is dialled as it is. With no public name it is the
+// plain dialer.
+func dialerFor(publicHost, listen string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if host, port, err := net.SplitHostPort(addr); err == nil && publicHost != "" && host == publicHost {
+			_, listenPort, _ := net.SplitHostPort(listen)
+			if port == listenPort {
+				addr = listen
+			}
+		}
+		return d.DialContext(ctx, network, addr)
+	}
+}
+
+// dialTLS opens a connection and verifies the server's certificate against the roots as they are now,
+// for the name in addr, which is the public name when there is one. It negotiates HTTP/1.1 only, as
+// the client always has: WebSocket upgrades need it.
+func (s *Server) dialTLS(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.dial(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	s.rootsMu.Lock()
+	roots := s.roots
+	s.rootsMu.Unlock()
+	conn := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: host})
+	if err := conn.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// TrustCertificates makes the test client trust certs as well as the server's own certificate, and
+// drops its idle connections, so the client keeps working after the server swaps to a certificate a
+// CA issued. Existing roots stay trusted: a server that falls back to its own certificate is still
+// reachable.
+func (s *Server) TrustCertificates(certs ...*x509.Certificate) {
+	s.t.Helper()
+	s.rootsMu.Lock()
+	next := s.roots.Clone()
+	for _, c := range certs {
+		next.AddCert(c)
+	}
+	s.roots = next
+	s.rootsMu.Unlock()
+	s.http.CloseIdleConnections()
 }
 
 // boot builds the server from s.env and starts serving. It reports false when Run
