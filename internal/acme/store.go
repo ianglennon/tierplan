@@ -181,6 +181,23 @@ func (s *Store) Account(ctx context.Context, directoryURL string) (Account, *ecd
 	}, key, true, nil
 }
 
+// AccountInfo returns the account registered with directoryURL without opening its key, for a reader
+// that only shows it: a key that does not open (a wrong master key after a restore, a damaged row) is
+// not its concern, and Account reports it to whoever needs the key.
+func (s *Store) AccountInfo(ctx context.Context, directoryURL string) (Account, bool, error) {
+	row, err := s.st.RQ.GetACMEAccount(ctx, directoryURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Account{}, false, nil
+	}
+	if err != nil {
+		return Account{}, false, fmt.Errorf("read the ACME account %q: %w", directoryURL, err)
+	}
+	return Account{
+		DirectoryURL: row.DirectoryUrl, URL: row.AccountUrl, Contact: row.Contact,
+		TermsOfService: row.TosUrl, CreatedAt: fromNanos(row.CreatedAt),
+	}, true, nil
+}
+
 // ForgetAccount removes the account registered with directoryURL, if there is one.
 func (s *Store) ForgetAccount(ctx context.Context, directoryURL string) error {
 	if err := s.st.Q.DeleteACMEAccount(ctx, directoryURL); err != nil {

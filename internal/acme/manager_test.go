@@ -1012,6 +1012,32 @@ func TestManagerStatusIsLocalAndComplete(t *testing.T) {
 	}
 }
 
+// A-WR-04: an account key that does not open (a wrong master key after a restore, a damaged row) does
+// not take the status with it. The account, the certificate and the pause still show; the paths that
+// need the key report it.
+func TestManagerStatusWithAnUnreadableAccountKey(t *testing.T) {
+	ctx := context.Background()
+	e := newMgrEnv(t)
+	e.issue()
+	if _, err := e.store.st.Write.ExecContext(ctx, `UPDATE acme_account SET key_sealed = 'not an envelope'`); err != nil {
+		t.Fatalf("damage the account key: %v", err)
+	}
+	if _, _, err := e.client.Account(ctx); err == nil {
+		t.Fatal("Client.Account opened a damaged key, want an error")
+	}
+
+	status, err := e.mgr.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status with an unreadable account key: %v", err)
+	}
+	if status.Account == nil || status.Certificate == nil || status.Mode != ModeActive {
+		t.Errorf("Status = %+v, want the account, the certificate and the mode shown", status)
+	}
+	if _, err := e.mgr.RenewNow(ctx, "user:1"); err == nil || errors.Is(err, ErrNoAccount) {
+		t.Errorf("RenewNow with an unreadable account key = %v, want the key's error, never ErrNoAccount", err)
+	}
+}
+
 func TestManagerJobMessagesCarryNoSecrets(t *testing.T) {
 	ctx := context.Background()
 	e := newMgrEnv(t)

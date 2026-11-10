@@ -121,7 +121,9 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		out.ChallengeType = ChallengeHTTP01
 	}
 
-	acct, hasAcct, err := m.d.Client.Account(ctx)
+	// The key is not opened: the page shows the account, and an unreadable key must not take the whole
+	// page with it (the certificate, the pause and Resume are on it too). Issue and renew report it.
+	acct, hasAcct, err := m.d.Store.AccountInfo(ctx, dir.URL)
 	if err != nil {
 		return Status{}, err
 	}
