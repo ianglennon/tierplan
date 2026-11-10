@@ -798,6 +798,18 @@ expect fail "restore-smoke-missing-image" env IMAGE=tierplan-no-such-image:none 
 expect_out "restore-smoke-missing-image says so" "RESTORE SMOKE FAIL"
 expect fail "restore-smoke-bad-mode" env RESTART_MODE=reboot scripts/restore-smoke.sh
 expect_out "restore-smoke-bad-mode names the setting" "RESTART_MODE must be exec or exit"
+
+# --- Dev Pebble (phase 14): the script parses, refuses a bad port before it touches Docker,
+# pins the image, and publishes Pebble's ports on loopback only (T-14-48). The container
+# itself is proved by the manual UAT, not here.
+expect pass "dev-pebble-syntax" bash -n scripts/dev-pebble.sh
+expect fail "dev-pebble-usage" scripts/dev-pebble.sh sideways
+expect_out "dev-pebble-usage says how to call it" "usage: scripts/dev-pebble.sh up|down"
+expect fail "dev-pebble-bad-port" env DEV_PEBBLE_HTTP_PORT=http scripts/dev-pebble.sh up
+expect_out "dev-pebble-bad-port names the setting" "DEV_PEBBLE_HTTP_PORT must be a port number"
+expect fail "dev-pebble-port-too-big" env DEV_PEBBLE_HTTP_PORT=70000 scripts/dev-pebble.sh up
+expect pass "dev-pebble-pins-the-image" grep -q 'ghcr.io/letsencrypt/pebble:2.10.1' scripts/dev-pebble.sh
+expect pass "dev-pebble-binds-loopback" grep -q -- '-p 127.0.0.1:14000:14000 -p 127.0.0.1:15000:15000' scripts/dev-pebble.sh
 expect pass "restore-smoke-target" mk restore-smoke
 expect_out "restore-smoke-target builds the image" "tierplan:e2e"
 expect_out "restore-smoke-target runs the script" "scripts/restore-smoke.sh"
