@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import type { HTTPSACME } from "@/api/https";
 import { keyExists } from "@/i18n/use-t";
+import { formatClock } from "@/lib/format";
 
 export const ERROR_CLASSES = [
   "rate_limited",
@@ -54,4 +56,25 @@ export function formatDate(iso: string | undefined): string {
     month: "short",
     year: "numeric",
   }).format(date);
+}
+
+export type ACMELastError = NonNullable<HTTPSACME["lastError"]>;
+
+// errorValues are the values a failure's copy names: the host it was about (the public host when the
+// CA named none, "the public host" when there is none), the port TierPlan listens on, the profile,
+// the terms address and the time of the next automatic attempt. The time is left out when the status
+// names none, so errorCopy picks the sentence without one.
+export function errorValues(
+  t: Translate,
+  error: ACMELastError,
+  acme: HTTPSACME,
+): Record<string, string | number | undefined> {
+  const host = error.host || acme.publicHost || t("https.acme.publicHostFallback");
+  return {
+    host,
+    port: acme.listenPort,
+    profile: error.profile ?? "",
+    url: error.termsUrl ?? "",
+    time: formatClock(acme.nextAttemptAt),
+  };
 }

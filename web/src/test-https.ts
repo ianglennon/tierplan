@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { ACMEDirectory, HTTPSACME, HTTPSStatus } from "@/api/https";
+import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
 
 // The Let's Encrypt block of the status on a fresh install that has a public address: no account
@@ -98,4 +99,79 @@ export function acmeActiveRun(over: Partial<NonNullable<HTTPSACME["activeRun"]>>
     trigger: "admin" as const,
     ...over,
   };
+}
+
+// The last failure as the status lists it: Let's Encrypt could not reach port 80.
+export function acmeLastError(over: Partial<ACMELastError> = {}): ACMELastError {
+  return {
+    at: new Date(Date.now() - 3_600_000).toISOString(),
+    code: "validation_unreachable",
+    detail:
+      '{"type":"urn:ietf:params:acme:error:connection","detail":"Timeout during connect (likely firewall problem)"}',
+    host: "tierplan.example.com",
+    ...over,
+  };
+}
+
+// The status of an install that serves a Let's Encrypt certificate: issued a month ago for the
+// public host, renewing two thirds through its life, with nothing failing.
+export function httpsLetsEncryptStatus(
+  acme: Partial<HTTPSACME> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  const issuedAt = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const notAfter = new Date(Date.now() + 60.5 * 86_400_000).toISOString();
+  const base = httpsStatus();
+  return {
+    ...base,
+    certificate: {
+      source: "lets_encrypt",
+      issuer: "Let's Encrypt R11",
+      names: ["tierplan.example.com"],
+      notBefore: issuedAt,
+      notAfter,
+      testCA: false,
+    },
+    acme: httpsACME({
+      mode: "active",
+      hasState: true,
+      account: {
+        contact: "ops@example.com",
+        registeredAt: issuedAt,
+        termsOfServiceUrl: "",
+      },
+      certificate: {
+        issuedAt,
+        names: ["tierplan.example.com"],
+        notAfter,
+        notBefore: issuedAt,
+        renewed: false,
+      },
+      renewal: {
+        basis: "two_thirds",
+        nextAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+      },
+      ...acme,
+    }),
+    ...top,
+  };
+}
+
+// The same, served from the test-only directory.
+export function httpsTestCAStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const status = httpsLetsEncryptStatus({ directoryOverridden: true, ...acme });
+  return { ...status, certificate: { ...status.certificate, testCA: true } };
+}
+
+// The Let's Encrypt certificate expired because renewal kept failing, so the self-signed one is
+// served until a renewal works.
+export function httpsFallbackStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const lets = httpsLetsEncryptStatus({
+    failures: 4,
+    fallback: { expiredAt: new Date(Date.now() - 86_400_000).toISOString() },
+    lastError: acmeLastError(),
+    renewal: undefined,
+    ...acme,
+  });
+  return { ...lets, certificate: httpsStatus().certificate };
 }

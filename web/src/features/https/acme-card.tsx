@@ -3,6 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Info } from "lucide-react";
+import { useState } from "react";
 
 import { type HTTPSStatus, httpsStatusQuery } from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,6 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { AccountSection } from "@/features/https/account-section";
 import { accountMode, advancedMode, deriveCardState } from "@/features/https/card-state";
+import { errorValues } from "@/features/https/copy";
+import { ErrorPanel } from "@/features/https/error-panel";
 import { IssueSection } from "@/features/https/issue-section";
 import { NamesSection } from "@/features/https/names-section";
 import { ProfileSection } from "@/features/https/profile-section";
@@ -49,6 +52,8 @@ export function AcmeCard() {
 function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean }) {
   const t = useT();
   const acme = status.acme;
+  // True right after a run of this session failed; a failure read from the ledger is only a note.
+  const [freshFailure, setFreshFailure] = useState(false);
   if (!acme) return null;
   const state = deriveCardState(status);
   // A restore pause with no account yet keeps the registration form, but the server refuses it.
@@ -93,7 +98,22 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
       )}
 
       <Separator />
-      <IssueSection status={status} acme={acme} state={state} canWrite={canWrite} />
+      <IssueSection
+        status={status}
+        acme={acme}
+        state={state}
+        canWrite={canWrite}
+        onRunFailed={setFreshFailure}
+      />
+      {acme.mode === "active" && acme.lastError ? (
+        <ErrorPanel
+          error={acme.lastError}
+          failures={acme.failures}
+          values={errorValues(t, acme.lastError, acme)}
+          quiet={paused || acme.blocked !== undefined}
+          fresh={freshFailure}
+        />
+      ) : null}
 
       {/* Slot, plan 18: the state alerts and the stop row. */}
 

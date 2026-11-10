@@ -67,13 +67,16 @@ interface IssueSectionProps {
   acme: HTTPSACME;
   state: CardState;
   canWrite: boolean;
+  // Told whether the run this page followed has just ended in failure and the status has been read
+  // again, so the card can announce the error panel once (role alert) instead of on every reload.
+  onRunFailed?: (failed: boolean) => void;
 }
 
 // IssueSection is the "Run and actions" part of the Let's Encrypt card (ACME-04, ACME-06, ACME-07,
 // ACME-10, D-09): the list of what stops an order, the Issue certificate and Renew now buttons with
 // their waits, and the live panel of the run. A run started elsewhere (another tab, the scheduler, a
 // resume after a restart) is picked up from the status and followed the same way.
-export function IssueSection({ status, acme, state, canWrite }: IssueSectionProps) {
+export function IssueSection({ status, acme, state, canWrite, onRunFailed }: IssueSectionProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const now = useNow();
@@ -121,6 +124,12 @@ export function IssueSection({ status, acme, state, canWrite }: IssueSectionProp
       toastSuccess(t(runKind === "renew" ? "https.issue.renewed" : "https.issue.issued"));
     }
   }, [jobId, current, stream.finished, runState, runKind, queryClient, t]);
+
+  // A run of this session ended in failure and the status shows its error: the panel is fresh.
+  const failedNow = current && stream.finished && runState === "failed" && refreshed === jobId;
+  useEffect(() => {
+    onRunFailed?.(failedNow);
+  }, [failedNow, onRunFailed]);
 
   // The server no longer has the run, or this person may not read it: nothing more can be followed.
   // The status says how it ended.

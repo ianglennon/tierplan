@@ -9,7 +9,10 @@
         "source": "Source",
         "issuer": "Issuer",
         "names": "Names",
-        "expires": "Expires"
+        "expires": "Expires",
+        "lastRenewed": "Last renewed",
+        "nextRenewal": "Next renewal",
+        "lastError": "Last error"
       },
       "source": {
         "self_signed": "Self-signed",
@@ -20,7 +23,13 @@
       "note": {
         "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files.",
         "cert_files": "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE."
-      }
+      },
+      "testCA": "Test CA",
+      "issuedWhen": "Issued {{when}}",
+      "renewedWhen": "Renewed {{when}}",
+      "pausedNext": "Paused until you resume",
+      "noError": "None",
+      "detailsBelow": "Details below"
     },
     "acme": {
       "title": "Let's Encrypt",
@@ -209,6 +218,20 @@
         "cancelled": "Stopped",
         "skipped": "Skipped"
       }
+    },
+    "renewal": {
+      "basis": {
+        "ari": "Chosen by Let's Encrypt",
+        "two_thirds": "Two thirds through the certificate's life",
+        "half": "Half way through the certificate's life"
+      }
+    },
+    "lastRun": {
+      "failed": "Failed {{when}}.",
+      "attempts_one": "{{count}} failed attempt in a row.",
+      "attempts_other": "{{count}} failed attempts in a row.",
+      "next": "Next automatic attempt {{time}}.",
+      "details": "Details"
     }
   }
 }
