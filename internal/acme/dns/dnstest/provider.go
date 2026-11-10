@@ -17,7 +17,8 @@ import (
 type Call struct {
 	// Op is "zone", "create", "get" or "delete".
 	Op string
-	// Name is the name asked about (zone lookup, create) and RecordID the record (get, delete).
+	// Name is the name asked about (zone lookup, create) and RecordID the record (get, delete, and a
+	// create that succeeded).
 	Name, ZoneID, RecordID string
 }
 
@@ -183,7 +184,8 @@ func (h *fakeHandle) Zone(_ context.Context, fqdn string) (dns.Zone, error) {
 
 func (h *fakeHandle) CreateTXT(_ context.Context, z dns.Zone, fqdn, value, comment string) (dns.RecordRef, error) {
 	h.f.mu.Lock()
-	h.record(Call{Op: "create", Name: fqdn, ZoneID: z.ID})
+	h.record(Call{Op: "create", Name: strings.ToLower(fqdn), ZoneID: z.ID})
+	call := len(h.f.calls) - 1
 	if !h.ok {
 		h.f.mu.Unlock()
 		return dns.RecordRef{}, h.denied("create record")
@@ -207,6 +209,7 @@ func (h *fakeHandle) CreateTXT(_ context.Context, z dns.Zone, fqdn, value, comme
 	h.f.nextID++
 	rec := FakeRecord{ID: fmt.Sprintf("rec-%d", h.f.nextID), Zone: z.ID, Name: name, Content: `"` + value + `"`, Comment: comment}
 	h.f.records = append(h.f.records, rec)
+	h.f.calls[call].RecordID = rec.ID // a create that succeeded names the record it made
 	sink := h.f.Sink
 	h.f.mu.Unlock()
 	if sink != nil {

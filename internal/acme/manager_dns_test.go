@@ -5,17 +5,20 @@ package acme
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	mdns "github.com/miekg/dns"
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/dnstest"
+	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
@@ -50,6 +53,35 @@ type dnsEnv struct {
 	prov *dnstest.FakeProvider
 	dns  *acmetest.DNSServer
 	logs *syncBuffer
+	// nsAddr is where the zone's nameserver answers; the responder unless a test points it elsewhere.
+	nsAddr string
+
+	mu     sync.Mutex
+	cnames map[string]string
+	// seen is what the provider held at each TXT lookup the CA made.
+	seen [][]dnstest.FakeRecord
+}
+
+// cname delegates name to target, for the CA as well as for the responder.
+func (e *dnsEnv) cname(name, target string) {
+	e.mu.Lock()
+	e.cnames[strings.ToLower(name)] = strings.ToLower(target)
+	e.mu.Unlock()
+	e.dns.SetCNAME(name, target)
+}
+
+// lookup is what the fake CA finds at fqdn: it follows a CNAME as a CA does.
+func (e *dnsEnv) lookup(fqdn string) []string {
+	e.mu.Lock()
+	if target, ok := e.cnames[strings.ToLower(fqdn)]; ok {
+		fqdn = target
+	}
+	e.mu.Unlock()
+	recs := e.prov.Records()
+	e.mu.Lock()
+	e.seen = append(e.seen, recs)
+	e.mu.Unlock()
+	return txtAt(e.prov, fqdn)
 }
 
 // txtAt is the TXT values the fake provider holds at fqdn: what the fake CA finds when it looks.
@@ -73,18 +105,15 @@ func newDNSEnv(t *testing.T, challenge string) *dnsEnv {
 	prov.Sink = srv
 	prov.AddZone("example.com", dnsNS)
 
+	e := &dnsEnv{prov: prov, dns: srv, logs: &syncBuffer{}, nsAddr: srv.Addr(), cnames: map[string]string{}}
 	opts := acmetest.Options{ChallengeType: challenge}
 	if challenge == ChallengeDNS01 {
-		opts.LookupTXT = func(fqdn string) []string { return txtAt(prov, fqdn) }
+		opts.LookupTXT = e.lookup
 	}
 	oe := newOrderEnvWith(t, opts)
 	hub := jobs.New(jobs.Options{Now: oe.clock.Now})
 	t.Cleanup(hub.Close)
-	logs := &syncBuffer{}
-	e := &dnsEnv{
-		mgrEnv: &mgrEnv{orderEnv: oe, hub: hub, inst: &recInstaller{}, urls: &urlSet{public: "https://" + testHost}},
-		prov:   prov, dns: srv, logs: logs,
-	}
+	e.mgrEnv = &mgrEnv{orderEnv: oe, hub: hub, inst: &recInstaller{}, urls: &urlSet{public: "https://" + testHost}}
 	e.mgr = e.build(false)
 	e.save(challenge, nil)
 	return e
@@ -100,7 +129,7 @@ func (e *dnsEnv) build(certFiles bool) *Manager {
 		Rand:   func(int64) int64 { return 0 },
 		DNS: DNSDeps{
 			Providers:       map[string]dns.Factory{"cloudflare": e.prov.Factory(dnsToken)},
-			NameserverAddrs: func(context.Context, string) ([]string, error) { return []string{e.dns.Addr()}, nil },
+			NameserverAddrs: func(context.Context, string) ([]string, error) { return []string{e.nsAddr}, nil },
 			ResolvConf:      func() ([]string, error) { return []string{e.dns.Addr()}, nil },
 		},
 	})
@@ -230,6 +259,419 @@ func TestManagerDNSPicksTheSolverForEverySavedChallenge(t *testing.T) {
 			sv, err := e.mgr.newSolver(context.Background(), &jobSteps{}, tc.challenge)
 			if err != nil || sv.Type() != tc.challenge {
 				t.Errorf("newSolver(%s) = %v, %v; want a %s solver", tc.challenge, sv, err, tc.challenge)
+			}
+		})
+	}
+}
+
+// multiSink tells several responders about every record the fake provider holds.
+type multiSink []dnstest.TXTSink
+
+func (m multiSink) AddTXT(fqdn, value string) {
+	for _, s := range m {
+		s.AddTXT(fqdn, value)
+	}
+}
+
+func (m multiSink) RemoveTXT(fqdn, value string) {
+	for _, s := range m {
+		s.RemoveTXT(fqdn, value)
+	}
+}
+
+// start begins an issue and does not wait for it.
+func (e *dnsEnv) start() RunStart {
+	e.t.Helper()
+	rs, err := e.mgr.Issue(context.Background(), "user:1")
+	if err != nil {
+		e.t.Fatalf("Issue: %v", err)
+	}
+	return rs
+}
+
+// failedDoc is the error document of the last failure.
+func (e *dnsEnv) failedDoc() errorDoc { return decodeError(e.state().LastErrorDetail) }
+
+func (e *dnsEnv) setAgent(u string) {
+	e.urls.mu.Lock()
+	defer e.urls.mu.Unlock()
+	e.urls.agent = u
+}
+
+// wantItem fails the test unless the step ended in state with code.
+func wantItem(t *testing.T, items map[string]jobs.Item, id, state, code string) {
+	t.Helper()
+	if it := items[id]; it.State != state || it.Code != code {
+		t.Errorf("step %s is %q with code %q, want %q with code %q", id, it.State, it.Code, state, code)
+	}
+}
+
+func TestDNSPresentRollbackOnTimeout(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	chal := dns.ChallengeFQDN(testHost)
+	e.dns.Hold(chal) // the record is created and never shows
+
+	rs := e.start()
+	e.clock.Tick(t, dnscheck.PropagationTimeout)
+	job := e.wait(rs)
+
+	items := itemsOf(job)
+	wantItem(t, items, StepChallenge, jobs.ItemDone, "")
+	wantItem(t, items, StepPropagation, jobs.ItemFailed, dns.ClassNotVisible)
+	wantItem(t, items, StepValidate, jobs.ItemSkipped, "")
+	wantItem(t, items, StepFinalize, jobs.ItemSkipped, "")
+	wantItem(t, items, StepStored, jobs.ItemSkipped, "")
+	wantItem(t, items, StepCleanup, jobs.ItemDone, "")
+	if recs := e.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider still holds %+v after a failed Present", recs)
+	}
+	if rows := e.ledger(); len(rows) != 0 {
+		t.Errorf("the ledger still holds %+v after a failed Present", rows)
+	}
+	runs := e.runs()
+	if len(runs) != 1 || runs[0].Outcome != OutcomeFailed || runs[0].ErrorClass != dns.ClassNotVisible {
+		t.Errorf("runs = %+v, want one run that failed as dns_not_visible", runs)
+	}
+	doc := e.failedDoc()
+	if doc.Host != testHost || doc.Zone != "example.com" || !slices.Equal(doc.Resolvers, []string{dnsNS}) {
+		t.Errorf("error doc = %+v, want host %s, zone example.com and the nameserver %s", doc, testHost, dnsNS)
+	}
+	if e.inst.served() != 0 {
+		t.Error("a certificate was served for a run that failed")
+	}
+}
+
+func TestDNSPresentRollbackOnCancel(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.dns.Hold(dns.ChallengeFQDN(testHost))
+
+	rs := e.start()
+	e.clock.WaitArmed(t) // the run is waiting for the record to show
+	if err := e.hub.Cancel(rs.JobID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	e.wait(rs)
+
+	if recs := e.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider still holds %+v after the run was cancelled", recs)
+	}
+	if rows := e.ledger(); len(rows) != 0 {
+		t.Errorf("the ledger still holds %+v after the run was cancelled", rows)
+	}
+	if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeCancelled {
+		t.Errorf("runs = %+v, want one cancelled run", runs)
+	}
+}
+
+func TestDNSCleanupLeftOverKeepsTheRunGreen(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+
+	job := e.issue()
+
+	for _, it := range job.Items {
+		if it.State == jobs.ItemFailed {
+			t.Errorf("step %s failed (%s), want no failed step on a run that issued", it.ID, it.Code)
+		}
+	}
+	cleanup := itemsOf(job)[StepCleanup]
+	if cleanup.State != jobs.ItemDone || cleanup.Code != "left_over" || cleanup.Result["left_over"] != "1" {
+		t.Errorf("Clean-up = %q %q %v, want done with code left_over and left_over 1", cleanup.State, cleanup.Code, cleanup.Result)
+	}
+	if want := "Couldn't remove 1 TXT record(s). TierPlan keeps trying."; cleanup.Message != want {
+		t.Errorf("Clean-up message = %q, want %q", cleanup.Message, want)
+	}
+	if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+		t.Errorf("runs = %+v, want one succeeded run", runs)
+	}
+	if st := e.state(); st.Mode != ModeActive {
+		t.Errorf("mode = %q, want active", st.Mode)
+	}
+	rows := e.ledger()
+	if len(rows) != 1 {
+		t.Fatalf("ledger = %+v, want the one record left behind", rows)
+	}
+	if r := rows[0]; r.Attempts != 1 || !r.LastTryAt.Equal(testNow) || !r.NextTryAt.Equal(testNow.Add(time.Minute)) || r.LastErrorClass != dns.ClassUnavailable {
+		t.Errorf("left-over row = %+v, want 1 attempt at %v, next a minute later, class dns_unavailable", r, testNow)
+	}
+	if n := len(e.prov.Records()); n != 1 {
+		t.Errorf("the provider holds %d records, want the 1 left over", n)
+	}
+}
+
+func TestDNSCleanupLeavesForeignRecords(t *testing.T) {
+	chal := dns.ChallengeFQDN(testHost)
+	t.Run("after an order that issued", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		foreign := e.prov.AddForeignTXT(chal, "someone-elses-value")
+
+		e.issue()
+
+		recs := e.prov.Records()
+		if len(recs) != 1 || recs[0].ID != foreign {
+			t.Errorf("the provider holds %+v, want only the foreign record %s", recs, foreign)
+		}
+		for _, c := range e.prov.Calls() {
+			if c.Op == "delete" && c.RecordID == foreign {
+				t.Errorf("TierPlan deleted the foreign record: %+v", c)
+			}
+		}
+	})
+	t.Run("after an order that failed", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		foreign := e.prov.AddForeignTXT(chal, "someone-elses-value")
+		e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "no answer"})
+
+		e.issue()
+
+		recs := e.prov.Records()
+		if len(recs) != 1 || recs[0].ID != foreign {
+			t.Errorf("the provider holds %+v, want only the foreign record %s", recs, foreign)
+		}
+		if n := e.prov.CallCount("delete"); n != 1 {
+			t.Errorf("TierPlan made %d delete calls, want exactly one, for its own record", n)
+		}
+	})
+}
+
+func TestDNSZoneNotFoundCreatesNothing(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.urls.setPublic("https://tierplan.example.org") // the provider holds example.com only
+
+	job := e.issue()
+
+	items := itemsOf(job)
+	wantItem(t, items, StepChallenge, jobs.ItemFailed, dns.ClassZoneNotFound)
+	wantItem(t, items, StepPropagation, jobs.ItemSkipped, "")
+	wantItem(t, items, StepCleanup, jobs.ItemSkipped, "")
+	if got := items[StepCleanup].Message; got != "Nothing to remove." {
+		t.Errorf("Clean-up message = %q, want %q", got, "Nothing to remove.")
+	}
+	if n, d := e.prov.CallCount("create"), e.prov.CallCount("delete"); n != 0 || d != 0 {
+		t.Errorf("the provider saw %d creates and %d deletes, want none", n, d)
+	}
+}
+
+func TestDNSNoTokenSavedFailsBeforeAnyProviderCall(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	if err := e.store.DeleteDNSToken(context.Background(), "cloudflare"); err != nil {
+		t.Fatal(err)
+	}
+
+	job := e.issue()
+
+	items := itemsOf(job)
+	wantItem(t, items, StepChallenge, jobs.ItemFailed, dns.ClassTokenInvalid)
+	wantItem(t, items, StepCleanup, jobs.ItemSkipped, "")
+	if calls := e.prov.Calls(); len(calls) != 0 {
+		t.Errorf("the provider was called %+v with no token saved", calls)
+	}
+}
+
+func TestDNSDelegatedChallenge(t *testing.T) {
+	const target = "_acme-challenge.tierplan.acme-target.net"
+	chal := dns.ChallengeFQDN(testHost)
+
+	t.Run("to a record in another provider zone", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		e.prov.AddZone("acme-target.net", dnsNS)
+		e.cname(chal, target)
+
+		job := e.issue()
+
+		challenge := itemsOf(job)[StepChallenge]
+		if challenge.State != jobs.ItemDone || challenge.Result["target"] != target || challenge.Result["record"] != target || challenge.Result["host"] != testHost {
+			t.Errorf("Challenge = %q %v, want done with host %s, record and target %s", challenge.State, challenge.Result, testHost, target)
+		}
+		var created []string
+		for _, c := range e.prov.Calls() {
+			if c.Op == "create" {
+				created = append(created, c.Name)
+			}
+		}
+		if !slices.Equal(created, []string{target}) {
+			t.Errorf("records were created at %v, want only %s", created, target)
+		}
+		if recs := e.prov.Records(); len(recs) != 0 {
+			t.Errorf("the provider still holds %+v", recs)
+		}
+	})
+
+	t.Run("by a name whose own zone is not on the provider", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		e.urls.setPublic("https://tierplan.example.org")
+		e.prov.AddZone("acme-target.net", dnsNS)
+		e.cname(dns.ChallengeFQDN("tierplan.example.org"), "_acme-challenge.x.acme-target.net")
+
+		job := e.issue()
+
+		if state := itemsOf(job)[StepChallenge].State; state != jobs.ItemDone {
+			t.Fatalf("Challenge is %q, want done: a delegation into a provider zone validates (D-15)", state)
+		}
+		if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+			t.Errorf("runs = %+v, want one succeeded run", runs)
+		}
+	})
+
+	t.Run("to a zone the token cannot see", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		e.prov.AddZone("acme-target.net", dnsNS)
+		e.prov.HideZone("acme-target.net")
+		e.cname(chal, target)
+
+		job := e.issue()
+
+		wantItem(t, itemsOf(job), StepChallenge, jobs.ItemFailed, dns.ClassDelegationTarget)
+		if doc := e.failedDoc(); doc.Target != target || doc.Host != testHost {
+			t.Errorf("error doc = %+v, want host %s and target %s", doc, testHost, target)
+		}
+		if n := e.prov.CallCount("create"); n != 0 {
+			t.Errorf("%d records were created for a delegation the token cannot edit, want none", n)
+		}
+	})
+}
+
+func TestDNSCNAMEProbeAsksTheZoneFirst(t *testing.T) {
+	chal := dns.ChallengeFQDN(testHost)
+	const target = "_acme-challenge.deleg.example.com"
+
+	t.Run("the zone's own nameserver answers", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		resolver := acmetest.StartDNSServer(t)
+		e.prov.Sink = multiSink{e.dns, resolver}
+		e.save(ChallengeDNS01, []string{resolver.Addr()})
+
+		e.issue()
+
+		sawCNAME := false
+		for _, q := range e.dns.Queries() {
+			if q.Type == mdns.TypeCNAME && !q.Recursive {
+				sawCNAME = true
+			}
+			if q.Type == mdns.TypeTXT {
+				t.Errorf("the zone's nameserver was asked for the TXT record %+v, but the listed resolvers replace it for the check", q)
+			}
+		}
+		if !sawCNAME {
+			t.Error("the zone's own nameserver was never asked for the CNAME")
+		}
+		qs := resolver.Queries()
+		if len(qs) == 0 {
+			t.Fatal("the listed resolver was never asked for the TXT record")
+		}
+		for _, q := range qs {
+			if q.Type == mdns.TypeCNAME {
+				t.Errorf("the listed resolver was asked for the CNAME %+v, want that only when no zone nameserver answers", q)
+			}
+			if !q.Recursive {
+				t.Errorf("the listed resolver was asked without recursion: %+v", q)
+			}
+		}
+	})
+
+	t.Run("no zone nameserver answers", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		resolver := acmetest.StartDNSServer(t)
+		e.prov.Sink = multiSink{e.dns, resolver}
+		e.save(ChallengeDNS01, []string{resolver.Addr()})
+		e.nsAddr = "127.0.0.1:1" // nothing listens there
+		e.cname(chal, target)
+		resolver.SetCNAME(chal, target)
+
+		job := e.issue()
+
+		if got := itemsOf(job)[StepChallenge].Result["target"]; got != target {
+			t.Errorf("Challenge target = %q, want %q found through the listed resolver", got, target)
+		}
+		sawCNAME := false
+		for _, q := range resolver.Queries() {
+			sawCNAME = sawCNAME || q.Type == mdns.TypeCNAME
+		}
+		if !sawCNAME {
+			t.Error("the listed resolver was never asked for the CNAME after the zone's nameservers did not answer")
+		}
+		if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+			t.Errorf("runs = %+v, want one succeeded run", runs)
+		}
+	})
+}
+
+func TestDNSTwoNamesToOneTargetGetTwoRecords(t *testing.T) {
+	const target = "_acme-challenge.shared.example.com"
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.setAgent("https://agents.example.com")
+	e.cname(dns.ChallengeFQDN(testHost), target)
+	e.cname(dns.ChallengeFQDN("agents.example.com"), target)
+
+	job := e.issue()
+
+	if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+		t.Fatalf("runs = %+v, want one succeeded run (steps %v)", runs, itemsOf(job))
+	}
+	created := map[string]string{} // record ID -> name
+	for _, c := range e.prov.Calls() {
+		if c.Op == "create" {
+			created[c.RecordID] = c.Name
+		}
+	}
+	if len(created) != 2 {
+		t.Fatalf("created %v, want two records with distinct IDs", created)
+	}
+	deleted := map[string]bool{}
+	for _, c := range e.prov.Calls() {
+		if c.Op == "delete" {
+			deleted[c.RecordID] = true
+		}
+	}
+	for id, name := range created {
+		if name != target || !deleted[id] {
+			t.Errorf("record %s at %s deleted = %v, want a record at %s deleted by its own ID", id, name, deleted[id], target)
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	both := false
+	for _, snap := range e.seen {
+		values := map[string]bool{}
+		for _, r := range snap {
+			if r.Name == target {
+				values[r.Value()] = true
+			}
+		}
+		both = both || len(values) == 2
+	}
+	if !both {
+		t.Error("the CA never saw two records with distinct values at the shared target")
+	}
+}
+
+func TestDNSJobItemsCarryNoSecrets(t *testing.T) {
+	scenarios := map[string]func(e *dnsEnv){
+		"issued":            func(e *dnsEnv) {},
+		"validation failed": func(e *dnsEnv) { e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "no answer"}) },
+		"left over": func(e *dnsEnv) {
+			e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+		},
+		"zone missing": func(e *dnsEnv) { e.urls.setPublic("https://tierplan.example.org") },
+	}
+	for name, setup := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			e := newDNSEnv(t, ChallengeDNS01)
+			setup(e)
+
+			job := e.issue()
+
+			doc, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := e.state()
+			for where, text := range map[string]string{
+				"the job": string(doc), "last_error_detail": st.LastErrorDetail, "the log": e.logs.String(),
+			} {
+				if strings.Contains(text, dnsToken) {
+					t.Errorf("%s holds the DNS token", where)
+				}
 			}
 		})
 	}
