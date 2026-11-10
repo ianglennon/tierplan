@@ -82,6 +82,13 @@ func TestARestoreWithLetsEncryptPausesACMEUntilResume(t *testing.T) {
 		t.Fatalf("PausedReason = %q, want %q", status.PausedReason, acme.PausedRestore)
 	}
 
+	// The first round after Resume asks the CA for renewal information (none is asked while paused)
+	// and draws the renewal instant at random inside the window it gets (RFC 9773). Here the CA's
+	// window closes at the renewal point, so once that has passed every draw is in the past and the
+	// renewal is due on that round. The fake's default window, two thirds of the lifetime a day
+	// either side, would put the draw after the clock about half the time.
+	r.fake.SetRenewalWindow(issued, status.RenewAt.Add(-24*time.Hour), status.RenewAt, 0)
+
 	// The renewal point passes, and the paused install asks the CA nothing, not even for its directory.
 	r.step(status.RenewAt.Sub(r.clock.Now()) + time.Hour)
 	r.awaitRuns()
