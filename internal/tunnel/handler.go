@@ -87,7 +87,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s := &Session{
 		AgentID: acc.AgentID, EnvID: acc.EnvID, AgentVersion: acc.AgentVersion, Facts: acc.Facts,
-		IP: acc.IP, ConnectedAt: h.now(), order: order, ym: ym, ws: c, done: make(chan struct{}),
+		IP: acc.IP, ConnectedAt: h.now(), DialHost: dialHost(aud), order: order, ym: ym, ws: c, done: make(chan struct{}),
 		streams: make(chan struct{}, MaxSessionStreams), maxResponse: h.maxResponse,
 		interactive: make(chan struct{}, MaxInteractiveStreams),
 		denyLimit:   rate.NewLimiter(rate.Every(denyRefill), denyBurst),
@@ -145,6 +145,9 @@ func (h *Hub) audience() (aud string, err error) {
 	}
 	return authn.Audience(raw)
 }
+
+// dialHost is not implemented yet.
+func dialHost(aud string) string { return aud }
 
 // secureTransport reports whether the connection reached TierPlan over TLS: only
 // the connection itself counts. X-Forwarded-Proto from a trusted proxy does not
