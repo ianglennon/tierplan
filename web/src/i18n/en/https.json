@@ -1,0 +1,26 @@
+{
+  "https": {
+    "tabTitle": "HTTPS",
+    "title": "HTTPS",
+    "description": "TierPlan always serves HTTPS. See the certificate it is using, or get a free one from Let's Encrypt that browsers trust.",
+    "certificate": {
+      "title": "Certificate in use",
+      "rows": {
+        "source": "Source",
+        "issuer": "Issuer",
+        "names": "Names",
+        "expires": "Expires"
+      },
+      "source": {
+        "self_signed": "Self-signed",
+        "cert_files": "Certificate files",
+        "lets_encrypt": "Let's Encrypt"
+      },
+      "issuerUnknown": "Unknown",
+      "note": {
+        "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files.",
+        "cert_files": "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE."
+      }
+    }
+  }
+}
