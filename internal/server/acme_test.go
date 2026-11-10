@@ -10,12 +10,14 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -89,6 +91,30 @@ func newACMERig(t *testing.T, fakeOpts acmetest.Options, extra map[string]string
 	r.opts = append([]Option{WithACMEClock(r.clock), WithTLSRefreshClock(r.tlsClock)}, opts...)
 	t.Cleanup(r.stop)
 	return r
+}
+
+// setEnv changes the environment variables of the next start; an empty value removes one.
+func (r *acmeRig) setEnv(vars map[string]string) {
+	r.t.Helper()
+	for k, v := range vars {
+		if v == "" {
+			delete(r.env, k)
+		} else {
+			r.env[k] = v
+		}
+	}
+	r.cfg = testConfig(r.t, r.env)
+}
+
+// counts is what the fake CA has been asked so far at the endpoints a quiet server must not reach.
+func (r *acmeRig) counts() map[string]int {
+	out := map[string]int{}
+	for _, e := range []string{
+		acmetest.EndpointDirectory, acmetest.EndpointNewAccount, acmetest.EndpointNewOrder, acmetest.EndpointRenewalInfo,
+	} {
+		out[e] = r.fake.Count(e)
+	}
+	return out
 }
 
 func (r *acmeRig) address() string {
@@ -560,4 +586,147 @@ func TestSelfSignedRefreshDoesNotOverwriteTheACMEMirror(t *testing.T) {
 		t.Error("the mirror no longer holds the Let's Encrypt certificate")
 	}
 	r.healthy()
+}
+
+// suppliedPair writes a certificate and key for the rig's name and returns the paths and the leaf.
+func suppliedPair(t *testing.T, host string) (crt, key string, leaf *x509.Certificate) {
+	t.Helper()
+	dir := t.TempDir()
+	crt, key = filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+	return crt, key, writePair(t, crt, key, host)
+}
+
+// With TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE set the files are served and Let's Encrypt is
+// refused: nothing is registered or ordered, and nothing reaches the CA (D-12).
+func TestACMECertFilesDisableIssue(t *testing.T) {
+	crt, key, leaf := suppliedPair(t, acmeHost)
+	r := newACMERig(t, acmetest.Options{}, map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key})
+	srv := r.startNew()
+
+	if srv.https.Kind() != tlsKindSupplied {
+		t.Fatalf("kind = %d, want the supplied files", srv.https.Kind())
+	}
+	if got := leafOf(t, srv.https.Config()); !bytes.Equal(got.Raw, leaf.Raw) {
+		t.Error("the server does not serve the supplied certificate")
+	}
+	ctx := context.Background()
+	if _, err := srv.acme.Register(ctx, "", true); !errors.Is(err, acme.ErrCertFiles) {
+		t.Errorf("Register = %v, want ErrCertFiles", err)
+	}
+	if _, err := srv.acme.Issue(ctx, "test"); !errors.Is(err, acme.ErrCertFiles) {
+		t.Errorf("Issue = %v, want ErrCertFiles", err)
+	}
+	st, err := srv.acme.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !st.CertFiles || st.PausedReason != "" {
+		t.Errorf("Status CertFiles = %v, PausedReason = %q; want true and empty (nothing stored to pause)", st.CertFiles, st.PausedReason)
+	}
+	for e, n := range r.counts() {
+		if n != 0 {
+			t.Errorf("the CA was asked %d times at %s, want none", n, e)
+		}
+	}
+}
+
+// With a Let's Encrypt certificate stored, setting the files later serves the files and keeps the
+// Let's Encrypt rows; removing them and restarting serves Let's Encrypt again, and while the files are
+// served the scheduler asks the CA nothing (D-12, D-13).
+func TestACMECertFilesPauseAndKeepLetsEncrypt(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	srv := r.startNew()
+	r.issue()
+	ctx := context.Background()
+	letsEncrypt := leafOf(t, srv.https.Config())
+
+	snapshot := func(srv *Server) (chain []byte, st acme.State, acct acme.Account) {
+		t.Helper()
+		store := acme.NewStore(srv.Store(), srv.Vault())
+		chain, _, found, err := store.Certificate(ctx)
+		if err != nil || !found {
+			t.Fatalf("the stored certificate: %v (found %v)", err, found)
+		}
+		if st, err = store.State(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var ok bool
+		if acct, _, ok, err = store.Account(ctx, r.fake.DirectoryURL()); err != nil || !ok {
+			t.Fatalf("the stored account: %v (found %v)", err, ok)
+		}
+		return chain, st, acct
+	}
+	chain, state, account := snapshot(srv)
+	r.stop()
+
+	// The files are set: they are served, and the Let's Encrypt rows are as they were.
+	crt, key, leaf := suppliedPair(t, acmeHost)
+	r.setEnv(map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key})
+	srv = r.startNew()
+	if srv.https.Kind() != tlsKindSupplied || !bytes.Equal(leafOf(t, srv.https.Config()).Raw, leaf.Raw) {
+		t.Fatal("the server does not serve the supplied files")
+	}
+	st, err := srv.acme.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.PausedReason != acme.PausedCertFiles || !st.CertFiles || !st.HasState {
+		t.Errorf("Status PausedReason = %q, CertFiles = %v, HasState = %v; want cert_files, true, true", st.PausedReason, st.CertFiles, st.HasState)
+	}
+	gotChain, gotState, gotAccount := snapshot(srv)
+	if !bytes.Equal(gotChain, chain) || !reflect.DeepEqual(gotState, state) || !reflect.DeepEqual(gotAccount, account) {
+		t.Error("the Let's Encrypt certificate, state or account changed while the files were served")
+	}
+	// Past the renewal point, the scheduler still asks the CA nothing.
+	before := r.counts()
+	r.step(61 * 24 * time.Hour)
+	if after := r.counts(); !reflect.DeepEqual(before, after) {
+		t.Errorf("the CA was asked while certificate files were served: before %v, after %v", before, after)
+	}
+	r.stop()
+
+	// The files are removed: Let's Encrypt is served again, as it was. Its renewal is due by now, so
+	// the first round of the new server tries one; it is refused, which leaves the certificate alone.
+	r.setEnv(map[string]string{"TIERPLAN_TLS_CERT_FILE": "", "TIERPLAN_TLS_KEY_FILE": ""})
+	r.fake.FailNext(acmetest.EndpointNewOrder, acmetest.Problem{Status: 400, Type: "malformed", Detail: "scripted refusal"})
+	srv = r.startNew()
+	if srv.https.Kind() != tlsKindACME || !bytes.Equal(leafOf(t, srv.https.Config()).Raw, letsEncrypt.Raw) {
+		t.Errorf("after the files were removed the kind is %d, want the stored Let's Encrypt certificate served again", srv.https.Kind())
+	}
+	r.awaitRuns()
+}
+
+// A start-up with the test-only directory set logs one loud warning that names the variable (D-19); a
+// start-up without it logs none.
+func TestACMEDirectoryOverrideWarnsAtStartUp(t *testing.T) {
+	build := func(env map[string]string) string {
+		t.Helper()
+		var logs bytes.Buffer
+		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.NewTextHandler(&logs, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return logs.String()
+	}
+	warnings := func(logs string) (n int) {
+		for _, line := range strings.Split(logs, "\n") {
+			if strings.Contains(line, "level=WARN") && strings.Contains(line, "TIERPLAN_ACME_DIRECTORY_URL") {
+				n++
+			}
+		}
+		return n
+	}
+	fake := acmetest.NewFake(t, acmetest.Options{})
+	got := build(map[string]string{
+		"TIERPLAN_DATA_DIR": t.TempDir() + "/data", "TIERPLAN_ACME_DIRECTORY_URL": fake.DirectoryURL(), "TIERPLAN_ACME_CA_FILE": fake.CAFile(t),
+	})
+	if n := warnings(got); n != 1 || !strings.Contains(got, fake.DirectoryURL()) {
+		t.Errorf("the log has %d warnings naming the variable (want one, with the URL):\n%s", n, got)
+	}
+	if got := build(map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"}); warnings(got) != 0 {
+		t.Errorf("a start-up with the real directory warns about the test one:\n%s", got)
+	}
 }

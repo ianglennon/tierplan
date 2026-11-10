@@ -156,7 +156,6 @@ func TestPlainWireMatrix(t *testing.T) {
 		{"a path that only extends the challenge name", loopback, "GET " + challenge + "X HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
 		{"absolute-form challenge target", loopback, "GET http://x" + challenge + "/t HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", true},
 		{"absolute-form target outside the challenge", loopback, "GET http://x/healthz HTTP/1.1\r\nHost: x\r\n" + closeAfter + "\r\n", false},
-		{"a challenge POST still gets only the challenge answer", loopback, "POST " + challenge + "/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n" + closeAfter + "\r\n", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,6 +170,24 @@ func TestPlainWireMatrix(t *testing.T) {
 		})
 	}
 
+	t.Run("a challenge POST still gets only the challenge answer", func(t *testing.T) {
+		// The token store, which answers the challenge path since Phase 14, refuses any method but GET
+		// and HEAD with 405. That is the challenge handler's own answer, and nothing follows it.
+		got := plainExchange(t, loopback.addr, "POST "+challenge+"/x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n"+closeAfter+"\r\n")
+		br := bufio.NewReader(strings.NewReader(got))
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("the reply %q is not a response: %v", got, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("got status %d, want 405 from the challenge handler", resp.StatusCode)
+		}
+		if _, err := br.Peek(1); !errors.Is(err, io.EOF) {
+			t.Fatalf("bytes follow the response in %q", got)
+		}
+	})
 	t.Run("a challenge request then a pipelined request outside the challenge", func(t *testing.T) {
 		got := plainExchange(t, loopback.addr, "GET "+challenge+"/a HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n")
 		wantOnly404(t, got)
