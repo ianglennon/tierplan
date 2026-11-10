@@ -46,7 +46,7 @@ func (b *syncBuffer) String() string {
 const dnsProviderID = "fake"
 
 // dnsToken is the one token the fake provider accepts.
-const dnsToken = "cf-token-7f3a91c2d04b8e65"
+const dnsToken = "cf-token-7f3a91c2d04b8e65" //nolint:gosec // G101: a recognisable fake token, so a test can prove it never leaks
 
 // dnsNS is the host name the fake zone's nameserver goes by; the checker maps it to the responder.
 const dnsNS = "ns1.tierplan-test.net"

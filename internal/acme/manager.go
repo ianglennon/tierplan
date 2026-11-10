@@ -291,6 +291,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.d.Store.InterruptRunning(ctx, now); err != nil {
 		return err
 	}
+	// Records an earlier process could not delete are tried again now (D-17).
+	m.sweepDNS(ctx, false)
 	if m.d.CertFiles {
 		return nil
 	}
@@ -971,6 +973,10 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 		steps.finishStored(nil)
 		return
 	}
+
+	// Whatever an earlier run left at the DNS provider goes first, for any challenge: the saved method
+	// may have changed since the record was made (D-17). A failure here never stops the order.
+	m.sweepDNS(ctx, false)
 
 	solver, err := m.newSolver(bg, steps, p.challenge)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -234,32 +235,49 @@ func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) 
 		return err
 	}
 	value := dns.TXTValue(keyAuth)
-	comment := dns.RecordComment(installID, orderID)
-	ref, err := p.CreateTXT(ctx, t.Zone, t.FQDN, value, comment)
-	if err != nil {
-		return err
-	}
-	s.steps.recordCreated()
+	var ref dns.RecordRef
 	var row *DNSRecord // set once the ledger holds the record's ID
 	defer func() {
-		if err != nil {
+		if err != nil && (row != nil || ref != (dns.RecordRef{})) {
 			s.rollback(ctx, p, ref, t.FQDN, row)
 		}
 	}()
 
-	id, err := s.rowID()
+	// An order resumed after its run was cut short presents the same value again. The record it made
+	// before is still there when its delete failed or was never tried, and the provider would refuse a
+	// second, identical one, so the ledger row is taken over instead (RESEARCH Pitfall 6).
+	pending, found, err := s.m.d.Store.PendingDNSRecord(ctx, p.Name(), t.Zone.ID, t.FQDN, value)
 	if err != nil {
 		return err
 	}
-	r := DNSRecord{
-		ID: id, Provider: p.Name(), ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
-		Comment: comment, OwnerKind: OwnerOrder, OwnerID: orderID, Token: token, CreatedAt: s.m.clock.Now(),
+	if found {
+		if err = s.m.d.Store.RestampDNSRecord(ctx, pending.ID, OwnerOrder, orderID, token); err != nil {
+			return err
+		}
+		pending.OwnerKind, pending.OwnerID, pending.Token = OwnerOrder, orderID, token
+		pending.Attempts, pending.LastTryAt, pending.NextTryAt, pending.LastErrorClass = 0, time.Time{}, time.Time{}, ""
+		row = &pending
+		s.steps.recordCreated()
+	} else {
+		comment := dns.RecordComment(installID, orderID)
+		if ref, err = p.CreateTXT(ctx, t.Zone, t.FQDN, value, comment); err != nil {
+			return err
+		}
+		s.steps.recordCreated()
+		var id string
+		if id, err = s.rowID(); err != nil {
+			return err
+		}
+		r := DNSRecord{
+			ID: id, Provider: p.Name(), ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
+			Comment: comment, OwnerKind: OwnerOrder, OwnerID: orderID, Token: token, CreatedAt: s.m.clock.Now(),
+		}
+		// The ID is durable before the CA is asked to look (D-16).
+		if err = s.m.d.Store.InsertDNSRecord(ctx, r); err != nil {
+			return err
+		}
+		row = &r
 	}
-	// The ID is durable before the CA is asked to look (D-16).
-	if err = s.m.d.Store.InsertDNSRecord(ctx, r); err != nil {
-		return err
-	}
-	row = &r
 
 	servers, hint, resolvers := s.propagationServers(t)
 	s.steps.RunningWith(StepPropagation, hint, map[string]string{"host": name, "record": t.FQDN, "resolvers": resolvers})
