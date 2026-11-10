@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -146,8 +147,16 @@ func (h *Hub) audience() (aud string, err error) {
 	return authn.Audience(raw)
 }
 
-// dialHost is not implemented yet.
-func dialHost(aud string) string { return aud }
+// dialHost is the host of a handshake audience (host[:port], as authn.Audience writes it):
+// lower-case, without the port and without the brackets of an IPv6 literal.
+func dialHost(aud string) string {
+	host := aud
+	if h, _, err := net.SplitHostPort(aud); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	return strings.ToLower(host)
+}
 
 // secureTransport reports whether the connection reached TierPlan over TLS: only
 // the connection itself counts. X-Forwarded-Proto from a trusted proxy does not
