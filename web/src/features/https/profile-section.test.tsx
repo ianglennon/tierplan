@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ACMEAccount, HTTPSACME, HTTPSStatus } from "@/api/https";
 import { queryClient } from "@/api/query-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { AcmeCard } from "@/features/https/acme-card";
 import "@/i18n";
 import { acmeDirectory, httpsACME, httpsStatus } from "@/test-https";
@@ -61,6 +62,9 @@ beforeEach(() => {
     Response.json(acmeDirectory({ profiles: profiles("classic", "shortlived", "tlsserver") }));
   put = (body) => Response.json({ profile: body.profile });
   successToast = vi.spyOn(toast, "success");
+  // A card with a run in progress follows the run's stream; this one never says anything.
+  FakeEventSource.reset();
+  vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {

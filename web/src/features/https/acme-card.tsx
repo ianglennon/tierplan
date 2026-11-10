@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { AccountSection } from "@/features/https/account-section";
 import { accountMode, advancedMode, deriveCardState } from "@/features/https/card-state";
+import { IssueSection } from "@/features/https/issue-section";
 import { NamesSection } from "@/features/https/names-section";
 import { ProfileSection } from "@/features/https/profile-section";
 import { Sentence, SLOT } from "@/features/https/sentence";
@@ -91,7 +92,9 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
         </>
       )}
 
-      {/* Slot, plan 16: the issue section, blocked list and run panel. */}
+      <Separator />
+      <IssueSection status={status} acme={acme} state={state} canWrite={canWrite} />
+
       {/* Slot, plan 18: the state alerts and the stop row. */}
 
       {canWrite ? null : (

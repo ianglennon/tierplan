@@ -42,3 +42,16 @@ export function errorCopy(
       : `${base}.fix`;
   return { headline: t(`${base}.headline`, values), fix: t(fixKey, values) };
 }
+
+// formatDate is the day of an RFC 3339 time in the browser's own locale ("10 Nov 2026"); an unreadable
+// time is an empty string.
+export function formatDate(iso: string | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}

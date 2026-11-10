@@ -126,6 +126,89 @@
         "fix": "Open Details and check the server log. TierPlan tries again at {{time}}.",
         "fixNoTime": "Open Details and check the server log."
       }
+    },
+    "issue": {
+      "helper": "TierPlan switches to the new certificate as soon as it is ready. Nothing restarts and nobody is signed out.",
+      "issue": "Issue certificate",
+      "issuing": "Issuing...",
+      "renew": "Renew now",
+      "renewing": "Renewing...",
+      "noAccount": "Register a Let's Encrypt account first.",
+      "runActive": "A run is already in progress.",
+      "paused": "Resume Let's Encrypt first.",
+      "toldToWait": "Let's Encrypt asked TierPlan to wait. You can try again at {{time}}.",
+      "failureGuard": "Three attempts failed in the last hour. TierPlan waits so it doesn't use up Let's Encrypt's limits. You can try again at {{time}}.",
+      "reused": "These names already have a valid certificate until {{date}}. Nothing was ordered. Use Renew now to get a new one.",
+      "issued": "Certificate issued.",
+      "renewed": "Certificate renewed."
+    },
+    "refusal": {
+      "title": "Can't issue yet",
+      "names_ip": {
+        "reason": "The public URL uses an IP address ({{host}}).",
+        "fix": "Set the public URL in Settings > General to a DNS name that points to this host."
+      },
+      "agent_url_ip": {
+        "reason": "The agent URL uses an IP address ({{host}}).",
+        "fix": "Set the agent URL to a DNS name, or clear it to use the public URL."
+      },
+      "names_wildcard": {
+        "reason": "{{host}} is a wildcard name.",
+        "fix": "Use a plain host name. Wildcard certificates aren't supported."
+      },
+      "names_not_public": {
+        "reason": "{{host}} isn't a public DNS name. It has no dot, or ends in a private suffix such as .lan or .home.arpa.",
+        "fix": "Use a name under a domain you own, such as tierplan.example.com. Nothing was sent to Let's Encrypt."
+      },
+      "base_path": {
+        "reason": "The public URL has a path ({{path}}).",
+        "fix": "HTTP-01 needs TierPlan at the root of its host. Remove the path from the public URL, or give TierPlan its own host name."
+      },
+      "agent_dial_host": {
+        "reason_one": "{{count}} connected agent reaches TierPlan at {{hosts}}, which isn't on the certificate.",
+        "reason_other": "{{count}} connected agents reach TierPlan at {{hosts}}, which isn't on the certificate.",
+        "fix": "Reinstall those agents with a new install command, or set the agent URL to the host they use. Only agents that are connected now are checked."
+      }
+    },
+    "run": {
+      "issuing": "Issuing certificate",
+      "renewing": "Renewing certificate",
+      "renewingAuto": "Renewing certificate automatically",
+      "started": "Started {{when}}.",
+      "issued": "Certificate issued.",
+      "renewed": "Certificate renewed.",
+      "validUntil": "Now serving a certificate valid until {{date}}.",
+      "issueFailed": "Issuing failed.",
+      "renewFailed": "Renewing failed.",
+      "issueStopped": "Issuing stopped.",
+      "renewStopped": "Renewing stopped.",
+      "reconnecting": "Reconnecting...",
+      "steps": "Steps",
+      "step": {
+        "account": "Account",
+        "order": "Order",
+        "challenge": "Challenge",
+        "validate": "Validation",
+        "finalize": "Finalize",
+        "stored": "Stored"
+      },
+      "hint": {
+        "account": "Checking the Let's Encrypt account.",
+        "order": "Asking for a certificate for {{names}}.",
+        "challenge": "Serving the HTTP-01 token on port 80.",
+        "validate": "Waiting for Let's Encrypt to check {{host}}.",
+        "finalize": "Sending the certificate request.",
+        "stored": "Saving the certificate and switching to it.",
+        "accountSkipped": "Account already registered."
+      },
+      "state": {
+        "waiting": "Not started",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "cancelled": "Stopped",
+        "skipped": "Skipped"
+      }
     }
   }
 }
