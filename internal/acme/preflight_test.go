@@ -17,7 +17,7 @@ func TestPreflightRefusals(t *testing.T) {
 	}{
 		{"nothing wrong", func(*PreflightInput) {}, nil},
 		{"a base path under http-01", func(in *PreflightInput) { in.BasePath = "/tierplan" }, []Refusal{{Code: RefuseBasePath, Path: "/tierplan"}}},
-		{"a base path under another challenge", func(in *PreflightInput) { in.BasePath = "/tierplan"; in.ChallengeType = "dns-01" }, nil},
+		{"a base path under another challenge", func(in *PreflightInput) { in.BasePath = "/tierplan"; in.ChallengeType = ChallengeDNS01 }, nil},
 		{"dial hosts not covered", func(in *PreflightInput) {
 			in.DialHosts = []string{"old.example.com", "a.example.com", "OLD.example.com"}
 		}, []Refusal{{Code: RefuseAgentDialHost, Count: 2, Hosts: []string{"old.example.com"}}}},
@@ -44,6 +44,40 @@ func TestPreflightRefusals(t *testing.T) {
 				t.Errorf("refusals = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPreflightBasePathOnlyForHTTP01 checks D-04 and ACME-10: a public URL with a base path is
+// refused for HTTP-01 only, and every other refusal is the same under either challenge.
+func TestPreflightBasePathOnlyForHTTP01(t *testing.T) {
+	bad := PreflightInput{
+		PublicURL: "https://10.0.0.5", AgentURL: "https://203.0.113.9", BasePath: "/tierplan",
+		DialHosts: []string{"old.example.com"},
+	}
+	codes := func(rs []Refusal) []string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.Code)
+		}
+		return out
+	}
+	http01, dns01 := bad, bad
+	http01.ChallengeType, dns01.ChallengeType = ChallengeHTTP01, ChallengeDNS01
+	_, gotHTTP := Preflight(http01)
+	_, gotDNS := Preflight(dns01)
+
+	wantHTTP := []string{RefuseNamesIP, RefuseAgentURLIP, RefuseBasePath, RefuseAgentDialHost}
+	wantDNS := []string{RefuseNamesIP, RefuseAgentURLIP, RefuseAgentDialHost}
+	if !reflect.DeepEqual(codes(gotHTTP), wantHTTP) {
+		t.Errorf("http-01 refusals = %v, want %v", codes(gotHTTP), wantHTTP)
+	}
+	if !reflect.DeepEqual(codes(gotDNS), wantDNS) {
+		t.Errorf("dns-01 refusals = %v, want %v", codes(gotDNS), wantDNS)
+	}
+
+	clean := PreflightInput{PublicURL: "https://a.example.com", BasePath: "/tierplan", ChallengeType: ChallengeDNS01}
+	if _, got := Preflight(clean); got != nil {
+		t.Errorf("a clean dns-01 install under a base path is refused: %+v", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,8 @@ import (
 	"unicode/utf8"
 
 	legoacme "github.com/go-acme/lego/v5/acme"
+
+	"github.com/ianglennon/tierplan/internal/acme/dns"
 )
 
 func problem(typ string, status int) *legoacme.ProblemDetails {
@@ -104,7 +107,7 @@ func TestClassify(t *testing.T) {
 			got := Classify(tc.err, tc.in)
 			detail := got.Detail
 			got.Detail = ""
-			if got != tc.want {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("Classify = %+v, want %+v", got, tc.want)
 			}
 			if detail == "" {
@@ -132,9 +135,127 @@ func TestClassifyCoversEveryClass(t *testing.T) {
 	} {
 		seen[Classify(err, ClassifyInput{}).Class] = true
 	}
-	if len(seen) != 12 {
-		t.Fatalf("the sample reached %d classes, want 12: %v", len(seen), seen)
+	for _, class := range []string{
+		ClassDNSTokenInvalid, ClassDNSTokenScope, ClassDNSZoneNotFound, ClassDNSDelegationTarget,
+		ClassDNSNotVisible, ClassDNSRateLimited, ClassDNSUnavailable,
+	} {
+		seen[Classify(&dns.Error{Class: class}, ClassifyInput{ChallengeType: ChallengeDNS01}).Class] = true
 	}
+	seen[Classify(&ChallengeError{Host: "a.example.com", Err: problem(legoacme.IncorrectResponseErrorType, 400)},
+		ClassifyInput{ChallengeType: ChallengeDNS01}).Class] = true
+	if len(seen) != 20 {
+		t.Fatalf("the sample reached %d classes, want 20: %v", len(seen), seen)
+	}
+}
+
+// TestClassifyDNSError checks that a DNS provider failure keeps its class through the wrapping the
+// order code adds, carries what its copy needs, and shows only the class, status and code as detail.
+func TestClassifyDNSError(t *testing.T) {
+	wrap := func(de *dns.Error) error {
+		return fmt.Errorf("present the dns-01 challenge for %s: %w", "a.example.com", de)
+	}
+	for _, class := range []string{
+		dns.ClassTokenInvalid, dns.ClassTokenScope, dns.ClassZoneNotFound, dns.ClassDelegationTarget,
+		dns.ClassNotVisible, dns.ClassRateLimited, dns.ClassUnavailable,
+	} {
+		t.Run(class, func(t *testing.T) {
+			de := &dns.Error{
+				Class: class, Host: "_acme-challenge.a.example.com", Zone: "example.com", Target: "t.example.net",
+				Resolvers: []string{"ns1.example.net:53", "ns2.example.net:53"}, RetryAfter: 45 * time.Second,
+				Status: 403, Code: 9109, Provider: "cloudflare", Op: "find zone",
+				Err: errors.New("the remote said something private"),
+			}
+			got := Classify(wrap(de), ClassifyInput{ChallengeType: ChallengeDNS01})
+			want := Failure{
+				Class: class, Host: "_acme-challenge.a.example.com", Zone: "example.com", Target: "t.example.net",
+				Resolvers: []string{"ns1.example.net:53", "ns2.example.net:53"}, RetryAfter: 45 * time.Second,
+			}
+			detail := got.Detail
+			got.Detail = ""
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Classify = %+v, want %+v", got, want)
+			}
+			if !strings.Contains(detail, "cloudflare find zone: HTTP 403 code 9109 ("+class+")") {
+				t.Errorf("Detail = %q, want the operation, status, code and class", detail)
+			}
+			if strings.Contains(detail, "private") {
+				t.Errorf("Detail = %q carries the wrapped cause's text", detail)
+			}
+		})
+	}
+
+	t.Run("a challenge error around a DNS error keeps the DNS host", func(t *testing.T) {
+		err := &ChallengeError{Host: "a.example.com", Err: &dns.Error{Class: dns.ClassZoneNotFound}}
+		if got := Classify(err, ClassifyInput{}); got.Class != ClassDNSZoneNotFound || got.Host != "a.example.com" {
+			t.Fatalf("Classify = %+v, want dns_zone_not_found for a.example.com", got)
+		}
+	})
+	t.Run("an empty class is internal", func(t *testing.T) {
+		got := Classify(wrap(&dns.Error{Status: 422, Code: 9999, Provider: "cloudflare", Op: "create record"}), ClassifyInput{})
+		if got.Class != ClassInternal || got.Detail == "" {
+			t.Fatalf("Classify = %+v, want internal with a detail", got)
+		}
+	})
+	t.Run("an unknown class is internal", func(t *testing.T) {
+		if got := Classify(wrap(&dns.Error{Class: "dns_from_the_future"}), ClassifyInput{}); got.Class != ClassInternal {
+			t.Fatalf("Classify = %+v, want internal", got)
+		}
+	})
+	t.Run("an empty-class DNS error with a network cause is still internal", func(t *testing.T) {
+		de := &dns.Error{Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}}
+		if got := Classify(wrap(de), ClassifyInput{}); got.Class != ClassInternal {
+			t.Fatalf("Classify = %+v, want internal", got)
+		}
+	})
+}
+
+// TestClassifyValidationTXT checks that the CA's validation problems are about the TXT record under
+// DNS-01 and keep their Phase 14 class under HTTP-01 (UI-SPEC J7).
+func TestClassifyValidationTXT(t *testing.T) {
+	for _, tc := range []struct {
+		name, typ string
+		httpClass string
+	}{
+		{"unauthorized", legoacme.UnauthorizedErrorType, ClassValidationUnreachable},
+		{"incorrect response", legoacme.IncorrectResponseErrorType, ClassValidationUnreachable},
+		{"connection", legoacme.ConnectionErrorType, ClassValidationUnreachable},
+		{"dns", legoacme.DNSErrorType, ClassValidationDNS},
+		{"timeout", timeoutErrorType, ClassValidationUnreachable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &ChallengeError{Host: "a.example.com", Err: problem(tc.typ, 400)}
+			got := Classify(err, ClassifyInput{ChallengeType: ChallengeDNS01})
+			if got.Class != ClassValidationTXT || got.Host != "a.example.com" {
+				t.Fatalf("under dns-01 Classify = %+v, want validation_txt for a.example.com", got)
+			}
+			for _, ct := range []string{ChallengeHTTP01, ""} {
+				if got := Classify(err, ClassifyInput{ChallengeType: ct}); got.Class != tc.httpClass {
+					t.Fatalf("under %q Classify = %+v, want %s", ct, got, tc.httpClass)
+				}
+			}
+		})
+	}
+	t.Run("a compound problem is classified by its sub-problem", func(t *testing.T) {
+		pd := &legoacme.ProblemDetails{Type: legoacme.CompoundErrorType, HTTPStatus: 400, SubProblems: []legoacme.SubProblem{
+			{Type: legoacme.UnauthorizedErrorType, Identifier: legoacme.Identifier{Type: "dns", Value: "b.example.com"}},
+		}}
+		if got := Classify(pd, ClassifyInput{ChallengeType: ChallengeDNS01}); got.Class != ClassValidationTXT || got.Host != "b.example.com" {
+			t.Fatalf("Classify = %+v, want validation_txt for b.example.com", got)
+		}
+	})
+	t.Run("other problems keep their class under dns-01", func(t *testing.T) {
+		for typ, want := range map[string]string{
+			legoacme.CaaErrorType:                ClassCAAForbids,
+			legoacme.RateLimitedErrorType:        ClassRateLimited,
+			legoacme.ServerInternalErrorType:     ClassCAUnavailable,
+			legoacme.RejectedIdentifierErrorType: ClassIdentifierRejected,
+		} {
+			err := &ChallengeError{Host: "c.example.com", Err: problem(typ, 400)}
+			if got := Classify(err, ClassifyInput{ChallengeType: ChallengeDNS01}); got.Class != want {
+				t.Errorf("%s under dns-01: Classify = %+v, want %s", typ, got, want)
+			}
+		}
+	})
 }
 
 func TestClassifyCapsAndCleansDetail(t *testing.T) {

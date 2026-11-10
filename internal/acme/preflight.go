@@ -8,9 +8,12 @@ import (
 	"strings"
 )
 
-// ChallengeHTTP01 is the challenge type this phase issues through. It is declared here, in one
-// place, and Phase 15 adds DNS-01 beside it.
-const ChallengeHTTP01 = "http-01"
+// The challenge types an install can issue through, declared here in one place. The values are the
+// ones ACME defines, so they match Challenge.Type in a CA's authorization.
+const (
+	ChallengeHTTP01 = "http-01"
+	ChallengeDNS01  = "dns-01"
+)
 
 // Refusal codes: each is one reason an issue is refused before any order is made.
 const (

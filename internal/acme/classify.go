@@ -16,13 +16,14 @@ import (
 
 	legoacme "github.com/go-acme/lego/v5/acme"
 
+	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
 // MaxDetailBytes caps the raw problem document kept for the Details disclosure.
 const MaxDetailBytes = 8 << 10
 
-// The twelve classes an ACME failure maps to. The values are stored and sent to the browser, so
+// The twenty classes an ACME failure maps to. The values are stored and sent to the browser, so
 // they are a contract; the English copy and the fix each one gets live in the API and the SPA.
 const (
 	ClassRateLimited           = "rate_limited"
@@ -37,6 +38,19 @@ const (
 	ClassCAUnavailable         = "ca_unavailable"
 	ClassCAUntrusted           = "ca_untrusted"
 	ClassInternal              = "internal"
+)
+
+// The DNS-01 classes: seven are a DNS provider failing (they are the values of the dns package's
+// own constants, so the two cannot drift) and validation_txt is the CA not finding the TXT record.
+const (
+	ClassDNSTokenInvalid     = dns.ClassTokenInvalid
+	ClassDNSTokenScope       = dns.ClassTokenScope
+	ClassDNSZoneNotFound     = dns.ClassZoneNotFound
+	ClassDNSDelegationTarget = dns.ClassDelegationTarget
+	ClassDNSNotVisible       = dns.ClassNotVisible
+	ClassDNSRateLimited      = dns.ClassRateLimited
+	ClassDNSUnavailable      = dns.ClassUnavailable
+	ClassValidationTXT       = "validation_txt"
 )
 
 // timeoutErrorType is the problem type some CAs return when a validation attempt timed out. lego
@@ -74,8 +88,15 @@ type Failure struct {
 	Profile string
 	// TermsURL is where the CA says the terms can be read (the problem's instance).
 	TermsURL string
-	// RetryAfter is the CA's Retry-After for a rate limit, zero when it gave none.
+	// RetryAfter is the CA's or the DNS provider's Retry-After for a rate limit, zero when it gave
+	// none.
 	RetryAfter time.Duration
+	// Zone is the DNS zone a DNS failure is about.
+	Zone string
+	// Target is the delegated name a DNS failure is about, when the challenge name is a CNAME.
+	Target string
+	// Resolvers are the resolvers a propagation failure asked.
+	Resolvers []string
 	// Detail is the raw problem document, free of control characters and at most MaxDetailBytes.
 	Detail string
 }
