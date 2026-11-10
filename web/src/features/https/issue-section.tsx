@@ -29,7 +29,9 @@ import { toastSuccess } from "@/lib/toast";
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
-const NOTE_ID = "acme-issue-note";
+// The line that says why Issue and Renew cannot be used; the Stop button is described by it too.
+export const ISSUE_NOTE_ID = "acme-issue-note";
+const NOTE_ID = ISSUE_NOTE_ID;
 const REFUSALS_ID = "acme-issue-refusals";
 
 type Which = "issue" | "renew";

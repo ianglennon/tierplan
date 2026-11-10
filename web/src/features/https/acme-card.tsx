@@ -7,6 +7,7 @@ import { useState } from "react";
 
 import { type HTTPSStatus, httpsStatusQuery } from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsCard } from "@/features/environments/settings-card";
@@ -14,11 +15,12 @@ import { AccountSection } from "@/features/https/account-section";
 import { accountMode, advancedMode, deriveCardState } from "@/features/https/card-state";
 import { errorValues } from "@/features/https/copy";
 import { ErrorPanel } from "@/features/https/error-panel";
-import { IssueSection } from "@/features/https/issue-section";
+import { ISSUE_NOTE_ID, IssueSection } from "@/features/https/issue-section";
 import { NamesSection } from "@/features/https/names-section";
 import { ProfileSection } from "@/features/https/profile-section";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { StateAlerts } from "@/features/https/state-alerts";
+import { StopDialog } from "@/features/https/stop-dialog";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -117,11 +119,42 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
         />
       ) : null}
 
-      {/* Slot, plan 18: the state alerts and the stop row. */}
+      {canWrite && acme.mode === "active" && state !== "I" && state !== "J" ? (
+        <StopRow running={state === "C"} />
+      ) : null}
 
       {canWrite ? null : (
         <p className="text-xs text-muted-foreground">{t("settings.general.readOnly")}</p>
       )}
     </div>
+  );
+}
+
+// StopRow is the last part of the card (D-14): a destructive button under a Separator that opens the
+// confirmation. It is drawn only while Let's Encrypt is in use and the certificate files are not the
+// control. While a run is active the button stays focusable but does nothing, and the run line above
+// says why.
+function StopRow({ running }: { running: boolean }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Separator />
+      <div>
+        <Button
+          type="button"
+          variant="destructive"
+          aria-disabled={running}
+          aria-describedby={running ? ISSUE_NOTE_ID : undefined}
+          className="h-11 max-md:w-full md:h-8 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+          onClick={() => {
+            if (!running) setOpen(true);
+          }}
+        >
+          {t("https.stop.action")}
+        </Button>
+      </div>
+      <StopDialog open={open} onOpenChange={setOpen} />
+    </>
   );
 }
