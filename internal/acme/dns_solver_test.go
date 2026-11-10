@@ -29,7 +29,7 @@ func (e *dnsEnv) inJob(fn func(ctx context.Context, steps *jobSteps)) jobs.Job {
 
 // solver is a solver for the order "order-unit", reporting to steps.
 func (e *dnsEnv) solver(steps *jobSteps) *dnsSolver {
-	return &dnsSolver{m: e.mgr, steps: steps, provider: "cloudflare", orderID: "order-unit"}
+	return &dnsSolver{m: e.mgr, steps: steps, provider: dnsProviderID, orderID: "order-unit"}
 }
 
 func TestDNSPresentRollbackOnLedgerFailure(t *testing.T) {

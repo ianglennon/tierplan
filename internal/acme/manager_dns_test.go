@@ -10,9 +10,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	mdns "github.com/miekg/dns"
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
@@ -40,6 +42,9 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// dnsProviderID is the provider id of the fake provider, which is what its ledger rows carry.
+const dnsProviderID = "fake"
+
 // dnsToken is the one token the fake provider accepts.
 const dnsToken = "cf-token-7f3a91c2d04b8e65"
 
@@ -56,10 +61,22 @@ type dnsEnv struct {
 	// nsAddr is where the zone's nameserver answers; the responder unless a test points it elsewhere.
 	nsAddr string
 
+	// built counts the providers the manager built, and so the tokens it opened for one.
+	built atomic.Int32
+
 	mu     sync.Mutex
 	cnames map[string]string
 	// seen is what the provider held at each TXT lookup the CA made.
 	seen [][]dnstest.FakeRecord
+}
+
+// countingFactory is the provider factory, counting every provider built from it.
+func (e *dnsEnv) countingFactory() dns.Factory {
+	inner := e.prov.Factory(dnsToken)
+	return func(token string) dns.Provider {
+		e.built.Add(1)
+		return inner(token)
+	}
 }
 
 // cname delegates name to target, for the CA as well as for the responder.
@@ -128,7 +145,7 @@ func (e *dnsEnv) build(certFiles bool) *Manager {
 		Jitter: func() float64 { return 0 },
 		Rand:   func(int64) int64 { return 0 },
 		DNS: DNSDeps{
-			Providers:       map[string]dns.Factory{"cloudflare": e.prov.Factory(dnsToken)},
+			Providers:       map[string]dns.Factory{dnsProviderID: e.countingFactory()},
 			NameserverAddrs: func(context.Context, string) ([]string, error) { return []string{e.nsAddr}, nil },
 			ResolvConf:      func() ([]string, error) { return []string{e.dns.Addr()}, nil },
 		},
@@ -141,7 +158,7 @@ func (e *dnsEnv) save(challenge string, resolvers []string) {
 	e.t.Helper()
 	tok := dnsToken
 	if err := e.store.SaveValidation(context.Background(), ValidationWrite{
-		ChallengeType: challenge, Provider: "cloudflare", Resolvers: resolvers, Token: &tok, Now: e.clock.Now(),
+		ChallengeType: challenge, Provider: dnsProviderID, Resolvers: resolvers, Token: &tok, Now: e.clock.Now(),
 	}); err != nil {
 		e.t.Fatalf("SaveValidation: %v", err)
 	}
@@ -454,7 +471,7 @@ func TestDNSZoneNotFoundCreatesNothing(t *testing.T) {
 
 func TestDNSNoTokenSavedFailsBeforeAnyProviderCall(t *testing.T) {
 	e := newDNSEnv(t, ChallengeDNS01)
-	if err := e.store.DeleteDNSToken(context.Background(), "cloudflare"); err != nil {
+	if err := e.store.DeleteDNSToken(context.Background(), dnsProviderID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -676,5 +693,317 @@ func TestDNSJobItemsCarryNoSecrets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// leftOver makes a record the way an earlier run did and then could not delete: it is at the provider,
+// and the ledger holds its ID, owned by an order that is gone.
+func (e *dnsEnv) leftOver(fqdn, value string, created time.Time) DNSRecord {
+	e.t.Helper()
+	ctx := context.Background()
+	p := e.prov.Factory(dnsToken)(dnsToken)
+	z, err := p.Zone(ctx, fqdn)
+	if err != nil {
+		e.t.Fatalf("Zone(%s): %v", fqdn, err)
+	}
+	ref, err := p.CreateTXT(ctx, z, fqdn, value, "tierplan:old-install:old-order")
+	if err != nil {
+		e.t.Fatalf("CreateTXT: %v", err)
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	row := DNSRecord{
+		ID: id.String(), Provider: dnsProviderID, ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: fqdn, Value: value,
+		Comment: "tierplan:old-install:old-order", OwnerKind: OwnerOrder, OwnerID: "old-order", Token: "old", CreatedAt: created,
+	}
+	if err := e.store.InsertDNSRecord(ctx, row); err != nil {
+		e.t.Fatalf("InsertDNSRecord: %v", err)
+	}
+	return row
+}
+
+// deletes are the record IDs the provider was asked to delete, in order.
+func (e *dnsEnv) deletes() []string {
+	var out []string
+	for _, c := range e.prov.Calls() {
+		if c.Op == "delete" {
+			out = append(out, c.RecordID)
+		}
+	}
+	return out
+}
+
+func TestDNSSweepAtStart(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	row := e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+
+	if err := e.mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if recs := e.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider still holds %+v after Start", recs)
+	}
+	if rows := e.ledger(); len(rows) != 0 {
+		t.Errorf("the ledger still holds %+v after Start (row %s)", rows, row.ID)
+	}
+}
+
+func TestDNSSweepNeverWhilePaused(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(e *dnsEnv) *Manager
+	}{
+		{"paused after a restore", func(e *dnsEnv) *Manager {
+			st := e.state()
+			st.PausedReason = PausedRestore
+			if err := e.store.SaveState(context.Background(), st); err != nil {
+				t.Fatal(err)
+			}
+			return e.mgr
+		}},
+		{"certificate files set", func(e *dnsEnv) *Manager { return e.build(true) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newDNSEnv(t, ChallengeDNS01)
+			e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+			mgr := tc.setup(e)
+			before := len(e.prov.Calls())
+
+			if err := mgr.Start(context.Background()); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			mgr.sweepDNS(context.Background(), true)
+
+			if n := len(e.prov.Calls()) - before; n != 0 {
+				t.Errorf("the provider was called %d times while ACME was paused, want 0", n)
+			}
+			if rows := e.ledger(); len(rows) != 1 {
+				t.Errorf("ledger = %+v, want the row kept", rows)
+			}
+		})
+	}
+}
+
+func TestDNSSweepBeforeEveryOrder(t *testing.T) {
+	for _, challenge := range []string{ChallengeHTTP01, ChallengeDNS01} {
+		t.Run(challenge+" deletes a pending row first", func(t *testing.T) {
+			e := newDNSEnv(t, challenge)
+			row := e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+			// Not due yet: a run deletes every pending row, not only the due ones.
+			if err := e.store.MarkDNSRecordFailed(context.Background(), row.ID, 1, testNow, testNow.Add(time.Hour), dns.ClassUnavailable); err != nil {
+				t.Fatal(err)
+			}
+
+			e.issue()
+
+			if got := e.deletes(); len(got) == 0 || got[0] != row.RecordID {
+				t.Errorf("deletes = %v, want the pending record %s deleted first", got, row.RecordID)
+			}
+			if rows := e.ledger(); len(rows) != 0 {
+				t.Errorf("ledger = %+v, want it empty", rows)
+			}
+			if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+				t.Errorf("runs = %+v, want one succeeded run", runs)
+			}
+		})
+	}
+
+	t.Run("a failing delete is stamped and the order still runs", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		row := e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+		e.prov.FailDelete(1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+
+		e.issue()
+
+		if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+			t.Fatalf("runs = %+v, want one succeeded run", runs)
+		}
+		rows := e.ledger()
+		if len(rows) != 1 || rows[0].ID != row.ID {
+			t.Fatalf("ledger = %+v, want only the row that could not be deleted", rows)
+		}
+		if r := rows[0]; r.Attempts != 1 || !r.NextTryAt.Equal(testNow.Add(time.Minute)) || r.LastErrorClass != dns.ClassUnavailable {
+			t.Errorf("row = %+v, want 1 attempt and the next try a minute on, class dns_unavailable", r)
+		}
+	})
+}
+
+func TestDNSSweepBacksOff(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+	e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+
+	waits := []time.Duration{time.Minute, 10 * time.Minute, 100 * time.Minute, 24 * time.Hour, 24 * time.Hour}
+	for i, wait := range waits {
+		before := e.prov.CallCount("delete")
+		e.mgr.sweepDNS(ctx, true)
+		if n := e.prov.CallCount("delete") - before; n != 1 {
+			t.Fatalf("attempt %d made %d delete calls, want 1", i+1, n)
+		}
+		rows := e.ledger()
+		if len(rows) != 1 || rows[0].Attempts != i+1 || !rows[0].NextTryAt.Equal(e.clock.Now().Add(wait)) {
+			t.Fatalf("after attempt %d the row is %+v, want %d attempts and the next try %v on", i+1, rows, i+1, wait)
+		}
+		// Before the next try is due the sweep leaves the row alone.
+		e.clock.Advance(wait - time.Second)
+		before = e.prov.CallCount("delete")
+		e.mgr.sweepDNS(ctx, true)
+		if n := e.prov.CallCount("delete") - before; n != 0 {
+			t.Fatalf("a sweep a second early made %d delete calls, want 0", n)
+		}
+		e.clock.Advance(time.Second)
+	}
+}
+
+func TestDNSSweepWithoutATokenStampsTheRows(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+	if err := e.store.DeleteDNSToken(ctx, dnsProviderID); err != nil {
+		t.Fatal(err)
+	}
+	built, calls := e.built.Load(), len(e.prov.Calls())
+
+	e.mgr.sweepDNS(ctx, false)
+
+	if e.built.Load() != built || len(e.prov.Calls()) != calls {
+		t.Error("a provider was built or called with no token saved")
+	}
+	rows := e.ledger()
+	if len(rows) != 1 || rows[0].LastErrorClass != dns.ClassTokenInvalid || rows[0].Attempts != 1 || !rows[0].NextTryAt.Equal(testNow.Add(time.Minute)) {
+		t.Errorf("ledger = %+v, want the row stamped dns_token_invalid with 1 attempt and a minute's backoff", rows)
+	}
+}
+
+func TestDNSSweepOfAnEmptyLedgerBuildsNothing(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+
+	e.mgr.sweepDNS(context.Background(), false)
+	e.mgr.sweepDNS(context.Background(), true)
+
+	if e.built.Load() != 0 || len(e.prov.Calls()) != 0 {
+		t.Errorf("an empty ledger built %d providers and made %d calls, want none", e.built.Load(), len(e.prov.Calls()))
+	}
+}
+
+func TestDNSSweepDeletesOldestFirst(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	// Inserted out of order; two share an instant, so their IDs decide.
+	newer := e.leftOver("_acme-challenge.c.example.com", "c", testNow.Add(2*time.Hour))
+	oldest := e.leftOver("_acme-challenge.a.example.com", "a", testNow.Add(-time.Hour))
+	tieA := e.leftOver("_acme-challenge.b.example.com", "b", testNow)
+	tieB := e.leftOver("_acme-challenge.d.example.com", "d", testNow)
+	want := []string{oldest.RecordID}
+	if tieA.ID < tieB.ID {
+		want = append(want, tieA.RecordID, tieB.RecordID)
+	} else {
+		want = append(want, tieB.RecordID, tieA.RecordID)
+	}
+	want = append(want, newer.RecordID)
+
+	e.mgr.sweepDNS(context.Background(), false)
+
+	if got := e.deletes(); !slices.Equal(got, want) {
+		t.Errorf("deleted %v, want %v (created_at, then id)", got, want)
+	}
+}
+
+func TestDNSResumeReusesThePendingRecord(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	var firstErr, secondErr error
+	var created int
+
+	e.inJob(func(ctx context.Context, steps *jobSteps) {
+		first := e.solver(steps)
+		first.orderID = "order-old"
+		firstErr = first.Present(ctx, testHost, "old", "tok.thumb")
+		// The order is resumed: a new solver presents the same value for the same name.
+		second := e.solver(steps)
+		second.orderID = "order-new"
+		secondErr = second.Present(ctx, testHost, "new", "tok.thumb")
+		created = steps.created
+	})
+
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("Present = %v, then %v; want both to succeed", firstErr, secondErr)
+	}
+	if n := e.prov.CallCount("create"); n != 1 {
+		t.Errorf("the provider saw %d creates, want 1: a resume reuses the record", n)
+	}
+	if created != 2 {
+		t.Errorf("the run counted %d records to clean up, want 2 (each Present owes a clean-up)", created)
+	}
+	rows, err := e.store.DNSRecordsFor(ctx, OwnerOrder, "order-new", "new")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows for the resumed order = %+v, %v; want the one restamped row", rows, err)
+	}
+	if all := e.ledger(); len(all) != 1 {
+		t.Errorf("ledger = %+v, want one row", all)
+	}
+}
+
+func TestManagerDNSTwoNamesShareOneStep(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.setAgent("https://agents.example.com")
+
+	job := e.issue()
+
+	if runs := e.runs(); len(runs) != 1 || runs[0].Outcome != OutcomeSucceeded {
+		t.Fatalf("runs = %+v, want one succeeded run", runs)
+	}
+	count := map[string]int{}
+	for _, it := range job.Items {
+		count[it.ID]++
+	}
+	if count[StepChallenge] != 1 || count[StepPropagation] != 1 {
+		t.Errorf("item counts = %v, want one Challenge and one Propagation step", count)
+	}
+	var made []string
+	for _, c := range e.prov.Calls() {
+		if c.Op == "create" {
+			made = append(made, c.Name)
+		}
+	}
+	if len(made) != 2 || made[0] == made[1] {
+		t.Fatalf("records were created at %v, want two different names", made)
+	}
+	items := itemsOf(job)
+	for _, id := range []string{StepChallenge, StepPropagation} {
+		if got := items[id].Result["record"]; got != made[1] {
+			t.Errorf("%s names the record %q, want the second record %q", id, got, made[1])
+		}
+	}
+	if recs := e.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider still holds %+v, want both records deleted", recs)
+	}
+}
+
+func TestManagerDNSStepOrderMatchesTheList(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	rs := e.start()
+	e.wait(rs)
+
+	// Event 1 is the Account step ending; every later step announces itself running, in turn.
+	_, events, cancel, err := e.hub.Subscribe(context.Background(), rs.JobID, 1)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer cancel()
+	var order []string
+	seen := map[string]bool{}
+	for ev := range events {
+		if ev.Type == jobs.EventItem && ev.Item.State == jobs.ItemRunning && !seen[ev.Item.ID] {
+			seen[ev.Item.ID] = true
+			order = append(order, ev.Item.ID)
+		}
+	}
+	want := specIDs(stepItemsDNS01)[1:] // the Account step is skipped, never running
+	if !slices.Equal(order, want) {
+		t.Errorf("steps became running in the order %v, want the list's %v", order, want)
 	}
 }
