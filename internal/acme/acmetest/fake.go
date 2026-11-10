@@ -91,6 +91,12 @@ type Options struct {
 	TermsOfService string
 	// NoRenewalInfo hides the renewalInfo endpoint, as a CA without ARI does.
 	NoRenewalInfo bool
+	// ChallengeType is the one challenge type every authorization offers: "http-01" (the default)
+	// or "dns-01".
+	ChallengeType string
+	// LookupTXT returns the TXT values found at fqdn, for dns-01 validation. Nil marks dns-01
+	// challenges valid without looking, as a nil Validate does for http-01.
+	LookupTXT func(fqdn string) []string
 }
 
 // OrderSeen is what the fake was asked for in one accepted newOrder request.
@@ -1099,3 +1105,6 @@ func (f *Fake) ValidationHits(token string) int {
 	defer f.mu.Unlock()
 	return f.hits[token]
 }
+
+// TXTLookups is the number of TXT lookups the fake made for fqdn.
+func (f *Fake) TXTLookups(fqdn string) int { return 0 }
