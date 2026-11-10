@@ -16,6 +16,7 @@ import { hasAnyEnvironmentPermission, hasPermission, type Me } from "@/hooks/use
 // permission and still opens Environments, to administer their own (D-07).
 export const SETTINGS_TABS = [
   { key: "general", to: "/settings/general", perm: "settings.read", scope: "global" },
+  { key: "https", to: "/settings/https", perm: "settings.read", scope: "global" },
   {
     key: "environments",
     to: "/settings/environments",

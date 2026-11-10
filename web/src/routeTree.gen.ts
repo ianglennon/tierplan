@@ -31,6 +31,7 @@ import { Route as AppSettingsAccessRouteImport } from './routes/_app/settings/ac
 import { Route as AppSettingsBackupRouteImport } from './routes/_app/settings/backup'
 import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/settings/environments'
 import { Route as AppSettingsGeneralRouteImport } from './routes/_app/settings/general'
+import { Route as AppSettingsHttpsRouteImport } from './routes/_app/settings/https'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
 import { Route as AppEnvEnvIdAddressSpaceRouteImport } from './routes/_app/env/$envId/address-space'
 import { Route as AppEnvEnvIdConfigsRouteImport } from './routes/_app/env/$envId/configs'
@@ -228,6 +229,11 @@ const AppSettingsEnvironmentsRoute = AppSettingsEnvironmentsRouteImport.update({
 const AppSettingsGeneralRoute = AppSettingsGeneralRouteImport.update({
   id: '/general',
   path: '/general',
+  getParentRoute: () => AppSettingsRoute,
+} as any)
+const AppSettingsHttpsRoute = AppSettingsHttpsRouteImport.update({
+  id: '/https',
+  path: '/https',
   getParentRoute: () => AppSettingsRoute,
 } as any)
 const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
@@ -766,6 +772,7 @@ export interface FileRoutesByFullPath {
   '/settings/backup': typeof AppSettingsBackupRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
+  '/settings/https': typeof AppSettingsHttpsRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
@@ -875,6 +882,7 @@ export interface FileRoutesByTo {
   '/settings/backup': typeof AppSettingsBackupRoute
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
+  '/settings/https': typeof AppSettingsHttpsRoute
   '/settings': typeof AppSettingsIndexRoute
   '/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
@@ -978,6 +986,7 @@ export interface FileRoutesById {
   '/_app/settings/backup': typeof AppSettingsBackupRoute
   '/_app/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/_app/settings/general': typeof AppSettingsGeneralRoute
+  '/_app/settings/https': typeof AppSettingsHttpsRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/_app/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
@@ -1092,6 +1101,7 @@ export interface FileRouteTypes {
     | '/settings/backup'
     | '/settings/environments'
     | '/settings/general'
+    | '/settings/https'
     | '/settings/'
     | '/env/$envId/address-space'
     | '/env/$envId/configs'
@@ -1201,6 +1211,7 @@ export interface FileRouteTypes {
     | '/settings/backup'
     | '/settings/environments'
     | '/settings/general'
+    | '/settings/https'
     | '/settings'
     | '/env/$envId/address-space'
     | '/env/$envId/configs'
@@ -1303,6 +1314,7 @@ export interface FileRouteTypes {
     | '/_app/settings/backup'
     | '/_app/settings/environments'
     | '/_app/settings/general'
+    | '/_app/settings/https'
     | '/_app/settings/'
     | '/_app/env/$envId/address-space'
     | '/_app/env/$envId/configs'
@@ -1561,6 +1573,13 @@ declare module '@tanstack/react-router' {
       path: '/general'
       fullPath: '/settings/general'
       preLoaderRoute: typeof AppSettingsGeneralRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
+    '/_app/settings/https': {
+      id: '/_app/settings/https'
+      path: '/https'
+      fullPath: '/settings/https'
+      preLoaderRoute: typeof AppSettingsHttpsRouteImport
       parentRoute: typeof AppSettingsRoute
     }
     '/_app/env/$envId/': {
@@ -2235,6 +2254,7 @@ interface AppSettingsRouteChildren {
   AppSettingsBackupRoute: typeof AppSettingsBackupRoute
   AppSettingsEnvironmentsRoute: typeof AppSettingsEnvironmentsRoute
   AppSettingsGeneralRoute: typeof AppSettingsGeneralRoute
+  AppSettingsHttpsRoute: typeof AppSettingsHttpsRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
   AppSettingsEnvironmentsEnvIdRoute: typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
 }
@@ -2245,6 +2265,7 @@ const AppSettingsRouteChildren: AppSettingsRouteChildren = {
   AppSettingsBackupRoute: AppSettingsBackupRoute,
   AppSettingsEnvironmentsRoute: AppSettingsEnvironmentsRoute,
   AppSettingsGeneralRoute: AppSettingsGeneralRoute,
+  AppSettingsHttpsRoute: AppSettingsHttpsRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppSettingsEnvironmentsEnvIdRoute:
     AppSettingsEnvironmentsEnvIdRouteWithChildren,
