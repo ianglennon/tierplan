@@ -204,11 +204,11 @@ async function openGeneral() {
 }
 
 describe("Settings tabs", () => {
-  it("shows General, Environments and About in that order, with General selected", async () => {
+  it("shows General, HTTPS, Environments and About in that order, with General selected", async () => {
     renderAt("/settings/general");
     await screen.findByRole("tab", { name: "About" });
     const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
-    expect(tabs).toEqual(["General", "Environments", "About"]);
+    expect(tabs).toEqual(["General", "HTTPS", "Environments", "About"]);
     expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "About" }).getAttribute("href")).toBe("/settings/about");
   });
@@ -217,7 +217,11 @@ describe("Settings tabs", () => {
     me = READER;
     renderAt("/settings/general");
     await screen.findByRole("tab", { name: "About" });
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["General", "About"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "General",
+      "HTTPS",
+      "About",
+    ]);
     cleanup();
     queryClient.clear();
 
