@@ -352,6 +352,16 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 	if _, err := tx.ExecContext(ctx, "DELETE FROM settings WHERE key = ?", "key_backup_ack"); err != nil {
 		return fmt.Errorf("clear the key backup acknowledgement: %w", err)
 	}
+	// TierPlan's own restore pauses Let's Encrypt, so a clone cannot use the original's account limits
+	// by renewing the same names before anyone has looked. An instance with no account has none to
+	// protect, so it is not paused: the page would otherwise show a pause nobody needs. The marker is
+	// written here, in the restore's own transaction, so there is no restored database without it.
+	now := o.Now()
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE acme_state SET paused_reason = 'restore', updated_at = ? WHERE id = 1 AND EXISTS (SELECT 1 FROM acme_account)",
+		now.UnixNano()); err != nil {
+		return fmt.Errorf("pause automatic ACME after the restore: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("prepare the staged database: %w", err)
 	}
