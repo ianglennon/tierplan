@@ -685,8 +685,12 @@ func (s *jobSteps) Skipped(step, message string) {
 }
 
 // Failed ends the step as failed with the error's class and every step that was not reached as
-// skipped.
+// skipped. A cancelled run reports nothing: the hub ends its unfinished steps as cancelled.
 func (s *jobSteps) Failed(step string, err error) {
+	if errors.Is(err, context.Canceled) {
+		// The run was cancelled, not defeated: the hub ends the unfinished steps as cancelled.
+		return
+	}
 	class := Classify(err, s.in).Class
 	if step == StepStored {
 		s.hold(jobs.ItemFailed, class)
