@@ -61,7 +61,7 @@ Other rules:
 - **Assert that something did not happen only after a later event.** To show an event was ignored, send a second event that must be processed after the first, wait for that, and then assert the first had no effect. Do not sleep and hope the event would have arrived by then.
 - **Use generous failure deadlines.** `testsupport.Deadline` is 30 seconds. A deadline only decides how long a broken test takes to fail, so a long one costs nothing when the test passes and a short one is a flake on a loaded runner.
 - **Every top-level test in `internal/api` runs in parallel.** The `paralleltest` linter fails a test there that does not call `t.Parallel()`. Where a fixture shares state (a fixed port, a package variable, one store), remove the sharing instead of leaving the test serial.
-- **Test helpers stay out of shipped code.** `proto/testsupport` may be imported by `_test.go` files and by the test helper packages (`internal/dockerx/dockertest`, `internal/tunnel/tunneltest`, `internal/server/servertest`, `internal/store/storetest`), nowhere else. `make lint` fails an import from product code.
+- **Test helpers stay out of shipped code.** `proto/testsupport` may be imported by `_test.go` files and by the test helper packages (`internal/acme/acmetest`, `internal/dockerx/dockertest`, `internal/tunnel/tunneltest`, `internal/server/servertest`, `internal/store/storetest`), nowhere else. `make lint` fails an import from product code.
 
 ### The wall-clock gate
 
