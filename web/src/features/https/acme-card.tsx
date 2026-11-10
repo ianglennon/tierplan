@@ -10,8 +10,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { AccountSection } from "@/features/https/account-section";
-import { accountMode, deriveCardState } from "@/features/https/card-state";
+import { accountMode, advancedMode, deriveCardState } from "@/features/https/card-state";
 import { NamesSection } from "@/features/https/names-section";
+import { ProfileSection } from "@/features/https/profile-section";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -53,6 +54,9 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
   const paused = acme.pausedReason !== "";
   const accountView = accountMode(state, canWrite);
   const mode = accountView === "form" && paused ? "form-disabled" : accountView;
+  const advanced = advancedMode(state, canWrite);
+  // The directory is read from the CA, which the server refuses while paused or with certificate files.
+  const listable = acme.pausedReason === "" && !status.certFiles;
   const host = acme.publicHost === "" ? t("https.acme.publicHostFallback") : acme.publicHost;
   const flag = <code className="font-mono text-xs">{`-p 80:${acme.listenPort}`}</code>;
 
@@ -80,7 +84,13 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
       <Separator />
       <AccountSection account={acme.account} mode={mode} />
 
-      {/* Slot, plan 22: the Advanced profile section (advancedMode). */}
+      {advanced === "hidden" ? null : (
+        <>
+          <Separator />
+          <ProfileSection acme={acme} mode={advanced} listable={listable} />
+        </>
+      )}
+
       {/* Slot, plan 16: the issue section, blocked list and run panel. */}
       {/* Slot, plan 18: the state alerts and the stop row. */}
 

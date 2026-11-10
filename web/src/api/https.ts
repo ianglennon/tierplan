@@ -81,3 +81,37 @@ export function useRegisterACMEAccount() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
   });
 }
+
+// ACMEProfileError is a profile save the server refused. type is the problem type
+// ("acme_profile_unknown", "acme_run_active", ...), when it sent one.
+export class ACMEProfileError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+
+  constructor(status: number, type?: string) {
+    super(`PUT /api/https/acme/profile failed with ${status}`);
+    this.name = "ACMEProfileError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// useSaveACMEProfile saves the certificate profile later orders ask for ("" is the CA's default)
+// and reads the status again, so the saved value is the one the section compares with. The
+// mutation stays pending until that read is done.
+export function useSaveACMEProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (profile: string): Promise<string> => {
+      const { data, error, response } = await api.PUT("/api/https/acme/profile", {
+        body: { profile },
+      });
+      if (!data) {
+        const problem = readProblem(error, response);
+        throw new ACMEProfileError(response.status, problem.type);
+      }
+      return data.profile;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+  });
+}

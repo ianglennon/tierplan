@@ -62,6 +62,18 @@
       "noContact": "No contact email.",
       "keyNote": "TierPlan keeps the account key encrypted and never shows it."
     },
+    "profile": {
+      "advanced": "Advanced",
+      "label": "Certificate profile",
+      "caDefault": "CA default",
+      "notOffered": "{{name}} (not offered now)",
+      "helper": "The default is right for most installs. A profile sets how long certificates last and what they are for. It applies from the next order and doesn't change the certificate in use.",
+      "none": "This directory offers no profiles. The CA default is used.",
+      "unreadable": "Let's Encrypt's list of profiles couldn't be read. You can still save the profile shown.",
+      "save": "Save profile",
+      "saving": "Saving...",
+      "done": "Profile saved."
+    },
     "error": {
       "rate_limited": {
         "headline": "Let's Encrypt is limiting requests.",

@@ -407,13 +407,18 @@ describe("Without settings.write", () => {
     expect(sent.some((s) => s.path === "/api/https/acme/directory")).toBe(false);
   });
 
-  it("shows the registered summary read-only with no button", async () => {
+  it("shows the registered summary read-only with no action button", async () => {
     me = viewer;
     status = () => Response.json(withACME({ account: accountOf() }));
     renderCard();
     await card().findByText("Registered");
     await card().findByText("You can view these settings but not change them.");
-    expect(card().queryByRole("button")).toBeNull();
+    // The Advanced disclosure only opens a section; no button acts on anything.
+    expect(
+      card()
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Advanced"]);
   });
 
   it("does not show the read-only line to an admin", async () => {
