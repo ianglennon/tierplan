@@ -31,6 +31,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/auth"
 	"github.com/ianglennon/tierplan/internal/buildinfo"
 	"github.com/ianglennon/tierplan/internal/config"
@@ -78,6 +79,10 @@ type Options struct {
 	// ACMEClock moves the clock the Let's Encrypt manager, its scheduler and its client judge time by
 	// (server.WithACMEClock). Nil keeps real time. It is kept across Restart.
 	ACMEClock stackops.Clock
+	// ACMEDNS replaces the DNS-01 dependencies of the Let's Encrypt manager: the DNS provider factories
+	// and the lookups of the propagation check (server.WithACMEDNS). Nil keeps the production ones. It
+	// is kept across Restart.
+	ACMEDNS *acme.DNSDeps
 }
 
 // Server is a running TierPlan with an admin signed in.
@@ -136,6 +141,9 @@ func Start(t testing.TB, o Options) *Server {
 	}
 	if o.ACMEClock != nil {
 		s.opts = append(s.opts, server.WithACMEClock(o.ACMEClock))
+	}
+	if o.ACMEDNS != nil {
+		s.opts = append(s.opts, server.WithACMEDNS(*o.ACMEDNS))
 	}
 	if !o.JanitorSchedule {
 		s.opts = append(s.opts, server.WithoutJanitorScheduler())

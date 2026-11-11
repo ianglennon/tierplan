@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { Check, Circle, CircleX, Minus } from "lucide-react";
+import { Check, Circle, CircleX, Minus, TriangleAlert } from "lucide-react";
+
+import type { ReactNode } from "react";
 
 import { RelativeTime } from "@/components/relative-time";
 import { Spinner } from "@/components/ui/spinner";
 import { formatDate } from "@/features/https/copy";
 import {
-  ACME_STEPS,
   type ACMERun,
   type ACMERunStreamState,
   type ACMEStep,
   type ACMEStepState,
+  stepsFor,
 } from "@/features/https/https-run-stream";
-import { Sentence, SLOT } from "@/features/https/sentence";
+import { rich, Sentence, SLOT } from "@/features/https/sentence";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -43,8 +45,20 @@ function headerKey(run: ACMERun): string {
   }
 }
 
-function StepIcon({ state }: { state: ACMEStepState }) {
+// What a row shows: the step's own state, or "leftOver" for a Clean-up that is done but could not delete
+// every record it wrote (UI-SPEC "Run panel - DNS-01 steps"). The run itself is unchanged by it.
+type RowState = ACMEStepState | "leftOver";
+
+// A Clean-up step the server ended done with the class left_over.
+const isLeftOver = (step: ACMEStep | undefined): boolean =>
+  step?.id === "cleanup" && step.state === "done" && step.code === "left_over";
+
+function StepIcon({ state }: { state: RowState }) {
   switch (state) {
+    case "leftOver":
+      return (
+        <TriangleAlert aria-hidden="true" className="size-4 shrink-0 text-status-warning-text" />
+      );
     case "running":
       return <Spinner aria-hidden="true" role="presentation" className="size-4 shrink-0" />;
     case "done":
@@ -59,8 +73,49 @@ function StepIcon({ state }: { state: ACMEStepState }) {
   }
 }
 
-// RunPanel is the live view of a certificate run (D-09): the six steps with where each stands, fed by
-// the run's stream. It is drawn for a run that is going and, once finished, stays until the next run
+// stepHint is the sentence under a step: what it is doing while it runs, and for Clean-up what it could
+// not do once it is done. The values of a DNS-01 step (the record, the name it was delegated to, the
+// resolvers) are the server's and are drawn as mono text that breaks anywhere.
+function stepHint(
+  t: ReturnType<typeof useT>,
+  id: string,
+  step: ACMEStep | undefined,
+  state: RowState,
+  dns: boolean,
+  values: { names: string; host: string },
+): ReactNode {
+  if (state === "leftOver") {
+    return t("https.run.hint.cleanupLeftOver", { count: step?.leftOver ?? 1 });
+  }
+  if (state === "skipped" && id === "account") return t("https.run.hint.accountSkipped");
+  if (state !== "running") return "";
+  if (dns) {
+    const record = step?.record ?? "";
+    switch (id) {
+      case "challenge":
+        return step?.target
+          ? rich(t, "https.run.hint.challengeDns01Delegated", {
+              record,
+              host: step.host ?? values.host,
+              target: step.target,
+            })
+          : rich(t, "https.run.hint.challengeDns01", { record });
+      case "propagation":
+        return rich(t, "https.run.hint.propagation", {
+          record,
+          resolvers: step?.resolvers?.length
+            ? step.resolvers.join(", ")
+            : t("https.error.resolversDefault"),
+        });
+      case "cleanup":
+        return t("https.run.hint.cleanup");
+    }
+  }
+  return t(`https.run.hint.${id}`, values);
+}
+
+// RunPanel is the live view of a certificate run (D-09): the six steps of an HTTP-01 run, or the eight
+// of a DNS-01 run (chosen from the run's challenge), with where each stands, fed by the run's stream. It is drawn for a run that is going and, once finished, stays until the next run
 // starts. Step labels are the SPA's own words; nothing from the CA reaches it. Only the header is
 // announced; the step list is not, so a screen reader is not read six updates a second.
 export function RunPanel({ stream, names, host, validUntil }: RunPanelProps) {
@@ -71,6 +126,7 @@ export function RunPanel({ stream, names, host, validUntil }: RunPanelProps) {
   const byId = new Map<string, ACMEStep>((run.items ?? []).map((s) => [s.id, s]));
   const running = run.state === "running";
   const reconnecting = running && stream.status === "reconnecting";
+  const dns = run.challenge === "dns-01";
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border p-4" data-run-state={run.state}>
@@ -99,20 +155,17 @@ export function RunPanel({ stream, names, host, validUntil }: RunPanelProps) {
         </p>
       </div>
       <ol aria-live="off" aria-label={t("https.run.steps")} className="flex flex-col gap-2">
-        {ACME_STEPS.map((id) => {
+        {stepsFor(run.challenge).map((id) => {
           const step = byId.get(id);
-          const state: ACMEStepState = step?.state ?? "waiting";
-          const hint =
-            state === "running"
-              ? t(`https.run.hint.${id}`, { names, host })
-              : id === "account" && state === "skipped"
-                ? t("https.run.hint.accountSkipped")
-                : "";
+          const stepState: ACMEStepState = step?.state ?? "waiting";
+          const state: RowState = isLeftOver(step) ? "leftOver" : stepState;
+          const hint = stepHint(t, id, step, state, dns, { names, host });
           return (
             <li
               key={id}
               data-step={id}
-              data-state={state}
+              data-state={stepState}
+              data-left-over={state === "leftOver" ? "true" : undefined}
               className={cn(
                 "flex items-start gap-2 text-sm",
                 state === "waiting" && "text-muted-foreground",

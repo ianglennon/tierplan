@@ -43,8 +43,15 @@ const (
 // PebbleOptions configure StartPebble.
 type PebbleOptions struct {
 	// HTTPPort is the port Pebble connects to for an HTTP-01 check (its config's httpPort), such as the
-	// port of a Relay. Required.
+	// port of a Relay. Required unless DNSServer is set.
 	HTTPPort int
+	// DNSServer is the "host:port" Pebble resolves challenges through (its -dnsserver flag), such as
+	// ChallTestSrv.InNetworkDNS(). Empty keeps the container's own resolver. A DNS-01 check asks only
+	// this server.
+	DNSServer string
+	// Network is the Docker network the container joins, so it can reach DNSServer by name. Nil keeps
+	// the default network.
+	Network *testcontainers.DockerNetwork
 	// Hosts are names the container resolves to the host running the test (the engine's
 	// host-gateway), such as "tierplan.test": the names the certificate is ordered for.
 	Hosts []string
@@ -67,8 +74,12 @@ type Pebble struct {
 // fixed expiry date, which would make the suite fail on a date, and nothing here skips verification.
 func StartPebble(t testing.TB, o PebbleOptions) *Pebble {
 	t.Helper()
-	if o.HTTPPort <= 0 {
+	if o.HTTPPort <= 0 && o.DNSServer == "" {
 		t.Fatal("acmetest: StartPebble needs the HTTP-01 port")
+	}
+	if o.HTTPPort <= 0 {
+		// A DNS-01 run never connects to it; this is Pebble's own default.
+		o.HTTPPort = 5002
 	}
 	dir := t.TempDir()
 	caCert, caPEM, certPEM, keyPEM := generatePebbleTLS(t)
@@ -105,12 +116,22 @@ func StartPebble(t testing.TB, o PebbleOptions) *Pebble {
 		extraHosts = append(extraHosts, h+":host-gateway")
 	}
 
+	cmd := []string{"-config", "/cfg/pebble-config.json"}
+	if o.DNSServer != "" {
+		cmd = append(cmd, "-dnsserver", o.DNSServer)
+	}
+	var networks []string
+	if o.Network != nil {
+		networks = []string{o.Network.Name}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), pebbleStartup)
 	defer cancel()
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: PebbleImage,
-			Cmd:   []string{"-config", "/cfg/pebble-config.json"},
+			Image:    PebbleImage,
+			Cmd:      cmd,
+			Networks: networks,
 			Env: map[string]string{
 				"PEBBLE_VA_NOSLEEP":      "1",
 				"PEBBLE_WFE_NONCEREJECT": "0",

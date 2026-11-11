@@ -54,6 +54,13 @@ type Status struct {
 	Block     *BlockView
 	ActiveRun *RunView
 	LastRun   *RunView
+	// DNS is the DNS-01 settings and the left-over TXT records. It never carries the token.
+	DNS DNSView
+	// ValidationUntested is true when the saved challenge type has not been proved by a run yet; it is
+	// false while a run is active.
+	ValidationUntested bool
+	// SuggestDNS01 is set when HTTP-01 is saved and the public host resolves to a private address.
+	SuggestDNS01 *Suggestion
 }
 
 // AccountView is the registered account, without its key.
@@ -75,7 +82,11 @@ type CertView struct {
 // Details disclosure.
 type ErrorView struct {
 	Class, Host, Profile, TermsURL, Detail string
-	At                                     time.Time
+	// Zone, Target and Resolvers are what a DNS failure was about: the zone, the delegation target and
+	// the resolvers asked.
+	Zone, Target string
+	Resolvers    []string
+	At           time.Time
 }
 
 // BlockView says until when a manual attempt is refused, and why (BlockToldToWait, BlockFailureGuard).
@@ -87,7 +98,9 @@ type BlockView struct {
 // RunView is one run.
 type RunView struct {
 	JobID, Kind, Trigger, Outcome string
-	StartedAt, FinishedAt         time.Time
+	// Challenge is the challenge type the run used.
+	Challenge             string
+	StartedAt, FinishedAt time.Time
 }
 
 // Status reads the page's state. It makes no request to the CA.
@@ -101,7 +114,8 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 	m.mu.Lock()
 	if ar := m.active; ar != nil {
 		active = &RunView{
-			JobID: ar.jobID, Kind: ar.kind, Trigger: ar.trigger, Outcome: OutcomeRunning, StartedAt: ar.startedAt,
+			JobID: ar.jobID, Kind: ar.kind, Trigger: ar.trigger, Outcome: OutcomeRunning, Challenge: ar.challenge,
+			StartedAt: ar.startedAt,
 		}
 	}
 	m.mu.Unlock()
@@ -177,7 +191,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		d := decodeError(st.LastErrorDetail)
 		out.LastError = &ErrorView{
 			Class: st.LastErrorClass, Host: d.Host, Profile: d.Profile, TermsURL: d.TermsURL,
-			Detail: d.Detail, At: st.LastErrorAt,
+			Detail: d.Detail, Zone: d.Zone, Target: d.Target, Resolvers: slices.Clone(d.Resolvers), At: st.LastErrorAt,
 		}
 	}
 
@@ -195,11 +209,22 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		}
 		if out.LastRun == nil {
 			out.LastRun = &RunView{
-				JobID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome,
+				JobID: r.ID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome, Challenge: r.ChallengeType,
 				StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 			}
 		}
 	}
 	out.ActiveRun = active
+	out.ValidationUntested = st.ValidationUntested && active == nil
+	out.SuggestDNS01 = m.suggestDNS01(ctx, st, canonicalHost(hostOf(m.publicURL())), dir.Overridden)
+
+	// Left-over records are paused for the same reasons as the scheduler: certificate files, or a restore.
+	paused := st.PausedReason
+	if m.d.CertFiles {
+		paused = PausedCertFiles
+	}
+	if out.DNS, err = m.dnsView(ctx, st, paused); err != nil {
+		return Status{}, err
+	}
 	return out, nil
 }

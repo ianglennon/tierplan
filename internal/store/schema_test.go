@@ -276,3 +276,95 @@ func assertACMETablesWork(t *testing.T, s *store.Store) {
 		t.Error("an order status other than open and closed was accepted")
 	}
 }
+
+// upTo40 is the embedded migrations as far as 00040, which is what a build before the review fix that
+// keeps the zone name in the DNS record ledger knew.
+func upTo40(t *testing.T) fstest.MapFS {
+	t.Helper()
+	m := fstest.MapFS{}
+	for _, f := range []string{
+		"00036_baseline.sql", "00037_tls_certs.sql", "00038_acme.sql", "00039_acme_issuing_account.sql", "00040_acme_dns.sql",
+	} {
+		data, err := os.ReadFile("migrations/" + f) //nolint:gosec // a test reads the embedded migration files by their fixed names
+		if err != nil {
+			t.Fatal(err)
+		}
+		m[f] = &fstest.MapFile{Data: data}
+	}
+	return m
+}
+
+// A DNS ledger row written before 00041 keeps working: its zone name reads ”, and a row written after
+// carries one.
+func TestACMEDNSRecordsGainAZoneNameOnA00040Database(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.1.0", DataDir: dir, Migrations: upTo40(t)}); err != nil {
+		t.Fatal(err)
+	}
+	const ins = `INSERT INTO acme_dns_records (id, provider, zone_id, record_id, name, value, owner_kind, owner_id, created_at)
+		VALUES (?, 'cloudflare', 'zone-1', 'rec-1', '_acme-challenge.a.example.org', 'v', 'order', 'order-1', 1)`
+	if _, err := s.Write.ExecContext(ctx, ins, "old-row"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.2.0", DataDir: dir})
+	if err != nil {
+		t.Fatalf("migrate from 00040: %v", err)
+	}
+	if res.From != 40 || res.To < 41 {
+		t.Errorf("From, To = %d, %d; want 40 and at least 41", res.From, res.To)
+	}
+	var name string
+	if err := s.Read.QueryRowContext(ctx, `SELECT zone_name FROM acme_dns_records WHERE id = 'old-row'`).Scan(&name); err != nil || name != "" {
+		t.Errorf("zone_name of the old row = %q, %v; want ''", name, err)
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, record_id, name, value, owner_kind, owner_id, created_at)
+		VALUES ('new-row', 'cloudflare', 'zone-1', 'example.org', 'rec-2', '_acme-challenge.b.example.org', 'v', 'order', 'order-1', 2)`); err != nil {
+		t.Fatalf("a row with a zone name: %v", err)
+	}
+}
+
+// upTo41 is the embedded migrations as far as 00041.
+func upTo41(t *testing.T) fstest.MapFS {
+	t.Helper()
+	m := upTo40(t)
+	data, err := os.ReadFile("migrations/00041_acme_dns_zone_name.sql") //nolint:gosec // a test reads the embedded migration files by their fixed names
+	if err != nil {
+		t.Fatal(err)
+	}
+	m["00041_acme_dns_zone_name.sql"] = &fstest.MapFile{Data: data}
+	return m
+}
+
+// A DNS ledger row written before 00042 keeps its zone name and reads an empty account ID; a row
+// written after carries one.
+func TestACMEDNSRecordsGainAnAccountIDOnA00041Database(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if _, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.1.0", DataDir: dir, Migrations: upTo41(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, record_id, name, value, owner_kind, owner_id, created_at)
+		VALUES ('old-row', 'cloudflare', 'zone-1', 'example.org', 'rec-1', '_acme-challenge.a.example.org', 'v', 'order', 'order-1', 1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{AppVersion: "v0.2.0", DataDir: dir})
+	if err != nil {
+		t.Fatalf("migrate from 00041: %v", err)
+	}
+	if res.From != 41 || res.To < 42 {
+		t.Errorf("From, To = %d, %d; want 41 and at least 42", res.From, res.To)
+	}
+	var zone, account string
+	if err := s.Read.QueryRowContext(ctx, `SELECT zone_name, account_id FROM acme_dns_records WHERE id = 'old-row'`).Scan(&zone, &account); err != nil || zone != "example.org" || account != "" {
+		t.Errorf("old row = zone %q, account %q, %v; want its zone name kept and an empty account ID", zone, account, err)
+	}
+	if _, err := s.Write.ExecContext(ctx, `INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, account_id, record_id, name, value, owner_kind, owner_id, created_at)
+		VALUES ('new-row', 'cloudflare', 'zone-1', 'example.org', 'acct-1', 'rec-2', '_acme-challenge.b.example.org', 'v', 'order', 'order-1', 2)`); err != nil {
+		t.Fatalf("a row with an account ID: %v", err)
+	}
+}

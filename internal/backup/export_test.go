@@ -257,6 +257,10 @@ func (f *exportFixture) seedExcluded(t *testing.T) {
 	// An open ACME order is the in-flight work of this instance: a restore must not resurrect it (Phase 14).
 	f.exec(t, `INSERT INTO acme_orders (id, directory_url, order_url, kind, names, cert_key_sealed, stage, created_at, updated_at)
 		VALUES ('order-1', 'https://acme.example/directory', 'https://acme.example/order/1', 'issue', '["a.example.org"]', 'v1.k1-x.sealed', 'created', 1, 1)`)
+	// The DNS-01 record ledger names the provider's records by this instance's IDs: a restored clone
+	// must never delete records by them (Phase 15).
+	f.exec(t, `INSERT INTO acme_dns_records (id, provider, zone_id, record_id, name, value, owner_kind, owner_id, created_at)
+		VALUES ('rec-1', 'cloudflare', 'zone-1', 'cf-rec-1', '_acme-challenge.a.example.org', 'v', 'order', 'order-1', 1)`)
 }
 
 func (f *exportFixture) liveCount(t *testing.T, table string) int {

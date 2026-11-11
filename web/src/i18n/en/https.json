@@ -36,11 +36,35 @@
       "title": "Let's Encrypt",
       "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",
       "method": {
-        "label": "Validation method",
-        "value": "HTTP-01"
+        "label": "Validation method"
       },
       "portNote": "Let's Encrypt checks your domain over plain HTTP on port 80. Port 80 on {{host}} must reach TierPlan, for example by starting the container with {{flag}}. TierPlan answers the check on its usual port, so there is nothing else to run.",
       "publicHostFallback": "the public host"
+    },
+    "validation": {
+      "http01": {
+        "label": "HTTP-01",
+        "description": "Let's Encrypt checks over plain HTTP on port 80. Port 80 on your public host must reach TierPlan."
+      },
+      "dns01": {
+        "label": "DNS-01",
+        "description": "TierPlan adds a TXT record at your DNS provider. No port needs opening, so it works for an install the internet can't reach."
+      },
+      "suggest": {
+        "title": "DNS-01 may suit this install better",
+        "body": "{{host}} points at a private address ({{address}}) as this server sees it. Let's Encrypt usually can't reach a private address, so HTTP-01 is likely to fail. DNS-01 doesn't need Let's Encrypt to reach TierPlan.",
+        "action": "Use DNS-01"
+      },
+      "helper": "A change applies from the next order. The certificate in use stays as it is.",
+      "save": "Save validation settings",
+      "testing": "Testing token...",
+      "saving": "Saving...",
+      "done": "Validation settings saved.",
+      "changed": {
+        "title": "Validation method changed",
+        "renew": "The certificate in use hasn't changed. TierPlan uses {{method}} from the next order. Renew now to test it.",
+        "issue": "No certificate has been ordered with {{method}} yet. Issue certificate to test it."
+      }
     },
     "names": {
       "title": "Names on the certificate",
@@ -84,7 +108,128 @@
       "saving": "Saving...",
       "done": "Profile saved."
     },
+    "dns": {
+      "provider": {
+        "label": "DNS provider",
+        "cloudflare": "Cloudflare"
+      },
+      "setup": {
+        "permEdit": "Zone:DNS:Edit",
+        "permRead": "Zone:Zone:Read",
+        "link": "Cloudflare's API tokens page",
+        "intro": "Create a Cloudflare API token with two permissions: {{edit}} and {{read}}. Limit it to the zones your certificate names are in. TierPlan doesn't accept the Global API Key. Create it on {{link}}.",
+        "records": "For each check TierPlan adds a TXT record at _acme-challenge and deletes it afterwards. It only deletes records it created."
+      },
+      "token": {
+        "label": "Cloudflare API token",
+        "labelNew": "New Cloudflare API token",
+        "helper": "TierPlan keeps the token encrypted and never shows it again. To change it, enter a new one.",
+        "show": "Show token",
+        "hide": "Hide token",
+        "required": "Enter a Cloudflare API token.",
+        "saved": "Token saved",
+        "savedNote": "TierPlan keeps it encrypted and never shows it.",
+        "kept": "Kept for DNS-01. TierPlan keeps it encrypted and never shows it.",
+        "replace": "Replace token",
+        "keep": "Keep the saved token"
+      },
+      "remove": {
+        "action": "Remove token",
+        "unavailable": "To remove the token, switch to HTTP-01 and save first. Removing it now would stop renewals.",
+        "title": "Remove the Cloudflare token?",
+        "body": "TierPlan deletes the saved token. You'll need to enter a token again to use DNS-01. Certificates already issued are not affected.",
+        "leftOver_one": "TierPlan needs the token to delete the {{count}} TXT record it left in Cloudflare. Remove it now and it stays there until you delete it yourself.",
+        "leftOver_other": "TierPlan needs the token to delete the {{count}} TXT records it left in Cloudflare. Remove it now and they stay there until you delete them yourself.",
+        "cancel": "Keep token",
+        "confirm": "Remove token",
+        "pending": "Removing...",
+        "done": "Token removed."
+      },
+      "advanced": {
+        "label": "Advanced DNS"
+      },
+      "resolvers": {
+        "label": "DNS resolvers (optional)",
+        "placeholder": "192.168.1.1, 10.0.0.53:5353",
+        "helper": "Comma-separated, each as host or host:port. When set, TierPlan asks only these while it waits for a record to appear. Leave it empty to ask the zone's own nameservers, which is right for most installs.",
+        "delegation": "If {{name}} is a CNAME, TierPlan follows it and writes the record at the target. The target must be in a Cloudflare zone this token can edit. There is nothing to set.",
+        "error": "{{entry}} isn't a valid resolver. Use host or host:port, separated by commas.",
+        "errorList": "The resolver list isn't valid. Use host or host:port, separated by commas, with at most five."
+      },
+      "test": {
+        "action": "Test token",
+        "pending": "Testing token...",
+        "helper": "Test token checks the names above without placing an order. It adds a test TXT record at each name and deletes it again.",
+        "hint": "This can take a minute while TierPlan waits for the record to appear.",
+        "required": "Enter a Cloudflare API token to test."
+      },
+      "result": {
+        "passed": "Token test passed",
+        "failed": "Token test failed",
+        "notSaved": "Nothing was saved. The settings in use are unchanged.",
+        "stale": "This result is for earlier settings. Test again.",
+        "state": {
+          "done": "Done",
+          "failed": "Failed",
+          "skipped": "Skipped",
+          "waiting": "Not started",
+          "note": "Note"
+        },
+        "row": {
+          "delegated": "Delegated to {{target}}.",
+          "delegatedOwnZone": "{{zone}} is not on Cloudflare. Delegated to {{target}}.",
+          "zoneFound": "{{zone}} zone found.",
+          "zoneFailed": "Couldn't find the zone.",
+          "created": "TXT created at {{record}}",
+          "read": "Read back.",
+          "deleted": "Deleted.",
+          "deleteFailed": "Couldn't delete the test record.",
+          "deleteKept": "TierPlan keeps trying to delete it. See the left-over records below."
+        },
+        "info": {
+          "seen": "Seen by {{resolvers}} after {{seconds}} s.",
+          "notSeen": "Not seen by {{resolvers}} within {{seconds}} s.",
+          "notSeenHint": "The token works, so this didn't fail the test. An order waits for the record to appear and can time out. Check that this host can reach {{resolvers}} on port 53, or set resolvers under Advanced DNS.",
+          "notChecked": "Not checked."
+        }
+      }
+    },
     "error": {
+      "resolversDefault": "the zone's nameservers",
+      "dns_token_invalid": {
+        "headline": "Cloudflare didn't accept the API token.",
+        "fix": "The token is wrong, expired or revoked. Create a new token and enter it again under Validation method."
+      },
+      "dns_token_scope": {
+        "headline": "The Cloudflare token can't manage DNS records for {{host}}.",
+        "fix": "The token needs both Zone:DNS:Edit and Zone:Zone:Read, and it must include the zone for {{host}}. Fix it in Cloudflare, or enter a new token."
+      },
+      "dns_zone_not_found": {
+        "headline": "Cloudflare has no zone for {{host}}.",
+        "fix": "Add the zone to the Cloudflare account the token belongs to, and check that the token includes it. Or make _acme-challenge.{{host}} a CNAME to a record in a Cloudflare zone you can edit."
+      },
+      "dns_delegation_target": {
+        "headline": "_acme-challenge.{{host}} is delegated to {{target}}, which TierPlan can't edit.",
+        "fix": "The target must be in a Cloudflare zone this token can edit. Add that zone to the token, or change the CNAME."
+      },
+      "dns_not_visible": {
+        "headline": "The TXT record for {{host}} didn't appear on {{resolvers}}.",
+        "fix": "Check that this host can reach {{resolvers}} on port 53. If you set resolvers under Advanced DNS, they must answer for public records. Clear them to ask the zone's own nameservers."
+      },
+      "dns_rate_limited": {
+        "headline": "Cloudflare is limiting requests.",
+        "fix": "TierPlan waits until {{time}} before it tries again. There is nothing to do.",
+        "fixNoTime": "TierPlan waits before it tries again. There is nothing to do."
+      },
+      "dns_unavailable": {
+        "headline": "Cloudflare couldn't be reached.",
+        "fix": "TierPlan tries again on its own schedule, next at {{time}}. If it keeps failing, check this host's internet access.",
+        "fixNoTime": "TierPlan tries again on its own schedule. If it keeps failing, check this host's internet access."
+      },
+      "validation_txt": {
+        "headline": "Let's Encrypt didn't find the right TXT record for _acme-challenge.{{host}}.",
+        "fix": "TierPlan saw the record, but Let's Encrypt didn't. Check that the zone's nameservers at your registrar are Cloudflare's, and that nothing else at _acme-challenge.{{host}} gets in the way, such as a conflicting CNAME. Then try again."
+      },
       "rate_limited": {
         "headline": "Let's Encrypt is limiting requests.",
         "fix": "TierPlan waits until {{time}} before it tries again. There is nothing to do.",
@@ -145,6 +290,7 @@
       "renewing": "Renewing...",
       "noAccount": "Register a Let's Encrypt account first.",
       "runActive": "A run is already in progress.",
+      "validationUnsaved": "Save your validation settings first.",
       "paused": "Resume Let's Encrypt first.",
       "toldToWait": "Let's Encrypt asked TierPlan to wait. You can try again at {{time}}.",
       "failureGuard": "Three attempts failed in the last hour. TierPlan waits so it doesn't use up Let's Encrypt's limits. You can try again at {{time}}.",
@@ -198,18 +344,26 @@
         "account": "Account",
         "order": "Order",
         "challenge": "Challenge",
+        "propagation": "Propagation",
         "validate": "Validation",
         "finalize": "Finalize",
-        "stored": "Stored"
+        "stored": "Stored",
+        "cleanup": "Clean-up"
       },
       "hint": {
         "account": "Checking the Let's Encrypt account.",
         "order": "Asking for a certificate for {{names}}.",
         "challenge": "Serving the HTTP-01 token on port 80.",
+        "challengeDns01": "Adding the TXT record {{record}} at Cloudflare.",
+        "challengeDns01Delegated": "Adding the TXT record {{record}} at Cloudflare. _acme-challenge.{{host}} is delegated to {{target}}.",
+        "propagation": "Waiting for {{record}} to show on {{resolvers}}.",
         "validate": "Waiting for Let's Encrypt to check {{host}}.",
         "finalize": "Sending the certificate request.",
         "stored": "Saving the certificate and switching to it.",
-        "accountSkipped": "Account already registered."
+        "accountSkipped": "Account already registered.",
+        "cleanup": "Removing the TXT records TierPlan added.",
+        "cleanupLeftOver_one": "Couldn't remove {{count}} record. TierPlan keeps trying. See the left-over records above.",
+        "cleanupLeftOver_other": "Couldn't remove {{count}} records. TierPlan keeps trying. See the left-over records above."
       },
       "state": {
         "waiting": "Not started",
@@ -217,8 +371,20 @@
         "done": "Done",
         "failed": "Failed",
         "cancelled": "Stopped",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "leftOver": "Left over"
       }
+    },
+    "leftover": {
+      "title_one": "A TXT record is left in Cloudflare",
+      "title_other": "{{count}} TXT records are left in Cloudflare",
+      "intro": "TierPlan couldn't delete these records it created. It keeps trying and removes them as soon as it can. The order itself was not affected.",
+      "item": "TXT record left at {{name}} (id {{id}})",
+      "tried": "Last tried {{when}}.",
+      "next": "Next try {{time}}.",
+      "pausedRestore": "Retries are paused until you resume Let's Encrypt.",
+      "pausedCertFiles": "Retries are paused while TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set.",
+      "footer": "You can also delete a record yourself in the Cloudflare dashboard. TierPlan's records have a comment that starts with {{prefix}}."
     },
     "renewal": {
       "basis": {

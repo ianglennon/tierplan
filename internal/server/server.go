@@ -301,6 +301,7 @@ type buildOptions struct {
 	janitorClock    stackops.Clock
 	tlsRefreshClock stackops.Clock
 	acmeClock       stackops.Clock
+	acmeDNS         *acme.DNSDeps
 	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
@@ -346,6 +347,16 @@ func WithTLSRefreshClock(c stackops.Clock) Option {
 // build, which calls Build without it, always reads the real time. A nil clock keeps the wall clock.
 func WithACMEClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.acmeClock = c }
+}
+
+// WithACMEDNS replaces the DNS-01 dependencies of the Let's Encrypt manager: the DNS providers, the
+// querier of the propagation check and the lookups behind it. It exists for tests, which point the
+// provider at a fake and the nameservers at a local responder. It is a Go option only, like
+// WithACMEClock: no setting, flag or environment variable reaches it, so the bearer token of a DNS
+// provider cannot be redirected to another host. A production build calls Build without it and gets the
+// Cloudflare factory on its real base URL. A DNSDeps with nil Providers still gets that factory.
+func WithACMEDNS(d acme.DNSDeps) Option {
+	return func(o *buildOptions) { o.acmeDNS = &d }
 }
 
 // WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
@@ -934,7 +945,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Let's Encrypt: the manager swaps the live certificate through the installer and answers the
 	// HTTP-01 check from its token store on the existing listener (D-01, D-02). A bad directory
 	// setting stops start-up.
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock)
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()

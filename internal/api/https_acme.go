@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -29,6 +30,11 @@ const (
 	problemACMEProfileUnknown = "acme_profile_unknown"
 	problemACMERunActive      = "acme_run_active"
 	problemACMECAError        = "acme_ca_error"
+
+	problemACMEDNSTokenRequired = "acme_dns_token_required" //nolint:gosec // G101: a problem type name, not a credential
+	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
+	problemACMEDNSTokenInUse    = "acme_dns_token_in_use" //nolint:gosec // G101: a problem type name, not a credential
+	problemACMEChallengeUnknown = "acme_challenge_unknown"
 )
 
 // HTTPSACME is the Let's Encrypt manager as the HTTPS routes use it. *acme.Manager is the one
@@ -38,6 +44,9 @@ type HTTPSACME interface {
 	Register(ctx context.Context, email string, agreeTOS bool) (acme.Account, error)
 	Directory(ctx context.Context) (acme.DirectoryMeta, error)
 	SetProfile(ctx context.Context, profile string) error
+	SaveValidation(ctx context.Context, in acme.ValidationInput) (acme.SaveResult, error)
+	TestToken(ctx context.Context, req acme.TestRequest) (acme.TokenTest, error)
+	RemoveToken(ctx context.Context) error
 	Issue(ctx context.Context, actor string) (acme.RunStart, error)
 	RenewNow(ctx context.Context, actor string) (acme.RunStart, error)
 	Resume(ctx context.Context, actor string) error
@@ -90,12 +99,16 @@ type HTTPSACMEFallbackBody struct {
 
 // HTTPSACMEErrorBody is the last failure. Detail is the CA's own text, cleaned and cut to a fixed size.
 type HTTPSACMEErrorBody struct {
-	Code     string    `json:"code" enum:"rate_limited,validation_unreachable,validation_dns,caa_forbids,identifier_rejected,contact_invalid,tos_action_required,account_gone,profile_invalid,ca_unavailable,ca_untrusted,internal" doc:"The class of the failure"`
+	Code     string    `json:"code" enum:"rate_limited,validation_unreachable,validation_dns,caa_forbids,identifier_rejected,contact_invalid,tos_action_required,account_gone,profile_invalid,ca_unavailable,ca_untrusted,internal,dns_token_invalid,dns_token_scope,dns_zone_not_found,dns_delegation_target,dns_not_visible,dns_rate_limited,dns_unavailable,validation_txt" doc:"The class of the failure"`
 	At       time.Time `json:"at" doc:"When it happened"`
 	Host     string    `json:"host,omitempty" doc:"The host a validation failure is about"`
 	Profile  string    `json:"profile,omitempty" doc:"The profile the CA refused"`
 	TermsURL string    `json:"termsUrl,omitempty" doc:"Where to read the terms the CA wants accepted"`
 	Detail   string    `json:"detail,omitempty" doc:"The CA's problem document as text, for a Details disclosure. Untrusted text: show it as text only"`
+	// The facts a DNS failure is about.
+	Zone      string   `json:"zone,omitempty" doc:"The DNS zone a DNS failure is about"`
+	Target    string   `json:"target,omitempty" doc:"The name the challenge name is delegated to, when a DNS failure is about a delegated name"`
+	Resolvers []string `json:"resolvers,omitempty" doc:"The resolvers a propagation failure asked"`
 }
 
 // HTTPSACMEBlockBody says a manual attempt is refused for now.
@@ -110,6 +123,7 @@ type HTTPSACMERunBody struct {
 	Kind       string     `json:"kind" enum:"issue,renew" doc:"A first issue or a renewal"`
 	Trigger    string     `json:"trigger" enum:"admin,schedule,resume" doc:"What started it"`
 	Outcome    string     `json:"outcome" enum:"running,succeeded,failed,cancelled,reused" doc:"How it went"`
+	Challenge  string     `json:"challenge" enum:"http-01,dns-01" doc:"The challenge the run used to prove the names"`
 	StartedAt  time.Time  `json:"startedAt" doc:"When it started"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty" doc:"When it ended; left out while it runs"`
 }
@@ -139,6 +153,35 @@ type HTTPSACMEBody struct {
 	Blocked             *HTTPSACMEBlockBody       `json:"blocked,omitempty" doc:"Set while a manual attempt is refused"`
 	ActiveRun           *HTTPSACMERunBody         `json:"activeRun,omitempty" doc:"The run in progress"`
 	LastRun             *HTTPSACMERunBody         `json:"lastRun,omitempty" doc:"The run that ended last"`
+	ValidationUntested  bool                      `json:"validationUntested" doc:"True when the saved validation method has not been proved by a run yet; false while a run is in progress"`
+	SuggestDNS01        *HTTPSACMESuggestionBody  `json:"suggestDns01,omitempty" doc:"Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better"`
+	DNS                 HTTPSACMEDNSBody          `json:"dns" doc:"The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned"`
+}
+
+// HTTPSACMEDNSBody is the DNS-01 side of the status.
+type HTTPSACMEDNSBody struct {
+	Provider   string                  `json:"provider" doc:"The DNS provider id the saved token is for, for example cloudflare"`
+	TokenSaved bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved. The token is never returned"`
+	Resolvers  []string                `json:"resolvers" doc:"The resolvers the propagation check asks, as host:port; empty means the zone's own name servers"`
+	LeftOver   []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
+}
+
+// HTTPSACMESuggestionBody is the DNS-01 suggestion: the host and the private address it resolves to.
+type HTTPSACMESuggestionBody struct {
+	Host    string `json:"host" doc:"The public host"`
+	Address string `json:"address" doc:"The private address it resolves to, as this server sees it"`
+}
+
+// HTTPSACMELeftOverBody is one TXT record still at the DNS provider.
+type HTTPSACMELeftOverBody struct {
+	Name         string     `json:"name" doc:"The record name, for example _acme-challenge.example.com"`
+	RecordID     string     `json:"recordId" doc:"The DNS provider's ID for the record"`
+	Code         string     `json:"code,omitempty" doc:"The class of the last delete error, for example dns_unavailable"`
+	CreatedAt    time.Time  `json:"createdAt" doc:"When the record was created"`
+	LastTryAt    *time.Time `json:"lastTryAt,omitempty" doc:"When a delete was last tried; left out when none was"`
+	NextTryAt    *time.Time `json:"nextTryAt,omitempty" doc:"When the next delete is tried; left out while retries are paused"`
+	RetryPaused  bool       `json:"retryPaused" doc:"True while no delete is tried"`
+	PausedReason string     `json:"pausedReason" enum:",restore,cert_files" doc:"Why retries are paused: a backup was restored, or certificate files are set. Empty when they run"`
 }
 
 // acmeStatusBody maps the manager's status onto the contract.
@@ -191,7 +234,10 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 		b.Fallback = &HTTPSACMEFallbackBody{ExpiredAt: st.ExpiredAt.UTC()}
 	}
 	if e := st.LastError; e != nil {
-		b.LastError = &HTTPSACMEErrorBody{Code: e.Class, At: e.At.UTC(), Host: e.Host, Profile: e.Profile, TermsURL: e.TermsURL, Detail: e.Detail}
+		b.LastError = &HTTPSACMEErrorBody{
+			Code: e.Class, At: e.At.UTC(), Host: e.Host, Profile: e.Profile, TermsURL: e.TermsURL, Detail: e.Detail,
+			Zone: e.Zone, Target: e.Target, Resolvers: slices.Clone(e.Resolvers),
+		}
 	}
 	if !st.NextAttemptAt.IsZero() {
 		t := st.NextAttemptAt.UTC()
@@ -202,14 +248,49 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	}
 	b.ActiveRun = acmeRunBody(st.ActiveRun)
 	b.LastRun = acmeRunBody(st.LastRun)
+	b.DNS = HTTPSACMEDNSBody{
+		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
+		LeftOver: make([]HTTPSACMELeftOverBody, 0, len(st.DNS.LeftOver)),
+	}
+	for _, l := range st.DNS.LeftOver {
+		b.DNS.LeftOver = append(b.DNS.LeftOver, HTTPSACMELeftOverBody{
+			Name: l.Name, RecordID: l.RecordID, Code: l.Class, CreatedAt: l.CreatedAt.UTC(),
+			LastTryAt: utcOrNil(l.LastTryAt), NextTryAt: utcOrNil(l.NextTryAt),
+			RetryPaused: l.RetryPaused, PausedReason: l.PausedReason,
+		})
+	}
+	b.ValidationUntested = st.ValidationUntested
+	if sg := st.SuggestDNS01; sg != nil {
+		b.SuggestDNS01 = &HTTPSACMESuggestionBody{Host: sg.Host, Address: sg.Address}
+	}
 	return b
+}
+
+// challengeOrDefault is c, or HTTP-01 for a run recorded before the challenge was.
+func challengeOrDefault(c string) string {
+	if c == "" {
+		return acme.ChallengeHTTP01
+	}
+	return c
+}
+
+// utcOrNil is t in UTC, or nil for the zero time.
+func utcOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }
 
 func acmeRunBody(r *acme.RunView) *HTTPSACMERunBody {
 	if r == nil {
 		return nil
 	}
-	b := &HTTPSACMERunBody{JobID: r.JobID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome, StartedAt: r.StartedAt.UTC()}
+	b := &HTTPSACMERunBody{
+		JobID: r.JobID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome, Challenge: challengeOrDefault(r.Challenge),
+		StartedAt: r.StartedAt.UTC(),
+	}
 	if !r.FinishedAt.IsZero() {
 		t := r.FinishedAt.UTC()
 		b.FinishedAt = &t
@@ -369,9 +450,15 @@ func acmeInternal(log *slog.Logger, what string, err error) error {
 
 // fieldProblem is a 422 whose type is the stable code and whose first error names the field.
 func fieldProblem(code, location, detail string) error {
+	return fieldValueProblem(code, location, detail, nil)
+}
+
+// fieldValueProblem is fieldProblem whose first error also carries the value that is wrong. Never pass
+// a secret as the value.
+func fieldValueProblem(code, location, detail string, value any) error {
 	return &huma.ErrorModel{
 		Type: code, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity, Detail: detail,
-		Errors: []*huma.ErrorDetail{{Location: location, Message: code}},
+		Errors: []*huma.ErrorDetail{{Location: location, Message: code, Value: value}},
 	}
 }
 
@@ -382,6 +469,7 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 	if p := runProblem(err); p != nil {
 		return p
 	}
+	var resolverErr *dnscheck.ResolverError
 	switch {
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
@@ -397,6 +485,14 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 		return fieldProblem(problemACMEContactInvalid, "body.email", "Enter an email address such as you@example.com, or leave it empty.")
 	case errors.Is(err, acme.ErrProfileUnknown):
 		return fieldProblem(problemACMEProfileUnknown, "body.profile", "The certificate authority does not offer that profile.")
+	case errors.Is(err, acme.ErrDNSTokenRequired):
+		return fieldProblem(problemACMEDNSTokenRequired, "body.token", "Enter a DNS API token. DNS-01 cannot be used without one.")
+	case errors.Is(err, acme.ErrDNSTokenInUse):
+		return httpx.Problem(http.StatusConflict, problemACMEDNSTokenInUse, "DNS-01 is the saved validation method, so its token cannot be removed. Switch to HTTP-01 first.")
+	case errors.Is(err, acme.ErrChallengeUnknown):
+		return fieldProblem(problemACMEChallengeUnknown, "body.challengeType", "The validation method must be http-01 or dns-01.")
+	case errors.As(err, &resolverErr):
+		return fieldValueProblem(problemACMEDNSResolverBad, "body.resolvers", resolverDetail(resolverErr), resolverErr.Entry)
 	}
 	f := acme.Classify(err, acme.ClassifyInput{})
 	switch f.Class {

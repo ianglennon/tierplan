@@ -7561,6 +7561,10 @@
             "description": "The CA directory in use",
             "type": "string"
           },
+          "dns": {
+            "$ref": "#/components/schemas/HTTPSACMEDNSBody",
+            "description": "The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned"
+          },
           "failures": {
             "description": "Consecutive failed runs",
             "format": "int64",
@@ -7644,6 +7648,14 @@
           "renewal": {
             "$ref": "#/components/schemas/HTTPSACMERenewalBody",
             "description": "The next renewal; left out unless Let's Encrypt is in use"
+          },
+          "suggestDns01": {
+            "$ref": "#/components/schemas/HTTPSACMESuggestionBody",
+            "description": "Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better"
+          },
+          "validationUntested": {
+            "description": "True when the saved validation method has not been proved by a run yet; false while a run is in progress",
+            "type": "boolean"
           }
         },
         "required": [
@@ -7659,7 +7671,9 @@
           "refusals",
           "namesMismatch",
           "profile",
-          "failures"
+          "failures",
+          "validationUntested",
+          "dns"
         ],
         "type": "object"
       },
@@ -7702,6 +7716,86 @@
           "notAfter",
           "issuedAt",
           "renewed"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEDNSBody": {
+        "additionalProperties": false,
+        "properties": {
+          "leftOver": {
+            "description": "TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none",
+            "items": {
+              "$ref": "#/components/schemas/HTTPSACMELeftOverBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "The DNS provider id the saved token is for, for example cloudflare",
+            "type": "string"
+          },
+          "resolvers": {
+            "description": "The resolvers the propagation check asks, as host:port; empty means the zone's own name servers",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tokenSaved": {
+            "description": "True when a DNS API token is saved. The token is never returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider",
+          "tokenSaved",
+          "resolvers",
+          "leftOver"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEDNSErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The class of the failure, one of the codes of lastError in the status",
+            "type": "string"
+          },
+          "host": {
+            "description": "The certificate name the failure is about",
+            "type": "string"
+          },
+          "resolvers": {
+            "description": "The resolvers that were asked",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "retryAt": {
+            "description": "When to try again, for a rate limit that said when",
+            "format": "date-time",
+            "type": "string"
+          },
+          "target": {
+            "description": "The name the challenge name is delegated to, when it is",
+            "type": "string"
+          },
+          "zone": {
+            "description": "The DNS zone the failure is about",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
         ],
         "type": "object"
       },
@@ -7761,7 +7855,15 @@
               "profile_invalid",
               "ca_unavailable",
               "ca_untrusted",
-              "internal"
+              "internal",
+              "dns_token_invalid",
+              "dns_token_scope",
+              "dns_zone_not_found",
+              "dns_delegation_target",
+              "dns_not_visible",
+              "dns_rate_limited",
+              "dns_unavailable",
+              "validation_txt"
             ],
             "type": "string"
           },
@@ -7777,8 +7879,26 @@
             "description": "The profile the CA refused",
             "type": "string"
           },
+          "resolvers": {
+            "description": "The resolvers a propagation failure asked",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "The name the challenge name is delegated to, when a DNS failure is about a delegated name",
+            "type": "string"
+          },
           "termsUrl": {
             "description": "Where to read the terms the CA wants accepted",
+            "type": "string"
+          },
+          "zone": {
+            "description": "The DNS zone a DNS failure is about",
             "type": "string"
           }
         },
@@ -7802,6 +7922,59 @@
         ],
         "type": "object"
       },
+      "HTTPSACMELeftOverBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The class of the last delete error, for example dns_unavailable",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the record was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "lastTryAt": {
+            "description": "When a delete was last tried; left out when none was",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "The record name, for example _acme-challenge.example.com",
+            "type": "string"
+          },
+          "nextTryAt": {
+            "description": "When the next delete is tried; left out while retries are paused",
+            "format": "date-time",
+            "type": "string"
+          },
+          "pausedReason": {
+            "description": "Why retries are paused: a backup was restored, or certificate files are set. Empty when they run",
+            "enum": [
+              "",
+              "restore",
+              "cert_files"
+            ],
+            "type": "string"
+          },
+          "recordId": {
+            "description": "The DNS provider's ID for the record",
+            "type": "string"
+          },
+          "retryPaused": {
+            "description": "True while no delete is tried",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "recordId",
+          "createdAt",
+          "retryPaused",
+          "pausedReason"
+        ],
+        "type": "object"
+      },
       "HTTPSACMENameBody": {
         "additionalProperties": false,
         "properties": {
@@ -7817,6 +7990,57 @@
         "required": [
           "name",
           "refused"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMENameTestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "delegatedTo": {
+            "description": "The name the challenge name is a CNAME to, when it is",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/components/schemas/HTTPSACMEDNSErrorBody",
+            "description": "The first row that failed, classified"
+          },
+          "info": {
+            "$ref": "#/components/schemas/HTTPSACMETestInfoBody",
+            "description": "Whether the resolvers showed the test record. It never changes the verdict"
+          },
+          "name": {
+            "description": "The certificate name tested",
+            "type": "string"
+          },
+          "ownZone": {
+            "description": "Set when the name's own zone is not at the provider and the challenge name is delegated into one that is: the zone that is not there",
+            "type": "string"
+          },
+          "record": {
+            "description": "The TXT record name the test wrote at, or would have",
+            "type": "string"
+          },
+          "steps": {
+            "description": "The four rows, in order: zone, created, read, deleted",
+            "items": {
+              "$ref": "#/components/schemas/HTTPSACMETestStepBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "zone": {
+            "description": "The DNS provider zone that record is in; empty when it was not found",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "record",
+          "zone",
+          "steps",
+          "info"
         ],
         "type": "object"
       },
@@ -7922,6 +8146,14 @@
       "HTTPSACMERunBody": {
         "additionalProperties": false,
         "properties": {
+          "challenge": {
+            "description": "The challenge the run used to prove the names",
+            "enum": [
+              "http-01",
+              "dns-01"
+            ],
+            "type": "string"
+          },
           "finishedAt": {
             "description": "When it ended; left out while it runs",
             "format": "date-time",
@@ -7970,6 +8202,7 @@
           "kind",
           "trigger",
           "outcome",
+          "challenge",
           "startedAt"
         ],
         "type": "object"
@@ -7993,6 +8226,154 @@
         },
         "required": [
           "reused"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMESuggestionBody": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "description": "The private address it resolves to, as this server sees it",
+            "type": "string"
+          },
+          "host": {
+            "description": "The public host",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "address"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMETestInfoBody": {
+        "additionalProperties": false,
+        "properties": {
+          "resolvers": {
+            "description": "The resolvers that showed it (seen) or had not shown it (not_seen)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "seconds": {
+            "description": "How long the wait took, in seconds",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "Every resolver showed the record, some had not when the wait ended, or it was never looked for",
+            "enum": [
+              "seen",
+              "not_seen",
+              "not_checked"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "resolvers",
+          "seconds"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMETestStepBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The class of a failure, for example dns_token_invalid",
+            "type": "string"
+          },
+          "id": {
+            "description": "The row: the zone was found, a test record was created, read back and deleted",
+            "enum": [
+              "zone",
+              "created",
+              "read",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "description": "Where the row ended. skipped is a row that was not reached because an earlier one failed",
+            "enum": [
+              "done",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMETokenTestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "names": {
+            "description": "The names tested, in certificate-name order",
+            "items": {
+              "$ref": "#/components/schemas/HTTPSACMENameTestBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "passed": {
+            "description": "True when every name passed its four rows. The info row has no say",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "passed",
+          "names"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMEValidationOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "challengeType": {
+            "description": "The validation method saved now",
+            "type": "string"
+          },
+          "resolvers": {
+            "description": "The resolvers saved now",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "saved": {
+            "description": "True when the settings were stored. False when the new token failed its test: nothing was stored",
+            "type": "boolean"
+          },
+          "test": {
+            "$ref": "#/components/schemas/HTTPSACMETokenTestBody",
+            "description": "The token test the save ran; left out when no new token was given"
+          },
+          "tokenSaved": {
+            "description": "True when a DNS API token is saved now. The token is never returned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "saved",
+          "challengeType",
+          "tokenSaved",
+          "resolvers"
         ],
         "type": "object"
       },
@@ -13907,6 +14288,39 @@
         },
         "required": [
           "profile"
+        ],
+        "type": "object"
+      },
+      "PutACMEValidationInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "challengeType": {
+            "description": "How Let's Encrypt is shown you control the names: http-01 over port 80, or dns-01 with a TXT record at your DNS provider",
+            "enum": [
+              "http-01",
+              "dns-01"
+            ],
+            "type": "string"
+          },
+          "resolvers": {
+            "description": "The resolvers the propagation check asks, as host or host:port; an empty list means the zone's own name servers. Leave out to keep the saved list",
+            "items": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token": {
+            "description": "A new DNS API token, at most 256 printable characters with no space; anything else fails its test as dns_token_invalid with no request made. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challengeType"
         ],
         "type": "object"
       },
@@ -23268,6 +23682,28 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "TestACMEDNSTokenInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "resolvers": {
+            "description": "The resolvers to ask, as host or host:port. Leave out to use the saved list",
+            "items": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token": {
+            "description": "The token to test, at most 256 printable characters with no space; anything else fails as dns_token_invalid with no request made. Leave out to test the saved token",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "TestStepBody": {
@@ -40780,6 +41216,87 @@
         ]
       }
     },
+    "/api/https/acme/dns/test": {
+      "post": {
+        "description": "Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "operationId": "testACMEDNSToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestACMEDNSTokenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMETokenTestBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Test a DNS API token",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/dns/token": {
+      "delete": {
+        "description": "Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "operationId": "deleteACMEDNSToken",
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove the saved DNS API token",
+        "tags": [
+          "https"
+        ]
+      }
+    },
     "/api/https/acme/issue": {
       "post": {
         "description": "Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.",
@@ -40952,6 +41469,55 @@
           }
         },
         "summary": "Stop using Let's Encrypt",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/validation": {
+      "put": {
+        "description": "Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "operationId": "putACMEValidation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutACMEValidationInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMEValidationOutputBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Choose how the names are validated",
         "tags": [
           "https"
         ]

@@ -16,7 +16,31 @@ export const ACME_STEPS = [
   "finalize",
   "stored",
 ] as const;
-export type ACMEStepId = (typeof ACME_STEPS)[number];
+
+// The steps of a DNS-01 run, in the order the server sends them (internal/acme/dns_steps.go
+// stepItemsDNS01): Propagation sits between Challenge and Validation, and Clean-up comes last, after
+// Stored, because the order withdraws its answers once the certificate is kept (UI-SPEC "Run panel -
+// DNS-01 steps"). Clean-up runs whether the order succeeded or failed and reports on its own.
+export const ACME_STEPS_DNS01 = [
+  "account",
+  "order",
+  "challenge",
+  "propagation",
+  "validate",
+  "finalize",
+  "stored",
+  "cleanup",
+] as const;
+export type ACMEStepId = (typeof ACME_STEPS)[number] | (typeof ACME_STEPS_DNS01)[number];
+
+// The challenge a run proves its names with.
+export type ACMEChallenge = "http-01" | "dns-01";
+
+// stepsFor is the list of steps a run draws, from the run's challenge. A run that names none is an
+// HTTP-01 run, so a frame from before DNS-01 existed still draws its six.
+export function stepsFor(challenge: string | undefined): readonly ACMEStepId[] {
+  return challenge === "dns-01" ? ACME_STEPS_DNS01 : ACME_STEPS;
+}
 
 // Where a step is. "skipped" is a step that was not needed (the account was already registered) or
 // not reached after a failure.
@@ -30,6 +54,14 @@ export interface ACMEStep {
   state: ACMEStepState;
   code?: string;
   message?: string;
+  // What a DNS-01 step is about, set while it runs (the server leaves a value out when it has none):
+  // the TXT record, the certificate name, the name the record was delegated to and the resolvers asked.
+  record?: string;
+  host?: string;
+  target?: string;
+  resolvers?: string[] | null;
+  // How many TXT records the Clean-up step could not delete; set with the code left_over.
+  leftOver?: number;
 }
 
 export type ACMERunStateName = "running" | "done" | "failed" | "cancelled";
@@ -40,6 +72,8 @@ export interface ACMERun {
   jobId: string;
   kind: "issue" | "renew";
   trigger: "admin" | "schedule" | "resume";
+  // What the run proves its names with; a frame without one is HTTP-01.
+  challenge?: ACMEChallenge;
   state: ACMERunStateName;
   startedAt: string;
   items: ACMEStep[] | null;

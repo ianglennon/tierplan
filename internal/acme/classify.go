@@ -11,18 +11,20 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"time"
 	"unicode/utf8"
 
 	legoacme "github.com/go-acme/lego/v5/acme"
 
+	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
 // MaxDetailBytes caps the raw problem document kept for the Details disclosure.
 const MaxDetailBytes = 8 << 10
 
-// The twelve classes an ACME failure maps to. The values are stored and sent to the browser, so
+// The twenty classes an ACME failure maps to. The values are stored and sent to the browser, so
 // they are a contract; the English copy and the fix each one gets live in the API and the SPA.
 const (
 	ClassRateLimited           = "rate_limited"
@@ -37,6 +39,19 @@ const (
 	ClassCAUnavailable         = "ca_unavailable"
 	ClassCAUntrusted           = "ca_untrusted"
 	ClassInternal              = "internal"
+)
+
+// The DNS-01 classes: seven are a DNS provider failing (they are the values of the dns package's
+// own constants, so the two cannot drift) and validation_txt is the CA not finding the TXT record.
+const (
+	ClassDNSTokenInvalid     = dns.ClassTokenInvalid
+	ClassDNSTokenScope       = dns.ClassTokenScope
+	ClassDNSZoneNotFound     = dns.ClassZoneNotFound
+	ClassDNSDelegationTarget = dns.ClassDelegationTarget
+	ClassDNSNotVisible       = dns.ClassNotVisible
+	ClassDNSRateLimited      = dns.ClassRateLimited
+	ClassDNSUnavailable      = dns.ClassUnavailable
+	ClassValidationTXT       = "validation_txt"
 )
 
 // timeoutErrorType is the problem type some CAs return when a validation attempt timed out. lego
@@ -74,8 +89,15 @@ type Failure struct {
 	Profile string
 	// TermsURL is where the CA says the terms can be read (the problem's instance).
 	TermsURL string
-	// RetryAfter is the CA's Retry-After for a rate limit, zero when it gave none.
+	// RetryAfter is the CA's or the DNS provider's Retry-After for a rate limit, zero when it gave
+	// none.
 	RetryAfter time.Duration
+	// Zone is the DNS zone a DNS failure is about.
+	Zone string
+	// Target is the delegated name a DNS failure is about, when the challenge name is a CNAME.
+	Target string
+	// Resolvers are the resolvers a propagation failure asked.
+	Resolvers []string
 	// Detail is the raw problem document, free of control characters and at most MaxDetailBytes.
 	Detail string
 }
@@ -99,9 +121,21 @@ func Classify(err error, in ClassifyInput) Failure {
 		return f
 	}
 
+	// A DNS provider failure is classified before any CA branch: it happened on our side of the
+	// challenge, before the CA was asked to look.
+	var de *dns.Error
+	if errors.As(err, &de) && de != nil {
+		return classifyDNS(f, de)
+	}
+
 	var pd *legoacme.ProblemDetails
 	if errors.As(err, &pd) && pd != nil {
 		class, host := classifyProblem(pd)
+		if in.ChallengeType == ChallengeDNS01 && (class == ClassValidationUnreachable || class == ClassValidationDNS) {
+			// The CA looked for the TXT record and did not find the answer: the class is about the
+			// record whichever way the CA words it (UI-SPEC J7).
+			class = ClassValidationTXT
+		}
 		if class == "" {
 			if pd.HTTPStatus >= 500 {
 				class = ClassCAUnavailable
@@ -134,6 +168,27 @@ func Classify(err error, in ClassifyInput) Failure {
 	case isNetworkFailure(err):
 		f.Class = ClassCAUnavailable
 	}
+	return f
+}
+
+// classifyDNS gives f the class of a DNS provider failure and the values its copy needs. A failure
+// with no class, or one this build does not know, is internal: it is not shown as a DNS problem the
+// page has no words for. The detail is the error's own text, which holds the provider, operation,
+// status, code and class only.
+func classifyDNS(f Failure, de *dns.Error) Failure {
+	switch de.Class {
+	case ClassDNSTokenInvalid, ClassDNSTokenScope, ClassDNSZoneNotFound, ClassDNSDelegationTarget,
+		ClassDNSNotVisible, ClassDNSRateLimited, ClassDNSUnavailable:
+		f.Class = de.Class
+	default:
+		f.Class = ClassInternal
+		return f
+	}
+	if de.Host != "" {
+		f.Host = de.Host
+	}
+	f.Zone, f.Target, f.RetryAfter = de.Zone, de.Target, de.RetryAfter
+	f.Resolvers = slices.Clone(de.Resolvers)
 	return f
 }
 

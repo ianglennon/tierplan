@@ -41,7 +41,8 @@ func (m *Manager) Run(ctx context.Context) {
 // run is in progress it leaves everything to the run. What is served is put right first, because that
 // is local and a lapsed certificate must not wait on anything (D-15). While paused after a restore
 // nothing more is done: no request to the CA is made, whether to ask for renewal information, to
-// renew or to continue an order (ACME-08).
+// renew or to continue an order (ACME-08), and no DNS record is deleted (D-23). The left-over DNS
+// records that are due go next, then the renewal.
 func (m *Manager) round(ctx context.Context) {
 	if m.d.CertFiles || ctx.Err() != nil || m.runActive() {
 		return
@@ -58,6 +59,9 @@ func (m *Manager) round(ctx context.Context) {
 	if st.PausedReason != "" {
 		return
 	}
+	// Left-over DNS records are retried when their next try is due, whatever the saved challenge is and
+	// whether or not Let's Encrypt is in use, before anything that could start a run (D-17, D-18).
+	m.sweepRound(ctx)
 	if m.resumeRound(ctx) {
 		return
 	}
@@ -73,6 +77,20 @@ func (m *Manager) round(ctx context.Context) {
 		return
 	}
 	m.renewalRound(ctx, st, leaf)
+}
+
+// sweepRound deletes the left-over DNS records that are due, holding the DNS slot while it does. A run
+// that starts meanwhile would act on the same rows from a snapshot gone stale (Present takes over a row
+// whose delete failed), and the sweep would then delete a record the run is waiting to see. With the
+// slot held, Issue, Renew now and the scheduler's own starts get ErrRunActive until the sweep ends, and
+// a round that finds the slot taken, by a run or a Test token, leaves the rows to the next one. The
+// sweep a run makes for itself needs no slot: the run already owns it.
+func (m *Manager) sweepRound(ctx context.Context) {
+	if !m.claimDNS() {
+		return
+	}
+	defer m.releaseDNS()
+	m.sweepDNS(ctx, true)
 }
 
 // settled writes the end of a run that could not be written when it ended, and reports whether
@@ -297,7 +315,7 @@ func (m *Manager) resumeRound(ctx context.Context) bool {
 		// one, and the certificate it named is that account's: the new account may not replace it.
 		req.Replaces = ""
 	}
-	if _, err := m.startRun(runParams{trigger: TriggerResume, req: req}); err != nil {
+	if _, err := m.startRun(runParams{trigger: TriggerResume, challenge: challengeOf(st), req: req}); err != nil {
 		if !errors.Is(err, ErrRunActive) {
 			m.log.Error("the scheduler could not continue the open order", "error", err)
 		}
@@ -356,7 +374,7 @@ func (m *Manager) renewalRound(ctx context.Context, st State, leaf *x509.Certifi
 	}
 	req := m.renewRequest(ctx, st, leaf)
 	m.log.Info("starting a scheduled renewal of the Let's Encrypt certificate", "renew_at", st.RenewAt)
-	if _, err := m.startRun(runParams{trigger: TriggerSchedule, req: req}); err != nil && !errors.Is(err, ErrRunActive) {
+	if _, err := m.startRun(runParams{trigger: TriggerSchedule, challenge: challengeOf(st), req: req}); err != nil && !errors.Is(err, ErrRunActive) {
 		m.log.Error("the scheduler could not start a renewal", "error", err)
 	}
 }

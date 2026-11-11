@@ -88,7 +88,7 @@ func (q *Queries) GetACMECertAccountURL(ctx context.Context) (string, error) {
 }
 
 const getACMEState = `-- name: GetACMEState :one
-SELECT id, mode, challenge_type, profile, paused_reason, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, renew_at, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, last_error_at, last_success_at, renew_basis, last_error_class, last_error_detail, last_success_kind, updated_at, cert_account_url FROM acme_state WHERE id = 1
+SELECT id, mode, challenge_type, profile, paused_reason, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, renew_at, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, last_error_at, last_success_at, renew_basis, last_error_class, last_error_detail, last_success_kind, updated_at, cert_account_url, dns_provider, dns_resolvers, validation_untested FROM acme_state WHERE id = 1
 `
 
 func (q *Queries) GetACMEState(ctx context.Context) (AcmeState, error) {
@@ -117,6 +117,9 @@ func (q *Queries) GetACMEState(ctx context.Context) (AcmeState, error) {
 		&i.LastSuccessKind,
 		&i.UpdatedAt,
 		&i.CertAccountUrl,
+		&i.DnsProvider,
+		&i.DnsResolvers,
+		&i.ValidationUntested,
 	)
 	return i, err
 }
@@ -219,20 +222,21 @@ func (q *Queries) InsertACMEOrder(ctx context.Context, arg InsertACMEOrderParams
 }
 
 const insertACMERun = `-- name: InsertACMERun :exec
-INSERT INTO acme_runs (id, kind, trigger, actor, names, started_at, finished_at, outcome, error_class)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO acme_runs (id, kind, trigger, actor, names, started_at, finished_at, outcome, error_class, challenge_type)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertACMERunParams struct {
-	ID         string
-	Kind       string
-	Trigger    string
-	Actor      string
-	Names      string
-	StartedAt  int64
-	FinishedAt int64
-	Outcome    string
-	ErrorClass string
+	ID            string
+	Kind          string
+	Trigger       string
+	Actor         string
+	Names         string
+	StartedAt     int64
+	FinishedAt    int64
+	Outcome       string
+	ErrorClass    string
+	ChallengeType string
 }
 
 func (q *Queries) InsertACMERun(ctx context.Context, arg InsertACMERunParams) error {
@@ -246,6 +250,7 @@ func (q *Queries) InsertACMERun(ctx context.Context, arg InsertACMERunParams) er
 		arg.FinishedAt,
 		arg.Outcome,
 		arg.ErrorClass,
+		arg.ChallengeType,
 	)
 	return err
 }
@@ -261,10 +266,14 @@ func (q *Queries) InterruptACMERuns(ctx context.Context, finishedAt int64) error
 }
 
 const listACMEFailedRunsSince = `-- name: ListACMEFailedRunsSince :many
-SELECT started_at FROM acme_runs WHERE outcome = 'failed' AND started_at >= ? ORDER BY started_at ASC
+SELECT started_at FROM acme_runs
+WHERE outcome = 'failed' AND started_at >= ? AND error_class NOT LIKE 'dns\_%' ESCAPE '\'
+ORDER BY started_at ASC
 `
 
-// The start times of the failed runs at or after a time, oldest first.
+// The start times of the failed runs at or after a time, oldest first. A run that failed on the DNS
+// provider's side (an error class starting dns_) is left out: it failed before the CA was asked, so it
+// must not block Renew now once the admin has fixed the token.
 func (q *Queries) ListACMEFailedRunsSince(ctx context.Context, startedAt int64) ([]int64, error) {
 	rows, err := q.db.QueryContext(ctx, listACMEFailedRunsSince, startedAt)
 	if err != nil {
@@ -289,7 +298,7 @@ func (q *Queries) ListACMEFailedRunsSince(ctx context.Context, startedAt int64) 
 }
 
 const listACMERuns = `-- name: ListACMERuns :many
-SELECT id, kind, "trigger", actor, names, started_at, finished_at, outcome, error_class FROM acme_runs ORDER BY started_at DESC, id DESC LIMIT ?
+SELECT id, kind, "trigger", actor, names, started_at, finished_at, outcome, error_class, challenge_type FROM acme_runs ORDER BY started_at DESC, id DESC LIMIT ?
 `
 
 // Newest first; the same started_at is ordered by id.
@@ -312,6 +321,7 @@ func (q *Queries) ListACMERuns(ctx context.Context, limit int64) ([]AcmeRun, err
 			&i.FinishedAt,
 			&i.Outcome,
 			&i.ErrorClass,
+			&i.ChallengeType,
 		); err != nil {
 			return nil, err
 		}
@@ -372,7 +382,7 @@ func (q *Queries) UpdateACMEOrderStage(ctx context.Context, arg UpdateACMEOrderS
 
 const updateACMEState = `-- name: UpdateACMEState :exec
 UPDATE acme_state SET
-    mode = ?, challenge_type = ?, profile = ?, paused_reason = ?, consecutive_failures = ?,
+    mode = ?, profile = ?, paused_reason = ?, consecutive_failures = ?,
     last_attempt_at = ?, next_attempt_at = ?, retry_after_until = ?, renew_at = ?,
     ari_window_start = ?, ari_window_end = ?, ari_checked_at = ?, ari_next_check_at = ?,
     last_error_at = ?, last_success_at = ?, renew_basis = ?, last_error_class = ?,
@@ -382,7 +392,6 @@ WHERE id = 1
 
 type UpdateACMEStateParams struct {
 	Mode                string
-	ChallengeType       string
 	Profile             string
 	PausedReason        string
 	ConsecutiveFailures int64
@@ -403,10 +412,11 @@ type UpdateACMEStateParams struct {
 	UpdatedAt           int64
 }
 
+// Never writes the validation settings (the challenge, the DNS provider and resolvers, the untested
+// flag): only the validation save does (acme_dns.sql), so a stale read cannot undo a saved choice.
 func (q *Queries) UpdateACMEState(ctx context.Context, arg UpdateACMEStateParams) error {
 	_, err := q.db.ExecContext(ctx, updateACMEState,
 		arg.Mode,
-		arg.ChallengeType,
 		arg.Profile,
 		arg.PausedReason,
 		arg.ConsecutiveFailures,

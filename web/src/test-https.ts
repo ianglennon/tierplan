@@ -1,9 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import type { ACMEDirectory, HTTPSACME, HTTPSStatus } from "@/api/https";
+import type {
+  ACMEDirectory,
+  ACMENameTest,
+  ACMETokenTest,
+  ACMEValidationResult,
+  HTTPSACME,
+  HTTPSStatus,
+} from "@/api/https";
 import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
+
+// The DNS block of the status: Cloudflare, no token saved, no resolvers and nothing left over.
+export type LeftOverRecord = NonNullable<HTTPSACME["dns"]["leftOver"]>[number];
+
+export function acmeDNSStatus(over: Partial<HTTPSACME["dns"]> = {}): HTTPSACME["dns"] {
+  return { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false, ...over };
+}
+
+// A TXT record TierPlan could not delete as the status lists it: the last delete failed because the
+// provider was unreachable, and the next try is in ten minutes.
+export function leftOverRecord(over: Partial<LeftOverRecord> = {}): LeftOverRecord {
+  return {
+    code: "dns_unavailable",
+    createdAt: new Date(Date.now() - 3_600_000).toISOString(),
+    lastTryAt: new Date(Date.now() - 120_000).toISOString(),
+    name: "_acme-challenge.tierplan.example.com",
+    nextTryAt: new Date(Date.now() + 600_000).toISOString(),
+    pausedReason: "",
+    recordId: "rec-1",
+    retryPaused: false,
+    ...over,
+  };
+}
 
 // The Let's Encrypt block of the status on a fresh install that has a public address: no account
 // yet, one name that can be ordered, nothing refused.
@@ -12,6 +42,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     challengeType: "http-01",
     directoryOverridden: false,
     directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+    dns: acmeDNSStatus(),
     failures: 0,
     hasState: false,
     listenPort: 7480,
@@ -22,6 +53,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     profile: "",
     publicHost: "tierplan.example.com",
     refusals: [],
+    validationUntested: false,
     ...over,
   };
 }
@@ -76,12 +108,35 @@ export function acmeSteps(states: Partial<Record<string, ACMEStep["state"]>> = {
   );
 }
 
+const DNS01_STEP_LABELS: ReadonlyArray<readonly [string, string]> = [
+  ["account", "Account"],
+  ["order", "Order"],
+  ["challenge", "Challenge"],
+  ["propagation", "Propagation"],
+  ["validate", "Validation"],
+  ["finalize", "Finalize"],
+  ["stored", "Stored"],
+  ["cleanup", "Clean-up"],
+];
+
+// The eight steps of a DNS-01 run in the order the server sends them (internal/acme/dns_steps.go
+// stepItemsDNS01), every step waiting except those named in states. over gives a step its values.
+export function acmeStepsDNS01(
+  states: Partial<Record<string, ACMEStep["state"]>> = {},
+  over: Partial<Record<string, Partial<ACMEStep>>> = {},
+): ACMEStep[] {
+  return DNS01_STEP_LABELS.map(([id, label]) =>
+    acmeStep({ id, label, state: states[id] ?? "waiting", ...over[id] }),
+  );
+}
+
 // A run as the stream sends it in its snapshot and done frames: an admin's first issue, running.
 export function acmeRunFrame(over: Partial<ACMERun> = {}): ACMERun {
   return {
     jobId: "job-1",
     kind: "issue",
     trigger: "admin",
+    challenge: "http-01",
     state: "running",
     startedAt: new Date(Date.now() - 5_000).toISOString(),
     items: acmeSteps({ account: "running" }),
@@ -92,6 +147,7 @@ export function acmeRunFrame(over: Partial<ACMERun> = {}): ACMERun {
 // The run in progress as the status lists it.
 export function acmeActiveRun(over: Partial<NonNullable<HTTPSACME["activeRun"]>> = {}) {
   return {
+    challenge: "http-01" as const,
     jobId: "job-1",
     kind: "issue" as const,
     outcome: "running" as const,
@@ -109,6 +165,52 @@ export function acmeLastError(over: Partial<ACMELastError> = {}): ACMELastError 
     detail:
       '{"type":"urn:ietf:params:acme:error:connection","detail":"Timeout during connect (likely firewall problem)"}',
     host: "tierplan.example.com",
+    ...over,
+  };
+}
+
+// A DNS-01 failure as the status lists it: the TXT record never showed on the resolvers asked.
+export function lastErrorDNS(over: Partial<ACMELastError> = {}): ACMELastError {
+  return acmeLastError({
+    code: "dns_not_visible",
+    detail: undefined,
+    resolvers: ["1.1.1.1", "192.168.1.1"],
+    zone: "example.com",
+    ...over,
+  });
+}
+
+// One name of a token test that passed all four rows, with the record seen by the resolvers asked.
+export function tokenTestName(over: Partial<ACMENameTest> = {}): ACMENameTest {
+  const name = over.name ?? "tierplan.example.com";
+  return {
+    info: { resolvers: ["1.1.1.1"], seconds: 4, state: "seen" },
+    name,
+    record: `_acme-challenge.${name}`,
+    steps: [
+      { id: "zone", state: "done" },
+      { id: "created", state: "done" },
+      { id: "read", state: "done" },
+      { id: "deleted", state: "done" },
+    ],
+    zone: "example.com",
+    ...over,
+  };
+}
+
+// A token test as the server answers it: one name, every row done.
+export function tokenTestResult(over: Partial<ACMETokenTest> = {}): ACMETokenTest {
+  return { names: [tokenTestName()], passed: true, ...over };
+}
+
+// The answer of a validation save that stored a DNS-01 token after its test passed.
+export function validationResult(over: Partial<ACMEValidationResult> = {}): ACMEValidationResult {
+  return {
+    challengeType: "dns-01",
+    resolvers: [],
+    saved: true,
+    test: tokenTestResult(),
+    tokenSaved: true,
     ...over,
   };
 }

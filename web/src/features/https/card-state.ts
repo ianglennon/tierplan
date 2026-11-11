@@ -15,6 +15,7 @@ export type CardState = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J
 
 export type AccountMode = "form" | "form-disabled" | "summary" | "summary-disabled";
 export type AdvancedMode = "hidden" | "shown" | "disabled";
+export type ValidationMode = "editable" | "disabled";
 
 // deriveCardState is the one place that decides which state the card is in, from the status alone.
 // The page reads the answer and never works out an expiry fallback or a mismatch itself. The order is
@@ -57,4 +58,15 @@ export function advancedMode(state: CardState, canWrite: boolean): AdvancedMode 
   if (state === "A" || state === "I") return "hidden";
   if (!canWrite || state === "C" || state === "H" || state === "J") return "disabled";
   return "shown";
+}
+
+// validationMode says whether the Validation section can be changed. It is drawn in every state but
+// disabled (inputs disabled, no action button) while a run is active (C, so two writers never touch
+// the challenge), after a restore (H), with certificate files (I and J) and without settings.write.
+// Before an account exists (A) it is editable: the method can be chosen first.
+export function validationMode(state: CardState, canWrite: boolean): ValidationMode {
+  if (!canWrite || state === "C" || state === "H" || state === "I" || state === "J") {
+    return "disabled";
+  }
+  return "editable";
 }

@@ -1745,6 +1745,11 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/miekg/dns",
+    "version": "v1.1.73",
+    "licence": "BSD-3-Clause"
+  },
+  {
     "name": "github.com/moby/buildkit",
     "version": "v0.33.1",
     "licence": "Apache-2.0"

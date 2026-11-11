@@ -83,6 +83,9 @@ func TestIssueACMEThroughTheAPIStreamsTheSteps(t *testing.T) {
 	if got := stepIDsOf(first.Items); !slices.Equal(got, acmeStepIDs) {
 		t.Fatalf("snapshot steps = %v, want %v", got, acmeStepIDs)
 	}
+	if first.Challenge != "http-01" {
+		t.Errorf("snapshot challenge = %q, want http-01", first.Challenge)
+	}
 
 	release()
 	var done api.HTTPSACMERunFrameBody
@@ -121,8 +124,8 @@ func TestIssueACMEThroughTheAPIStreamsTheSteps(t *testing.T) {
 	}
 
 	got := f.status(t).ACME
-	if got.LastRun == nil || got.LastRun.Outcome != "succeeded" || got.LastRun.JobID != started.JobID {
-		t.Errorf("lastRun = %+v, want the run that succeeded", got.LastRun)
+	if got.LastRun == nil || got.LastRun.Outcome != "succeeded" || got.LastRun.JobID != started.JobID || got.LastRun.Challenge != "http-01" {
+		t.Errorf("lastRun = %+v, want the http-01 run that succeeded", got.LastRun)
 	}
 	if got.Certificate == nil || got.Mode != "active" {
 		t.Errorf("mode %q certificate %+v, want a stored certificate and Let's Encrypt in use", got.Mode, got.Certificate)

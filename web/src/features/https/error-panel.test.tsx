@@ -19,6 +19,7 @@ import {
   acmeRunFrame,
   acmeSteps,
   httpsLetsEncryptStatus,
+  lastErrorDNS,
 } from "@/test-https";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -199,12 +200,74 @@ const CLASSES: {
     headline: "Something went wrong inside TierPlan.",
     fix: `Open Details and check the server log. TierPlan tries again at ${nextTime()}.`,
   },
+  {
+    code: "dns_token_invalid",
+    error: {},
+    headline: "Cloudflare didn't accept the API token.",
+    fix: "The token is wrong, expired or revoked. Create a new token and enter it again under Validation method.",
+  },
+  {
+    code: "dns_token_scope",
+    error: { host: "tp.example.org", zone: "example.org" },
+    headline: "The Cloudflare token can't manage DNS records for tp.example.org.",
+    fix: "The token needs both Zone:DNS:Edit and Zone:Zone:Read, and it must include the zone for tp.example.org. Fix it in Cloudflare, or enter a new token.",
+  },
+  {
+    code: "dns_zone_not_found",
+    error: { host: "tp.example.org" },
+    headline: "Cloudflare has no zone for tp.example.org.",
+    fix: "Add the zone to the Cloudflare account the token belongs to, and check that the token includes it. Or make _acme-challenge.tp.example.org a CNAME to a record in a Cloudflare zone you can edit.",
+  },
+  {
+    code: "dns_delegation_target",
+    error: { host: "tp.example.org", target: "tp.validation.example.net" },
+    headline:
+      "_acme-challenge.tp.example.org is delegated to tp.validation.example.net, which TierPlan can't edit.",
+    fix: "The target must be in a Cloudflare zone this token can edit. Add that zone to the token, or change the CNAME.",
+  },
+  {
+    code: "dns_not_visible",
+    error: { host: "tp.example.org", resolvers: ["1.1.1.1", "192.168.1.1"] },
+    headline: "The TXT record for tp.example.org didn't appear on 1.1.1.1, 192.168.1.1.",
+    fix: "Check that this host can reach 1.1.1.1, 192.168.1.1 on port 53. If you set resolvers under Advanced DNS, they must answer for public records. Clear them to ask the zone's own nameservers.",
+  },
+  {
+    code: "dns_rate_limited",
+    error: {},
+    headline: "Cloudflare is limiting requests.",
+    fix: `TierPlan waits until ${nextTime()} before it tries again. There is nothing to do.`,
+  },
+  {
+    code: "dns_unavailable",
+    error: {},
+    headline: "Cloudflare couldn't be reached.",
+    fix: `TierPlan tries again on its own schedule, next at ${nextTime()}. If it keeps failing, check this host's internet access.`,
+  },
+  {
+    code: "validation_txt",
+    error: { host: "tp.example.org" },
+    headline: "Let's Encrypt didn't find the right TXT record for _acme-challenge.tp.example.org.",
+    fix: "TierPlan saw the record, but Let's Encrypt didn't. Check that the zone's nameservers at your registrar are Cloudflare's, and that nothing else at _acme-challenge.tp.example.org gets in the way, such as a conflicting CNAME. Then try again.",
+  },
 ];
 
 describe("Last-run error panel: every class", () => {
-  it("has a case for each of the twelve classes the server sends", () => {
+  it("has a case for each of the twenty classes the server sends", () => {
     expect(CLASSES.map((c) => c.code)).toEqual([...ERROR_CLASSES]);
-    expect(CLASSES).toHaveLength(12);
+    expect(CLASSES).toHaveLength(20);
+    expect(ERROR_CLASSES).toHaveLength(20);
+    for (const code of [
+      "dns_token_invalid",
+      "dns_token_scope",
+      "dns_zone_not_found",
+      "dns_delegation_target",
+      "dns_not_visible",
+      "dns_rate_limited",
+      "dns_unavailable",
+      "validation_txt",
+    ] as const) {
+      expect(CLASSES.map((c) => c.code)).toContain(code);
+    }
   });
 
   it.each(CLASSES)(
@@ -219,6 +282,52 @@ describe("Last-run error panel: every class", () => {
       expect(row.textContent).toContain(headline);
     },
   );
+
+  it("explains a DNS-01 failure from the status with the resolvers it asked", async () => {
+    status = () =>
+      Response.json(withACME({ failures: 1, lastError: lastErrorDNS({ host: "tp.example.org" }) }));
+    await renderPage();
+    const el = panel() as HTMLElement;
+    expect(el.querySelector('[data-slot="alert-title"]')?.textContent).toBe(
+      "The TXT record for tp.example.org didn't appear on 1.1.1.1, 192.168.1.1.",
+    );
+    expect(el.querySelector('[data-slot="alert-description"]')?.textContent).toContain(
+      "reach 1.1.1.1, 192.168.1.1 on port 53",
+    );
+  });
+
+  it("names the zone's own nameservers when a propagation failure asked no resolver list", async () => {
+    status = () =>
+      Response.json(
+        withACME({
+          failures: 1,
+          lastError: lastErrorDNS({ host: "tp.example.org", resolvers: undefined }),
+        }),
+      );
+    await renderPage();
+    expect((panel() as HTMLElement).querySelector('[data-slot="alert-title"]')?.textContent).toBe(
+      "The TXT record for tp.example.org didn't appear on the zone's nameservers.",
+    );
+  });
+
+  it("draws a server-supplied target as text, never as markup", async () => {
+    const target = '<img src=x onerror="window.__pwned = true">.example.net';
+    status = () =>
+      Response.json(
+        withACME({
+          failures: 1,
+          lastError: lastErrorDNS({
+            code: "dns_delegation_target",
+            host: "tp.example.org",
+            target,
+          }),
+        }),
+      );
+    await renderPage();
+    const el = panel() as HTMLElement;
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.querySelector('[data-slot="alert-title"]')?.textContent).toContain(target);
+  });
 
   it("falls back to the internal copy for a class this build does not know", async () => {
     status = () => Response.json(failing({ code: "quota_exceeded_in_a_future_version" as never }));

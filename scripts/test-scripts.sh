@@ -808,6 +808,10 @@ expect_out "dev-pebble-usage says how to call it" "usage: scripts/dev-pebble.sh 
 expect fail "dev-pebble-bad-port" env DEV_PEBBLE_HTTP_PORT=http scripts/dev-pebble.sh up
 expect_out "dev-pebble-bad-port names the setting" "DEV_PEBBLE_HTTP_PORT must be a port number"
 expect fail "dev-pebble-port-too-big" env DEV_PEBBLE_HTTP_PORT=70000 scripts/dev-pebble.sh up
+expect fail "dev-pebble-bad-dns-server" env DEV_PEBBLE_DNS_SERVER=1.1.1.1 scripts/dev-pebble.sh up
+expect_out "dev-pebble-bad-dns-server names the setting" "DEV_PEBBLE_DNS_SERVER must be host:port"
+expect fail "dev-pebble-dns-port-too-big" env DEV_PEBBLE_DNS_SERVER=1.1.1.1:70000 scripts/dev-pebble.sh up
+expect pass "dev-pebble-passes-dnsserver" grep -q -- '-dnsserver "${DNS_SERVER}"' scripts/dev-pebble.sh
 expect pass "dev-pebble-pins-the-image" grep -q 'ghcr.io/letsencrypt/pebble:2.10.1' scripts/dev-pebble.sh
 expect pass "dev-pebble-binds-loopback" grep -q -- '-p 127.0.0.1:14000:14000 -p 127.0.0.1:15000:15000' scripts/dev-pebble.sh
 expect pass "restore-smoke-target" mk restore-smoke

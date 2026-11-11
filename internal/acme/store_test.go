@@ -9,6 +9,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -317,7 +318,8 @@ func TestACMEStateRoundTripsToTheNanosecond(t *testing.T) {
 
 	base := time.Unix(1_800_000_000, 0)
 	want := State{
-		Mode: ModeActive, ChallengeType: "http-01", Profile: "shortlived", PausedReason: PausedRestore,
+		Mode: ModeActive, ChallengeType: "http-01", DNSProvider: "cloudflare", DNSResolvers: []string{},
+		Profile: "shortlived", PausedReason: PausedRestore,
 		ConsecutiveFailures: 3, RenewBasis: "ari", LastErrorClass: "rate_limited",
 		LastErrorDetail: "too many certificates (5) already issued", LastSuccessKind: "renew",
 		LastAttemptAt: base.Add(1), NextAttemptAt: base.Add(2*time.Hour + 22), RetryAfterUntil: base.Add(3*time.Hour + 333),
@@ -342,7 +344,7 @@ func TestACMEStateRoundTripsToTheNanosecond(t *testing.T) {
 	for _, p := range []*State{&got, &want} {
 		zeroInstants(p)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("State = %+v, want %+v", got, want)
 	}
 

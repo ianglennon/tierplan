@@ -19,6 +19,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import type { CardState } from "@/features/https/card-state";
+import { ChallengeChangedPrompt } from "@/features/https/challenge-changed-prompt";
 import { formatDate } from "@/features/https/copy";
 import { useACMERun } from "@/features/https/https-run-stream";
 import { RunPanel } from "@/features/https/run-panel";
@@ -75,6 +76,9 @@ interface IssueSectionProps {
   // Told whether a run is active as this page sees it: the status's run, or one the page has started or
   // is following before the status lists it. The Stop button is disabled by it.
   onRunActive?: (active: boolean) => void;
+  // True while the Validation section holds a draft that is not saved (UI-SPEC J4): an order would use
+  // the saved settings, not the ones the page shows, so the buttons wait for the save.
+  validationUnsaved?: boolean;
 }
 
 // IssueSection is the "Run and actions" part of the Let's Encrypt card (ACME-04, ACME-06, ACME-07,
@@ -88,6 +92,7 @@ export function IssueSection({
   canWrite,
   onRunFailed,
   onRunActive,
+  validationUnsaved = false,
 }: IssueSectionProps) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -206,6 +211,8 @@ export function IssueSection({
       key: block.reason === "failure_guard" ? "https.issue.failureGuard" : "https.issue.toldToWait",
       time: formatClock(block.until) ?? "",
     };
+  // Lowest priority: a run, a pause or a wait is explained first (J4).
+  else if (validationUnsaved) reason = { key: "https.issue.validationUnsaved" };
 
   const issueBlockedByNames = refusals.length > 0;
   const disabledAll = pending || reason !== null;
@@ -288,6 +295,14 @@ export function IssueSection({
 
       {showButtons ? (
         <>
+          {/* Saved validation settings no order has used yet (D-03). Not while a run is active: the run
+              panel takes over. It carries no button, since the buttons are the next elements below. */}
+          {acme.validationUntested && !runActive ? (
+            <ChallengeChangedPrompt
+              method={acme.challengeType}
+              variant={buttons.renew ? "renew" : "issue"}
+            />
+          ) : null}
           <p className="text-sm text-muted-foreground">{t("https.issue.helper")}</p>
           {reason ? (
             <p id={NOTE_ID} className="text-sm text-muted-foreground">

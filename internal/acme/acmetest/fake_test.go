@@ -6,8 +6,10 @@ package acmetest
 import (
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -628,5 +630,155 @@ func TestClockNeverSleeps(t *testing.T) {
 	c.Tick(t, 10*time.Minute)
 	if got := testsupport.Await(t, "the waiter to wake", woke); !got.Equal(epoch.Add(10 * time.Minute)) {
 		t.Fatalf("waiter woke at %v", got)
+	}
+}
+
+// txtRecords is the DNS the dns-01 tests give the fake: the TXT values it will find at a name.
+type txtRecords struct {
+	mu     sync.Mutex
+	values map[string][]string
+}
+
+func newTXTRecords() *txtRecords { return &txtRecords{values: map[string][]string{}} }
+
+func (r *txtRecords) set(fqdn string, values ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values[fqdn] = values
+}
+
+func (r *txtRecords) lookup(fqdn string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.values[fqdn])
+}
+
+// dnsValue is the TXT value a dns-01 challenge expects: base64url(sha256(key authorization)).
+func dnsValue(keyAuth string) string {
+	sum := sha256.Sum256([]byte(keyAuth))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// solveDNS answers the dns-01 challenge of every authorization of the order. publish decides what
+// the DNS holds at _acme-challenge.<name> given the right value.
+func (f *fix) solveDNS(t *testing.T, o acme.ExtendedOrder, publish func(name, value string)) []acme.Challenge {
+	t.Helper()
+	var answered []acme.Challenge
+	for _, u := range o.Authorizations {
+		az, err := f.core.Authorizations.Get(f.ctx, u)
+		if err != nil {
+			t.Fatalf("get the authorization: %v", err)
+		}
+		if len(az.Challenges) != 1 || az.Challenges[0].Type != "dns-01" {
+			t.Fatalf("challenges offered = %+v, want exactly one dns-01", az.Challenges)
+		}
+		ch := az.Challenges[0]
+		keyAuth, err := f.core.GetKeyAuthorization(ch.Token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publish(az.Identifier.Value, dnsValue(keyAuth))
+		got, err := f.core.Challenges.New(f.ctx, ch.URL)
+		if err != nil {
+			t.Fatalf("answer the challenge: %v", err)
+		}
+		answered = append(answered, got.Challenge)
+	}
+	return answered
+}
+
+func TestFakeIssuesDNS01ThroughLegoCore(t *testing.T) {
+	t.Parallel()
+	dns := newTXTRecords()
+	f := newFix(t, Options{ChallengeType: "dns-01", LookupTXT: dns.lookup})
+
+	order, err := f.core.Orders.New(f.ctx, []string{"tierplan.example.com"}, &api.OrderOptions{Profile: "classic"})
+	if err != nil {
+		t.Fatalf("new order: %v", err)
+	}
+	answered := f.solveDNS(t, order, func(name, value string) { dns.set("_acme-challenge."+name, value) })
+	if len(answered) != 1 || answered[0].Status != acme.StatusValid {
+		t.Fatalf("challenge after the right TXT value was published = %+v, want valid", answered)
+	}
+
+	done := f.finalize(t, order, "tierplan.example.com")
+	if done.Status != acme.StatusValid || done.Certificate == "" {
+		t.Fatalf("finalized order = %+v, want valid with a certificate URL", done.Order)
+	}
+	raw, err := f.core.Certificates.Get(f.ctx, done.Certificate, true)
+	if err != nil {
+		t.Fatalf("download the certificate: %v", err)
+	}
+	if leaf := leafOf(t, raw.Cert); !slices.Equal(leaf.DNSNames, []string{"tierplan.example.com"}) {
+		t.Fatalf("leaf names = %v", leaf.DNSNames)
+	}
+	if n := f.fake.TXTLookups("_acme-challenge.tierplan.example.com"); n != 1 {
+		t.Errorf("the fake looked up the TXT record %d times, want once", n)
+	}
+	if f.chal.total() != 0 {
+		t.Error("a dns-01 order made an http-01 GET")
+	}
+}
+
+func TestFakeDNS01WithAWrongOrMissingValueIsUnauthorized(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		publish func(dns *txtRecords, name, value string)
+	}{
+		{"a wrong value", func(dns *txtRecords, name, _ string) { dns.set("_acme-challenge."+name, "not-the-value") }},
+		{"no record at all", func(*txtRecords, string, string) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dns := newTXTRecords()
+			f := newFix(t, Options{ChallengeType: "dns-01", LookupTXT: dns.lookup})
+			order, err := f.core.Orders.New(f.ctx, []string{"tierplan.example.com"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			answered := f.solveDNS(t, order, func(name, value string) { tc.publish(dns, name, value) })
+			if len(answered) != 1 || answered[0].Status != acme.StatusInvalid || answered[0].Error == nil {
+				t.Fatalf("challenge = %+v, want invalid with a problem", answered)
+			}
+			if answered[0].Error.Type != acme.UnauthorizedErrorType {
+				t.Errorf("problem type = %q, want unauthorized", answered[0].Error.Type)
+			}
+			if !strings.Contains(answered[0].Error.Detail, "_acme-challenge.tierplan.example.com") {
+				t.Errorf("problem detail %q does not name the record", answered[0].Error.Detail)
+			}
+		})
+	}
+}
+
+func TestFakeDNS01AcceptsTheRightValueAmongOthers(t *testing.T) {
+	t.Parallel()
+	dns := newTXTRecords()
+	f := newFix(t, Options{ChallengeType: "dns-01", LookupTXT: dns.lookup})
+	order, err := f.core.Orders.New(f.ctx, []string{"tierplan.example.com"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := f.solveDNS(t, order, func(name, value string) { dns.set("_acme-challenge."+name, "stale", value) })
+	if len(answered) != 1 || answered[0].Status != acme.StatusValid {
+		t.Fatalf("challenge = %+v, want valid", answered)
+	}
+}
+
+func TestFakeDNS01ScriptedFailureWinsAndLooksNothingUp(t *testing.T) {
+	t.Parallel()
+	dns := newTXTRecords()
+	f := newFix(t, Options{ChallengeType: "dns-01", LookupTXT: dns.lookup})
+	f.fake.FailValidation("tierplan.example.com", Problem{Type: "dns", Detail: "DNS problem: SERVFAIL"})
+	order, err := f.core.Orders.New(f.ctx, []string{"tierplan.example.com"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := f.solveDNS(t, order, func(name, value string) { dns.set("_acme-challenge."+name, value) })
+	if len(answered) != 1 || answered[0].Status != acme.StatusInvalid || answered[0].Error == nil || answered[0].Error.Type != acme.DNSErrorType {
+		t.Fatalf("challenge = %+v, want invalid with a dns problem", answered)
+	}
+	if n := f.fake.TXTLookups("_acme-challenge.tierplan.example.com"); n != 0 {
+		t.Errorf("a scripted failure still looked the record up %d times", n)
 	}
 }

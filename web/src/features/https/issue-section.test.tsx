@@ -20,6 +20,7 @@ import {
   acmeRunFrame,
   acmeStep,
   acmeSteps,
+  acmeStepsDNS01,
   httpsACME,
   httpsStatus,
 } from "@/test-https";
@@ -865,5 +866,186 @@ describe("a dropped stream", () => {
     const settled = reads();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(reads()).toBe(settled);
+  });
+});
+
+describe("a dropped stream during a DNS-01 run (E8 overflow)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("says Reconnecting... over eight steps and reads the status every 5 seconds, as for HTTP-01", async () => {
+    status = () =>
+      withACME({ challengeType: "dns-01", activeRun: acmeActiveRun({ challenge: "dns-01" }) });
+    await ready();
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const frame = acmeRunFrame({
+      challenge: "dns-01",
+      items: acmeStepsDNS01({
+        account: "done",
+        order: "done",
+        challenge: "done",
+        propagation: "running",
+      }),
+    });
+    act(() => stream().sendFrame("snapshot", frame));
+    const panel = await card().findByRole("list", { name: "Steps" });
+    expect(panel.querySelectorAll("li")).toHaveLength(8);
+    const reads = () => sent.filter((s) => s.path === "/api/https/status").length;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"] });
+    act(() => stream().fail());
+    await waitUnderFakeClock(() => expect(card().getByText("Reconnecting...")).toBeTruthy());
+    const before = reads();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitUnderFakeClock(() => expect(reads()).toBeGreaterThan(before));
+    // The panel keeps its eight rows while the stream is down.
+    expect(card().getByRole("list", { name: "Steps" }).querySelectorAll("li")).toHaveLength(8);
+  });
+});
+
+describe("an unsaved validation draft (J4)", () => {
+  const pickDNS = () => fireEvent.click(card().getByRole("radio", { name: /DNS-01/ }));
+  const pickHTTP = () => fireEvent.click(card().getByRole("radio", { name: /HTTP-01/ }));
+  const UNSAVED = "Save your validation settings first.";
+
+  it("makes Issue certificate and Renew now aria-disabled, described by 'Save your validation settings first.'", async () => {
+    status = () =>
+      served({ namesMismatch: true, names: [{ name: "new.example.com", refused: false }] });
+    await ready();
+    expect(isDisabled(issueButton())).toBe(false);
+    expect(isDisabled(renewButton())).toBe(false);
+    pickDNS();
+    for (const button of [issueButton(), renewButton()]) {
+      expect(isDisabled(button)).toBe(true);
+      expect(describedBy(button)).toBe(UNSAVED);
+    }
+    fireEvent.click(issueButton() as HTMLElement);
+    fireEvent.click(renewButton() as HTMLElement);
+    await flush();
+    expect(posts()).toEqual([]);
+  });
+
+  it("frees the buttons again when the draft goes back to the saved method", async () => {
+    status = () => served();
+    await ready();
+    pickDNS();
+    expect(isDisabled(renewButton())).toBe(true);
+    pickHTTP();
+    expect(isDisabled(renewButton())).toBe(false);
+    expect(card().queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("gives a wait as the reason when there is one, and the unsaved line only after it", async () => {
+    const until = inAnHour();
+    status = () => served({ blocked: { reason: "told_to_wait", until } });
+    await ready();
+    pickDNS();
+    expect(isDisabled(renewButton())).toBe(true);
+    expect(describedBy(renewButton())).toBe(
+      `Let's Encrypt asked TierPlan to wait. You can try again at ${formatClock(until)}.`,
+    );
+    expect(card().queryByText(UNSAVED)).toBeNull();
+  });
+});
+
+describe("E6: the 'Validation method changed' prompt (D-03)", () => {
+  const TITLE = "Validation method changed";
+  const RENEW_BODY = (method: string) =>
+    `The certificate in use hasn't changed. TierPlan uses ${method} from the next order. Renew now to test it.`;
+  const ISSUE_BODY = (method: string) =>
+    `No certificate has been ordered with ${method} yet. Issue certificate to test it.`;
+  const prompt = () =>
+    (card().queryByText(TITLE)?.closest('[role="note"]') ?? null) as HTMLElement | null;
+
+  it("is not rendered unless the status says the settings are untested, and is never an empty alert (empty)", async () => {
+    status = () => served();
+    await ready();
+    expect(card().queryByText(TITLE)).toBeNull();
+    expect(prompt()).toBeNull();
+  });
+
+  it("offers the Renew variant naming DNS-01 when Renew now is offered (populated)", async () => {
+    status = () => served({ challengeType: "dns-01", validationUntested: true });
+    await ready();
+    const el = prompt() as HTMLElement;
+    expect(within(el).getByText(RENEW_BODY("DNS-01"))).toBeTruthy();
+    expect(renewButton()).not.toBeNull();
+  });
+
+  it("names HTTP-01 when that is the saved method (populated)", async () => {
+    status = () => served({ challengeType: "http-01", validationUntested: true });
+    await ready();
+    expect(within(prompt() as HTMLElement).getByText(RENEW_BODY("HTTP-01"))).toBeTruthy();
+  });
+
+  it("offers the Issue-only variant when only Issue certificate is offered (populated)", async () => {
+    status = () => withACME({ challengeType: "dns-01", validationUntested: true });
+    await ready();
+    expect(issueButton()).not.toBeNull();
+    expect(renewButton()).toBeNull();
+    expect(within(prompt() as HTMLElement).getByText(ISSUE_BODY("DNS-01"))).toBeTruthy();
+  });
+
+  it("sits directly above the helper and the buttons, with no button and no dismiss of its own", async () => {
+    status = () => served({ validationUntested: true });
+    await ready();
+    const el = prompt() as HTMLElement;
+    expect(within(el).queryAllByRole("button")).toEqual([]);
+    const helper = card().getByText(
+      /TierPlan switches to the new certificate as soon as it is ready/,
+    );
+    expect(el.nextElementSibling).toBe(helper);
+    expect(helper.nextElementSibling?.contains(renewButton())).toBe(true);
+  });
+
+  it("is not rendered while a run is active (state C)", async () => {
+    status = () => served({ validationUntested: true, activeRun: acmeActiveRun() });
+    await ready();
+    expect(prompt()).toBeNull();
+  });
+
+  it("goes when the status stops saying the settings are untested", async () => {
+    status = () => served({ validationUntested: true });
+    await ready();
+    expect(prompt()).not.toBeNull();
+    status = () => served({ validationUntested: false });
+    await act(() => queryClient.invalidateQueries({ queryKey: ["https", "status"] }));
+    await waitFor(() => expect(prompt()).toBeNull());
+  });
+
+  it("keeps the prompt on a paused card while the reason line explains the buttons (partial)", async () => {
+    status = () => served({ validationUntested: true, pausedReason: "restore" });
+    await ready();
+    expect(prompt()).not.toBeNull();
+    expect(card().getByText("Resume Let's Encrypt first.")).toBeTruthy();
+  });
+
+  it("keeps the prompt when Let's Encrypt asked TierPlan to wait (partial)", async () => {
+    const until = inAnHour();
+    status = () => served({ validationUntested: true, blocked: { reason: "told_to_wait", until } });
+    await ready();
+    expect(prompt()).not.toBeNull();
+    expect(
+      card().getByText(
+        `Let's Encrypt asked TierPlan to wait. You can try again at ${formatClock(until)}.`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("keeps the prompt when a Renew now fails, with the failure shown as before (error)", async () => {
+    status = () => served({ validationUntested: true });
+    renewAnswer = () => problem(500, "internal");
+    await ready();
+    fireEvent.click(renewButton() as HTMLElement);
+    await card().findByText("Something went wrong. Try again.");
+    expect(prompt()).not.toBeNull();
+  });
+
+  it("draws no prompt when the viewer has no button to press", async () => {
+    me = viewer;
+    status = () => served({ validationUntested: true });
+    await ready();
+    expect(prompt()).toBeNull();
   });
 });

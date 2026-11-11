@@ -70,6 +70,13 @@ var Tables = map[string]Class{
 	"acme_runs":    Included, // history
 	"acme_orders":  Excluded, // an in-flight order never comes back with a restore
 
+	// Let's Encrypt over DNS-01 (Phase 15). The Cloudflare token is sealed under its provider's name
+	// and registered in vault.SealedColumns, so RewrapAll moves it and a restored instance can renew
+	// after Resume. The record ledger holds the provider's own record IDs: a restored clone must never
+	// delete records by the IDs of the install it was copied from, so it stays behind.
+	"acme_dns_credentials": Included, // token_sealed is re-wrapped by RewrapAll
+	"acme_dns_records":     Excluded, // a restored clone must never delete records by the source install's IDs
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key

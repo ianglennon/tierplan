@@ -1,0 +1,367 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package dnstest
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
+
+	"github.com/ianglennon/tierplan/internal/acme/dns"
+)
+
+// Call is one call the FakeProvider received. It never holds a token.
+type Call struct {
+	// Op is "zone", "create", "get" or "delete".
+	Op string
+	// Name is the name asked about (zone lookup, create) and RecordID the record (get, delete, and a
+	// create that succeeded).
+	Name, ZoneID, RecordID string
+}
+
+// FakeProvider is an in-memory dns.Provider for tests (CHAL-03): it holds zones and TXT records,
+// tells a TXTSink about every record it holds, can be scripted to fail, and deletes only by record
+// ID, as a real provider's delete does. A second provider is proven to fit the seam when a whole
+// order runs on it with no change to the ACME core.
+type FakeProvider struct {
+	// Sink, when set, is told about every record created, deleted or added as foreign.
+	Sink TXTSink
+	// AfterCreate, when set, is called once for each record created, after the record exists and before
+	// the create returns, with no lock held. A test cancels a context there to make the cancel arrive
+	// between the create and whatever the caller does next.
+	AfterCreate func()
+	// BeforeDelete, when set, is called in every delete once the call is recorded, with no lock held, and the delete
+	// goes on when it returns. A test blocks in it to hold a sweep part-way through its rows.
+	BeforeDelete func()
+
+	mu      sync.Mutex
+	zones   []dns.Zone
+	hidden  map[string]bool
+	records []FakeRecord
+	calls   []Call
+	nextID  int
+
+	createErr  error
+	zoneErr    error
+	deleteErr  error
+	deleteLeft int // failures still to serve; negative means every delete fails
+}
+
+// NewFakeProvider is an empty provider.
+func NewFakeProvider() *FakeProvider {
+	return &FakeProvider{hidden: map[string]bool{}}
+}
+
+// FakeDefaultAccount is the account the FakeProvider's AddZone puts a zone in.
+const FakeDefaultAccount = "fake-account"
+
+// AddZone adds a zone to FakeDefaultAccount with the nameservers a propagation check asks, and returns its ID.
+func (f *FakeProvider) AddZone(name string, nameservers ...string) string {
+	return f.AddZoneInAccount(FakeDefaultAccount, name, nameservers...)
+}
+
+// AddZoneInAccount adds a zone to an account and returns its ID.
+func (f *FakeProvider) AddZoneInAccount(account, name string, nameservers ...string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	z := dns.Zone{ID: fmt.Sprintf("zone-%d", f.nextID), Name: strings.ToLower(name), AccountID: account, NameServers: slices.Clone(nameservers)}
+	f.zones = append(f.zones, z)
+	return z.ID
+}
+
+// HideZone makes the token unable to see the zone, as a zone-scoped token does not see another.
+func (f *FakeProvider) HideZone(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hidden[strings.ToLower(name)] = true
+}
+
+// RemoveZone deletes a zone and the records in it, as deleting a zone at a provider does. Its ID becomes
+// one the provider does not know: a delete under it is refused as the real provider refuses it
+// (dns.ErrZoneRefused), and a lookup of its name no longer finds it.
+func (f *FakeProvider) RemoveZone(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name = strings.ToLower(name)
+	var gone []string
+	for _, z := range f.zones {
+		if z.Name == name {
+			gone = append(gone, z.ID)
+		}
+	}
+	f.zones = slices.DeleteFunc(f.zones, func(z dns.Zone) bool { return z.Name == name })
+	f.records = slices.DeleteFunc(f.records, func(r FakeRecord) bool { return slices.Contains(gone, r.Zone) })
+}
+
+// Factory builds providers over this fake. A token other than acceptToken is a token the provider
+// does not accept: every call fails with dns_token_invalid.
+func (f *FakeProvider) Factory(acceptToken string) dns.Factory {
+	return func(token string) dns.Provider { return &fakeHandle{f: f, ok: token == acceptToken} }
+}
+
+// Records is a copy of every record the fake holds.
+func (f *FakeProvider) Records() []FakeRecord {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.records)
+}
+
+// AddForeignTXT adds a record TierPlan did not create, in the zone that holds name, and returns its ID.
+func (f *FakeProvider) AddForeignTXT(name, value string) string {
+	f.mu.Lock()
+	z, _ := f.zoneLocked(name, true)
+	f.nextID++
+	r := FakeRecord{ID: fmt.Sprintf("foreign-%d", f.nextID), Zone: z.ID, Name: strings.ToLower(name), Content: `"` + value + `"`}
+	f.records = append(f.records, r)
+	sink := f.Sink
+	f.mu.Unlock()
+	if sink != nil {
+		sink.AddTXT(r.Name, value)
+	}
+	return r.ID
+}
+
+// FailCreate makes every create fail with err; nil ends it.
+func (f *FakeProvider) FailCreate(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createErr = err
+}
+
+// FailZone makes every zone lookup fail with err; nil ends it.
+func (f *FakeProvider) FailZone(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.zoneErr = err
+}
+
+// FailDelete makes the next times deletes fail with err; a negative times makes every delete fail,
+// and zero ends it.
+func (f *FakeProvider) FailDelete(times int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteErr, f.deleteLeft = err, times
+}
+
+// Calls is a copy of every call received, in order.
+func (f *FakeProvider) Calls() []Call {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
+}
+
+// CallCount is how many calls of op were received.
+func (f *FakeProvider) CallCount(op string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.Op == op {
+			n++
+		}
+	}
+	return n
+}
+
+// zoneLocked is the zone with the longest name that holds name. When includeHidden is false a hidden
+// zone is not seen.
+func (f *FakeProvider) zoneLocked(name string, includeHidden bool) (dns.Zone, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	var best dns.Zone
+	found := false
+	for _, z := range f.zones {
+		if !includeHidden && f.hidden[z.Name] {
+			continue
+		}
+		if (name == z.Name || strings.HasSuffix(name, "."+z.Name)) && (!found || len(z.Name) > len(best.Name)) {
+			best, found = z, true
+		}
+	}
+	return best, found
+}
+
+// seesAnyZoneLocked reports whether the token sees at least one zone.
+func (f *FakeProvider) seesAnyZoneLocked() bool {
+	for _, z := range f.zones {
+		if !f.hidden[z.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *FakeProvider) hasZoneLocked(id string) bool {
+	for _, z := range f.zones {
+		if z.ID == id && !f.hidden[z.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+type fakeHandle struct {
+	f  *FakeProvider
+	ok bool
+}
+
+func (h *fakeHandle) Name() string { return "fake" }
+
+func (h *fakeHandle) record(c Call) {
+	h.f.calls = append(h.f.calls, c)
+}
+
+func (h *fakeHandle) denied(op string) error {
+	return &dns.Error{Provider: "fake", Op: op, Class: dns.ClassTokenInvalid, Status: 403}
+}
+
+func (h *fakeHandle) Zone(_ context.Context, fqdn string) (dns.Zone, error) {
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	h.record(Call{Op: "zone", Name: fqdn})
+	if !h.ok {
+		return dns.Zone{}, h.denied("find zone")
+	}
+	if h.f.zoneErr != nil {
+		return dns.Zone{}, h.f.zoneErr
+	}
+	z, found := h.f.zoneLocked(fqdn, false)
+	if !found {
+		if !h.f.seesAnyZoneLocked() {
+			// A token that lists no zone at all is not scoped to any, as the real provider says.
+			return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: dns.ClassTokenScope, Host: fqdn}
+		}
+		return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: dns.ClassZoneNotFound, Host: fqdn}
+	}
+	return z, nil
+}
+
+// AccountZone finds the zone called name in an account among the zones the token sees.
+func (h *fakeHandle) AccountZone(_ context.Context, accountID, name string) (dns.Zone, error) {
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	h.record(Call{Op: "account_zone", Name: name})
+	if !h.ok {
+		return dns.Zone{}, h.denied("find zone")
+	}
+	if h.f.zoneErr != nil {
+		return dns.Zone{}, h.f.zoneErr
+	}
+	name = strings.ToLower(name)
+	seesAccount := false
+	for _, z := range h.f.zones {
+		if z.AccountID != accountID || h.f.hidden[z.Name] {
+			continue
+		}
+		seesAccount = true
+		if z.Name == name {
+			return z, nil
+		}
+	}
+	class := dns.ClassTokenScope // sees no zone in the account at all
+	if seesAccount {
+		class = dns.ClassZoneNotFound
+	}
+	return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: class, Host: name}
+}
+
+func (h *fakeHandle) CreateTXT(_ context.Context, z dns.Zone, fqdn, value, comment string) (dns.RecordRef, error) {
+	h.f.mu.Lock()
+	h.record(Call{Op: "create", Name: strings.ToLower(fqdn), ZoneID: z.ID})
+	call := len(h.f.calls) - 1
+	if !h.ok {
+		h.f.mu.Unlock()
+		return dns.RecordRef{}, h.denied("create record")
+	}
+	if h.f.createErr != nil {
+		err := h.f.createErr
+		h.f.mu.Unlock()
+		return dns.RecordRef{}, err
+	}
+	if !h.f.hasZoneLocked(z.ID) {
+		h.f.mu.Unlock()
+		return dns.RecordRef{}, &dns.Error{Provider: "fake", Op: "create record", Class: dns.ClassZoneNotFound, Host: fqdn}
+	}
+	name := strings.ToLower(fqdn)
+	for _, have := range h.f.records {
+		if have.Zone == z.ID && have.Name == name && have.Value() == value {
+			h.f.mu.Unlock()
+			return dns.RecordRef{}, &dns.Error{Provider: "fake", Op: "create record", Class: dns.ClassUnavailable, Status: 400, Err: dns.ErrIdentical}
+		}
+	}
+	h.f.nextID++
+	rec := FakeRecord{ID: fmt.Sprintf("rec-%d", h.f.nextID), Zone: z.ID, Name: name, Content: `"` + value + `"`, Comment: comment}
+	h.f.records = append(h.f.records, rec)
+	h.f.calls[call].RecordID = rec.ID // a create that succeeded names the record it made
+	sink, after := h.f.Sink, h.f.AfterCreate
+	h.f.mu.Unlock()
+	if sink != nil {
+		sink.AddTXT(rec.Name, value)
+	}
+	if after != nil {
+		after()
+	}
+	return dns.RecordRef{ZoneID: z.ID, RecordID: rec.ID}, nil
+}
+
+func (h *fakeHandle) GetTXT(_ context.Context, ref dns.RecordRef) (dns.Record, error) {
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	h.record(Call{Op: "get", ZoneID: ref.ZoneID, RecordID: ref.RecordID})
+	if !h.ok {
+		return dns.Record{}, h.denied("read record")
+	}
+	for _, r := range h.f.records {
+		if r.ID == ref.RecordID && r.Zone == ref.ZoneID {
+			return dns.Record{Name: r.Name, Content: r.Value(), Comment: r.Comment}, nil
+		}
+	}
+	return dns.Record{}, &dns.Error{Provider: "fake", Op: "read record", Class: dns.ClassUnavailable, Status: 404}
+}
+
+// DeleteTXT deletes by ID and nothing else. A record that is not there is success.
+func (h *fakeHandle) DeleteTXT(_ context.Context, ref dns.RecordRef) error {
+	h.f.mu.Lock()
+	h.record(Call{Op: "delete", ZoneID: ref.ZoneID, RecordID: ref.RecordID})
+	if before := h.f.BeforeDelete; before != nil {
+		h.f.mu.Unlock()
+		before()
+		h.f.mu.Lock()
+	}
+	if !h.ok {
+		h.f.mu.Unlock()
+		return h.denied("delete record")
+	}
+	if h.f.deleteLeft != 0 && h.f.deleteErr != nil {
+		if h.f.deleteLeft > 0 {
+			h.f.deleteLeft--
+		}
+		err := h.f.deleteErr
+		h.f.mu.Unlock()
+		return err
+	}
+	if !h.f.hasZoneLocked(ref.ZoneID) {
+		// A zone ID the token does not know, whether the zone is gone or only hidden from this token,
+		// is refused with no more to say, like the real provider's 403 (dns.ErrZoneRefused).
+		h.f.mu.Unlock()
+		return &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassTokenScope, Status: 403, Code: 10000, Err: dns.ErrZoneRefused}
+	}
+	var gone FakeRecord
+	found := false
+	h.f.records = slices.DeleteFunc(h.f.records, func(r FakeRecord) bool {
+		if r.ID == ref.RecordID && r.Zone == ref.ZoneID {
+			gone, found = r, true
+			return true
+		}
+		return false
+	})
+	sink := h.f.Sink
+	h.f.mu.Unlock()
+	if found && sink != nil {
+		sink.RemoveTXT(gone.Name, gone.Value())
+	}
+	return nil
+}
