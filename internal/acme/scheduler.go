@@ -41,7 +41,8 @@ func (m *Manager) Run(ctx context.Context) {
 // run is in progress it leaves everything to the run. What is served is put right first, because that
 // is local and a lapsed certificate must not wait on anything (D-15). While paused after a restore
 // nothing more is done: no request to the CA is made, whether to ask for renewal information, to
-// renew or to continue an order (ACME-08).
+// renew or to continue an order (ACME-08), and no DNS record is deleted (D-23). The left-over DNS
+// records that are due go next, then the renewal.
 func (m *Manager) round(ctx context.Context) {
 	if m.d.CertFiles || ctx.Err() != nil || m.runActive() {
 		return
@@ -58,6 +59,9 @@ func (m *Manager) round(ctx context.Context) {
 	if st.PausedReason != "" {
 		return
 	}
+	// Left-over DNS records are retried when their next try is due, whatever the saved challenge is and
+	// whether or not Let's Encrypt is in use, before anything that could start a run (D-17, D-18).
+	m.sweepDNS(ctx, true)
 	if m.resumeRound(ctx) {
 		return
 	}
