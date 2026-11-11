@@ -678,3 +678,81 @@ describe("Validation section: disabled and read-only", () => {
     expect(card().getByText("You can view these settings but not change them.")).toBeTruthy();
   });
 });
+
+describe("Validation section: the DNS-01 suggestion (D-02, J2)", () => {
+  const SUGGEST = { host: "tierplan.example.com", address: "192.168.1.20" };
+  const TITLE = "DNS-01 may suit this install better";
+  const alert = () => card().getByText(TITLE).closest('[role="note"]') as HTMLElement;
+
+  it("is not drawn when the server suggests nothing", async () => {
+    await ready();
+    expect(card().queryByText(TITLE)).toBeNull();
+  });
+
+  it("is not drawn once DNS-01 is the draft", async () => {
+    status = () => Response.json(withACME({ suggestDns01: SUGGEST }));
+    await ready();
+    expect(card().getByText(TITLE)).toBeTruthy();
+    pickDNS();
+    expect(card().queryByText(TITLE)).toBeNull();
+  });
+
+  it("is not drawn when DNS-01 is the saved method", async () => {
+    status = () => Response.json(withACME({ suggestDns01: SUGGEST, challengeType: "dns-01" }));
+    await ready();
+    pickHTTP();
+    expect(card().queryByText(TITLE)).toBeNull();
+  });
+
+  it("names the host and the address, with a Use DNS-01 action", async () => {
+    status = () => Response.json(withACME({ suggestDns01: SUGGEST }));
+    await ready();
+    expect(alert().textContent).toContain(
+      "tierplan.example.com points at a private address (192.168.1.20) as this server sees it.",
+    );
+    expect(alert().textContent).toContain("DNS-01 doesn't need Let's Encrypt to reach TierPlan.");
+    expect(within(alert()).getByRole("button", { name: "Use DNS-01" })).toBeTruthy();
+  });
+
+  it("wraps a long host in mono code that breaks anywhere", async () => {
+    const host = `${"a".repeat(60)}.internal.example.com`;
+    status = () => Response.json(withACME({ suggestDns01: { host, address: "10.0.0.5" } }));
+    await ready();
+    const code = within(alert()).getByText(host);
+    expect(code.tagName).toBe("CODE");
+    expect(code.className).toContain("break-all");
+    expect(code.className).toContain("font-mono");
+  });
+
+  it("selects DNS-01 in the draft only and focuses the token input, requesting nothing", async () => {
+    status = () => Response.json(withACME({ suggestDns01: SUGGEST }));
+    await ready();
+    const before = sent.length;
+    fireEvent.click(within(alert()).getByRole("button", { name: "Use DNS-01" }));
+    await waitFor(() => expect(document.activeElement).toBe(tokenInput()));
+    expect(
+      card()
+        .getByRole("radio", { name: /DNS-01/ })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(sent).toHaveLength(before);
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("focuses Replace token when a token is already saved", async () => {
+    status = () =>
+      Response.json(withACME({ suggestDns01: SUGGEST, dns: acmeDNSStatus({ tokenSaved: true }) }));
+    await ready();
+    fireEvent.click(within(alert()).getByRole("button", { name: "Use DNS-01" }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(card().getByRole("button", { name: "Replace token" })),
+    );
+  });
+
+  it("is not drawn in a disabled section", async () => {
+    status = () =>
+      Response.json(withACME({ suggestDns01: SUGGEST, pausedReason: "restore", hasState: true }));
+    await ready();
+    expect(card().queryByRole("button", { name: "Use DNS-01" })).toBeNull();
+  });
+});
