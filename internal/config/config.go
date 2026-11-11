@@ -43,6 +43,15 @@ const (
 	envACMECAFile       = "TIERPLAN_ACME_CA_FILE"
 )
 
+// The environment variables that set TierPlan's HTTPS and ACME behaviour. They are exported so the
+// acme and api packages name a variable in a lock label or a message without repeating the string.
+const (
+	// EnvACME turns Let's Encrypt on or off (on|off).
+	EnvACME = "TIERPLAN_ACME"
+	// EnvACMEAcceptTOS accepts the CA's terms of service; TIERPLAN_ACME=on requires it.
+	EnvACMEAcceptTOS = "TIERPLAN_ACME_ACCEPT_TOS"
+)
+
 // redactedMark replaces the value of a set secret in Redacted.
 const redactedMark = "[redacted]"
 
@@ -86,6 +95,11 @@ type Config struct {
 	// TierPlan's own host. Optional: when it is not there the check says so.
 	HostRouteFile string
 
+	// ACME is the HTTPS and Let's Encrypt side of the environment, parsed and validated once at start.
+	// It is env-only: it is never written to the database, and the ACME manager applies it through
+	// accessors so a set variable locks the matching Settings field (D-02).
+	ACME ACMEEnv
+
 	TLSCertFile string
 	TLSKeyFile  string
 	// ACMEDirectoryURL overrides the ACME directory TierPlan talks to, and ACMECAFile is the PEM of the
@@ -127,6 +141,15 @@ type Config struct {
 
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string
+}
+
+// ACMEEnv is what the TIERPLAN_ACME* variables say. A field left at its zero value (nil for a switch)
+// means the variable is unset, and then the stored setting applies.
+type ACMEEnv struct {
+	// Enabled is TIERPLAN_ACME: nil when unset, otherwise whether Let's Encrypt is on.
+	Enabled *bool
+	// AcceptTOS is TIERPLAN_ACME_ACCEPT_TOS=true: the CA's terms of service are accepted.
+	AcceptTOS bool
 }
 
 // setting is one row of the table.
@@ -252,6 +275,31 @@ var settings = []setting{
 		}},
 	{env: envACMECAFile, flag: "acme-ca-file", desc: "PEM file of the CA that signs the ACME directory's HTTPS certificate. Testing only and unsupported",
 		apply: func(c *Config, raw string) error { c.ACMECAFile = raw; return nil }},
+	{env: EnvACME, desc: "turns Let's Encrypt on or off and locks Issue and Stop to match",
+		apply: func(c *Config, raw string) error {
+			if raw == "" {
+				c.ACME.Enabled = nil
+				return nil
+			}
+			on, err := parseSwitch(raw)
+			if err != nil {
+				return err
+			}
+			c.ACME.Enabled = &on
+			return nil
+		}},
+	{env: EnvACMEAcceptTOS, desc: "accepts the CA's terms of service; TIERPLAN_ACME=on requires it",
+		apply: func(c *Config, raw string) error {
+			switch strings.ToLower(raw) {
+			case "":
+				c.ACME.AcceptTOS = false
+			case "true", "on":
+				c.ACME.AcceptTOS = true
+			default:
+				return errors.New("must be true")
+			}
+			return nil
+		}},
 	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", desc: "deprecated and without effect: TierPlan always serves HTTPS with a self-signed certificate unless a certificate file is supplied; any value is accepted and logged at start",
 		apply: func(c *Config, raw string) error {
 			// A stale value must never stop startup, so one that is not a boolean reads as not true.
@@ -402,6 +450,9 @@ func (c Config) crossCheck() error {
 	if c.ACMECAFile != "" && c.ACMEDirectoryURL == "" {
 		return fmt.Errorf("%s is set without %s; the CA file only applies to a directory you name", envACMECAFile, envACMEDirectoryURL)
 	}
+	if c.ACME.Enabled != nil && *c.ACME.Enabled && !c.ACME.AcceptTOS {
+		return fmt.Errorf("%s is on without %s=true; Let's Encrypt needs its terms of service accepted", EnvACME, EnvACMEAcceptTOS)
+	}
 	// A window shorter than two heartbeats would call an agent offline after one
 	// late or lost heartbeat.
 	if c.AgentOfflineAfter < 2*c.AgentHeartbeatInterval {
@@ -435,6 +486,17 @@ func Names() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// parseSwitch reads an on/off switch: on, off, true or false, in any ASCII case.
+func parseSwitch(raw string) (bool, error) {
+	switch strings.ToLower(raw) {
+	case "on", "true":
+		return true, nil
+	case "off", "false":
+		return false, nil
+	}
+	return false, errors.New("must be on or off")
 }
 
 func parseInt(raw string, minimum int) (int, error) {

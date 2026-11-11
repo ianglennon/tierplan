@@ -840,3 +840,84 @@ func TestACMEDirectoryOverrideSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestACMEEnvSwitchParses(t *testing.T) {
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ACME.Enabled != nil || c.ACME.AcceptTOS {
+		t.Errorf("unset gave Enabled=%v AcceptTOS=%v, want nil and false", c.ACME.Enabled, c.ACME.AcceptTOS)
+	}
+	for value, want := range map[string]bool{"on": true, "ON": true, "true": true, "off": false, "False": false} {
+		// "on" needs the terms; "off" does not, and giving them anyway is harmless.
+		c, err := load(t, nil, envMap{"TIERPLAN_ACME": value, "TIERPLAN_ACME_ACCEPT_TOS": "true"}, files{})
+		if err != nil {
+			t.Errorf("TIERPLAN_ACME=%q was rejected: %v", value, err)
+			continue
+		}
+		if c.ACME.Enabled == nil || *c.ACME.Enabled != want {
+			t.Errorf("TIERPLAN_ACME=%q gave Enabled=%v, want %v", value, c.ACME.Enabled, want)
+		}
+		if !c.ACME.AcceptTOS {
+			t.Errorf("TIERPLAN_ACME=%q lost AcceptTOS", value)
+		}
+	}
+}
+
+func TestACMEEnvRefusesAnUnknownSwitch(t *testing.T) {
+	_, err := load(t, nil, envMap{"TIERPLAN_ACME": "maybe"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_ACME: must be on or off") {
+		t.Errorf("TIERPLAN_ACME=maybe error = %v", err)
+	}
+}
+
+func TestACMEEnvOnNeedsTheTermsAccepted(t *testing.T) {
+	_, err := load(t, nil, envMap{"TIERPLAN_ACME": "on"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_ACME") || !strings.Contains(err.Error(), "TIERPLAN_ACME_ACCEPT_TOS") {
+		t.Errorf("on without the terms error = %v, want one naming both variables", err)
+	}
+	c, err := load(t, nil, envMap{"TIERPLAN_ACME": "on", "TIERPLAN_ACME_ACCEPT_TOS": "true"}, files{})
+	if err != nil {
+		t.Fatalf("on with the terms: %v", err)
+	}
+	if c.ACME.Enabled == nil || !*c.ACME.Enabled || !c.ACME.AcceptTOS {
+		t.Errorf("on with the terms loaded as %+v", c.ACME)
+	}
+	// Accepting the terms alone is allowed: the stored setting decides whether ACME is on.
+	if _, err := load(t, nil, envMap{"TIERPLAN_ACME_ACCEPT_TOS": "true"}, files{}); err != nil {
+		t.Errorf("the terms alone were rejected: %v", err)
+	}
+}
+
+func TestACMEEnvAcceptTOSTakesOnlyTrue(t *testing.T) {
+	_, err := load(t, nil, envMap{"TIERPLAN_ACME_ACCEPT_TOS": "yes"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_ACME_ACCEPT_TOS") {
+		t.Errorf("TIERPLAN_ACME_ACCEPT_TOS=yes error = %v", err)
+	}
+	for _, v := range []string{"TRUE", "on"} {
+		c, err := load(t, nil, envMap{"TIERPLAN_ACME_ACCEPT_TOS": v}, files{})
+		if err != nil || !c.ACME.AcceptTOS {
+			t.Errorf("TIERPLAN_ACME_ACCEPT_TOS=%q gave %+v, %v", v, c.ACME, err)
+		}
+	}
+}
+
+func TestACMEEnvEmptyStringIsUnset(t *testing.T) {
+	c, err := load(t, nil, envMap{"TIERPLAN_ACME": "", "TIERPLAN_ACME_ACCEPT_TOS": ""}, files{})
+	if err != nil {
+		t.Fatalf("empty values were rejected: %v", err)
+	}
+	if c.ACME.Enabled != nil || c.ACME.AcceptTOS {
+		t.Errorf("empty values gave %+v, want the zero value", c.ACME)
+	}
+}
+
+func TestACMEEnvNamesAreListed(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{config.EnvACME, config.EnvACMEAcceptTOS} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+}
