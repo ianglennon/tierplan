@@ -5,6 +5,7 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -176,6 +177,88 @@ func TestDNSSweepNeverWhileTheSlotIsBusyInTheScheduler(t *testing.T) {
 			t.Errorf("a round made %d provider calls while a run was active, want 0", n)
 		}
 	})
+}
+
+// While the scheduler's sweep is part-way through its rows it holds the DNS slot (WR-03): Issue, Renew
+// now and any other start are refused with ErrRunActive, so no run can take over a row the sweep is
+// about to delete. The sweep is held inside the provider's delete by channels, so nothing waits on a
+// wall clock.
+func TestDNSSweepInTheSchedulerHoldsTheSlotAgainstRuns(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	row := e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+	entered, release := make(chan struct{}), make(chan struct{})
+	e.prov.BeforeDelete = func() {
+		entered <- struct{}{}
+		<-release
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.mgr.round(ctx)
+	}()
+	<-entered // the sweep has the row in hand and is inside the provider's delete
+
+	if _, err := e.mgr.Issue(ctx, "user:1"); !errors.Is(err, ErrRunActive) {
+		t.Errorf("Issue during the sweep = %v, want ErrRunActive", err)
+	}
+	if _, err := e.mgr.RenewNow(ctx, "user:1"); !errors.Is(err, ErrRunActive) {
+		t.Errorf("RenewNow during the sweep = %v, want ErrRunActive", err)
+	}
+	if _, err := e.mgr.startRun(runParams{trigger: TriggerSchedule, challenge: ChallengeDNS01, req: OrderRequest{Kind: KindRenew}}); !errors.Is(err, ErrRunActive) {
+		t.Errorf("startRun during the sweep = %v, want ErrRunActive", err)
+	}
+	if st, err := e.mgr.Status(ctx); err != nil || st.ActiveRun != nil {
+		t.Errorf("Status during the sweep = %+v, %v, want no active run shown", st.ActiveRun, err)
+	}
+	// A second round meanwhile leaves the rows alone: the first one has them.
+	if n := e.prov.CallCount("delete"); n != 1 {
+		t.Errorf("delete calls = %d during the sweep, want only the one in flight", n)
+	}
+	e.mgr.round(ctx)
+	if n := e.prov.CallCount("delete"); n != 1 {
+		t.Errorf("a round during the sweep made %d delete calls, want none of its own", n-1)
+	}
+
+	e.prov.BeforeDelete = nil
+	close(release)
+	<-done
+
+	if got := e.deletes(); len(got) != 1 || got[0] != row.RecordID {
+		t.Errorf("deletes = %v, want the left-over record %s deleted once", got, row.RecordID)
+	}
+	if !e.mgr.claimDNS() {
+		t.Fatal("the DNS slot is still held after the round ended")
+	}
+	e.mgr.releaseDNS()
+	rs, err := e.mgr.Issue(ctx, "user:1")
+	if err != nil {
+		t.Fatalf("Issue after the sweep = %v, want it to start", err)
+	}
+	e.wait(rs)
+}
+
+// A round that finds the slot taken between its own check and its claim skips the sweep and carries on.
+func TestDNSSweepRoundSkipsWhenTheSlotIsTaken(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+	if !e.mgr.claimDNS() {
+		t.Fatal("the DNS slot was not free")
+	}
+	before, built := len(e.prov.Calls()), e.built.Load()
+
+	e.mgr.sweepRound(context.Background())
+
+	if n := len(e.prov.Calls()) - before; n != 0 || e.built.Load() != built {
+		t.Errorf("sweepRound made %d provider calls and built %d providers with the slot taken, want none", n, e.built.Load()-built)
+	}
+	e.mgr.releaseDNS() // sweepRound must not have released a slot it did not take
+	if !e.mgr.claimDNS() {
+		t.Error("the slot could not be claimed after the test released it")
+	}
+	if e.mgr.claimDNS() {
+		t.Error("the slot was claimed twice")
+	}
 }
 
 func TestDNSSweepOfAnEmptyLedgerInTheSchedulerBuildsNothing(t *testing.T) {

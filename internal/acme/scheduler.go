@@ -61,7 +61,7 @@ func (m *Manager) round(ctx context.Context) {
 	}
 	// Left-over DNS records are retried when their next try is due, whatever the saved challenge is and
 	// whether or not Let's Encrypt is in use, before anything that could start a run (D-17, D-18).
-	m.sweepDNS(ctx, true)
+	m.sweepRound(ctx)
 	if m.resumeRound(ctx) {
 		return
 	}
@@ -77,6 +77,20 @@ func (m *Manager) round(ctx context.Context) {
 		return
 	}
 	m.renewalRound(ctx, st, leaf)
+}
+
+// sweepRound deletes the left-over DNS records that are due, holding the DNS slot while it does. A run
+// that starts meanwhile would act on the same rows from a snapshot gone stale (Present takes over a row
+// whose delete failed), and the sweep would then delete a record the run is waiting to see. With the
+// slot held, Issue, Renew now and the scheduler's own starts get ErrRunActive until the sweep ends, and
+// a round that finds the slot taken, by a run or a Test token, leaves the rows to the next one. The
+// sweep a run makes for itself needs no slot: the run already owns it.
+func (m *Manager) sweepRound(ctx context.Context) {
+	if !m.claimDNS() {
+		return
+	}
+	defer m.releaseDNS()
+	m.sweepDNS(ctx, true)
 }
 
 // settled writes the end of a run that could not be written when it ended, and reports whether

@@ -33,6 +33,9 @@ type FakeProvider struct {
 	// the create returns, with no lock held. A test cancels a context there to make the cancel arrive
 	// between the create and whatever the caller does next.
 	AfterCreate func()
+	// BeforeDelete, when set, is called in every delete once the call is recorded, with no lock held, and the delete
+	// goes on when it returns. A test blocks in it to hold a sweep part-way through its rows.
+	BeforeDelete func()
 
 	mu      sync.Mutex
 	zones   []dns.Zone
@@ -244,6 +247,11 @@ func (h *fakeHandle) GetTXT(_ context.Context, ref dns.RecordRef) (dns.Record, e
 func (h *fakeHandle) DeleteTXT(_ context.Context, ref dns.RecordRef) error {
 	h.f.mu.Lock()
 	h.record(Call{Op: "delete", ZoneID: ref.ZoneID, RecordID: ref.RecordID})
+	if before := h.f.BeforeDelete; before != nil {
+		h.f.mu.Unlock()
+		before()
+		h.f.mu.Lock()
+	}
 	if !h.ok {
 		h.f.mu.Unlock()
 		return h.denied("delete record")
