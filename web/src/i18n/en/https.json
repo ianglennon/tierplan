@@ -128,6 +128,18 @@
         "replace": "Replace token",
         "keep": "Keep the saved token"
       },
+      "remove": {
+        "action": "Remove token",
+        "unavailable": "To remove the token, switch to HTTP-01 and save first. Removing it now would stop renewals.",
+        "title": "Remove the Cloudflare token?",
+        "body": "TierPlan deletes the saved token. You'll need to enter a token again to use DNS-01. Certificates already issued are not affected.",
+        "leftOver_one": "TierPlan needs the token to delete the {{count}} TXT record it left in Cloudflare. Remove it now and it stays there until you delete it yourself.",
+        "leftOver_other": "TierPlan needs the token to delete the {{count}} TXT records it left in Cloudflare. Remove it now and they stay there until you delete them yourself.",
+        "cancel": "Keep token",
+        "confirm": "Remove token",
+        "pending": "Removing...",
+        "done": "Token removed."
+      },
       "advanced": {
         "label": "Advanced DNS"
       },

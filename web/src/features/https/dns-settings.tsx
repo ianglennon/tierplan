@@ -51,6 +51,10 @@ interface DnsSettingsProps {
   busy: boolean;
   advancedOpen: boolean;
   onAdvancedOpenChange: (open: boolean) => void;
+  // What the saved token is saved for, and how many test records TierPlan failed to delete: the Remove
+  // token button and its dialog (D-05, D-18).
+  savedChallenge: "http-01" | "dns-01";
+  leftOverCount: number;
 }
 
 // DnsSettings is the DNS-01 detail of the Validation section (CHAL-01, D-02, D-06, UI-SPEC J1): the
@@ -69,6 +73,8 @@ export function DnsSettings({
   busy,
   advancedOpen,
   onAdvancedOpenChange,
+  savedChallenge,
+  leftOverCount,
 }: DnsSettingsProps) {
   const t = useT();
   const link = (
@@ -106,7 +112,12 @@ export function DnsSettings({
       </Alert>
 
       {tokenSaved && !replacing ? (
-        <TokenSavedRow onReplace={editable ? onReplace : undefined} />
+        <TokenSavedRow
+          onReplace={editable ? onReplace : undefined}
+          savedChallenge={savedChallenge}
+          leftOverCount={leftOverCount}
+          canRemove={editable}
+        />
       ) : (
         <div className="flex flex-col gap-2">
           <TokenField

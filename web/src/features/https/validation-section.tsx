@@ -108,6 +108,7 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
   // by default only when a list is saved.
   const savedResolvers = acme.dns.resolvers ?? [];
   const savedText = savedResolvers.join(", ");
+  const leftOverCount = acme.dns.leftOver?.length ?? 0;
   const [resolverProblem, setResolverProblem] = useState<{ entry?: string } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(savedResolvers.length > 0);
   // Set by "Use DNS-01": move focus to the token input (or Replace token) once it is drawn.
@@ -336,7 +337,14 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
                   <Sentence text={t("https.acme.portNote", { host, flag: SLOT })} slot={flag} />
                 </AlertDescription>
               </Alert>
-              {tokenSaved ? <TokenSavedRow kept /> : null}
+              {tokenSaved ? (
+                <TokenSavedRow
+                  kept
+                  savedChallenge={saved}
+                  leftOverCount={leftOverCount}
+                  canRemove={editable}
+                />
+              ) : null}
             </>
           ) : (
             <DnsSettings
@@ -371,6 +379,8 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
               busy={pending}
               advancedOpen={advancedOpen}
               onAdvancedOpenChange={setAdvancedOpen}
+              savedChallenge={saved}
+              leftOverCount={leftOverCount}
             />
           )}
 
