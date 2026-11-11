@@ -7,9 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/mail"
 
 	legoacme "github.com/go-acme/lego/v5/acme"
+
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 var (
@@ -32,11 +33,8 @@ func (c *Client) Register(ctx context.Context, email string, agreeTOS bool) (Acc
 	if !agreeTOS {
 		return Account{}, ErrTOSNotAccepted
 	}
-	if email != "" {
-		addr, err := mail.ParseAddress(email)
-		if err != nil || addr.Address != email {
-			return Account{}, ErrContactInvalid
-		}
+	if email != "" && !config.ValidContactEmail(email) {
+		return Account{}, ErrContactInvalid
 	}
 
 	c.register.Lock()

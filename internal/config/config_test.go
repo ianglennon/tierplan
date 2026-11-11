@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -916,6 +917,189 @@ func TestACMEEnvEmptyStringIsUnset(t *testing.T) {
 func TestACMEEnvNamesAreListed(t *testing.T) {
 	names := strings.Join(config.Names(), " ")
 	for _, want := range []string{config.EnvACME, config.EnvACMEAcceptTOS} {
+		if !strings.Contains(names, want) {
+			t.Errorf("Names() does not list %s", want)
+		}
+	}
+}
+
+func TestACMEEnvEmailMustBeABareAddress(t *testing.T) {
+	c, err := load(t, nil, envMap{"TIERPLAN_ACME_EMAIL": "ops@example.com"}, files{})
+	if err != nil || c.ACME.Email != "ops@example.com" {
+		t.Fatalf("a bare address gave %q, %v", c.ACME.Email, err)
+	}
+	for _, bad := range []string{"Ops <ops@example.com>", "not-an-email", "a@b@c"} {
+		_, err := load(t, nil, envMap{"TIERPLAN_ACME_EMAIL": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_ACME_EMAIL") {
+			t.Errorf("TIERPLAN_ACME_EMAIL=%q error = %v", bad, err)
+		}
+	}
+	if !config.ValidContactEmail("ops@example.com") || config.ValidContactEmail("Ops <ops@example.com>") || config.ValidContactEmail("") {
+		t.Error("ValidContactEmail must accept a bare address only")
+	}
+}
+
+func TestACMEEnvChallengeIsHeldLowerCase(t *testing.T) {
+	for in, want := range map[string]string{"HTTP-01": "http-01", "http-01": "http-01", "DNS-01": "dns-01"} {
+		c, err := load(t, nil, envMap{"TIERPLAN_ACME_CHALLENGE": in}, files{})
+		if err != nil || c.ACME.Challenge != want {
+			t.Errorf("TIERPLAN_ACME_CHALLENGE=%q gave %q, %v; want %q", in, c.ACME.Challenge, err, want)
+		}
+	}
+	_, err := load(t, nil, envMap{"TIERPLAN_ACME_CHALLENGE": "tls-alpn-01"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_ACME_CHALLENGE") {
+		t.Errorf("tls-alpn-01 error = %v", err)
+	}
+}
+
+func TestACMEEnvProviderAndTokenGoTogether(t *testing.T) {
+	c, err := load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "Cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": "x"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ACME.DNSProvider != "cloudflare" || c.ACME.CloudflareToken != "x" || c.ACME.TokenVar != "TIERPLAN_CLOUDFLARE_API_TOKEN" {
+		t.Errorf("provider and plain token loaded as %+v", c.ACME)
+	}
+	if c.ACME.TokenVar != config.EnvCloudflareToken {
+		t.Errorf("TokenVar %q is not EnvCloudflareToken", c.ACME.TokenVar)
+	}
+
+	c, err = load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/run/secrets/cf"}, files{"/run/secrets/cf": "tok\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ACME.CloudflareToken != "tok" || c.ACME.TokenVar != config.EnvCloudflareTokenFile {
+		t.Errorf("provider and file token loaded as %+v", c.ACME)
+	}
+
+	_, err = load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "route53", "TIERPLAN_CLOUDFLARE_API_TOKEN": "x"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_DNS_PROVIDER") {
+		t.Errorf("route53 error = %v", err)
+	}
+	_, err = load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_DNS_PROVIDER") ||
+		!strings.Contains(err.Error(), "TIERPLAN_CLOUDFLARE_API_TOKEN") || !strings.Contains(err.Error(), "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE") {
+		t.Errorf("provider without a token error = %v", err)
+	}
+	_, err = load(t, nil, envMap{"TIERPLAN_CLOUDFLARE_API_TOKEN": "x"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_DNS_PROVIDER") {
+		t.Errorf("token without a provider error = %v", err)
+	}
+}
+
+func TestACMEEnvTokenFollowsTheFileRules(t *testing.T) {
+	both := envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": "x", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"}
+	if _, err := load(t, nil, both, files{"/t": "y"}); err == nil || !strings.Contains(err.Error(), "set only one") {
+		t.Errorf("both forms error = %v, want one saying to set only one", err)
+	}
+	onlyFile := envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"}
+	if _, err := load(t, nil, onlyFile, files{"/t": ""}); err == nil || !strings.Contains(err.Error(), "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE") {
+		t.Errorf("empty token file error = %v", err)
+	}
+	// An empty variable is unset, so TokenVar stays empty and no provider is needed.
+	c, err := load(t, nil, envMap{"TIERPLAN_CLOUDFLARE_API_TOKEN": ""}, files{})
+	if err != nil || c.ACME.TokenVar != "" || c.ACME.CloudflareToken != "" {
+		t.Errorf("an empty token variable loaded as %+v, %v", c.ACME, err)
+	}
+}
+
+func TestACMEEnvResolversKeepTheOperatorsOrder(t *testing.T) {
+	c, err := load(t, nil, envMap{"TIERPLAN_DNS_RESOLVERS": "1.1.1.1, 9.9.9.9:53,1.1.1.1"}, files{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1.1.1.1:53", "9.9.9.9:53"}; !slices.Equal(c.ACME.Resolvers, want) || !c.ACME.ResolversSet {
+		t.Errorf("resolvers = %v (set %v), want %v", c.ACME.Resolvers, c.ACME.ResolversSet, want)
+	}
+	for _, bad := range []string{"not a resolver", ","} {
+		_, err := load(t, nil, envMap{"TIERPLAN_DNS_RESOLVERS": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_DNS_RESOLVERS") {
+			t.Errorf("TIERPLAN_DNS_RESOLVERS=%q error = %v", bad, err)
+		}
+	}
+	c, err = load(t, nil, envMap{"TIERPLAN_DNS_RESOLVERS": ""}, files{})
+	if err != nil || c.ACME.ResolversSet || c.ACME.Resolvers != nil {
+		t.Errorf("an empty resolver variable loaded as %+v, %v", c.ACME, err)
+	}
+}
+
+func TestACMEEnvProfileNames(t *testing.T) {
+	c, err := load(t, nil, envMap{"TIERPLAN_ACME_PROFILE": "shortlived"}, files{})
+	if err != nil || c.ACME.Profile != "shortlived" {
+		t.Errorf("shortlived gave %q, %v", c.ACME.Profile, err)
+	}
+	for _, bad := range []string{"Short Lived", strings.Repeat("a", 65)} {
+		_, err := load(t, nil, envMap{"TIERPLAN_ACME_PROFILE": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_ACME_PROFILE") {
+			t.Errorf("TIERPLAN_ACME_PROFILE=%q error = %v", bad, err)
+		}
+	}
+	if _, err := load(t, nil, envMap{"TIERPLAN_ACME_PROFILE": strings.Repeat("a", 64)}, files{}); err != nil {
+		t.Errorf("a 64-character profile was rejected: %v", err)
+	}
+}
+
+func TestACMEEnvHSTSNeverMeetsACMEOff(t *testing.T) {
+	c, err := load(t, nil, envMap{"TIERPLAN_HSTS": "on"}, files{})
+	if err != nil || c.ACME.HSTS == nil || !*c.ACME.HSTS {
+		t.Errorf("HSTS on with ACME unset gave %+v, %v", c.ACME, err)
+	}
+	c, err = load(t, nil, envMap{"TIERPLAN_HSTS": "off", "TIERPLAN_ACME": "off"}, files{})
+	if err != nil || c.ACME.HSTS == nil || *c.ACME.HSTS {
+		t.Errorf("HSTS off with ACME off gave %+v, %v", c.ACME, err)
+	}
+	_, err = load(t, nil, envMap{"TIERPLAN_HSTS": "on", "TIERPLAN_ACME": "off"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_HSTS") || !strings.Contains(err.Error(), "TIERPLAN_ACME") {
+		t.Errorf("HSTS on with ACME off error = %v, want one naming both variables", err)
+	}
+	_, err = load(t, nil, envMap{"TIERPLAN_HSTS": "sometimes"}, files{})
+	if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_HSTS") {
+		t.Errorf("TIERPLAN_HSTS=sometimes error = %v", err)
+	}
+}
+
+func TestACMEEnvTokenIsRedactedAndHasNoFlag(t *testing.T) {
+	const secret = "cf-token-value-123"
+	for name, env := range map[string]envMap{
+		"plain": {"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": secret},
+		"file":  {"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"},
+	} {
+		c, err := load(t, nil, env, files{"/t": secret + "\n"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		red := c.Redacted()
+		for k, v := range red {
+			if strings.Contains(k, secret) || strings.Contains(v, secret) {
+				t.Errorf("%s: Redacted leaks the token in %s=%s", name, k, v)
+			}
+		}
+		if red["TIERPLAN_CLOUDFLARE_API_TOKEN"] != "[redacted]" {
+			t.Errorf("%s: token shown as %q, want [redacted]", name, red["TIERPLAN_CLOUDFLARE_API_TOKEN"])
+		}
+	}
+	// No variable of this phase has a command-line flag: the lock label names the variable, and a
+	// flag-set value would make that label wrong.
+	fl := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	config.BindFlags(fl)
+	fl.VisitAll(func(f *pflag.Flag) {
+		for _, bad := range []string{"cloudflare", "dns-provider", "dns-resolvers", "hsts", "accept-tos"} {
+			if strings.Contains(f.Name, bad) {
+				t.Errorf("flag --%s exists for an environment-only setting", f.Name)
+			}
+		}
+		if f.Name == "acme" || f.Name == "acme-email" || f.Name == "acme-challenge" || f.Name == "acme-profile" {
+			t.Errorf("flag --%s exists for an environment-only setting", f.Name)
+		}
+	})
+}
+
+func TestACMEEnvNamesAreAllListed(t *testing.T) {
+	names := strings.Join(config.Names(), " ")
+	for _, want := range []string{
+		config.EnvACMEEmail, config.EnvACMEChallenge, config.EnvDNSProvider, config.EnvCloudflareToken,
+		config.EnvDNSResolvers, config.EnvACMEProfile, config.EnvHSTS,
+	} {
 		if !strings.Contains(names, want) {
 			t.Errorf("Names() does not list %s", want)
 		}

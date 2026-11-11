@@ -127,6 +127,13 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `TIERPLAN_ACME_CA_FILE` | unset | no | Testing only and unsupported: PEM file of the CA that signs the ACME directory's HTTPS certificate. Needs `TIERPLAN_ACME_DIRECTORY_URL`. Trusted by the ACME client only, never added to the system roots. |
 | `TIERPLAN_ACME` | unset | no | `on` or `off`: turns Let's Encrypt on or off. Locks the Issue and Stop buttons in Settings > HTTPS and names this variable there; the stored value is kept underneath and used again if you remove the variable. `on` needs `TIERPLAN_ACME_ACCEPT_TOS=true`. |
 | `TIERPLAN_ACME_ACCEPT_TOS` | unset | no | `true` accepts the certificate authority's terms of service. Required with `TIERPLAN_ACME=on`; any other value stops startup. Locks the terms checkbox in Settings > HTTPS. |
+| `TIERPLAN_ACME_EMAIL` | unset | no | Contact address for the Let's Encrypt account, a bare address such as `admin@example.com` (no display name). Locks the email field in Settings > HTTPS; the stored value is kept underneath and used again if you remove the variable. |
+| `TIERPLAN_ACME_CHALLENGE` | unset | no | `http-01` or `dns-01`, in any case. Locks the challenge choice in Settings > HTTPS; the stored value is kept and used again if you remove the variable. |
+| `TIERPLAN_DNS_PROVIDER` | unset | no | `cloudflare`, the DNS provider for `dns-01`. Needs `TIERPLAN_CLOUDFLARE_API_TOKEN` or `TIERPLAN_CLOUDFLARE_API_TOKEN_FILE`, and the token needs it. Locks the provider choice; the stored value is kept and used again if you remove the variable. |
+| `TIERPLAN_CLOUDFLARE_API_TOKEN` | unset | yes | Cloudflare API token for `dns-01` (the Zone DNS Edit permission, scoped to the zone). Prefer `TIERPLAN_CLOUDFLARE_API_TOKEN_FILE`, which reads it from a file such as a Docker secret: a plain variable stays visible in `docker inspect`. Setting both is an error. Locks the token field and is never logged. |
+| `TIERPLAN_DNS_RESOLVERS` | unset | no | Comma-separated DNS resolvers (`host` or `host:port`, at most 5) the `dns-01` propagation check asks, in your order. Unset means the zone's own nameservers. A value that lists no resolver stops startup. Locks the resolver list; the stored value is kept and used again if you remove the variable. |
+| `TIERPLAN_ACME_PROFILE` | unset | no | The CA's certificate profile name, such as `shortlived` (1 to 64 characters of `a-z`, `0-9`, `.`, `_`, `-`). Locks the profile choice; the stored value is kept and used again if you remove the variable. |
+| `TIERPLAN_HSTS` | unset | no | `on` or `off`: turns the Strict-Transport-Security header on or off. `on` needs a trusted certificate and is refused at start together with `TIERPLAN_ACME=off`, because stopping Let's Encrypt under HSTS would lock browsers out. Locks the HSTS switch; the stored value is kept and used again if you remove the variable. |
 | `TIERPLAN_TLS_SELF_SIGNED` | `false` | no | Deprecated and without effect: TierPlan always serves HTTPS, with its own certificate unless you supply one. Setting it only logs a warning; remove it. |
 | `TIERPLAN_DOCKER_GID` | detected | no | Group ID of the Docker socket, overriding detection. |
 | `TIERPLAN_HOST_ROUTE_FILE` | `/host/route` | no | The host's `/proc/1/net/route` bind-mounted read-only into TierPlan's own container (`-v /proc/1/net/route:/host/route:ro`), so the subnet picker can warn about a subnet that collides with a LAN or VPN route of the host TierPlan runs on. An absolute path. Optional: without the mount the check says it cannot read this host's routes and nothing else changes. See [docs/agent.md](docs/agent.md#host-routes). |
@@ -139,7 +146,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `TIERPLAN_LOG_LEVEL` | `info` | no | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | no | Docker daemon address; `unix://` only. Pointing it at a different daemon still shows the "TierPlan (this instance)" badge on the one TierPlan runs in. |
 
-Only `TIERPLAN_ENCRYPTION_KEY` accepts `_FILE` (`TIERPLAN_ENCRYPTION_KEY_FILE`). TierPlan logs every setting at startup with secrets shown as `[redacted]`.
+Only `TIERPLAN_ENCRYPTION_KEY` and `TIERPLAN_CLOUDFLARE_API_TOKEN` accept `_FILE` (`TIERPLAN_ENCRYPTION_KEY_FILE`, `TIERPLAN_CLOUDFLARE_API_TOKEN_FILE`). TierPlan logs every setting at startup with secrets shown as `[redacted]`.
 
 ### TLS
 
