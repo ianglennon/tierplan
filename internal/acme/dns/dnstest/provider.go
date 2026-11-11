@@ -29,6 +29,10 @@ type Call struct {
 type FakeProvider struct {
 	// Sink, when set, is told about every record created, deleted or added as foreign.
 	Sink TXTSink
+	// AfterCreate, when set, is called once for each record created, after the record exists and before
+	// the create returns, with no lock held. A test cancels a context there to make the cancel arrive
+	// between the create and whatever the caller does next.
+	AfterCreate func()
 
 	mu      sync.Mutex
 	zones   []dns.Zone
@@ -210,10 +214,13 @@ func (h *fakeHandle) CreateTXT(_ context.Context, z dns.Zone, fqdn, value, comme
 	rec := FakeRecord{ID: fmt.Sprintf("rec-%d", h.f.nextID), Zone: z.ID, Name: name, Content: `"` + value + `"`, Comment: comment}
 	h.f.records = append(h.f.records, rec)
 	h.f.calls[call].RecordID = rec.ID // a create that succeeded names the record it made
-	sink := h.f.Sink
+	sink, after := h.f.Sink, h.f.AfterCreate
 	h.f.mu.Unlock()
 	if sink != nil {
 		sink.AddTXT(rec.Name, value)
+	}
+	if after != nil {
+		after()
 	}
 	return dns.RecordRef{ZoneID: z.ID, RecordID: rec.ID}, nil
 }

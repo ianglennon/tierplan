@@ -100,6 +100,81 @@ func TestDNSRollbackDeleteFailureKeepsTheRow(t *testing.T) {
 	}
 }
 
+// A cancel that arrives right after the provider created the record must not skip the ledger write
+// (WR-02): the delete that follows fails too, as it often does in the same trouble, and the record is
+// at the provider, so the ledger has to name it for the sweep.
+func TestDNSPresentCancelledAfterTheCreateStillWritesTheLedger(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+
+	var presentErr error
+	e.inJob(func(ctx context.Context, steps *jobSteps) {
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		e.prov.AfterCreate = cancel
+		presentErr = e.solver(steps).Present(cctx, testHost, "tok", "tok.thumb")
+	})
+
+	if !errors.Is(presentErr, context.Canceled) {
+		t.Fatalf("Present = %v, want the cancel", presentErr)
+	}
+	recs := e.prov.Records()
+	if len(recs) != 1 {
+		t.Fatalf("the provider holds %+v, want the one record whose delete failed", recs)
+	}
+	rows := e.ledger()
+	if len(rows) != 1 || rows[0].RecordID != recs[0].ID {
+		t.Fatalf("ledger = %+v, want one row naming the record %s that is still at the provider", rows, recs[0].ID)
+	}
+	if r := rows[0]; r.Attempts != 1 || r.LastErrorClass != dns.ClassUnavailable || !r.NextTryAt.Equal(testNow.Add(time.Minute)) {
+		t.Errorf("row = %+v, want the failed delete stamped for the sweep", r)
+	}
+}
+
+// With a delete that works, the same cancel leaves nothing at the provider and nothing in the ledger.
+func TestDNSPresentCancelledAfterTheCreateDeletesTheRecord(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+
+	var presentErr error
+	e.inJob(func(ctx context.Context, steps *jobSteps) {
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		e.prov.AfterCreate = cancel
+		presentErr = e.solver(steps).Present(cctx, testHost, "tok", "tok.thumb")
+	})
+
+	if !errors.Is(presentErr, context.Canceled) {
+		t.Fatalf("Present = %v, want the cancel", presentErr)
+	}
+	if recs := e.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider holds %+v, want the record deleted", recs)
+	}
+	if rows := e.ledger(); len(rows) != 0 {
+		t.Errorf("ledger = %+v, want it empty once the record is deleted", rows)
+	}
+}
+
+// A Test token request that is cancelled right after the test record was created still puts it in the
+// ledger (WR-02), so a failed delete leaves a row for the sweep.
+func TestDNSTestNameCancelledAfterTheCreateStillWritesTheLedger(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+	e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.prov.AfterCreate = cancel
+
+	e.mgr.testName(ctx, e.prov.Factory(dnsToken)(dnsToken), testHost, nil, "install-unit")
+
+	recs := e.prov.Records()
+	if len(recs) != 1 {
+		t.Fatalf("the provider holds %+v, want the test record whose delete failed", recs)
+	}
+	rows := e.ledger()
+	if len(rows) != 1 || rows[0].RecordID != recs[0].ID || rows[0].OwnerKind != OwnerTest {
+		t.Fatalf("ledger = %+v, want one test row naming the record %s", rows, recs[0].ID)
+	}
+}
+
 func TestDNSPresentRefusedAsIdenticalTouchesNothing(t *testing.T) {
 	e := newDNSEnv(t, ChallengeDNS01)
 	chal := dns.ChallengeFQDN(testHost)

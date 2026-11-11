@@ -251,7 +251,8 @@ func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) 
 		return err
 	}
 	if found {
-		if err = s.m.d.Store.RestampDNSRecord(ctx, pending.ID, OwnerOrder, orderID, token); err != nil {
+		// The row is written on a context a cancel cannot end: it is how the record is found and deleted.
+		if err = s.m.d.Store.RestampDNSRecord(context.WithoutCancel(ctx), pending.ID, OwnerOrder, orderID, token); err != nil {
 			return err
 		}
 		pending.OwnerKind, pending.OwnerID, pending.Token = OwnerOrder, orderID, token
@@ -272,8 +273,10 @@ func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) 
 			ID: id, Provider: p.Name(), ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
 			Comment: comment, OwnerKind: OwnerOrder, OwnerID: orderID, Token: token, CreatedAt: s.m.clock.Now(),
 		}
-		// The ID is durable before the CA is asked to look (D-16).
-		if err = s.m.d.Store.InsertDNSRecord(ctx, r); err != nil {
+		// The ID is durable before the CA is asked to look (D-16). It is written on a context a cancel
+		// cannot end: a run cancelled between the create and this write would otherwise leave a record
+		// at the provider that no ledger row names, and nothing would ever delete it.
+		if err = s.m.d.Store.InsertDNSRecord(context.WithoutCancel(ctx), r); err != nil {
 			return err
 		}
 		row = &r

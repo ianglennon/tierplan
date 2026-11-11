@@ -203,7 +203,9 @@ func (m *Manager) trackTestRecord(ctx context.Context, p dns.Provider, ref dns.R
 		ID: id.String(), Provider: p.Name(), ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
 		Comment: comment, OwnerKind: OwnerTest, OwnerID: testID, CreatedAt: m.clock.Now(),
 	}
-	return row, m.d.Store.InsertDNSRecord(ctx, row)
+	// Written on a context a cancel cannot end (a browser that disconnects cancels the request): the
+	// record exists, and the ledger is the only way it is deleted if the delete after the test fails.
+	return row, m.d.Store.InsertDNSRecord(context.WithoutCancel(ctx), row)
 }
 
 // observeTestRecord asks the propagation servers, the admin's resolvers when set else the zone's own
