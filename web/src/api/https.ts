@@ -26,6 +26,10 @@ export const httpsStatusQuery = queryOptions({
 export type HTTPSACME = components["schemas"]["HTTPSACMEBody"];
 export type ACMEDirectory = components["schemas"]["HTTPSACMEDirectoryBody"];
 export type ACMEAccount = components["schemas"]["HTTPSACMEAccountBody"];
+// A DNS token test: one entry per certificate name, in order. The save (PUT validation) and Test token
+// (POST dns/test) answer with it.
+export type ACMETokenTest = components["schemas"]["HTTPSACMETokenTestBody"];
+export type ACMENameTest = components["schemas"]["HTTPSACMENameTestBody"];
 
 // The ["https", "acme", "directory"] query: the CA's terms of service address and the profiles it
 // offers. The server asks the CA for it, so callers enable it only when the card is neither paused

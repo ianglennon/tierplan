@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import type { ACMEDirectory, HTTPSACME, HTTPSStatus } from "@/api/https";
+import type {
+  ACMEDirectory,
+  ACMENameTest,
+  ACMETokenTest,
+  HTTPSACME,
+  HTTPSStatus,
+} from "@/api/https";
 import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
 
@@ -125,6 +131,29 @@ export function lastErrorDNS(over: Partial<ACMELastError> = {}): ACMELastError {
     zone: "example.com",
     ...over,
   });
+}
+
+// One name of a token test that passed all four rows, with the record seen by the resolvers asked.
+export function tokenTestName(over: Partial<ACMENameTest> = {}): ACMENameTest {
+  const name = over.name ?? "tierplan.example.com";
+  return {
+    info: { resolvers: ["1.1.1.1"], seconds: 4, state: "seen" },
+    name,
+    record: `_acme-challenge.${name}`,
+    steps: [
+      { id: "zone", state: "done" },
+      { id: "created", state: "done" },
+      { id: "read", state: "done" },
+      { id: "deleted", state: "done" },
+    ],
+    zone: "example.com",
+    ...over,
+  };
+}
+
+// A token test as the server answers it: one name, every row done.
+export function tokenTestResult(over: Partial<ACMETokenTest> = {}): ACMETokenTest {
+  return { names: [tokenTestName()], passed: true, ...over };
 }
 
 // The status of an install that serves a Let's Encrypt certificate: issued a month ago for the
