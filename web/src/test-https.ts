@@ -13,8 +13,26 @@ import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
 
 // The DNS block of the status: Cloudflare, no token saved, no resolvers and nothing left over.
+export type LeftOverRecord = NonNullable<HTTPSACME["dns"]["leftOver"]>[number];
+
 export function acmeDNSStatus(over: Partial<HTTPSACME["dns"]> = {}): HTTPSACME["dns"] {
   return { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false, ...over };
+}
+
+// A TXT record TierPlan could not delete as the status lists it: the last delete failed because the
+// provider was unreachable, and the next try is in ten minutes.
+export function leftOverRecord(over: Partial<LeftOverRecord> = {}): LeftOverRecord {
+  return {
+    code: "dns_unavailable",
+    createdAt: new Date(Date.now() - 3_600_000).toISOString(),
+    lastTryAt: new Date(Date.now() - 120_000).toISOString(),
+    name: "_acme-challenge.tierplan.example.com",
+    nextTryAt: new Date(Date.now() + 600_000).toISOString(),
+    pausedReason: "",
+    recordId: "rec-1",
+    retryPaused: false,
+    ...over,
+  };
 }
 
 // The Let's Encrypt block of the status on a fresh install that has a public address: no account
