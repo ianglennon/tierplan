@@ -165,12 +165,25 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 	}
 	defer release()
 
+	if in.ChallengeType != ChallengeHTTP01 && in.ChallengeType != ChallengeDNS01 {
+		return SaveResult{}, ErrChallengeUnknown
+	}
 	resolvers, err := resolversOf(st, in.Resolvers)
 	if err != nil {
 		return SaveResult{}, err
 	}
 	provider := dnsProviderOf(st)
 	token := strings.TrimSpace(in.Token)
+	if in.ChallengeType == ChallengeDNS01 && token == "" {
+		// Saved or typed: DNS-01 cannot be the method with no token to answer it.
+		saved, err := m.d.Store.DNSTokenSaved(ctx, provider)
+		if err != nil {
+			return SaveResult{}, err
+		}
+		if !saved {
+			return SaveResult{}, ErrDNSTokenRequired
+		}
+	}
 
 	var test *TokenTest
 	if token != "" {
@@ -186,6 +199,10 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
+	// A request that was cancelled while the token was tested stores nothing.
+	if err := ctx.Err(); err != nil {
+		return SaveResult{}, err
+	}
 	// The guards again, on the state as it is now: a restore may have paused Let's Encrypt meanwhile.
 	if st, err = m.mutable(ctx); err != nil {
 		return SaveResult{}, err
@@ -245,7 +262,20 @@ func (m *Manager) TestToken(ctx context.Context, req TestRequest) (TokenTest, er
 	return m.runTokenTest(ctx, st, provider, token, dnscheck.Resolvers(resolvers))
 }
 
-// RemoveToken deletes the saved DNS token. It is refused while DNS-01 is the saved method.
+// RemoveToken deletes the saved DNS token. It is refused while DNS-01 is the saved method, because a
+// renewal would then fail with no way for TierPlan to say why, and while a run or a test holds the slot.
 func (m *Manager) RemoveToken(ctx context.Context) error {
-	return errors.New("not implemented")
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	st, err := m.mutable(ctx)
+	if err != nil {
+		return err
+	}
+	if m.runActive() {
+		return ErrRunActive
+	}
+	if challengeOf(st) == ChallengeDNS01 {
+		return ErrDNSTokenInUse
+	}
+	return m.d.Store.DeleteDNSToken(ctx, dnsProviderOf(st))
 }

@@ -576,6 +576,10 @@ func (m *Manager) Stop(ctx context.Context, actor string) error {
 	if err := m.d.Store.SaveState(ctx, st); err != nil {
 		return err
 	}
+	// With Let's Encrypt stopped there is nothing for the "Renew now to test it" prompt to test.
+	if err := m.d.Store.SetValidationUntested(ctx, false, now); err != nil {
+		m.log.Warn("clear the untested validation flag", "error", err)
+	}
 	m.log.Info("stopped using Let's Encrypt", "actor", actor)
 	return nil
 }
@@ -996,6 +1000,12 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 		x.end(OutcomeFailed)
 		steps.finishStored(nil)
 		return
+	}
+
+	// A run puts the saved validation settings to the test, so they are no longer untested (D-03). A
+	// failure to clear the flag only leaves a prompt on the page.
+	if err := m.d.Store.SetValidationUntested(bg, false, m.clock.Now()); err != nil {
+		m.log.Warn("clear the untested validation flag", "error", err)
 	}
 
 	// Whatever an earlier run left at the DNS provider goes first, for any challenge: the saved method
