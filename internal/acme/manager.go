@@ -159,9 +159,13 @@ type Manager struct {
 	// opMu serialises the admin's mutations, so two requests cannot both pass the guards.
 	opMu sync.Mutex
 
-	// mu guards active, unrecorded, wire and installErr.
+	// mu guards active, dnsBusy, unrecorded, wire and installErr.
 	mu     sync.Mutex
 	active *activeRun
+	// dnsBusy is true while a Test token or a validation save holds the DNS slot. It makes runActive
+	// true, so no run starts and no other admin change is accepted while a test writes
+	// _acme-challenge, but it is not a run: Status.ActiveRun follows active alone.
+	dnsBusy bool
 	// unrecorded is the end of a run that could not be written when the run ended. Until it is, the
 	// stored ledger does not know about that run, so no run starts and every admin change writes it
 	// first.
@@ -275,10 +279,30 @@ func (m *Manager) mutable(ctx context.Context) (State, error) {
 	return st, nil
 }
 
+// runActive reports whether a run is in progress or a Test token holds the DNS slot: either way the
+// admin's changes and the scheduler leave things alone.
 func (m *Manager) runActive() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.active != nil
+	return m.active != nil || m.dnsBusy
+}
+
+// claimDNS takes the DNS slot unless a run or another test holds it.
+func (m *Manager) claimDNS() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != nil || m.dnsBusy {
+		return false
+	}
+	m.dnsBusy = true
+	return true
+}
+
+// releaseDNS gives the DNS slot back.
+func (m *Manager) releaseDNS() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dnsBusy = false
 }
 
 // Start puts the manager in its state at process start (D-15): runs a crash left running are closed,
@@ -910,7 +934,7 @@ func (m *Manager) startRun(p runParams) (RunStart, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.active != nil {
+	if m.active != nil || m.dnsBusy {
 		return RunStart{}, ErrRunActive
 	}
 	if m.unrecorded != nil {
