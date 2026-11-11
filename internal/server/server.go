@@ -764,6 +764,15 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// served (D-21).
 	if tlsSrcKind == tlsKindSelfSigned {
 		rt.SetSelfSignedPin(spkiPin(&tls.Config{GetCertificate: tlsSrc.GetCertificate}))
+	} else {
+		var identityPin string
+		identityPin, err = selfSignedIdentityPin(ctx, sealedCertStore{st: st, v: vlt}, cfg, inst.PublicURL, inst.AgentURL, tlsClock.Now)
+		if err != nil {
+			_ = st.Close()
+			// A key that cannot be read comes from restored state, as in the self-signed branch above.
+			return nil, restoredStateError{fmt.Errorf("prepare the self-signed identity: %w", err)}
+		}
+		rt.SetSelfSignedPin(identityPin)
 	}
 	switch rt.Kind() {
 	case tlsKindSelfSigned:
