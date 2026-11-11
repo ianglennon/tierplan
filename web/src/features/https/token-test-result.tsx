@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import type { ACMENameTest, ACMETokenTest } from "@/api/https";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { errorCopy } from "@/features/https/copy";
+import { rich } from "@/features/https/sentence";
 import { useT } from "@/i18n/use-t";
 import { formatClock } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -24,35 +25,6 @@ type RowState = "done" | "failed" | "skipped" | "waiting";
 const ROW_IDS = ["zone", "created", "read", "deleted"] as const;
 
 type Translate = ReturnType<typeof useT>;
-
-// Marks where a server value goes inside a translated sentence.
-const MARK = "\u0001";
-
-// rich is a translated sentence with the server's values drawn as mono text that breaks anywhere. The
-// values are passed to the translation as markers and put in afterwards, so they are only ever React
-// text nodes: never interpolated into the string, never markup.
-function rich(t: Translate, key: string, values: Record<string, string>): ReactNode[] {
-  const marked: Record<string, string> = {};
-  for (const name of Object.keys(values)) marked[name] = `${MARK}${name}${MARK}`;
-  const out: ReactNode[] = [];
-  let offset = 0;
-  // Split at the marker: the parts alternate between the sentence's own words and a value's name.
-  t(key, marked)
-    .split(MARK)
-    .forEach((part, i) => {
-      if (i % 2 === 1) {
-        out.push(
-          <code key={offset} className="min-w-0 break-all font-mono text-xs">
-            {values[part]}
-          </code>,
-        );
-      } else if (part !== "") {
-        out.push(part);
-      }
-      offset += part.length + 1;
-    });
-  return out;
-}
 
 function RowIcon({ state }: { state: RowState }) {
   switch (state) {

@@ -5,11 +5,17 @@ import type {
   ACMEDirectory,
   ACMENameTest,
   ACMETokenTest,
+  ACMEValidationResult,
   HTTPSACME,
   HTTPSStatus,
 } from "@/api/https";
 import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
+
+// The DNS block of the status: Cloudflare, no token saved, no resolvers and nothing left over.
+export function acmeDNSStatus(over: Partial<HTTPSACME["dns"]> = {}): HTTPSACME["dns"] {
+  return { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false, ...over };
+}
 
 // The Let's Encrypt block of the status on a fresh install that has a public address: no account
 // yet, one name that can be ordered, nothing refused.
@@ -18,7 +24,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     challengeType: "http-01",
     directoryOverridden: false,
     directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
-    dns: { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false },
+    dns: acmeDNSStatus(),
     failures: 0,
     hasState: false,
     listenPort: 7480,
@@ -154,6 +160,18 @@ export function tokenTestName(over: Partial<ACMENameTest> = {}): ACMENameTest {
 // A token test as the server answers it: one name, every row done.
 export function tokenTestResult(over: Partial<ACMETokenTest> = {}): ACMETokenTest {
   return { names: [tokenTestName()], passed: true, ...over };
+}
+
+// The answer of a validation save that stored a DNS-01 token after its test passed.
+export function validationResult(over: Partial<ACMEValidationResult> = {}): ACMEValidationResult {
+  return {
+    challengeType: "dns-01",
+    resolvers: [],
+    saved: true,
+    test: tokenTestResult(),
+    tokenSaved: true,
+    ...over,
+  };
 }
 
 // The status of an install that serves a Let's Encrypt certificate: issued a month ago for the

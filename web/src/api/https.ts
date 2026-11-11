@@ -30,6 +30,8 @@ export type ACMEAccount = components["schemas"]["HTTPSACMEAccountBody"];
 // (POST dns/test) answer with it.
 export type ACMETokenTest = components["schemas"]["HTTPSACMETokenTestBody"];
 export type ACMENameTest = components["schemas"]["HTTPSACMENameTestBody"];
+// The answer of the validation save: saved, and the token test it ran when a new token was given.
+export type ACMEValidationResult = components["schemas"]["HTTPSACMEValidationOutputBody"];
 
 // The ["https", "acme", "directory"] query: the CA's terms of service address and the profiles it
 // offers. The server asks the CA for it, so callers enable it only when the card is neither paused
@@ -117,6 +119,83 @@ export function useSaveACMEProfile() {
       return data.profile;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+  });
+}
+
+// ACMEValidationError is a validation save the server refused. type is the problem type
+// ("acme_dns_token_required", "acme_dns_resolver_invalid", "acme_run_active", "acme_paused",
+// "acme_cert_files", ...), when it sent one. entry is the resolver a resolver problem names. A token
+// that fails its test is not an error: the answer is 200 with saved false.
+export class ACMEValidationError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+  readonly entry: string | undefined;
+
+  constructor(status: number, type?: string, entry?: string) {
+    super(`PUT /api/https/acme/validation failed with ${status}`);
+    this.name = "ACMEValidationError";
+    this.status = status;
+    this.type = type;
+    this.entry = entry;
+  }
+}
+
+export interface SaveACMEValidationValues {
+  challengeType: "http-01" | "dns-01";
+  // A new token to test and store. Leave out to keep the saved one.
+  token?: string;
+  // Called when the server has answered, before the status is read again.
+  onAnswered?: () => void;
+}
+
+function isRecordValue(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// readResolverEntry reads the resolver an acme_dns_resolver_invalid answer names: errors[].value of
+// the error at body.resolvers. Nothing else of the body is read, so a token can never travel on.
+function readResolverEntry(body: unknown): string | undefined {
+  const errors = isRecordValue(body) && Array.isArray(body.errors) ? body.errors : [];
+  for (const e of errors) {
+    if (isRecordValue(e) && e.location === "body.resolvers" && typeof e.value === "string") {
+      return e.value;
+    }
+  }
+  return undefined;
+}
+
+// useSaveACMEValidation saves the validation method. A new token is tested against the certificate
+// names first and stored only when every name passes; a failed test answers saved false with the
+// per-name result and stores nothing. The status is read again after a save, and the mutation stays
+// pending until that read is done.
+export function useSaveACMEValidation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      onAnswered,
+      ...body
+    }: SaveACMEValidationValues): Promise<ACMEValidationResult> => {
+      const { data, error, response } = await api.PUT("/api/https/acme/validation", { body });
+      if (!data) {
+        const problem = readProblem(error, response);
+        throw new ACMEValidationError(
+          response.status,
+          problem.type,
+          problem.type === "acme_dns_resolver_invalid" ? readResolverEntry(error) : undefined,
+        );
+      }
+      onAnswered?.();
+      return data;
+    },
+    retry: false,
+    onSuccess: (data) =>
+      data.saved ? queryClient.invalidateQueries({ queryKey: ["https", "status"] }) : undefined,
+    onError: (error) => {
+      // The page was out of date: a run began, the card was paused or the files were set.
+      if (error instanceof ACMEValidationError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+      }
+    },
   });
 }
 

@@ -36,11 +36,25 @@
       "title": "Let's Encrypt",
       "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",
       "method": {
-        "label": "Validation method",
-        "value": "HTTP-01"
+        "label": "Validation method"
       },
       "portNote": "Let's Encrypt checks your domain over plain HTTP on port 80. Port 80 on {{host}} must reach TierPlan, for example by starting the container with {{flag}}. TierPlan answers the check on its usual port, so there is nothing else to run.",
       "publicHostFallback": "the public host"
+    },
+    "validation": {
+      "http01": {
+        "label": "HTTP-01",
+        "description": "Let's Encrypt checks over plain HTTP on port 80. Port 80 on your public host must reach TierPlan."
+      },
+      "dns01": {
+        "label": "DNS-01",
+        "description": "TierPlan adds a TXT record at your DNS provider. No port needs opening, so it works for an install the internet can't reach."
+      },
+      "helper": "A change applies from the next order. The certificate in use stays as it is.",
+      "save": "Save validation settings",
+      "testing": "Testing token...",
+      "saving": "Saving...",
+      "done": "Validation settings saved."
     },
     "names": {
       "title": "Names on the certificate",
@@ -85,6 +99,30 @@
       "done": "Profile saved."
     },
     "dns": {
+      "provider": {
+        "label": "DNS provider",
+        "cloudflare": "Cloudflare"
+      },
+      "setup": {
+        "permEdit": "Zone:DNS:Edit",
+        "permRead": "Zone:Zone:Read",
+        "link": "Cloudflare's API tokens page",
+        "intro": "Create a Cloudflare API token with two permissions: {{edit}} and {{read}}. Limit it to the zones your certificate names are in. TierPlan doesn't accept the Global API Key. Create it on {{link}}.",
+        "records": "For each check TierPlan adds a TXT record at _acme-challenge and deletes it afterwards. It only deletes records it created."
+      },
+      "token": {
+        "label": "Cloudflare API token",
+        "labelNew": "New Cloudflare API token",
+        "helper": "TierPlan keeps the token encrypted and never shows it again. To change it, enter a new one.",
+        "show": "Show token",
+        "hide": "Hide token",
+        "required": "Enter a Cloudflare API token.",
+        "saved": "Token saved",
+        "savedNote": "TierPlan keeps it encrypted and never shows it.",
+        "kept": "Kept for DNS-01. TierPlan keeps it encrypted and never shows it.",
+        "replace": "Replace token",
+        "keep": "Keep the saved token"
+      },
       "result": {
         "passed": "Token test passed",
         "failed": "Token test failed",
@@ -212,6 +250,7 @@
       "renewing": "Renewing...",
       "noAccount": "Register a Let's Encrypt account first.",
       "runActive": "A run is already in progress.",
+      "validationUnsaved": "Save your validation settings first.",
       "paused": "Resume Let's Encrypt first.",
       "toldToWait": "Let's Encrypt asked TierPlan to wait. You can try again at {{time}}.",
       "failureGuard": "Three attempts failed in the last hour. TierPlan waits so it doesn't use up Let's Encrypt's limits. You can try again at {{time}}.",
