@@ -13,9 +13,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -603,5 +606,409 @@ func TestDNSTokenResultErrorsAndLogsCarryNoToken(t *testing.T) {
 		if strings.Contains(text, dnsToken) || strings.Contains(text, typedBad) {
 			t.Errorf("a token appears in %q", text)
 		}
+	}
+}
+
+// unchanged fails the test unless the validation settings are what they were: the method, the token,
+// the resolvers and the untested flag.
+func (e *dnsEnv) unchanged(before State, token string) {
+	e.t.Helper()
+	st := e.state()
+	if st.ChallengeType != before.ChallengeType || st.ValidationUntested != before.ValidationUntested ||
+		!slices.Equal(st.DNSResolvers, before.DNSResolvers) || st.DNSProvider != before.DNSProvider {
+		e.t.Errorf("settings = %q %v %v %q, want %q %v %v %q as before", st.ChallengeType, st.ValidationUntested, st.DNSResolvers, st.DNSProvider,
+			before.ChallengeType, before.ValidationUntested, before.DNSResolvers, before.DNSProvider)
+	}
+	if got := e.savedToken(); got != token {
+		e.t.Errorf("saved token changed")
+	}
+}
+
+func TestSaveValidationTestFailureStoresNothing(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	before := e.state()
+	resolvers := []string{"1.1.1.1"}
+
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: "a-token-the-provider-refuses", Resolvers: &resolvers})
+
+	if err != nil {
+		t.Fatalf("SaveValidation: %v", err)
+	}
+	if res.Saved || res.Test == nil || res.Test.Passed {
+		t.Fatalf("result = %+v, want not saved, with the failed test", res)
+	}
+	if got := res.Test.Names[0].Steps[0]; got.Class != dns.ClassTokenInvalid {
+		t.Errorf("zone row = %+v, want dns_token_invalid", got)
+	}
+	e.unchanged(before, dnsToken)
+	if rows := e.ledger(); len(rows) != 0 {
+		t.Errorf("the ledger holds %+v", rows)
+	}
+}
+
+func TestSaveValidationDNSNeedsATypedOrSavedToken(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.forgetToken()
+	before := e.state()
+
+	if _, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01}); !errors.Is(err, ErrDNSTokenRequired) {
+		t.Errorf("SaveValidation with no token = %v, want ErrDNSTokenRequired", err)
+	}
+	if _, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: "   "}); !errors.Is(err, ErrDNSTokenRequired) {
+		t.Errorf("SaveValidation with a blank token = %v, want ErrDNSTokenRequired", err)
+	}
+	e.unchanged(before, "")
+	if calls := e.prov.Calls(); len(calls) != 0 {
+		t.Errorf("the provider saw %+v", calls)
+	}
+}
+
+func TestSaveValidationDNSWithASavedTokenNeedsNoTest(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+
+	res, err := e.mgr.SaveValidation(context.Background(), ValidationInput{ChallengeType: ChallengeDNS01})
+
+	if err != nil || !res.Saved || res.Test != nil {
+		t.Fatalf("SaveValidation = %+v, %v, want saved with no test", res, err)
+	}
+	if st := e.state(); st.ChallengeType != ChallengeDNS01 {
+		t.Errorf("challenge = %q, want dns-01", st.ChallengeType)
+	}
+	if calls := e.prov.Calls(); len(calls) != 0 {
+		t.Errorf("the provider saw %+v for a save that types no token", calls)
+	}
+	if got := e.savedToken(); got != dnsToken {
+		t.Error("the saved token changed")
+	}
+}
+
+func TestSaveValidationBadResolverNamesTheEntry(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+	before := e.state()
+	resolvers := []string{"1.1.1.1", "bad/entry"}
+
+	_, err := e.mgr.SaveValidation(context.Background(), ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken, Resolvers: &resolvers})
+
+	var re *dnscheck.ResolverError
+	if !errors.As(err, &re) || re.Entry != "bad/entry" {
+		t.Fatalf("SaveValidation = %v, want a ResolverError naming bad/entry", err)
+	}
+	e.unchanged(before, dnsToken)
+	if calls := e.prov.Calls(); len(calls) != 0 {
+		t.Errorf("the provider saw %+v before the list was valid", calls)
+	}
+}
+
+func TestSaveValidationNormalisesTheResolvers(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+	resolvers := []string{" 1.1.1.1 , Dns.Example.Net:5353", "1.1.1.1:53"}
+
+	res, err := e.mgr.SaveValidation(context.Background(), ValidationInput{ChallengeType: ChallengeHTTP01, Resolvers: &resolvers})
+
+	if err != nil || !res.Saved {
+		t.Fatalf("SaveValidation = %+v, %v", res, err)
+	}
+	if got, want := e.state().DNSResolvers, []string{"1.1.1.1:53", "dns.example.net:5353"}; !slices.Equal(got, want) {
+		t.Errorf("stored resolvers = %v, want %v", got, want)
+	}
+}
+
+func TestSaveValidationUnknownChallenge(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+	before := e.state()
+
+	for _, kind := range []string{"", "tls-alpn-01", "DNS-01"} {
+		if _, err := e.mgr.SaveValidation(context.Background(), ValidationInput{ChallengeType: kind, Token: dnsToken}); !errors.Is(err, ErrChallengeUnknown) {
+			t.Errorf("SaveValidation(%q) = %v, want ErrChallengeUnknown", kind, err)
+		}
+	}
+	e.unchanged(before, dnsToken)
+}
+
+func TestSaveValidationSwitchingClosesTheOpenOrderAndMarksUntested(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	release := e.crashHeld(OrderRequest{Kind: KindIssue, Names: []string{testHost}})
+	defer release()
+	e.openOrder()
+
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01})
+	if err != nil || !res.Saved {
+		t.Fatalf("SaveValidation = %+v, %v", res, err)
+	}
+
+	e.noOpenOrder()
+	if got := e.stages(); !slices.Equal(got, []string{StageFailed}) {
+		t.Errorf("order stages = %v, want the one order closed as failed", got)
+	}
+	if !e.state().ValidationUntested {
+		t.Error("untested is false after the method changed")
+	}
+
+	// The same settings again change nothing, and the flag stays as it was.
+	if res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01}); err != nil || !res.Saved {
+		t.Fatalf("second SaveValidation = %+v, %v", res, err)
+	}
+	if !e.state().ValidationUntested {
+		t.Error("saving the same settings cleared the untested flag")
+	}
+	if err := e.store.SetValidationUntested(ctx, false, e.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01}); err != nil || !res.Saved {
+		t.Fatalf("third SaveValidation = %+v, %v", res, err)
+	}
+	if e.state().ValidationUntested {
+		t.Error("saving the same settings set the untested flag")
+	}
+}
+
+func TestSaveValidationUntestedNeedsAnAccount(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	if err := e.client.Forget(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeHTTP01})
+
+	if err != nil || !res.Saved {
+		t.Fatalf("SaveValidation = %+v, %v", res, err)
+	}
+	if e.state().ValidationUntested {
+		t.Error("untested is set with no account: there is nothing a run could test")
+	}
+}
+
+func TestSaveValidationResolverChangeMarksUntested(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	resolvers := []string{"9.9.9.9"}
+
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: &resolvers})
+
+	if err != nil || !res.Saved {
+		t.Fatalf("SaveValidation = %+v, %v", res, err)
+	}
+	if st := e.state(); !st.ValidationUntested || !slices.Equal(st.DNSResolvers, []string{"9.9.9.9:53"}) {
+		t.Errorf("settings = untested %v, resolvers %v, want untested and 9.9.9.9:53", st.ValidationUntested, st.DNSResolvers)
+	}
+}
+
+func TestSwitchBackKeepsTheToken(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeHTTP01})
+
+	if err != nil || !res.Saved {
+		t.Fatalf("SaveValidation = %+v, %v", res, err)
+	}
+	if got := e.state().ChallengeType; got != ChallengeHTTP01 {
+		t.Errorf("challenge = %q, want http-01", got)
+	}
+	if got := e.savedToken(); got != dnsToken {
+		t.Error("switching back to HTTP-01 lost the sealed token")
+	}
+	if err := e.mgr.RemoveToken(ctx); err != nil {
+		t.Fatalf("RemoveToken: %v", err)
+	}
+	if got := e.savedToken(); got != "" {
+		t.Errorf("token after RemoveToken = %q, want none", got)
+	}
+}
+
+func TestRemoveTokenRefusedWhileDNS01IsSaved(t *testing.T) {
+	e := newDNSEnv(t, ChallengeDNS01)
+
+	if err := e.mgr.RemoveToken(context.Background()); !errors.Is(err, ErrDNSTokenInUse) {
+		t.Errorf("RemoveToken = %v, want ErrDNSTokenInUse", err)
+	}
+	if got := e.savedToken(); got != dnsToken {
+		t.Error("the token was removed while DNS-01 is the saved method")
+	}
+}
+
+func TestRemoveTokenIsRefusedDuringATest(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+	chal := dns.ChallengeFQDN(testHost)
+	e.dns.Hold(chal)
+
+	out := e.testTokenAsync(TestRequest{})
+	e.clock.WaitArmed(t)
+	if err := e.mgr.RemoveToken(context.Background()); !errors.Is(err, ErrRunActive) {
+		t.Errorf("RemoveToken during a test = %v, want ErrRunActive", err)
+	}
+	e.dns.Release(chal)
+	e.clock.Advance(dnscheck.PropagationInterval)
+	testsupport.Await(t, "Test token to finish", out)
+	if got := e.savedToken(); got != dnsToken {
+		t.Error("the token was removed during a test")
+	}
+}
+
+func TestSaveValidationUntestedFlagIsClearedByARunAndByStop(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeDNS01)
+	if err := e.store.SetValidationUntested(ctx, true, e.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	e.issue()
+
+	if e.state().ValidationUntested {
+		t.Error("untested is still set after a run started")
+	}
+	if err := e.store.SetValidationUntested(ctx, true, e.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.mgr.Stop(ctx, "user:1"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if e.state().ValidationUntested {
+		t.Error("untested is still set after Let's Encrypt was stopped")
+	}
+}
+
+func TestManagerFailureGuardDNS(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("dns failures never block and a save resets the backoff", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		e.forgetToken() // every run fails at the provider with dns_token_invalid
+		for i := range FailureGuardRuns + 1 {
+			rs, err := e.mgr.Issue(ctx, "user:1")
+			if err != nil {
+				t.Fatalf("Issue #%d: %v, want the failure guard to stay open for dns_ failures", i+1, err)
+			}
+			e.wait(rs)
+		}
+		st := e.state()
+		if st.ConsecutiveFailures != FailureGuardRuns+1 || st.LastErrorClass != dns.ClassTokenInvalid || st.NextAttemptAt.IsZero() {
+			t.Fatalf("state = %d failures, class %q, next %v, want the backoff of four dns_token_invalid failures", st.ConsecutiveFailures, st.LastErrorClass, st.NextAttemptAt)
+		}
+
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken})
+		if err != nil || !res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v", res, err)
+		}
+
+		st = e.state()
+		if st.ConsecutiveFailures != 0 || !st.NextAttemptAt.IsZero() || !st.RetryAfterUntil.IsZero() {
+			t.Errorf("ledger = %d failures, next %v, retry-after %v, want it reset by the save", st.ConsecutiveFailures, st.NextAttemptAt, st.RetryAfterUntil)
+		}
+		if job := e.issue(); job.State == jobs.JobFailed {
+			t.Errorf("the run after the save failed: %+v", job)
+		}
+	})
+
+	t.Run("a save that changes nothing leaves a CA backoff alone", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "refused"})
+		e.wait(e.start())
+		before := e.state()
+		if before.ConsecutiveFailures != 1 || strings.HasPrefix(before.LastErrorClass, "dns_") {
+			t.Fatalf("state = %d failures, class %q, want one failure from the CA", before.ConsecutiveFailures, before.LastErrorClass)
+		}
+
+		if res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken}); err != nil || !res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v", res, err)
+		}
+
+		if got := e.state(); got.ConsecutiveFailures != 1 || !got.NextAttemptAt.Equal(before.NextAttemptAt) {
+			t.Errorf("ledger = %d failures, next %v, want a CA backoff to survive a save (D-22)", got.ConsecutiveFailures, got.NextAttemptAt)
+		}
+	})
+
+	t.Run("failures the CA reports still block", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		e.fake.FailValidation(testHost, acmetest.Problem{Type: "connection", Detail: "no TXT record"})
+		for i := range FailureGuardRuns {
+			rs, err := e.mgr.Issue(ctx, "user:1")
+			if err != nil {
+				t.Fatalf("Issue #%d: %v", i+1, err)
+			}
+			e.wait(rs)
+			e.clock.Advance(10 * time.Minute)
+		}
+		if got := e.state().LastErrorClass; got != ClassValidationTXT {
+			t.Fatalf("last error class = %q, want validation_txt", got)
+		}
+
+		_, err := e.mgr.Issue(ctx, "user:1")
+
+		var blocked *BlockedError
+		if !errors.As(err, &blocked) || blocked.Reason != BlockFailureGuard {
+			t.Errorf("the fourth Issue = %v, want the failure guard", err)
+		}
+	})
+}
+
+func TestSaveValidationTwoSavesAtOnceKeepTheFirst(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	chal := dns.ChallengeFQDN(testHost)
+	e.dns.Hold(chal)
+	resolvers := []string{e.dns.Addr()}
+
+	type saved struct {
+		res SaveResult
+		err error
+	}
+	first := make(chan saved, 1)
+	go func() {
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken, Resolvers: &resolvers})
+		first <- saved{res, err}
+	}()
+	e.clock.WaitArmed(t) // the first save is testing its token, holding the slot
+
+	other := []string{"9.9.9.9"}
+	if _, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeHTTP01, Resolvers: &other}); !errors.Is(err, ErrRunActive) {
+		t.Errorf("the second save = %v, want ErrRunActive", err)
+	}
+	e.dns.Release(chal)
+	e.clock.Advance(dnscheck.PropagationInterval)
+	got := testsupport.Await(t, "the first save to finish", first)
+
+	if got.err != nil || !got.res.Saved {
+		t.Fatalf("the first save = %+v, %v, want it stored", got.res, got.err)
+	}
+	st := e.state()
+	if st.ChallengeType != ChallengeDNS01 || !slices.Equal(st.DNSResolvers, []string{resolvers[0]}) {
+		t.Errorf("stored settings = %q %v, want exactly the first save's", st.ChallengeType, st.DNSResolvers)
+	}
+}
+
+func TestSaveValidationCancelledRequestStoresNothing(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+	before := e.state()
+	chal := dns.ChallengeFQDN(testHost)
+	e.dns.Hold(chal)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	type saved struct {
+		res SaveResult
+		err error
+	}
+	out := make(chan saved, 1)
+	go func() {
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken})
+		out <- saved{res, err}
+	}()
+	e.clock.WaitArmed(t)
+	cancel()
+	got := testsupport.Await(t, "the cancelled save to finish", out)
+
+	if got.err == nil && got.res.Saved {
+		t.Fatalf("a cancelled save stored: %+v", got.res)
+	}
+	e.unchanged(before, dnsToken)
+	if recs := e.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider still holds %+v: a cancelled test must still delete its record", recs)
+	}
+	if e.mgr.runActive() {
+		t.Error("the DNS slot is still held after the save was cancelled")
 	}
 }

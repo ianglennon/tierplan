@@ -244,3 +244,8 @@ func (m *Manager) TestToken(ctx context.Context, req TestRequest) (TokenTest, er
 	}
 	return m.runTokenTest(ctx, st, provider, token, dnscheck.Resolvers(resolvers))
 }
+
+// RemoveToken deletes the saved DNS token. It is refused while DNS-01 is the saved method.
+func (m *Manager) RemoveToken(ctx context.Context) error {
+	return errors.New("not implemented")
+}
