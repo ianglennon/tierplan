@@ -756,3 +756,123 @@ describe("Validation section: the DNS-01 suggestion (D-02, J2)", () => {
     expect(card().queryByRole("button", { name: "Use DNS-01" })).toBeNull();
   });
 });
+
+describe("Validation section: Remove token keyed on the saved method (J3, D-05)", () => {
+  const J3 =
+    "To remove the token, switch to HTTP-01 and save first. Removing it now would stop renewals.";
+  const removeButton = () => card().queryByRole("button", { name: "Remove token" });
+
+  it("offers Remove token (destructive) under an HTTP-01 draft when HTTP-01 is saved", async () => {
+    status = () => Response.json(httpWithToken());
+    await ready();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(
+      card().getByText("Kept for DNS-01. TierPlan keeps it encrypted and never shows it."),
+    ).toBeTruthy();
+    expect(removeButton()?.getAttribute("data-variant")).toBe("destructive");
+    expect(card().queryByText(J3)).toBeNull();
+    // No Replace button in this branch.
+    expect(card().queryByRole("button", { name: "Replace token" })).toBeNull();
+  });
+
+  it("offers Remove token beside Replace token under a DNS-01 draft when HTTP-01 is saved", async () => {
+    status = () => Response.json(httpWithToken());
+    await ready();
+    pickDNS();
+    expect(card().getByRole("button", { name: "Replace token" })).toBeTruthy();
+    expect(removeButton()).toBeTruthy();
+    expect(card().queryByText(J3)).toBeNull();
+  });
+
+  it("explains instead of offering Remove token when DNS-01 is saved, under the DNS-01 draft", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    expect(card().getByRole("button", { name: "Replace token" })).toBeTruthy();
+    expect(removeButton()).toBeNull();
+    expect(card().getByText(J3)).toBeTruthy();
+  });
+
+  it("explains instead of offering Remove token when DNS-01 is saved, under the HTTP-01 draft", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    pickHTTP();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(removeButton()).toBeNull();
+    expect(card().getByText(J3)).toBeTruthy();
+  });
+
+  it("draws neither when no token is saved", async () => {
+    await ready();
+    pickDNS();
+    expect(removeButton()).toBeNull();
+    expect(card().queryByText(J3)).toBeNull();
+  });
+
+  it("draws no Remove token button in a disabled section", async () => {
+    status = () =>
+      Response.json(
+        withACME({
+          dns: acmeDNSStatus({ tokenSaved: true }),
+          pausedReason: "restore",
+          hasState: true,
+        }),
+      );
+    await ready();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(removeButton()).toBeNull();
+  });
+
+  it("opens the dialog on Remove token, counting the left-over records of the status", async () => {
+    const record = (name: string) => ({
+      createdAt: "2026-11-10T08:00:00Z",
+      name,
+      pausedReason: "" as const,
+      recordId: "r1",
+      retryPaused: false,
+    });
+    status = () =>
+      Response.json(
+        withACME({
+          dns: acmeDNSStatus({
+            tokenSaved: true,
+            leftOver: [
+              record("_acme-challenge.a.example.com"),
+              record("_acme-challenge.b.example.com"),
+            ],
+          }),
+        }),
+      );
+    await ready();
+    fireEvent.click(removeButton() as HTMLElement);
+    const dialog = within(await screen.findByRole("alertdialog"));
+    expect(dialog.getByText("Remove the Cloudflare token?")).toBeTruthy();
+    expect(dialog.getByText(/the 2 TXT records it left in Cloudflare/)).toBeTruthy();
+  });
+
+  it("removes the token on confirm: DELETE, a toast and the row gone once the status is read", async () => {
+    let deleted = false;
+    const deletes: string[] = [];
+    status = () => Response.json(deleted ? withACME({}) : httpWithToken());
+    const original = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        if (new URL(req.url).pathname === "/api/https/acme/dns/token" && req.method === "DELETE") {
+          deleted = true;
+          deletes.push(req.method);
+          return new Response(null, { status: 204 });
+        }
+        return original(req);
+      }),
+    );
+    await ready();
+    fireEvent.click(removeButton() as HTMLElement);
+    const dialog = within(await screen.findByRole("alertdialog"));
+    fireEvent.click(dialog.getByRole("button", { name: "Remove token" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(card().queryByText("Token saved")).toBeNull());
+    expect(deletes).toHaveLength(1);
+    const [node] = successToast.mock.calls[0] as [{ props: { children: string } }];
+    expect(node.props.children).toBe("Token removed.");
+  });
+});
