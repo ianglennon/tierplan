@@ -191,8 +191,12 @@ export function useSaveACMEValidation() {
     onSuccess: (data) =>
       data.saved ? queryClient.invalidateQueries({ queryKey: ["https", "status"] }) : undefined,
     onError: (error) => {
-      // The page was out of date: a run began, the card was paused or the files were set.
-      if (error instanceof ACMEValidationError && error.status === 409) {
+      // The page was out of date: a run began, the card was paused, the files were set, or the saved
+      // token is gone.
+      if (
+        error instanceof ACMEValidationError &&
+        (error.status === 409 || error.type === "acme_dns_token_required")
+      ) {
         void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
       }
     },

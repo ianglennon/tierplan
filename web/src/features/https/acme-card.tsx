@@ -63,6 +63,8 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
   const [freshFailure, setFreshFailure] = useState(false);
   // True while a run is active as the issue section sees it, which is sooner than the status says C.
   const [runActive, setRunActive] = useState(false);
+  // True while the validation draft differs from what is saved: an order would not use what the page shows.
+  const [validationUnsaved, setValidationUnsaved] = useState(false);
   if (!acme) return null;
   const state = deriveCardState(status);
   // A restore pause with no account yet keeps the registration form, but the server refuses it.
@@ -77,7 +79,11 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
     <div className="flex flex-col gap-6" data-state={state}>
       <div className="flex flex-col gap-4">
         <p className="text-sm text-muted-foreground">{t("https.acme.description")}</p>
-        <ValidationSection acme={acme} mode={validationMode(state, canWrite)} />
+        <ValidationSection
+          acme={acme}
+          mode={validationMode(state, canWrite)}
+          onDirtyChange={setValidationUnsaved}
+        />
       </div>
 
       <Separator />
@@ -102,6 +108,7 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
         canWrite={canWrite}
         onRunFailed={setFreshFailure}
         onRunActive={setRunActive}
+        validationUnsaved={validationUnsaved}
       />
       {/* Drawn whatever the mode: a failed first issue leaves Let's Encrypt off, and Stop clears the
           error, so an error the status carries is always one to explain. With the mode off nothing

@@ -529,9 +529,11 @@ describe("Validation section: a token is required for DNS-01", () => {
     expect(puts()).toHaveLength(0);
   });
 
-  it("shows the field error when the server says the token is required", async () => {
-    put = () =>
-      Response.json(
+  it("shows the field error when the server says the token is required, the page being out of date", async () => {
+    // The token was removed elsewhere: the page still believes one is saved.
+    put = () => {
+      status = () => Response.json(withACME({ dns: acmeDNSStatus({ tokenSaved: false }) }));
+      return Response.json(
         {
           type: "acme_dns_token_required",
           title: "x",
@@ -540,11 +542,13 @@ describe("Validation section: a token is required for DNS-01", () => {
         },
         { status: 422, headers: { "Content-Type": "application/problem+json" } },
       );
+    };
     status = () => Response.json(httpWithToken());
     await ready();
     pickDNS();
     fireEvent.click(saveButton());
     expect(await card().findByText("Enter a Cloudflare API token.")).toBeTruthy();
+    expect(tokenInput().getAttribute("aria-invalid")).toBe("true");
   });
 });
 
@@ -568,7 +572,7 @@ describe("Validation section: failures and the pending state", () => {
     type(tokenInput(), TOKEN);
     fireEvent.click(saveButton());
     const busy = await card().findByRole("button", { name: /Testing token/ });
-    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(busy.matches(":disabled")).toBe(true);
     expect(busy.querySelector('[role="presentation"], svg')).toBeTruthy();
     expect(tokenInput().matches(":disabled")).toBe(true);
     for (const radio of card().getAllByRole("radio")) expect(radio.matches(":disabled")).toBe(true);

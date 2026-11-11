@@ -891,6 +891,7 @@ describe("an unsaved validation draft (J4)", () => {
   });
 
   it("frees the buttons again when the draft goes back to the saved method", async () => {
+    status = () => served();
     await ready();
     pickDNS();
     expect(isDisabled(renewButton())).toBe(true);

@@ -3,10 +3,15 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Info } from "lucide-react";
-import { useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 
-import { type ACMETokenTest, type HTTPSACME, useSaveACMEValidation } from "@/api/https";
+import {
+  type ACMETokenTest,
+  ACMEValidationError,
+  type HTTPSACME,
+  useSaveACMEValidation,
+} from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription } from "@/components/ui/field";
@@ -30,13 +35,24 @@ type Method = (typeof METHODS)[number];
 
 // The draft: the method, the token being typed and whether it is typed over a saved one. Validation
 // here is UX only; the server checks again. The token is in this form and nowhere else.
-const schema = z.object({
-  challengeType: z.enum(METHODS),
-  token: z.string(),
-  replacing: z.boolean(),
-});
+const TOKEN_REQUIRED = "https.dns.token.required";
 
-type Values = z.infer<typeof schema>;
+// DNS-01 needs a token to send when none is saved, or when the person chose to replace the saved one.
+function makeSchema(tokenSaved: boolean) {
+  return z
+    .object({
+      challengeType: z.enum(METHODS),
+      token: z.string(),
+      replacing: z.boolean(),
+    })
+    .superRefine((v, ctx) => {
+      if (v.challengeType === "dns-01" && (!tokenSaved || v.replacing) && v.token.trim() === "") {
+        ctx.addIssue({ code: "custom", path: ["token"], message: TOKEN_REQUIRED });
+      }
+    });
+}
+
+type Values = z.infer<ReturnType<typeof makeSchema>>;
 
 const HEADING_ID = "acme-validation-title";
 
@@ -49,12 +65,15 @@ interface Outcome {
 interface ValidationSectionProps {
   acme: HTTPSACME;
   mode: ValidationMode;
+  // Told whether the draft differs from what is saved, so the card can keep Issue and Renew from
+  // ordering with settings the page is not showing (UI-SPEC J4).
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 // ValidationSection is "Validation method" on the Let's Encrypt card (CHAL-01, CHAL-02, D-02, D-06,
 // D-07, UI-SPEC J2): the challenge picker, the detail of the chosen method and one Save. Picking a radio
 // changes the draft only; nothing is stored until Save, which is where a new token is tested first.
-export function ValidationSection({ acme, mode }: ValidationSectionProps) {
+export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSectionProps) {
   const t = useT();
   const save = useSaveACMEValidation();
   const saved: Method = acme.challengeType === "dns-01" ? "dns-01" : "http-01";
@@ -65,19 +84,41 @@ export function ValidationSection({ acme, mode }: ValidationSectionProps) {
   const [failed, setFailed] = useState(false);
 
   const form = useForm<Values>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(makeSchema(tokenSaved)),
     values: { challengeType: saved, token: "", replacing: false },
     mode: "onSubmit",
   });
   const method = useWatch({ control: form.control, name: "challengeType" });
   const replacing = useWatch({ control: form.control, name: "replacing" }) && tokenSaved;
+  const typed = useWatch({ control: form.control, name: "token" }).trim() !== "";
   const pending = save.isPending;
   const editable = mode === "editable";
+  // Under HTTP-01 only the method can differ: leaving DNS-01 drops every other draft value (J9).
+  const dirty = method !== saved || (method === "dns-01" && (typed || replacing));
+  const locked = pending || !editable;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
+
+  // Picking a radio changes the draft and nothing else. Leaving DNS-01 discards what was typed for it:
+  // the token, replacing and the result, so no hidden value is left behind (J9, D-05).
+  const pick = (value: string) => {
+    const next: Method = value === "dns-01" ? "dns-01" : "http-01";
+    form.setValue("challengeType", next);
+    if (next === "http-01") {
+      form.setValue("token", "");
+      form.setValue("replacing", false);
+      form.clearErrors();
+      setOutcome(null);
+    }
+  };
 
   const host = acme.publicHost === "" ? t("https.acme.publicHostFallback") : acme.publicHost;
   const flag = <code className="font-mono text-xs">{`-p 80:${acme.listenPort}`}</code>;
 
-  const submit = form.handleSubmit((v) => {
+  const send = form.handleSubmit((v) => {
     setFailed(false);
     setOutcome(null);
     const token = v.challengeType === "dns-01" ? v.token.trim() : "";
@@ -96,10 +137,26 @@ export function ValidationSection({ acme, mode }: ValidationSectionProps) {
           form.reset({ challengeType: v.challengeType, token: "", replacing: false });
           toastSuccess(t("https.validation.done"));
         },
-        onError: () => setFailed(true),
+        onError: (error) => {
+          if (error instanceof ACMEValidationError && error.type === "acme_dns_token_required") {
+            form.setError("token", { type: "server", message: TOKEN_REQUIRED });
+            return;
+          }
+          setFailed(true);
+        },
       },
     );
   });
+  // Save does nothing while nothing differs or a save is on its way, as Enter in the field would
+  // otherwise reach it past the aria-disabled button.
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    if (!dirty || locked) {
+      event.preventDefault();
+      return;
+    }
+    void send(event);
+  };
+  const tokenMessage = form.formState.errors.token?.message;
 
   return (
     <section aria-labelledby={HEADING_ID} className="flex flex-col gap-4">
@@ -107,12 +164,11 @@ export function ValidationSection({ acme, mode }: ValidationSectionProps) {
         {t("https.acme.method.label")}
       </h4>
       <form noValidate onSubmit={submit} className="flex flex-col gap-4">
-        <fieldset disabled={pending || !editable} className="contents">
+        <fieldset disabled={locked} className="contents">
           <RadioGroup
             value={method}
-            onValueChange={(v) =>
-              form.setValue("challengeType", v === "dns-01" ? "dns-01" : "http-01")
-            }
+            onValueChange={pick}
+            disabled={locked}
             aria-labelledby={HEADING_ID}
             className="gap-4"
           >
@@ -164,10 +220,12 @@ export function ValidationSection({ acme, mode }: ValidationSectionProps) {
               replacing={replacing}
               editable={editable}
               tokenField={form.register("token")}
+              tokenError={typeof tokenMessage === "string" ? t(tokenMessage) : undefined}
               onReplace={() => form.setValue("replacing", true)}
               onKeep={() => {
                 form.setValue("replacing", false);
                 form.setValue("token", "");
+                form.clearErrors("token");
               }}
             />
           )}
@@ -180,7 +238,12 @@ export function ValidationSection({ acme, mode }: ValidationSectionProps) {
 
           {editable ? (
             <div className="flex flex-wrap gap-2">
-              <Button type="submit" variant="outline" className={`${TOUCH_HEIGHT} max-md:w-full`}>
+              <Button
+                type="submit"
+                variant="outline"
+                aria-disabled={!dirty}
+                className={`${TOUCH_HEIGHT} max-md:w-full aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
+              >
                 {pending ? (
                   <>
                     <Spinner aria-hidden="true" />
