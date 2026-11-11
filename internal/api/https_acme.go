@@ -99,12 +99,16 @@ type HTTPSACMEFallbackBody struct {
 
 // HTTPSACMEErrorBody is the last failure. Detail is the CA's own text, cleaned and cut to a fixed size.
 type HTTPSACMEErrorBody struct {
-	Code     string    `json:"code" enum:"rate_limited,validation_unreachable,validation_dns,caa_forbids,identifier_rejected,contact_invalid,tos_action_required,account_gone,profile_invalid,ca_unavailable,ca_untrusted,internal" doc:"The class of the failure"`
+	Code     string    `json:"code" enum:"rate_limited,validation_unreachable,validation_dns,caa_forbids,identifier_rejected,contact_invalid,tos_action_required,account_gone,profile_invalid,ca_unavailable,ca_untrusted,internal,dns_token_invalid,dns_token_scope,dns_zone_not_found,dns_delegation_target,dns_not_visible,dns_rate_limited,dns_unavailable,validation_txt" doc:"The class of the failure"`
 	At       time.Time `json:"at" doc:"When it happened"`
 	Host     string    `json:"host,omitempty" doc:"The host a validation failure is about"`
 	Profile  string    `json:"profile,omitempty" doc:"The profile the CA refused"`
 	TermsURL string    `json:"termsUrl,omitempty" doc:"Where to read the terms the CA wants accepted"`
 	Detail   string    `json:"detail,omitempty" doc:"The CA's problem document as text, for a Details disclosure. Untrusted text: show it as text only"`
+	// The facts a DNS failure is about.
+	Zone      string   `json:"zone,omitempty" doc:"The DNS zone a DNS failure is about"`
+	Target    string   `json:"target,omitempty" doc:"The name the challenge name is delegated to, when a DNS failure is about a delegated name"`
+	Resolvers []string `json:"resolvers,omitempty" doc:"The resolvers a propagation failure asked"`
 }
 
 // HTTPSACMEBlockBody says a manual attempt is refused for now.
@@ -119,6 +123,7 @@ type HTTPSACMERunBody struct {
 	Kind       string     `json:"kind" enum:"issue,renew" doc:"A first issue or a renewal"`
 	Trigger    string     `json:"trigger" enum:"admin,schedule,resume" doc:"What started it"`
 	Outcome    string     `json:"outcome" enum:"running,succeeded,failed,cancelled,reused" doc:"How it went"`
+	Challenge  string     `json:"challenge" enum:"http-01,dns-01" doc:"The challenge the run used to prove the names"`
 	StartedAt  time.Time  `json:"startedAt" doc:"When it started"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty" doc:"When it ended; left out while it runs"`
 }
@@ -148,6 +153,8 @@ type HTTPSACMEBody struct {
 	Blocked             *HTTPSACMEBlockBody       `json:"blocked,omitempty" doc:"Set while a manual attempt is refused"`
 	ActiveRun           *HTTPSACMERunBody         `json:"activeRun,omitempty" doc:"The run in progress"`
 	LastRun             *HTTPSACMERunBody         `json:"lastRun,omitempty" doc:"The run that ended last"`
+	ValidationUntested  bool                      `json:"validationUntested" doc:"True when the saved validation method has not been proved by a run yet; false while a run is in progress"`
+	SuggestDNS01        *HTTPSACMESuggestionBody  `json:"suggestDns01,omitempty" doc:"Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better"`
 	DNS                 HTTPSACMEDNSBody          `json:"dns" doc:"The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned"`
 }
 
@@ -159,8 +166,23 @@ type HTTPSACMEDNSBody struct {
 	LeftOver   []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
 }
 
+// HTTPSACMESuggestionBody is the DNS-01 suggestion: the host and the private address it resolves to.
+type HTTPSACMESuggestionBody struct {
+	Host    string `json:"host" doc:"The public host"`
+	Address string `json:"address" doc:"The private address it resolves to, as this server sees it"`
+}
+
 // HTTPSACMELeftOverBody is one TXT record still at the DNS provider.
-type HTTPSACMELeftOverBody struct{}
+type HTTPSACMELeftOverBody struct {
+	Name         string     `json:"name" doc:"The record name, for example _acme-challenge.example.com"`
+	RecordID     string     `json:"recordId" doc:"The DNS provider's ID for the record"`
+	Code         string     `json:"code,omitempty" doc:"The class of the last delete error, for example dns_unavailable"`
+	CreatedAt    time.Time  `json:"createdAt" doc:"When the record was created"`
+	LastTryAt    *time.Time `json:"lastTryAt,omitempty" doc:"When a delete was last tried; left out when none was"`
+	NextTryAt    *time.Time `json:"nextTryAt,omitempty" doc:"When the next delete is tried; left out while retries are paused"`
+	RetryPaused  bool       `json:"retryPaused" doc:"True while no delete is tried"`
+	PausedReason string     `json:"pausedReason" enum:",restore,cert_files" doc:"Why retries are paused: a backup was restored, or certificate files are set. Empty when they run"`
+}
 
 // acmeStatusBody maps the manager's status onto the contract.
 func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {

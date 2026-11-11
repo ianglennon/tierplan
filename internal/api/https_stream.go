@@ -29,11 +29,18 @@ const (
 // HTTPSACMEStepBody is one step of a run. It carries the step's id, its state, a class code for a
 // failure and a fixed sentence; never anything the CA said and never key material.
 type HTTPSACMEStepBody struct {
-	ID      string `json:"id" enum:"account,order,challenge,validate,finalize,stored" doc:"The step"`
+	ID      string `json:"id" enum:"account,order,challenge,propagation,validate,finalize,stored,cleanup" doc:"The step. propagation and cleanup are DNS-01 only"`
 	Label   string `json:"label" doc:"The step's name in English"`
 	State   string `json:"state" enum:"waiting,running,done,failed,cancelled,skipped" doc:"Where the step is. skipped is a step that was not needed (the account was already registered) or not reached"`
 	Code    string `json:"code,omitempty" doc:"The class of a failure, for example validation_dns; the same codes as lastError in the status"`
 	Message string `json:"message,omitempty" doc:"A fixed sentence about the step"`
+
+	// What a DNS-01 step is about, for the page to word it from. All left out when the step has none.
+	Record    string   `json:"record,omitempty" doc:"The TXT record name the step writes or waits for"`
+	Host      string   `json:"host,omitempty" doc:"The certificate name the step is about"`
+	Target    string   `json:"target,omitempty" doc:"The name the challenge name is delegated to, when it is"`
+	Resolvers []string `json:"resolvers,omitempty" doc:"The resolvers the propagation check asks"`
+	LeftOver  int      `json:"leftOver,omitempty" doc:"How many TXT records the clean-up could not delete and TierPlan keeps trying to"`
 }
 
 // HTTPSACMERunFrameBody is a run as the stream sends it: in the snapshot frame as it stands and in the
@@ -42,9 +49,10 @@ type HTTPSACMERunFrameBody struct {
 	JobID     string              `json:"jobId" doc:"The run's job"`
 	Kind      string              `json:"kind" enum:"issue,renew" doc:"A first issue or a renewal"`
 	Trigger   string              `json:"trigger" enum:"admin,schedule,resume" doc:"What started it"`
+	Challenge string              `json:"challenge" enum:"http-01,dns-01" doc:"The challenge the run uses to prove the names"`
 	State     string              `json:"state" enum:"running,done,failed,cancelled" doc:"How the run is: done is a certificate stored and served, failed names a step that failed"`
 	StartedAt time.Time           `json:"startedAt" doc:"When it started"`
-	Items     []HTTPSACMEStepBody `json:"items" doc:"The six steps, in order"`
+	Items     []HTTPSACMEStepBody `json:"items" doc:"The steps, in order: six for HTTP-01, eight for DNS-01"`
 }
 
 // acmeStepBody maps a job item to the step the stream sends.
