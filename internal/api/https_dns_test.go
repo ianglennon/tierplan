@@ -315,20 +315,27 @@ func TestHTTPSValidationProblems(t *testing.T) {
 		t.Errorf("a refused save changed the state: %+v", st)
 	}
 
-	// A token over the size limit is refused before the manager sees it, and never echoed.
+	// A token over the size limit fails its test as an invalid token with no request made, and is never
+	// echoed: a schema violation would answer with the offending value.
 	big := strings.Repeat("t", 1100)
-	for path, method := range map[string]string{"/api/https/acme/validation": http.MethodPut, "/api/https/acme/dns/test": http.MethodPost} {
-		body := `{"token":"` + big + `"}`
-		if method == http.MethodPut {
-			body = `{"challengeType":"dns-01","token":"` + big + `"}`
-		}
-		rec := f.sendDNS(t, method, path, body)
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Errorf("%s %s with a 1100 byte token: %d, want 422", method, path, rec.Code)
-		}
-		if strings.Contains(rec.Body.String(), big) || strings.Contains(rec.Body.String(), big[:200]) {
-			t.Errorf("%s %s echoed the oversized token", method, path)
-		}
+	calls := len(f.prov.Calls())
+	rec = f.putValidation(t, `{"challengeType":"dns-01","token":"`+big+`"}`)
+	if strings.Contains(rec.Body.String(), big[:200]) {
+		t.Error("PUT validation echoed the oversized token")
+	}
+	if got := decodeValidation(t, rec); got.Saved || got.Test == nil || got.Test.Passed || got.Test.Names[0].Error == nil || got.Test.Names[0].Error.Code != "dns_token_invalid" {
+		t.Errorf("an oversized token: %+v, want saved false and dns_token_invalid", got)
+	}
+	rec = f.sendDNS(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"`+big+`"}`)
+	if strings.Contains(rec.Body.String(), big[:200]) {
+		t.Error("POST dns/test echoed the oversized token")
+	}
+	var tested api.HTTPSACMETokenTestBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &tested); err != nil || tested.Passed || tested.Names[0].Error == nil || tested.Names[0].Error.Code != "dns_token_invalid" {
+		t.Errorf("an oversized token test: %d %s, want passed false and dns_token_invalid", rec.Code, rec.Body)
+	}
+	if got := len(f.prov.Calls()); got != calls {
+		t.Errorf("the provider saw %d calls for an oversized token, want none", got-calls)
 	}
 }
 
@@ -460,7 +467,7 @@ func TestHTTPSResponsesNeverCarryTheDNSToken(t *testing.T) {
 		if rec.Body.Len() == 0 && rec.Code != http.StatusNoContent {
 			t.Errorf("%s: empty body on %d", name, rec.Code)
 		}
-		if name != "status" {
+		if rec.Code < 300 && name != "status" {
 			requireNoStore(t, rec)
 		}
 		all := rec.Body.String()

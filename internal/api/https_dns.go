@@ -19,6 +19,10 @@ import (
 
 // The DNS-01 routes: save the validation method and token, test a token, remove the token. None of them
 // ever returns the token, and every answer is no-store.
+//
+// The token field carries no maxLength in the schema on purpose: a schema violation is answered with the
+// offending value, which would echo a secret. The manager refuses a token over 256 bytes as
+// dns_token_invalid before any request is made, and the server's body limit bounds the request.
 
 // HTTPSACMEDNSErrorBody is the facts of one failed DNS step. It carries data only; the browser writes
 // the words.
@@ -99,7 +103,7 @@ func resolverDetail(e *dnscheck.ResolverError) string {
 type PutACMEValidationInput struct {
 	Body struct {
 		ChallengeType string   `json:"challengeType" enum:"http-01,dns-01" doc:"How Let's Encrypt is shown you control the names: http-01 over port 80, or dns-01 with a TXT record at your DNS provider"`
-		Token         string   `json:"token,omitempty" maxLength:"1024" doc:"A new DNS API token. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token"`
+		Token         string   `json:"token,omitempty" doc:"A new DNS API token, at most 256 printable characters with no space; anything else fails its test as dns_token_invalid with no request made. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token"`
 		Resolvers     []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers the propagation check asks, as host or host:port; an empty list means the zone's own name servers. Leave out to keep the saved list"`
 	}
 }
@@ -119,7 +123,7 @@ type HTTPSACMEValidationOutput struct {
 // TestACMEDNSTokenInput is the body of the token test.
 type TestACMEDNSTokenInput struct {
 	Body struct {
-		Token     string   `json:"token,omitempty" maxLength:"1024" doc:"The token to test. Leave out to test the saved token"`
+		Token     string   `json:"token,omitempty" doc:"The token to test, at most 256 printable characters with no space; anything else fails as dns_token_invalid with no request made. Leave out to test the saved token"`
 		Resolvers []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers to ask, as host or host:port. Leave out to use the saved list"`
 	}
 }
@@ -176,4 +180,57 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 		out.Body.Resolvers = nonNil(st.DNS.Resolvers)
 		return out, nil
 	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testACMEDNSToken",
+		Method:      http.MethodPost,
+		Path:        "/api/https/acme/dns/test",
+		Summary:     "Test a DNS API token",
+		Description: "Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it " +
+			"finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed " +
+			"and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing " +
+			"name. 422 " + problemACMEDNSTokenRequired + " (field body.token) when none is typed or saved; 422 " + problemACMEDNSResolverBad +
+			" (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 " +
+			problemACMERunActive + " while a run or another test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " +
+			problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+		Tags: []string{"https"},
+	}, write, func(ctx context.Context, in *TestACMEDNSTokenInput) (*HTTPSACMETokenTestOutput, error) {
+		if d.ACME == nil {
+			return nil, acmeUnavailable()
+		}
+		var resolvers *[]string
+		if in.Body.Resolvers != nil {
+			resolvers = &in.Body.Resolvers
+		}
+		res, err := d.ACME.TestToken(ctx, acme.TestRequest{Token: in.Body.Token, Resolvers: resolvers})
+		if err != nil {
+			return nil, acmeProblem(d.Log, "test the DNS token", err)
+		}
+		return &HTTPSACMETokenTestOutput{CacheControl: "no-store", Body: *tokenTestBody(res)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteACMEDNSToken",
+		Method:        http.MethodDelete,
+		Path:          "/api/https/acme/dns/token",
+		DefaultStatus: http.StatusNoContent,
+		Summary:       "Remove the saved DNS API token",
+		Description: "Deletes the saved token. 409 " + problemACMEDNSTokenInUse + " while DNS-01 is the saved validation method, because renewals " +
+			"would stop; 409 " + problemACMERunActive + " while a run or a token test holds the DNS slot; 409 " + problemACMEPaused +
+			" after a restore; 409 " + problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+		Tags: []string{"https"},
+	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMENoContentOutput, error) {
+		if d.ACME == nil {
+			return nil, acmeUnavailable()
+		}
+		if err := d.ACME.RemoveToken(ctx); err != nil {
+			return nil, acmeProblem(d.Log, "remove the DNS token", err)
+		}
+		return &HTTPSACMENoContentOutput{CacheControl: "no-store"}, nil
+	})
+}
+
+// HTTPSACMENoContentOutput is an answer with no body that must still not be cached.
+type HTTPSACMENoContentOutput struct {
+	CacheControl string `header:"Cache-Control"`
 }

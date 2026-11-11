@@ -4196,6 +4196,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/https/acme/dns/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a DNS API token
+         * @description Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         */
+        post: operations["testACMEDNSToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/acme/dns/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove the saved DNS API token
+         * @description Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         */
+        delete: operations["deleteACMEDNSToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/https/acme/issue": {
         parameters: {
             query?: never;
@@ -11419,7 +11459,7 @@ export interface components {
             challengeType: "http-01" | "dns-01";
             /** @description The resolvers the propagation check asks, as host or host:port; an empty list means the zone's own name servers. Leave out to keep the saved list */
             resolvers?: string[] | null;
-            /** @description A new DNS API token. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token */
+            /** @description A new DNS API token, at most 256 printable characters with no space; anything else fails its test as dns_token_invalid with no request made. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token */
             token?: string;
         };
         PutBackupScheduleInputBody: {
@@ -15290,6 +15330,12 @@ export interface components {
             id: string;
             /** @description The team's name */
             name: string;
+        };
+        TestACMEDNSTokenInputBody: {
+            /** @description The resolvers to ask, as host or host:port. Leave out to use the saved list */
+            resolvers?: string[] | null;
+            /** @description The token to test, at most 256 printable characters with no space; anything else fails as dns_token_invalid with no request made. Leave out to test the saved token */
+            token?: string;
         };
         TestStepBody: {
             /** @description Why, as a stable code: registry_unreachable, registry_tls, registry_http, sign_in_refused, no_login_asked, no_pull_access, repository_not_found, rate_limited or check_failed. Empty when there is nothing to say. No text from the registry is ever returned */
@@ -25042,6 +25088,68 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPSACMEDirectoryBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testACMEDNSToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestACMEDNSTokenInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMETokenTestBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteACMEDNSToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

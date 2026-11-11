@@ -14204,8 +14204,7 @@
             ]
           },
           "token": {
-            "description": "A new DNS API token. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token",
-            "maxLength": 1024,
+            "description": "A new DNS API token, at most 256 printable characters with no space; anything else fails its test as dns_token_invalid with no request made. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token",
             "type": "string"
           }
         },
@@ -23572,6 +23571,28 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "TestACMEDNSTokenInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "resolvers": {
+            "description": "The resolvers to ask, as host or host:port. Leave out to use the saved list",
+            "items": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token": {
+            "description": "The token to test, at most 256 printable characters with no space; anything else fails as dns_token_invalid with no request made. Leave out to test the saved token",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "TestStepBody": {
@@ -41079,6 +41100,87 @@
           }
         },
         "summary": "Read the CA's terms and profiles",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/dns/test": {
+      "post": {
+        "description": "Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "operationId": "testACMEDNSToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestACMEDNSTokenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSACMETokenTestBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Test a DNS API token",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/acme/dns/token": {
+      "delete": {
+        "description": "Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "operationId": "deleteACMEDNSToken",
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove the saved DNS API token",
         "tags": [
           "https"
         ]
