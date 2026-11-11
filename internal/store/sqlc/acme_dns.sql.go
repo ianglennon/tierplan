@@ -89,7 +89,7 @@ func (q *Queries) GetOpenACMEOrderID(ctx context.Context) (string, error) {
 }
 
 const getPendingACMEDNSRecord = `-- name: GetPendingACMEDNSRecord :one
-SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name FROM acme_dns_records WHERE provider = ? AND zone_id = ? AND name = ? AND value = ?
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name, account_id FROM acme_dns_records WHERE provider = ? AND zone_id = ? AND name = ? AND value = ?
 ORDER BY created_at DESC, id DESC LIMIT 1
 `
 
@@ -126,14 +126,16 @@ func (q *Queries) GetPendingACMEDNSRecord(ctx context.Context, arg GetPendingACM
 		&i.NextTryAt,
 		&i.LastErrorClass,
 		&i.ZoneName,
+		&i.AccountID,
 	)
 	return i, err
 }
 
 const insertACMEDNSRecord = `-- name: InsertACMEDNSRecord :exec
-INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, record_id, name, value, comment, owner_kind,
-                              owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, account_id, record_id, name, value, comment,
+                              owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at,
+                              last_error_class)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertACMEDNSRecordParams struct {
@@ -141,6 +143,7 @@ type InsertACMEDNSRecordParams struct {
 	Provider       string
 	ZoneID         string
 	ZoneName       string
+	AccountID      string
 	RecordID       string
 	Name           string
 	Value          string
@@ -161,6 +164,7 @@ func (q *Queries) InsertACMEDNSRecord(ctx context.Context, arg InsertACMEDNSReco
 		arg.Provider,
 		arg.ZoneID,
 		arg.ZoneName,
+		arg.AccountID,
 		arg.RecordID,
 		arg.Name,
 		arg.Value,
@@ -193,7 +197,7 @@ func (q *Queries) InsertACMEInstallID(ctx context.Context, arg InsertACMEInstall
 }
 
 const listACMEDNSRecords = `-- name: ListACMEDNSRecords :many
-SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name FROM acme_dns_records ORDER BY created_at, id
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name, account_id FROM acme_dns_records ORDER BY created_at, id
 `
 
 func (q *Queries) ListACMEDNSRecords(ctx context.Context) ([]AcmeDnsRecord, error) {
@@ -222,6 +226,7 @@ func (q *Queries) ListACMEDNSRecords(ctx context.Context) ([]AcmeDnsRecord, erro
 			&i.NextTryAt,
 			&i.LastErrorClass,
 			&i.ZoneName,
+			&i.AccountID,
 		); err != nil {
 			return nil, err
 		}
@@ -237,7 +242,7 @@ func (q *Queries) ListACMEDNSRecords(ctx context.Context) ([]AcmeDnsRecord, erro
 }
 
 const listACMEDNSRecordsByOwner = `-- name: ListACMEDNSRecordsByOwner :many
-SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name FROM acme_dns_records WHERE owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name, account_id FROM acme_dns_records WHERE owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id
 `
 
 type ListACMEDNSRecordsByOwnerParams struct {
@@ -273,6 +278,7 @@ func (q *Queries) ListACMEDNSRecordsByOwner(ctx context.Context, arg ListACMEDNS
 			&i.NextTryAt,
 			&i.LastErrorClass,
 			&i.ZoneName,
+			&i.AccountID,
 		); err != nil {
 			return nil, err
 		}
@@ -288,7 +294,7 @@ func (q *Queries) ListACMEDNSRecordsByOwner(ctx context.Context, arg ListACMEDNS
 }
 
 const listDueACMEDNSRecords = `-- name: ListDueACMEDNSRecords :many
-SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name FROM acme_dns_records WHERE next_try_at <= ? ORDER BY created_at, id
+SELECT id, provider, zone_id, record_id, name, value, comment, owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class, zone_name, account_id FROM acme_dns_records WHERE next_try_at <= ? ORDER BY created_at, id
 `
 
 // The rows whose next try has come, oldest first.
@@ -318,6 +324,7 @@ func (q *Queries) ListDueACMEDNSRecords(ctx context.Context, nextTryAt int64) ([
 			&i.NextTryAt,
 			&i.LastErrorClass,
 			&i.ZoneName,
+			&i.AccountID,
 		); err != nil {
 			return nil, err
 		}

@@ -270,7 +270,7 @@ func (s *dnsSolver) Present(ctx context.Context, domain, token, keyAuth string) 
 			return err
 		}
 		r := DNSRecord{
-			ID: id, Provider: p.Name(), ZoneID: ref.ZoneID, ZoneName: t.Zone.Name, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
+			ID: id, Provider: p.Name(), ZoneID: ref.ZoneID, ZoneName: t.Zone.Name, AccountID: t.Zone.AccountID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
 			Comment: comment, OwnerKind: OwnerOrder, OwnerID: orderID, Token: token, CreatedAt: s.m.clock.Now(),
 		}
 		// The ID is durable before the CA is asked to look (D-16). It is written on a context a cancel
@@ -369,18 +369,18 @@ func (m *Manager) deleteRecord(ctx context.Context, p dns.Provider, row DNSRecor
 
 // zoneGone reports whether a delete the provider refused for the row's zone ID was refused because the
 // zone no longer exists, so the record went with it. A provider answers a zone ID it does not know the
-// same way as a token that may not edit the zone, so the question is asked of the provider by the
-// zone's name: it is gone only when the token still sees zones and none of them is that zone, or the
-// zone of that name now has another ID (it was deleted and made again). A lookup that fails, a token
-// that sees no zone at all (it may be another account's, or one that lost its permission), a zone that
-// is still there under its ID, and a row from before the name was kept all say "not shown to be gone",
-// and the row is retried as it always was. The only call is the read-only zone lookup; nothing is
-// deleted by name.
+// same way as a token that may not edit the zone, or one that belongs to another account, so the
+// question is asked of the provider by the zone's name inside the row's own account. The zone is gone
+// only when the row names its account, the token still sees zones in that account, and none of them
+// is that zone, or the name now has another ID there (it was deleted and made again). A row from before
+// the account was kept, a token that sees no zone in the account (another account's), a lookup that
+// fails and a zone that is still there under its ID all say "not shown to be gone", and the row is
+// retried as it always was. The only call is the read-only zone lookup; nothing is deleted by name.
 func (m *Manager) zoneGone(ctx context.Context, p dns.Provider, row DNSRecord, delErr error) bool {
-	if row.ZoneName == "" || !errors.Is(delErr, dns.ErrZoneRefused) {
+	if row.AccountID == "" || row.ZoneName == "" || !errors.Is(delErr, dns.ErrZoneRefused) {
 		return false
 	}
-	z, err := p.Zone(ctx, row.ZoneName)
+	z, err := p.AccountZone(ctx, row.AccountID, row.ZoneName)
 	if err != nil {
 		var de *dns.Error
 		return errors.As(err, &de) && de.Class == dns.ClassZoneNotFound

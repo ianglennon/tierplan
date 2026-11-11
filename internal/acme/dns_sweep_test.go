@@ -29,7 +29,7 @@ func refusedZone() error {
 func TestDNSSweepDropsTheRowOfAZoneThatIsGone(t *testing.T) {
 	ctx := context.Background()
 	e := newDNSEnv(t, ChallengeDNS01)
-	e.prov.AddZone("other.org", dnsNS)
+	e.prov.AddZone("other.org", dnsNS) // the same account, so the token still sees a zone there
 	row := e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
 	keep := e.leftOver("_acme-challenge.keep.other.org", "keep-value", testNow.Add(time.Second))
 	e.prov.RemoveZone("example.com")
@@ -45,7 +45,7 @@ func TestDNSSweepDropsTheRowOfAZoneThatIsGone(t *testing.T) {
 	}
 	var lookups []string
 	for _, c := range e.prov.Calls() {
-		if c.Op == "zone" && c.Name == "example.com" {
+		if c.Op == "account_zone" && c.Name == "example.com" {
 			lookups = append(lookups, c.Name)
 		}
 	}
@@ -77,31 +77,46 @@ func TestDNSSweepDropsTheRowOfAZoneMadeAgainUnderANewID(t *testing.T) {
 }
 
 // Where the question cannot be answered, the row is kept and retried as before (D-18): the lookup
-// fails, the token sees no zone at all (another account's token, or one that lost its permission), the
-// zone is still there under its ID (the token may not edit its records), or the row has no zone name.
+// fails, the token sees no zone in the record's own account (it is another account's token, which sees
+// other zones and says the same thing), the zone is still there under its ID (the token may not edit
+// its records), or the row has no account ID, with or without a zone name.
 func TestDNSSweepKeepsTheRowWhenTheZoneIsNotShownToBeGone(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		setup     func(e *dnsEnv)
-		withName  bool
-		wantClass string
+		name                      string
+		setup                     func(e *dnsEnv)
+		withZoneName, withAccount bool
 	}{
 		{"the zone lookup fails", func(e *dnsEnv) {
 			e.prov.RemoveZone("example.com")
 			e.prov.AddZone("other.org", dnsNS)
 			e.prov.FailZone(&dns.Error{Provider: "fake", Op: "find zone", Class: dns.ClassUnavailable})
-		}, true, dns.ClassTokenScope},
-		{"the token sees no zone at all", func(e *dnsEnv) { e.prov.RemoveZone("example.com") }, true, dns.ClassTokenScope},
-		{"the token sees nothing but a hidden zone", func(e *dnsEnv) { e.prov.HideZone("example.com") }, true, dns.ClassTokenScope},
-		{"the zone is still there", func(e *dnsEnv) { e.prov.FailDelete(-1, refusedZone()) }, true, dns.ClassTokenScope},
-		{"the row has no zone name", func(e *dnsEnv) {
+		}, true, true},
+		{"the token sees no zone at all", func(e *dnsEnv) { e.prov.RemoveZone("example.com") }, true, true},
+		{"a token for another account that sees other zones", func(e *dnsEnv) {
+			e.prov.HideZone("example.com")
+			e.prov.AddZoneInAccount("another-account", "foreign.net", dnsNS)
+		}, true, true},
+		{"a token for another account, the zone gone from view", func(e *dnsEnv) {
+			e.prov.RemoveZone("example.com")
+			e.prov.AddZoneInAccount("another-account", "foreign.net", dnsNS)
+		}, true, true},
+		{"the same name in another account", func(e *dnsEnv) {
+			e.prov.RemoveZone("example.com")
+			e.prov.AddZoneInAccount("another-account", "example.com", dnsNS)
+		}, true, true},
+		{"the zone is still there", func(e *dnsEnv) { e.prov.FailDelete(-1, refusedZone()) }, true, true},
+		{"the row has a zone name but no account ID", func(e *dnsEnv) {
 			e.prov.RemoveZone("example.com")
 			e.prov.AddZone("other.org", dnsNS)
-		}, false, dns.ClassTokenScope},
+		}, true, false},
+		{"the row has neither", func(e *dnsEnv) {
+			e.prov.RemoveZone("example.com")
+			e.prov.AddZone("other.org", dnsNS)
+		}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newDNSEnv(t, ChallengeDNS01)
-			row := e.leftOverNamed("_acme-challenge.old.example.com", "old-value", testNow, tc.withName)
+			row := e.leftOverNamed("_acme-challenge.old.example.com", "old-value", testNow, tc.withZoneName, tc.withAccount)
 			tc.setup(e)
 
 			e.mgr.sweepDNS(context.Background(), false)
@@ -110,8 +125,8 @@ func TestDNSSweepKeepsTheRowWhenTheZoneIsNotShownToBeGone(t *testing.T) {
 			if len(rows) != 1 || rows[0].ID != row.ID {
 				t.Fatalf("ledger = %+v, want the row kept", rows)
 			}
-			if r := rows[0]; r.Attempts != 1 || r.LastErrorClass != tc.wantClass || !r.NextTryAt.Equal(testNow.Add(time.Minute)) {
-				t.Errorf("row = %+v, want one failed attempt of class %s and the next in a minute", r, tc.wantClass)
+			if r := rows[0]; r.Attempts != 1 || r.LastErrorClass != dns.ClassTokenScope || !r.NextTryAt.Equal(testNow.Add(time.Minute)) {
+				t.Errorf("row = %+v, want one failed attempt of class dns_token_scope and the next in a minute", r)
 			}
 		})
 	}
@@ -135,7 +150,7 @@ func TestDNSSweepKeepsTheRowOfARejectedToken(t *testing.T) {
 	}
 }
 
-// The ledger keeps the zone's name from the moment the record is made, for an order and for a test.
+// The ledger keeps the zone's name and account from the moment the record is made, for an order and for a test.
 func TestDNSLedgerRowsCarryTheZoneName(t *testing.T) {
 	e := newDNSEnv(t, ChallengeDNS01)
 	e.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
@@ -150,15 +165,16 @@ func TestDNSLedgerRowsCarryTheZoneName(t *testing.T) {
 		t.Fatalf("ledger = %+v, want the order's row and the test's row", rows)
 	}
 	for _, r := range rows {
-		if r.ZoneName != "example.com" {
-			t.Errorf("%s row has zone name %q, want example.com", r.OwnerKind, r.ZoneName)
+		if r.ZoneName != "example.com" || r.AccountID != dnstest.FakeDefaultAccount {
+			t.Errorf("%s row has zone name %q and account %q, want example.com in %s", r.OwnerKind, r.ZoneName, r.AccountID, dnstest.FakeDefaultAccount)
 		}
 	}
 }
 
 // The whole path against the Cloudflare client and its fake API: a zone deleted in Cloudflare answers
 // the delete with 403 and code 10000, the zone is looked up by name and is not found while the token
-// still sees another zone, and the ledger row goes. A token that sees no zone keeps the row.
+// still sees another zone in the record's account, and the ledger row goes. A token for another
+// account, or one that sees no zone, keeps the row.
 func TestDNSSweepOfAZoneDeletedAtCloudflare(t *testing.T) {
 	setup := func(t *testing.T) (*dnsEnv, *dnstest.FakeCloudflare, DNSRecord) {
 		t.Helper()
@@ -183,7 +199,7 @@ func TestDNSSweepOfAZoneDeletedAtCloudflare(t *testing.T) {
 			t.Fatal(err)
 		}
 		row := DNSRecord{
-			ID: id.String(), Provider: "cloudflare", ZoneID: ref.ZoneID, ZoneName: z.Name, RecordID: ref.RecordID, Name: fqdn,
+			ID: id.String(), Provider: "cloudflare", ZoneID: ref.ZoneID, ZoneName: z.Name, AccountID: z.AccountID, RecordID: ref.RecordID, Name: fqdn,
 			Value: "old-value", OwnerKind: OwnerOrder, OwnerID: "old-order", Token: "old", CreatedAt: testNow,
 		}
 		if err := e.store.InsertDNSRecord(ctx, row); err != nil {
@@ -211,6 +227,20 @@ func TestDNSSweepOfAZoneDeletedAtCloudflare(t *testing.T) {
 			if r.Method == "DELETE" && !strings.HasSuffix(r.Path, "/dns_records/"+row.RecordID) {
 				t.Errorf("a DELETE went to %s, want only the stored record ID", r.Path)
 			}
+		}
+	})
+
+	t.Run("a token for another account that sees other zones", func(t *testing.T) {
+		e, fake, row := setup(t)
+		fake.RemoveZone("example.com")
+		fake.AddZoneInAccount("account-two", "foreign.net", dnsNS)
+		fake.LimitZones("foreign.net") // the record's own account shows this token nothing
+
+		e.mgr.sweepDNS(context.Background(), false)
+
+		rows := e.ledger()
+		if len(rows) != 1 || rows[0].ID != row.ID || rows[0].LastErrorClass != dns.ClassTokenScope || rows[0].Attempts != 1 {
+			t.Errorf("ledger = %+v, want the row kept for a retry: the record may still exist in its own account", rows)
 		}
 	})
 

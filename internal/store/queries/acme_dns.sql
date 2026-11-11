@@ -16,9 +16,10 @@ DELETE FROM acme_dns_credentials WHERE provider = ?;
 SELECT COUNT(*) FROM acme_dns_credentials WHERE provider = ?;
 
 -- name: InsertACMEDNSRecord :exec
-INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, record_id, name, value, comment, owner_kind,
-                              owner_id, token, created_at, attempts, last_try_at, next_try_at, last_error_class)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, account_id, record_id, name, value, comment,
+                              owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at,
+                              last_error_class)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListACMEDNSRecordsByOwner :many
 -- The rows of one owner (an order or a test) for one ACME challenge token, oldest first.

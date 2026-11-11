@@ -575,3 +575,66 @@ func TestCloudflareDeletesOnlyByID(t *testing.T) {
 		t.Fatalf("the second record read back as %+v, %v", got, err)
 	}
 }
+
+// TestCloudflareZoneCarriesItsAccount checks that a zone found by name reports the account Cloudflare
+// says it belongs to.
+func TestCloudflareZoneCarriesItsAccount(t *testing.T) {
+	fake := dnstest.NewFakeCloudflare(t)
+	fake.AddZoneInAccount("account-two", "example.com", "ns1.example.net")
+	z, err := newProvider(fake).Zone(context.Background(), challengeName)
+	if err != nil {
+		t.Fatalf("Zone: %v", err)
+	}
+	if z.AccountID != "account-two" || z.Name != "example.com" {
+		t.Errorf("zone = %+v, want example.com in account-two", z)
+	}
+}
+
+// TestCloudflareAccountZone checks the lookup that tells a zone that went away from one the token cannot
+// see: by exact name, inside one account.
+func TestCloudflareAccountZone(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the zone is in the account", func(t *testing.T) {
+		fake := dnstest.NewFakeCloudflare(t)
+		id := fake.AddZoneInAccount("account-one", "example.com", "ns1.example.net")
+		z, err := newProvider(fake).AccountZone(ctx, "account-one", "example.com")
+		if err != nil || z.ID != id || z.AccountID != "account-one" {
+			t.Fatalf("AccountZone = %+v, %v; want the zone %s", z, err, id)
+		}
+	})
+	t.Run("the zone is gone and the account has another", func(t *testing.T) {
+		fake := dnstest.NewFakeCloudflare(t)
+		fake.AddZoneInAccount("account-one", "other.org")
+		_, err := newProvider(fake).AccountZone(ctx, "account-one", "example.com")
+		if de := asDNS(t, err); de.Class != dns.ClassZoneNotFound {
+			t.Fatalf("got %+v, want dns_zone_not_found", de)
+		}
+	})
+	t.Run("the same name in another account is not the zone", func(t *testing.T) {
+		fake := dnstest.NewFakeCloudflare(t)
+		fake.AddZoneInAccount("account-one", "other.org")
+		fake.AddZoneInAccount("account-two", "example.com")
+		_, err := newProvider(fake).AccountZone(ctx, "account-one", "example.com")
+		if de := asDNS(t, err); de.Class != dns.ClassZoneNotFound {
+			t.Fatalf("got %+v, want dns_zone_not_found", de)
+		}
+	})
+	t.Run("the token sees no zone in the account", func(t *testing.T) {
+		fake := dnstest.NewFakeCloudflare(t)
+		fake.AddZoneInAccount("account-two", "example.com")
+		_, err := newProvider(fake).AccountZone(ctx, "account-one", "example.com")
+		if de := asDNS(t, err); de.Class != dns.ClassTokenScope {
+			t.Fatalf("got %+v, want dns_token_scope", de)
+		}
+	})
+	t.Run("an answer that is an error is passed on", func(t *testing.T) {
+		fake := dnstest.NewFakeCloudflare(t)
+		fake.AddZoneInAccount("account-one", "example.com")
+		fake.Script(dnstest.OpZones, dnstest.FakeResponse{Status: 500})
+		_, err := newProvider(fake).AccountZone(ctx, "account-one", "example.com")
+		if de := asDNS(t, err); de.Class != dns.ClassUnavailable {
+			t.Fatalf("got %+v, want dns_unavailable", de)
+		}
+	})
+}

@@ -61,6 +61,9 @@ var ErrZoneRefused = errors.New("the provider refused the zone ID")
 type Zone struct {
 	ID   string
 	Name string
+	// AccountID is the provider account the zone belongs to; empty when the provider has none or did
+	// not say.
+	AccountID string
 	// NameServers are the zone's authoritative name servers as the provider reports them, which
 	// gives a propagation check its servers without a DNS lookup.
 	NameServers []string
@@ -89,6 +92,11 @@ type Provider interface {
 	// Zone finds the zone that holds fqdn: the longest match, never above the registrable
 	// domain. A failure is a *Error.
 	Zone(ctx context.Context, fqdn string) (Zone, error)
+	// AccountZone finds the zone called name inside one account, by that exact name and no other. A
+	// token that sees zones in the account but not that one gets a *Error of ClassZoneNotFound; one that
+	// sees no zone in the account at all (it may be another account's, or may have lost the permission)
+	// gets ClassTokenScope. It is how a caller tells a zone that went away from a zone it cannot see.
+	AccountZone(ctx context.Context, accountID, name string) (Zone, error)
 	// CreateTXT writes one TXT record in z and returns the provider's reference to it. comment is
 	// informational text the provider keeps with the record. A refused duplicate is ErrIdentical.
 	CreateTXT(ctx context.Context, z Zone, fqdn, value, comment string) (RecordRef, error)

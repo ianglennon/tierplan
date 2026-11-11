@@ -294,6 +294,9 @@ type zoneJSON struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	NameServers []string `json:"name_servers"`
+	Account     struct {
+		ID string `json:"id"`
+	} `json:"account"`
 }
 
 // Zone walks the candidates from fqdn down to its registrable domain and returns the first zone the
@@ -318,7 +321,7 @@ func (p *provider) Zone(ctx context.Context, fqdn string) (dns.Zone, error) {
 		}
 		for _, z := range zones {
 			if strings.EqualFold(strings.TrimSuffix(z.Name, "."), candidate) {
-				zone := dns.Zone{ID: z.ID, Name: strings.ToLower(candidate), NameServers: z.NameServers}
+				zone := dns.Zone{ID: z.ID, Name: strings.ToLower(candidate), AccountID: z.Account.ID, NameServers: z.NameServers}
 				p.mu.Lock()
 				p.zoneNames[zone.ID] = zone.Name
 				p.mu.Unlock()
@@ -352,6 +355,45 @@ func (p *provider) noZone(ctx context.Context, name string) error {
 		return &dns.Error{Provider: providerName, Op: opFindZone, Status: res.status, Class: dns.ClassTokenScope, Host: name}
 	}
 	return &dns.Error{Provider: providerName, Op: opFindZone, Class: dns.ClassZoneNotFound, Host: name}
+}
+
+// AccountZone finds the zone called name in one account. Cloudflare lists zones filtered by account, so
+// a token for another account sees none of them there.
+func (p *provider) AccountZone(ctx context.Context, accountID, name string) (dns.Zone, error) {
+	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	list := func(q url.Values) ([]zoneJSON, error) {
+		res, err := p.do(ctx, opFindZone, http.MethodGet, "/zones", q, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !p.ok(res) {
+			return nil, p.failure(opFindZone, res, name, "")
+		}
+		var zones []zoneJSON
+		if err := json.Unmarshal(res.env.Result, &zones); err != nil {
+			return nil, &dns.Error{Provider: providerName, Op: opFindZone, Status: res.status, Class: dns.ClassUnavailable, Host: name}
+		}
+		return zones, nil
+	}
+	zones, err := list(url.Values{"account.id": {accountID}, "name": {name}})
+	if err != nil {
+		return dns.Zone{}, err
+	}
+	for _, z := range zones {
+		if strings.EqualFold(strings.TrimSuffix(z.Name, "."), name) && z.Account.ID == accountID {
+			return dns.Zone{ID: z.ID, Name: name, AccountID: accountID, NameServers: z.NameServers}, nil
+		}
+	}
+	others, err := list(url.Values{"account.id": {accountID}, "per_page": {"5"}})
+	if err != nil {
+		return dns.Zone{}, err
+	}
+	for _, z := range others {
+		if z.Account.ID == accountID {
+			return dns.Zone{}, &dns.Error{Provider: providerName, Op: opFindZone, Class: dns.ClassZoneNotFound, Host: name}
+		}
+	}
+	return dns.Zone{}, &dns.Error{Provider: providerName, Op: opFindZone, Class: dns.ClassTokenScope, Host: name}
 }
 
 // known is the zone name and host this provider learned for ref, for an error that holds IDs only.

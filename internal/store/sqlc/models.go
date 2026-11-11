@@ -40,6 +40,7 @@ type AcmeDnsRecord struct {
 	NextTryAt      int64
 	LastErrorClass string
 	ZoneName       string
+	AccountID      string
 }
 
 type AcmeOrder struct {

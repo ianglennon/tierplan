@@ -55,12 +55,20 @@ func NewFakeProvider() *FakeProvider {
 	return &FakeProvider{hidden: map[string]bool{}}
 }
 
-// AddZone adds a zone with the nameservers a propagation check asks, and returns its ID.
+// FakeDefaultAccount is the account the FakeProvider's AddZone puts a zone in.
+const FakeDefaultAccount = "fake-account"
+
+// AddZone adds a zone to FakeDefaultAccount with the nameservers a propagation check asks, and returns its ID.
 func (f *FakeProvider) AddZone(name string, nameservers ...string) string {
+	return f.AddZoneInAccount(FakeDefaultAccount, name, nameservers...)
+}
+
+// AddZoneInAccount adds a zone to an account and returns its ID.
+func (f *FakeProvider) AddZoneInAccount(account, name string, nameservers ...string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
-	z := dns.Zone{ID: fmt.Sprintf("zone-%d", f.nextID), Name: strings.ToLower(name), NameServers: slices.Clone(nameservers)}
+	z := dns.Zone{ID: fmt.Sprintf("zone-%d", f.nextID), Name: strings.ToLower(name), AccountID: account, NameServers: slices.Clone(nameservers)}
 	f.zones = append(f.zones, z)
 	return z.ID
 }
@@ -229,6 +237,35 @@ func (h *fakeHandle) Zone(_ context.Context, fqdn string) (dns.Zone, error) {
 		return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: dns.ClassZoneNotFound, Host: fqdn}
 	}
 	return z, nil
+}
+
+// AccountZone finds the zone called name in an account among the zones the token sees.
+func (h *fakeHandle) AccountZone(_ context.Context, accountID, name string) (dns.Zone, error) {
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	h.record(Call{Op: "account_zone", Name: name})
+	if !h.ok {
+		return dns.Zone{}, h.denied("find zone")
+	}
+	if h.f.zoneErr != nil {
+		return dns.Zone{}, h.f.zoneErr
+	}
+	name = strings.ToLower(name)
+	seesAccount := false
+	for _, z := range h.f.zones {
+		if z.AccountID != accountID || h.f.hidden[z.Name] {
+			continue
+		}
+		seesAccount = true
+		if z.Name == name {
+			return z, nil
+		}
+	}
+	class := dns.ClassTokenScope // sees no zone in the account at all
+	if seesAccount {
+		class = dns.ClassZoneNotFound
+	}
+	return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: class, Host: name}
 }
 
 func (h *fakeHandle) CreateTXT(_ context.Context, z dns.Zone, fqdn, value, comment string) (dns.RecordRef, error) {

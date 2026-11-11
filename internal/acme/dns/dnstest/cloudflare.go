@@ -30,8 +30,12 @@ type TXTSink interface {
 type FakeZone struct {
 	ID          string
 	Name        string
+	AccountID   string
 	NameServers []string
 }
+
+// DefaultAccount is the account AddZone puts a zone in.
+const DefaultAccount = "account-default"
 
 // FakeRecord is a copy of a record the fake holds.
 type FakeRecord struct {
@@ -123,11 +127,16 @@ func (f *FakeCloudflare) Client() *http.Client { return f.srv.Client() }
 // Close stops the server. Closing twice is harmless.
 func (f *FakeCloudflare) Close() { f.srv.Close() }
 
-// AddZone adds a zone and returns its ID.
+// AddZone adds a zone to DefaultAccount and returns its ID.
 func (f *FakeCloudflare) AddZone(name string, nameservers ...string) string {
+	return f.AddZoneInAccount(DefaultAccount, name, nameservers...)
+}
+
+// AddZoneInAccount adds a zone to an account and returns its ID.
+func (f *FakeCloudflare) AddZoneInAccount(account, name string, nameservers ...string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	z := FakeZone{ID: randHex(16), Name: strings.ToLower(name), NameServers: nameservers}
+	z := FakeZone{ID: randHex(16), Name: strings.ToLower(name), AccountID: account, NameServers: nameservers}
 	f.zones = append(f.zones, z)
 	return z.ID
 }
@@ -321,16 +330,23 @@ func (f *FakeCloudflare) intercept(w http.ResponseWriter, r *http.Request) bool 
 
 func (f *FakeCloudflare) listZones(w http.ResponseWriter, r *http.Request) {
 	name := strings.ToLower(r.URL.Query().Get("name"))
+	account := r.URL.Query().Get("account.id")
 	f.mu.Lock()
 	out := []map[string]any{}
 	for _, z := range f.zones {
 		if name != "" && z.Name != name {
 			continue
 		}
+		if account != "" && z.AccountID != account {
+			continue
+		}
 		if f.limited && !f.visible[z.Name] {
 			continue
 		}
-		out = append(out, map[string]any{"id": z.ID, "name": z.Name, "name_servers": z.NameServers, "status": "active"})
+		out = append(out, map[string]any{
+			"id": z.ID, "name": z.Name, "name_servers": z.NameServers, "status": "active",
+			"account": map[string]any{"id": z.AccountID, "name": z.AccountID},
+		})
 	}
 	f.mu.Unlock()
 	writeOK(w, out)

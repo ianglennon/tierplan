@@ -200,7 +200,7 @@ func (m *Manager) trackTestRecord(ctx context.Context, p dns.Provider, ref dns.R
 		return DNSRecord{}, err
 	}
 	row := DNSRecord{
-		ID: id.String(), Provider: p.Name(), ZoneID: ref.ZoneID, ZoneName: t.Zone.Name, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
+		ID: id.String(), Provider: p.Name(), ZoneID: ref.ZoneID, ZoneName: t.Zone.Name, AccountID: t.Zone.AccountID, RecordID: ref.RecordID, Name: t.FQDN, Value: value,
 		Comment: comment, OwnerKind: OwnerTest, OwnerID: testID, CreatedAt: m.clock.Now(),
 	}
 	// Written on a context a cancel cannot end (a browser that disconnects cancels the request): the
