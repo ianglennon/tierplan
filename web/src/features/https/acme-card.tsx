@@ -20,6 +20,7 @@ import {
 import { errorValues } from "@/features/https/copy";
 import { ErrorPanel } from "@/features/https/error-panel";
 import { ISSUE_NOTE_ID, IssueSection } from "@/features/https/issue-section";
+import { LeftOverRecords } from "@/features/https/leftover-records";
 import { NamesSection } from "@/features/https/names-section";
 import { ProfileSection } from "@/features/https/profile-section";
 import { StateAlerts } from "@/features/https/state-alerts";
@@ -100,6 +101,8 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
       )}
 
       <Separator />
+      {/* Records TierPlan could not delete, whatever the state and the saved method (D-18). */}
+      <LeftOverRecords dns={acme.dns} />
       <StateAlerts status={status} canWrite={canWrite} />
       <IssueSection
         status={status}

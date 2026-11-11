@@ -26,7 +26,15 @@ const PART = new RegExp(`(TIERPLAN_[A-Z_]+|${FIRST}|${SECOND})`);
 
 // Rich draws a translated sentence with the environment variable names in mono and the two value
 // markers replaced by the nodes given.
-function Rich({ text, first, second }: { text: string; first?: ReactNode; second?: ReactNode }) {
+export function Rich({
+  text,
+  first,
+  second,
+}: {
+  text: string;
+  first?: ReactNode;
+  second?: ReactNode;
+}) {
   return (
     <>
       {text.split(PART).map((part, i) => {

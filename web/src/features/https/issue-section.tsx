@@ -19,6 +19,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import type { CardState } from "@/features/https/card-state";
+import { ChallengeChangedPrompt } from "@/features/https/challenge-changed-prompt";
 import { formatDate } from "@/features/https/copy";
 import { useACMERun } from "@/features/https/https-run-stream";
 import { RunPanel } from "@/features/https/run-panel";
@@ -294,6 +295,14 @@ export function IssueSection({
 
       {showButtons ? (
         <>
+          {/* Saved validation settings no order has used yet (D-03). Not while a run is active: the run
+              panel takes over. It carries no button, since the buttons are the next elements below. */}
+          {acme.validationUntested && !runActive ? (
+            <ChallengeChangedPrompt
+              method={acme.challengeType}
+              variant={buttons.renew ? "renew" : "issue"}
+            />
+          ) : null}
           <p className="text-sm text-muted-foreground">{t("https.issue.helper")}</p>
           {reason ? (
             <p id={NOTE_ID} className="text-sm text-muted-foreground">

@@ -265,7 +265,7 @@ describe("E7: the left-over list on the Let's Encrypt card", () => {
       Response.json(httpsLetsEncryptStatus({ dns: acmeDNSStatus(LEFT), pausedReason: "restore" }));
     renderCard();
     const title = await card().findByText("A TXT record is left in Cloudflare");
-    const restore = await card().findByText(/Let's Encrypt is paused/);
+    const restore = await card().findByText("Paused after restore");
     const order = title.compareDocumentPosition(restore);
     expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -279,7 +279,10 @@ describe("E7: the left-over list on the Let's Encrypt card", () => {
 
   it("renders nothing until the status has arrived (loading)", async () => {
     let release: (r: Response) => void = () => {};
-    status = () => new Promise<Response>((resolve) => (release = resolve));
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    status = () => pending;
     renderCard();
     expect(card().queryByText(/TXT records? (is|are) left/)).toBeNull();
     release(Response.json(httpsLetsEncryptStatus({ dns: acmeDNSStatus(LEFT) })));
