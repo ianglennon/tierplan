@@ -8,6 +8,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { formatDate } from "@/features/https/copy";
 import {
+  ACME_STEPS,
+  ACME_STEPS_DNS01,
   type ACMERunFrame,
   type ACMERunStreamState,
   type ACMEStepState,
@@ -15,10 +17,11 @@ import {
   createACMERunStream,
   initialACMERunStream,
   reduceACMERunStream,
+  stepsFor,
 } from "@/features/https/https-run-stream";
 import { RunPanel } from "@/features/https/run-panel";
 import "@/i18n";
-import { acmeRunFrame, acmeStep, acmeSteps } from "@/test-https";
+import { acmeRunFrame, acmeStep, acmeSteps, acmeStepsDNS01 } from "@/test-https";
 import { waitUnderFakeClock } from "@/test-settle";
 
 // The run panel and the stream behind it (plan 14-16, D-09, UI-SPEC E5).
@@ -406,5 +409,347 @@ describe("E5: the run panel", () => {
     const hint = steps().querySelector('[data-step="order"] .text-xs') as HTMLElement;
     expect(hint.className).toContain("break-all");
     expect((hint.parentElement as HTMLElement).className).toContain("min-w-0");
+  });
+});
+
+// The step ids the server's DNS-01 run reports, in order (internal/acme/dns_steps.go stepItemsDNS01,
+// pinned there by TestManagerDNSStepOrderMatchesTheList and on the stream by
+// TestACMERunStreamCarriesTheDNSSteps).
+const SERVER_DNS01_ORDER = [
+  "account",
+  "order",
+  "challenge",
+  "propagation",
+  "validate",
+  "finalize",
+  "stored",
+  "cleanup",
+];
+
+const dnsRun = (
+  states: Parameters<typeof acmeStepsDNS01>[0],
+  values: Parameters<typeof acmeStepsDNS01>[1] = {},
+  over: Partial<Parameters<typeof acmeRunFrame>[0]> = {},
+) => acmeRunFrame({ challenge: "dns-01", items: acmeStepsDNS01(states, values), ...over });
+
+// What a row says under its label: the text of its hint, or "" when it has none.
+const hintOf = (id: string) =>
+  steps().querySelector(`[data-step="${id}"] .text-xs`)?.textContent ?? "";
+const stateWords = (id: string) =>
+  steps().querySelector(`[data-step="${id}"] .sr-only`)?.textContent ?? "";
+
+describe("E8: the DNS-01 steps (CHAL-04, D-09, D-14, D-18)", () => {
+  it("lists the steps in the order the server's DNS-01 run reports them", () => {
+    expect([...ACME_STEPS_DNS01]).toEqual(SERVER_DNS01_ORDER);
+    expect(stepsFor("dns-01")).toBe(ACME_STEPS_DNS01);
+    // Clean-up is last: it runs after the certificate is stored, and after a failed order too.
+    expect(ACME_STEPS_DNS01.at(-1)).toBe("cleanup");
+  });
+
+  it("builds the HTTP-01 list for a run that names http-01 or no challenge", () => {
+    expect(stepsFor("http-01")).toBe(ACME_STEPS);
+    expect(stepsFor(undefined)).toBe(ACME_STEPS);
+    expect(stepsFor("something-new")).toBe(ACME_STEPS);
+  });
+
+  it("draws eight rows in execution order with their labels for a DNS-01 run (populated)", () => {
+    draw(live({ run: dnsRun({ account: "running" }) }));
+    expect(
+      Array.from(steps().querySelectorAll("li")).map((li) => li.getAttribute("data-step")),
+    ).toEqual(SERVER_DNS01_ORDER);
+    expect(
+      Array.from(steps().querySelectorAll("li")).map(
+        (li) => li.querySelector("span.font-medium")?.firstChild?.textContent,
+      ),
+    ).toEqual([
+      "Account",
+      "Order",
+      "Challenge",
+      "Propagation",
+      "Validation",
+      "Finalize",
+      "Stored",
+      "Clean-up",
+    ]);
+  });
+
+  it("keeps six rows for an HTTP-01 run (populated)", () => {
+    draw(live({ run: acmeRunFrame({ challenge: "http-01" }) }));
+    expect(steps().querySelectorAll("li")).toHaveLength(6);
+    expect(steps().querySelector('[data-step="propagation"]')).toBeNull();
+    expect(steps().querySelector('[data-step="cleanup"]')).toBeNull();
+  });
+
+  it.each<[ACMEStepState, string]>([
+    ["waiting", "Not started"],
+    ["running", "Running"],
+    ["done", "Done"],
+    ["failed", "Failed"],
+    ["skipped", "Skipped"],
+  ])("gives the new Propagation and Clean-up rows the state %s (populated)", (state, words) => {
+    draw(live({ run: dnsRun({ propagation: state, cleanup: state }) }));
+    for (const id of ["propagation", "cleanup"]) {
+      expect(stateOf(id)).toBe(state);
+      expect(stateWords(id)).toBe(` (${words})`);
+    }
+  });
+
+  it("names the record in the Challenge hint while it runs (loading)", () => {
+    draw(
+      live({
+        run: dnsRun(
+          { account: "done", order: "done", challenge: "running" },
+          { challenge: { record: "_acme-challenge.tierplan.example.com" } },
+        ),
+      }),
+    );
+    expect(hintOf("challenge")).toBe(
+      "Adding the TXT record _acme-challenge.tierplan.example.com at Cloudflare.",
+    );
+    expect(hintOf("propagation")).toBe("");
+  });
+
+  it("names where the name is delegated when a CNAME was followed", () => {
+    draw(
+      live({
+        run: dnsRun(
+          { challenge: "running" },
+          {
+            challenge: {
+              record: "_acme-challenge.tierplan.example.com",
+              host: "tierplan.example.com",
+              target: "tierplan.acme.example.net",
+            },
+          },
+        ),
+      }),
+    );
+    expect(hintOf("challenge")).toBe(
+      "Adding the TXT record _acme-challenge.tierplan.example.com at Cloudflare. " +
+        "_acme-challenge.tierplan.example.com is delegated to tierplan.acme.example.net.",
+    );
+  });
+
+  it("shows the record at the end of the Propagation hint on the zone's nameservers by default", () => {
+    draw(
+      live({
+        run: dnsRun(
+          { challenge: "done", propagation: "running" },
+          { propagation: { record: "_acme-challenge.tierplan.example.com" } },
+        ),
+      }),
+    );
+    expect(hintOf("propagation")).toBe(
+      "Waiting for _acme-challenge.tierplan.example.com to show on the zone's nameservers.",
+    );
+  });
+
+  it("names the admin's resolvers in the Propagation hint", () => {
+    draw(
+      live({
+        run: dnsRun(
+          { propagation: "running" },
+          {
+            propagation: {
+              record: "_acme-challenge.tierplan.example.com",
+              resolvers: ["1.1.1.1:53", "192.168.1.1:53"],
+            },
+          },
+        ),
+      }),
+    );
+    expect(hintOf("propagation")).toBe(
+      "Waiting for _acme-challenge.tierplan.example.com to show on 1.1.1.1:53, 192.168.1.1:53.",
+    );
+  });
+
+  it("says what Clean-up is doing while it runs", () => {
+    draw(live({ run: dnsRun({ stored: "done", cleanup: "running" }) }));
+    expect(hintOf("cleanup")).toBe("Removing the TXT records TierPlan added.");
+  });
+
+  it("draws the record and target as mono text that breaks anywhere (long-text)", () => {
+    const record = `_acme-challenge.${"long-label.".repeat(10)}example.com`;
+    draw(
+      live({
+        run: dnsRun(
+          { challenge: "running" },
+          { challenge: { record, host: "x.example.com", target: `${"t".repeat(80)}.example.net` } },
+        ),
+      }),
+    );
+    const row = steps().querySelector('[data-step="challenge"]') as HTMLElement;
+    const codes = Array.from(row.querySelectorAll("code"));
+    expect(codes.map((c) => c.textContent)).toContain(record);
+    for (const code of codes) expect(code.className).toContain("break-all");
+    const hint = row.querySelector(".text-xs") as HTMLElement;
+    expect(hint.className).toContain("break-all");
+    expect((hint.parentElement as HTMLElement).className).toContain("min-w-0");
+  });
+
+  it("draws a record name the server sent as text, never as markup", () => {
+    draw(
+      live({
+        run: dnsRun(
+          { challenge: "running" },
+          { challenge: { record: "<img src=x onerror=alert(1)>" } },
+        ),
+      }),
+    );
+    expect(steps().querySelector("img")).toBeNull();
+    expect(hintOf("challenge")).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("shows earlier steps done from the replay of a run joined midway (partial)", () => {
+    draw(
+      live({
+        run: dnsRun(
+          { account: "skipped", order: "done", challenge: "done", propagation: "running" },
+          { propagation: { record: "_acme-challenge.tierplan.example.com" } },
+          { trigger: "resume" },
+        ),
+      }),
+    );
+    expect(SERVER_DNS01_ORDER.map(stateOf)).toEqual([
+      "skipped",
+      "done",
+      "done",
+      "running",
+      "waiting",
+      "waiting",
+      "waiting",
+      "waiting",
+    ]);
+  });
+
+  it("draws a Clean-up that could not delete as the amber left-over state, and the run still says issued (error)", () => {
+    draw(
+      live({
+        finished: true,
+        status: "closed",
+        run: dnsRun(
+          {
+            account: "done",
+            order: "done",
+            challenge: "done",
+            propagation: "done",
+            validate: "done",
+            finalize: "done",
+            stored: "done",
+            cleanup: "done",
+          },
+          { cleanup: { code: "left_over", leftOver: 2 } },
+          { state: "done" },
+        ),
+      }),
+    );
+    expect(screen.getByText("Certificate issued.")).toBeTruthy();
+    const row = steps().querySelector('[data-step="cleanup"]') as HTMLElement;
+    // The step is still done as far as the run goes; only its mark and words change.
+    expect(row.getAttribute("data-state")).toBe("done");
+    expect(row.getAttribute("data-left-over")).toBe("true");
+    expect(row.querySelector("svg")?.getAttribute("class")).toContain("text-status-warning-text");
+    expect(stateWords("cleanup")).toBe(" (Left over)");
+    expect(hintOf("cleanup")).toBe(
+      "Couldn't remove 2 records. TierPlan keeps trying. See the left-over records above.",
+    );
+  });
+
+  it("words one left-over record in the singular", () => {
+    draw(
+      live({
+        finished: true,
+        status: "closed",
+        run: dnsRun(
+          { cleanup: "done" },
+          { cleanup: { code: "left_over", leftOver: 1 } },
+          { state: "done" },
+        ),
+      }),
+    );
+    expect(hintOf("cleanup")).toBe(
+      "Couldn't remove 1 record. TierPlan keeps trying. See the left-over records above.",
+    );
+  });
+
+  it("draws a Clean-up that removed everything as plainly done, and a skipped one as skipped", () => {
+    const { unmount } = draw(live({ run: dnsRun({ cleanup: "done" }) }));
+    expect(stateWords("cleanup")).toBe(" (Done)");
+    expect(hintOf("cleanup")).toBe("");
+    expect(
+      steps().querySelector('[data-step="cleanup"]')?.getAttribute("data-left-over"),
+    ).toBeNull();
+    unmount();
+    draw(live({ run: dnsRun({ cleanup: "skipped" }) }));
+    expect(stateWords("cleanup")).toBe(" (Skipped)");
+  });
+
+  it("does not treat left_over on any other step as a left-over state", () => {
+    draw(live({ run: dnsRun({ stored: "done" }, { stored: { code: "left_over" } }) }));
+    expect(stateWords("stored")).toBe(" (Done)");
+  });
+
+  it("runs Clean-up after a failed order and keeps the earlier steps' marks (error)", () => {
+    draw(
+      live({
+        finished: true,
+        status: "closed",
+        run: dnsRun(
+          {
+            account: "done",
+            order: "done",
+            challenge: "done",
+            propagation: "done",
+            validate: "failed",
+            finalize: "skipped",
+            stored: "skipped",
+            cleanup: "done",
+          },
+          {},
+          { state: "failed" },
+        ),
+      }),
+    );
+    expect(screen.getByText("Issuing failed.")).toBeTruthy();
+    expect(stateOf("validate")).toBe("failed");
+    expect(stateOf("cleanup")).toBe("done");
+  });
+
+  it("says Reconnecting... for a DNS-01 run whose stream dropped, and not once it ended (overflow)", () => {
+    const { unmount } = draw(
+      live({ status: "reconnecting", run: dnsRun({ propagation: "running" }) }),
+    );
+    expect(screen.getByText("Reconnecting...")).toBeTruthy();
+    expect(steps().querySelectorAll("li")).toHaveLength(8);
+    unmount();
+    draw(
+      live({
+        status: "reconnecting",
+        finished: true,
+        run: dnsRun({ cleanup: "done" }, {}, { state: "done" }),
+      }),
+    );
+    expect(screen.queryByText("Reconnecting...")).toBeNull();
+  });
+
+  it("folds the DNS step values of an item frame into the step (reducer)", () => {
+    const start = reduceACMERunStream(initialACMERunStream, {
+      type: "snapshot",
+      run: dnsRun({ challenge: "running" }),
+    });
+    const next = reduceACMERunStream(start, {
+      type: "item",
+      item: acmeStep({
+        id: "propagation",
+        label: "Propagation",
+        state: "running",
+        record: "_acme-challenge.tierplan.example.com",
+        resolvers: ["1.1.1.1:53"],
+      }),
+    });
+    const step = next.run?.items?.find((i) => i.id === "propagation");
+    expect(step?.record).toBe("_acme-challenge.tierplan.example.com");
+    expect(step?.resolvers).toEqual(["1.1.1.1:53"]);
+    expect(next.run?.challenge).toBe("dns-01");
   });
 });

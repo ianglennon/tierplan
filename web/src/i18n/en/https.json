@@ -59,7 +59,12 @@
       "save": "Save validation settings",
       "testing": "Testing token...",
       "saving": "Saving...",
-      "done": "Validation settings saved."
+      "done": "Validation settings saved.",
+      "changed": {
+        "title": "Validation method changed",
+        "renew": "The certificate in use hasn't changed. TierPlan uses {{method}} from the next order. Renew now to test it.",
+        "issue": "No certificate has been ordered with {{method}} yet. Issue certificate to test it."
+      }
     },
     "names": {
       "title": "Names on the certificate",
@@ -339,18 +344,26 @@
         "account": "Account",
         "order": "Order",
         "challenge": "Challenge",
+        "propagation": "Propagation",
         "validate": "Validation",
         "finalize": "Finalize",
-        "stored": "Stored"
+        "stored": "Stored",
+        "cleanup": "Clean-up"
       },
       "hint": {
         "account": "Checking the Let's Encrypt account.",
         "order": "Asking for a certificate for {{names}}.",
         "challenge": "Serving the HTTP-01 token on port 80.",
+        "challengeDns01": "Adding the TXT record {{record}} at Cloudflare.",
+        "challengeDns01Delegated": "Adding the TXT record {{record}} at Cloudflare. _acme-challenge.{{host}} is delegated to {{target}}.",
+        "propagation": "Waiting for {{record}} to show on {{resolvers}}.",
         "validate": "Waiting for Let's Encrypt to check {{host}}.",
         "finalize": "Sending the certificate request.",
         "stored": "Saving the certificate and switching to it.",
-        "accountSkipped": "Account already registered."
+        "accountSkipped": "Account already registered.",
+        "cleanup": "Removing the TXT records TierPlan added.",
+        "cleanupLeftOver_one": "Couldn't remove {{count}} record. TierPlan keeps trying. See the left-over records above.",
+        "cleanupLeftOver_other": "Couldn't remove {{count}} records. TierPlan keeps trying. See the left-over records above."
       },
       "state": {
         "waiting": "Not started",
@@ -358,8 +371,20 @@
         "done": "Done",
         "failed": "Failed",
         "cancelled": "Stopped",
-        "skipped": "Skipped"
+        "skipped": "Skipped",
+        "leftOver": "Left over"
       }
+    },
+    "leftover": {
+      "title_one": "A TXT record is left in Cloudflare",
+      "title_other": "{{count}} TXT records are left in Cloudflare",
+      "intro": "TierPlan couldn't delete these records it created. It keeps trying and removes them as soon as it can. The order itself was not affected.",
+      "item": "TXT record left at {{name}} (id {{id}})",
+      "tried": "Last tried {{when}}.",
+      "next": "Next try {{time}}.",
+      "pausedRestore": "Retries are paused until you resume Let's Encrypt.",
+      "pausedCertFiles": "Retries are paused while TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set.",
+      "footer": "You can also delete a record yourself in the Cloudflare dashboard. TierPlan's records have a comment that starts with {{prefix}}."
     },
     "renewal": {
       "basis": {

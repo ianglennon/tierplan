@@ -90,12 +90,35 @@ export function acmeSteps(states: Partial<Record<string, ACMEStep["state"]>> = {
   );
 }
 
+const DNS01_STEP_LABELS: ReadonlyArray<readonly [string, string]> = [
+  ["account", "Account"],
+  ["order", "Order"],
+  ["challenge", "Challenge"],
+  ["propagation", "Propagation"],
+  ["validate", "Validation"],
+  ["finalize", "Finalize"],
+  ["stored", "Stored"],
+  ["cleanup", "Clean-up"],
+];
+
+// The eight steps of a DNS-01 run in the order the server sends them (internal/acme/dns_steps.go
+// stepItemsDNS01), every step waiting except those named in states. over gives a step its values.
+export function acmeStepsDNS01(
+  states: Partial<Record<string, ACMEStep["state"]>> = {},
+  over: Partial<Record<string, Partial<ACMEStep>>> = {},
+): ACMEStep[] {
+  return DNS01_STEP_LABELS.map(([id, label]) =>
+    acmeStep({ id, label, state: states[id] ?? "waiting", ...over[id] }),
+  );
+}
+
 // A run as the stream sends it in its snapshot and done frames: an admin's first issue, running.
 export function acmeRunFrame(over: Partial<ACMERun> = {}): ACMERun {
   return {
     jobId: "job-1",
     kind: "issue",
     trigger: "admin",
+    challenge: "http-01",
     state: "running",
     startedAt: new Date(Date.now() - 5_000).toISOString(),
     items: acmeSteps({ account: "running" }),
