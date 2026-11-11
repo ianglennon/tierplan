@@ -164,6 +164,41 @@ describe("/login", () => {
     expect(await screen.findByText("Invalid username or password.")).toBeTruthy();
   });
 
+  it("says the address is wrong when the server refuses the sign-in on origin", async () => {
+    stubApi({
+      login: () =>
+        Response.json(
+          {
+            status: 403,
+            type: "origin_mismatch",
+            detail: "The request did not come from this TierPlan's public URL.",
+          },
+          { status: 403, headers: { "Content-Type": "application/problem+json" } },
+        ),
+    });
+    renderAt("/login");
+    await fill("admin", "right password");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const alert = await screen.findByText(/TierPlan didn't check your password/);
+    expect(alert.textContent).toContain(window.location.origin);
+    expect(alert.closest("[role=alert]")).toBeTruthy();
+    expect(screen.queryByText("Invalid username or password.")).toBeNull();
+  });
+
+  it("keeps the generic error for any other 403", async () => {
+    stubApi({
+      login: () =>
+        Response.json(
+          { status: 403, type: "csrf_failed" },
+          { status: 403, headers: { "Content-Type": "application/problem+json" } },
+        ),
+    });
+    renderAt("/login");
+    await fill("admin", "x");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText("Invalid username or password.")).toBeTruthy();
+  });
+
   it("shows the unreachable message when the request itself fails", async () => {
     stubApi({
       login: () => {

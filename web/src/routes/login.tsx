@@ -42,6 +42,18 @@ interface LoginSearch {
   notice?: "password-set" | "backup-restored";
 }
 
+// isOriginMismatch reports whether the server refused the sign-in because the
+// request did not come from its public URL (403 origin_mismatch).
+function isOriginMismatch(response: Response, error: unknown): boolean {
+  return (
+    response.status === 403 &&
+    typeof error === "object" &&
+    error !== null &&
+    "type" in error &&
+    error.type === "origin_mismatch"
+  );
+}
+
 function LoginPage() {
   const t = useT();
   const router = useRouter();
@@ -55,7 +67,11 @@ function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [pending, setPending] = useState(false);
   // The i18n key of the form error, or null. Every failed sign-in shows the
-  // same one (D-30): the screen never learns why the server said no.
+  // same one (D-30): the screen never learns why the server said no. The one
+  // exception says nothing about the account: the server refused the request
+  // because this page is not served from the public URL (origin_mismatch), so
+  // the password was never checked and "invalid username or password" would
+  // send the user hunting for the wrong problem.
   const [errorKey, setErrorKey] = useState<string | null>(null);
 
   const submitting = useRef(false);
@@ -77,11 +93,13 @@ function LoginPage() {
     setPending(true);
     setErrorKey(null);
     try {
-      const { data } = await api.POST("/api/auth/login", {
+      const { data, error, response } = await api.POST("/api/auth/login", {
         body: { username, password, remember },
       });
       if (!data) {
-        setErrorKey("auth.login.error");
+        setErrorKey(
+          isOriginMismatch(response, error) ? "auth.login.wrongAddress" : "auth.login.error",
+        );
         return;
       }
       setCsrfToken(data.csrfToken);
@@ -120,7 +138,7 @@ function LoginPage() {
       ) : null}
       {errorKey ? (
         <Alert variant="destructive">
-          <AlertDescription>{t(errorKey)}</AlertDescription>
+          <AlertDescription>{t(errorKey, { origin: window.location.origin })}</AlertDescription>
         </Alert>
       ) : null}
       <form noValidate onSubmit={onSubmit}>
