@@ -236,7 +236,7 @@ func txtAt(t *testing.T, addr, name string) []string {
 	q.SetQuestion(mdns.Fqdn(name), mdns.TypeTXT)
 	ctx, cancel := context.WithTimeout(testsupport.Context(t), 30*time.Second)
 	defer cancel()
-	resp, _, err := (&mdns.Client{Net: "udp", Timeout: 10 * time.Second}).ExchangeContext(ctx, q, addr)
+	resp, _, err := (&mdns.Client{Net: "udp"}).ExchangeContext(ctx, q, addr)
 	if err != nil {
 		t.Fatalf("ask %s for TXT %s: %v", addr, name, err)
 	}
@@ -304,6 +304,56 @@ func TestPebbleDNS01IssuesAndLeavesNoRecord(t *testing.T) {
 		t.Errorf("the system resolver was asked %+v; the default path asks the zone's own name servers only", q)
 	}
 	p.requireNothingLeft(t, challengeName)
+}
+
+// TestPebbleDNS01FollowsACNAMEDelegation: a name whose own zone is not on Cloudflare validates through
+// an _acme-challenge CNAME into a Cloudflare zone (D-14, D-15). Because the zone is not on Cloudflare,
+// the CNAME is asked of the custom resolvers the admin listed (D-12), and the system resolver, which
+// here answers a different CNAME as split-horizon LAN DNS would, is never asked.
+func TestPebbleDNS01FollowsACNAMEDelegation(t *testing.T) {
+	const (
+		host      = "lan.split.test"
+		delegated = "lan.delegated.test"
+	)
+	chall := acmetest.StartChallTestSrv(t)
+	fake, zoneID, sink := newFakeCloudflare(t, chall, "delegated.test", "ns1.delegated.test")
+	challengeName := "_acme-challenge." + host
+	target := "_acme-challenge." + delegated
+	chall.SetCNAME(challengeName, target)
+
+	// The LAN resolver's view: the same name is delegated elsewhere, to a zone Cloudflare does not hold.
+	// Asking it would send the record to the wrong place or fail, so a query to it fails the test.
+	lan := acmetest.StartDNSServer(t)
+	lan.SetCNAME(challengeName, "_acme-challenge.lan.elsewhere.test")
+
+	p := startDNSPebbleServer(t, host, fake, chall, sink, acme.DNSDeps{
+		NameserverAddrs: nameserverMap(chall.DNSAddr(), "ns1.delegated.test"),
+		ResolvConf:      func() ([]string, error) { return []string{lan.Addr()}, nil },
+	})
+	p.register(t)
+	p.saveValidation(t, chall.DNSAddr())
+	p.issueViaAPI(t)
+
+	if st := p.status(t); st.Certificate.Source != "lets_encrypt" {
+		t.Errorf("certificate source %q; want lets_encrypt", st.Certificate.Source)
+	}
+	if !requestedCreateIn(fake, zoneID) {
+		t.Errorf("the fake Cloudflare saw no record created in zone delegated.test (%s): %+v", zoneID, fake.Requests())
+	}
+	names, _ := sink.added()
+	if !containsName(names, target) {
+		t.Errorf("records were added at %v; want one at %s, the delegation's target", names, target)
+	}
+	if containsName(names, challengeName) {
+		t.Errorf("a record was added at %s itself; the delegation says it goes to %s", challengeName, target)
+	}
+	if q := lan.Queries(); len(q) != 0 {
+		t.Errorf("the LAN resolver was asked %+v; with custom resolvers set it is never asked", q)
+	}
+	p.requireNothingLeft(t, challengeName, target)
+	if got := p.dnsStatus(t).ACME.DNS.TokenSaved; !got {
+		t.Error("the status says no token is saved after a DNS-01 run")
+	}
 }
 
 func containsName(names []string, want string) bool {
