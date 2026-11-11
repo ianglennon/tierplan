@@ -5,7 +5,10 @@ package acme
 
 import (
 	"context"
+	"net"
+	"net/netip"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -74,4 +77,78 @@ type Suggestion struct {
 	Host, Address string
 }
 
-func (m *Manager) suggestDNS01(context.Context, State, string, bool) *Suggestion { return nil }
+const (
+	// suggestLookupTimeout bounds the one DNS lookup a status read can make.
+	suggestLookupTimeout = 2 * time.Second
+	// suggestCacheTTL is how long an answer, a failure included, is kept: the page polls the status
+	// every minute and must stay cheap.
+	suggestCacheTTL = 5 * time.Minute
+)
+
+// cgnat is 100.64.0.0/10, the shared address space of RFC 6598, which IsPrivate does not cover.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// isPrivateLike reports whether a CA could not be expected to reach addr: a private, loopback or
+// link-local address, or one in the carrier-grade NAT range.
+func isPrivateLike(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || cgnat.Contains(addr)
+}
+
+// suggestCache is the last lookup the suggestion made. It has its own lock, so a status read never
+// waits on the manager's while a resolver answers.
+type suggestCache struct {
+	mu        sync.Mutex
+	host      string
+	answer    *Suggestion
+	checkedAt time.Time
+	set       bool
+}
+
+func (c *suggestCache) get(host string, now time.Time) (*Suggestion, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.set || c.host != host || now.Sub(c.checkedAt) >= suggestCacheTTL {
+		return nil, false
+	}
+	return c.answer, true
+}
+
+func (c *suggestCache) put(host string, answer *Suggestion, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.host, c.answer, c.checkedAt, c.set = host, answer, now, true
+}
+
+// suggestDNS01 returns the DNS-01 suggestion for host, or nil. It is made only when HTTP-01 is the saved
+// challenge, host is a name (not an IP address) and the directory is not overridden for a test. The
+// name is looked up with the system resolver, as this server sees it, under a 2 s deadline, and the
+// answer (or the failure to get one) is kept for 5 minutes on the manager's clock.
+func (m *Manager) suggestDNS01(ctx context.Context, st State, host string, overridden bool) *Suggestion {
+	if overridden || challengeOf(st) != ChallengeHTTP01 || host == "" || net.ParseIP(host) != nil {
+		return nil
+	}
+	now := m.clock.Now()
+	if answer, ok := m.suggest.get(host, now); ok {
+		return answer
+	}
+	lookup := m.d.DNS.LookupIP
+	if lookup == nil {
+		lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	lctx, cancel := context.WithTimeout(ctx, suggestLookupTimeout)
+	defer cancel()
+	var answer *Suggestion
+	if addrs, err := lookup(lctx, host); err == nil {
+		for _, a := range addrs {
+			if isPrivateLike(a) {
+				answer = &Suggestion{Host: host, Address: a.Unmap().String()}
+				break
+			}
+		}
+	}
+	m.suggest.put(host, answer, now)
+	return answer
+}

@@ -174,6 +174,9 @@ type Manager struct {
 	// refusal that was logged (scheduler.go).
 	wire       servedCert
 	installErr string
+
+	// suggest is the last answer of the DNS-01 suggestion's host lookup (dns_status.go).
+	suggest suggestCache
 }
 
 // activeRun is the one run in progress.

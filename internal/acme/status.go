@@ -216,6 +216,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 	}
 	out.ActiveRun = active
 	out.ValidationUntested = st.ValidationUntested && active == nil
+	out.SuggestDNS01 = m.suggestDNS01(ctx, st, canonicalHost(hostOf(m.publicURL())), dir.Overridden)
 
 	// Left-over records are paused for the same reasons as the scheduler: certificate files, or a restore.
 	paused := st.PausedReason
