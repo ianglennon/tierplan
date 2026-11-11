@@ -67,3 +67,11 @@ func (m *Manager) dnsView(ctx context.Context, st State, paused string) (DNSView
 	}
 	return out, nil
 }
+
+// Suggestion says the public host resolves, as this server sees it, to an address Let's Encrypt can
+// hardly reach, so DNS-01 may suit the install better (D-02).
+type Suggestion struct {
+	Host, Address string
+}
+
+func (m *Manager) suggestDNS01(context.Context, State, string, bool) *Suggestion { return nil }

@@ -5,10 +5,14 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,5 +210,222 @@ func TestStatusCarriesTheDNSFactsOfTheErrorAndTheChallengeOfTheRun(t *testing.T)
 	le := got.LastError
 	if le == nil || le.Zone != "example.com" || le.Target != "validation.example.net" || !slices.Equal(le.Resolvers, []string{"1.1.1.1:53"}) {
 		t.Errorf("LastError = %+v, want the zone, the target and the resolvers", le)
+	}
+}
+
+// lookupRecorder is a host lookup that answers addrs and remembers what it was asked.
+type lookupRecorder struct {
+	addrs []netip.Addr
+	err   error
+
+	mu        sync.Mutex
+	hosts     []string
+	deadlines []time.Duration
+}
+
+func (l *lookupRecorder) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hosts = append(l.hosts, host)
+	if dl, ok := ctx.Deadline(); ok {
+		l.deadlines = append(l.deadlines, time.Until(dl))
+	} else {
+		l.deadlines = append(l.deadlines, -1)
+	}
+	return l.addrs, l.err
+}
+
+func (l *lookupRecorder) calls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.hosts)
+}
+
+func addrs(t *testing.T, texts ...string) []netip.Addr {
+	t.Helper()
+	out := make([]netip.Addr, len(texts))
+	for i, s := range texts {
+		a, err := netip.ParseAddr(s)
+		if err != nil {
+			t.Fatalf("ParseAddr(%q): %v", s, err)
+		}
+		out[i] = a
+	}
+	return out
+}
+
+// suggestEnv is an HTTP-01 environment whose manager looks hosts up with rec.
+func suggestEnv(t *testing.T, rec *lookupRecorder) *dnsEnv {
+	t.Helper()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.lookupIP = rec.lookup
+	e.mgr = e.build(false)
+	return e
+}
+
+func TestSuggestDNS01ForAPrivateAddress(t *testing.T) {
+	rec := &lookupRecorder{addrs: addrs(t, "192.168.1.10")}
+	e := suggestEnv(t, rec)
+
+	got := e.mgr.suggestDNS01(context.Background(), e.state(), testHost, false)
+
+	if got == nil || got.Host != testHost || got.Address != "192.168.1.10" {
+		t.Errorf("suggestion = %+v, want %s at 192.168.1.10", got, testHost)
+	}
+}
+
+func TestSuggestDNS01WhichAddressesSuggest(t *testing.T) {
+	for _, tc := range []struct {
+		addr    string
+		suggest bool
+	}{
+		{"10.1.2.3", true}, {"172.16.0.5", true}, {"192.168.1.10", true}, {"127.0.0.1", true},
+		{"fe80::1", true}, {"fd00::1", true}, {"100.64.0.1", true}, {"100.127.255.254", true},
+		{"::ffff:192.168.1.10", true},
+		{"1.1.1.1", false}, {"2606:4700::1", false}, {"100.63.255.255", false}, {"100.128.0.1", false},
+	} {
+		t.Run(tc.addr, func(t *testing.T) {
+			rec := &lookupRecorder{addrs: addrs(t, tc.addr)}
+			e := suggestEnv(t, rec)
+
+			got := e.mgr.suggestDNS01(context.Background(), e.state(), testHost, false)
+
+			if (got != nil) != tc.suggest {
+				t.Errorf("suggestion for %s = %+v, want a suggestion: %v", tc.addr, got, tc.suggest)
+			}
+		})
+	}
+
+	t.Run("the first private address is the one named", func(t *testing.T) {
+		rec := &lookupRecorder{addrs: addrs(t, "1.1.1.1", "10.0.0.7", "192.168.1.10")}
+		e := suggestEnv(t, rec)
+
+		got := e.mgr.suggestDNS01(context.Background(), e.state(), testHost, false)
+
+		if got == nil || got.Address != "10.0.0.7" {
+			t.Errorf("suggestion = %+v, want the first private address 10.0.0.7", got)
+		}
+	})
+}
+
+func TestSuggestDNS01OnlyForAnHTTP01NameOnTheRealDirectory(t *testing.T) {
+	private := addrs(t, "192.168.1.10")
+	for _, tc := range []struct {
+		name       string
+		challenge  string
+		host       string
+		overridden bool
+		err        error
+	}{
+		{"DNS-01 saved", ChallengeDNS01, testHost, false, nil},
+		{"an IPv4 literal host", ChallengeHTTP01, "192.168.1.10", false, nil},
+		{"an IPv6 literal host", ChallengeHTTP01, "fd00::1", false, nil},
+		{"no host", ChallengeHTTP01, "", false, nil},
+		{"an overridden directory", ChallengeHTTP01, testHost, true, nil},
+		{"a lookup error", ChallengeHTTP01, testHost, false, errors.New("no such host")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &lookupRecorder{addrs: private, err: tc.err}
+			e := suggestEnv(t, rec)
+			st := e.state()
+			st.ChallengeType = tc.challenge
+
+			got := e.mgr.suggestDNS01(context.Background(), st, tc.host, tc.overridden)
+
+			if got != nil {
+				t.Errorf("suggestion = %+v, want none", got)
+			}
+		})
+	}
+}
+
+func TestSuggestDNS01IsCachedForFiveMinutesOnTheClock(t *testing.T) {
+	ctx := context.Background()
+	rec := &lookupRecorder{addrs: addrs(t, "192.168.1.10")}
+	e := suggestEnv(t, rec)
+	st := e.state()
+
+	e.mgr.suggestDNS01(ctx, st, testHost, false)
+	e.mgr.suggestDNS01(ctx, st, testHost, false)
+	if n := rec.calls(); n != 1 {
+		t.Fatalf("two reads made %d lookups, want 1", n)
+	}
+
+	e.clock.Advance(5*time.Minute - time.Second)
+	got := e.mgr.suggestDNS01(ctx, st, testHost, false)
+	if n := rec.calls(); n != 1 || got == nil {
+		t.Fatalf("a read just inside five minutes made %d lookups and answered %+v, want the cached answer", n, got)
+	}
+
+	e.clock.Advance(time.Second)
+	e.mgr.suggestDNS01(ctx, st, testHost, false)
+	if n := rec.calls(); n != 2 {
+		t.Errorf("a read after five minutes made %d lookups in all, want 2", n)
+	}
+
+	e.mgr.suggestDNS01(ctx, st, "other.example.org", false)
+	if n := rec.calls(); n != 3 || rec.hosts[2] != "other.example.org" {
+		t.Errorf("a changed host made %d lookups in all (%v), want a lookup at once", n, rec.hosts)
+	}
+}
+
+func TestSuggestDNS01CachesAFailedLookupToo(t *testing.T) {
+	ctx := context.Background()
+	rec := &lookupRecorder{err: errors.New("no such host")}
+	e := suggestEnv(t, rec)
+
+	e.mgr.suggestDNS01(ctx, e.state(), testHost, false)
+	e.mgr.suggestDNS01(ctx, e.state(), testHost, false)
+
+	if n := rec.calls(); n != 1 {
+		t.Errorf("a failing resolver was asked %d times in a minute, want once", n)
+	}
+}
+
+func TestSuggestDNS01LookupCarriesATwoSecondDeadline(t *testing.T) {
+	rec := &lookupRecorder{addrs: addrs(t, "192.168.1.10")}
+	e := suggestEnv(t, rec)
+
+	e.mgr.suggestDNS01(context.Background(), e.state(), testHost, false)
+
+	if len(rec.deadlines) != 1 || rec.deadlines[0] <= 0 || rec.deadlines[0] > 2*time.Second {
+		t.Errorf("lookup deadlines = %v, want one deadline within 2 s", rec.deadlines)
+	}
+}
+
+func TestStatusSuggestsDNS01ForAPrivatelyResolvingHost(t *testing.T) {
+	ctx := context.Background()
+	rec := &lookupRecorder{addrs: addrs(t, "10.0.0.9")}
+	e := suggestEnv(t, rec)
+
+	// The test directory is an override, which never suggests.
+	st, err := e.mgr.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.SuggestDNS01 != nil || rec.calls() != 0 {
+		t.Errorf("an overridden directory gave %+v after %d lookups, want none", st.SuggestDNS01, rec.calls())
+	}
+
+	// The same install on the real directory.
+	real := NewManager(Deps{
+		Store: e.store, Client: NewClient(Directory{URL: LetsEncryptDirectory}, e.store, e.clock, "tierplan-test/0"),
+		Challenges: e.tokens, Jobs: e.hub, Installer: e.inst, Clock: e.clock,
+		PublicURL: e.urls.getPublic, AgentURL: e.urls.getAgent, BasePath: e.urls.getBase,
+		Log: slog.New(slog.DiscardHandler), DNS: DNSDeps{LookupIP: rec.lookup},
+	})
+	st, err = real.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.SuggestDNS01 == nil || st.SuggestDNS01.Host != testHost || st.SuggestDNS01.Address != "10.0.0.9" {
+		t.Errorf("SuggestDNS01 = %+v, want %s at 10.0.0.9", st.SuggestDNS01, testHost)
+	}
+
+	if _, err := real.Status(ctx); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if n := rec.calls(); n != 1 {
+		t.Errorf("two status reads made %d lookups, want 1", n)
 	}
 }

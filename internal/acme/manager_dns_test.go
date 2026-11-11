@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -63,6 +64,9 @@ type dnsEnv struct {
 
 	// built counts the providers the manager built, and so the tokens it opened for one.
 	built atomic.Int32
+
+	// lookupIP is the manager's host lookup (DNSDeps.LookupIP), applied by build; nil is the default.
+	lookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
 
 	mu     sync.Mutex
 	cnames map[string]string
@@ -146,6 +150,7 @@ func (e *dnsEnv) build(certFiles bool) *Manager {
 		Rand:   func(int64) int64 { return 0 },
 		DNS: DNSDeps{
 			Providers:       map[string]dns.Factory{dnsProviderID: e.countingFactory()},
+			LookupIP:        e.lookupIP,
 			NameserverAddrs: func(context.Context, string) ([]string, error) { return []string{e.nsAddr}, nil },
 			ResolvConf:      func() ([]string, error) { return []string{e.dns.Addr()}, nil },
 		},

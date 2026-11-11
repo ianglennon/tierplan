@@ -59,6 +59,8 @@ type Status struct {
 	// ValidationUntested is true when the saved challenge type has not been proved by a run yet; it is
 	// false while a run is active.
 	ValidationUntested bool
+	// SuggestDNS01 is set when HTTP-01 is saved and the public host resolves to a private address.
+	SuggestDNS01 *Suggestion
 }
 
 // AccountView is the registered account, without its key.
