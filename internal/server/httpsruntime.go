@@ -22,11 +22,13 @@ const (
 	// zero value is no kind at all and never reads as self-signed.
 	tlsKindSelfSigned tlsKind = iota + 1
 	// tlsKindSupplied is a certificate the operator provided or obtained. HSTS
-	// is allowed over it and no pin is published.
+	// is allowed over it. No install command carries a pin for it, and a welcome
+	// still lists the install's self-signed pin (D-19).
 	tlsKindSupplied
-	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No pin is
-	// published (the certificate chains to the public roots, and agents keep the pin of the
-	// self-signed key they were installed with), and HSTS is not sent in this phase.
+	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No install
+	// command carries a pin (the certificate chains to the public roots). A welcome still lists the
+	// self-signed pin, so agents keep the key they were installed with and never start a PinOverlap
+	// countdown on it (D-19). HSTS is not sent in this phase.
 	tlsKindACME
 )
 
@@ -48,6 +50,10 @@ type liveTLS struct {
 type httpsRuntime struct {
 	cur atomic.Pointer[liveTLS]
 	cfg *tls.Config
+	// selfPin is the SPKI pin of the install's self-signed identity, settled once by Build. It is
+	// never read from the served certificate, so a Let's Encrypt leaf's pin is never published and
+	// a renewal never changes what welcomes list (D-19).
+	selfPin atomic.Pointer[string]
 }
 
 // newHTTPSRuntime returns a runtime with nothing installed.
@@ -89,9 +95,24 @@ func (r *httpsRuntime) Config() *tls.Config { return r.cfg }
 // ServerConfig is the config a TLS listener serves with. It is never nil.
 func (r *httpsRuntime) ServerConfig() *tls.Config { return r.cfg }
 
-// Pins is the SPKI pin list a welcome carries: the generated certificate's pin
-// and nothing else. A supplied certificate publishes none.
-func (r *httpsRuntime) Pins() []string {
+// SetSelfSignedPin records the pin of the install's self-signed identity. Build calls it once,
+// before any goroutine starts: the key is never rotated while the server runs (13.1 D-12).
+func (r *httpsRuntime) SetSelfSignedPin(pin string) {
+	if pin == "" {
+		r.selfPin.Store(nil)
+		return
+	}
+	r.selfPin.Store(&pin)
+}
+
+// WelcomePins is the SPKI pin list a welcome, a control-stream catch-up and an address push carry:
+// the self-signed identity's pin, whatever certificate is served, so no agent sees its pin
+// disappear and starts a PinOverlap countdown (D-19). A runtime that was never given a pin and
+// serves the self-signed kind falls back to the served certificate's pin. Otherwise it is nil.
+func (r *httpsRuntime) WelcomePins() []string {
+	if p := r.selfPin.Load(); p != nil {
+		return []string{*p}
+	}
 	if r.Kind() != tlsKindSelfSigned {
 		return nil
 	}
@@ -101,9 +122,14 @@ func (r *httpsRuntime) Pins() []string {
 	return nil
 }
 
-// Pin is the pin an install command carries: the first of Pins, or "".
+// Pin is the pin an install, rotate or manual-update command carries: the self-signed pin while
+// the self-signed certificate is served, and "" under Let's Encrypt or cert files, whose
+// certificates chain to a root the host already trusts or are the operator's own (TLS-08, D-18).
 func (r *httpsRuntime) Pin() string {
-	if p := r.Pins(); len(p) > 0 {
+	if r.Kind() != tlsKindSelfSigned {
+		return ""
+	}
+	if p := r.WelcomePins(); len(p) > 0 {
 		return p[0]
 	}
 	return ""

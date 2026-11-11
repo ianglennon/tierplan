@@ -108,8 +108,8 @@ func TestHTTPSRuntimeHasNoKindUntilInstalled(t *testing.T) {
 	if cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil || cert != nil {
 		t.Errorf("GetCertificate = %v, %v; want an error and no certificate before an install", cert, err)
 	}
-	if rt.Pins() != nil || rt.Pin() != "" || rt.HSTSAllowed() {
-		t.Errorf("Pins %v, Pin %q, HSTSAllowed %v; want none, empty and false", rt.Pins(), rt.Pin(), rt.HSTSAllowed())
+	if rt.WelcomePins() != nil || rt.Pin() != "" || rt.HSTSAllowed() {
+		t.Errorf("WelcomePins %v, Pin %q, HSTSAllowed %v; want none, empty and false", rt.WelcomePins(), rt.Pin(), rt.HSTSAllowed())
 	}
 }
 
@@ -150,8 +150,8 @@ func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rt.Pins(); len(got) != 1 || got[0] != authn.SPKIPin(leaf) || !strings.HasPrefix(got[0], "sha256/") {
-		t.Errorf("self-signed Pins = %v, want exactly [%s]", got, authn.SPKIPin(leaf))
+	if got := rt.WelcomePins(); len(got) != 1 || got[0] != authn.SPKIPin(leaf) || !strings.HasPrefix(got[0], "sha256/") {
+		t.Errorf("self-signed WelcomePins = %v, want exactly [%s]", got, authn.SPKIPin(leaf))
 	}
 	if rt.Pin() != authn.SPKIPin(leaf) || rt.Kind() != tlsKindSelfSigned {
 		t.Errorf("self-signed Pin %q, Kind %v", rt.Pin(), rt.Kind())
@@ -160,13 +160,31 @@ func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 		t.Error("HSTS is allowed over the self-signed certificate (WR-09)")
 	}
 
+	// Once the identity's pin is settled (Build does it), a certificate that is not the self-signed
+	// one still has welcomes list that pin and install commands carry none (D-19, TLS-08).
+	rt.SetSelfSignedPin(authn.SPKIPin(leaf))
 	supplied, _ := genCert(t, "a.example.com")
 	rt.Install(tlsKindSupplied, getter(supplied))
-	if rt.Pins() != nil || rt.Pin() != "" {
-		t.Errorf("supplied Pins %v, Pin %q; want none", rt.Pins(), rt.Pin())
+	if got := rt.WelcomePins(); len(got) != 1 || got[0] != authn.SPKIPin(leaf) || rt.Pin() != "" {
+		t.Errorf("supplied WelcomePins %v, Pin %q; want [%s] and no install pin", got, rt.Pin(), authn.SPKIPin(leaf))
 	}
 	if !rt.HSTSAllowed() {
 		t.Error("HSTS is not allowed over a supplied certificate")
+	}
+	rt.Install(tlsKindACME, getter(supplied))
+	if got := rt.WelcomePins(); len(got) != 1 || got[0] != authn.SPKIPin(leaf) || rt.Pin() != "" {
+		t.Errorf("Let's Encrypt WelcomePins %v, Pin %q; want [%s] and no install pin", got, rt.Pin(), authn.SPKIPin(leaf))
+	}
+	rt.Install(tlsKindSelfSigned, src.GetCertificate)
+	if rt.Pin() != authn.SPKIPin(leaf) {
+		t.Errorf("back on the self-signed certificate Pin = %q, want %q", rt.Pin(), authn.SPKIPin(leaf))
+	}
+
+	// A runtime never given a pin, serving a certificate that is not self-signed, lists nothing.
+	bare := newHTTPSRuntime()
+	bare.Install(tlsKindSupplied, getter(supplied))
+	if bare.WelcomePins() != nil || bare.Pin() != "" {
+		t.Errorf("a bare supplied runtime lists WelcomePins %v, Pin %q; want none", bare.WelcomePins(), bare.Pin())
 	}
 }
 

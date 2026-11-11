@@ -758,6 +758,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	rt := newHTTPSRuntime()
 	rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
+	// The pin welcomes list is settled once, from the self-signed identity and never from the
+	// served certificate (D-19): a Let's Encrypt leaf's pin is not published and a renewal does
+	// not change what a welcome lists. In cert-files mode the identity is kept without being
+	// served (D-21).
+	if tlsSrcKind == tlsKindSelfSigned {
+		rt.SetSelfSignedPin(spkiPin(&tls.Config{GetCertificate: tlsSrc.GetCertificate}))
+	}
 	switch rt.Kind() {
 	case tlsKindSelfSigned:
 		log.Info("TierPlan serves HTTPS with its own self-signed certificate. Your browser will warn about it: check that the warning shows this SHA-256 fingerprint before you continue",
@@ -843,7 +850,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// Every welcome, and every push when an address changes, carries the
 		// endpoint agents are told to dial (D-19).
 		WithEndpoint(inst.AgentEndpoint).
-		WithPins(rt.Pins).
+		WithPins(rt.WelcomePins).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
 		WithServerVersion(buildinfo.Get().Version).

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -392,8 +393,8 @@ func TestACMEIssueSwap(t *testing.T) {
 	r := newACMERig(t, acmetest.Options{}, nil)
 	srv := r.startNew()
 	pinBefore := srv.https.Pin()
-	if pinBefore == "" || len(srv.https.Pins()) != 1 {
-		t.Fatalf("the self-signed certificate publishes pins %v, want one", srv.https.Pins())
+	if pinBefore == "" || len(srv.Tunnel().Pins()) != 1 || srv.Tunnel().Pins()[0] != pinBefore {
+		t.Fatalf("the self-signed certificate publishes welcome pins %v, want [%s]", srv.Tunnel().Pins(), pinBefore)
 	}
 	before := leafOf(t, srv.https.Config())
 
@@ -435,9 +436,13 @@ func TestACMEIssueSwap(t *testing.T) {
 	mirrorMatchesServed(t, srv, r.cfg.DataDir)
 	r.healthy()
 
-	// Let's Encrypt publishes no pin and sends no HSTS in this phase.
-	if got := srv.https.Pins(); got != nil {
-		t.Errorf("Pins() = %v with a Let's Encrypt certificate, want none", got)
+	// Welcomes keep listing the self-signed pin, never the Let's Encrypt leaf's, and install
+	// commands carry none (D-19, TLS-08). HSTS is not sent in this phase.
+	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != pinBefore || got[0] == authn.SPKIPin(leaf) {
+		t.Errorf("welcome pins = %v with a Let's Encrypt certificate, want [%s] and not the leaf's pin", got, pinBefore)
+	}
+	if got := srv.TLSPin(); got != "" {
+		t.Errorf("TLSPin() = %q with a Let's Encrypt certificate, want none", got)
 	}
 	if srv.https.HSTSAllowed() {
 		t.Error("HSTS is allowed with a Let's Encrypt certificate, want it off")
@@ -491,8 +496,11 @@ func TestACMEStopReturnsToTheSelfSignedPin(t *testing.T) {
 	if got := authn.SPKIPin(leaf); got != pinBefore {
 		t.Errorf("pin after Stop = %q, want the pin from before the issue, %q", got, pinBefore)
 	}
-	if got := srv.https.Pins(); len(got) != 1 || got[0] != pinBefore {
-		t.Errorf("Pins() after Stop = %v, want [%s]", got, pinBefore)
+	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != pinBefore {
+		t.Errorf("welcome pins after Stop = %v, want [%s]", got, pinBefore)
+	}
+	if got := srv.TLSPin(); got != pinBefore {
+		t.Errorf("TLSPin() after Stop = %q, want %q", got, pinBefore)
 	}
 	if srv.https.HSTSAllowed() {
 		t.Error("HSTS is allowed over the self-signed certificate")
@@ -523,8 +531,11 @@ func TestACMEExpiryFallsBackToSelfSigned(t *testing.T) {
 	if got := authn.SPKIPin(leaf); got != pinBefore || r.issuedBy(leaf) {
 		t.Errorf("after the expiry the handshake presents pin %q (issued by the fake CA: %v), want the self-signed pin %q", got, r.issuedBy(leaf), pinBefore)
 	}
-	if got := srv.https.Pins(); len(got) != 1 || got[0] != pinBefore {
-		t.Errorf("Pins() after the expiry = %v, want [%s]", got, pinBefore)
+	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != pinBefore {
+		t.Errorf("welcome pins after the expiry = %v, want [%s]", got, pinBefore)
+	}
+	if got := srv.TLSPin(); got != pinBefore {
+		t.Errorf("TLSPin() after the expiry = %q, want %q", got, pinBefore)
 	}
 	st, err := srv.acme.Status(context.Background())
 	if err != nil {
@@ -547,10 +558,91 @@ func TestACMEExpiryFallsBackToSelfSigned(t *testing.T) {
 	if renewed.SerialNumber.Cmp(first.SerialNumber) == 0 || !r.issuedBy(renewed) {
 		t.Errorf("after the renewal the handshake presents serial %v, want a new certificate from the fake CA", renewed.SerialNumber)
 	}
-	if srv.https.Kind() != tlsKindACME || srv.https.Pins() != nil {
-		t.Errorf("after the renewal kind = %d and pins = %v, want Let's Encrypt and none", srv.https.Kind(), srv.https.Pins())
+	if got := srv.Tunnel().Pins(); srv.https.Kind() != tlsKindACME || len(got) != 1 || got[0] != pinBefore || srv.TLSPin() != "" {
+		t.Errorf("after the renewal kind = %d, welcome pins = %v and install pin %q, want Let's Encrypt, [%s] and no install pin", srv.https.Kind(), got, srv.TLSPin(), pinBefore)
 	}
 	mirrorMatchesServed(t, srv, r.cfg.DataDir)
+}
+
+// installPin creates an agent environment over HTTPS as the signed-in admin and returns the pin its
+// install commands carry.
+func (r *acmeRig) installPin(c *http.Client, cookie *http.Cookie) string {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodPost, r.base+"/api/environments",
+		strings.NewReader(`{"kind":"agent"}`))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", r.csrf(c, cookie))
+	req.AddCookie(cookie)
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var got struct {
+		Install struct {
+			Pin string `json:"pin"`
+		} `json:"install"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil || resp.StatusCode != http.StatusCreated {
+		r.t.Fatalf("POST /api/environments: %d (%v)", resp.StatusCode, err)
+	}
+	return got.Install.Pin
+}
+
+// Under Let's Encrypt a welcome keeps listing the install's self-signed pin through the issue and a
+// renewal, never lists the leaf's pin, and a new install command carries no pin (D-19, TLS-08,
+// T-16-04, T-16-06).
+func TestWelcomePinsKeepTheSelfSignedPinUnderLetsEncrypt(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	srv := r.startNew()
+	selfPin := srv.https.Pin()
+	if selfPin == "" {
+		t.Fatal("the self-signed certificate has no pin")
+	}
+	client := r.client(r.mirrorPool())
+	cookie := r.signIn(client)
+	if got := r.installPin(client, cookie); got != selfPin {
+		t.Errorf("install.pin on the self-signed certificate = %q, want %q", got, selfPin)
+	}
+
+	r.issue()
+	first := leafOf(t, srv.https.Config())
+	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != selfPin {
+		t.Fatalf("welcome pins after the issue = %v, want [%s]", got, selfPin)
+	}
+	lePin := authn.SPKIPin(first)
+	if lePin == selfPin {
+		t.Fatal("the Let's Encrypt leaf has the self-signed key")
+	}
+	le := r.client(r.fake.IssuerPool())
+	if got := r.installPin(le, cookie); got != "" {
+		t.Errorf("install.pin under Let's Encrypt = %q, want none", got)
+	}
+
+	// The renewal point passes and the CA's window closes there, so the next round renews.
+	st, err := srv.acme.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	r.fake.SetRenewalWindow(first, st.RenewAt.Add(-24*time.Hour), st.RenewAt, 0)
+	r.step(st.RenewAt.Sub(r.clock.Now()) + time.Hour)
+	r.awaitRuns()
+	renewed := leafOf(t, srv.https.Config())
+	if renewed.SerialNumber.Cmp(first.SerialNumber) == 0 {
+		t.Fatal("the renewal did not replace the certificate")
+	}
+	got := srv.Tunnel().Pins()
+	if len(got) != 1 || got[0] != selfPin || slices.Contains(got, lePin) || slices.Contains(got, authn.SPKIPin(renewed)) {
+		t.Errorf("welcome pins after the renewal = %v, want [%s] and no leaf pin", got, selfPin)
+	}
+	// The clock is months ahead, so a client judging the renewed certificate by the wall clock would
+	// refuse it: the install pin is read from the same place the environments API reads it.
+	if got := srv.TLSPin(); got != "" {
+		t.Errorf("the install pin after the renewal = %q, want none", got)
+	}
 }
 
 // While a Let's Encrypt certificate is served, an agent URL change (the public URL is fixed by the environment in these tests) makes the self-signed source sign
