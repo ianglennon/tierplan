@@ -18,6 +18,14 @@ export const ERROR_CLASSES = [
   "ca_unavailable",
   "ca_untrusted",
   "internal",
+  "dns_token_invalid",
+  "dns_token_scope",
+  "dns_zone_not_found",
+  "dns_delegation_target",
+  "dns_not_visible",
+  "dns_rate_limited",
+  "dns_unavailable",
+  "validation_txt",
 ] as const;
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -62,8 +70,9 @@ export type ACMELastError = NonNullable<HTTPSACME["lastError"]>;
 
 // errorValues are the values a failure's copy names: the host it was about (the public host when the
 // CA named none, "the public host" when there is none), the port TierPlan listens on, the profile,
-// the terms address and the time of the next automatic attempt. The time is left out when the status
-// names none, so errorCopy picks the sentence without one.
+// the terms address, the DNS zone, the delegation target, the resolvers that were asked (comma-joined,
+// "the zone's nameservers" when none were named) and the time of the next automatic attempt. The time
+// is left out when the status names none, so errorCopy picks the sentence without one.
 export function errorValues(
   t: Translate,
   error: ACMELastError,
@@ -75,6 +84,11 @@ export function errorValues(
     port: acme.listenPort,
     profile: error.profile ?? "",
     url: error.termsUrl ?? "",
+    zone: error.zone ?? "",
+    target: error.target ?? "",
+    resolvers: error.resolvers?.length
+      ? error.resolvers.join(", ")
+      : t("https.error.resolversDefault"),
     time: formatClock(acme.nextAttemptAt),
   };
 }

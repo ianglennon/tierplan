@@ -85,6 +85,41 @@
       "done": "Profile saved."
     },
     "error": {
+      "resolversDefault": "the zone's nameservers",
+      "dns_token_invalid": {
+        "headline": "Cloudflare didn't accept the API token.",
+        "fix": "The token is wrong, expired or revoked. Create a new token and enter it again under Validation method."
+      },
+      "dns_token_scope": {
+        "headline": "The Cloudflare token can't manage DNS records for {{host}}.",
+        "fix": "The token needs both Zone:DNS:Edit and Zone:Zone:Read, and it must include the zone for {{host}}. Fix it in Cloudflare, or enter a new token."
+      },
+      "dns_zone_not_found": {
+        "headline": "Cloudflare has no zone for {{host}}.",
+        "fix": "Add the zone to the Cloudflare account the token belongs to, and check that the token includes it. Or make _acme-challenge.{{host}} a CNAME to a record in a Cloudflare zone you can edit."
+      },
+      "dns_delegation_target": {
+        "headline": "_acme-challenge.{{host}} is delegated to {{target}}, which TierPlan can't edit.",
+        "fix": "The target must be in a Cloudflare zone this token can edit. Add that zone to the token, or change the CNAME."
+      },
+      "dns_not_visible": {
+        "headline": "The TXT record for {{host}} didn't appear on {{resolvers}}.",
+        "fix": "Check that this host can reach {{resolvers}} on port 53. If you set resolvers under Advanced DNS, they must answer for public records. Clear them to ask the zone's own nameservers."
+      },
+      "dns_rate_limited": {
+        "headline": "Cloudflare is limiting requests.",
+        "fix": "TierPlan waits until {{time}} before it tries again. There is nothing to do.",
+        "fixNoTime": "TierPlan waits before it tries again. There is nothing to do."
+      },
+      "dns_unavailable": {
+        "headline": "Cloudflare couldn't be reached.",
+        "fix": "TierPlan tries again on its own schedule, next at {{time}}. If it keeps failing, check this host's internet access.",
+        "fixNoTime": "TierPlan tries again on its own schedule. If it keeps failing, check this host's internet access."
+      },
+      "validation_txt": {
+        "headline": "Let's Encrypt didn't find the right TXT record for _acme-challenge.{{host}}.",
+        "fix": "TierPlan saw the record, but Let's Encrypt didn't. Check that the zone's nameservers at your registrar are Cloudflare's, and that nothing else at _acme-challenge.{{host}} gets in the way, such as a conflicting CNAME. Then try again."
+      },
       "rate_limited": {
         "headline": "Let's Encrypt is limiting requests.",
         "fix": "TierPlan waits until {{time}} before it tries again. There is nothing to do.",

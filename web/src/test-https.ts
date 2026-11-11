@@ -116,6 +116,17 @@ export function acmeLastError(over: Partial<ACMELastError> = {}): ACMELastError 
   };
 }
 
+// A DNS-01 failure as the status lists it: the TXT record never showed on the resolvers asked.
+export function lastErrorDNS(over: Partial<ACMELastError> = {}): ACMELastError {
+  return acmeLastError({
+    code: "dns_not_visible",
+    detail: undefined,
+    resolvers: ["1.1.1.1", "192.168.1.1"],
+    zone: "example.com",
+    ...over,
+  });
+}
+
 // The status of an install that serves a Let's Encrypt certificate: issued a month ago for the
 // public host, renewing two thirds through its life, with nothing failing.
 export function httpsLetsEncryptStatus(
