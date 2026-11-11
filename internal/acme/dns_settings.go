@@ -5,6 +5,7 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,6 +17,16 @@ import (
 
 // The most names tested at once. A certificate carries two names at most, so this is the whole list.
 const testParallel = 2
+
+var (
+	// ErrDNSTokenRequired means a DNS API token is needed and none was typed or saved.
+	ErrDNSTokenRequired = errors.New("a DNS API token is required")
+	// ErrDNSTokenInUse means the token cannot be removed because DNS-01 is the saved validation method
+	// and renewals would silently stop.
+	ErrDNSTokenInUse = errors.New("the DNS API token is in use: DNS-01 is the saved validation method")
+	// ErrChallengeUnknown means the validation method is neither http-01 nor dns-01.
+	ErrChallengeUnknown = errors.New("the validation method is not http-01 or dns-01")
+)
 
 // ValidationInput is one save of the validation settings.
 type ValidationInput struct {
@@ -200,4 +211,10 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 		return SaveResult{}, err
 	}
 	return SaveResult{Saved: true, Test: test}, nil
+}
+
+// TestToken tests a DNS token against the current certificate names without storing anything and
+// without placing an order (CHAL-02).
+func (m *Manager) TestToken(ctx context.Context, req TestRequest) (TokenTest, error) {
+	return TokenTest{}, errors.New("not implemented")
 }
