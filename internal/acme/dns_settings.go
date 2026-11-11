@@ -214,7 +214,33 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 }
 
 // TestToken tests a DNS token against the current certificate names without storing anything and
-// without placing an order (CHAL-02).
+// without placing an order or contacting the CA (CHAL-02). It tests the typed token, or else the saved
+// one, with the draft resolvers or else the saved ones. A typed token that cannot be a bearer token, or
+// one that is blank and none is saved, is refused or fails every name before any request is made.
+//
+// It holds the DNS slot while it runs, like SaveValidation does.
 func (m *Manager) TestToken(ctx context.Context, req TestRequest) (TokenTest, error) {
-	return TokenTest{}, errors.New("not implemented")
+	st, release, err := m.claimForDNS(ctx)
+	if err != nil {
+		return TokenTest{}, err
+	}
+	defer release()
+
+	resolvers, err := resolversOf(st, req.Resolvers)
+	if err != nil {
+		return TokenTest{}, err
+	}
+	provider := dnsProviderOf(st)
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		saved, found, err := m.d.Store.DNSToken(ctx, provider)
+		if err != nil {
+			return TokenTest{}, err
+		}
+		if !found {
+			return TokenTest{}, ErrDNSTokenRequired
+		}
+		token = saved
+	}
+	return m.runTokenTest(ctx, st, provider, token, dnscheck.Resolvers(resolvers))
 }
