@@ -84,6 +84,38 @@
       "saving": "Saving...",
       "done": "Profile saved."
     },
+    "dns": {
+      "result": {
+        "passed": "Token test passed",
+        "failed": "Token test failed",
+        "notSaved": "Nothing was saved. The settings in use are unchanged.",
+        "stale": "This result is for earlier settings. Test again.",
+        "state": {
+          "done": "Done",
+          "failed": "Failed",
+          "skipped": "Skipped",
+          "waiting": "Not started",
+          "note": "Note"
+        },
+        "row": {
+          "delegated": "Delegated to {{target}}.",
+          "delegatedOwnZone": "{{zone}} is not on Cloudflare. Delegated to {{target}}.",
+          "zoneFound": "{{zone}} zone found.",
+          "zoneFailed": "Couldn't find the zone.",
+          "created": "TXT created at {{record}}",
+          "read": "Read back.",
+          "deleted": "Deleted.",
+          "deleteFailed": "Couldn't delete the test record.",
+          "deleteKept": "TierPlan keeps trying to delete it. See the left-over records below."
+        },
+        "info": {
+          "seen": "Seen by {{resolvers}} after {{seconds}} s.",
+          "notSeen": "Not seen by {{resolvers}} within {{seconds}} s.",
+          "notSeenHint": "The token works, so this didn't fail the test. An order waits for the record to appear and can time out. Check that this host can reach {{resolvers}} on port 53, or set resolvers under Advanced DNS.",
+          "notChecked": "Not checked."
+        }
+      }
+    },
     "error": {
       "resolversDefault": "the zone's nameservers",
       "dns_token_invalid": {
