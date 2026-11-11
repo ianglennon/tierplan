@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { Eye, EyeOff, Info } from "lucide-react";
+import { ChevronRight, Eye, EyeOff, Info } from "lucide-react";
 import { useState } from "react";
 import type { UseFormRegisterReturn } from "react-hook-form";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   InputGroup,
   InputGroupAddon,
@@ -18,12 +20,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { rich } from "@/features/https/sentence";
 import { TokenSavedRow } from "@/features/https/token-saved-row";
 import { useT } from "@/i18n/use-t";
+import { cn } from "@/lib/utils";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
 const CLOUDFLARE_TOKENS_URL = "https://dash.cloudflare.com/profile/api-tokens";
-const TOKEN_ID = "acme-dns-token";
+export const TOKEN_ID = "acme-dns-token";
+export const RESOLVERS_ID = "acme-dns-resolvers";
 
 interface DnsSettingsProps {
   // True when a token is saved. Only this is known: the token itself is never sent to the page.
@@ -38,6 +42,15 @@ interface DnsSettingsProps {
   tokenError?: string;
   onReplace: () => void;
   onKeep: () => void;
+  // The registration of the resolvers field (a comma-separated list), and the Advanced DNS disclosure
+  // that holds it. The section owns the open state so a server error can open it.
+  resolversField: UseFormRegisterReturn<"resolvers">;
+  // The resolver the server refused. entry is what it named, when it named one.
+  resolversProblem?: { entry?: string };
+  // True while a save or a test is on its way: the field is aria-disabled.
+  busy: boolean;
+  advancedOpen: boolean;
+  onAdvancedOpenChange: (open: boolean) => void;
 }
 
 // DnsSettings is the DNS-01 detail of the Validation section (CHAL-01, D-02, D-06, UI-SPEC J1): the
@@ -51,6 +64,11 @@ export function DnsSettings({
   tokenError,
   onReplace,
   onKeep,
+  resolversField,
+  resolversProblem,
+  busy,
+  advancedOpen,
+  onAdvancedOpenChange,
 }: DnsSettingsProps) {
   const t = useT();
   const link = (
@@ -109,7 +127,80 @@ export function DnsSettings({
           ) : null}
         </div>
       )}
+
+      <AdvancedDns
+        open={advancedOpen}
+        onOpenChange={onAdvancedOpenChange}
+        field={resolversField}
+        problem={resolversProblem}
+        busy={busy}
+      />
     </div>
+  );
+}
+
+interface AdvancedDnsProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  field: UseFormRegisterReturn<"resolvers">;
+  problem?: { entry?: string };
+  busy: boolean;
+}
+
+// AdvancedDns is the disclosure that holds the optional resolver list (CHAL-05, D-12, D-14). There is
+// no switch to skip the propagation check: the list only chooses who is asked.
+function AdvancedDns({ open, onOpenChange, field, problem, busy }: AdvancedDnsProps) {
+  const t = useT();
+  const error = problem
+    ? problem.entry
+      ? rich(t, "https.dns.resolvers.error", { entry: problem.entry })
+      : t("https.dns.resolvers.errorList")
+    : null;
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange} className="flex flex-col gap-4">
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" size="sm" className="self-start max-md:h-11">
+          <ChevronRight
+            aria-hidden="true"
+            className={cn(
+              "transition-transform motion-reduce:transition-none",
+              open && "rotate-90",
+            )}
+          />
+          {t("https.dns.advanced.label")}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-2">
+        <Field data-invalid={error ? true : undefined}>
+          <FieldLabel htmlFor={RESOLVERS_ID}>{t("https.dns.resolvers.label")}</FieldLabel>
+          <Input
+            id={RESOLVERS_ID}
+            type="text"
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder={t("https.dns.resolvers.placeholder")}
+            aria-invalid={Boolean(error)}
+            aria-disabled={busy}
+            aria-describedby={`${RESOLVERS_ID}-helper${error ? ` ${RESOLVERS_ID}-error` : ""}`}
+            className={`${TOUCH_HEIGHT} font-mono`}
+            {...field}
+          />
+          <FieldDescription id={`${RESOLVERS_ID}-helper`}>
+            {t("https.dns.resolvers.helper")}
+          </FieldDescription>
+          {error ? (
+            <FieldError id={`${RESOLVERS_ID}-error`} className="break-words">
+              {error}
+            </FieldError>
+          ) : null}
+        </Field>
+        <p className="text-sm text-muted-foreground">
+          {rich(t, "https.dns.resolvers.delegation", { name: "_acme-challenge.<name>" })}
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

@@ -9,6 +9,9 @@ import { useT } from "@/i18n/use-t";
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
+// The id of Replace token, so the DNS-01 suggestion can move focus to it.
+export const REPLACE_ID = "acme-dns-replace";
+
 interface TokenSavedRowProps {
   // Draws the Replace token button, which swaps the empty field in. Left out, the row has no action.
   onReplace?: () => void;
@@ -33,6 +36,7 @@ export function TokenSavedRow({ onReplace, kept = false }: TokenSavedRowProps) {
       </div>
       {onReplace ? (
         <Button
+          id={REPLACE_ID}
           type="button"
           variant="outline"
           className={`${TOUCH_HEIGHT} max-md:w-full`}

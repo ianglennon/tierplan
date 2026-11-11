@@ -50,6 +50,11 @@
         "label": "DNS-01",
         "description": "TierPlan adds a TXT record at your DNS provider. No port needs opening, so it works for an install the internet can't reach."
       },
+      "suggest": {
+        "title": "DNS-01 may suit this install better",
+        "body": "{{host}} points at a private address ({{address}}) as this server sees it. Let's Encrypt usually can't reach a private address, so HTTP-01 is likely to fail. DNS-01 doesn't need Let's Encrypt to reach TierPlan.",
+        "action": "Use DNS-01"
+      },
       "helper": "A change applies from the next order. The certificate in use stays as it is.",
       "save": "Save validation settings",
       "testing": "Testing token...",
@@ -122,6 +127,17 @@
         "kept": "Kept for DNS-01. TierPlan keeps it encrypted and never shows it.",
         "replace": "Replace token",
         "keep": "Keep the saved token"
+      },
+      "advanced": {
+        "label": "Advanced DNS"
+      },
+      "resolvers": {
+        "label": "DNS resolvers (optional)",
+        "placeholder": "192.168.1.1, 10.0.0.53:5353",
+        "helper": "Comma-separated, each as host or host:port. When set, TierPlan asks only these while it waits for a record to appear. Leave it empty to ask the zone's own nameservers, which is right for most installs.",
+        "delegation": "If {{name}} is a CNAME, TierPlan follows it and writes the record at the target. The target must be in a Cloudflare zone this token can edit. There is nothing to set.",
+        "error": "{{entry}} isn't a valid resolver. Use host or host:port, separated by commas.",
+        "errorList": "The resolver list isn't valid. Use host or host:port, separated by commas, with at most five."
       },
       "test": {
         "action": "Test token",

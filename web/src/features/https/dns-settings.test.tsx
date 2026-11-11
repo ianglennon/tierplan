@@ -138,7 +138,7 @@ describe("Test token", () => {
 
     await card().findByText("Token test passed");
     expect(tests()).toHaveLength(1);
-    expect(tests()[0]?.body).toEqual({ token: TOKEN });
+    expect(tests()[0]?.body).toEqual({ token: TOKEN, resolvers: [] });
     expect(card().getByText("Read back.")).toBeTruthy();
     expect(card().getByText(/Seen by/)).toBeTruthy();
     expect(card().queryByText("Nothing was saved. The settings in use are unchanged.")).toBeNull();
@@ -158,7 +158,7 @@ describe("Test token", () => {
 
     await card().findByText("Token test passed");
     expect(tests()).toHaveLength(1);
-    expect(tests()[0]?.body).toEqual({});
+    expect(tests()[0]?.body).toEqual({ resolvers: [] });
   });
 
   it("shows the failing name's result when the token fails", async () => {

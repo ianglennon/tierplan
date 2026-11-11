@@ -206,7 +206,7 @@ describe("Validation section: saving a new token", () => {
 
     await card().findByText("Token saved");
     expect(puts()).toHaveLength(1);
-    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN });
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN, resolvers: [] });
     expect(card().queryByLabelText("Cloudflare API token")).toBeNull();
     expect(card().getByText("TierPlan keeps it encrypted and never shows it.")).toBeTruthy();
     expect(successToast).toHaveBeenCalledTimes(1);
@@ -408,7 +408,7 @@ describe("Validation section: what Save sends", () => {
     pickDNS();
     fireEvent.click(saveButton());
     await waitFor(() => expect(puts()).toHaveLength(1));
-    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01" });
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", resolvers: [] });
     await waitFor(() => expect(successToast).toHaveBeenCalledTimes(1));
     expect(card().queryByText(/Token test (passed|failed)/)).toBeNull();
   });
@@ -419,7 +419,7 @@ describe("Validation section: what Save sends", () => {
     type(tokenInput(), `  ${TOKEN}\n `);
     fireEvent.click(saveButton());
     await waitFor(() => expect(puts()).toHaveLength(1));
-    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN });
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN, resolvers: [] });
   });
 
   it("sends the new token when replacing a saved one", async () => {
@@ -429,7 +429,7 @@ describe("Validation section: what Save sends", () => {
     type(card().getByLabelText("New Cloudflare API token") as HTMLInputElement, TOKEN);
     fireEvent.click(saveButton());
     await waitFor(() => expect(puts()).toHaveLength(1));
-    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN });
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN, resolvers: [] });
   });
 
   it("returns to the saved token with 'Keep the saved token', dropping what was typed", async () => {

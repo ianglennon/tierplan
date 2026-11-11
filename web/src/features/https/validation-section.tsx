@@ -7,22 +7,28 @@ import { type FormEvent, useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 
 import {
+  ACMETestError,
   type ACMETokenTest,
   ACMEValidationError,
   type HTTPSACME,
   useSaveACMEValidation,
   useTestACMEDNSToken,
 } from "@/api/https";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import type { ValidationMode } from "@/features/https/card-state";
-import { DnsSettings, TestTokenButton, TestTokenNotes } from "@/features/https/dns-settings";
-import { Sentence, SLOT } from "@/features/https/sentence";
-import { TokenSavedRow } from "@/features/https/token-saved-row";
+import {
+  DnsSettings,
+  TestTokenButton,
+  TestTokenNotes,
+  TOKEN_ID,
+} from "@/features/https/dns-settings";
+import { rich, Sentence, SLOT } from "@/features/https/sentence";
+import { REPLACE_ID, TokenSavedRow } from "@/features/https/token-saved-row";
 import { TokenTestResult } from "@/features/https/token-test-result";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
@@ -45,6 +51,8 @@ function makeSchema(tokenSaved: boolean) {
       challengeType: z.enum(METHODS),
       token: z.string(),
       replacing: z.boolean(),
+      // The resolver list as typed: comma-separated. The server checks each entry.
+      resolvers: z.string(),
     })
     .superRefine((v, ctx) => {
       if (v.challengeType === "dns-01" && (!tokenSaved || v.replacing) && v.token.trim() === "") {
@@ -55,6 +63,15 @@ function makeSchema(tokenSaved: boolean) {
 
 type Values = z.infer<ReturnType<typeof makeSchema>>;
 
+// parseResolvers turns the typed list into the entries to send: split on commas, trimmed, empty
+// pieces dropped. Nothing is checked here; the server says which entry is not a resolver.
+function parseResolvers(text: string): string[] {
+  return text
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+}
+
 const HEADING_ID = "acme-validation-title";
 
 // What a save or a Test token answered, to show under the buttons: the token test it ran, and whether it
@@ -62,6 +79,8 @@ const HEADING_ID = "acme-validation-title";
 interface Outcome {
   test: ACMETokenTest;
   saved: boolean | null;
+  // True once the token or the resolvers changed after the test: the result is for earlier settings.
+  stale: boolean;
 }
 
 interface ValidationSectionProps {
@@ -85,21 +104,32 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
   // "testing" while the server tests a typed token, "saving" from its answer until the status is read.
   const [stage, setStage] = useState<"testing" | "saving">("saving");
   const [failed, setFailed] = useState(false);
+  // The resolver the server refused, and the Advanced DNS disclosure that holds the field. It is open
+  // by default only when a list is saved.
+  const savedResolvers = acme.dns.resolvers ?? [];
+  const savedText = savedResolvers.join(", ");
+  const [resolverProblem, setResolverProblem] = useState<{ entry?: string } | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(savedResolvers.length > 0);
+  // Set by "Use DNS-01": move focus to the token input (or Replace token) once it is drawn.
+  const [focusToken, setFocusToken] = useState(false);
 
   const form = useForm<Values>({
     resolver: zodResolver(makeSchema(tokenSaved)),
-    values: { challengeType: saved, token: "", replacing: false },
+    values: { challengeType: saved, token: "", replacing: false, resolvers: savedText },
     mode: "onSubmit",
   });
   const method = useWatch({ control: form.control, name: "challengeType" });
   const replacing = useWatch({ control: form.control, name: "replacing" }) && tokenSaved;
   const typed = useWatch({ control: form.control, name: "token" }).trim() !== "";
+  const resolversText = useWatch({ control: form.control, name: "resolvers" });
+  const resolversChanged = parseResolvers(resolversText).join(",") !== savedResolvers.join(",");
   const saving = save.isPending;
   const testing = test.isPending;
   const pending = saving || testing;
   const editable = mode === "editable";
   // Under HTTP-01 only the method can differ: leaving DNS-01 drops every other draft value (J9).
-  const dirty = method !== saved || (method === "dns-01" && (typed || replacing));
+  const dirty =
+    method !== saved || (method === "dns-01" && (typed || replacing || resolversChanged));
   const locked = pending || !editable;
 
   useEffect(() => {
@@ -107,17 +137,46 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
     return () => onDirtyChange?.(false);
   }, [dirty, onDirtyChange]);
 
+  useEffect(() => {
+    if (!focusToken || method !== "dns-01") return;
+    // The token input, or Replace token when a token is saved: whichever the section drew.
+    (document.getElementById(TOKEN_ID) ?? document.getElementById(REPLACE_ID))?.focus();
+    setFocusToken(false);
+  }, [focusToken, method]);
+
   // Picking a radio changes the draft and nothing else. Leaving DNS-01 discards what was typed for it:
-  // the token, replacing and the result, so no hidden value is left behind (J9, D-05).
+  // the token, replacing, edited resolvers and the result, so no hidden value is left behind (J9, D-05).
   const pick = (value: string) => {
     const next: Method = value === "dns-01" ? "dns-01" : "http-01";
     form.setValue("challengeType", next);
     if (next === "http-01") {
       form.setValue("token", "");
       form.setValue("replacing", false);
+      form.setValue("resolvers", savedText);
       form.clearErrors();
+      setResolverProblem(null);
+      setAdvancedOpen(savedResolvers.length > 0);
       setOutcome(null);
     }
+  };
+
+  // A result is for the token and resolvers it was produced with: changing either greys it (UI-SPEC E5).
+  const markStale = () => setOutcome((o) => (o && !o.stale ? { ...o, stale: true } : o));
+  const tokenField = form.register("token");
+  const resolversField = form.register("resolvers");
+
+  // The server refused a resolver: name it on the field and open the disclosure that holds it.
+  const refuseResolver = (entry: string | undefined) => {
+    setResolverProblem({ entry });
+    setAdvancedOpen(true);
+  };
+
+  // The server says the public host resolves to a private address; the page never works that out.
+  const suggestion = acme.suggestDns01;
+  // Use DNS-01 changes the draft and nothing else, then moves focus to where the token goes.
+  const useDns01 = () => {
+    pick("dns-01");
+    setFocusToken(true);
   };
 
   const host = acme.publicHost === "" ? t("https.acme.publicHostFallback") : acme.publicHost;
@@ -133,15 +192,24 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
     }
     form.clearErrors("token");
     setFailed(false);
+    setResolverProblem(null);
     setOutcome(null);
-    test.mutate(token === "" ? {} : { token }, {
-      onSuccess: (answer) => setOutcome({ test: answer, saved: null }),
-      onError: () => setFailed(true),
+    const resolvers = parseResolvers(form.getValues("resolvers"));
+    test.mutate(token === "" ? { resolvers } : { token, resolvers }, {
+      onSuccess: (answer) => setOutcome({ test: answer, saved: null, stale: false }),
+      onError: (error) => {
+        if (error instanceof ACMETestError && error.type === "acme_dns_resolver_invalid") {
+          refuseResolver(error.entry);
+          return;
+        }
+        setFailed(true);
+      },
     });
   };
 
   const send = form.handleSubmit((v) => {
     setFailed(false);
+    setResolverProblem(null);
     setOutcome(null);
     const token = v.challengeType === "dns-01" ? v.token.trim() : "";
     setStage(token === "" ? "saving" : "testing");
@@ -149,19 +217,30 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
       {
         challengeType: v.challengeType,
         ...(token === "" ? {} : { token }),
+        // Resolvers travel with the DNS-01 draft only: an HTTP-01 save is the method alone (J9).
+        ...(v.challengeType === "dns-01" ? { resolvers: parseResolvers(v.resolvers) } : {}),
         onAnswered: () => setStage("saving"),
       },
       {
         onSuccess: (answer) => {
-          setOutcome(answer.test ? { test: answer.test, saved: answer.saved } : null);
+          setOutcome(answer.test ? { test: answer.test, saved: answer.saved, stale: false } : null);
           if (!answer.saved) return;
           // Stored: the typed token leaves the form, and the status shows only that one is saved.
-          form.reset({ challengeType: v.challengeType, token: "", replacing: false });
+          form.reset({
+            challengeType: v.challengeType,
+            token: "",
+            replacing: false,
+            resolvers: v.resolvers,
+          });
           toastSuccess(t("https.validation.done"));
         },
         onError: (error) => {
           if (error instanceof ACMEValidationError && error.type === "acme_dns_token_required") {
             form.setError("token", { type: "server", message: TOKEN_REQUIRED });
+            return;
+          }
+          if (error instanceof ACMEValidationError && error.type === "acme_dns_resolver_invalid") {
+            refuseResolver(error.entry);
             return;
           }
           setFailed(true);
@@ -226,6 +305,29 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
           </RadioGroup>
           <p className="text-sm text-muted-foreground">{t("https.validation.helper")}</p>
 
+          {suggestion && method === "http-01" && saved === "http-01" && editable ? (
+            <Alert role="note" className="text-foreground has-data-[slot=alert-action]:pr-2.5">
+              <Info aria-hidden="true" />
+              <AlertTitle>{t("https.validation.suggest.title")}</AlertTitle>
+              <AlertDescription className="text-foreground">
+                {rich(t, "https.validation.suggest.body", {
+                  host: suggestion.host,
+                  address: suggestion.address,
+                })}
+              </AlertDescription>
+              <AlertAction className="static col-start-2 mt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={`${TOUCH_HEIGHT} max-md:w-full`}
+                  onClick={useDns01}
+                >
+                  {t("https.validation.suggest.action")}
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : null}
+
           {method === "http-01" ? (
             <>
               <Alert role="note" className="text-foreground">
@@ -241,14 +343,34 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
               tokenSaved={tokenSaved}
               replacing={replacing}
               editable={editable}
-              tokenField={form.register("token")}
+              tokenField={{
+                ...tokenField,
+                onChange: (event: Parameters<typeof tokenField.onChange>[0]) => {
+                  form.clearErrors("token");
+                  markStale();
+                  return tokenField.onChange(event);
+                },
+              }}
               tokenError={typeof tokenMessage === "string" ? t(tokenMessage) : undefined}
               onReplace={() => form.setValue("replacing", true)}
               onKeep={() => {
                 form.setValue("replacing", false);
                 form.setValue("token", "");
                 form.clearErrors("token");
+                markStale();
               }}
+              resolversField={{
+                ...resolversField,
+                onChange: (event: Parameters<typeof resolversField.onChange>[0]) => {
+                  setResolverProblem(null);
+                  markStale();
+                  return resolversField.onChange(event);
+                },
+              }}
+              resolversProblem={resolverProblem ?? undefined}
+              busy={pending}
+              advancedOpen={advancedOpen}
+              onAdvancedOpenChange={setAdvancedOpen}
             />
           )}
 
@@ -286,7 +408,11 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
           {editable && method === "dns-01" ? <TestTokenNotes pending={testing} /> : null}
 
           {outcome ? (
-            <TokenTestResult result={outcome.test} notSaved={outcome.saved === false} />
+            <TokenTestResult
+              result={outcome.test}
+              notSaved={outcome.saved === false}
+              stale={outcome.stale}
+            />
           ) : null}
         </fieldset>
       </form>
