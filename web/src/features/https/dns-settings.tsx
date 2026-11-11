@@ -14,6 +14,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { Spinner } from "@/components/ui/spinner";
 import { rich } from "@/features/https/sentence";
 import { TokenSavedRow } from "@/features/https/token-saved-row";
 import { useT } from "@/i18n/use-t";
@@ -155,5 +156,51 @@ function TokenField({ field, label, error }: TokenFieldProps) {
       <FieldDescription id={`${TOKEN_ID}-helper`}>{t("https.dns.token.helper")}</FieldDescription>
       {error ? <FieldError id={`${TOKEN_ID}-error`}>{error}</FieldError> : null}
     </Field>
+  );
+}
+
+interface TestTokenButtonProps {
+  // True while a token test or a save is on its way: the button is aria-disabled and does nothing.
+  busy: boolean;
+  // True while this button's own test is the thing in flight: it shows the spinner.
+  testing: boolean;
+  onTest: () => void;
+}
+
+// TestTokenButton is "Test token" (CHAL-02, D-07): a button of its own beside Save. It tests the typed
+// token, or else the saved one, and stores nothing.
+export function TestTokenButton({ busy, testing, onTest }: TestTokenButtonProps) {
+  const t = useT();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      aria-disabled={busy}
+      className={`${TOUCH_HEIGHT} max-md:w-full aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
+      onClick={() => {
+        if (!busy) onTest();
+      }}
+    >
+      {testing ? (
+        <>
+          <Spinner aria-hidden="true" />
+          {t("https.dns.test.pending")}
+        </>
+      ) : (
+        t("https.dns.test.action")
+      )}
+    </Button>
+  );
+}
+
+// TestTokenNotes is the text under the button row: what a test does, and while one runs that it can
+// take a minute (UI-SPEC J8).
+export function TestTokenNotes({ pending }: { pending: boolean }) {
+  const t = useT();
+  return (
+    <>
+      <p className="text-sm text-muted-foreground">{t("https.dns.test.helper")}</p>
+      {pending ? <p className="text-xs text-muted-foreground">{t("https.dns.test.hint")}</p> : null}
+    </>
   );
 }

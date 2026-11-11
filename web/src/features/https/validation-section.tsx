@@ -11,6 +11,7 @@ import {
   ACMEValidationError,
   type HTTPSACME,
   useSaveACMEValidation,
+  useTestACMEDNSToken,
 } from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import type { ValidationMode } from "@/features/https/card-state";
-import { DnsSettings } from "@/features/https/dns-settings";
+import { DnsSettings, TestTokenButton, TestTokenNotes } from "@/features/https/dns-settings";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { TokenSavedRow } from "@/features/https/token-saved-row";
 import { TokenTestResult } from "@/features/https/token-test-result";
@@ -56,10 +57,11 @@ type Values = z.infer<ReturnType<typeof makeSchema>>;
 
 const HEADING_ID = "acme-validation-title";
 
-// What a save answered, to show under the buttons: the token test it ran, and whether it stored.
+// What a save or a Test token answered, to show under the buttons: the token test it ran, and whether it
+// stored (null for Test token, which never stores).
 interface Outcome {
   test: ACMETokenTest;
-  saved: boolean;
+  saved: boolean | null;
 }
 
 interface ValidationSectionProps {
@@ -76,6 +78,7 @@ interface ValidationSectionProps {
 export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSectionProps) {
   const t = useT();
   const save = useSaveACMEValidation();
+  const test = useTestACMEDNSToken();
   const saved: Method = acme.challengeType === "dns-01" ? "dns-01" : "http-01";
   const tokenSaved = acme.dns.tokenSaved;
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -91,7 +94,9 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
   const method = useWatch({ control: form.control, name: "challengeType" });
   const replacing = useWatch({ control: form.control, name: "replacing" }) && tokenSaved;
   const typed = useWatch({ control: form.control, name: "token" }).trim() !== "";
-  const pending = save.isPending;
+  const saving = save.isPending;
+  const testing = test.isPending;
+  const pending = saving || testing;
   const editable = mode === "editable";
   // Under HTTP-01 only the method can differ: leaving DNS-01 drops every other draft value (J9).
   const dirty = method !== saved || (method === "dns-01" && (typed || replacing));
@@ -117,6 +122,23 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
 
   const host = acme.publicHost === "" ? t("https.acme.publicHostFallback") : acme.publicHost;
   const flag = <code className="font-mono text-xs">{`-p 80:${acme.listenPort}`}</code>;
+
+  // Test token: the typed token, or else the saved one, with nothing stored. With neither there is
+  // nothing to test, and nothing is sent.
+  const runTest = () => {
+    const token = form.getValues("token").trim();
+    if (token === "" && !tokenSaved) {
+      form.setError("token", { type: "test", message: "https.dns.test.required" });
+      return;
+    }
+    form.clearErrors("token");
+    setFailed(false);
+    setOutcome(null);
+    test.mutate(token === "" ? {} : { token }, {
+      onSuccess: (answer) => setOutcome({ test: answer, saved: null }),
+      onError: () => setFailed(true),
+    });
+  };
 
   const send = form.handleSubmit((v) => {
     setFailed(false);
@@ -238,13 +260,16 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
 
           {editable ? (
             <div className="flex flex-wrap gap-2">
+              {method === "dns-01" ? (
+                <TestTokenButton busy={pending} testing={testing} onTest={runTest} />
+              ) : null}
               <Button
                 type="submit"
                 variant="outline"
-                aria-disabled={!dirty}
+                aria-disabled={!dirty || pending}
                 className={`${TOUCH_HEIGHT} max-md:w-full aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
               >
-                {pending ? (
+                {saving ? (
                   <>
                     <Spinner aria-hidden="true" />
                     {t(
@@ -258,7 +283,11 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
             </div>
           ) : null}
 
-          {outcome ? <TokenTestResult result={outcome.test} notSaved={!outcome.saved} /> : null}
+          {editable && method === "dns-01" ? <TestTokenNotes pending={testing} /> : null}
+
+          {outcome ? (
+            <TokenTestResult result={outcome.test} notSaved={outcome.saved === false} />
+          ) : null}
         </fieldset>
       </form>
     </section>

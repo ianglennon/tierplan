@@ -123,6 +123,13 @@
         "replace": "Replace token",
         "keep": "Keep the saved token"
       },
+      "test": {
+        "action": "Test token",
+        "pending": "Testing token...",
+        "helper": "Test token checks the names above without placing an order. It adds a test TXT record at each name and deletes it again.",
+        "hint": "This can take a minute while TierPlan waits for the record to appear.",
+        "required": "Enter a Cloudflare API token to test."
+      },
       "result": {
         "passed": "Token test passed",
         "failed": "Token test failed",

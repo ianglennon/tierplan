@@ -203,6 +203,94 @@ export function useSaveACMEValidation() {
   });
 }
 
+// ACMETestError is a token test the server refused (not one that failed: a failed test is a 200 with
+// passed false). type is the problem type ("acme_dns_resolver_invalid", "acme_run_active", ...), when
+// it sent one. entry is the resolver a resolver problem names.
+export class ACMETestError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+  readonly entry: string | undefined;
+
+  constructor(status: number, type?: string, entry?: string) {
+    super(`POST /api/https/acme/dns/test failed with ${status}`);
+    this.name = "ACMETestError";
+    this.status = status;
+    this.type = type;
+    this.entry = entry;
+  }
+}
+
+export interface TestACMEDNSTokenValues {
+  // The token to test. Leave out to test the saved one.
+  token?: string;
+  // The resolvers to ask. Leave out to use the saved list; an empty list asks the zone's own servers.
+  resolvers?: string[];
+}
+
+// useTestACMEDNSToken tests a DNS token against the certificate names: a test TXT record at each name,
+// read back and deleted again. It stores nothing and places no order, so the status is not read again.
+export function useTestACMEDNSToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: TestACMEDNSTokenValues): Promise<ACMETokenTest> => {
+      const { data, error, response } = await api.POST("/api/https/acme/dns/test", { body });
+      if (!data) {
+        const problem = readProblem(error, response);
+        throw new ACMETestError(
+          response.status,
+          problem.type,
+          problem.type === "acme_dns_resolver_invalid" ? readResolverEntry(error) : undefined,
+        );
+      }
+      return data;
+    },
+    retry: false,
+    onError: (error) => {
+      // The page was out of date (a run began, the card was paused, the files were set).
+      if (error instanceof ACMETestError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+      }
+    },
+  });
+}
+
+// ACMETokenRemoveError is a token removal the server refused. type is the problem type
+// ("acme_dns_token_in_use", ...), when it sent one.
+export class ACMETokenRemoveError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+
+  constructor(status: number, type?: string) {
+    super(`DELETE /api/https/acme/dns/token failed with ${status}`);
+    this.name = "ACMETokenRemoveError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// useRemoveACMEDNSToken deletes the saved DNS token. The server refuses while DNS-01 is the saved
+// method. The status is read again after a removal (not awaited, so a dialog can close first), and
+// after a 409 so the page shows what is saved now.
+export function useRemoveACMEDNSToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      const { error, response } = await api.DELETE("/api/https/acme/dns/token");
+      if (response.ok) return;
+      throw new ACMETokenRemoveError(response.status, readProblem(error, response).type);
+    },
+    retry: false,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
+    onError: (error) => {
+      if (error instanceof ACMETokenRemoveError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+      }
+    },
+  });
+}
+
 export type ACMERefusal = components["schemas"]["HTTPSACMERefusalBody"];
 export type ACMERunStart = components["schemas"]["HTTPSACMERunStartBody"];
 export type ACMEBlock = components["schemas"]["HTTPSACMEBlockBody"];
