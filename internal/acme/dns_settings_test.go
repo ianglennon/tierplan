@@ -22,6 +22,9 @@ import (
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
+// refusedToken is a well-formed token the fake provider does not accept.
+const refusedToken = "a-token-the-provider-refuses" //nolint:gosec // G101: a recognisable fake token, not a credential
+
 // forgetToken removes the token the environment saved, so a test starts from an install with none.
 func (e *dnsEnv) forgetToken() {
 	e.t.Helper()
@@ -446,7 +449,7 @@ func TestDNSTokenDeleteFailureFailsTheTestAndKeepsTheRow(t *testing.T) {
 func TestDNSTokenInvalidTokenStopsAtTheZone(t *testing.T) {
 	e := newDNSEnv(t, ChallengeDNS01)
 
-	tt := e.testToken(TestRequest{Token: "a-token-the-provider-refuses"})
+	tt := e.testToken(TestRequest{Token: refusedToken})
 
 	if tt.Passed {
 		t.Fatalf("result = %+v, want a failure", tt)
@@ -630,7 +633,7 @@ func TestSaveValidationTestFailureStoresNothing(t *testing.T) {
 	before := e.state()
 	resolvers := []string{"1.1.1.1"}
 
-	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: "a-token-the-provider-refuses", Resolvers: &resolvers})
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: refusedToken, Resolvers: &resolvers})
 
 	if err != nil {
 		t.Fatalf("SaveValidation: %v", err)
