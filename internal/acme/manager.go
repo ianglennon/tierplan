@@ -318,8 +318,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.d.Store.InterruptRunning(ctx, now); err != nil {
 		return err
 	}
-	// Records an earlier process could not delete are tried again now (D-17).
-	m.sweepDNS(ctx, false)
+	// Records an earlier process could not delete are not tried here: a sweep makes one provider call
+	// for each row, so it would hold up start-up, and the stored certificate with it, for as long as
+	// the provider takes to answer. The scheduler's first round deletes every row whose next try has
+	// come, and a row never tried has none (D-17).
 	if m.d.CertFiles {
 		return nil
 	}

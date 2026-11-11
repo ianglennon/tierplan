@@ -740,19 +740,42 @@ func (e *dnsEnv) deletes() []string {
 	return out
 }
 
-func TestDNSSweepAtStart(t *testing.T) {
+// Start makes no provider call (WR-01): a sweep there would hold up start-up, and the stored
+// certificate with it, for as long as a slow provider takes. The scheduler's first round deletes the rows
+// instead, including a row that was never tried, whose next try is the zero time.
+func TestDNSSweepNotAtStartButInTheFirstSchedulerRound(t *testing.T) {
+	ctx := context.Background()
 	e := newDNSEnv(t, ChallengeDNS01)
 	row := e.leftOver("_acme-challenge.old.example.com", "old-value", testNow)
+	if !row.NextTryAt.IsZero() || row.Attempts != 0 {
+		t.Fatalf("the left-over row = %+v, want one that was never tried", row)
+	}
+	before, built := len(e.prov.Calls()), e.built.Load()
 
-	if err := e.mgr.Start(context.Background()); err != nil {
+	if err := e.mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
+	if n := len(e.prov.Calls()) - before; n != 0 || e.built.Load() != built {
+		t.Errorf("Start made %d provider calls and built %d providers, want none", n, e.built.Load()-built)
+	}
+	if recs := e.prov.Records(); len(recs) != 1 {
+		t.Errorf("the provider holds %+v after Start, want the record still there", recs)
+	}
+	if rows := e.ledger(); len(rows) != 1 {
+		t.Errorf("the ledger holds %+v after Start, want the row kept", rows)
+	}
+
+	e.mgr.round(ctx)
+
+	if got := e.deletes(); len(got) != 1 || got[0] != row.RecordID {
+		t.Errorf("deletes = %v after the first round, want only %s", got, row.RecordID)
+	}
 	if recs := e.prov.Records(); len(recs) != 0 {
-		t.Errorf("the provider still holds %+v after Start", recs)
+		t.Errorf("the provider still holds %+v after the first round", recs)
 	}
 	if rows := e.ledger(); len(rows) != 0 {
-		t.Errorf("the ledger still holds %+v after Start (row %s)", rows, row.ID)
+		t.Errorf("the ledger still holds %+v after the first round (row %s)", rows, row.ID)
 	}
 }
 
