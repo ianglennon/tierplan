@@ -10,10 +10,13 @@ import type { HTTPSACME, HTTPSStatus } from "@/api/https";
 import { queryClient } from "@/api/query-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AcmeCard } from "@/features/https/acme-card";
+import { type CardState, validationMode } from "@/features/https/card-state";
 import "@/i18n";
 import {
   acmeDNSStatus,
   httpsACME,
+  httpsCertFilesStatus,
+  httpsRestoredStatus,
   httpsStatus,
   tokenTestName,
   tokenTestResult,
@@ -36,6 +39,7 @@ const REGISTERED_AT = "2026-11-10T08:00:00Z";
 
 let sent: Sent[];
 let status: () => Response | Promise<Response>;
+let me: () => Response;
 let put: (body: Record<string, unknown>) => Response | Promise<Response>;
 let successToast: ReturnType<typeof vi.spyOn>;
 
@@ -51,6 +55,7 @@ function withACME(over: Partial<HTTPSACME>): HTTPSStatus {
 beforeEach(() => {
   sent = [];
   status = () => Response.json(withACME({}));
+  me = () => Response.json(makeMe({ instanceAdmin: true }));
   put = () => Response.json(validationResult());
   successToast = vi.spyOn(toast, "success");
   vi.stubGlobal(
@@ -60,7 +65,7 @@ beforeEach(() => {
       const entry: Sent = { path, method: req.method };
       if (req.method === "PUT") entry.body = await req.clone().json();
       sent.push(entry);
-      if (path === "/api/me") return Response.json(makeMe({ instanceAdmin: true }));
+      if (path === "/api/me") return me();
       if (path === "/api/https/status") return status();
       if (path === "/api/https/acme/directory") {
         return Response.json({ overridden: false, profiles: [], termsOfServiceUrl: "", url: "" });
@@ -97,6 +102,7 @@ async function ready() {
   await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
 }
 
+const pickHTTP = () => fireEvent.click(card().getByRole("radio", { name: /HTTP-01/ }));
 const pickDNS = () => fireEvent.click(card().getByRole("radio", { name: /DNS-01/ }));
 const tokenInput = () => card().getByLabelText("Cloudflare API token") as HTMLInputElement;
 const saveButton = () => card().getByRole("button", { name: /Save validation settings|Saving/ });
@@ -303,5 +309,368 @@ describe("Validation section: a token that fails its test", () => {
     fireEvent.click(saveButton());
     await card().findByText("Token test failed");
     expect(tokenInput().value).toBe(TOKEN);
+  });
+});
+
+// A saved DNS-01 setup with a token, and an HTTP-01 one that still keeps a token for later.
+const dnsSaved = () =>
+  withACME({ challengeType: "dns-01", dns: acmeDNSStatus({ tokenSaved: true }) });
+const httpWithToken = () => withACME({ dns: acmeDNSStatus({ tokenSaved: true }) });
+
+const scopeFailed = () =>
+  validationResult({
+    saved: false,
+    tokenSaved: false,
+    test: tokenTestResult({
+      passed: false,
+      names: [
+        tokenTestName({
+          steps: [
+            { id: "zone", state: "done" },
+            { id: "created", state: "failed" },
+          ],
+          error: { code: "dns_token_scope", host: "tierplan.example.com" },
+          info: { resolvers: null, seconds: 0, state: "not_checked" },
+        }),
+      ],
+    }),
+  });
+
+const isAriaDisabled = (button: HTMLElement) => button.getAttribute("aria-disabled") === "true";
+
+describe("Validation section: leaving DNS-01 discards the DNS-01 draft (J9)", () => {
+  it("clears the typed token: DNS-01 again shows an empty field", async () => {
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    pickHTTP();
+    pickDNS();
+    expect(tokenInput().value).toBe("");
+  });
+
+  it("cancels replacing: DNS-01 again shows the Token saved row, not the field", async () => {
+    status = () => Response.json(httpWithToken());
+    await ready();
+    pickDNS();
+    fireEvent.click(card().getByRole("button", { name: "Replace token" }));
+    expect(card().getByLabelText("New Cloudflare API token")).toBeTruthy();
+    pickHTTP();
+    pickDNS();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(card().queryByLabelText("New Cloudflare API token")).toBeNull();
+  });
+
+  it("removes the result of a failed save", async () => {
+    put = () => Response.json(scopeFailed());
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await card().findByText("Token test failed");
+    pickHTTP();
+    expect(card().queryByText("Token test failed")).toBeNull();
+    expect(card().queryByText("Nothing was saved. The settings in use are unchanged.")).toBeNull();
+  });
+
+  it("draws no result block before any save", async () => {
+    await ready();
+    pickDNS();
+    expect(card().queryByText(/Token test (passed|failed)/)).toBeNull();
+  });
+
+  it("keeps a saved token when going back to DNS-01: Token saved shows with no typing", async () => {
+    status = () => Response.json(httpWithToken());
+    await ready();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(card().getByText(/Kept for DNS-01/)).toBeTruthy();
+    pickDNS();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(card().getByRole("button", { name: "Replace token" })).toBeTruthy();
+    expect(card().getByText(/It only deletes records it created/)).toBeTruthy();
+  });
+});
+
+describe("Validation section: what Save sends", () => {
+  it("sends the method alone under an HTTP-01 draft", async () => {
+    status = () => Response.json(dnsSaved());
+    put = () => validationResultResponse({ challengeType: "http-01", test: undefined });
+    await ready();
+    pickHTTP();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "http-01" });
+  });
+
+  it("sends no token and runs no test when DNS-01 is picked with a token already saved", async () => {
+    status = () => Response.json(httpWithToken());
+    put = () => validationResultResponse({ test: undefined });
+    await ready();
+    pickDNS();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01" });
+    await waitFor(() => expect(successToast).toHaveBeenCalledTimes(1));
+    expect(card().queryByText(/Token test (passed|failed)/)).toBeNull();
+  });
+
+  it("sends the token trimmed", async () => {
+    await ready();
+    pickDNS();
+    type(tokenInput(), `  ${TOKEN}\n `);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN });
+  });
+
+  it("sends the new token when replacing a saved one", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    fireEvent.click(card().getByRole("button", { name: "Replace token" }));
+    type(card().getByLabelText("New Cloudflare API token") as HTMLInputElement, TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN });
+  });
+
+  it("returns to the saved token with 'Keep the saved token', dropping what was typed", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    fireEvent.click(card().getByRole("button", { name: "Replace token" }));
+    type(card().getByLabelText("New Cloudflare API token") as HTMLInputElement, TOKEN);
+    fireEvent.click(card().getByRole("button", { name: "Keep the saved token" }));
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(isAriaDisabled(saveButton())).toBe(true);
+  });
+});
+
+function validationResultResponse(over: Parameters<typeof validationResult>[0] = {}) {
+  return Response.json(validationResult(over));
+}
+
+describe("Validation section: Save is aria-disabled until something changed", () => {
+  it("is aria-disabled when nothing changed, and pressing it sends nothing", async () => {
+    await ready();
+    expect(isAriaDisabled(saveButton())).toBe(true);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(sent.length).toBeGreaterThan(0));
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("under an HTTP-01 draft is dirty only when the method differs from the saved one", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    expect(isAriaDisabled(saveButton())).toBe(true);
+    pickHTTP();
+    expect(isAriaDisabled(saveButton())).toBe(false);
+    pickDNS();
+    expect(isAriaDisabled(saveButton())).toBe(true);
+  });
+
+  it("under a DNS-01 draft is dirty when the method differs", async () => {
+    await ready();
+    pickDNS();
+    expect(isAriaDisabled(saveButton())).toBe(false);
+  });
+
+  it("under a saved DNS-01 is dirty when a token is typed, and not when it is cleared again", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    fireEvent.click(card().getByRole("button", { name: "Replace token" }));
+    expect(isAriaDisabled(saveButton())).toBe(false);
+    const field = card().getByLabelText("New Cloudflare API token") as HTMLInputElement;
+    type(field, TOKEN);
+    expect(isAriaDisabled(saveButton())).toBe(false);
+    fireEvent.click(card().getByRole("button", { name: "Keep the saved token" }));
+    expect(isAriaDisabled(saveButton())).toBe(true);
+  });
+
+  it("is aria-disabled again once the save has been stored", async () => {
+    put = () => {
+      status = () =>
+        Response.json(
+          withACME({ challengeType: "dns-01", dns: acmeDNSStatus({ tokenSaved: true }) }),
+        );
+      return Response.json(validationResult());
+    };
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await card().findByText("Token saved");
+    expect(isAriaDisabled(saveButton())).toBe(true);
+  });
+});
+
+describe("Validation section: a token is required for DNS-01", () => {
+  it("shows 'Enter a Cloudflare API token.' with aria-invalid and sends nothing", async () => {
+    await ready();
+    pickDNS();
+    fireEvent.click(saveButton());
+    expect(await card().findByText("Enter a Cloudflare API token.")).toBeTruthy();
+    expect(tokenInput().getAttribute("aria-invalid")).toBe("true");
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("takes spaces alone as no token", async () => {
+    await ready();
+    pickDNS();
+    type(tokenInput(), "   ");
+    fireEvent.click(saveButton());
+    expect(await card().findByText("Enter a Cloudflare API token.")).toBeTruthy();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("asks for a new token when 'Replace token' was pressed and none is typed", async () => {
+    status = () => Response.json(dnsSaved());
+    await ready();
+    fireEvent.click(card().getByRole("button", { name: "Replace token" }));
+    fireEvent.click(saveButton());
+    expect(await card().findByText("Enter a Cloudflare API token.")).toBeTruthy();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("shows the field error when the server says the token is required", async () => {
+    put = () =>
+      Response.json(
+        {
+          type: "acme_dns_token_required",
+          title: "x",
+          status: 422,
+          errors: [{ location: "body.token", message: "acme_dns_token_required" }],
+        },
+        { status: 422, headers: { "Content-Type": "application/problem+json" } },
+      );
+    status = () => Response.json(httpWithToken());
+    await ready();
+    pickDNS();
+    fireEvent.click(saveButton());
+    expect(await card().findByText("Enter a Cloudflare API token.")).toBeTruthy();
+  });
+});
+
+describe("Validation section: failures and the pending state", () => {
+  it("shows 'Something went wrong. Try again.' when the save fails with no classified reason", async () => {
+    put = () => Response.json({}, { status: 500 });
+    await ready();
+    pickHTTP();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    expect(await card().findByText("Something went wrong. Try again.")).toBeTruthy();
+    expect(tokenInput().value).toBe(TOKEN);
+    expect(successToast).not.toHaveBeenCalled();
+  });
+
+  it("freezes the radios, the field and the button while the save is pending", async () => {
+    put = () => new Promise<Response>(() => {});
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    const busy = await card().findByRole("button", { name: /Testing token/ });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(busy.querySelector('[role="presentation"], svg')).toBeTruthy();
+    expect(tokenInput().matches(":disabled")).toBe(true);
+    for (const radio of card().getAllByRole("radio")) expect(radio.matches(":disabled")).toBe(true);
+  });
+
+  it("draws no radios while the status is loading: the card's skeleton stands in", () => {
+    status = () => new Promise<Response>(() => {});
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <TestRouter>
+            <AcmeCard />
+          </TestRouter>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("acme-loading")).toBeTruthy();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+  });
+});
+
+describe("Validation section: long text", () => {
+  it("lets the token input scroll inside itself at the touch height", async () => {
+    await ready();
+    pickDNS();
+    const group = tokenInput().closest('[data-slot="input-group"]') as HTMLElement;
+    expect(group.className).toContain("h-11");
+    expect(group.className).toContain("md:h-8");
+    expect(tokenInput().className).toContain("min-w-0");
+    type(tokenInput(), "t".repeat(400));
+    expect(tokenInput().value).toHaveLength(400);
+  });
+
+  it("wraps the radio descriptions and keeps each radio row at the touch height", async () => {
+    await ready();
+    const description = card().getByText(/Let's Encrypt checks over plain HTTP on port 80/);
+    expect(description.className).toContain("break-words");
+    const label = card().getByText("DNS-01", { selector: "label" });
+    expect(label.className).toContain("max-md:min-h-11");
+  });
+
+  it("renders the buttons without the filled default variant", async () => {
+    await ready();
+    pickDNS();
+    expect(saveButton().className).not.toContain("bg-primary");
+  });
+});
+
+describe("validationMode", () => {
+  const editable: CardState[] = ["A", "B", "D", "E", "F", "G", "K", "L"];
+  const disabled: CardState[] = ["C", "H", "I", "J"];
+
+  it.each(editable)("is editable in state %s with settings.write", (state) => {
+    expect(validationMode(state, true)).toBe("editable");
+  });
+
+  it.each(disabled)("is disabled in state %s", (state) => {
+    expect(validationMode(state, true)).toBe("disabled");
+  });
+
+  it.each([...editable, ...disabled])("is disabled in state %s without settings.write", (state) => {
+    expect(validationMode(state, false)).toBe("disabled");
+  });
+});
+
+describe("Validation section: disabled and read-only", () => {
+  it("disables the radios and the token field and draws no action button in state H (paused after a restore)", async () => {
+    status = () =>
+      Response.json({
+        ...httpsRestoredStatus({ challengeType: "dns-01", dns: acmeDNSStatus() }),
+      });
+    await ready();
+    for (const radio of card().getAllByRole("radio")) expect(radio.matches(":disabled")).toBe(true);
+    expect(tokenInput().matches(":disabled")).toBe(true);
+    expect(card().queryByRole("button", { name: /Save validation settings/ })).toBeNull();
+  });
+
+  it("shows the saved token with no Replace button in state J", async () => {
+    status = () =>
+      Response.json(
+        httpsCertFilesStatus({
+          hasState: true,
+          challengeType: "dns-01",
+          dns: acmeDNSStatus({ tokenSaved: true }),
+          account: { contact: "", registeredAt: REGISTERED_AT, termsOfServiceUrl: "" },
+        }),
+      );
+    await ready();
+    expect(card().getByText("Token saved")).toBeTruthy();
+    expect(card().queryByRole("button", { name: "Replace token" })).toBeNull();
+    expect(card().queryByRole("button", { name: /Save validation settings/ })).toBeNull();
+  });
+
+  it("without settings.write disables the inputs, draws no action button and shows the read-only line", async () => {
+    status = () => Response.json(dnsSaved());
+    me = () => Response.json(makeMe({ allEnvironments: "viewer" }));
+    await ready();
+    for (const radio of card().getAllByRole("radio")) expect(radio.matches(":disabled")).toBe(true);
+    expect(
+      card().queryByRole("button", { name: /Save validation settings|Replace token/ }),
+    ).toBeNull();
+    expect(card().getByText("You can view these settings but not change them.")).toBeTruthy();
   });
 });

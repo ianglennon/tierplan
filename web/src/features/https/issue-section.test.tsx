@@ -867,3 +867,47 @@ describe("a dropped stream", () => {
     expect(reads()).toBe(settled);
   });
 });
+
+describe("an unsaved validation draft (J4)", () => {
+  const pickDNS = () => fireEvent.click(card().getByRole("radio", { name: /DNS-01/ }));
+  const pickHTTP = () => fireEvent.click(card().getByRole("radio", { name: /HTTP-01/ }));
+  const UNSAVED = "Save your validation settings first.";
+
+  it("makes Issue certificate and Renew now aria-disabled, described by 'Save your validation settings first.'", async () => {
+    status = () =>
+      served({ namesMismatch: true, names: [{ name: "new.example.com", refused: false }] });
+    await ready();
+    expect(isDisabled(issueButton())).toBe(false);
+    expect(isDisabled(renewButton())).toBe(false);
+    pickDNS();
+    for (const button of [issueButton(), renewButton()]) {
+      expect(isDisabled(button)).toBe(true);
+      expect(describedBy(button)).toBe(UNSAVED);
+    }
+    fireEvent.click(issueButton() as HTMLElement);
+    fireEvent.click(renewButton() as HTMLElement);
+    await flush();
+    expect(posts()).toEqual([]);
+  });
+
+  it("frees the buttons again when the draft goes back to the saved method", async () => {
+    await ready();
+    pickDNS();
+    expect(isDisabled(renewButton())).toBe(true);
+    pickHTTP();
+    expect(isDisabled(renewButton())).toBe(false);
+    expect(card().queryByText(UNSAVED)).toBeNull();
+  });
+
+  it("gives a wait as the reason when there is one, and the unsaved line only after it", async () => {
+    const until = inAnHour();
+    status = () => served({ blocked: { reason: "told_to_wait", until } });
+    await ready();
+    pickDNS();
+    expect(isDisabled(renewButton())).toBe(true);
+    expect(describedBy(renewButton())).toBe(
+      `Let's Encrypt asked TierPlan to wait. You can try again at ${formatClock(until)}.`,
+    );
+    expect(card().queryByText(UNSAVED)).toBeNull();
+  });
+});
