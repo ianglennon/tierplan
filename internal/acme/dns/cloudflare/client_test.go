@@ -210,23 +210,24 @@ func TestCloudflareClassifies(t *testing.T) {
 	}
 }
 
-// TestCloudflareClassifies404 checks the three meanings of a 404 (D-19): a zone ID Cloudflare no
-// longer routes, a record it no longer has, and a delete of a record that is already gone.
+// TestCloudflareClassifies404 checks the meanings of a 404 (D-19): a zone ID Cloudflare no longer
+// routes, a record it no longer has, and a delete of a record that is already gone. A zone that was
+// deleted is not a 404: the live API answers its ID with 403 and code 10000 (see the next test).
 func TestCloudflareClassifies404(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("create under a zone that is gone", func(t *testing.T) {
+	t.Run("create under a zone ID that is not routed", func(t *testing.T) {
 		fake, p, z, _ := withRecord(t)
-		fake.RemoveZone("example.com")
+		fake.Script(dnstest.OpCreate, dnstest.FakeResponse{Status: 404, Code: 7003, Message: "Could not route to /zones/x/dns_records, perhaps your object identifier is invalid?"})
 		_, err := p.CreateTXT(ctx, z, challengeName, dns.TXTValue("x"), "c")
 		de := asDNS(t, err)
 		if de.Class != dns.ClassZoneNotFound || de.Status != 404 || de.Code != 7003 || de.Host != challengeName || de.Zone != "example.com" {
 			t.Fatalf("got %+v, want dns_zone_not_found 404/7003 with host %q and zone example.com", de, challengeName)
 		}
 	})
-	t.Run("read under a zone that is gone", func(t *testing.T) {
+	t.Run("read under a zone ID that is not routed", func(t *testing.T) {
 		fake, p, _, ref := withRecord(t)
-		fake.RemoveZone("example.com")
+		fake.Script(dnstest.OpGet, dnstest.FakeResponse{Status: 404, Code: 7003, Message: "Could not route to /zones/x/dns_records/y, perhaps your object identifier is invalid?"})
 		_, err := p.GetTXT(ctx, ref)
 		de := asDNS(t, err)
 		if de.Class != dns.ClassZoneNotFound || de.Status != 404 || de.Host != challengeName || de.Zone != "example.com" {
@@ -253,13 +254,43 @@ func TestCloudflareClassifies404(t *testing.T) {
 			t.Fatalf("second delete of the same ID = %v, want nil", err)
 		}
 	})
-	t.Run("delete under a zone that is gone is success", func(t *testing.T) {
-		fake, p, _, ref := withRecord(t)
-		fake.RemoveZone("example.com")
-		if err := p.DeleteTXT(ctx, ref); err != nil {
-			t.Fatalf("DeleteTXT = %v, want nil", err)
-		}
-	})
+}
+
+// TestCloudflareUnknownZoneID checks the answer to a zone ID Cloudflare does not know, read from the
+// live API on 2026-11-11 with a valid token: 403, code 10000, "Authentication error", for a read, a
+// create and a delete alike. It is the answer of a token that may not edit the zone too, so the class
+// stays dns_token_scope; the error carries dns.ErrZoneRefused so a caller knows the zone is still to be
+// looked up by name. A delete under it is an error, not "already gone".
+func TestCloudflareUnknownZoneID(t *testing.T) {
+	ctx := context.Background()
+	calls := map[string]func(dns.Provider, dns.Zone, dns.RecordRef) error{
+		"create": func(p dns.Provider, z dns.Zone, _ dns.RecordRef) error {
+			_, err := p.CreateTXT(ctx, z, challengeName, dns.TXTValue("x"), "c")
+			return err
+		},
+		"read": func(p dns.Provider, _ dns.Zone, ref dns.RecordRef) error {
+			_, err := p.GetTXT(ctx, ref)
+			return err
+		},
+		"delete": func(p dns.Provider, _ dns.Zone, ref dns.RecordRef) error { return p.DeleteTXT(ctx, ref) },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			fake, p, z, ref := withRecord(t)
+			fake.RemoveZone("example.com")
+			err := call(p, z, ref)
+			if err == nil {
+				t.Fatal("want an error, got nil")
+			}
+			de := asDNS(t, err)
+			if de.Class != dns.ClassTokenScope || de.Status != 403 || de.Code != 10000 || !errors.Is(err, dns.ErrZoneRefused) {
+				t.Fatalf("got %+v, want dns_token_scope 403/10000 wrapping dns.ErrZoneRefused", de)
+			}
+			if len(fake.Records()) != 0 {
+				t.Errorf("the fake still holds %+v after its zone was removed", fake.Records())
+			}
+		})
+	}
 }
 
 // TestCloudflareClassifiesUnreachable covers the answers that are no answer at all.

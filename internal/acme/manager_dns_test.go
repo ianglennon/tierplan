@@ -705,6 +705,13 @@ func TestDNSJobItemsCarryNoSecrets(t *testing.T) {
 // and the ledger holds its ID, owned by an order that is gone.
 func (e *dnsEnv) leftOver(fqdn, value string, created time.Time) DNSRecord {
 	e.t.Helper()
+	return e.leftOverNamed(fqdn, value, created, true)
+}
+
+// leftOverNamed is leftOver with or without the zone name in the ledger row: a row from before the name
+// was kept has none.
+func (e *dnsEnv) leftOverNamed(fqdn, value string, created time.Time, withZoneName bool) DNSRecord {
+	e.t.Helper()
 	ctx := context.Background()
 	p := e.prov.Factory(dnsToken)(dnsToken)
 	z, err := p.Zone(ctx, fqdn)
@@ -722,6 +729,9 @@ func (e *dnsEnv) leftOver(fqdn, value string, created time.Time) DNSRecord {
 	row := DNSRecord{
 		ID: id.String(), Provider: dnsProviderID, ZoneID: ref.ZoneID, RecordID: ref.RecordID, Name: fqdn, Value: value,
 		Comment: "tierplan:old-install:old-order", OwnerKind: OwnerOrder, OwnerID: "old-order", Token: "old", CreatedAt: created,
+	}
+	if withZoneName {
+		row.ZoneName = z.Name
 	}
 	if err := e.store.InsertDNSRecord(ctx, row); err != nil {
 		e.t.Fatalf("InsertDNSRecord: %v", err)

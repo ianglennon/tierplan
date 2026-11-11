@@ -86,7 +86,7 @@ func TestDNSTokenRoundTripsSealed(t *testing.T) {
 
 func ledgerRow(id, ownerKind, ownerID, token string, created time.Time) DNSRecord {
 	return DNSRecord{
-		ID: id, Provider: "cloudflare", ZoneID: "zone-1", RecordID: "rec-" + id,
+		ID: id, Provider: "cloudflare", ZoneID: "zone-1", ZoneName: "example.org", RecordID: "rec-" + id,
 		Name: "_acme-challenge.tierplan.example.org", Value: "value-" + id,
 		Comment:   "tierplan:install-1:" + ownerID,
 		OwnerKind: ownerKind, OwnerID: ownerID, Token: token, CreatedAt: created,

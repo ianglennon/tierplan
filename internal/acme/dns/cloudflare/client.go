@@ -64,6 +64,7 @@ const (
 	codeBadAuthHeader  = 6003  // malformed Authorization header (chain code 6111)
 	codeBadAuthFormat  = 6111  // "Invalid format for Authorization header"
 	codeInvalidToken   = 9109  // "Invalid access token", and also "Unauthorized to access requested resource" (see tokenUnknown)
+	codeAuthError      = 10000 // "Authentication error": a token without the permission, and a zone ID Cloudflare does not know
 	codeIdentical      = 81058 // an identical record already exists
 	codeCNAMEExists    = 81053 // a CNAME record at that name
 	codeCNAMEExistsToo = 81054 // a CNAME record at that name
@@ -245,6 +246,12 @@ func (p *provider) failure(op string, res response, host, zone string) error {
 		} else {
 			e.Class = dns.ClassTokenScope
 		}
+	case res.status == http.StatusForbidden && has(codeAuthError):
+		// The same answer for a token that may not edit the zone's records and for a zone ID Cloudflare
+		// does not know (read from the live API, 2026-11-11), so the class is the safe one and the
+		// error says which question is open (dns.ErrZoneRefused).
+		e.Class = dns.ClassTokenScope
+		e.Err = dns.ErrZoneRefused
 	case res.status == http.StatusForbidden:
 		// A token that lacks Zone:Zone:Read or Zone:DNS:Edit, or a code this build does not know.
 		e.Class = dns.ClassTokenScope

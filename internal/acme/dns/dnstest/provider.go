@@ -45,6 +45,7 @@ type FakeProvider struct {
 	nextID  int
 
 	createErr  error
+	zoneErr    error
 	deleteErr  error
 	deleteLeft int // failures still to serve; negative means every delete fails
 }
@@ -69,6 +70,23 @@ func (f *FakeProvider) HideZone(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hidden[strings.ToLower(name)] = true
+}
+
+// RemoveZone deletes a zone and the records in it, as deleting a zone at a provider does. Its ID becomes
+// one the provider does not know: a delete under it is refused as the real provider refuses it
+// (dns.ErrZoneRefused), and a lookup of its name no longer finds it.
+func (f *FakeProvider) RemoveZone(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name = strings.ToLower(name)
+	var gone []string
+	for _, z := range f.zones {
+		if z.Name == name {
+			gone = append(gone, z.ID)
+		}
+	}
+	f.zones = slices.DeleteFunc(f.zones, func(z dns.Zone) bool { return z.Name == name })
+	f.records = slices.DeleteFunc(f.records, func(r FakeRecord) bool { return slices.Contains(gone, r.Zone) })
 }
 
 // Factory builds providers over this fake. A token other than acceptToken is a token the provider
@@ -104,6 +122,13 @@ func (f *FakeProvider) FailCreate(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createErr = err
+}
+
+// FailZone makes every zone lookup fail with err; nil ends it.
+func (f *FakeProvider) FailZone(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.zoneErr = err
 }
 
 // FailDelete makes the next times deletes fail with err; a negative times makes every delete fail,
@@ -151,6 +176,16 @@ func (f *FakeProvider) zoneLocked(name string, includeHidden bool) (dns.Zone, bo
 	return best, found
 }
 
+// seesAnyZoneLocked reports whether the token sees at least one zone.
+func (f *FakeProvider) seesAnyZoneLocked() bool {
+	for _, z := range f.zones {
+		if !f.hidden[z.Name] {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *FakeProvider) hasZoneLocked(id string) bool {
 	for _, z := range f.zones {
 		if z.ID == id && !f.hidden[z.Name] {
@@ -182,8 +217,15 @@ func (h *fakeHandle) Zone(_ context.Context, fqdn string) (dns.Zone, error) {
 	if !h.ok {
 		return dns.Zone{}, h.denied("find zone")
 	}
+	if h.f.zoneErr != nil {
+		return dns.Zone{}, h.f.zoneErr
+	}
 	z, found := h.f.zoneLocked(fqdn, false)
 	if !found {
+		if !h.f.seesAnyZoneLocked() {
+			// A token that lists no zone at all is not scoped to any, as the real provider says.
+			return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: dns.ClassTokenScope, Host: fqdn}
+		}
 		return dns.Zone{}, &dns.Error{Provider: "fake", Op: "find zone", Class: dns.ClassZoneNotFound, Host: fqdn}
 	}
 	return z, nil
@@ -263,6 +305,12 @@ func (h *fakeHandle) DeleteTXT(_ context.Context, ref dns.RecordRef) error {
 		err := h.f.deleteErr
 		h.f.mu.Unlock()
 		return err
+	}
+	if !h.f.hasZoneLocked(ref.ZoneID) {
+		// A zone ID the token does not know, whether the zone is gone or only hidden from this token,
+		// is refused with no more to say, like the real provider's 403 (dns.ErrZoneRefused).
+		h.f.mu.Unlock()
+		return &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassTokenScope, Status: 403, Code: 10000, Err: dns.ErrZoneRefused}
 	}
 	var gone FakeRecord
 	found := false

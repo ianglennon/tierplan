@@ -51,6 +51,12 @@ const MaxCommentLen = 100
 // caller can match with errors.Is; the caller holds no ID for that record, so it must not adopt it.
 var ErrIdentical = errors.New("an identical record already exists")
 
+// ErrZoneRefused is a provider refusing a call for a zone ID without saying why. Some providers answer
+// the same for a zone that no longer exists, a zone in another account and a token without the
+// permission to edit it, so a caller that needs to know which asks the provider for the zone by name
+// (Provider.Zone) and judges from that. It is a sentinel a caller can match with errors.Is.
+var ErrZoneRefused = errors.New("the provider refused the zone ID")
+
 // Zone is a DNS zone a token can edit.
 type Zone struct {
 	ID   string

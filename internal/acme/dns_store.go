@@ -86,9 +86,12 @@ const (
 // provider's own reference (ZoneID, RecordID) is the only thing a delete uses.
 type DNSRecord struct {
 	// ID is TierPlan's own row ID.
-	ID                   string
-	Provider             string
-	ZoneID, RecordID     string
+	ID               string
+	Provider         string
+	ZoneID, RecordID string
+	// ZoneName is the name of the zone ZoneID, as the provider reported it when the record was made;
+	// empty for a row from before it was kept.
+	ZoneName             string
 	Name, Value, Comment string
 	OwnerKind, OwnerID   string
 	Token                string
@@ -108,7 +111,8 @@ func (s *Store) InsertDNSRecord(ctx context.Context, r DNSRecord) error {
 	}
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	if err := s.st.Q.WithTx(tx).InsertACMEDNSRecord(ctx, sqlc.InsertACMEDNSRecordParams{
-		ID: r.ID, Provider: r.Provider, ZoneID: r.ZoneID, RecordID: r.RecordID, Name: r.Name, Value: r.Value,
+		ID: r.ID, Provider: r.Provider, ZoneID: r.ZoneID, ZoneName: r.ZoneName, RecordID: r.RecordID,
+		Name: r.Name, Value: r.Value,
 		Comment: r.Comment, OwnerKind: r.OwnerKind, OwnerID: r.OwnerID, Token: r.Token,
 		CreatedAt: toNanos(r.CreatedAt), Attempts: int64(r.Attempts), LastTryAt: toNanos(r.LastTryAt),
 		NextTryAt: toNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,
@@ -205,7 +209,8 @@ func dnsRecords(rows []sqlc.AcmeDnsRecord) []DNSRecord {
 
 func dnsRecord(r sqlc.AcmeDnsRecord) DNSRecord {
 	return DNSRecord{
-		ID: r.ID, Provider: r.Provider, ZoneID: r.ZoneID, RecordID: r.RecordID, Name: r.Name, Value: r.Value,
+		ID: r.ID, Provider: r.Provider, ZoneID: r.ZoneID, ZoneName: r.ZoneName, RecordID: r.RecordID,
+		Name: r.Name, Value: r.Value,
 		Comment: r.Comment, OwnerKind: r.OwnerKind, OwnerID: r.OwnerID, Token: r.Token,
 		CreatedAt: fromNanos(r.CreatedAt), Attempts: int(r.Attempts), LastTryAt: fromNanos(r.LastTryAt),
 		NextTryAt: fromNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,

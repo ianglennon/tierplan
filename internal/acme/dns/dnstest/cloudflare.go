@@ -147,12 +147,21 @@ func (f *FakeCloudflare) AddForeignTXT(name, content string) string {
 	return r.ID
 }
 
-// RemoveZone removes a zone, so its ID becomes one Cloudflare does not know.
+// RemoveZone removes a zone and its records, so its ID becomes one Cloudflare does not know: a call
+// under it is answered 403 with code 10000 and "Authentication error", as the live API answers a valid
+// token asked about an unknown zone ID (read 2026-11-11), and not 404.
 func (f *FakeCloudflare) RemoveZone(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name = strings.ToLower(name)
+	var gone []string
+	for _, z := range f.zones {
+		if z.Name == name {
+			gone = append(gone, z.ID)
+		}
+	}
 	f.zones = slices.DeleteFunc(f.zones, func(z FakeZone) bool { return z.Name == name })
+	f.records = slices.DeleteFunc(f.records, func(r FakeRecord) bool { return slices.Contains(gone, r.Zone) })
 }
 
 // LimitZones makes the token a zone-scoped one: the filtered and the unfiltered zone lists show
@@ -351,7 +360,7 @@ func (f *FakeCloudflare) createRecord(w http.ResponseWriter, r *http.Request, zo
 	f.mu.Lock()
 	if !f.hasZoneLocked(zoneID) {
 		f.mu.Unlock()
-		writeErr(w, http.StatusNotFound, 7003, "Could not route to /zones/"+zoneID+"/dns_records, perhaps your object identifier is invalid?")
+		writeErr(w, http.StatusForbidden, 10000, "Authentication error")
 		return
 	}
 	for _, have := range f.records {
@@ -384,7 +393,7 @@ func (f *FakeCloudflare) getRecord(w http.ResponseWriter, zoneID, id string) {
 	f.mu.Lock()
 	if !f.hasZoneLocked(zoneID) {
 		f.mu.Unlock()
-		writeErr(w, http.StatusNotFound, 7003, "Could not route to /zones/"+zoneID+"/dns_records/"+id+", perhaps your object identifier is invalid?")
+		writeErr(w, http.StatusForbidden, 10000, "Authentication error")
 		return
 	}
 	i, ok := f.findRecordLocked(zoneID, id)
@@ -402,6 +411,11 @@ func (f *FakeCloudflare) getRecord(w http.ResponseWriter, zoneID, id string) {
 
 func (f *FakeCloudflare) deleteRecord(w http.ResponseWriter, zoneID, id string) {
 	f.mu.Lock()
+	if !f.hasZoneLocked(zoneID) {
+		f.mu.Unlock()
+		writeErr(w, http.StatusForbidden, 10000, "Authentication error")
+		return
+	}
 	i, ok := f.findRecordLocked(zoneID, id)
 	var rec FakeRecord
 	if ok {
