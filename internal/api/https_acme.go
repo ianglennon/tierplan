@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -29,6 +30,11 @@ const (
 	problemACMEProfileUnknown = "acme_profile_unknown"
 	problemACMERunActive      = "acme_run_active"
 	problemACMECAError        = "acme_ca_error"
+
+	problemACMEDNSTokenRequired = "acme_dns_token_required"
+	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
+	problemACMEDNSTokenInUse    = "acme_dns_token_in_use"
+	problemACMEChallengeUnknown = "acme_challenge_unknown"
 )
 
 // HTTPSACME is the Let's Encrypt manager as the HTTPS routes use it. *acme.Manager is the one
@@ -38,6 +44,9 @@ type HTTPSACME interface {
 	Register(ctx context.Context, email string, agreeTOS bool) (acme.Account, error)
 	Directory(ctx context.Context) (acme.DirectoryMeta, error)
 	SetProfile(ctx context.Context, profile string) error
+	SaveValidation(ctx context.Context, in acme.ValidationInput) (acme.SaveResult, error)
+	TestToken(ctx context.Context, req acme.TestRequest) (acme.TokenTest, error)
+	RemoveToken(ctx context.Context) error
 	Issue(ctx context.Context, actor string) (acme.RunStart, error)
 	RenewNow(ctx context.Context, actor string) (acme.RunStart, error)
 	Resume(ctx context.Context, actor string) error
@@ -139,7 +148,19 @@ type HTTPSACMEBody struct {
 	Blocked             *HTTPSACMEBlockBody       `json:"blocked,omitempty" doc:"Set while a manual attempt is refused"`
 	ActiveRun           *HTTPSACMERunBody         `json:"activeRun,omitempty" doc:"The run in progress"`
 	LastRun             *HTTPSACMERunBody         `json:"lastRun,omitempty" doc:"The run that ended last"`
+	DNS                 HTTPSACMEDNSBody          `json:"dns" doc:"The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned"`
 }
+
+// HTTPSACMEDNSBody is the DNS-01 side of the status.
+type HTTPSACMEDNSBody struct {
+	Provider   string                  `json:"provider" doc:"The DNS provider id the saved token is for, for example cloudflare"`
+	TokenSaved bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved. The token is never returned"`
+	Resolvers  []string                `json:"resolvers" doc:"The resolvers the propagation check asks, as host:port; empty means the zone's own name servers"`
+	LeftOver   []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
+}
+
+// HTTPSACMELeftOverBody is one TXT record still at the DNS provider.
+type HTTPSACMELeftOverBody struct{}
 
 // acmeStatusBody maps the manager's status onto the contract.
 func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
@@ -202,6 +223,10 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	}
 	b.ActiveRun = acmeRunBody(st.ActiveRun)
 	b.LastRun = acmeRunBody(st.LastRun)
+	b.DNS = HTTPSACMEDNSBody{
+		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
+		LeftOver: []HTTPSACMELeftOverBody{},
+	}
 	return b
 }
 
@@ -369,9 +394,15 @@ func acmeInternal(log *slog.Logger, what string, err error) error {
 
 // fieldProblem is a 422 whose type is the stable code and whose first error names the field.
 func fieldProblem(code, location, detail string) error {
+	return fieldValueProblem(code, location, detail, nil)
+}
+
+// fieldValueProblem is fieldProblem whose first error also carries the value that is wrong. Never pass
+// a secret as the value.
+func fieldValueProblem(code, location, detail string, value any) error {
 	return &huma.ErrorModel{
 		Type: code, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity, Detail: detail,
-		Errors: []*huma.ErrorDetail{{Location: location, Message: code}},
+		Errors: []*huma.ErrorDetail{{Location: location, Message: code, Value: value}},
 	}
 }
 
@@ -382,6 +413,7 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 	if p := runProblem(err); p != nil {
 		return p
 	}
+	var resolverErr *dnscheck.ResolverError
 	switch {
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
@@ -397,6 +429,14 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 		return fieldProblem(problemACMEContactInvalid, "body.email", "Enter an email address such as you@example.com, or leave it empty.")
 	case errors.Is(err, acme.ErrProfileUnknown):
 		return fieldProblem(problemACMEProfileUnknown, "body.profile", "The certificate authority does not offer that profile.")
+	case errors.Is(err, acme.ErrDNSTokenRequired):
+		return fieldProblem(problemACMEDNSTokenRequired, "body.token", "Enter a DNS API token. DNS-01 cannot be used without one.")
+	case errors.Is(err, acme.ErrDNSTokenInUse):
+		return httpx.Problem(http.StatusConflict, problemACMEDNSTokenInUse, "DNS-01 is the saved validation method, so its token cannot be removed. Switch to HTTP-01 first.")
+	case errors.Is(err, acme.ErrChallengeUnknown):
+		return fieldProblem(problemACMEChallengeUnknown, "body.challengeType", "The validation method must be http-01 or dns-01.")
+	case errors.As(err, &resolverErr):
+		return fieldValueProblem(problemACMEDNSResolverBad, "body.resolvers", resolverDetail(resolverErr), resolverErr.Entry)
 	}
 	f := acme.Classify(err, acme.ClassifyInput{})
 	switch f.Class {

@@ -4296,6 +4296,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/https/acme/validation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose how the names are validated
+         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         */
+        put: operations["putACMEValidation"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/https/status": {
         parameters: {
             query?: never;
@@ -8706,6 +8726,8 @@ export interface components {
             directoryOverridden: boolean;
             /** @description The CA directory in use */
             directoryUrl: string;
+            /** @description The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned */
+            dns: components["schemas"]["HTTPSACMEDNSBody"];
             /**
              * Format: int64
              * @description Consecutive failed runs
@@ -8773,6 +8795,33 @@ export interface components {
             /** @description True when the newest issue was a renewal */
             renewed: boolean;
         };
+        HTTPSACMEDNSBody: {
+            /** @description TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none */
+            leftOver: components["schemas"]["HTTPSACMELeftOverBody"][] | null;
+            /** @description The DNS provider id the saved token is for, for example cloudflare */
+            provider: string;
+            /** @description The resolvers the propagation check asks, as host:port; empty means the zone's own name servers */
+            resolvers: string[] | null;
+            /** @description True when a DNS API token is saved. The token is never returned */
+            tokenSaved: boolean;
+        };
+        HTTPSACMEDNSErrorBody: {
+            /** @description The class of the failure, one of the codes of lastError in the status */
+            code: string;
+            /** @description The certificate name the failure is about */
+            host?: string;
+            /** @description The resolvers that were asked */
+            resolvers?: string[] | null;
+            /**
+             * Format: date-time
+             * @description When to try again, for a rate limit that said when
+             */
+            retryAt?: string;
+            /** @description The name the challenge name is delegated to, when it is */
+            target?: string;
+            /** @description The DNS zone the failure is about */
+            zone?: string;
+        };
         HTTPSACMEDirectoryBody: {
             /** @description True when the test-only directory override is set */
             overridden: boolean;
@@ -8810,11 +8859,30 @@ export interface components {
              */
             expiredAt: string;
         };
+        HTTPSACMELeftOverBody: Record<string, never>;
         HTTPSACMENameBody: {
             /** @description The host name or address, in its ASCII form */
             name: string;
             /** @description True when this name cannot be ordered, for example an IP address */
             refused: boolean;
+        };
+        HTTPSACMENameTestBody: {
+            /** @description The name the challenge name is a CNAME to, when it is */
+            delegatedTo?: string;
+            /** @description The first row that failed, classified */
+            error?: components["schemas"]["HTTPSACMEDNSErrorBody"];
+            /** @description Whether the resolvers showed the test record. It never changes the verdict */
+            info: components["schemas"]["HTTPSACMETestInfoBody"];
+            /** @description The certificate name tested */
+            name: string;
+            /** @description Set when the name's own zone is not at the provider and the challenge name is delegated into one that is: the zone that is not there */
+            ownZone?: string;
+            /** @description The TXT record name the test wrote at, or would have */
+            record: string;
+            /** @description The four rows, in order: zone, created, read, deleted */
+            steps: components["schemas"]["HTTPSACMETestStepBody"][] | null;
+            /** @description The DNS provider zone that record is in; empty when it was not found */
+            zone: string;
         };
         HTTPSACMEProfileBody: {
             /** @description What the CA says about it. Untrusted text: show it as text only */
@@ -8895,6 +8963,52 @@ export interface components {
              * @description When that certificate expires; set only when reused
              */
             validUntil?: string;
+        };
+        HTTPSACMETestInfoBody: {
+            /** @description The resolvers that showed it (seen) or had not shown it (not_seen) */
+            resolvers: string[] | null;
+            /**
+             * Format: int64
+             * @description How long the wait took, in seconds
+             */
+            seconds: number;
+            /**
+             * @description Every resolver showed the record, some had not when the wait ended, or it was never looked for
+             * @enum {string}
+             */
+            state: "seen" | "not_seen" | "not_checked";
+        };
+        HTTPSACMETestStepBody: {
+            /** @description The class of a failure, for example dns_token_invalid */
+            code?: string;
+            /**
+             * @description The row: the zone was found, a test record was created, read back and deleted
+             * @enum {string}
+             */
+            id: "zone" | "created" | "read" | "deleted";
+            /**
+             * @description Where the row ended. skipped is a row that was not reached because an earlier one failed
+             * @enum {string}
+             */
+            state: "done" | "failed" | "skipped";
+        };
+        HTTPSACMETokenTestBody: {
+            /** @description The names tested, in certificate-name order */
+            names: components["schemas"]["HTTPSACMENameTestBody"][] | null;
+            /** @description True when every name passed its four rows. The info row has no say */
+            passed: boolean;
+        };
+        HTTPSACMEValidationOutputBody: {
+            /** @description The validation method saved now */
+            challengeType: string;
+            /** @description The resolvers saved now */
+            resolvers: string[] | null;
+            /** @description True when the settings were stored. False when the new token failed its test: nothing was stored */
+            saved: boolean;
+            /** @description The token test the save ran; left out when no new token was given */
+            test?: components["schemas"]["HTTPSACMETokenTestBody"];
+            /** @description True when a DNS API token is saved now. The token is never returned */
+            tokenSaved: boolean;
         };
         HTTPSCertificateBody: {
             /** @description Who issued it: the issuer's common name, else its organisation, else empty */
@@ -11296,6 +11410,17 @@ export interface components {
         PutACMEProfileInputBody: {
             /** @description The profile to order with; empty is the CA's default */
             profile: string;
+        };
+        PutACMEValidationInputBody: {
+            /**
+             * @description How Let's Encrypt is shown you control the names: http-01 over port 80, or dns-01 with a TXT record at your DNS provider
+             * @enum {string}
+             */
+            challengeType: "http-01" | "dns-01";
+            /** @description The resolvers the propagation check asks, as host or host:port; an empty list means the zone's own name servers. Leave out to keep the saved list */
+            resolvers?: string[] | null;
+            /** @description A new DNS API token. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token */
+            token?: string;
         };
         PutBackupScheduleInputBody: {
             /** @description Turn scheduled backups on or off */
@@ -25065,6 +25190,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putACMEValidation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutACMEValidationInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSACMEValidationOutputBody"];
+                };
             };
             /** @description Error */
             default: {

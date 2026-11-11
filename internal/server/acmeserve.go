@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 
 	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/acme/dns"
+	"github.com/ianglennon/tierplan/internal/acme/dns/cloudflare"
 	"github.com/ianglennon/tierplan/internal/buildinfo"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/instance"
@@ -120,7 +122,7 @@ type acmeWiring struct {
 // before the server listens and runs the scheduler in the background. A bad directory setting is an
 // error that stops start-up.
 func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.Vault, inst *instance.Instance,
-	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock) (acmeWiring, error) {
+	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps) (acmeWiring, error) {
 	dir, err := acme.NewDirectory(cfg)
 	if err != nil {
 		return acmeWiring{}, err
@@ -138,6 +140,17 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 	installer := &acmeInstaller{
 		rt: rt, self: self, dataDir: cfg.DataDir, files: cfg.TLSCertFile != "", log: log.With("component", "acme"),
 	}
+	// The DNS provider factory carries the bearer token, so it is built here and no setting or
+	// environment variable can point it elsewhere (WithACMEDNS is a Go option for tests).
+	var dnsD acme.DNSDeps
+	if dnsDeps != nil {
+		dnsD = *dnsDeps
+	}
+	if dnsD.Providers == nil {
+		dnsD.Providers = map[string]dns.Factory{
+			"cloudflare": cloudflare.New(cloudflare.Options{UserAgent: "TierPlan/" + buildinfo.Get().Version}),
+		}
+	}
 	mgr := acme.NewManager(acme.Deps{
 		Store: acmeStore, Client: client, Challenges: challenges, Jobs: jobHub, Installer: installer, Clock: clock,
 		PublicURL: inst.PublicURL, AgentURL: inst.AgentURL, BasePath: inst.BasePath,
@@ -148,7 +161,7 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 			}
 			return hosts
 		},
-		CertFiles: cfg.TLSCertFile != "", Log: log,
+		CertFiles: cfg.TLSCertFile != "", Log: log, DNS: dnsD,
 	})
 	return acmeWiring{mgr: mgr, challenges: challenges}, nil
 }

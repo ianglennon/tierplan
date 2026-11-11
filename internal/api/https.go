@@ -137,5 +137,6 @@ func RegisterHTTPS(r *httpx.Router, d HTTPSDeps) {
 	// without a manager answers them 503.
 	registerHTTPSACME(r, d)
 	registerHTTPSACMERuns(r, d)
+	registerHTTPSACMEDNS(r, d)
 	registerHTTPSACMEStream(r, d)
 }

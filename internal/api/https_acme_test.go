@@ -70,6 +70,16 @@ type acmeOpts struct {
 	realDirectory bool
 	// served is what the listener serves; nil leaves a self-signed certificate.
 	served func(t *testing.T) api.ServedCertificate
+	// dns replaces the manager's DNS-01 dependencies; nil keeps the production ones.
+	dns *acme.DNSDeps
+}
+
+// dnsDeps is d, or the zero value when a test gives none.
+func dnsDeps(d *acme.DNSDeps) acme.DNSDeps {
+	if d == nil {
+		return acme.DNSDeps{}
+	}
+	return *d
 }
 
 func (f *acmeFix) dialHosts() []string {
@@ -117,6 +127,7 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 		PublicURL: f.inst.PublicURL, AgentURL: f.inst.AgentURL, BasePath: f.inst.BasePath,
 		DialHosts: f.dialHosts, CertFiles: o.certFiles, Log: slog.New(slog.DiscardHandler),
 		Jitter: func() float64 { return 0 }, Rand: func(int64) int64 { return 0 },
+		DNS: dnsDeps(o.dns),
 	})
 
 	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"tierplan.example.com"}, nil)

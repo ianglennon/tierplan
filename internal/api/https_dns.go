@@ -1,0 +1,179 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api
+
+import (
+	"context"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+)
+
+// The DNS-01 routes: save the validation method and token, test a token, remove the token. None of them
+// ever returns the token, and every answer is no-store.
+
+// HTTPSACMEDNSErrorBody is the facts of one failed DNS step. It carries data only; the browser writes
+// the words.
+type HTTPSACMEDNSErrorBody struct {
+	Code      string     `json:"code" doc:"The class of the failure, one of the codes of lastError in the status"`
+	Host      string     `json:"host,omitempty" doc:"The certificate name the failure is about"`
+	Zone      string     `json:"zone,omitempty" doc:"The DNS zone the failure is about"`
+	Target    string     `json:"target,omitempty" doc:"The name the challenge name is delegated to, when it is"`
+	Resolvers []string   `json:"resolvers,omitempty" doc:"The resolvers that were asked"`
+	RetryAt   *time.Time `json:"retryAt,omitempty" doc:"When to try again, for a rate limit that said when"`
+}
+
+// HTTPSACMETestStepBody is one row of a name's token test.
+type HTTPSACMETestStepBody struct {
+	ID    string `json:"id" enum:"zone,created,read,deleted" doc:"The row: the zone was found, a test record was created, read back and deleted"`
+	State string `json:"state" enum:"done,failed,skipped" doc:"Where the row ended. skipped is a row that was not reached because an earlier one failed"`
+	Code  string `json:"code,omitempty" doc:"The class of a failure, for example dns_token_invalid"`
+}
+
+// HTTPSACMETestInfoBody is the row that never changes the verdict: whether the resolvers showed the test record.
+type HTTPSACMETestInfoBody struct {
+	State     string   `json:"state" enum:"seen,not_seen,not_checked" doc:"Every resolver showed the record, some had not when the wait ended, or it was never looked for"`
+	Resolvers []string `json:"resolvers" doc:"The resolvers that showed it (seen) or had not shown it (not_seen)"`
+	Seconds   int      `json:"seconds" doc:"How long the wait took, in seconds"`
+}
+
+// HTTPSACMENameTestBody is the token test of one certificate name.
+type HTTPSACMENameTestBody struct {
+	Name        string                  `json:"name" doc:"The certificate name tested"`
+	Record      string                  `json:"record" doc:"The TXT record name the test wrote at, or would have"`
+	Zone        string                  `json:"zone" doc:"The DNS provider zone that record is in; empty when it was not found"`
+	DelegatedTo string                  `json:"delegatedTo,omitempty" doc:"The name the challenge name is a CNAME to, when it is"`
+	OwnZone     string                  `json:"ownZone,omitempty" doc:"Set when the name's own zone is not at the provider and the challenge name is delegated into one that is: the zone that is not there"`
+	Steps       []HTTPSACMETestStepBody `json:"steps" doc:"The four rows, in order: zone, created, read, deleted"`
+	Info        HTTPSACMETestInfoBody   `json:"info" doc:"Whether the resolvers showed the test record. It never changes the verdict"`
+	Error       *HTTPSACMEDNSErrorBody  `json:"error,omitempty" doc:"The first row that failed, classified"`
+}
+
+// HTTPSACMETokenTestBody is the result of testing a token against the certificate names. It carries no token.
+type HTTPSACMETokenTestBody struct {
+	Passed bool                    `json:"passed" doc:"True when every name passed its four rows. The info row has no say"`
+	Names  []HTTPSACMENameTestBody `json:"names" doc:"The names tested, in certificate-name order"`
+}
+
+// tokenTestBody maps a token test onto the contract.
+func tokenTestBody(t acme.TokenTest) *HTTPSACMETokenTestBody {
+	b := &HTTPSACMETokenTestBody{Passed: t.Passed, Names: make([]HTTPSACMENameTestBody, 0, len(t.Names))}
+	for _, n := range t.Names {
+		nb := HTTPSACMENameTestBody{
+			Name: n.Name, Record: n.Record, Zone: n.Zone, DelegatedTo: n.DelegatedTo, OwnZone: n.OwnZone,
+			Steps: make([]HTTPSACMETestStepBody, 0, len(n.Steps)),
+			Info:  HTTPSACMETestInfoBody{State: n.Info.State, Resolvers: nonNil(n.Info.Resolvers), Seconds: n.Info.Seconds},
+		}
+		for _, s := range n.Steps {
+			nb.Steps = append(nb.Steps, HTTPSACMETestStepBody{ID: s.ID, State: s.State, Code: s.Class})
+		}
+		if f := n.Failure; f != nil {
+			nb.Error = &HTTPSACMEDNSErrorBody{Code: f.Class, Host: f.Host, Zone: f.Zone, Target: f.Target, Resolvers: f.Resolvers}
+			if f.RetryAfter > 0 {
+				at := time.Now().Add(f.RetryAfter).UTC()
+				nb.Error.RetryAt = &at
+			}
+		}
+		b.Names = append(b.Names, nb)
+	}
+	return b
+}
+
+// resolverDetail is the sentence for a resolver entry that was refused.
+func resolverDetail(e *dnscheck.ResolverError) string {
+	if e.Reason == dnscheck.ReasonTooMany {
+		return "List at most " + strconv.Itoa(dnscheck.MaxResolvers) + " resolvers."
+	}
+	return "A resolver is a host name or IP address, optionally followed by :port."
+}
+
+// PutACMEValidationInput is the body of the validation save.
+type PutACMEValidationInput struct {
+	Body struct {
+		ChallengeType string   `json:"challengeType" enum:"http-01,dns-01" doc:"How Let's Encrypt is shown you control the names: http-01 over port 80, or dns-01 with a TXT record at your DNS provider"`
+		Token         string   `json:"token,omitempty" maxLength:"1024" doc:"A new DNS API token. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token"`
+		Resolvers     []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers the propagation check asks, as host or host:port; an empty list means the zone's own name servers. Leave out to keep the saved list"`
+	}
+}
+
+// HTTPSACMEValidationOutput is the result of the validation save.
+type HTTPSACMEValidationOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         struct {
+		Saved         bool                    `json:"saved" doc:"True when the settings were stored. False when the new token failed its test: nothing was stored"`
+		Test          *HTTPSACMETokenTestBody `json:"test,omitempty" doc:"The token test the save ran; left out when no new token was given"`
+		ChallengeType string                  `json:"challengeType" doc:"The validation method saved now"`
+		TokenSaved    bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved now. The token is never returned"`
+		Resolvers     []string                `json:"resolvers" doc:"The resolvers saved now"`
+	}
+}
+
+// TestACMEDNSTokenInput is the body of the token test.
+type TestACMEDNSTokenInput struct {
+	Body struct {
+		Token     string   `json:"token,omitempty" maxLength:"1024" doc:"The token to test. Leave out to test the saved token"`
+		Resolvers []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers to ask, as host or host:port. Leave out to use the saved list"`
+	}
+}
+
+// HTTPSACMETokenTestOutput is the result of a token test.
+type HTTPSACMETokenTestOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         HTTPSACMETokenTestBody
+}
+
+// registerHTTPSACMEDNS wires the DNS-01 routes. All three need settings.write at global scope.
+func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
+	write := rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "putACMEValidation",
+		Method:      http.MethodPut,
+		Path:        "/api/https/acme/validation",
+		Summary:     "Choose how the names are validated",
+		Description: "Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is " +
+			"tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is " +
+			"stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 " +
+			problemACMEDNSTokenRequired + " (field body.token) when DNS-01 is chosen and no token is given or saved; 422 " +
+			problemACMEDNSResolverBad + " (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list " +
+			"of more than five; 422 " + problemACMEChallengeUnknown + "; 422 acme_refused when no certificate could be ordered for the names; " +
+			"409 " + problemACMERunActive + " while a run or a token test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " +
+			problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+		Tags: []string{"https"},
+	}, write, func(ctx context.Context, in *PutACMEValidationInput) (*HTTPSACMEValidationOutput, error) {
+		if d.ACME == nil {
+			return nil, acmeUnavailable()
+		}
+		var resolvers *[]string
+		if in.Body.Resolvers != nil {
+			resolvers = &in.Body.Resolvers
+		}
+		res, err := d.ACME.SaveValidation(ctx, acme.ValidationInput{
+			ChallengeType: in.Body.ChallengeType, Token: in.Body.Token, Resolvers: resolvers,
+		})
+		if err != nil {
+			return nil, acmeProblem(d.Log, "save the validation settings", err)
+		}
+		st, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
+		out := &HTTPSACMEValidationOutput{CacheControl: "no-store"}
+		out.Body.Saved = res.Saved
+		if res.Test != nil {
+			out.Body.Test = tokenTestBody(*res.Test)
+		}
+		out.Body.ChallengeType = st.ChallengeType
+		out.Body.TokenSaved = st.DNS.TokenSaved
+		out.Body.Resolvers = nonNil(st.DNS.Resolvers)
+		return out, nil
+	})
+}
