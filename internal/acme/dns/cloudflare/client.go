@@ -63,7 +63,7 @@ const (
 const (
 	codeBadAuthHeader  = 6003  // malformed Authorization header (chain code 6111)
 	codeBadAuthFormat  = 6111  // "Invalid format for Authorization header"
-	codeInvalidToken   = 9109  // "Invalid access token"
+	codeInvalidToken   = 9109  // "Invalid access token", and also "Unauthorized to access requested resource" (see tokenUnknown)
 	codeIdentical      = 81058 // an identical record already exists
 	codeCNAMEExists    = 81053 // a CNAME record at that name
 	codeCNAMEExistsToo = 81054 // a CNAME record at that name
@@ -238,7 +238,13 @@ func (p *provider) failure(op string, res response, host, zone string) error {
 	case res.status == http.StatusBadRequest && has(codeBadAuthHeader, codeBadAuthFormat):
 		e.Class = dns.ClassTokenInvalid
 	case res.status == http.StatusForbidden && has(codeInvalidToken):
-		e.Class = dns.ClassTokenInvalid
+		// Cloudflare answers 403 and 9109 both for a token it does not know and for a valid one that
+		// lacks a permission; only the message tells them apart (read from the live API, 2026-11-11).
+		if tokenUnknown(res.env.Errors) {
+			e.Class = dns.ClassTokenInvalid
+		} else {
+			e.Class = dns.ClassTokenScope
+		}
 	case res.status == http.StatusForbidden:
 		// A token that lacks Zone:Zone:Read or Zone:DNS:Edit, or a code this build does not know.
 		e.Class = dns.ClassTokenScope
@@ -249,6 +255,18 @@ func (p *provider) failure(op string, res response, host, zone string) error {
 		e.Class = dns.ClassZoneNotFound
 	}
 	return e
+}
+
+// tokenUnknown reports whether a 9109 answer says Cloudflare does not know the token ("Invalid access
+// token"), as opposed to a known token that is not allowed the call ("Unauthorized to access
+// requested resource"). The message is read for this decision only and is never kept.
+func tokenUnknown(errs []apiError) bool {
+	for _, ae := range errs {
+		if ae.Code == codeInvalidToken && strings.Contains(strings.ToLower(ae.Message), "invalid access token") {
+			return true
+		}
+	}
+	return false
 }
 
 // retryAfter reads a Retry-After given as whole seconds. Anything else, or a wait of nothing, is

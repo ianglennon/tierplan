@@ -173,6 +173,11 @@ func TestCloudflareClassifies(t *testing.T) {
 		{"a malformed token (probed)", dnstest.OpZones, dnstest.FakeResponse{Status: 400, Code: 6003, Chain: 6111, Message: "Invalid request headers"}, zoneCall, dns.ClassTokenInvalid, 400, 6003, 0},
 		{"an unknown 401 (probed)", dnstest.OpZones, dnstest.FakeResponse{Status: 401, Code: 1000, Message: "Invalid API Token"}, zoneCall, dns.ClassTokenInvalid, 401, 1000, 0},
 		{"an unknown token 403 (probed)", dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 9109, Message: "Invalid access token"}, zoneCall, dns.ClassTokenInvalid, 403, 9109, 0},
+		// Read from the live API on 2026-11-11 with a valid token that had Zone:DNS:Edit only, on a
+		// call it was not granted (GET /zones/{id}/settings): the same 403 and code 9109 as an unknown
+		// token, with a different message. The message alone tells "unknown" from "not allowed".
+		{"a valid token without the permission (probed)", dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 9109, Message: "Unauthorized to access requested resource"}, zoneCall, dns.ClassTokenScope, 403, 9109, 0},
+		{"a valid token without the permission, on create (probed)", dnstest.OpCreate, dnstest.FakeResponse{Status: 403, Code: 9109, Message: "Unauthorized to access requested resource"}, createCall, dns.ClassTokenScope, 403, 9109, 0},
 		{"no permission to list zones", dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 0, Message: "requires permission \"com.cloudflare.api.account.zone.list\" to list zones"}, zoneCall, dns.ClassTokenScope, 403, 0, 0},
 		{"no permission to edit records on create", dnstest.OpCreate, dnstest.FakeResponse{Status: 403, Code: 10000, Message: "Authentication error"}, createCall, dns.ClassTokenScope, 403, 10000, 0},
 		{"a 403 with a code this build does not know", dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 12345, Message: "something new"}, zoneCall, dns.ClassTokenScope, 403, 12345, 0},
@@ -428,6 +433,7 @@ func TestCloudflareTokenNeverInErrors(t *testing.T) {
 	}{
 		{dnstest.OpZones, dnstest.FakeResponse{Status: 400, Code: 6003, Chain: 6111, Message: "Invalid request headers " + secret}},
 		{dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 9109, Message: "Invalid access token " + secret}},
+		{dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 9109, Message: "Unauthorized to access requested resource " + secret}},
 		{dnstest.OpZones, dnstest.FakeResponse{Status: 403, Code: 0, Message: "requires permission " + secret}},
 		{dnstest.OpZones, dnstest.FakeResponse{Status: 429, RetryAfter: "5"}},
 		{dnstest.OpZones, dnstest.FakeResponse{Status: 500, Body: secret}},
