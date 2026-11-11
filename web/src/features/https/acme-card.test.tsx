@@ -487,6 +487,7 @@ describe("deriveCardState", () => {
     names: ["tierplan.example.com"],
   };
   const run = {
+    challenge: "http-01",
     jobId: "j1",
     kind: "issue",
     outcome: "running",

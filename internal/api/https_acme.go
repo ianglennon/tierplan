@@ -31,9 +31,9 @@ const (
 	problemACMERunActive      = "acme_run_active"
 	problemACMECAError        = "acme_ca_error"
 
-	problemACMEDNSTokenRequired = "acme_dns_token_required"
+	problemACMEDNSTokenRequired = "acme_dns_token_required" //nolint:gosec // G101: a problem type name, not a credential
 	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
-	problemACMEDNSTokenInUse    = "acme_dns_token_in_use"
+	problemACMEDNSTokenInUse    = "acme_dns_token_in_use" //nolint:gosec // G101: a problem type name, not a credential
 	problemACMEChallengeUnknown = "acme_challenge_unknown"
 )
 

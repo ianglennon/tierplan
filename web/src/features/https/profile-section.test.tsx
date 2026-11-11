@@ -29,6 +29,7 @@ const account: ACMEAccount = {
   termsOfServiceUrl: "",
 };
 const run = {
+  challenge: "http-01",
   jobId: "j1",
   kind: "issue",
   outcome: "running",

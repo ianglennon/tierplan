@@ -12,6 +12,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     challengeType: "http-01",
     directoryOverridden: false,
     directoryUrl: "https://acme-v02.api.letsencrypt.org/directory",
+    dns: { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false },
     failures: 0,
     hasState: false,
     listenPort: 7480,
@@ -22,6 +23,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     profile: "",
     publicHost: "tierplan.example.com",
     refusals: [],
+    validationUntested: false,
     ...over,
   };
 }
@@ -92,6 +94,7 @@ export function acmeRunFrame(over: Partial<ACMERun> = {}): ACMERun {
 // The run in progress as the status lists it.
 export function acmeActiveRun(over: Partial<NonNullable<HTTPSACME["activeRun"]>> = {}) {
   return {
+    challenge: "http-01" as const,
     jobId: "job-1",
     kind: "issue" as const,
     outcome: "running" as const,
