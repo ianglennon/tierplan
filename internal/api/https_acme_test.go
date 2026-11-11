@@ -497,6 +497,9 @@ func TestHTTPSACMERoutesNeedSettingsWrite(t *testing.T) {
 	writes := []route{
 		{http.MethodPost, "/api/https/acme/account", `{"agreeTos":true}`},
 		{http.MethodPut, "/api/https/acme/profile", `{"profile":"shortlived"}`},
+		{http.MethodPut, "/api/https/acme/validation", `{"challengeType":"dns-01","token":"cf-token-7f3a91c2d04b8e65"}`},
+		{http.MethodPost, "/api/https/acme/dns/test", `{"token":"cf-token-7f3a91c2d04b8e65"}`},
+		{http.MethodDelete, "/api/https/acme/dns/token", ""},
 	}
 	for _, r := range append(append([]route{}, reads...), writes...) {
 		if rec := f.call(t, authReq{method: r.method, path: r.path, body: r.body}); rec.Code != http.StatusUnauthorized {
@@ -671,6 +674,9 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 		"register":  f.send(t, http.MethodPost, "/api/https/acme/account", `{"agreeTos":true}`).Body.String(),
 		"profile":   f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":"classic"}`).Body.String(),
 		"refused":   f.send(t, http.MethodPost, "/api/https/acme/account", `{"agreeTos":false}`).Body.String(),
+		// A token is sent with a resolver that is refused first, so no request leaves the test.
+		"save refused": f.send(t, http.MethodPut, "/api/https/acme/validation", `{"challengeType":"dns-01","token":"cf-token-7f3a91c2d04b8e65","resolvers":["bad/entry"]}`).Body.String(),
+		"test refused": f.send(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"cf-token-7f3a91c2d04b8e65","resolvers":["bad/entry"]}`).Body.String(),
 	}
 	for name, body := range bodies {
 		if body == "" {
@@ -680,6 +686,9 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 			if strings.Contains(body, bad) {
 				t.Errorf("%s holds %q: %s", name, bad, body)
 			}
+		}
+		if strings.Contains(body, "cf-token-7f3a91c2d04b8e65") {
+			t.Errorf("%s holds the DNS token: %s", name, body)
 		}
 		for _, secret := range secrets {
 			if strings.Contains(body, secret) {
@@ -744,6 +753,10 @@ func TestHTTPSACMERoutesDeclareTheirPermissions(t *testing.T) {
 		"GET /api/https/acme/directory": rbac.PermSettingsRead,
 		"POST /api/https/acme/account":  rbac.PermSettingsWrite,
 		"PUT /api/https/acme/profile":   rbac.PermSettingsWrite,
+
+		"PUT /api/https/acme/validation":   rbac.PermSettingsWrite,
+		"POST /api/https/acme/dns/test":    rbac.PermSettingsWrite,
+		"DELETE /api/https/acme/dns/token": rbac.PermSettingsWrite,
 	}
 	got := map[string]rbac.Perm{}
 	for _, rt := range r.Routes() {
