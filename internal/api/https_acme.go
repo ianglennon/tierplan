@@ -234,7 +234,10 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 		b.Fallback = &HTTPSACMEFallbackBody{ExpiredAt: st.ExpiredAt.UTC()}
 	}
 	if e := st.LastError; e != nil {
-		b.LastError = &HTTPSACMEErrorBody{Code: e.Class, At: e.At.UTC(), Host: e.Host, Profile: e.Profile, TermsURL: e.TermsURL, Detail: e.Detail}
+		b.LastError = &HTTPSACMEErrorBody{
+			Code: e.Class, At: e.At.UTC(), Host: e.Host, Profile: e.Profile, TermsURL: e.TermsURL, Detail: e.Detail,
+			Zone: e.Zone, Target: e.Target, Resolvers: slices.Clone(e.Resolvers),
+		}
 	}
 	if !st.NextAttemptAt.IsZero() {
 		t := st.NextAttemptAt.UTC()
@@ -247,16 +250,47 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	b.LastRun = acmeRunBody(st.LastRun)
 	b.DNS = HTTPSACMEDNSBody{
 		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
-		LeftOver: []HTTPSACMELeftOverBody{},
+		LeftOver: make([]HTTPSACMELeftOverBody, 0, len(st.DNS.LeftOver)),
+	}
+	for _, l := range st.DNS.LeftOver {
+		b.DNS.LeftOver = append(b.DNS.LeftOver, HTTPSACMELeftOverBody{
+			Name: l.Name, RecordID: l.RecordID, Code: l.Class, CreatedAt: l.CreatedAt.UTC(),
+			LastTryAt: utcOrNil(l.LastTryAt), NextTryAt: utcOrNil(l.NextTryAt),
+			RetryPaused: l.RetryPaused, PausedReason: l.PausedReason,
+		})
+	}
+	b.ValidationUntested = st.ValidationUntested
+	if sg := st.SuggestDNS01; sg != nil {
+		b.SuggestDNS01 = &HTTPSACMESuggestionBody{Host: sg.Host, Address: sg.Address}
 	}
 	return b
+}
+
+// challengeOrDefault is c, or HTTP-01 for a run recorded before the challenge was.
+func challengeOrDefault(c string) string {
+	if c == "" {
+		return acme.ChallengeHTTP01
+	}
+	return c
+}
+
+// utcOrNil is t in UTC, or nil for the zero time.
+func utcOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }
 
 func acmeRunBody(r *acme.RunView) *HTTPSACMERunBody {
 	if r == nil {
 		return nil
 	}
-	b := &HTTPSACMERunBody{JobID: r.JobID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome, StartedAt: r.StartedAt.UTC()}
+	b := &HTTPSACMERunBody{
+		JobID: r.JobID, Kind: r.Kind, Trigger: r.Trigger, Outcome: r.Outcome, Challenge: challengeOrDefault(r.Challenge),
+		StartedAt: r.StartedAt.UTC(),
+	}
 	if !r.FinishedAt.IsZero() {
 		t := r.FinishedAt.UTC()
 		b.FinishedAt = &t

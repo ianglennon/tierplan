@@ -7648,6 +7648,14 @@
           "renewal": {
             "$ref": "#/components/schemas/HTTPSACMERenewalBody",
             "description": "The next renewal; left out unless Let's Encrypt is in use"
+          },
+          "suggestDns01": {
+            "$ref": "#/components/schemas/HTTPSACMESuggestionBody",
+            "description": "Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better"
+          },
+          "validationUntested": {
+            "description": "True when the saved validation method has not been proved by a run yet; false while a run is in progress",
+            "type": "boolean"
           }
         },
         "required": [
@@ -7664,6 +7672,7 @@
           "namesMismatch",
           "profile",
           "failures",
+          "validationUntested",
           "dns"
         ],
         "type": "object"
@@ -7846,7 +7855,15 @@
               "profile_invalid",
               "ca_unavailable",
               "ca_untrusted",
-              "internal"
+              "internal",
+              "dns_token_invalid",
+              "dns_token_scope",
+              "dns_zone_not_found",
+              "dns_delegation_target",
+              "dns_not_visible",
+              "dns_rate_limited",
+              "dns_unavailable",
+              "validation_txt"
             ],
             "type": "string"
           },
@@ -7862,8 +7879,26 @@
             "description": "The profile the CA refused",
             "type": "string"
           },
+          "resolvers": {
+            "description": "The resolvers a propagation failure asked",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "The name the challenge name is delegated to, when a DNS failure is about a delegated name",
+            "type": "string"
+          },
           "termsUrl": {
             "description": "Where to read the terms the CA wants accepted",
+            "type": "string"
+          },
+          "zone": {
+            "description": "The DNS zone a DNS failure is about",
             "type": "string"
           }
         },
@@ -7889,6 +7924,55 @@
       },
       "HTTPSACMELeftOverBody": {
         "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The class of the last delete error, for example dns_unavailable",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the record was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "lastTryAt": {
+            "description": "When a delete was last tried; left out when none was",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "The record name, for example _acme-challenge.example.com",
+            "type": "string"
+          },
+          "nextTryAt": {
+            "description": "When the next delete is tried; left out while retries are paused",
+            "format": "date-time",
+            "type": "string"
+          },
+          "pausedReason": {
+            "description": "Why retries are paused: a backup was restored, or certificate files are set. Empty when they run",
+            "enum": [
+              "",
+              "restore",
+              "cert_files"
+            ],
+            "type": "string"
+          },
+          "recordId": {
+            "description": "The DNS provider's ID for the record",
+            "type": "string"
+          },
+          "retryPaused": {
+            "description": "True while no delete is tried",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "recordId",
+          "createdAt",
+          "retryPaused",
+          "pausedReason"
+        ],
         "type": "object"
       },
       "HTTPSACMENameBody": {
@@ -8062,6 +8146,14 @@
       "HTTPSACMERunBody": {
         "additionalProperties": false,
         "properties": {
+          "challenge": {
+            "description": "The challenge the run used to prove the names",
+            "enum": [
+              "http-01",
+              "dns-01"
+            ],
+            "type": "string"
+          },
           "finishedAt": {
             "description": "When it ended; left out while it runs",
             "format": "date-time",
@@ -8110,6 +8202,7 @@
           "kind",
           "trigger",
           "outcome",
+          "challenge",
           "startedAt"
         ],
         "type": "object"
@@ -8133,6 +8226,24 @@
         },
         "required": [
           "reused"
+        ],
+        "type": "object"
+      },
+      "HTTPSACMESuggestionBody": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "description": "The private address it resolves to, as this server sees it",
+            "type": "string"
+          },
+          "host": {
+            "description": "The public host",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "address"
         ],
         "type": "object"
       },

@@ -5,6 +5,8 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,7 +59,19 @@ type HTTPSACMERunFrameBody struct {
 
 // acmeStepBody maps a job item to the step the stream sends.
 func acmeStepBody(it jobs.Item) HTTPSACMEStepBody {
-	return HTTPSACMEStepBody{ID: it.ID, Label: it.Label, State: it.State, Code: it.Code, Message: it.Message}
+	b := HTTPSACMEStepBody{
+		ID: it.ID, Label: it.Label, State: it.State, Code: it.Code, Message: it.Message,
+		Record: it.Result["record"], Host: it.Result["host"], Target: it.Result["target"],
+	}
+	for r := range strings.SplitSeq(it.Result["resolvers"], ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			b.Resolvers = append(b.Resolvers, r)
+		}
+	}
+	if n, err := strconv.Atoi(it.Result["left_over"]); err == nil && n > 0 {
+		b.LeftOver = n
+	}
+	return b
 }
 
 // acmeRunState reads the state of a run from its steps. The hub's own state counts a skipped step
@@ -85,7 +99,7 @@ func acmeRunState(j jobs.Job) string {
 // acmeRunFrameBody maps a job to the run the stream sends.
 func acmeRunFrameBody(j jobs.Job) HTTPSACMERunFrameBody {
 	b := HTTPSACMERunFrameBody{
-		JobID: j.ID, Kind: j.Meta["kind"], Trigger: j.Meta["trigger"], State: acmeRunState(j),
+		JobID: j.ID, Kind: j.Meta["kind"], Trigger: j.Meta["trigger"], Challenge: challengeOrDefault(j.Meta["challenge"]), State: acmeRunState(j),
 		StartedAt: j.CreatedAt.UTC(), Items: make([]HTTPSACMEStepBody, 0, len(j.Items)),
 	}
 	for _, it := range j.Items {

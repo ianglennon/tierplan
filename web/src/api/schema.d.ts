@@ -8813,6 +8813,10 @@ export interface components {
             refusals: components["schemas"]["HTTPSACMERefusalBody"][] | null;
             /** @description The next renewal; left out unless Let's Encrypt is in use */
             renewal?: components["schemas"]["HTTPSACMERenewalBody"];
+            /** @description Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better */
+            suggestDns01?: components["schemas"]["HTTPSACMESuggestionBody"];
+            /** @description True when the saved validation method has not been proved by a run yet; false while a run is in progress */
+            validationUntested: boolean;
         };
         HTTPSACMECertificateBody: {
             /**
@@ -8882,15 +8886,21 @@ export interface components {
              * @description The class of the failure
              * @enum {string}
              */
-            code: "rate_limited" | "validation_unreachable" | "validation_dns" | "caa_forbids" | "identifier_rejected" | "contact_invalid" | "tos_action_required" | "account_gone" | "profile_invalid" | "ca_unavailable" | "ca_untrusted" | "internal";
+            code: "rate_limited" | "validation_unreachable" | "validation_dns" | "caa_forbids" | "identifier_rejected" | "contact_invalid" | "tos_action_required" | "account_gone" | "profile_invalid" | "ca_unavailable" | "ca_untrusted" | "internal" | "dns_token_invalid" | "dns_token_scope" | "dns_zone_not_found" | "dns_delegation_target" | "dns_not_visible" | "dns_rate_limited" | "dns_unavailable" | "validation_txt";
             /** @description The CA's problem document as text, for a Details disclosure. Untrusted text: show it as text only */
             detail?: string;
             /** @description The host a validation failure is about */
             host?: string;
             /** @description The profile the CA refused */
             profile?: string;
+            /** @description The resolvers a propagation failure asked */
+            resolvers?: string[] | null;
+            /** @description The name the challenge name is delegated to, when a DNS failure is about a delegated name */
+            target?: string;
             /** @description Where to read the terms the CA wants accepted */
             termsUrl?: string;
+            /** @description The DNS zone a DNS failure is about */
+            zone?: string;
         };
         HTTPSACMEFallbackBody: {
             /**
@@ -8899,7 +8909,36 @@ export interface components {
              */
             expiredAt: string;
         };
-        HTTPSACMELeftOverBody: Record<string, never>;
+        HTTPSACMELeftOverBody: {
+            /** @description The class of the last delete error, for example dns_unavailable */
+            code?: string;
+            /**
+             * Format: date-time
+             * @description When the record was created
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When a delete was last tried; left out when none was
+             */
+            lastTryAt?: string;
+            /** @description The record name, for example _acme-challenge.example.com */
+            name: string;
+            /**
+             * Format: date-time
+             * @description When the next delete is tried; left out while retries are paused
+             */
+            nextTryAt?: string;
+            /**
+             * @description Why retries are paused: a backup was restored, or certificate files are set. Empty when they run
+             * @enum {string}
+             */
+            pausedReason: "" | "restore" | "cert_files";
+            /** @description The DNS provider's ID for the record */
+            recordId: string;
+            /** @description True while no delete is tried */
+            retryPaused: boolean;
+        };
         HTTPSACMENameBody: {
             /** @description The host name or address, in its ASCII form */
             name: string;
@@ -8966,6 +9005,11 @@ export interface components {
         };
         HTTPSACMERunBody: {
             /**
+             * @description The challenge the run used to prove the names
+             * @enum {string}
+             */
+            challenge: "http-01" | "dns-01";
+            /**
              * Format: date-time
              * @description When it ended; left out while it runs
              */
@@ -9003,6 +9047,12 @@ export interface components {
              * @description When that certificate expires; set only when reused
              */
             validUntil?: string;
+        };
+        HTTPSACMESuggestionBody: {
+            /** @description The private address it resolves to, as this server sees it */
+            address: string;
+            /** @description The public host */
+            host: string;
         };
         HTTPSACMETestInfoBody: {
             /** @description The resolvers that showed it (seen) or had not shown it (not_seen) */
