@@ -157,7 +157,8 @@
         "later": "Later",
         "unused": "Not used for this certificate",
         "startsLater": "The lifetime starts at step 1 when HSTS is sent.",
-        "foot": "A step lasts a day, a week and a month. A withdrawal, an untrusted certificate or a new public host starts again at step 1. A restore starts again too."
+        "foot": "A step lasts a day, a week and a month. A withdrawal, an untrusted certificate or a new public host starts again at step 1. A restore starts again too.",
+        "unusedState": "Not used"
       }
     },
     "agents": {

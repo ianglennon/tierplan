@@ -6,7 +6,7 @@ import { Check, Minus, TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 
 import { HSTSError, httpsStatusQuery, isLockProblem, useSaveHSTS } from "@/api/https";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,14 +14,25 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { type HstsStatusKey, type HstsView, hstsView } from "@/features/https/card-state";
+import { formatDate } from "@/features/https/copy";
+import { HstsRamp } from "@/features/https/hsts-ramp";
+import { LockedNote } from "@/features/https/locked-note";
+import { trustReasonText } from "@/features/https/trust-copy";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
+import { formatAbsolute } from "@/lib/format";
 import { toastSuccess } from "@/lib/toast";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
+// The one place this card is red: a status that cannot be read or a save that failed. No HSTS state is
+// ever destructive; a withdrawal or a not-sent state is a warning because TierPlan is working as designed.
+const FAILURE_ALERT = { variant: "destructive" } as const;
+
 const HELPER_ID = "hsts-helper";
+// The two lock lines of the Switch while TIERPLAN_HSTS fixes the setting.
+export const HSTS_LOCK_ID = "hsts-lock";
 
 // HstsCard is the HSTS card of Settings > HTTPS (TLS-06, SET-01, SET-02, D-10 to D-14, D-22, D-23,
 // D-25): a Switch that only changes a draft, an explicit Save HSTS setting, and a Status row that always
@@ -38,7 +49,7 @@ export function HstsCard() {
       <p className="text-sm text-muted-foreground">{t("https.hsts.description")}</p>
       {status.isPending ? <HstsLoading /> : null}
       {status.isError ? (
-        <Alert variant="destructive">
+        <Alert {...FAILURE_ALERT}>
           <AlertDescription>{t("common.errors.unreachable")}</AlertDescription>
         </Alert>
       ) : null}
@@ -73,13 +84,17 @@ function HstsBody({ view }: { view: HstsView }) {
   const [draft, setDraft] = useState<boolean | undefined>();
   const [failed, setFailed] = useState(false);
 
-  const checked = draft ?? view.storedEnabled;
+  // TIERPLAN_HSTS fixes the setting (D-10): the Switch shows what the variable says, nothing can be
+  // saved, and the lock says which variable and what is kept underneath.
+  const lock = view.lock;
+  const locked = lock !== undefined;
+  const checked = locked ? view.enabled : (draft ?? view.storedEnabled);
   // Save waits for a change: the draft must differ from the choice kept in the database.
-  const dirty = checked !== view.storedEnabled;
+  const dirty = !locked && checked !== view.storedEnabled;
   const saving = save.isPending;
 
   const submit = () => {
-    if (!canWrite || !dirty || saving) return;
+    if (!canWrite || locked || !dirty || saving) return;
     setFailed(false);
     const enabled = checked;
     save.mutate(enabled, {
@@ -107,23 +122,24 @@ function HstsBody({ view }: { view: HstsView }) {
             id={switchId}
             checked={checked}
             onCheckedChange={setDraft}
-            disabled={!canWrite || saving}
-            aria-describedby={HELPER_ID}
+            disabled={!canWrite || locked || saving}
+            aria-describedby={locked ? `${HELPER_ID} ${HSTS_LOCK_ID}` : HELPER_ID}
           />
           <Label htmlFor={switchId}>{t("https.hsts.switch")}</Label>
         </div>
         <p id={HELPER_ID} className="text-sm text-muted-foreground">
           {t("https.hsts.helper")}
         </p>
-        {checked && !view.storedEnabled ? (
+        {lock ? <LockedNote id={HSTS_LOCK_ID} lock={lock} /> : null}
+        {!locked && checked && !view.storedEnabled ? (
           <p className="text-xs text-muted-foreground">{t("https.hsts.draftOn")}</p>
         ) : null}
-        {!checked && view.storedEnabled ? (
+        {!locked && !checked && view.storedEnabled ? (
           <p className="text-xs text-muted-foreground">{t("https.hsts.draftOff")}</p>
         ) : null}
 
         {failed ? (
-          <Alert variant="destructive">
+          <Alert {...FAILURE_ALERT}>
             <AlertDescription>
               {save.error instanceof HSTSError && save.error.type === "https_unavailable"
                 ? t("common.errors.unreachable")
@@ -132,7 +148,7 @@ function HstsBody({ view }: { view: HstsView }) {
           </Alert>
         ) : null}
 
-        {canWrite ? (
+        {canWrite && !locked ? (
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -155,6 +171,8 @@ function HstsBody({ view }: { view: HstsView }) {
       </div>
 
       <StatusRows view={view} />
+      <WithdrawalNotice view={view} />
+      <HstsRamp view={view} />
 
       {canWrite ? null : (
         <p className="text-xs text-muted-foreground">{t("settings.general.readOnly")}</p>
@@ -211,6 +229,64 @@ function StatusRows({ view }: { view: HstsView }) {
           </dd>
         </>
       ) : null}
+
+      {view.next ? (
+        <>
+          <dt className="text-sm font-medium text-muted-foreground">
+            {t("https.hsts.status.next")}
+          </dt>
+          <dd className="min-w-0 text-sm">
+            {view.next.kind === "at" ? (
+              <div className="flex flex-col gap-1">
+                <span className="break-words">{formatAbsolute(view.next.at)}</span>
+                <span className="text-xs text-muted-foreground">{t("https.hsts.nextAfter")}</span>
+              </div>
+            ) : (
+              <span>
+                {t(view.next.kind === "final" ? "https.hsts.nextFinal" : "https.hsts.nextCapped")}
+              </span>
+            )}
+          </dd>
+        </>
+      ) : null}
+
+      {view.reason ? <WhyRow reason={view.reason} host={view.host} /> : null}
     </dl>
+  );
+}
+
+// The Why row of a state that is on but not sent: the trust reason and its fix, worded by the one table
+// the certificate-files block and the install dialog use (E9).
+function WhyRow({ reason, host }: { reason: string; host: string | undefined }) {
+  const t = useT();
+  const text = trustReasonText(t, reason, host);
+  return (
+    <>
+      <dt className="text-sm font-medium text-muted-foreground">{t("https.hsts.status.why")}</dt>
+      <dd className="min-w-0 text-sm">
+        <div className="flex flex-col gap-1">
+          <span className="break-words">{text.sentence}</span>
+          <span className="break-words text-xs text-muted-foreground">{text.fix}</span>
+        </div>
+      </dd>
+    </>
+  );
+}
+
+// WithdrawalNotice says, while HSTS is withdrawn ahead of the certificate's end, why browsers are told
+// to forget it while the certificate still works and when it comes back (D-12). A warning, not an
+// error: TierPlan is working as designed.
+function WithdrawalNotice({ view }: { view: HstsView }) {
+  const t = useT();
+  if (view.state !== "withdrawn" || !view.withdrawal) return null;
+  const source = view.withdrawal.source === "cert_files" ? "cert_files" : "lets_encrypt";
+  return (
+    <Alert variant="warning" role="note">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>{t(`https.hsts.withdrawn.${source}.title`)}</AlertTitle>
+      <AlertDescription>
+        {t(`https.hsts.withdrawn.${source}.body`, { date: formatDate(view.withdrawal.notAfter) })}
+      </AlertDescription>
+    </Alert>
   );
 }
