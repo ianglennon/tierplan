@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/cloudflare"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/buildinfo"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/instance"
@@ -203,6 +204,9 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 			return hosts
 		},
 		CertFiles: cfg.TLSCertFile != "", Log: log, DNS: dnsD,
+		// The outcome of every certificate run is a system:acme row in the audit log (Phase 17, SET-04). The writer is
+		// the server's own over the same database; several writers may append to one chain.
+		Audit: audit.NewWriter(st, vlt, log, nil).Record,
 		// TIERPLAN_ACME* decide at the manager's decision sites and are never saved; the start-time issue
 		// waits for the listener, because the CA validates through it (D-07).
 		Env: cfg.ACME, Ready: listening,

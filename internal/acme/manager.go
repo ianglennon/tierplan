@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/cloudflare"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -152,6 +153,11 @@ type Deps struct {
 	// RunEnded is a test seam: it is told when a run has ended, after its outcome is stored and
 	// before its last job item is finished.
 	RunEnded func(runID, outcome string)
+	// Audit writes one audit row; the server sets it to an audit.Writer's Record. Every run that ends in a
+	// certificate or in an error writes one row as system:acme before RunEnded is told (Phase 17, SET-04). Nil writes
+	// nothing, so a Manager built without it works as before. A failed write is logged at error level and never fails
+	// the run.
+	Audit func(ctx context.Context, e audit.Entry) error
 }
 
 // RunStart says what an Issue or a renewal did: started a job, or found nothing to do.
@@ -163,6 +169,9 @@ type RunStart struct {
 	Reused bool
 	// ValidUntil is the end of that certificate when Reused.
 	ValidUntil time.Time
+	// hold keeps an admin-started run from beginning until the caller's WithRunStarted hook has run; nil for any
+	// other run (audit.go).
+	hold *runHold
 }
 
 // Manager is the admin's way into ACME: register, issue, renew now, stop, resume and read the status.
@@ -462,7 +471,10 @@ func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
 	if err != nil {
 		return RunStart{}, err
 	}
-	return m.issueLocked(ctx, st, actor, TriggerAdmin, nil)
+	rs, err := m.issueLocked(ctx, st, actor, TriggerAdmin, nil)
+	// The caller's hook runs while the new run waits, so a row it writes comes before the run's outcome row.
+	announceStarted(runStartedFrom(ctx), rs)
+	return rs, err
 }
 
 // RenewNow renews the certificate now, for the names it already carries: never the names the URLs
@@ -496,10 +508,12 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 	if err := m.manualBlock(ctx, st); err != nil {
 		return RunStart{}, err
 	}
-	return m.startRun(runParams{
+	rs, err := m.startRun(runParams{
 		trigger: TriggerAdmin, actor: actor, challenge: m.challenge(st),
 		req: m.renewRequest(ctx, st, leaf),
 	})
+	announceStarted(runStartedFrom(ctx), rs)
+	return rs, err
 }
 
 // renewRequest is the order that renews leaf: its own names, the profile in force (m.profile), and the certificate
@@ -1001,17 +1015,26 @@ func (m *Manager) startRun(p runParams) (RunStart, error) {
 		p.challenge = ChallengeHTTP01
 	}
 	ar := &activeRun{kind: p.req.Kind, trigger: p.trigger, challenge: p.challenge, startedAt: m.clock.Now()}
+	// An admin's run waits for its caller's run-started hook, so the caller's request row comes before the run's
+	// outcome row (audit.go). Any other run starts at once.
+	var hold *runHold
+	if p.trigger == TriggerAdmin {
+		hold = newRunHold()
+	}
 	job, err := m.d.Jobs.Start(jobs.Spec{
 		Kind: JobKind, Owner: owner,
 		Meta:  map[string]string{"kind": p.req.Kind, "trigger": p.trigger, "challenge": p.challenge},
 		Items: itemsFor(p.challenge),
-	}, func(ctx context.Context, r *jobs.Reporter) { m.runBody(ctx, r, ar, p) })
+	}, func(ctx context.Context, r *jobs.Reporter) {
+		hold.wait()
+		m.runBody(ctx, r, ar, p)
+	})
 	if err != nil {
 		return RunStart{}, fmt.Errorf("start the certificate run: %w", err)
 	}
 	ar.jobID = job.ID
 	m.active = ar
-	return RunStart{JobID: job.ID}, nil
+	return RunStart{JobID: job.ID, hold: hold}, nil
 }
 
 // run is one run's own bookkeeping.
@@ -1082,7 +1105,7 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 		m.failed(ctx, bg, x, steps, err, p)
 		return
 	}
-	m.succeeded(bg, x, steps, issued, p)
+	m.succeeded(ctx, bg, x, steps, issued, p)
 }
 
 // newSolver is the solver for a run of challenge: the token store for HTTP-01, and for DNS-01 a solver of
@@ -1132,13 +1155,17 @@ func (m *Manager) failed(ctx, bg context.Context, x *run, steps *jobSteps, runEr
 		}
 	}
 	m.log.Warn("a certificate run failed", "kind", p.req.Kind, "class", f.Class, "host", f.Host)
+	// One row per run that ends in an error, before the run is told to have ended (D-11, D-12). The cancel and
+	// shutdown returns above write none (amended D-27).
+	m.recordRunFailed(bg, x, p, f)
 	x.end(OutcomeFailed)
 	steps.finishStored(nil)
 }
 
 // succeeded stores the outcome and the ledger, and only then asks the Installer to serve the new
-// certificate.
-func (m *Manager) succeeded(bg context.Context, x *run, steps *jobSteps, issued Issued, p runParams) {
+// certificate. ctx is the run's own context, read only to tell a person's cancel that landed after the order was
+// final; everything the run does here uses bg.
+func (m *Manager) succeeded(ctx, bg context.Context, x *run, steps *jobSteps, issued Issued, p runParams) {
 	now := m.clock.Now()
 	leaf := issued.Leaf
 	renewAt, basis := FallbackRenewAt(leaf.NotBefore, leaf.NotAfter)
@@ -1166,6 +1193,9 @@ func (m *Manager) succeeded(bg context.Context, x *run, steps *jobSteps, issued 
 			m.log.Error("record that the new certificate could not be served", "error", err)
 		}
 	}
+	// The row says whether the new certificate is the one being served now, so it follows the install attempt, and
+	// it comes before the run is told to have ended, so whoever waits for the end sees it.
+	m.recordIssued(ctx, bg, x, p, leaf, installErr == nil)
 	x.end(OutcomeSucceeded)
 	steps.finishStored(installErr)
 }
