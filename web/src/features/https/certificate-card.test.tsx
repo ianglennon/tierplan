@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HTTPSCertificate, HTTPSStatus } from "@/api/https";
 import { queryClient } from "@/api/query-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { deriveMode } from "@/features/https/card-state";
 import { CertificateCard } from "@/features/https/certificate-card";
 import { HttpsPage } from "@/features/https/https-page";
 import "@/i18n";
@@ -15,9 +16,13 @@ import { formatAbsolute } from "@/lib/format";
 import {
   acmeLastError,
   httpsCertFilesKeptStatus,
+  httpsCertFilesStatus,
   httpsFallbackStatus,
   httpsLetsEncryptStatus,
+  httpsPendingStatus,
+  httpsRestoredStatus,
   httpsStatus,
+  httpsStoppedStatus,
   httpsTestCAStatus,
 } from "@/test-https";
 import { TestRouter } from "@/test-router";
@@ -72,7 +77,7 @@ describe("Certificate in use card", () => {
     renderCard();
     const loading = screen.getByTestId("certificate-loading");
     expect(loading.children).toHaveLength(3);
-    expect(card().queryByText("Source")).toBeNull();
+    expect(card().queryByText("Mode")).toBeNull();
     expect(card().queryByText("Self-signed")).toBeNull();
   });
 
@@ -82,7 +87,7 @@ describe("Certificate in use card", () => {
     const alert = await card().findByRole("alert");
     expect(alert.textContent).toBe("Can't reach TierPlan. Check your connection and try again.");
     expect(screen.queryByTestId("certificate-loading")).toBeNull();
-    expect(card().queryByText("Source")).toBeNull();
+    expect(card().queryByText("Mode")).toBeNull();
   });
 
   it("renders a self-signed certificate with its badge, rows and note", async () => {
@@ -90,8 +95,8 @@ describe("Certificate in use card", () => {
     const notAfter = new Date(Date.now() + 364.5 * 86_400_000).toISOString();
     answer = () => Response.json(withCertificate({ notAfter }));
     renderCard();
-    await card().findByText("Source");
-    expect(within(rowValue("Source")).getByText("Self-signed")).toBeTruthy();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).getByText("Self-signed")).toBeTruthy();
     expect(rowValue("Issuer").textContent).toBe("TierPlan");
     expect(rowValue("Expires").textContent).toContain("Expires in 364 days");
     expect(
@@ -101,31 +106,26 @@ describe("Certificate in use card", () => {
     ).toBeTruthy();
   });
 
-  it("renders a certificate-files certificate with its own badge and note", async () => {
+  it("renders a certificate-files certificate with its own badge and reason", async () => {
     answer = () => Response.json(withCertificate({ source: "cert_files", issuer: "Example CA" }));
     renderCard();
-    await card().findByText("Source");
-    expect(within(rowValue("Source")).getByText("Certificate files")).toBeTruthy();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).getByText("Certificate files")).toBeTruthy();
     expect(rowValue("Issuer").textContent).toBe("Example CA");
-    expect(
-      card().getByText(
-        "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE.",
-      ),
-    ).toBeTruthy();
     expect(card().queryByText(/made this certificate/)).toBeNull();
   });
 
   it("shows Unknown when the issuer is empty", async () => {
     answer = () => Response.json(withCertificate({ issuer: "" }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Issuer").textContent).toBe("Unknown");
   });
 
   it("lists the IP addresses of a certificate that has only IP names", async () => {
     answer = () => Response.json(withCertificate({ names: ["192.168.1.20", "::1"] }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     const items = within(rowValue("Names")).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual(["192.168.1.20", "::1"]);
   });
@@ -134,7 +134,7 @@ describe("Certificate in use card", () => {
     const names = ["a.example.com", "b.example.com", "localhost", "127.0.0.1", "::1", "10.0.0.5"];
     answer = () => Response.json(withCertificate({ names }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     const items = within(rowValue("Names")).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual(names);
     expect(card().queryByText(/more/)).toBeNull();
@@ -143,7 +143,7 @@ describe("Certificate in use card", () => {
   it("renders one name as the same list", async () => {
     answer = () => Response.json(withCertificate({ names: ["tierplan.example.com"] }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     const list = within(rowValue("Names")).getByRole("list");
     expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     expect(list.textContent).toBe("tierplan.example.com");
@@ -154,7 +154,7 @@ describe("Certificate in use card", () => {
     const issuer = "The Very Long Certificate Authority Name ".repeat(5).trim();
     answer = () => Response.json(withCertificate({ names: [host], issuer }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(host.length).toBeGreaterThanOrEqual(120);
     expect(rowValue("Names").className).toContain("break-all");
     expect(rowValue("Names").className).toContain("min-w-0");
@@ -169,7 +169,7 @@ describe("Certificate in use card", () => {
     const markup = "<img src=x onerror=alert(1)>";
     answer = () => Response.json(withCertificate({ names: [punycode], issuer: markup }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(within(rowValue("Names")).getByText(punycode)).toBeTruthy();
     expect(card().queryByText("bücher.example")).toBeNull();
     expect(rowValue("Issuer").textContent).toBe(markup);
@@ -178,7 +178,7 @@ describe("Certificate in use card", () => {
 
   it("shows no renewal or error rows outside Let's Encrypt", async () => {
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(card().queryByText("Last renewed")).toBeNull();
     expect(card().queryByText("Next renewal")).toBeNull();
     expect(card().queryByText("Last error")).toBeNull();
@@ -186,7 +186,137 @@ describe("Certificate in use card", () => {
       card()
         .getAllByRole("term")
         .map((dt) => dt.textContent),
-    ).toEqual(["Source", "Issuer", "Names", "Expires"]);
+    ).toEqual(["Mode", "Issuer", "Names", "Expires"]);
+  });
+});
+
+describe("Certificate in use card: Mode row", () => {
+  const REASONS: ReadonlyArray<readonly [string, () => HTTPSStatus, string, string]> = [
+    [
+      "default",
+      () => httpsStatus(),
+      "Self-signed",
+      "This is the default. No certificate files and no Let's Encrypt certificate are set up.",
+    ],
+    [
+      "pending",
+      () => httpsPendingStatus(),
+      "Self-signed",
+      "Let's Encrypt is set up, but no certificate has been issued yet.",
+    ],
+    [
+      "stopped",
+      () => httpsStoppedStatus(),
+      "Self-signed",
+      "Let's Encrypt is stopped. Issue a certificate to use it again.",
+    ],
+    [
+      "fallback",
+      () => httpsFallbackStatus(),
+      "Self-signed",
+      "The Let's Encrypt certificate expired. TierPlan serves its own certificate until a renewal works.",
+    ],
+    [
+      "files",
+      () => httpsCertFilesKeptStatus({ pausedReason: "" }),
+      "Certificate files",
+      "Set by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE. Certificate files take priority over Let's Encrypt.",
+    ],
+    [
+      "filesPaused",
+      () => httpsCertFilesStatus(),
+      "Certificate files",
+      "Set by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE. Let's Encrypt is paused while they are set.",
+    ],
+    [
+      "issued",
+      () => httpsLetsEncryptStatus(),
+      "Let's Encrypt",
+      "TierPlan got this certificate from Let's Encrypt and renews it.",
+    ],
+    [
+      "pausedRestore",
+      () => httpsRestoredStatus(),
+      "Let's Encrypt",
+      "Paused after a restore. Resume Let's Encrypt below to renew.",
+    ],
+  ];
+
+  it.each(REASONS)("says why the %s mode is in force", async (reason, make, badge, sentence) => {
+    answer = () => Response.json(make());
+    renderCard();
+    await card().findByText("Mode");
+    expect(deriveMode(make()).reason).toBe(reason);
+    expect(within(rowValue("Mode")).getByText(badge)).toBeTruthy();
+    expect(rowValue("Mode").textContent).toContain(sentence);
+  });
+
+  it("puts the file variable names in mono", async () => {
+    answer = () => Response.json(httpsCertFilesKeptStatus({ pausedReason: "" }));
+    renderCard();
+    await card().findByText("Mode");
+    const names = Array.from(rowValue("Mode").querySelectorAll("code")).map((c) => c.textContent);
+    expect(names).toEqual(["TIERPLAN_TLS_CERT_FILE", "TIERPLAN_TLS_KEY_FILE"]);
+  });
+
+  it("shows the validation badge for Let's Encrypt", async () => {
+    answer = () => Response.json(httpsLetsEncryptStatus({ challengeType: "dns-01" }));
+    renderCard();
+    await card().findByText("Mode");
+    const badge = within(rowValue("Mode")).getByText("DNS-01");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+  });
+
+  it.each([
+    [
+      "self-signed",
+      () => httpsStatus({ acme: httpsLetsEncryptStatus({ challengeType: "dns-01" }).acme }),
+    ],
+    ["certificate files", () => httpsCertFilesKeptStatus({ challengeType: "dns-01" })],
+  ] as const)("shows no validation badge for %s", async (_name, make) => {
+    answer = () => Response.json(make());
+    renderCard();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).queryByText("HTTP-01")).toBeNull();
+    expect(within(rowValue("Mode")).queryByText("DNS-01")).toBeNull();
+  });
+
+  it("says HTTP-01 for a Let's Encrypt certificate ordered over HTTP", async () => {
+    answer = () => Response.json(httpsLetsEncryptStatus({ challengeType: "http-01" }));
+    renderCard();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).getByText("HTTP-01")).toBeTruthy();
+  });
+
+  it("falls back to the default sentence for a reason it does not know, and still draws the badge", async () => {
+    const unknown = httpsStatus({
+      acme: httpsStatus().acme && {
+        ...(httpsStatus().acme as NonNullable<HTTPSStatus["acme"]>),
+        pausedReason: "from_the_future" as never,
+      },
+    });
+    answer = () => Response.json(unknown);
+    renderCard();
+    await card().findByText("Mode");
+    expect(deriveMode(unknown).reason).toBe("default");
+    expect(within(rowValue("Mode")).getByText("Self-signed")).toBeTruthy();
+    expect(rowValue("Mode").textContent).toContain("This is the default.");
+  });
+
+  it("keeps the Test CA badge beside the mode", async () => {
+    answer = () => Response.json(httpsTestCAStatus());
+    renderCard();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).getByText("Test CA")).toBeTruthy();
+  });
+
+  it("wraps the reason sentence instead of widening the column", async () => {
+    answer = () => Response.json(httpsFallbackStatus());
+    renderCard();
+    await card().findByText("Mode");
+    const sentence = within(rowValue("Mode")).getByText(/The Let's Encrypt certificate expired/);
+    expect(sentence.className).toContain("break-words");
+    expect(rowValue("Mode").className).toContain("min-w-0");
   });
 });
 
@@ -201,11 +331,11 @@ describe("Certificate in use card: Let's Encrypt", () => {
     answer = () =>
       Response.json(httpsLetsEncryptStatus({ renewal: { basis: "two_thirds", nextAt: NEXT_AT } }));
     renderCard();
-    await card().findByText("Source");
-    expect(within(rowValue("Source")).getByText("Let's Encrypt")).toBeTruthy();
-    expect(within(rowValue("Source")).queryByText("Test CA")).toBeNull();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).getByText("Let's Encrypt")).toBeTruthy();
+    expect(within(rowValue("Mode")).queryByText("Test CA")).toBeNull();
     expect(labels()).toEqual([
-      "Source",
+      "Mode",
       "Issuer",
       "Names",
       "Expires",
@@ -235,7 +365,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Last renewed").textContent).toMatch(/^Renewed /);
   });
 
@@ -246,7 +376,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
   ] as const)("words the %s basis of the next renewal", async (basis, words) => {
     answer = () => Response.json(httpsLetsEncryptStatus({ renewal: { basis, nextAt: NEXT_AT } }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(within(rowValue("Next renewal")).getByText(words)).toBeTruthy();
     expect(within(rowValue("Next renewal")).getByText(formatAbsolute(NEXT_AT))).toBeTruthy();
   });
@@ -254,8 +384,8 @@ describe("Certificate in use card: Let's Encrypt", () => {
   it("marks a certificate from the test directory with a destructive Test CA badge", async () => {
     answer = () => Response.json(httpsTestCAStatus());
     renderCard();
-    await card().findByText("Source");
-    const source = within(rowValue("Source"));
+    await card().findByText("Mode");
+    const source = within(rowValue("Mode"));
     expect(source.getByText("Let's Encrypt")).toBeTruthy();
     const badge = source.getByText("Test CA");
     expect(badge.getAttribute("data-variant")).toBe("destructive");
@@ -265,7 +395,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
     answer = () =>
       Response.json(httpsLetsEncryptStatus({ pausedReason: "restore", renewal: undefined }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Next renewal").textContent).toBe("Paused until you resume");
   });
 
@@ -278,7 +408,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Next renewal").textContent).toBe("Paused while certificate files are set");
     expect(card().queryByText(formatAbsolute(NEXT_AT))).toBeNull();
     expect(card().queryByText("Chosen by Let's Encrypt")).toBeNull();
@@ -293,7 +423,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     const value = rowValue("Last error");
     expect(value.textContent).toContain("A CAA record forbids Let's Encrypt for tp.example.org.");
     expect(value.querySelector("time")).toBeTruthy();
@@ -310,15 +440,15 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Last error").textContent).toContain("Something went wrong inside TierPlan.");
   });
 
   it("shows the self-signed badge, no self-signed note and the last error after an expiry fallback", async () => {
     answer = () => Response.json(httpsFallbackStatus());
     renderCard();
-    await card().findByText("Source");
-    expect(within(rowValue("Source")).getByText("Self-signed")).toBeTruthy();
+    await card().findByText("Mode");
+    expect(within(rowValue("Mode")).getByText("Self-signed")).toBeTruthy();
     expect(card().queryByText(/made this certificate/)).toBeNull();
     expect(rowValue("Last error").textContent).toContain(
       "Let's Encrypt couldn't reach http://tierplan.example.com/.well-known/acme-challenge/.",
@@ -335,8 +465,8 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
-    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires"]);
+    await card().findByText("Mode");
+    expect(labels()).toEqual(["Mode", "Issuer", "Names", "Expires"]);
     expect(card().getByText(/made this certificate/)).toBeTruthy();
   });
 
@@ -354,8 +484,8 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
-    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires", "Last error"]);
+    await card().findByText("Mode");
+    expect(labels()).toEqual(["Mode", "Issuer", "Names", "Expires", "Last error"]);
     expect(rowValue("Last error").textContent).toContain(
       "Let's Encrypt couldn't reach http://tierplan.example.com/.well-known/acme-challenge/.",
     );
@@ -377,15 +507,15 @@ describe("Certificate in use card: Let's Encrypt", () => {
         }),
       );
     renderCard();
-    await card().findByText("Source");
-    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires", "Last error"]);
+    await card().findByText("Mode");
+    expect(labels()).toEqual(["Mode", "Issuer", "Names", "Expires", "Last error"]);
   });
 
   it("has no Let's Encrypt rows when the status carries no Let's Encrypt block", async () => {
     answer = () => Response.json({ ...httpsStatus(), acme: undefined });
     renderCard();
-    await card().findByText("Source");
-    expect(labels()).toEqual(["Source", "Issuer", "Names", "Expires"]);
+    await card().findByText("Mode");
+    expect(labels()).toEqual(["Mode", "Issuer", "Names", "Expires"]);
   });
 
   it("says 'Not renewing' on a certificate close to its end while renewals are failing", async () => {
@@ -394,7 +524,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
     answer = () =>
       Response.json({ ...status, certificate: { ...status.certificate, notAfter: soon } });
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Expires").textContent).toContain("Not renewing");
   });
 
@@ -404,7 +534,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
     answer = () =>
       Response.json({ ...status, certificate: { ...status.certificate, notAfter: soon } });
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Expires").textContent).not.toContain("Not renewing");
   });
 
@@ -412,7 +542,7 @@ describe("Certificate in use card: Let's Encrypt", () => {
     const host = `${"a".repeat(60)}.${"b".repeat(60)}.example.com`;
     answer = () => Response.json(httpsLetsEncryptStatus({ lastError: acmeLastError({ host }) }));
     renderCard();
-    await card().findByText("Source");
+    await card().findByText("Mode");
     expect(rowValue("Last error").className).toContain("break-all");
     expect(rowValue("Last error").textContent).toContain(host);
   });
@@ -435,6 +565,6 @@ describe("HTTPS page", () => {
         "TierPlan always serves HTTPS. See the certificate it is using, or get a free one from Let's Encrypt that browsers trust.",
       ),
     ).toBeTruthy();
-    await card().findByText("Source");
+    await card().findByText("Mode");
   });
 });

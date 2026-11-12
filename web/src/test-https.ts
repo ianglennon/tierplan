@@ -326,3 +326,17 @@ export function httpsNamesChangedStatus(acme: Partial<HTTPSACME> = {}): HTTPSSta
     ...acme,
   });
 }
+
+// Let's Encrypt is set up (an account, mode active) and nothing has been issued yet: the self-signed
+// certificate is served.
+export function httpsPendingStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const lets = httpsLetsEncryptStatus({ certificate: undefined, renewal: undefined, ...acme });
+  return { ...lets, certificate: httpsStatus().certificate, agentTrust: "pin" };
+}
+
+// Let's Encrypt was stopped: the self-signed certificate is served and the account and the old
+// certificate are kept.
+export function httpsStoppedStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const lets = httpsLetsEncryptStatus({ mode: "off", renewal: undefined, ...acme });
+  return { ...lets, certificate: httpsStatus().certificate, agentTrust: "pin" };
+}

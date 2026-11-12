@@ -6,7 +6,7 @@
     "certificate": {
       "title": "Certificate in use",
       "rows": {
-        "source": "Source",
+        "source": "Mode",
         "issuer": "Issuer",
         "names": "Names",
         "expires": "Expires",
@@ -21,8 +21,7 @@
       },
       "issuerUnknown": "Unknown",
       "note": {
-        "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files.",
-        "cert_files": "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE."
+        "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files."
       },
       "testCA": "Test CA",
       "issuedWhen": "Issued {{when}}",
@@ -31,6 +30,21 @@
       "pausedNextFiles": "Paused while certificate files are set",
       "noError": "None",
       "detailsBelow": "Details below"
+    },
+    "mode": {
+      "reason": {
+        "default": "This is the default. No certificate files and no Let's Encrypt certificate are set up.",
+        "pending": "Let's Encrypt is set up, but no certificate has been issued yet.",
+        "envPending": "TIERPLAN_ACME is on. TierPlan is getting a certificate by itself.",
+        "stopped": "Let's Encrypt is stopped. Issue a certificate to use it again.",
+        "fallback": "The Let's Encrypt certificate expired. TierPlan serves its own certificate until a renewal works.",
+        "envOff": "Let's Encrypt is turned off by TIERPLAN_ACME.",
+        "files": "Set by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE. Certificate files take priority over Let's Encrypt.",
+        "filesPaused": "Set by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE. Let's Encrypt is paused while they are set.",
+        "issued": "TierPlan got this certificate from Let's Encrypt and renews it.",
+        "issuedEnv": "Turned on by TIERPLAN_ACME. TierPlan renews it by itself.",
+        "pausedRestore": "Paused after a restore. Resume Let's Encrypt below to renew."
+      }
     },
     "acme": {
       "title": "Let's Encrypt",

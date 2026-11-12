@@ -70,3 +70,61 @@ export function validationMode(state: CardState, canWrite: boolean): ValidationM
   }
   return "editable";
 }
+
+// ModeReason is why the install is in the mode it is in (UI-SPEC "Mode line"). envPending, envOff and
+// issuedEnv are the reasons that come from TIERPLAN_ACME; they are derived from the lock data, not
+// from the status alone, so deriveMode never produces them.
+export type ModeReason =
+  | "default"
+  | "pending"
+  | "envPending"
+  | "stopped"
+  | "fallback"
+  | "envOff"
+  | "files"
+  | "filesPaused"
+  | "issued"
+  | "issuedEnv"
+  | "pausedRestore";
+
+export type ModeKind = "self_signed" | "cert_files" | "lets_encrypt";
+
+export interface Mode {
+  kind: ModeKind;
+  // The validation method, for Let's Encrypt only.
+  validation?: "http-01" | "dns-01";
+  reason: ModeReason;
+}
+
+// deriveMode is the one place that decides which TLS mode the install is in and why (D-15, SET-01).
+// The kind is certificate files when the status says they fix the certificate, Let's Encrypt when
+// that is what is served, self-signed otherwise. Exactly one reason is chosen, in this order:
+// certificate files (filesPaused when Let's Encrypt is paused for them, else files), then a restore
+// pause of a served Let's Encrypt certificate (pausedRestore), then an expiry fallback (fallback),
+// then a served Let's Encrypt certificate (issued), then for a self-signed certificate: Let's
+// Encrypt set up with nothing issued yet (pending), Let's Encrypt stopped with state kept (stopped),
+// else default. A value the page does not know falls to default, so a newer server never leaves the
+// row without a sentence.
+export function deriveMode(status: HTTPSStatus): Mode {
+  const acme = status.acme;
+  const source = status.certificate.source;
+  if (status.certFiles || source === "cert_files") {
+    return {
+      kind: "cert_files",
+      reason: acme?.pausedReason === "cert_files" ? "filesPaused" : "files",
+    };
+  }
+  if (source === "lets_encrypt") {
+    const validation = acme?.challengeType === "dns-01" ? "dns-01" : acme ? "http-01" : undefined;
+    return {
+      kind: "lets_encrypt",
+      ...(validation ? { validation } : {}),
+      reason: acme?.pausedReason === "restore" ? "pausedRestore" : "issued",
+    };
+  }
+  if (acme?.fallback) return { kind: "self_signed", reason: "fallback" };
+  if (acme?.mode === "active" && !acme.certificate)
+    return { kind: "self_signed", reason: "pending" };
+  if (acme?.mode === "off" && acme.hasState) return { kind: "self_signed", reason: "stopped" };
+  return { kind: "self_signed", reason: "default" };
+}
