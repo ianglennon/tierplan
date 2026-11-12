@@ -371,6 +371,27 @@
       "swarm": {
         "task_history_limit_changed": "Changed the swarm task history limit",
         "task_history_limit_changed_named": "Set the task history limit to {{limit}}"
+      },
+      "https": {
+        "account_registered": "Registered Let's Encrypt account",
+        "account_forgotten": "Dropped Let's Encrypt account",
+        "settings_updated": "Changed HTTPS settings",
+        "settings_updated_validation": "Changed the validation method",
+        "settings_updated_profile": "Changed the certificate profile",
+        "settings_updated_hsts": "Changed HSTS",
+        "settings_updated_dns_credential": "Changed the Cloudflare token",
+        "issue_requested": "Asked for a Let's Encrypt certificate",
+        "renew_requested": "Asked to renew the certificate",
+        "issued": "Issued Let's Encrypt certificate",
+        "renewed": "Renewed Let's Encrypt certificate",
+        "run_failed": "Let's Encrypt run failed",
+        "resumed": "Resumed Let's Encrypt",
+        "stopped": "Stopped using Let's Encrypt",
+        "dns_tested": "Tested the Cloudflare token",
+        "fallback_started": "Fell back to the self-signed certificate",
+        "fallback_ended": "Returned to the Let's Encrypt certificate",
+        "hsts_withdrawn": "Withdrew HSTS",
+        "hsts_restored": "Restored HSTS"
       }
     },
     "coalesced": {

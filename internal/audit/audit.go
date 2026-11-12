@@ -48,6 +48,10 @@ var (
 	SystemRetention = Actor{Type: ActorSystem, ID: "system:audit-retention", Name: "system:audit-retention"}
 	SystemRestore   = Actor{Type: ActorSystem, ID: "system:restore", Name: "system:restore"}
 	SystemBackup    = Actor{Type: ActorSystem, ID: "system:backup", Name: "system:backup"}
+	// SystemACME writes the outcome of a Let's Encrypt run and the changes TierPlan makes to the served certificate by
+	// itself (Phase 17, D-09). It matches acme.OwnerScheduler. It is an audit actor only: it holds no permission, so it
+	// is not in rbac.SystemPrincipals.
+	SystemACME = Actor{Type: ActorSystem, ID: "system:acme", Name: "system:acme"}
 )
 
 // Result is the outcome of an action.
@@ -295,6 +299,41 @@ const (
 	// image.updated, image.update_failed and image.update_rolled_back entries of the same selection, how many of the items were
 	// updated (done), how many were selected (total), how many were rolled back and how many were skipped.
 	ActionImageBulkUpdated = "image.bulk_updated"
+)
+
+// The HTTPS and Let's Encrypt actions (Phase 17, SET-04). They are instance-level: the target of every row is
+// TargetType "https", TargetID "https", and none carries an environment. A run's outcome (issued, renewed, run_failed)
+// is written by the system principal SystemACME; an admin who started the run is named only in the detail started_by.
+// The entries never carry a token, a key, a CA error text or a certificate: closed facts only (names, issuer, serial,
+// dates, error class).
+const (
+	// TierPlan registered a Let's Encrypt account, or an admin forgot it (D-09).
+	ActionHTTPSAccountRegistered = "https.account_registered"
+	ActionHTTPSAccountForgotten  = "https.account_forgotten"
+	// An admin changed an HTTPS setting. The detail section names which (validation, profile, hsts, dns_credential).
+	ActionHTTPSSettingsUpdated = "https.settings_updated"
+	// An admin asked to issue or renew the certificate now. The row is written when the run is accepted, before the run's
+	// own outcome row (D-10).
+	ActionHTTPSIssueRequested = "https.issue_requested"
+	ActionHTTPSRenewRequested = "https.renew_requested"
+	// A run ended. issued and renewed say whether the new certificate is being served (the detail served); run_failed
+	// carries the error class, never the CA's words. A run cancelled before it obtained a certificate writes none of
+	// the three (D-27).
+	ActionHTTPSIssued    = "https.issued"
+	ActionHTTPSRenewed   = "https.renewed"
+	ActionHTTPSRunFailed = "https.run_failed"
+	// An admin resumed Let's Encrypt after a restore, or stopped using it.
+	ActionHTTPSResumed = "https.resumed"
+	ActionHTTPSStopped = "https.stopped"
+	// An admin tested the Cloudflare token.
+	ActionHTTPSDNSTested = "https.dns_tested"
+	// TierPlan fell back to its self-signed certificate because the served one expired, and went back to a Let's Encrypt
+	// one.
+	ActionHTTPSFallbackStarted = "https.fallback_started"
+	ActionHTTPSFallbackEnded   = "https.fallback_ended"
+	// TierPlan stopped sending HSTS because the certificate it covers is no longer trusted, and sent it again.
+	ActionHTTPSHSTSWithdrawn = "https.hsts_withdrawn"
+	ActionHTTPSHSTSRestored  = "https.hsts_restored"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
