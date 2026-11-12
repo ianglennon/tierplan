@@ -987,6 +987,59 @@ func TestACMEEnvProviderAndTokenGoTogether(t *testing.T) {
 	}
 }
 
+// A token that cannot be a bearer token fails start-up with the variable's name and never the value,
+// whether it came from the variable or from its file; a stray space or newline at either end is trimmed
+// (D-05, D-06, WR-03).
+func TestACMEEnvTokenShapeIsCheckedAtStartup(t *testing.T) {
+	good := "abcDEF123_-"
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{"trailing space", good + " ", good},
+		{"leading tab and trailing newline", "\t" + good + "\r\n", good},
+	} {
+		c, err := load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": tc.raw}, files{})
+		if err != nil || c.ACME.CloudflareToken != tc.want {
+			t.Errorf("%s: token %q, %v; want %q trimmed", tc.name, c.ACME.CloudflareToken, err, tc.want)
+		}
+		c, err = load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"}, files{"/t": tc.raw})
+		if err != nil || c.ACME.CloudflareToken != tc.want {
+			t.Errorf("%s in a file: token %q, %v; want %q trimmed", tc.name, c.ACME.CloudflareToken, err, tc.want)
+		}
+	}
+	if c, err := load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": strings.Repeat("a", 256)}, files{}); err != nil || len(c.ACME.CloudflareToken) != 256 {
+		t.Errorf("a 256-character token: %v, want it accepted", err)
+	}
+
+	for _, tc := range []struct {
+		name, raw string
+	}{
+		{"a space inside", "secret-part one"},
+		{"a tab inside", "secret-part\tone"},
+		{"a newline inside", "secret-part\none"},
+		{"a non-ASCII character", "secret-t\u00f6ken"},
+		{"a control character", "secret\x01token"},
+		{"a DEL character", "secret\x7ftoken"},
+		{"only whitespace", " \t "},
+		{"257 characters", strings.Repeat("s", 257)},
+	} {
+		for _, viaFile := range []bool{false, true} {
+			env, fs := envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": tc.raw}, files{}
+			if viaFile {
+				env, fs = envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"}, files{"/t": tc.raw}
+			}
+			_, err := load(t, nil, env, fs)
+			if err == nil || !strings.Contains(err.Error(), "invalid TIERPLAN_CLOUDFLARE_API_TOKEN: ") {
+				t.Errorf("%s (file %v): error = %v, want invalid TIERPLAN_CLOUDFLARE_API_TOKEN", tc.name, viaFile, err)
+				continue
+			}
+			if v := strings.TrimSpace(tc.raw); v != "" && strings.Contains(err.Error(), v) {
+				t.Errorf("%s (file %v): the error repeats the token: %v", tc.name, viaFile, err)
+			}
+		}
+	}
+}
+
 func TestACMEEnvTokenFollowsTheFileRules(t *testing.T) {
 	both := envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": "x", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"}
 	if _, err := load(t, nil, both, files{"/t": "y"}); err == nil || !strings.Contains(err.Error(), "set only one") {

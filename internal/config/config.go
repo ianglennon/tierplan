@@ -377,7 +377,22 @@ var settings = []setting{
 			return nil
 		}},
 	{env: EnvCloudflareToken, secret: true, desc: "Cloudflare API token for dns-01 (also TIERPLAN_CLOUDFLARE_API_TOKEN_FILE, preferred)",
-		apply: func(c *Config, raw string) error { c.ACME.CloudflareToken = raw; return nil }},
+		apply: func(c *Config, raw string) error {
+			// A stray space or newline from a template or a secret file is not part of the token, so the
+			// ends are trimmed. What is left must be able to be a bearer token: a token that is not would
+			// fail every name as dns_token_invalid at run time, with the field locked on the page, so it is
+			// refused here. The error never carries the value (D-05, D-06).
+			if raw == "" {
+				c.ACME.CloudflareToken = ""
+				return nil
+			}
+			tok := strings.TrimSpace(raw)
+			if !apiTokenShape(tok) {
+				return errors.New("is not a usable API token: it must be 1 to 256 printable ASCII characters with no spaces or control characters")
+			}
+			c.ACME.CloudflareToken = tok
+			return nil
+		}},
 	{env: EnvDNSResolvers, desc: "comma-separated DNS resolvers (host or host:port) the dns-01 propagation check asks; unset means the zone's own nameservers",
 		apply: func(c *Config, raw string) error {
 			if raw == "" {
@@ -522,6 +537,25 @@ func Load(flags *pflag.FlagSet, env func(string) string, readFile func(string) (
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// maxAPITokenBytes is the longest DNS API token that is tried. It matches the limit the Let's Encrypt
+// manager puts on a token typed into the page.
+const maxAPITokenBytes = 256
+
+// apiTokenShape reports whether tok can be a bearer token: 1 to 256 printable ASCII characters, with no
+// space or control character in it. It is the rule the page's token field applies (internal/acme), so a
+// token from the environment and one from the page are held to the same shape.
+func apiTokenShape(tok string) bool {
+	if tok == "" || len(tok) > maxAPITokenBytes {
+		return false
+	}
+	for i := 0; i < len(tok); i++ {
+		if c := tok[i]; c <= 0x20 || c >= 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // resolve applies the precedence rules to one setting.
