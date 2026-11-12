@@ -72,8 +72,7 @@ export function validationMode(state: CardState, canWrite: boolean): ValidationM
 }
 
 // ModeReason is why the install is in the mode it is in (UI-SPEC "Mode line"). envPending, envOff and
-// issuedEnv are the reasons that come from TIERPLAN_ACME; they are derived from the lock data, not
-// from the status alone, so deriveMode never produces them.
+// issuedEnv are the reasons that come from TIERPLAN_ACME (D-15).
 export type ModeReason =
   | "default"
   | "pending"
@@ -96,18 +95,59 @@ export interface Mode {
   reason: ModeReason;
 }
 
+// EnvOverlay is what TIERPLAN_ACME adds to a card state (UI-SPEC J5, D-04, D-07): an overlay on the
+// letters A to L, never a letter of its own.
+export interface EnvOverlay {
+  // The variable's value, null when it is not set.
+  env: "on" | "off" | null;
+  // TIERPLAN_ACME is on and TierPlan has no Let's Encrypt certificate yet, with nothing running,
+  // refused, failed or told to wait: it orders by itself and the admin presses nothing.
+  waiting: boolean;
+  // TIERPLAN_ACME is off and a Let's Encrypt certificate, order or account is kept (D-02).
+  offWithState: boolean;
+}
+
+// deriveEnvOverlay is the one place that reads TIERPLAN_ACME and the fields around it into what the
+// card says. The inputs are acme.locks.acme (the variable), acme.certificate and the served source
+// (a certificate exists), acme.activeRun, acme.lastError, acme.refusals and acme.blocked (something is
+// happening or was refused), acme.pausedReason and certFiles (nothing may order), acme.hasState and
+// acme.account (state is kept) and the DNS-01 token source. No component works any of it out itself.
+export function deriveEnvOverlay(status: HTTPSStatus): EnvOverlay {
+  const acme = status.acme;
+  const value = acme?.locks?.acme?.value;
+  const env = value === "on" || value === "off" ? value : null;
+  if (!acme || env === null) return { env: null, waiting: false, offWithState: false };
+  const stored = acme.hasState || !!acme.account || !!acme.certificate;
+  // DNS-01 with no token anywhere is its own waiting state, which says what is missing.
+  const noToken = acme.challengeType === "dns-01" && acme.dns.tokenSource === "none";
+  const waiting =
+    env === "on" &&
+    !acme.certificate &&
+    status.certificate.source !== "lets_encrypt" &&
+    !status.certFiles &&
+    acme.pausedReason === "" &&
+    !acme.activeRun &&
+    !acme.lastError &&
+    (acme.refusals ?? []).length === 0 &&
+    !acme.blocked &&
+    !noToken;
+  return { env, waiting, offWithState: env === "off" && stored };
+}
+
 // deriveMode is the one place that decides which TLS mode the install is in and why (D-15, SET-01).
 // The kind is certificate files when the status says they fix the certificate, Let's Encrypt when
 // that is what is served, self-signed otherwise. Exactly one reason is chosen, in this order:
 // certificate files (filesPaused when Let's Encrypt is paused for them, else files), then a restore
 // pause of a served Let's Encrypt certificate (pausedRestore), then an expiry fallback (fallback),
-// then a served Let's Encrypt certificate (issued), then for a self-signed certificate: Let's
-// Encrypt set up with nothing issued yet (pending), Let's Encrypt stopped with state kept (stopped),
-// else default. A value the page does not know falls to default, so a newer server never leaves the
-// row without a sentence.
+// then TIERPLAN_ACME=off (envOff), then a served Let's Encrypt certificate (issuedEnv when
+// TIERPLAN_ACME is on, else issued), then for a self-signed certificate: TIERPLAN_ACME=on with nothing
+// issued yet (envPending), Let's Encrypt set up with nothing issued yet (pending), Let's Encrypt
+// stopped with state kept (stopped), else default. A value the page does not know falls to default, so
+// a newer server never leaves the row without a sentence.
 export function deriveMode(status: HTTPSStatus): Mode {
   const acme = status.acme;
   const source = status.certificate.source;
+  const env = deriveEnvOverlay(status).env;
   if (status.certFiles || source === "cert_files") {
     return {
       kind: "cert_files",
@@ -116,13 +156,13 @@ export function deriveMode(status: HTTPSStatus): Mode {
   }
   if (source === "lets_encrypt") {
     const validation = acme?.challengeType === "dns-01" ? "dns-01" : acme ? "http-01" : undefined;
-    return {
-      kind: "lets_encrypt",
-      ...(validation ? { validation } : {}),
-      reason: acme?.pausedReason === "restore" ? "pausedRestore" : "issued",
-    };
+    const reason =
+      acme?.pausedReason === "restore" ? "pausedRestore" : env === "on" ? "issuedEnv" : "issued";
+    return { kind: "lets_encrypt", ...(validation ? { validation } : {}), reason };
   }
   if (acme?.fallback) return { kind: "self_signed", reason: "fallback" };
+  if (env === "off") return { kind: "self_signed", reason: "envOff" };
+  if (env === "on" && !acme?.certificate) return { kind: "self_signed", reason: "envPending" };
   if (acme?.mode === "active" && !acme.certificate)
     return { kind: "self_signed", reason: "pending" };
   if (acme?.mode === "off" && acme.hasState) return { kind: "self_signed", reason: "stopped" };

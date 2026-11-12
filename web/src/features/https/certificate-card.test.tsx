@@ -18,6 +18,10 @@ import {
   certFilesInfo,
   httpsCertFilesKeptStatus,
   httpsCertFilesStatus,
+  httpsEnvOffEmptyStatus,
+  httpsEnvOffStatus,
+  httpsEnvOnIssuedStatus,
+  httpsEnvOnStatus,
   httpsFallbackStatus,
   httpsLetsEncryptStatus,
   httpsPendingStatus,
@@ -241,6 +245,30 @@ describe("Certificate in use card: Mode row", () => {
       "Let's Encrypt",
       "Paused after a restore. Resume Let's Encrypt below to renew.",
     ],
+    [
+      "envPending",
+      () => httpsEnvOnStatus(),
+      "Self-signed",
+      "TIERPLAN_ACME is on. TierPlan is getting a certificate by itself.",
+    ],
+    [
+      "envOff",
+      () => httpsEnvOffStatus(),
+      "Self-signed",
+      "Let's Encrypt is turned off by TIERPLAN_ACME.",
+    ],
+    [
+      "envOff",
+      () => httpsEnvOffEmptyStatus(),
+      "Self-signed",
+      "Let's Encrypt is turned off by TIERPLAN_ACME.",
+    ],
+    [
+      "issuedEnv",
+      () => httpsEnvOnIssuedStatus(),
+      "Let's Encrypt",
+      "Turned on by TIERPLAN_ACME. TierPlan renews it by itself.",
+    ],
   ];
 
   it.each(REASONS)("says why the %s mode is in force", async (reason, make, badge, sentence) => {
@@ -250,6 +278,28 @@ describe("Certificate in use card: Mode row", () => {
     expect(deriveMode(make()).reason).toBe(reason);
     expect(within(rowValue("Mode")).getByText(badge)).toBeTruthy();
     expect(rowValue("Mode").textContent).toContain(sentence);
+  });
+
+  it("puts TIERPLAN_ACME in mono in an environment reason", async () => {
+    answer = () => Response.json(httpsEnvOnStatus());
+    renderCard();
+    await card().findByText("Mode");
+    const names = Array.from(rowValue("Mode").querySelectorAll("code")).map((c) => c.textContent);
+    expect(names).toEqual(["TIERPLAN_ACME"]);
+  });
+
+  it("keeps the precedence: files, then a restore pause, then the fallback, then the environment", () => {
+    const on = { locks: { acme: { var: "TIERPLAN_ACME", value: "on" } } };
+    expect(deriveMode(httpsCertFilesKeptStatus({ pausedReason: "cert_files", ...on })).reason).toBe(
+      "filesPaused",
+    );
+    expect(deriveMode(httpsRestoredStatus(on)).reason).toBe("pausedRestore");
+    expect(deriveMode(httpsFallbackStatus(on)).reason).toBe("fallback");
+    expect(deriveMode(httpsEnvOnStatus()).reason).toBe("envPending");
+    // Without the variable the same installs read as before.
+    expect(deriveMode(httpsPendingStatus()).reason).toBe("pending");
+    expect(deriveMode(httpsStoppedStatus()).reason).toBe("stopped");
+    expect(deriveMode(httpsLetsEncryptStatus()).reason).toBe("issued");
   });
 
   it("puts the file variable names in mono", async () => {

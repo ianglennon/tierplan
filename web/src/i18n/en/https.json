@@ -492,6 +492,12 @@
         "body": "TIERPLAN_ACME_DIRECTORY_URL is set, so TierPlan talks to {{url}} instead of Let's Encrypt. This is for testing only and isn't supported. Certificates from it aren't trusted by browsers."
       }
     },
+    "envState": {
+      "waiting": {
+        "title": "TierPlan is getting a certificate",
+        "body": "TIERPLAN_ACME is on, so TierPlan orders the certificate by itself as soon as it is ready. You don't need to press anything. The steps show here while it runs."
+      }
+    },
     "stop": {
       "action": "Stop using Let's Encrypt",
       "title": "Stop using Let's Encrypt?",

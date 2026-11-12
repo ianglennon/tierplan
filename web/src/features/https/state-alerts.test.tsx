@@ -19,9 +19,11 @@ import {
   httpsACME,
   httpsCertFilesKeptStatus,
   httpsCertFilesStatus,
+  httpsEnvOnStatus,
   httpsFallbackStatus,
   httpsLetsEncryptStatus,
   httpsNamesChangedStatus,
+  httpsPendingStatus,
   httpsRestoredStatus,
   httpsStatus,
   httpsTestCAStatus,
@@ -475,5 +477,87 @@ describe("Stop row (D-14)", () => {
         name: "Stop using Let's Encrypt",
       }),
     ).toBeNull();
+  });
+});
+
+describe("TIERPLAN_ACME=on, waiting for the first certificate (D-07, UI-SPEC J5)", () => {
+  const TITLE = "TierPlan is getting a certificate";
+
+  it("says TierPlan orders by itself, asks for no click and adds no state letter", async () => {
+    status = () => Response.json(httpsEnvOnStatus());
+    await ready();
+    expect(stateOf()).toBe("B");
+    const alert = noteWith(TITLE) as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.textContent).toContain("orders the certificate by itself as soon as it is ready");
+    expect(alert.textContent).toContain("You don't need to press anything.");
+    expect(alert.textContent).toContain("The steps show here while it runs.");
+    expect([...alert.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "TIERPLAN_ACME",
+    ]);
+    expect(alert.getAttribute("role")).toBe("note");
+  });
+
+  it("is not shown while a start-time order runs, and the run panel takes over", async () => {
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({ activeRun: acmeActiveRun({ trigger: "schedule", kind: "issue" }) }),
+      );
+    await ready();
+    expect(stateOf()).toBe("C");
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("is not shown once the order failed, refused or was told to wait", async () => {
+    status = () => Response.json(httpsEnvOnStatus({ lastError: acmeLastError(), failures: 1 }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({
+          refusals: [{ code: "names_ip", host: "10.0.0.1" }],
+        }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({
+          blocked: {
+            reason: "told_to_wait",
+            until: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+        }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("is not shown when the variable is unset, or once a certificate is served", async () => {
+    status = () => Response.json(httpsPendingStatus());
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsLetsEncryptStatus({ locks: { acme: { var: "TIERPLAN_ACME", value: "on" } } }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("gives way to the pause alerts, which say what is missing", async () => {
+    status = () => Response.json(httpsEnvOnStatus({ pausedReason: "restore" }));
+    await ready();
+    expect(stateOf()).toBe("H");
+    expect(noteWith(TITLE)).toBeUndefined();
   });
 });

@@ -385,3 +385,36 @@ export function httpsLockedStatus(
     ...top,
   });
 }
+
+// The TIERPLAN_ACME lock as the status carries it: the variable's value and what is stored.
+export function acmeSwitchLock(
+  value: "on" | "off",
+  stored: "on" | "off" = "off",
+): HTTPSACME["locks"] {
+  return { acme: { var: "TIERPLAN_ACME", value, stored } };
+}
+
+// An install whose Let's Encrypt is turned on by TIERPLAN_ACME and has no certificate yet: the account
+// is registered, nothing is running, refused or failed, and the self-signed certificate is served.
+export function httpsEnvOnStatus(
+  acme: Partial<HTTPSACME> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  return { ...httpsPendingStatus({ locks: acmeSwitchLock("on"), ...acme }), ...top };
+}
+
+// The same once the certificate is issued: TIERPLAN_ACME is on and a Let's Encrypt certificate is served.
+export function httpsEnvOnIssuedStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsLetsEncryptStatus({ locks: acmeSwitchLock("on"), ...acme });
+}
+
+// TIERPLAN_ACME=off over a Let's Encrypt certificate, order and account that are kept: the self-signed
+// certificate is served and Let's Encrypt makes no requests.
+export function httpsEnvOffStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsStoppedStatus({ locks: acmeSwitchLock("off", "on"), ...acme });
+}
+
+// TIERPLAN_ACME=off on an install that never set Let's Encrypt up: nothing is kept.
+export function httpsEnvOffEmptyStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsStatus({ acme: httpsACME({ locks: acmeSwitchLock("off"), ...acme }) });
+}

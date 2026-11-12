@@ -8,7 +8,7 @@ import { ACMEControlError, type HTTPSStatus, useResumeACME } from "@/api/https";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { deriveCardState } from "@/features/https/card-state";
+import { deriveCardState, deriveEnvOverlay } from "@/features/https/card-state";
 import { formatDate } from "@/features/https/copy";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -152,8 +152,23 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
         </Alert>
       );
     default:
-      return null;
+      return deriveEnvOverlay(status).waiting ? <WaitingAlert /> : null;
   }
+}
+
+// WaitingAlert says TierPlan orders the certificate by itself because TIERPLAN_ACME is on (D-07): no
+// certificate yet, nothing running, refused or failed. It sits above the buttons and asks for nothing.
+function WaitingAlert() {
+  const t = useT();
+  return (
+    <Alert role="note" className="text-foreground">
+      <Info aria-hidden="true" />
+      <AlertTitle>{t("https.envState.waiting.title")}</AlertTitle>
+      <AlertDescription className="text-foreground">
+        <Rich text={t("https.envState.waiting.body")} />
+      </AlertDescription>
+    </Alert>
+  );
 }
 
 // RestoreAlert is the pause a restore puts on Let's Encrypt (D-20), with the one filled button of the
