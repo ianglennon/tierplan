@@ -4,10 +4,12 @@
 package server
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +102,81 @@ func TestACMEBell(t *testing.T) {
 		r.step(acme.ExpiringWarnWithin)
 		if r.bellItem(client, cookie, "https_cert_expiring") == nil {
 			t.Error("a pair past its end is not listed")
+		}
+	})
+
+	t.Run("restore pause raises and Resume clears", func(t *testing.T) {
+		r := newACMERig(t, acmetest.Options{}, nil)
+		srv := r.startNew()
+		client := r.client(r.mirrorPool())
+		cookie := r.signIn(client)
+		csrf := r.csrf(client, cookie)
+		if got := httpsIDs(r.bellItems(client, cookie)); len(got) != 0 {
+			t.Fatalf("before the restore: %v, want no https_ item", got)
+		}
+
+		// What a restore leaves behind: the pause, as acme_restore_test.go finds it after the swap.
+		ctx := context.Background()
+		store := acme.NewStore(srv.Store(), srv.Vault())
+		st, err := store.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.PausedReason = acme.PausedRestore
+		if err := store.SaveState(ctx, st); err != nil {
+			t.Fatal(err)
+		}
+		it := r.bellItem(client, cookie, "https_acme_paused")
+		if it == nil || it.HTTPS == nil || it.HTTPS.Reason != acme.PausedRestore {
+			t.Fatalf("after the restore: %v, want https_acme_paused with reason restore", httpsIDs(r.bellItems(client, cookie)))
+		}
+
+		req, err := http.NewRequestWithContext(testsupport.Context(t), http.MethodPost, r.base+"/api/https/acme/resume", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-CSRF-Token", csrf)
+		req.AddCookie(cookie)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("POST /api/https/acme/resume: %d, want 204", resp.StatusCode)
+		}
+		if got := httpsIDs(r.bellItems(client, cookie)); len(got) != 0 {
+			t.Errorf("on the first read after Resume: %v, want no https_ item", got)
+		}
+	})
+
+	t.Run("expiry fallback", func(t *testing.T) {
+		r := newACMERig(t, acmetest.Options{}, nil)
+		srv := r.startNew()
+		cookie := r.signIn(r.client(r.mirrorPool()))
+		r.issue()
+		first := leafOf(t, srv.https.Config())
+		if got := httpsIDs(r.bellItems(r.client(r.fake.IssuerPool()), cookie)); len(got) != 0 {
+			t.Fatalf("with a fresh Let's Encrypt certificate: %v, want no https_ item", got)
+		}
+
+		// One renewal fails and the clock jumps past the end of the certificate: the self-signed one is served.
+		r.fake.FailNext(acmetest.EndpointNewOrder, acmetest.Problem{Status: 400, Type: "malformed", Detail: "scripted refusal"})
+		r.step(first.NotAfter.Sub(r.clock.Now()) + time.Hour)
+		r.awaitRuns()
+
+		client := r.client(r.mirrorPool())
+		items := r.bellItems(client, cookie)
+		ids := httpsIDs(items)
+		if len(ids) == 0 || ids[0] != "https_cert_fallback" {
+			t.Fatalf("after the expiry: %v, want https_cert_fallback first", ids)
+		}
+		if slices.Contains(ids, "https_cert_expiring") {
+			t.Errorf("after the expiry: %v, want no https_cert_expiring beside the fallback", ids)
+		}
+		fb := r.bellItem(client, cookie, "https_cert_fallback")
+		if fb.HTTPS == nil || fb.HTTPS.NotAfter == nil || !fb.HTTPS.NotAfter.Equal(first.NotAfter) {
+			t.Errorf("the fallback item = %+v, want notAfter %s", fb.HTTPS, first.NotAfter)
 		}
 	})
 }

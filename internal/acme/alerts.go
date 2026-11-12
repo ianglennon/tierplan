@@ -109,6 +109,9 @@ func DeriveAlerts(now time.Time, st Status, sv Served) []Alert {
 	if a, ok := paused(st); ok {
 		out = append(out, a)
 	}
+	if a, ok := txtLeft(st); ok {
+		out = append(out, a)
+	}
 	slices.SortStableFunc(out, func(a, b Alert) int { return a.Kind.rank() - b.Kind.rank() })
 	return out
 }
@@ -164,6 +167,23 @@ func expiring(now time.Time, st Status, sv Served) (Alert, bool) {
 		return Alert{}, false
 	}
 	return Alert{Kind: AlertExpiring, Source: sv.Source, NotAfter: sv.NotAfter}, true
+}
+
+// txtLeft is the left-over record item (D-04.6): a TXT record TierPlan created and could not delete. A
+// row whose delete has not failed (Class empty) belongs to a run still in flight, so it counts for
+// nothing. The item names the oldest such record (dnsView lists them oldest first) and how many others
+// there are; neither the record's value nor the provider's ID for it is carried (T-17-08).
+func txtLeft(st Status) (Alert, bool) {
+	var failed []LeftOverView
+	for _, r := range st.DNS.LeftOver {
+		if r.Class != "" {
+			failed = append(failed, r)
+		}
+	}
+	if len(failed) == 0 {
+		return Alert{}, false
+	}
+	return Alert{Kind: AlertTXTLeft, Record: failed[0].Name, More: len(failed) - 1, RetryPaused: failed[0].RetryPaused}, true
 }
 
 // Alerts reports what is wrong with HTTPS now, for the instance warnings feed. sv is the certificate

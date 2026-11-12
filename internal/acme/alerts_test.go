@@ -240,6 +240,88 @@ func TestDeriveAlerts(t *testing.T) {
 		}
 	})
 
+	left := func(name, class string, paused bool) LeftOverView {
+		return LeftOverView{Name: name, RecordID: "provider-id-" + name, Class: class, RetryPaused: paused}
+	}
+
+	t.Run("left-over records give one txt_left alert naming the oldest failed one and counting the rest", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{DNS: DNSView{LeftOver: []LeftOverView{
+			left("_acme-challenge.a.example.com", "unavailable", false),
+			left("_acme-challenge.b.example.com", "token_invalid", false),
+			left("_acme-challenge.c.example.com", "", false),
+		}}}, Served{})
+		want := []Alert{{Kind: AlertTXTLeft, Record: "_acme-challenge.a.example.com", More: 1}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a record of a run still in flight gives no txt_left alert", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{DNS: DNSView{LeftOver: []LeftOverView{
+			left("_acme-challenge.a.example.com", "", false),
+			left("_acme-challenge.b.example.com", "", false),
+		}}}, Served{})
+		if len(got) != 0 {
+			t.Fatalf("got %+v, want none", got)
+		}
+	})
+
+	t.Run("an in-flight record older than the failed one is not the one named", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{DNS: DNSView{LeftOver: []LeftOverView{
+			left("_acme-challenge.running.example.com", "", false),
+			left("_acme-challenge.stuck.example.com", "unavailable", false),
+		}}}, Served{})
+		if len(got) != 1 || got[0].Record != "_acme-challenge.stuck.example.com" || got[0].More != 0 {
+			t.Fatalf("got %+v, want the failed record and nothing more", got)
+		}
+	})
+
+	t.Run("a retry-paused record carries retryPaused", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{DNS: DNSView{LeftOver: []LeftOverView{
+			left("_acme-challenge.a.example.com", "unavailable", true),
+		}}}, Served{})
+		want := []Alert{{Kind: AlertTXTLeft, Record: "_acme-challenge.a.example.com", RetryPaused: true}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("txt_left holds neither the provider's record ID nor any text of the record but its name", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{DNS: DNSView{LeftOver: []LeftOverView{
+			left("_acme-challenge.a.example.com", "unavailable", false),
+		}}}, Served{})
+		if len(got) != 1 || containsDetail(got[0], "provider-id-_acme-challenge.a.example.com") {
+			t.Fatalf("got %+v, want one alert without the record ID", got)
+		}
+	})
+
+	t.Run("the causes of the five kinds derived so far come out in the bell's order", func(t *testing.T) {
+		t.Parallel()
+		// Everything but the clock, in a state where each rule holds at once: the fallback hides the
+		// expiring item, so the expiring cause is a separate row below.
+		all := Status{
+			Mode: ModeActive, Certificate: cert, Fallback: true, ExpiredAt: alertsNow, LastError: failing, Failures: 1,
+			Block: &BlockView{Until: until, Reason: BlockFailureGuard},
+			DNS:   DNSView{LeftOver: []LeftOverView{left("_acme-challenge.a.example.com", "unavailable", false)}},
+		}
+		got := DeriveAlerts(alertsNow, all, Served{})
+		want := []AlertKind{AlertFallback, AlertRenewalFailed, AlertPaused, AlertTXTLeft}
+		if !slices.Equal(kindsOf(got), want) {
+			t.Fatalf("with the fallback: kinds = %v, want %v", kindsOf(got), want)
+		}
+		all.Fallback, all.ExpiredAt = false, time.Time{}
+		got = DeriveAlerts(alertsNow, all, served("lets_encrypt", lifetime90, 3*24*time.Hour))
+		want = []AlertKind{AlertRenewalFailed, AlertPaused, AlertExpiring, AlertTXTLeft}
+		if !slices.Equal(kindsOf(got), want) {
+			t.Fatalf("with an expiring certificate: kinds = %v, want %v", kindsOf(got), want)
+		}
+	})
+
 	t.Run("the alert has nowhere to hold the CA's problem text", func(t *testing.T) {
 		t.Parallel()
 		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Certificate: cert, LastError: failing, Failures: 1}, Served{})

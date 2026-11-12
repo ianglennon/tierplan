@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
+	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/api"
 )
 
@@ -79,6 +80,37 @@ func TestWarningsHTTPS(t *testing.T) {
 		rec, w := f.httpsWarnings(t)
 		if len(w.Items) != 1 || w.Items[0].ID != "https_acme_paused" || w.Items[0].HTTPS == nil || w.Items[0].HTTPS.Reason != "restore" {
 			t.Fatalf("got %s, want one https_acme_paused with reason restore", rec.Body)
+		}
+	})
+
+	t.Run("a challenge record that could not be deleted is listed by name and never by value", func(t *testing.T) {
+		t.Parallel()
+		f := newDNSFix(t, acme.ChallengeDNS01, acmeOpts{})
+		f.register(t, "")
+		decodeValidation(t, f.putValidation(t, `{"challengeType":"dns-01","token":"`+dnsAPIToken+`"}`))
+		f.prov.FailDelete(-1, &dns.Error{Provider: "fake", Op: "delete record", Class: dns.ClassUnavailable})
+
+		f.awaitRun(t, startRun(t, f.issue(t)))
+
+		left := f.prov.Records()
+		if len(left) != 1 {
+			t.Fatalf("the provider holds %d records, want the one that could not be deleted", len(left))
+		}
+		rec, w := f.httpsWarnings(t)
+		var txt *api.WarningBody
+		for i := range w.Items {
+			if w.Items[i].ID == "https_txt_left" {
+				txt = &w.Items[i]
+			}
+		}
+		if txt == nil || txt.HTTPS == nil || txt.HTTPS.Record != "_acme-challenge.tierplan.example.com" || txt.HTTPS.More != 0 {
+			t.Fatalf("got %s, want https_txt_left naming _acme-challenge.tierplan.example.com", rec.Body)
+		}
+		body := rec.Body.String()
+		for what, secret := range map[string]string{"value": left[0].Value(), "provider ID": left[0].ID, "token": dnsAPIToken} {
+			if secret != "" && strings.Contains(body, secret) {
+				t.Errorf("the feed carries the record's %s: %s", what, body)
+			}
 		}
 	})
 
