@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -110,6 +111,45 @@ func (i *acmeInstaller) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 		return nil, errors.New("no Let's Encrypt certificate is loaded")
 	}
 	return c, nil
+}
+
+// errACMEOffUnderHSTS is the refusal at start when TIERPLAN_ACME=off would take a Let's Encrypt certificate
+// out of service while HSTS is on.
+var errACMEOffUnderHSTS = errors.New("TIERPLAN_ACME=off with Let's Encrypt in use while HSTS is on would lock browsers out: " +
+	"the self-signed certificate would be served to browsers that hold the policy, which they refuse with no way to click through. " +
+	"Turn HSTS off in Settings (or set TIERPLAN_HSTS=off), wait until browsers have forgotten the policy, then set TIERPLAN_ACME=off")
+
+// refuseACMEOffUnderHSTS applies at start the rule D-26 applies to Stop and config.Load applies to
+// TIERPLAN_HSTS=on: env must not create the lockout either. TIERPLAN_ACME=off makes the manager serve the
+// self-signed certificate whatever is stored, so it is refused while Let's Encrypt is in use (the stored
+// mode is active) and the effective HSTS setting is on, which is TIERPLAN_HSTS when set and the stored
+// toggle otherwise. Certificate files win over Let's Encrypt and are served either way, so they do not
+// count. Config checks the variables against each other; only here is the stored setting known.
+func refuseACMEOffUnderHSTS(ctx context.Context, cfg config.Config, st *store.Store, acmeStore *acme.Store) error {
+	if cfg.ACME.Enabled == nil || *cfg.ACME.Enabled || cfg.TLSCertFile != "" {
+		return nil
+	}
+	hstsOn := false
+	if cfg.ACME.HSTS != nil {
+		hstsOn = *cfg.ACME.HSTS
+	} else {
+		row, err := st.RQ.GetHTTPSState(ctx)
+		if err != nil {
+			return fmt.Errorf("read the HSTS setting: %w", err)
+		}
+		hstsOn = row.HstsEnabled != 0
+	}
+	if !hstsOn {
+		return nil
+	}
+	state, err := acmeStore.State(ctx)
+	if err != nil {
+		return err
+	}
+	if state.Mode != acme.ModeActive {
+		return nil
+	}
+	return errACMEOffUnderHSTS
 }
 
 // acmeWiring is what Build needs back from wireACME.

@@ -1278,8 +1278,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		return nil, err
 	}
 	challenges := acmeWire.challenges
+	// TIERPLAN_ACME=off over a stored Let's Encrypt setup with HSTS on would serve the self-signed
+	// certificate to browsers that hold the policy (D-26), so start-up stops before it can.
+	startErr := refuseACMEOffUnderHSTS(ctx, cfg, st, acme.NewStore(st, vlt))
 	// A stored Let's Encrypt certificate is served before the server listens (ACME-04).
-	if err := acmeWire.mgr.Start(ctx); err != nil {
+	if startErr == nil {
+		if err := acmeWire.mgr.Start(ctx); err != nil {
+			startErr = fmt.Errorf("start Let's Encrypt: %w", err)
+		}
+	}
+	if startErr != nil {
 		jobHub.Close()
 		statsHub.Close()
 		tunnelHub.Close()
@@ -1287,7 +1295,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
-		return nil, fmt.Errorf("start Let's Encrypt: %w", err)
+		return nil, startErr
 	}
 	srv = &Server{
 		unlock:     unlock,

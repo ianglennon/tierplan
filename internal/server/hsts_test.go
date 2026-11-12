@@ -1196,3 +1196,40 @@ func TestHSTSBlocksStop(t *testing.T) {
 		t.Errorf("hsts = %+v after the stop, want a forget-by time in the future", st)
 	}
 }
+
+// TIERPLAN_ACME=off over a stored Let's Encrypt setup with HSTS on in the database would serve the
+// self-signed certificate to browsers that hold the policy, so start-up is refused with a message naming
+// both settings (D-26, D-06, CR-01). With HSTS off, or fixed off by TIERPLAN_HSTS, the variable is
+// accepted and the self-signed certificate is served.
+func TestACMEEnvOffRefusedWhileStoredHSTSIsOn(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	r.opts = append(r.opts, WithTrustRoots(r.fake.IssuerPool()))
+	srv := r.startNew()
+	selfSigned := r.client(r.mirrorPool())
+	cookie := r.signIn(selfSigned)
+	csrf := r.csrf(selfSigned, cookie)
+	r.issue()
+	le := r.client(r.fake.IssuerPool())
+	if code, body := r.hstsPut(le, cookie, csrf, `{"enabled":true}`); code != http.StatusOK {
+		t.Fatalf("PUT hsts on: %d %s", code, body)
+	}
+	if srv.https.Kind() != tlsKindACME {
+		t.Fatalf("served kind = %d after the issue, want Let's Encrypt", srv.https.Kind())
+	}
+	r.stop()
+
+	r.setEnv(map[string]string{"TIERPLAN_ACME": "off"})
+	if built, err := Build(testsupport.Context(t), r.cfg, slog.New(slog.DiscardHandler), r.opts...); err == nil {
+		_ = built.Close()
+		t.Fatal("Build with TIERPLAN_ACME=off over a stored HSTS-on setting succeeded, want a refusal")
+	} else if !strings.Contains(err.Error(), "TIERPLAN_ACME") || !strings.Contains(err.Error(), "HSTS") {
+		t.Errorf("Build error = %q, want one naming both TIERPLAN_ACME and HSTS", err)
+	}
+
+	// The variable that fixes HSTS off decides over the stored toggle, so nothing is held to lock out.
+	r.setEnv(map[string]string{"TIERPLAN_HSTS": "off"})
+	srv = r.startNew()
+	if k := srv.https.Kind(); k != tlsKindSelfSigned {
+		t.Errorf("served kind = %d with TIERPLAN_ACME=off and TIERPLAN_HSTS=off, want self-signed", k)
+	}
+}
