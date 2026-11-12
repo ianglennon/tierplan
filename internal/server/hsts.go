@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // hstsKind is what the policy does with Strict-Transport-Security.
@@ -38,6 +39,8 @@ type hstsDecision struct {
 	host string
 	// reason says why the policy is not sending, in the words the status reports (D-10).
 	reason string
+	// step is the ramp step in force, 0 when the policy is not sending.
+	step int
 }
 
 // hstsPolicy decides Strict-Transport-Security (TLS-06). It is off by default, sends only over a
@@ -51,6 +54,7 @@ type hstsPolicy struct {
 	rt    *httpsRuntime
 	// env is TIERPLAN_HSTS: nil when unset, otherwise the toggle.
 	env *bool
+	db  hstsStore
 	// clock is the clock the periodic loop waits on. It is separate from now's clock because an
 	// extra timer on the ACME clock breaks the rigs' armed-timer counting.
 	clock stackops.Clock
@@ -58,19 +62,51 @@ type hstsPolicy struct {
 
 	snap atomic.Pointer[hstsDecision]
 	wake chan struct{}
-	// mu serialises Recompute, which runs off the request path.
+
+	// mu serialises Recompute, which runs off the request path, and guards what follows.
 	mu sync.Mutex
+	// loaded is whether the ramp has been read from the database. The ramp in memory is the truth
+	// from then on; saved is the part of it the database is known to hold, so a failed write is
+	// retried by the next recompute.
+	loaded   bool
+	ramp     hstsRamp
+	saved    hstsRamp
+	storedOn bool
+	// writeWarned is whether a failed write has been logged since the last write that worked.
+	writeWarned bool
+}
+
+// hstsStore is the database the policy keeps its toggle and its ramp in.
+type hstsStore interface {
+	GetHTTPSState(ctx context.Context) (sqlc.HttpsState, error)
+	SaveHSTSRamp(ctx context.Context, arg sqlc.SaveHSTSRampParams) error
+	SaveHSTSHeldUntil(ctx context.Context, arg sqlc.SaveHSTSHeldUntilParams) error
+}
+
+// hstsDB reads from the read pool and writes through the write pool.
+type hstsDB struct{ r, w *sqlc.Queries }
+
+func (d hstsDB) GetHTTPSState(ctx context.Context) (sqlc.HttpsState, error) {
+	return d.r.GetHTTPSState(ctx)
+}
+
+func (d hstsDB) SaveHSTSRamp(ctx context.Context, arg sqlc.SaveHSTSRampParams) error {
+	return d.w.SaveHSTSRamp(ctx, arg)
+}
+
+func (d hstsDB) SaveHSTSHeldUntil(ctx context.Context, arg sqlc.SaveHSTSHeldUntilParams) error {
+	return d.w.SaveHSTSHeldUntil(ctx, arg)
 }
 
 // newHSTSPolicy returns a policy that decides nothing until the first Recompute.
-func newHSTSPolicy(now func() time.Time, trust *trustChecker, rt *httpsRuntime, env *bool, clock stackops.Clock, log *slog.Logger) *hstsPolicy {
+func newHSTSPolicy(now func() time.Time, trust *trustChecker, rt *httpsRuntime, env *bool, clock stackops.Clock, db hstsStore, log *slog.Logger) *hstsPolicy {
 	if clock == nil {
 		clock = stackops.RealClock()
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &hstsPolicy{now: now, trust: trust, rt: rt, env: env, clock: clock, log: log, wake: make(chan struct{}, 1)}
+	return &hstsPolicy{now: now, trust: trust, rt: rt, env: env, db: db, clock: clock, log: log, wake: make(chan struct{}, 1)}
 }
 
 // Header is the router's hook: the value of Strict-Transport-Security for this request, or "". It
@@ -126,44 +162,129 @@ func (p *hstsPolicy) Run(ctx context.Context) {
 	}
 }
 
-// enabled is the effective toggle: the variable when set.
+// enabled is the effective toggle: the variable when set, else the stored column.
 func (p *hstsPolicy) enabled() bool {
 	if p.env != nil {
 		return *p.env
 	}
-	return false
+	return p.storedOn
 }
 
-// Recompute reads the served certificate and the trust verdict and publishes the decision.
-func (p *hstsPolicy) Recompute(_ context.Context) {
+// hstsSteps are the max-age values of the ramp in seconds (D-11), after hstspreload.org's guidance.
+// hstsDwell[i] is how long step i+1 must have been sent before step i+2 is.
+var (
+	hstsSteps = [...]int64{300, 604800, 2592000, 31536000}
+	hstsDwell = [...]time.Duration{24 * time.Hour, 7 * 24 * time.Hour, 30 * 24 * time.Hour}
+)
+
+// hstsRamp is the persisted progress of the ramp. Instants are unix nanoseconds.
+type hstsRamp struct {
+	host  string
+	step  int
+	since int64
+}
+
+// Recompute reads the served certificate and the trust verdict, moves the ramp and publishes the
+// decision. A database that cannot be read or written does not change the answer: the ramp in memory
+// carries on and the failure is logged once.
+func (p *hstsPolicy) Recompute(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.load(ctx)
+	now := p.now()
 	kind, chain := p.rt.servedChain()
-	d := hstsDecide(kind, p.trust.verdictFor(kind, chain), p.enabled())
+	in := hstsInput{kind: kind, verdict: p.trust.verdictFor(kind, chain), enabled: p.enabled(), now: now}
+	d, ramp := hstsDecide(in, p.ramp)
+	p.ramp = ramp
 	p.snap.Store(&d)
+	p.persist(ctx, now)
 }
 
-// hstsFirstStep is the first max-age, in seconds.
-const hstsFirstStep int64 = 300
-
-// hstsDecide is the decision table (D-10, D-14, D-23, D-25). Nothing is sent over the self-signed
-// certificate or an unverified Let's Encrypt certificate. A certificate-files certificate that does
-// not verify gets max-age=0, so a browser that trusts its CA drops the one-year header earlier
-// versions sent. A verified certificate gets max-age=0 while the toggle is off, and a positive
-// max-age for the verified host while it is on.
-func hstsDecide(kind tlsKind, v trustVerdict, enabled bool) hstsDecision {
-	switch {
-	case kind == 0 || !v.Checked:
-		return hstsDecision{}
-	case kind == tlsKindSelfSigned:
-		return hstsDecision{reason: trustSelfSigned}
-	case !v.Verified:
-		if kind == tlsKindSupplied {
-			return hstsDecision{kind: hstsWithdraw, reason: v.Reason}
-		}
-		return hstsDecision{reason: v.Reason}
-	case !enabled:
-		return hstsDecision{kind: hstsWithdraw, reason: "toggle_off"}
+// load reads the stored toggle every time and the ramp the first time it can.
+func (p *hstsPolicy) load(ctx context.Context) {
+	row, err := p.db.GetHTTPSState(ctx)
+	if err != nil {
+		p.warn("read the HSTS state", err)
+		return
 	}
-	return hstsDecision{kind: hstsSend, maxAge: hstsFirstStep, host: v.Host}
+	p.storedOn = row.HstsEnabled != 0
+	if p.loaded {
+		return
+	}
+	p.loaded = true
+	p.ramp = hstsRamp{host: row.HstsHost, step: int(row.HstsStep), since: row.HstsStepSince}
+	p.saved = p.ramp
+}
+
+// persist writes the ramp when it differs from what the database holds.
+func (p *hstsPolicy) persist(ctx context.Context, now time.Time) {
+	if p.ramp == p.saved {
+		return
+	}
+	err := p.db.SaveHSTSRamp(ctx, sqlc.SaveHSTSRampParams{
+		HstsHost: p.ramp.host, HstsStep: int64(p.ramp.step), HstsStepSince: p.ramp.since, UpdatedAt: now.UnixNano(),
+	})
+	if err != nil {
+		p.warn("save the HSTS ramp", err)
+		return
+	}
+	p.saved = p.ramp
+	p.writeWarned = false
+}
+
+// warn logs a database failure once, until a write works again.
+func (p *hstsPolicy) warn(what string, err error) {
+	if p.writeWarned {
+		return
+	}
+	p.writeWarned = true
+	p.log.Warn("could not "+what+"; the HSTS decision goes on from memory", "error", err)
+}
+
+// hstsInput is everything one decision depends on.
+type hstsInput struct {
+	kind    tlsKind
+	verdict trustVerdict
+	enabled bool
+	now     time.Time
+}
+
+// hstsDecide is the decision table (D-10, D-14, D-23, D-25) and the ramp. Nothing is sent over the
+// self-signed certificate or an unverified Let's Encrypt certificate. A certificate-files certificate
+// that does not verify gets max-age=0, so a browser that trusts its CA drops the one-year header
+// earlier versions sent. A verified certificate gets max-age=0 while the toggle is off, and a positive
+// max-age for the verified host while it is on. Every decision that is not a send starts the ramp
+// over, and so does a new verified host; a send moves at most one step, and a step begins when it is
+// entered.
+func hstsDecide(in hstsInput, ramp hstsRamp) (hstsDecision, hstsRamp) {
+	v := in.verdict
+	var d hstsDecision
+	switch {
+	case in.kind == 0 || !v.Checked:
+	case in.kind == tlsKindSelfSigned:
+		d.reason = trustSelfSigned
+	case !v.Verified:
+		d.reason = v.Reason
+		if in.kind == tlsKindSupplied {
+			d.kind = hstsWithdraw
+		}
+	case !in.enabled:
+		d.kind, d.reason = hstsWithdraw, "toggle_off"
+	default:
+		d.kind, d.host = hstsSend, v.Host
+	}
+	if d.kind != hstsSend {
+		return d, hstsRamp{}
+	}
+
+	now := in.now.UnixNano()
+	switch {
+	case ramp.step < 1 || ramp.host != v.Host:
+		ramp = hstsRamp{host: v.Host, step: 1, since: now}
+	case ramp.step < len(hstsSteps) && in.now.Sub(time.Unix(0, ramp.since)) >= hstsDwell[ramp.step-1]:
+		ramp.step++
+		ramp.since = now
+	}
+	d.step, d.maxAge = ramp.step, hstsSteps[ramp.step-1]
+	return d, ramp
 }

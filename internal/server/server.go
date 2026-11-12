@@ -876,7 +876,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Strict-Transport-Security is the policy's decision, made off the request path and read from an
 	// atomic snapshot (D-10). It reads time from the same clock as the certificates and the trust
 	// verdict, and waits on a clock of its own.
-	hsts := newHSTSPolicy(trustNow, trust, rt, cfg.ACME.HSTS, bo.hstsClock, log)
+	hsts := newHSTSPolicy(trustNow, trust, rt, cfg.ACME.HSTS, bo.hstsClock, hstsDB{r: st.RQ, w: st.Q}, log)
 	rt.SetOnInstall(hsts.Wake)
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.

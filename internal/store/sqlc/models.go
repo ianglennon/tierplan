@@ -267,6 +267,16 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type HttpsState struct {
+	ID            int64
+	HstsEnabled   int64
+	HstsHost      string
+	HstsStep      int64
+	HstsStepSince int64
+	HstsHeldUntil int64
+	UpdatedAt     int64
+}
+
 type ImageCheck struct {
 	Host      string
 	Repo      string
