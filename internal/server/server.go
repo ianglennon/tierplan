@@ -304,6 +304,7 @@ type buildOptions struct {
 	acmeClock       stackops.Clock
 	acmeDNS         *acme.DNSDeps
 	trustRoots      *x509.CertPool
+	hstsClock       stackops.Clock
 	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
@@ -349,6 +350,15 @@ func WithTLSRefreshClock(c stackops.Clock) Option {
 // build, which calls Build without it, always reads the real time. A nil clock keeps the wall clock.
 func WithACMEClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.acmeClock = c }
+}
+
+// WithHSTSClock replaces the clock the HSTS policy's periodic loop waits on. It is separate from the
+// ACME clock, which the policy reads the time from: an extra timer on that clock would break the
+// armed-timer counting of the ACME rigs. It exists for tests. It is a Go option only, like
+// WithACMEClock: no setting, flag or environment variable reaches it, so a production build always
+// waits on the wall clock. A nil clock keeps the wall clock.
+func WithHSTSClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.hstsClock = c }
 }
 
 // WithACMEDNS replaces the DNS-01 dependencies of the Let's Encrypt manager: the DNS providers, the
@@ -863,6 +873,11 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	trust := newTrustChecker(bo.trustRoots, trustNow, func() string { return hostOf(inst.PublicURL()) })
 	agentTrust := func() string { return rt.agentTrust(trust) }
+	// Strict-Transport-Security is the policy's decision, made off the request path and read from an
+	// atomic snapshot (D-10). It reads time from the same clock as the certificates and the trust
+	// verdict, and waits on a clock of its own.
+	hsts := newHSTSPolicy(trustNow, trust, rt, cfg.ACME.HSTS, bo.hstsClock, log)
+	rt.SetOnInstall(hsts.Wake)
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -1161,12 +1176,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:          proxyObs,
 			PublicOrigin:   inst.PublicOrigin,
 			Logger:         log,
-			// Strict-Transport-Security only on a response to a request that came
-			// over TLS: no plain response exists to carry it, and an
-			// X-Forwarded-Proto header decides nothing here. Not for TierPlan's own
-			// self-signed certificate: a browser pinned to it could not click through
-			// a regenerated one (WR-09).
-			HSTS: func(r *http.Request) bool { return r.TLS != nil && rt.HSTSAllowed() },
+			// Strict-Transport-Security is the policy's decision (D-10): only on a
+			// response to a request that came over TLS, an X-Forwarded-Proto header
+			// decides nothing here, and never over TierPlan's own self-signed
+			// certificate, which a browser could not click through once regenerated
+			// (WR-09).
+			HSTS: hsts.Header,
 		},
 		System: api.SystemDeps{Ready: ready},
 		Setup:  setupDeps,
@@ -1316,6 +1331,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
 	// Renewals, the expiry fallback and the resume of an open order run on the ACME clock.
 	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
+	// The header is decided once before anything is served, then again on every certificate install
+	// and every minute.
+	hsts.Recompute(ctx)
+	srv.background.Go(func() { hsts.Run(bg) })
 	// A setting another store handle wrote, such as a restore or a CLI user command, is applied here
 	// within one poll, so the redirect gate, the cookie scope and the Origin check follow it without
 	// a restart. The watcher only reloads the instance's cached values: it pushes no address to

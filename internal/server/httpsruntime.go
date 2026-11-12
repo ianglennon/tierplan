@@ -54,6 +54,9 @@ type httpsRuntime struct {
 	// never read from the served certificate, so a Let's Encrypt leaf's pin is never published and
 	// a renewal never changes what welcomes list (D-19).
 	selfPin atomic.Pointer[string]
+	// onInstall is told after every Install, so the HSTS policy decides for a swapped certificate at
+	// once instead of at its next tick (D-10).
+	onInstall atomic.Pointer[func()]
 }
 
 // newHTTPSRuntime returns a runtime with nothing installed.
@@ -76,6 +79,19 @@ func newHTTPSRuntime() *httpsRuntime {
 // connection already open keeps the certificate it was set up with.
 func (r *httpsRuntime) Install(kind tlsKind, get func(*tls.ClientHelloInfo) (*tls.Certificate, error)) {
 	r.cur.Store(&liveTLS{kind: kind, get: get})
+	if f := r.onInstall.Load(); f != nil {
+		(*f)()
+	}
+}
+
+// SetOnInstall registers f to be called after every Install. f must not block: it is called on the
+// goroutine that installs a certificate. A nil f removes the hook.
+func (r *httpsRuntime) SetOnInstall(f func()) {
+	if f == nil {
+		r.onInstall.Store(nil)
+		return
+	}
+	r.onInstall.Store(&f)
 }
 
 // Kind is the kind of the installed source, 0 when nothing is installed. That
