@@ -627,9 +627,15 @@ func TestHTTPSStatusFlagsTheTestDirectory(t *testing.T) {
 	}
 }
 
+// envDNSToken is the token an environment variable supplies in the tests below; no response may hold it.
+const envDNSToken = "cf-env-token-b19e04d7a6c3825f" //nolint:gosec // G101: a recognisable fake token, so a test can prove it never leaks
+
 func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 	t.Parallel()
-	f := newACMEFix(t, acmeOpts{})
+	// The DNS provider and its token come from the environment, so the locks are in every answer.
+	f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{
+		DNSProvider: "cloudflare", CloudflareToken: envDNSToken, TokenVar: config.EnvCloudflareTokenFile,
+	}})
 	f.register(t, "ops@example.org")
 	ctx := context.Background()
 	rs, err := f.mgr.Issue(ctx, "user:test")
@@ -680,6 +686,11 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 		// A token is sent with a resolver that is refused first, so no request leaves the test.
 		"save refused": f.send(t, http.MethodPut, "/api/https/acme/validation", `{"challengeType":"dns-01","token":"cf-token-7f3a91c2d04b8e65","resolvers":["bad/entry"]}`).Body.String(),
 		"test refused": f.send(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"cf-token-7f3a91c2d04b8e65","resolvers":["bad/entry"]}`).Body.String(),
+		// The environment's token is locked: a typed token and a removal are refused, and the answers name the
+		// variable, never the token.
+		"save locked":   f.send(t, http.MethodPut, "/api/https/acme/validation", `{"challengeType":"dns-01","token":"cf-token-7f3a91c2d04b8e65"}`).Body.String(),
+		"test locked":   f.send(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"cf-token-7f3a91c2d04b8e65"}`).Body.String(),
+		"remove locked": f.send(t, http.MethodDelete, "/api/https/acme/dns/token", "").Body.String(),
 	}
 	for name, body := range bodies {
 		if body == "" {
@@ -690,8 +701,8 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 				t.Errorf("%s holds %q: %s", name, bad, body)
 			}
 		}
-		if strings.Contains(body, "cf-token-7f3a91c2d04b8e65") {
-			t.Errorf("%s holds the DNS token: %s", name, body)
+		if strings.Contains(body, "cf-token-7f3a91c2d04b8e65") || strings.Contains(body, envDNSToken) {
+			t.Errorf("%s holds a DNS token: %s", name, body)
 		}
 		for _, secret := range secrets {
 			if strings.Contains(body, secret) {
@@ -717,6 +728,13 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 	}
 	if a.Account == nil || a.Account.Contact != "ops@example.org" {
 		t.Errorf("account = %+v, want the contact without its mailto: prefix", a.Account)
+	}
+	// The environment's token is in use and locked, and the status says so without a trace of it.
+	if a.DNS.TokenSource != "env" || a.DNS.TokenSaved {
+		t.Errorf("dns = %+v, want the token from env and none saved", a.DNS)
+	}
+	if l := a.Locks.DNSToken; l == nil || l.Var != "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE" || l.Value != "" || l.Stored != "" {
+		t.Errorf("locks.dnsToken = %+v, want only the variable's name", l)
 	}
 }
 

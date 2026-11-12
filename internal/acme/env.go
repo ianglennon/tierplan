@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
+	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
 	"github.com/ianglennon/tierplan/internal/config"
 )
 
@@ -99,6 +101,49 @@ func (m *Manager) tokenSaved(ctx context.Context, provider string) (bool, error)
 	return m.d.Store.DNSTokenSaved(ctx, provider)
 }
 
+// The sources a DNS token in use can come from, as the status says them.
+const (
+	// TokenSourceEnv is a token the environment gives; it is never stored.
+	TokenSourceEnv = "env"
+	// TokenSourceStored is a token saved in the database.
+	TokenSourceStored = "stored"
+	// TokenSourceNone is no token anywhere.
+	TokenSourceNone = "none"
+)
+
+// tokenSource says which token a DNS-01 run for provider uses: the environment's when it gives one,
+// else the saved one, else none. saved is whether a token is saved, whichever is in use. The token itself
+// is not read.
+func (m *Manager) tokenSource(ctx context.Context, provider string) (source string, saved bool, err error) {
+	saved, err = m.d.Store.DNSTokenSaved(ctx, provider)
+	if err != nil {
+		return "", false, err
+	}
+	switch {
+	case m.d.Env.CloudflareToken != "" && provider == m.envProvider():
+		return TokenSourceEnv, saved, nil
+	case saved:
+		return TokenSourceStored, saved, nil
+	}
+	return TokenSourceNone, saved, nil
+}
+
+// tokenLocked reports whether a variable fixes the DNS provider and its token. They lock together
+// (D-05): config refuses one without the other, and here either is enough, so no path can change the
+// token of a provider the environment names.
+func (m *Manager) tokenLocked() bool {
+	return m.d.Env.DNSProvider != "" || m.d.Env.CloudflareToken != ""
+}
+
+// tokenVar is the variable that supplies the token, for the lock to name. It is the variable's name,
+// never its value.
+func (m *Manager) tokenVar() string {
+	if v := m.d.Env.TokenVar; v != "" {
+		return v
+	}
+	return config.EnvCloudflareToken
+}
+
 // envProvider is the provider the environment's token belongs to: the token and the provider are set
 // together (config validation), so the token is the provider's.
 func (m *Manager) envProvider() string {
@@ -134,6 +179,12 @@ const (
 	LockProfile = "profile"
 	// LockChallenge is the validation method TIERPLAN_ACME_CHALLENGE fixes (D-17).
 	LockChallenge = "challengeType"
+	// LockDNSProvider is the DNS provider TIERPLAN_DNS_PROVIDER fixes (D-05).
+	LockDNSProvider = "dnsProvider"
+	// LockDNSToken is the DNS API token a token variable supplies (D-05). It locks with the provider.
+	LockDNSToken = "dnsToken"
+	// LockResolvers is the resolver list TIERPLAN_DNS_RESOLVERS fixes (D-17).
+	LockResolvers = "resolvers"
 )
 
 // ErrLocked is returned when an action is refused because an environment variable fixes the setting it
@@ -166,6 +217,12 @@ type Locks struct {
 	Profile   *Lock
 	// ChallengeType is the validation method TIERPLAN_ACME_CHALLENGE fixes.
 	ChallengeType *Lock
+	// DNSProvider is the DNS provider TIERPLAN_DNS_PROVIDER fixes, and DNSToken the token a token variable
+	// supplies. Either variable gives both. DNSToken carries only the variable's name: its value and the
+	// stored token are secrets and never appear.
+	DNSProvider, DNSToken *Lock
+	// Resolvers is the resolver list TIERPLAN_DNS_RESOLVERS fixes; its values are the lists joined by commas.
+	Resolvers *Lock
 }
 
 // lockedACME is the refusal of an action TIERPLAN_ACME fixes.
@@ -199,6 +256,31 @@ func (m *Manager) lockedChallenge() error {
 	return &ErrLocked{Field: LockChallenge, Var: config.EnvACMEChallenge, Problem: "acme_challenge_locked"}
 }
 
+// lockedDNSToken is the refusal of a token change while a variable supplies the token.
+func (m *Manager) lockedDNSToken() error {
+	return &ErrLocked{Field: LockDNSToken, Var: m.tokenVar(), Problem: "acme_dns_token_locked"}
+}
+
+// lockedResolvers is the refusal of a resolver list TIERPLAN_DNS_RESOLVERS does not name.
+func (m *Manager) lockedResolvers() error {
+	return &ErrLocked{Field: LockResolvers, Var: config.EnvDNSResolvers, Problem: "acme_resolvers_locked"}
+}
+
+// checkResolverLock settles a requested resolver list against TIERPLAN_DNS_RESOLVERS. A list that is not
+// sent, or that equals the variable's after normalisation and in the same order (the list is asked in
+// order, so a reordering is a change), is accepted; the caller then ignores it and writes the stored list.
+// Any other list, one that cannot be parsed included, is refused.
+func (m *Manager) checkResolverLock(draft *[]string) error {
+	if !m.d.Env.ResolversSet || draft == nil {
+		return nil
+	}
+	list, err := dnscheck.ParseResolvers(*draft)
+	if err != nil || !slices.Equal(list, m.d.Env.Resolvers) {
+		return m.lockedResolvers()
+	}
+	return nil
+}
+
 // lockedProfile is the refusal of a profile TIERPLAN_ACME_PROFILE does not name.
 func (m *Manager) lockedProfile() error {
 	return &ErrLocked{Field: LockProfile, Var: config.EnvACMEProfile, Problem: "acme_profile_locked"}
@@ -223,6 +305,15 @@ func (m *Manager) locks(st State) Locks {
 	}
 	if c := m.d.Env.Challenge; c != "" {
 		l.ChallengeType = &Lock{Var: config.EnvACMEChallenge, Value: c, Stored: challengeOf(st)}
+	}
+	if m.tokenLocked() {
+		l.DNSProvider = &Lock{Var: config.EnvDNSProvider, Value: m.envProvider(), Stored: dnsProviderOf(st)}
+		l.DNSToken = &Lock{Var: m.tokenVar()}
+	}
+	if m.d.Env.ResolversSet {
+		l.Resolvers = &Lock{
+			Var: config.EnvDNSResolvers, Value: strings.Join(m.d.Env.Resolvers, ","), Stored: strings.Join(st.DNSResolvers, ","),
+		}
 	}
 	return l
 }

@@ -12,11 +12,18 @@ import type {
 import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
 
-// The DNS block of the status: Cloudflare, no token saved, no resolvers and nothing left over.
+// The DNS block of the status: Cloudflare, no token anywhere, no resolvers and nothing left over.
 export type LeftOverRecord = NonNullable<HTTPSACME["dns"]["leftOver"]>[number];
 
 export function acmeDNSStatus(over: Partial<HTTPSACME["dns"]> = {}): HTTPSACME["dns"] {
-  return { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false, ...over };
+  return {
+    leftOver: [],
+    provider: "cloudflare",
+    resolvers: [],
+    tokenSaved: false,
+    tokenSource: "none",
+    ...over,
+  };
 }
 
 // A TXT record TierPlan could not delete as the status lists it: the last delete failed because the

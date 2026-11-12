@@ -151,7 +151,12 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 			"of more than five; 422 " + problemACMEChallengeUnknown + "; 422 acme_refused when no certificate could be ordered for the names; " +
 			"409 " + problemACMERunActive + " while a run or a token test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " +
 			problemACMECertFiles + " while certificate files are set. While TIERPLAN_ACME_CHALLENGE is set it decides: its own method is accepted and the " +
-			"save keeps the saved method, and any other method is refused with 409 " + problemACMEChallengeLocked + ", storing nothing. Needs settings.write.",
+			"save keeps the saved method, and any other method is refused with 409 " + problemACMEChallengeLocked + ", storing nothing. A typed token while " +
+			"TIERPLAN_DNS_PROVIDER or a Cloudflare token variable is set is refused with 409 " + problemACMEDNSTokenLocked + ": the provider and its token lock " +
+			"together (locks.dnsProvider and locks.dnsToken), and a change of provider would be refused with 409 " + problemACMEDNSProviderLocked +
+			", though no route offers one. With the environment's token alone DNS-01 needs no saved one. While " +
+			"TIERPLAN_DNS_RESOLVERS is set the same list in the same order is accepted and the save keeps the saved list, and any other list is refused with 409 " +
+			problemACMEResolversLocked + "; every lock is checked before anything is stored, so a refused save stores nothing. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *PutACMEValidationInput) (*HTTPSACMEValidationOutput, error) {
 		if d.ACME == nil {
@@ -193,7 +198,10 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 			"name. 422 " + problemACMEDNSTokenRequired + " (field body.token) when none is typed or saved; 422 " + problemACMEDNSResolverBad +
 			" (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 " +
 			problemACMERunActive + " while a run or another test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " +
-			problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+			problemACMECertFiles + " while certificate files are set. With no token typed it tests the token DNS-01 uses: the environment's when a " +
+			"variable supplies one (it is held in memory, never stored or returned), else the saved one. A typed token while a variable supplies the token is " +
+			"refused with 409 " + problemACMEDNSTokenLocked + ", and so is a list other than TIERPLAN_DNS_RESOLVERS's with 409 " + problemACMEResolversLocked +
+			" (the variable's list answers the test). A token the provider refuses is a 200 with the classified error of each name, never a failure of the page. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *TestACMEDNSTokenInput) (*HTTPSACMETokenTestOutput, error) {
 		if d.ACME == nil {
@@ -217,8 +225,9 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 		DefaultStatus: http.StatusNoContent,
 		Summary:       "Remove the saved DNS API token",
 		Description: "Deletes the saved token. 409 " + problemACMEDNSTokenInUse + " while DNS-01 is the saved validation method, because renewals " +
-			"would stop; 409 " + problemACMERunActive + " while a run or a token test holds the DNS slot; 409 " + problemACMEPaused +
-			" after a restore; 409 " + problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+			"would stop; 409 " + problemACMEDNSTokenLocked + " while an environment variable supplies the token; 409 " + problemACMERunActive +
+			" while a run or a token test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " + problemACMECertFiles +
+			" while certificate files are set. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMENoContentOutput, error) {
 		if d.ACME == nil {

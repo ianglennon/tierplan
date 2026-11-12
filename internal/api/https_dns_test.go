@@ -804,3 +804,131 @@ func TestPutACMEValidationLockedChallenge(t *testing.T) {
 		t.Errorf("locks.challengeType after the echo = %+v, want stored http-01", lock)
 	}
 }
+
+// The provider and its token lock together, the token is proved but never stored or shown, and a typed
+// token or a removal is refused while a variable supplies it (SET-02, D-03, D-05, D-06, D-17).
+func TestPutACMEValidationLockedDNSToken(t *testing.T) {
+	t.Parallel()
+	f := newDNSFix(t, "", acmeOpts{env: config.ACMEEnv{
+		DNSProvider: "cloudflare", CloudflareToken: dnsAPIToken, TokenVar: config.EnvCloudflareTokenFile,
+	}})
+	ctx := context.Background()
+
+	st := f.status(t).ACME
+	if l := st.Locks.DNSProvider; l == nil || l.Var != "TIERPLAN_DNS_PROVIDER" || l.Value != "cloudflare" {
+		t.Errorf("locks.dnsProvider = %+v, want TIERPLAN_DNS_PROVIDER fixing cloudflare", l)
+	}
+	if l := st.Locks.DNSToken; l == nil || l.Var != "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE" || l.Value != "" || l.Stored != "" {
+		t.Errorf("locks.dnsToken = %+v, want the variable's name and nothing else", l)
+	}
+	if st.Locks.ChallengeType != nil || st.Locks.Resolvers != nil {
+		t.Errorf("locks = challenge %+v resolvers %+v, want them free", st.Locks.ChallengeType, st.Locks.Resolvers)
+	}
+	if st.DNS.TokenSource != "env" || st.DNS.TokenSaved {
+		t.Errorf("dns = %+v, want the token from env and none saved", st.DNS)
+	}
+
+	// A typed token is refused before it is tested, and nothing is stored.
+	rec := f.putValidation(t, `{"challengeType":"dns-01","token":"`+dnsAPIWrongToken+`"}`)
+	if rec.Code != http.StatusConflict || decodeProblemValue(t, rec).Type != "acme_dns_token_locked" {
+		t.Fatalf("PUT with a typed token: %d %s, want 409 acme_dns_token_locked", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), dnsAPIWrongToken) || strings.Contains(rec.Body.String(), dnsAPIToken) {
+		t.Errorf("the refusal holds a token: %s", rec.Body)
+	}
+	if got := f.storedState(t).ChallengeType; got == acme.ChallengeDNS01 {
+		t.Errorf("stored challenge = %q after a refused save, want it unchanged", got)
+	}
+
+	// With the environment's token alone DNS-01 can be saved, and nothing is sealed.
+	got := decodeValidation(t, f.putValidation(t, `{"challengeType":"dns-01"}`))
+	if !got.Saved || got.Test != nil || got.ChallengeType != "dns-01" || got.TokenSaved {
+		t.Errorf("save = %+v, want dns-01 saved with no test and no token saved", got)
+	}
+	if saved, err := f.store.DNSTokenSaved(ctx, "cloudflare"); err != nil || saved {
+		t.Errorf("DNSTokenSaved = %v (%v), want the environment's token never stored", saved, err)
+	}
+
+	// Test token proves the environment's token and stores nothing.
+	rec = f.sendDNS(t, http.MethodPost, "/api/https/acme/dns/test", `{}`)
+	var tested api.HTTPSACMETokenTestBody
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &tested) != nil || !tested.Passed {
+		t.Fatalf("test with the environment's token: %d %s, want 200 and passed", rec.Code, rec.Body)
+	}
+	if saved, err := f.store.DNSTokenSaved(ctx, "cloudflare"); err != nil || saved {
+		t.Errorf("DNSTokenSaved after a test = %v (%v), want none", saved, err)
+	}
+	rec = f.sendDNS(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"`+dnsAPIWrongToken+`"}`)
+	if rec.Code != http.StatusConflict || decodeProblemValue(t, rec).Type != "acme_dns_token_locked" {
+		t.Errorf("test with a typed token: %d %s, want 409 acme_dns_token_locked", rec.Code, rec.Body)
+	}
+
+	// The token cannot be removed while a variable supplies it.
+	rec = f.sendDNS(t, http.MethodDelete, "/api/https/acme/dns/token", "")
+	if rec.Code != http.StatusConflict || decodeProblemValue(t, rec).Type != "acme_dns_token_locked" {
+		t.Errorf("DELETE token: %d %s, want 409 acme_dns_token_locked", rec.Code, rec.Body)
+	}
+	if recs := f.prov.Records(); len(recs) != 0 {
+		t.Errorf("the provider still holds %+v", recs)
+	}
+}
+
+// A well-formed token from the environment that the provider refuses shows as a failed test with the
+// classified error; the page and the status keep working (D-06).
+func TestPutACMEValidationLockedDNSTokenRefusedByTheProvider(t *testing.T) {
+	t.Parallel()
+	f := newDNSFix(t, "", acmeOpts{env: config.ACMEEnv{
+		DNSProvider: "cloudflare", CloudflareToken: dnsAPIWrongToken, TokenVar: config.EnvCloudflareToken,
+	}})
+
+	rec := f.sendDNS(t, http.MethodPost, "/api/https/acme/dns/test", `{}`)
+
+	var got api.HTTPSACMETokenTestBody
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+		t.Fatalf("test: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if got.Passed || len(got.Names) != 1 || got.Names[0].Error == nil || got.Names[0].Error.Code != "dns_token_invalid" {
+		t.Errorf("test = %+v, want a failed name classified dns_token_invalid", got)
+	}
+	if strings.Contains(rec.Body.String(), dnsAPIWrongToken) {
+		t.Errorf("the answer holds the token: %s", rec.Body)
+	}
+	if st := f.status(t).ACME; st.DNS.TokenSource != "env" {
+		t.Errorf("tokenSource = %q, want env", st.DNS.TokenSource)
+	}
+}
+
+// Resolvers fixed by TIERPLAN_DNS_RESOLVERS: the same list in the same order is an echo that stores
+// nothing, and any other list is refused with nothing stored (D-17).
+func TestPutACMEValidationLockedResolvers(t *testing.T) {
+	t.Parallel()
+	f := newDNSFix(t, "", acmeOpts{env: config.ACMEEnv{Resolvers: []string{"1.1.1.1:53", "9.9.9.9:53"}, ResolversSet: true}})
+	f.seedValidation(t, acme.ChallengeHTTP01, []string{"8.8.8.8:53"})
+
+	lock := f.status(t).ACME.Locks.Resolvers
+	if lock == nil || lock.Var != "TIERPLAN_DNS_RESOLVERS" || lock.Value != "1.1.1.1:53,9.9.9.9:53" || lock.Stored != "8.8.8.8:53" {
+		t.Fatalf("locks.resolvers = %+v, want the variable, its list and the stored list", lock)
+	}
+
+	for _, body := range []string{
+		`{"challengeType":"http-01","resolvers":["9.9.9.9","1.1.1.1"]}`,
+		`{"challengeType":"http-01","resolvers":["8.8.8.8"]}`,
+		`{"challengeType":"http-01","resolvers":[]}`,
+	} {
+		rec := f.putValidation(t, body)
+		if rec.Code != http.StatusConflict || decodeProblemValue(t, rec).Type != "acme_resolvers_locked" {
+			t.Errorf("PUT %s: %d %s, want 409 acme_resolvers_locked", body, rec.Code, rec.Body)
+		}
+		if got := f.storedState(t).DNSResolvers; !slices.Equal(got, []string{"8.8.8.8:53"}) {
+			t.Fatalf("stored resolvers after %s = %v, want them unchanged", body, got)
+		}
+	}
+
+	got := decodeValidation(t, f.putValidation(t, `{"challengeType":"http-01","resolvers":["1.1.1.1","9.9.9.9"]}`))
+	if !got.Saved || !slices.Equal(got.Resolvers, []string{"1.1.1.1:53", "9.9.9.9:53"}) {
+		t.Errorf("echo answer = %+v, want saved, reporting the variable's list", got)
+	}
+	if got := f.storedState(t).DNSResolvers; !slices.Equal(got, []string{"8.8.8.8:53"}) {
+		t.Errorf("stored resolvers after the echo = %v, want 8.8.8.8:53: the variable is never stored", got)
+	}
+}

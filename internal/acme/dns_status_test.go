@@ -101,9 +101,16 @@ func TestStatusShowsTheDNSViewWithoutTheToken(t *testing.T) {
 		t.Errorf("%%+v of the status contains the token")
 	}
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(DNSView{})) {
+		// TokenSource names where the token comes from (an enum of three words), never the token.
+		if f.Name == "TokenSource" {
+			continue
+		}
 		if strings.Contains(f.Name, "Token") && f.Type.Kind() != reflect.Bool {
 			t.Errorf("DNSView.%s is a %s; a token field may only be a bool", f.Name, f.Type)
 		}
+	}
+	if d.TokenSource != TokenSourceStored {
+		t.Errorf("DNSView.TokenSource = %q, want one of the three source words (stored here)", d.TokenSource)
 	}
 }
 

@@ -14,8 +14,11 @@ import (
 // DNSView is the DNS-01 settings as the page shows them. The token is never in it: TokenSaved says only
 // whether one is saved (CHAL-01, D-03).
 type DNSView struct {
-	Provider   string
+	Provider string
+	// TokenSaved is whether a token is saved in the database; a token from the environment is not one.
 	TokenSaved bool
+	// TokenSource is the token a run uses: TokenSourceEnv, TokenSourceStored or TokenSourceNone.
+	TokenSource string
 	// Resolvers are the normalised resolver list as saved; empty, never nil, when the system's are used.
 	Resolvers []string
 	// LeftOver lists every TXT record TierPlan created and could not yet delete, oldest first (D-18).
@@ -38,7 +41,7 @@ type LeftOverView struct {
 // being tried ("" when they are).
 func (m *Manager) dnsView(ctx context.Context, st State, paused string) (DNSView, error) {
 	provider := m.provider(st)
-	saved, err := m.tokenSaved(ctx, provider)
+	source, saved, err := m.tokenSource(ctx, provider)
 	if err != nil {
 		return DNSView{}, err
 	}
@@ -47,7 +50,7 @@ func (m *Manager) dnsView(ctx context.Context, st State, paused string) (DNSView
 		return DNSView{}, err
 	}
 	out := DNSView{
-		Provider: provider, TokenSaved: saved,
+		Provider: provider, TokenSaved: saved, TokenSource: source,
 		Resolvers: m.resolvers(st), LeftOver: make([]LeftOverView, 0, len(rows)),
 	}
 	if out.Resolvers == nil {

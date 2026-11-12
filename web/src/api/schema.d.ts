@@ -4207,7 +4207,7 @@ export interface paths {
         put?: never;
         /**
          * Test a DNS API token
-         * @description Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. With no token typed it tests the token DNS-01 uses: the environment's when a variable supplies one (it is held in memory, never stored or returned), else the saved one. A typed token while a variable supplies the token is refused with 409 acme_dns_token_locked, and so is a list other than TIERPLAN_DNS_RESOLVERS's with 409 acme_resolvers_locked (the variable's list answers the test). A token the provider refuses is a 200 with the classified error of each name, never a failure of the page. Needs settings.write.
          */
         post: operations["testACMEDNSToken"];
         delete?: never;
@@ -4228,7 +4228,7 @@ export interface paths {
         post?: never;
         /**
          * Remove the saved DNS API token
-         * @description Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_dns_token_locked while an environment variable supplies the token; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
          */
         delete: operations["deleteACMEDNSToken"];
         options?: never;
@@ -4346,7 +4346,7 @@ export interface paths {
         get?: never;
         /**
          * Choose how the names are validated
-         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_CHALLENGE is set it decides: its own method is accepted and the save keeps the saved method, and any other method is refused with 409 acme_challenge_locked, storing nothing. Needs settings.write.
+         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_CHALLENGE is set it decides: its own method is accepted and the save keeps the saved method, and any other method is refused with 409 acme_challenge_locked, storing nothing. A typed token while TIERPLAN_DNS_PROVIDER or a Cloudflare token variable is set is refused with 409 acme_dns_token_locked: the provider and its token lock together (locks.dnsProvider and locks.dnsToken), and a change of provider would be refused with 409 acme_dns_provider_locked, though no route offers one. With the environment's token alone DNS-01 needs no saved one. While TIERPLAN_DNS_RESOLVERS is set the same list in the same order is accepted and the save keeps the saved list, and any other list is refused with 409 acme_resolvers_locked; every lock is checked before anything is stored, so a refused save stores nothing. Needs settings.write.
          */
         put: operations["putACMEValidation"];
         post?: never;
@@ -8848,8 +8848,13 @@ export interface components {
             provider: string;
             /** @description The resolvers the propagation check asks, as host:port; empty means the zone's own name servers */
             resolvers: string[] | null;
-            /** @description True when a DNS API token is saved. The token is never returned */
+            /** @description True when a DNS API token is saved in the database. A token an environment variable supplies is not a saved one. The token is never returned */
             tokenSaved: boolean;
+            /**
+             * @description Which token DNS-01 uses: env when an environment variable supplies it (it is never stored), stored for the saved one, none when there is no token. The token is never returned
+             * @enum {string}
+             */
+            tokenSource: "env" | "stored" | "none";
         };
         HTTPSACMEDNSErrorBody: {
             /** @description The class of the failure, one of the codes of lastError in the status */
@@ -9150,10 +9155,16 @@ export interface components {
             acme?: components["schemas"]["HTTPSLockBody"];
             /** @description The validation method, fixed by TIERPLAN_ACME_CHALLENGE. Value is http-01 or dns-01 and stored is the saved method */
             challengeType?: components["schemas"]["HTTPSLockBody"];
+            /** @description The DNS provider, fixed by TIERPLAN_DNS_PROVIDER or by a Cloudflare token variable: the provider and its token lock together. Value is the provider id and stored the saved one */
+            dnsProvider?: components["schemas"]["HTTPSLockBody"];
+            /** @description The DNS API token, supplied by TIERPLAN_CLOUDFLARE_API_TOKEN or TIERPLAN_CLOUDFLARE_API_TOKEN_FILE, whichever var names. It is a secret: it has no value and no stored value, and a saved token is not removed or replaced while it is locked */
+            dnsToken?: components["schemas"]["HTTPSLockBody"];
             /** @description The account contact, fixed by TIERPLAN_ACME_EMAIL */
             email?: components["schemas"]["HTTPSLockBody"];
             /** @description The certificate profile, fixed by TIERPLAN_ACME_PROFILE */
             profile?: components["schemas"]["HTTPSLockBody"];
+            /** @description The propagation-check resolvers, fixed by TIERPLAN_DNS_RESOLVERS. Value and stored are the lists as host:port joined by commas; value is empty when the variable fixes the zone's own name servers */
+            resolvers?: components["schemas"]["HTTPSLockBody"];
         };
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */

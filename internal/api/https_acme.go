@@ -33,11 +33,14 @@ const (
 
 	// The 409 an environment variable's lock answers with (D-17). They equal the Problem of the
 	// acme.ErrLocked the manager returns; the route descriptions name them.
-	problemACMELocked          = "acme_locked"
-	problemACMEEmailLocked     = "acme_email_locked"
-	problemACMETOSLocked       = "acme_tos_locked"
-	problemACMEProfileLocked   = "acme_profile_locked"
-	problemACMEChallengeLocked = "acme_challenge_locked"
+	problemACMELocked            = "acme_locked"
+	problemACMEEmailLocked       = "acme_email_locked"
+	problemACMETOSLocked         = "acme_tos_locked"
+	problemACMEProfileLocked     = "acme_profile_locked"
+	problemACMEChallengeLocked   = "acme_challenge_locked"
+	problemACMEDNSProviderLocked = "acme_dns_provider_locked"
+	problemACMEDNSTokenLocked    = "acme_dns_token_locked" //nolint:gosec // G101: a problem type name, not a credential
+	problemACMEResolversLocked   = "acme_resolvers_locked"
 
 	problemACMEDNSTokenRequired = "acme_dns_token_required" //nolint:gosec // G101: a problem type name, not a credential
 	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
@@ -182,6 +185,9 @@ type HTTPSLocksBody struct {
 	AcceptTOS     *HTTPSLockBody `json:"acceptTos,omitempty" doc:"The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value"`
 	Profile       *HTTPSLockBody `json:"profile,omitempty" doc:"The certificate profile, fixed by TIERPLAN_ACME_PROFILE"`
 	ChallengeType *HTTPSLockBody `json:"challengeType,omitempty" doc:"The validation method, fixed by TIERPLAN_ACME_CHALLENGE. Value is http-01 or dns-01 and stored is the saved method"`
+	DNSProvider   *HTTPSLockBody `json:"dnsProvider,omitempty" doc:"The DNS provider, fixed by TIERPLAN_DNS_PROVIDER or by a Cloudflare token variable: the provider and its token lock together. Value is the provider id and stored the saved one"`
+	DNSToken      *HTTPSLockBody `json:"dnsToken,omitempty" doc:"The DNS API token, supplied by TIERPLAN_CLOUDFLARE_API_TOKEN or TIERPLAN_CLOUDFLARE_API_TOKEN_FILE, whichever var names. It is a secret: it has no value and no stored value, and a saved token is not removed or replaced while it is locked"`
+	Resolvers     *HTTPSLockBody `json:"resolvers,omitempty" doc:"The propagation-check resolvers, fixed by TIERPLAN_DNS_RESOLVERS. Value and stored are the lists as host:port joined by commas; value is empty when the variable fixes the zone's own name servers"`
 }
 
 // httpsLockBody maps a lock onto the contract; nil stays nil.
@@ -194,10 +200,11 @@ func httpsLockBody(l *acme.Lock) *HTTPSLockBody {
 
 // HTTPSACMEDNSBody is the DNS-01 side of the status.
 type HTTPSACMEDNSBody struct {
-	Provider   string                  `json:"provider" doc:"The DNS provider id the saved token is for, for example cloudflare"`
-	TokenSaved bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved. The token is never returned"`
-	Resolvers  []string                `json:"resolvers" doc:"The resolvers the propagation check asks, as host:port; empty means the zone's own name servers"`
-	LeftOver   []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
+	Provider    string                  `json:"provider" doc:"The DNS provider id the saved token is for, for example cloudflare"`
+	TokenSaved  bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved in the database. A token an environment variable supplies is not a saved one. The token is never returned"`
+	TokenSource string                  `json:"tokenSource" enum:"env,stored,none" doc:"Which token DNS-01 uses: env when an environment variable supplies it (it is never stored), stored for the saved one, none when there is no token. The token is never returned"`
+	Resolvers   []string                `json:"resolvers" doc:"The resolvers the propagation check asks, as host:port; empty means the zone's own name servers"`
+	LeftOver    []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
 }
 
 // HTTPSACMESuggestionBody is the DNS-01 suggestion: the host and the private address it resolves to.
@@ -233,7 +240,8 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	b.Locks = HTTPSLocksBody{
 		ACME: httpsLockBody(st.Locks.ACME), Email: httpsLockBody(st.Locks.Email),
 		AcceptTOS: httpsLockBody(st.Locks.AcceptTOS), Profile: httpsLockBody(st.Locks.Profile),
-		ChallengeType: httpsLockBody(st.Locks.ChallengeType),
+		ChallengeType: httpsLockBody(st.Locks.ChallengeType), DNSProvider: httpsLockBody(st.Locks.DNSProvider),
+		DNSToken: httpsLockBody(st.Locks.DNSToken), Resolvers: httpsLockBody(st.Locks.Resolvers),
 	}
 	refusedHost := map[string]bool{}
 	noPublicURL := false
@@ -288,7 +296,7 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	b.ActiveRun = acmeRunBody(st.ActiveRun)
 	b.LastRun = acmeRunBody(st.LastRun)
 	b.DNS = HTTPSACMEDNSBody{
-		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
+		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, TokenSource: st.DNS.TokenSource, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
 		LeftOver: make([]HTTPSACMELeftOverBody, 0, len(st.DNS.LeftOver)),
 	}
 	for _, l := range st.DNS.LeftOver {
@@ -517,7 +525,7 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 	var locked *acme.ErrLocked
 	switch {
 	case errors.As(err, &locked):
-		// The variable's name, never its value.
+		// The variable's name, never its value (a token's least of all).
 		return httpx.Problem(http.StatusConflict, locked.Problem, "Set by the "+locked.Var+" environment variable.")
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
