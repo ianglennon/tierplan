@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
@@ -182,6 +183,24 @@ type hstsRamp struct {
 	host  string
 	step  int
 	since int64
+	// held is the instant until which a browser may still hold a policy TierPlan sent. It is never
+	// lowered, and a reset of the ramp leaves it alone (D-26).
+	held int64
+}
+
+// hstsHeldSlack is added when the held-until bound is moved, so it is rewritten at most once an hour.
+const hstsHeldSlack = time.Hour
+
+// hstsWindow is the longest withdrawal window (D-12).
+const hstsWindow = 7 * 24 * time.Hour
+
+// withdrawWindow is how long before a certificate's NotAfter HSTS is withdrawn: a week, or a third
+// of the lifetime for a certificate shorter than three weeks, so a short-lived certificate is not
+// permanently inside it (D-12, D-22). The renewal scheduler renews at two thirds of the lifetime, or
+// half for a short one, so a certificate in the window has missed its renewal. The division is in
+// integer nanoseconds and truncates.
+func withdrawWindow(lifetime time.Duration) time.Duration {
+	return min(hstsWindow, lifetime/3)
 }
 
 // Recompute reads the served certificate and the trust verdict, moves the ramp and publishes the
@@ -194,6 +213,9 @@ func (p *hstsPolicy) Recompute(ctx context.Context) {
 	now := p.now()
 	kind, chain := p.rt.servedChain()
 	in := hstsInput{kind: kind, verdict: p.trust.verdictFor(kind, chain), enabled: p.enabled(), now: now}
+	if len(chain) > 0 {
+		in.notBefore, in.notAfter = chain[0].NotBefore, chain[0].NotAfter
+	}
 	d, ramp := hstsDecide(in, p.ramp)
 	p.ramp = ramp
 	p.snap.Store(&d)
@@ -212,24 +234,36 @@ func (p *hstsPolicy) load(ctx context.Context) {
 		return
 	}
 	p.loaded = true
-	p.ramp = hstsRamp{host: row.HstsHost, step: int(row.HstsStep), since: row.HstsStepSince}
+	p.ramp = hstsRamp{host: row.HstsHost, step: int(row.HstsStep), since: row.HstsStepSince, held: row.HstsHeldUntil}
 	p.saved = p.ramp
 }
 
-// persist writes the ramp when it differs from what the database holds.
+// persist writes the ramp, and the held-until bound, when they differ from what the database holds.
 func (p *hstsPolicy) persist(ctx context.Context, now time.Time) {
-	if p.ramp == p.saved {
-		return
+	failed := false
+	if p.ramp.host != p.saved.host || p.ramp.step != p.saved.step || p.ramp.since != p.saved.since {
+		err := p.db.SaveHSTSRamp(ctx, sqlc.SaveHSTSRampParams{
+			HstsHost: p.ramp.host, HstsStep: int64(p.ramp.step), HstsStepSince: p.ramp.since, UpdatedAt: now.UnixNano(),
+		})
+		if err != nil {
+			p.warn("save the HSTS ramp", err)
+			failed = true
+		} else {
+			p.saved.host, p.saved.step, p.saved.since = p.ramp.host, p.ramp.step, p.ramp.since
+		}
 	}
-	err := p.db.SaveHSTSRamp(ctx, sqlc.SaveHSTSRampParams{
-		HstsHost: p.ramp.host, HstsStep: int64(p.ramp.step), HstsStepSince: p.ramp.since, UpdatedAt: now.UnixNano(),
-	})
-	if err != nil {
-		p.warn("save the HSTS ramp", err)
-		return
+	if p.ramp.held != p.saved.held {
+		err := p.db.SaveHSTSHeldUntil(ctx, sqlc.SaveHSTSHeldUntilParams{HstsHeldUntil: p.ramp.held, UpdatedAt: now.UnixNano()})
+		if err != nil {
+			p.warn("save the HSTS held-until bound", err)
+			failed = true
+		} else {
+			p.saved.held = p.ramp.held
+		}
 	}
-	p.saved = p.ramp
-	p.writeWarned = false
+	if !failed {
+		p.writeWarned = false
+	}
 }
 
 // warn logs a database failure once, until a write works again.
@@ -247,17 +281,21 @@ type hstsInput struct {
 	verdict trustVerdict
 	enabled bool
 	now     time.Time
+	// notBefore and notAfter are the served leaf's validity.
+	notBefore, notAfter time.Time
 }
 
-// hstsDecide is the decision table (D-10, D-14, D-23, D-25) and the ramp. Nothing is sent over the
-// self-signed certificate or an unverified Let's Encrypt certificate. A certificate-files certificate
-// that does not verify gets max-age=0, so a browser that trusts its CA drops the one-year header
-// earlier versions sent. A verified certificate gets max-age=0 while the toggle is off, and a positive
-// max-age for the verified host while it is on. Every decision that is not a send starts the ramp
-// over, and so does a new verified host; a send moves at most one step, and a step begins when it is
-// entered.
+// hstsDecide is the decision table (D-10, D-12, D-14, D-22, D-23, D-25) and the ramp. Nothing is sent
+// over the self-signed certificate or an unverified Let's Encrypt certificate. A certificate-files
+// certificate that does not verify gets max-age=0, so a browser that trusts its CA drops the one-year
+// header earlier versions sent. A verified certificate gets max-age=0 while the toggle is off and
+// inside its withdrawal window, and otherwise a positive max-age for the verified host. Every decision
+// that is not a send starts the ramp over, and so does a new verified host; a send moves at most one
+// step, a step begins when it is entered, and a certificate that lives under ten days stops at the
+// one-week step.
 func hstsDecide(in hstsInput, ramp hstsRamp) (hstsDecision, hstsRamp) {
 	v := in.verdict
+	lifetime := in.notAfter.Sub(in.notBefore)
 	var d hstsDecision
 	switch {
 	case in.kind == 0 || !v.Checked:
@@ -270,21 +308,35 @@ func hstsDecide(in hstsInput, ramp hstsRamp) (hstsDecision, hstsRamp) {
 		}
 	case !in.enabled:
 		d.kind, d.reason = hstsWithdraw, "toggle_off"
+	case !in.now.Before(in.notAfter.Add(-withdrawWindow(lifetime))):
+		d.kind, d.reason = hstsWithdraw, "withdrawn"
 	default:
 		d.kind, d.host = hstsSend, v.Host
 	}
 	if d.kind != hstsSend {
-		return d, hstsRamp{}
+		return d, hstsRamp{held: ramp.held}
 	}
 
+	limit := len(hstsSteps)
+	if lifetime < acme.ShortLifetime {
+		limit = 2
+	}
 	now := in.now.UnixNano()
 	switch {
 	case ramp.step < 1 || ramp.host != v.Host:
-		ramp = hstsRamp{host: v.Host, step: 1, since: now}
-	case ramp.step < len(hstsSteps) && in.now.Sub(time.Unix(0, ramp.since)) >= hstsDwell[ramp.step-1]:
+		ramp = hstsRamp{host: v.Host, step: 1, since: now, held: ramp.held}
+	case ramp.step > limit:
+		ramp.step = limit
+	case ramp.step < limit && in.now.Sub(time.Unix(0, ramp.since)) >= hstsDwell[ramp.step-1]:
 		ramp.step++
 		ramp.since = now
 	}
+	if limit < len(hstsSteps) && ramp.step == limit {
+		d.reason = "capped"
+	}
 	d.step, d.maxAge = ramp.step, hstsSteps[ramp.step-1]
+	if need := now + d.maxAge*int64(time.Second); ramp.held < need {
+		ramp.held = need + int64(hstsHeldSlack)
+	}
 	return d, ramp
 }

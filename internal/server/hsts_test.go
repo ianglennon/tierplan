@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -467,5 +468,285 @@ func TestHSTSPolicyRampFailedWriteKeepsTheDecision(t *testing.T) {
 	g.header(p, hstsHost)
 	if row := g.row(); row.HstsStep != 1 {
 		t.Errorf("row = %+v after the write recovered, want step 1", row)
+	}
+}
+
+// seedRamp stores a ramp the way an earlier run of the server left it.
+func (g *hstsRig) seedRamp(host string, step int, since time.Time, held time.Time) {
+	g.t.Helper()
+	if _, err := g.st.Write.ExecContext(testsupport.Context(g.t),
+		`UPDATE https_state SET hsts_host = ?, hsts_step = ?, hsts_step_since = ?, hsts_held_until = ? WHERE id = 1`,
+		host, step, since.UnixNano(), held.UnixNano()); err != nil {
+		g.t.Fatal(err)
+	}
+}
+
+// A 90-day certificate on step 3: the last second before the withdrawal window it still sends, and at
+// exactly NotAfter minus 7 days it sends max-age=0 and the ramp starts over (D-12).
+func TestHSTSPolicyWithdrawAtExactlySevenDaysBeforeNotAfter(t *testing.T) {
+	g := newHSTSRig(t)
+	notAfter := hstsStart.Add(30 * 24 * time.Hour)
+	g.serve(tlsKindSupplied, g.leaf(notAfter.Add(-90*24*time.Hour), notAfter, hstsHost))
+	g.setStored(true)
+	g.seedRamp(hstsHost, 3, hstsStart, time.Time{})
+	p := g.policy(nil)
+
+	if got := g.header(p, hstsHost); got != "max-age=2592000" {
+		t.Fatalf("header = %q, want max-age=2592000", got)
+	}
+	g.clock.Advance(23*24*time.Hour - time.Nanosecond)
+	if got := g.header(p, hstsHost); got != "max-age=2592000" {
+		t.Fatalf("1 ns before the window the header is %q, want max-age=2592000", got)
+	}
+	g.clock.Advance(time.Nanosecond)
+	if got := g.header(p, hstsHost); got != "max-age=0" {
+		t.Fatalf("at the window's start the header is %q, want max-age=0", got)
+	}
+	if row := g.row(); row.HstsStep != 0 || row.HstsStepSince != 0 {
+		t.Errorf("row = %+v, want the ramp reset", row)
+	}
+	if d := p.snap.Load(); d.reason != "withdrawn" {
+		t.Errorf("reason = %q, want withdrawn", d.reason)
+	}
+}
+
+// After the renewal that missed its window, the new certificate is sent at step 1 (D-12).
+func TestHSTSPolicyWithdrawnThenRenewedStartsAgainAtFiveMinutes(t *testing.T) {
+	g := newHSTSRig(t)
+	notAfter := hstsStart.Add(5 * 24 * time.Hour)
+	g.serve(tlsKindACME, g.leaf(notAfter.Add(-90*24*time.Hour), notAfter, hstsHost))
+	g.setStored(true)
+	g.seedRamp(hstsHost, 3, hstsStart.Add(-time.Hour), time.Time{})
+	p := g.policy(nil)
+
+	if got := g.header(p, hstsHost); got != "max-age=0" {
+		t.Fatalf("inside the window the header is %q, want max-age=0", got)
+	}
+	renewed := hstsStart.Add(90 * 24 * time.Hour)
+	g.serve(tlsKindACME, g.leaf(hstsStart, renewed, hstsHost))
+	if got := g.header(p, hstsHost); got != "max-age=300" {
+		t.Errorf("after the renewal the header is %q, want max-age=300", got)
+	}
+}
+
+// A renewal that keeps sending keeps the step and when it began.
+func TestHSTSPolicyWithdrawRenewalWhileSendingKeepsTheRamp(t *testing.T) {
+	g := newHSTSRig(t)
+	g.serve(tlsKindACME, g.leaf(hstsStart.Add(-30*24*time.Hour), hstsStart.Add(60*24*time.Hour), hstsHost))
+	g.setStored(true)
+	p := g.policy(nil)
+	g.header(p, hstsHost)
+	g.clock.Advance(24 * time.Hour)
+	if got := g.header(p, hstsHost); got != "max-age=604800" {
+		t.Fatalf("header = %q, want step 2", got)
+	}
+	before := g.row()
+
+	g.clock.Advance(time.Hour)
+	g.serve(tlsKindACME, g.leaf(g.clock.Now(), g.clock.Now().Add(90*24*time.Hour), hstsHost))
+	if got := g.header(p, hstsHost); got != "max-age=604800" {
+		t.Errorf("after a renewal the header is %q, want step 2 kept", got)
+	}
+	if after := g.row(); after.HstsStep != before.HstsStep || after.HstsStepSince != before.HstsStepSince {
+		t.Errorf("a renewal changed the ramp from %+v to %+v", before, after)
+	}
+}
+
+// The window is a third of the lifetime when that is under a week, in integer nanoseconds, and the cap
+// for short-lived certificates begins below 10 days exactly.
+func TestHSTSPolicyWithdrawWindowAndCapBoundaries(t *testing.T) {
+	const day = 24 * time.Hour
+	if got := withdrawWindow(90 * day); got != 7*day {
+		t.Errorf("window of 90 days = %s, want 7 days", got)
+	}
+	if got := withdrawWindow(6 * day); got != 2*day {
+		t.Errorf("window of 6 days = %s, want 2 days", got)
+	}
+	if got := withdrawWindow(21 * day); got != 7*day {
+		t.Errorf("window of 21 days = %s, want 7 days (the cap meets a third exactly)", got)
+	}
+	if got := withdrawWindow(21*day - 1); got != 7*day-1 {
+		t.Errorf("window of 21 days less 1 ns = %s, want 7 days less 1 ns (truncated)", got)
+	}
+	if got := withdrawWindow(10); got != 3 {
+		t.Errorf("window of 10 ns = %d, want 3: integer division truncates", got)
+	}
+
+	v := trustVerdict{Checked: true, Verified: true, Host: hstsHost}
+	for _, tc := range []struct {
+		name     string
+		lifetime time.Duration
+		maxAge   int64
+		capped   bool
+	}{
+		{"exactly 10 days is not capped", 10 * day, 2592000, false},
+		{"1 ns under 10 days is capped at one week", 10*day - 1, 604800, true},
+		{"a 6-day certificate is capped", 6 * day, 604800, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			notBefore := hstsStart.Add(-time.Hour)
+			ramp := hstsRamp{host: hstsHost, step: 2, since: hstsStart.Add(-7 * day).UnixNano()}
+			d, got := hstsDecide(hstsInput{
+				kind: tlsKindACME, verdict: v, enabled: true, now: hstsStart,
+				notBefore: notBefore, notAfter: notBefore.Add(tc.lifetime),
+			}, ramp)
+			if d.kind != hstsSend || d.maxAge != tc.maxAge {
+				t.Fatalf("decision = %+v, want a send of %d", d, tc.maxAge)
+			}
+			if (d.reason == "capped") != tc.capped {
+				t.Errorf("reason = %q, capped want %v", d.reason, tc.capped)
+			}
+			if tc.capped && got.step != 2 {
+				t.Errorf("step = %d, want it held at 2", got.step)
+			}
+		})
+	}
+
+	t.Run("the window starts at exactly NotAfter minus the window", func(t *testing.T) {
+		notAfter := hstsStart.Add(30 * day)
+		in := hstsInput{kind: tlsKindACME, verdict: v, enabled: true, notBefore: notAfter.Add(-90 * day), notAfter: notAfter}
+		start := notAfter.Add(-7 * day)
+		in.now = start.Add(-time.Nanosecond)
+		if d, _ := hstsDecide(in, hstsRamp{}); d.kind != hstsSend {
+			t.Errorf("1 ns before the window the decision is %+v, want a send", d)
+		}
+		in.now = start
+		if d, _ := hstsDecide(in, hstsRamp{}); d.kind != hstsWithdraw {
+			t.Errorf("at the window's start the decision is %+v, want a withdrawal", d)
+		}
+	})
+}
+
+// A short-lived certificate never reaches the one-month step, even when renewal after renewal keeps the
+// ramp running past the days that would have lifted it (D-22).
+func TestHSTSPolicyCapAcrossRenewalsOfShortCertificates(t *testing.T) {
+	const day = 24 * time.Hour
+	g := newHSTSRig(t)
+	issue := func() {
+		now := g.clock.Now()
+		g.serve(tlsKindACME, g.leaf(now, now.Add(6*day), hstsHost))
+	}
+	issue()
+	g.setStored(true)
+	p := g.policy(nil)
+	g.header(p, hstsHost)
+	for range 20 {
+		g.clock.Advance(day)
+		if got := g.header(p, hstsHost); got != "max-age=604800" && got != "max-age=300" {
+			t.Fatalf("day %v: header = %q, want 300 or 604800", g.clock.Now().Sub(hstsStart), got)
+		}
+		issue() // renewed at half life or earlier, each time before the window
+	}
+	if got := g.header(p, hstsHost); got != "max-age=604800" {
+		t.Errorf("after 20 days of short certificates the header is %q, want the 1 week cap", got)
+	}
+	if d := p.snap.Load(); d.reason != "capped" || d.step != 2 {
+		t.Errorf("decision = %+v, want step 2 reported as capped", d)
+	}
+}
+
+// What each certificate kind gets when it does not verify, with the toggle on and off.
+func TestHSTSPolicyClearsOverUntrustedCertificateFiles(t *testing.T) {
+	g := newHSTSRig(t)
+	stranger := pkiLeaf(t, nil, pkiFrom, pkiTo, hstsHost) // signed by nobody the rig trusts
+
+	for _, toggle := range []bool{true, false} {
+		g.setStored(toggle)
+		g.serve(tlsKindSupplied, stranger)
+		if got := g.header(g.policy(nil), hstsHost); got != "max-age=0" {
+			t.Errorf("cert files that fail the trust check, toggle %v: header = %q, want max-age=0", toggle, got)
+		}
+	}
+
+	g.setStored(true)
+	g.serve(tlsKindSelfSigned, stranger)
+	p := g.policy(nil)
+	if got := g.header(p, hstsHost); got != "" {
+		t.Errorf("self-signed: header = %q, want none", got)
+	}
+	if d := p.snap.Load(); d.reason != "self_signed" {
+		t.Errorf("self-signed reason = %q", d.reason)
+	}
+
+	// A Let's Encrypt certificate from a test directory chains to a root no system trusts.
+	g.serve(tlsKindACME, stranger)
+	p = g.policy(nil)
+	if got := g.header(p, hstsHost); got != "" {
+		t.Errorf("unverified Let's Encrypt: header = %q, want none", got)
+	}
+	if d := p.snap.Load(); d.reason != trustUnknownAuthority && d.reason != trustSelfSigned {
+		t.Errorf("unverified Let's Encrypt reason = %q, want the trust reason", d.reason)
+	}
+}
+
+// The bound on what a browser may hold is kept at or after now plus the max-age, and is rewritten at
+// most once an hour of the clock (D-26).
+func TestHSTSPolicyHeldUntil(t *testing.T) {
+	g := newHSTSRig(t)
+	g.serveForever(tlsKindSupplied)
+	g.setStored(true)
+	db := &countingHSTSStore{hstsStore: g.db()}
+	p := g.policyOver(nil, db, slog.New(slog.DiscardHandler))
+
+	for i := range 180 {
+		got := g.header(p, hstsHost)
+		if got != "max-age=300" {
+			t.Fatalf("minute %d: header = %q", i, got)
+		}
+		need := g.clock.Now().Add(300 * time.Second).UnixNano()
+		if held := g.row().HstsHeldUntil; held < need {
+			t.Fatalf("minute %d: held until %d, want at least %d", i, held, need)
+		}
+		g.clock.Advance(time.Minute)
+	}
+	if db.held != 3 {
+		t.Errorf("three hours of recomputes wrote the bound %d times, want 3 (at minutes 0, 61 and 122)", db.held)
+	}
+
+	// Withdrawing does not lower it: a browser may still hold what was sent.
+	before := g.row().HstsHeldUntil
+	g.setStored(false)
+	g.header(p, hstsHost)
+	if after := g.row().HstsHeldUntil; after != before {
+		t.Errorf("a withdrawal moved the bound from %d to %d", before, after)
+	}
+}
+
+// Every value the policy can produce is one of the five exact integers and nothing else (D-13).
+func TestHSTSHeaderValuesAreExact(t *testing.T) {
+	const day = 24 * time.Hour
+	valid := regexp.MustCompile(`^max-age=(0|300|604800|2592000|31536000)$`)
+	good := trustVerdict{Checked: true, Verified: true, Host: hstsHost}
+	bad := trustVerdict{Checked: true, Reason: trustUnknownAuthority, Host: hstsHost}
+	verdicts := []trustVerdict{{}, good, bad, {Checked: true, Reason: trustNoPublicURL}}
+	kinds := []tlsKind{0, tlsKindSelfSigned, tlsKindSupplied, tlsKindACME}
+	lifetimes := []time.Duration{day, 6 * day, 10*day - 1, 10 * day, 90 * day}
+	seen := map[string]bool{}
+	for _, kind := range kinds {
+		for _, v := range verdicts {
+			for _, enabled := range []bool{false, true} {
+				for _, life := range lifetimes {
+					for step := 0; step <= 4; step++ {
+						for _, offset := range []time.Duration{0, life / 2, life - life/3, life - time.Hour} {
+							notBefore := hstsStart.Add(-offset)
+							in := hstsInput{kind: kind, verdict: v, enabled: enabled, now: hstsStart, notBefore: notBefore, notAfter: notBefore.Add(life)}
+							d, _ := hstsDecide(in, hstsRamp{host: hstsHost, step: step, since: hstsStart.Add(-40 * day).UnixNano()})
+							p := &hstsPolicy{}
+							p.snap.Store(&d)
+							got := hstsHeaderFor(p, hstsHost)
+							if got != "" && !valid.MatchString(got) {
+								t.Fatalf("%+v gave %q", in, got)
+							}
+							seen[got] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	for _, want := range []string{"", "max-age=0", "max-age=300", "max-age=604800", "max-age=2592000", "max-age=31536000"} {
+		if !seen[want] {
+			t.Errorf("the grid never produced %q", want)
+		}
 	}
 }
