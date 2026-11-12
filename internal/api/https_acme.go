@@ -33,10 +33,11 @@ const (
 
 	// The 409 an environment variable's lock answers with (D-17). They equal the Problem of the
 	// acme.ErrLocked the manager returns; the route descriptions name them.
-	problemACMELocked        = "acme_locked"
-	problemACMEEmailLocked   = "acme_email_locked"
-	problemACMETOSLocked     = "acme_tos_locked"
-	problemACMEProfileLocked = "acme_profile_locked"
+	problemACMELocked          = "acme_locked"
+	problemACMEEmailLocked     = "acme_email_locked"
+	problemACMETOSLocked       = "acme_tos_locked"
+	problemACMEProfileLocked   = "acme_profile_locked"
+	problemACMEChallengeLocked = "acme_challenge_locked"
 
 	problemACMEDNSTokenRequired = "acme_dns_token_required" //nolint:gosec // G101: a problem type name, not a credential
 	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
@@ -176,10 +177,11 @@ type HTTPSLockBody struct {
 
 // HTTPSLocksBody is one entry for each setting the environment fixes; a setting no variable fixes is left out.
 type HTTPSLocksBody struct {
-	ACME      *HTTPSLockBody `json:"acme,omitempty" doc:"The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off"`
-	Email     *HTTPSLockBody `json:"email,omitempty" doc:"The account contact, fixed by TIERPLAN_ACME_EMAIL"`
-	AcceptTOS *HTTPSLockBody `json:"acceptTos,omitempty" doc:"The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value"`
-	Profile   *HTTPSLockBody `json:"profile,omitempty" doc:"The certificate profile, fixed by TIERPLAN_ACME_PROFILE"`
+	ACME          *HTTPSLockBody `json:"acme,omitempty" doc:"The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off"`
+	Email         *HTTPSLockBody `json:"email,omitempty" doc:"The account contact, fixed by TIERPLAN_ACME_EMAIL"`
+	AcceptTOS     *HTTPSLockBody `json:"acceptTos,omitempty" doc:"The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value"`
+	Profile       *HTTPSLockBody `json:"profile,omitempty" doc:"The certificate profile, fixed by TIERPLAN_ACME_PROFILE"`
+	ChallengeType *HTTPSLockBody `json:"challengeType,omitempty" doc:"The validation method, fixed by TIERPLAN_ACME_CHALLENGE. Value is http-01 or dns-01 and stored is the saved method"`
 }
 
 // httpsLockBody maps a lock onto the contract; nil stays nil.
@@ -231,6 +233,7 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	b.Locks = HTTPSLocksBody{
 		ACME: httpsLockBody(st.Locks.ACME), Email: httpsLockBody(st.Locks.Email),
 		AcceptTOS: httpsLockBody(st.Locks.AcceptTOS), Profile: httpsLockBody(st.Locks.Profile),
+		ChallengeType: httpsLockBody(st.Locks.ChallengeType),
 	}
 	refusedHost := map[string]bool{}
 	noPublicURL := false

@@ -150,6 +150,21 @@ func (m *Manager) runTokenTest(ctx context.Context, st State, provider, token st
 	return t, nil
 }
 
+// checkChallengeLock settles a requested validation method against TIERPLAN_ACME_CHALLENGE. With the
+// variable unset the request is free. With it set, the variable's own method (compared after ASCII
+// lower-casing) is an echo, which the caller replaces by the stored method so that nothing the
+// environment says is ever written, and any other value is refused.
+func (m *Manager) checkChallengeLock(requested string) (echo bool, err error) {
+	fixed := m.d.Env.Challenge
+	if fixed == "" {
+		return false, nil
+	}
+	if strings.ToLower(requested) != fixed {
+		return false, m.lockedChallenge()
+	}
+	return true, nil
+}
+
 // SaveValidation saves the challenge type, the DNS resolvers and, when one is typed, the DNS token. A
 // typed token is tested first against the current certificate names and is stored only when every name
 // passed: on a failed name nothing at all is stored, and the result says so (D-07). The token, the
@@ -159,12 +174,22 @@ func (m *Manager) runTokenTest(ctx context.Context, st State, provider, token st
 // While it runs it holds the DNS slot: a run, another save, a test and the scheduler see a run as
 // active, so a test and an order never write _acme-challenge at once.
 func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveResult, error) {
+	// Every lock is checked before the slot is taken and before anything is read or stored (D-17), so a
+	// refused save changes nothing. A value that equals the variable's is the page echoing what it was
+	// shown: it is accepted and the save then writes the stored value, never the variable's.
+	echo, err := m.checkChallengeLock(in.ChallengeType)
+	if err != nil {
+		return SaveResult{}, err
+	}
 	st, release, err := m.claimForDNS(ctx)
 	if err != nil {
 		return SaveResult{}, err
 	}
 	defer release()
 
+	if echo {
+		in.ChallengeType = challengeOf(st)
+	}
 	if in.ChallengeType != ChallengeHTTP01 && in.ChallengeType != ChallengeDNS01 {
 		return SaveResult{}, ErrChallengeUnknown
 	}
@@ -210,6 +235,9 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 	_, hasAccount, err := m.d.Client.Account(ctx)
 	if err != nil {
 		return SaveResult{}, err
+	}
+	if echo {
+		in.ChallengeType = challengeOf(st) // the state as it is now, not as it was before the test
 	}
 	methodChanged := challengeOf(st) != in.ChallengeType
 	changed := methodChanged || token != "" || !slices.Equal(st.DNSResolvers, resolvers)

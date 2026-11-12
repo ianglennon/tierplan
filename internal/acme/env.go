@@ -132,6 +132,8 @@ const (
 	LockAcceptTOS = "acceptTos"
 	// LockProfile is the certificate profile TIERPLAN_ACME_PROFILE fixes (D-24).
 	LockProfile = "profile"
+	// LockChallenge is the validation method TIERPLAN_ACME_CHALLENGE fixes (D-17).
+	LockChallenge = "challengeType"
 )
 
 // ErrLocked is returned when an action is refused because an environment variable fixes the setting it
@@ -162,6 +164,8 @@ type Locks struct {
 	Email     *Lock
 	AcceptTOS *Lock
 	Profile   *Lock
+	// ChallengeType is the validation method TIERPLAN_ACME_CHALLENGE fixes.
+	ChallengeType *Lock
 }
 
 // lockedACME is the refusal of an action TIERPLAN_ACME fixes.
@@ -190,6 +194,11 @@ func (m *Manager) registerTerms(email string, agreeTOS bool) (string, error) {
 	return email, nil
 }
 
+// lockedChallenge is the refusal of a validation method TIERPLAN_ACME_CHALLENGE does not name.
+func (m *Manager) lockedChallenge() error {
+	return &ErrLocked{Field: LockChallenge, Var: config.EnvACMEChallenge, Problem: "acme_challenge_locked"}
+}
+
 // lockedProfile is the refusal of a profile TIERPLAN_ACME_PROFILE does not name.
 func (m *Manager) lockedProfile() error {
 	return &ErrLocked{Field: LockProfile, Var: config.EnvACMEProfile, Problem: "acme_profile_locked"}
@@ -211,6 +220,9 @@ func (m *Manager) locks(st State) Locks {
 	}
 	if p := m.d.Env.Profile; p != "" {
 		l.Profile = &Lock{Var: config.EnvACMEProfile, Value: p, Stored: st.Profile}
+	}
+	if c := m.d.Env.Challenge; c != "" {
+		l.ChallengeType = &Lock{Var: config.EnvACMEChallenge, Value: c, Stored: challengeOf(st)}
 	}
 	return l
 }

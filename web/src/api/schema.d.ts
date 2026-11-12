@@ -4346,7 +4346,7 @@ export interface paths {
         get?: never;
         /**
          * Choose how the names are validated
-         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_CHALLENGE is set it decides: its own method is accepted and the save keeps the saved method, and any other method is refused with 409 acme_challenge_locked, storing nothing. Needs settings.write.
          */
         put: operations["putACMEValidation"];
         post?: never;
@@ -9091,7 +9091,7 @@ export interface components {
             passed: boolean;
         };
         HTTPSACMEValidationOutputBody: {
-            /** @description The validation method saved now */
+            /** @description The validation method in use now: TIERPLAN_ACME_CHALLENGE when it is set, else the saved one */
             challengeType: string;
             /** @description The resolvers saved now */
             resolvers: string[] | null;
@@ -9148,6 +9148,8 @@ export interface components {
             acceptTos?: components["schemas"]["HTTPSLockBody"];
             /** @description The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off */
             acme?: components["schemas"]["HTTPSLockBody"];
+            /** @description The validation method, fixed by TIERPLAN_ACME_CHALLENGE. Value is http-01 or dns-01 and stored is the saved method */
+            challengeType?: components["schemas"]["HTTPSLockBody"];
             /** @description The account contact, fixed by TIERPLAN_ACME_EMAIL */
             email?: components["schemas"]["HTTPSLockBody"];
             /** @description The certificate profile, fixed by TIERPLAN_ACME_PROFILE */

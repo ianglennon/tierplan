@@ -5,6 +5,9 @@ package api_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/dnstest"
 	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -721,5 +725,82 @@ func TestACMERunStreamDelegatedStepCarriesTheTarget(t *testing.T) {
 	ch := stepsByID(done.Items)["challenge"]
 	if ch.Target != "tierplan.dns.example.net" {
 		t.Errorf("challenge = %+v, want the delegation target", ch)
+	}
+}
+
+// seedValidation stores the validation settings the way an earlier save did, without going through
+// the API, so a test can start from a stored value a variable then disagrees with.
+func (f *dnsFix) seedValidation(t *testing.T, challenge string, resolvers []string) {
+	t.Helper()
+	if err := f.store.SaveValidation(context.Background(), acme.ValidationWrite{
+		ChallengeType: challenge, Provider: "cloudflare", Resolvers: resolvers, Now: f.clock.Now(),
+	}); err != nil {
+		t.Fatalf("seed the validation settings: %v", err)
+	}
+}
+
+// seedOpenOrder stores an open order, so a test can see whether a save closed it.
+func (f *dnsFix) seedOpenOrder(t *testing.T) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := f.clock.Now()
+	if err := f.store.InsertOrder(context.Background(), acme.Order{
+		ID: "order-1", DirectoryURL: f.fake.DirectoryURL(), URL: f.fake.DirectoryURL() + "/order/1", Kind: acme.KindIssue,
+		Names: []string{"tierplan.example.com"}, Stage: acme.StageCreated, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}, key); err != nil {
+		t.Fatalf("seed an open order: %v", err)
+	}
+}
+
+// storedState reads the stored Let's Encrypt state, which no overlay of the environment touches.
+func (f *dnsFix) storedState(t *testing.T) acme.State {
+	t.Helper()
+	st, err := f.store.State(context.Background())
+	if err != nil {
+		t.Fatalf("read the stored state: %v", err)
+	}
+	return st
+}
+
+// A validation method fixed by TIERPLAN_ACME_CHALLENGE is reported with its variable, another method is
+// refused, and the variable's own method changes nothing: not the stored method, not an open order (D-17).
+func TestPutACMEValidationLockedChallenge(t *testing.T) {
+	t.Parallel()
+	f := newDNSFix(t, "", acmeOpts{env: config.ACMEEnv{Challenge: acme.ChallengeDNS01}})
+	f.seedValidation(t, acme.ChallengeHTTP01, nil)
+	f.seedOpenOrder(t)
+
+	st := f.status(t).ACME
+	lock := st.Locks.ChallengeType
+	if lock == nil || lock.Var != "TIERPLAN_ACME_CHALLENGE" || lock.Value != "dns-01" || lock.Stored != "http-01" {
+		t.Fatalf("locks.challengeType = %+v, want TIERPLAN_ACME_CHALLENGE, value dns-01, stored http-01", lock)
+	}
+	if st.ChallengeType != "dns-01" {
+		t.Errorf("challengeType = %q, want the variable's dns-01", st.ChallengeType)
+	}
+
+	rec := f.putValidation(t, `{"challengeType":"http-01"}`)
+	if rec.Code != http.StatusConflict || decodeProblemValue(t, rec).Type != "acme_challenge_locked" {
+		t.Fatalf("PUT http-01: %d %s, want 409 acme_challenge_locked", rec.Code, rec.Body)
+	}
+	if got := f.storedState(t).ChallengeType; got != acme.ChallengeHTTP01 {
+		t.Errorf("stored challenge after the refusal = %q, want http-01", got)
+	}
+
+	got := decodeValidation(t, f.putValidation(t, `{"challengeType":"dns-01"}`))
+	if !got.Saved || got.ChallengeType != "dns-01" {
+		t.Errorf("echo answer = %+v, want saved, reporting the variable's dns-01", got)
+	}
+	if got := f.storedState(t).ChallengeType; got != acme.ChallengeHTTP01 {
+		t.Errorf("stored challenge after the echo = %q, want http-01: the variable's value is never stored", got)
+	}
+	if _, _, open, err := f.store.OpenOrder(context.Background()); err != nil || !open {
+		t.Errorf("open order after the echo = %v (%v), want it left open", open, err)
+	}
+	if lock := f.status(t).ACME.Locks.ChallengeType; lock == nil || lock.Stored != "http-01" {
+		t.Errorf("locks.challengeType after the echo = %+v, want stored http-01", lock)
 	}
 }

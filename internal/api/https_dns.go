@@ -114,7 +114,7 @@ type HTTPSACMEValidationOutput struct {
 	Body         struct {
 		Saved         bool                    `json:"saved" doc:"True when the settings were stored. False when the new token failed its test: nothing was stored"`
 		Test          *HTTPSACMETokenTestBody `json:"test,omitempty" doc:"The token test the save ran; left out when no new token was given"`
-		ChallengeType string                  `json:"challengeType" doc:"The validation method saved now"`
+		ChallengeType string                  `json:"challengeType" doc:"The validation method in use now: TIERPLAN_ACME_CHALLENGE when it is set, else the saved one"`
 		TokenSaved    bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved now. The token is never returned"`
 		Resolvers     []string                `json:"resolvers" doc:"The resolvers saved now"`
 	}
@@ -150,7 +150,8 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 			problemACMEDNSResolverBad + " (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list " +
 			"of more than five; 422 " + problemACMEChallengeUnknown + "; 422 acme_refused when no certificate could be ordered for the names; " +
 			"409 " + problemACMERunActive + " while a run or a token test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " +
-			problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+			problemACMECertFiles + " while certificate files are set. While TIERPLAN_ACME_CHALLENGE is set it decides: its own method is accepted and the " +
+			"save keeps the saved method, and any other method is refused with 409 " + problemACMEChallengeLocked + ", storing nothing. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *PutACMEValidationInput) (*HTTPSACMEValidationOutput, error) {
 		if d.ACME == nil {

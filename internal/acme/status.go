@@ -28,8 +28,10 @@ type Status struct {
 	PausedReason string
 	CertFiles    bool
 	// HasState is whether a stored certificate or an open order exists.
-	HasState      bool
-	Account       *AccountView
+	HasState bool
+	Account  *AccountView
+	// ChallengeType is the validation method in use now: TIERPLAN_ACME_CHALLENGE when it is set, else
+	// the saved one (http-01 when none is saved).
 	ChallengeType string
 	// Names and Refusals are what the URLs say today; Refusals is empty when an order could start.
 	Names    []string
@@ -133,12 +135,9 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 
 	out := Status{
 		DirectoryURL: dir.URL, DirectoryOverridden: dir.Overridden, Mode: mode, Locks: m.locks(st),
-		CertFiles: m.d.CertFiles, ChallengeType: st.ChallengeType, Profile: m.profile(st),
+		CertFiles: m.d.CertFiles, ChallengeType: m.challenge(st), Profile: m.profile(st),
 		Names: slices.Clone(ns.Names), Refusals: refusals,
 		Failures: st.ConsecutiveFailures, NextAttemptAt: st.NextAttemptAt,
-	}
-	if out.ChallengeType == "" {
-		out.ChallengeType = ChallengeHTTP01
 	}
 
 	// The key is not opened: the page shows the account, and an unreadable key must not take the whole
