@@ -125,7 +125,7 @@ type HTTPSStatusOutput struct {
 
 // certificateBody builds the public description of a served certificate.
 func trustBody(t CertTrust) HTTPSTrustBody {
-	return HTTPSTrustBody{Checked: t.Checked, Verified: t.Verified, Reason: t.Reason, Host: t.Host}
+	return HTTPSTrustBody(t)
 }
 
 func certificateBody(s ServedCertificate) HTTPSCertificateBody {

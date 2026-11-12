@@ -26,8 +26,8 @@ import (
 type hstsKind uint8
 
 const (
-	// hstsNone sends nothing at all.
-	hstsNone hstsKind = iota
+	// The zero value sends nothing at all.
+	_ hstsKind = iota
 	// hstsSend sends a positive max-age, on a request for the verified public host only.
 	hstsSend
 	// hstsWithdraw sends max-age=0 on every TLS response, which clears a policy a browser holds.

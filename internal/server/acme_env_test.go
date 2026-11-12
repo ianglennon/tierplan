@@ -306,7 +306,7 @@ func TestACMEEnvNamesChangeReissuesAtStart(t *testing.T) {
 
 	const newHost = "moved.tierplan.test"
 	r.setEnv(map[string]string{"TIERPLAN_PUBLIC_URL": "https://" + newHost, "TIERPLAN_ACME": ""})
-	srv = r.restartAndRound(addr)
+	r.restartAndRound(addr)
 	if got := r.fake.Count(acmetest.EndpointNewOrder); got != 1 {
 		t.Errorf("%d orders with the variable unset and the names changed, want the admin to be waited for", got)
 	}

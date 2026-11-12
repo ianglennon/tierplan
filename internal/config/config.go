@@ -61,8 +61,8 @@ const (
 	// EnvDNSProvider is the DNS provider for dns-01: cloudflare.
 	EnvDNSProvider = "TIERPLAN_DNS_PROVIDER"
 	// EnvCloudflareToken is the Cloudflare API token; EnvCloudflareTokenFile reads it from a file.
-	EnvCloudflareToken     = "TIERPLAN_CLOUDFLARE_API_TOKEN"
-	EnvCloudflareTokenFile = "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE"
+	EnvCloudflareToken     = "TIERPLAN_CLOUDFLARE_API_TOKEN"      //nolint:gosec // G101: a variable name, not a credential
+	EnvCloudflareTokenFile = "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE" //nolint:gosec // G101: a variable name, not a credential
 	// EnvDNSResolvers is the resolver list the dns-01 propagation check queries.
 	EnvDNSResolvers = "TIERPLAN_DNS_RESOLVERS"
 	// EnvACMEProfile is the CA's certificate profile name.

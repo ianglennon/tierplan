@@ -964,7 +964,7 @@ func TestACMEEnvProviderAndTokenGoTogether(t *testing.T) {
 		t.Errorf("TokenVar %q is not EnvCloudflareToken", c.ACME.TokenVar)
 	}
 
-	c, err = load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/run/secrets/cf"}, files{"/run/secrets/cf": "tok\n"})
+	c, err = load(t, nil, envMap{"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/run/secrets/cf"}, files{"/run/secrets/cf": "tok\n"}) //nolint:gosec // G101: a test token read from a fake file
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1112,7 +1112,7 @@ func TestACMEEnvHSTSNeverMeetsACMEOff(t *testing.T) {
 }
 
 func TestACMEEnvTokenIsRedactedAndHasNoFlag(t *testing.T) {
-	const secret = "cf-token-value-123"
+	const secret = "cf-token-value-123" //nolint:gosec // G101: a fake token the test checks is redacted
 	for name, env := range map[string]envMap{
 		"plain": {"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN": secret},
 		"file":  {"TIERPLAN_DNS_PROVIDER": "cloudflare", "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE": "/t"},
