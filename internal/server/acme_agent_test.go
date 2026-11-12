@@ -5,7 +5,9 @@ package server
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net"
 	"net/http"
@@ -352,5 +354,186 @@ func TestACMEAgentStaysConnectedThroughALiveSwap(t *testing.T) {
 	// D-20 step 3, structurally: the self-signed pin is stored with no deadline.
 	if e := awaitStoredPin(t, stateDir, selfPin); !e.ExpiresAt.IsZero() {
 		t.Errorf("the self-signed pin has the deadline %s, want none while welcomes list it", e.ExpiresAt)
+	}
+}
+
+// awaitAgentLog waits until the agent process has printed want.
+func awaitAgentLog(t *testing.T, p *agentProc, want string) {
+	t.Helper()
+	testsupport.Poll(t, testsupport.Deadline, "the agent to print "+want, func() (bool, string) { // testsupport: external, the agent process writing its log
+		out := p.log.String()
+		return strings.Contains(out, want), "the agent's output so far:\n" + out
+	})
+}
+
+// writeRootFile writes the root as PEM to a file in the test's temporary directory, for an agent's
+// SSL_CERT_FILE.
+func writeRootFile(t *testing.T, root pkiCert) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "root.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.cert.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// D-20 pinless: an agent installed with no pin after Let's Encrypt was issued verifies the public
+// chain (root, intermediate, leaf) against its system roots, stores the self-signed pin from its first
+// welcome with no deadline, and survives the expiry fallback to self-signed with no tls_untrusted.
+func TestACMEAgentPinlessInstallSurvivesTheFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the agent binary")
+	}
+	agentBin := buildAgentBinary(t)
+	ln, addr, port := listenLoopback(t)
+	r := newACMERig(t, acmetest.Options{Intermediate: true}, map[string]string{"TIERPLAN_PUBLIC_URL": "https://localhost:" + port})
+	srv := r.start(ln)
+	selfPin := srv.https.Pin()
+	client := r.client(r.mirrorPool())
+	cookie := r.signIn(client)
+	csrf := r.csrf(client, cookie)
+
+	r.issue()
+	first := leafOf(t, srv.https.Config())
+	created := r.createAgentEnv(r.client(r.fake.IssuerPool()), cookie, csrf)
+	if created.Pin != "" || created.JoinToken == "" {
+		t.Fatalf("install = %+v, want the join token and no pin under Let's Encrypt", created)
+	}
+
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "acme-host"})
+	stateDir := t.TempDir()
+	agent := startAgentProc(t, agentBin, agentEnv(agentEnvOptions{install: created, socket: fake.SocketPath(), stateDir: stateDir, roots: r.fake.IssuerFile(t)}))
+	awaitAgentOnline(t, srv, created.ID, agent.exited, &agent.log, true)
+	if e := awaitStoredPin(t, stateDir, selfPin); !e.ExpiresAt.IsZero() {
+		t.Errorf("the self-signed pin has the deadline %s, want none", e.ExpiresAt)
+	}
+
+	// Renewals fail and the certificate reaches its end: the server falls back to self-signed and,
+	// restarted, serves it to an agent that has only the pin it stored.
+	r.fake.FailValidation(r.host, acmetest.Problem{Status: 403, Type: "unauthorized", Detail: "scripted"})
+	r.step(first.NotAfter.Sub(r.clock.Now()) + time.Hour)
+	r.awaitRuns()
+	if srv.https.Kind() != tlsKindSelfSigned {
+		t.Fatalf("after the expiry the kind is %d, want the self-signed certificate", srv.https.Kind())
+	}
+	srv = r.restart(addr)
+	if srv.https.Kind() != tlsKindSelfSigned || srv.https.Pin() != selfPin {
+		t.Fatalf("after the restart kind = %d and pin = %q, want the self-signed certificate with pin %q", srv.https.Kind(), srv.https.Pin(), selfPin)
+	}
+	awaitAgentOnline(t, srv, created.ID, agent.exited, &agent.log, true)
+	if strings.Contains(agent.log.String(), "tls_untrusted") {
+		t.Errorf("the agent reported an untrusted certificate:\n%s", agent.log.String())
+	}
+}
+
+// The incomplete-chain pitfall: a certificate served without its intermediate cannot be verified by an
+// agent that holds only the root, so a pinless agent is refused with tls_untrusted. The self-signed pin
+// does not cover the Let's Encrypt leaf either, so an agent started with it is refused as well, while
+// the one that was already connected keeps its session.
+func TestACMEAgentLeafOnlyChainIsRefused(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the agent binary")
+	}
+	agentBin := buildAgentBinary(t)
+	ln, _, port := listenLoopback(t)
+	r := newACMERig(t, acmetest.Options{Intermediate: true, LeafOnly: true}, map[string]string{"TIERPLAN_PUBLIC_URL": "https://localhost:" + port})
+	srv := r.start(ln)
+	client := r.client(r.mirrorPool())
+	cookie := r.signIn(client)
+	csrf := r.csrf(client, cookie)
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "acme-host"})
+	roots := r.fake.IssuerFile(t)
+
+	// A pinned agent is connected before the swap.
+	pinned := r.createAgentEnv(client, cookie, csrf)
+	pinnedAgent := startAgentProc(t, agentBin, agentEnv(agentEnvOptions{install: pinned, socket: fake.SocketPath(), stateDir: t.TempDir(), roots: roots, withPin: true}))
+	session := awaitAgentOnline(t, srv, pinned.ID, pinnedAgent.exited, &pinnedAgent.log, true)
+
+	r.issue()
+	if srv.https.Kind() != tlsKindACME {
+		t.Fatalf("after the issue the kind is %d, want tlsKindACME", srv.https.Kind())
+	}
+	if got := sessionOfEnv(srv, pinned.ID); got != session {
+		t.Fatalf("the pinned agent's session after the swap is %v, want the one it held before", got)
+	}
+
+	// The leaf alone is not a chain to the root, so the API client trusts the leaf itself to add the
+	// pinless environment.
+	leafPool := x509.NewCertPool()
+	leafPool.AddCert(leafOf(t, srv.https.Config()))
+	pinless := r.createAgentEnv(r.client(leafPool), cookie, csrf)
+	if pinless.Pin != "" {
+		t.Fatalf("install pin = %q, want none under Let's Encrypt", pinless.Pin)
+	}
+	agent := startAgentProc(t, agentBin, agentEnv(agentEnvOptions{install: pinless, socket: fake.SocketPath(), stateDir: t.TempDir(), roots: roots}))
+	awaitAgentLog(t, agent, "tls_untrusted")
+	if sessionOfEnv(srv, pinless.ID) != nil {
+		t.Error("the pinless agent has a session although it could not build the chain")
+	}
+
+	// The same chain refuses a restarted pinned agent: its pin is the self-signed key's.
+	pinnedAgent.halt()
+	awaitSessionEnded(t, srv, pinned.ID)
+	again := startAgentProc(t, agentBin, agentEnv(agentEnvOptions{install: pinned, socket: fake.SocketPath(), stateDir: t.TempDir(), roots: roots, withPin: true}))
+	awaitAgentLog(t, again, "tls_untrusted")
+	if sessionOfEnv(srv, pinned.ID) != nil {
+		t.Error("the restarted pinned agent has a session although the chain is incomplete")
+	}
+}
+
+// D-21: a server started with a certificate pair welcomes the self-signed pin it does not serve. A
+// pinless agent verifies the pair through its roots, stores the pin, and when the server is restarted
+// on the same data directory without the two variables it finds the self-signed certificate and
+// reconnects with no tls_untrusted.
+func TestACMEAgentCertFilesRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the agent binary")
+	}
+	agentBin := buildAgentBinary(t)
+	ln, addr, port := listenLoopback(t)
+	root := pkiCA(t, "agent test root", nil, pkiFrom, pkiTo)
+	leaf := pkiLeaf(t, &root, pkiFrom, pkiTo, "localhost")
+	crt, key := pkiWritePair(t, leaf)
+	r := newACMERig(t, acmetest.Options{}, map[string]string{
+		"TIERPLAN_PUBLIC_URL":    "https://localhost:" + port,
+		"TIERPLAN_TLS_CERT_FILE": crt,
+		"TIERPLAN_TLS_KEY_FILE":  key,
+	})
+	srv := r.start(ln)
+	if srv.https.Kind() != tlsKindSupplied {
+		t.Fatalf("the kind is %d, want the supplied pair", srv.https.Kind())
+	}
+	pins := srv.Tunnel().Pins()
+	if len(pins) != 1 || pins[0] == "" {
+		t.Fatalf("welcome pins with a certificate pair = %v, want the self-signed pin it does not serve", pins)
+	}
+	selfPin := pins[0]
+
+	client := r.client(pkiPool(root))
+	cookie := r.signIn(client)
+	csrf := r.csrf(client, cookie)
+	created := r.createAgentEnv(client, cookie, csrf)
+	if created.Pin != "" || created.JoinToken == "" {
+		t.Fatalf("install = %+v, want the join token and no pin with a certificate pair", created)
+	}
+
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "acme-host"})
+	stateDir := t.TempDir()
+	agent := startAgentProc(t, agentBin, agentEnv(agentEnvOptions{install: created, socket: fake.SocketPath(), stateDir: stateDir, roots: writeRootFile(t, root)}))
+	awaitAgentOnline(t, srv, created.ID, agent.exited, &agent.log, true)
+	if e := awaitStoredPin(t, stateDir, selfPin); !e.ExpiresAt.IsZero() {
+		t.Errorf("the self-signed pin has the deadline %s, want none", e.ExpiresAt)
+	}
+
+	// The variables are removed and the server restarts: the self-signed certificate is served again,
+	// with the same key, and only the stored pin covers it.
+	r.setEnv(map[string]string{"TIERPLAN_TLS_CERT_FILE": "", "TIERPLAN_TLS_KEY_FILE": ""})
+	srv = r.restart(addr)
+	if srv.https.Kind() != tlsKindSelfSigned || srv.https.Pin() != selfPin {
+		t.Fatalf("after the restart kind = %d and pin = %q, want the self-signed certificate with pin %q", srv.https.Kind(), srv.https.Pin(), selfPin)
+	}
+	awaitAgentOnline(t, srv, created.ID, agent.exited, &agent.log, true)
+	if strings.Contains(agent.log.String(), "tls_untrusted") {
+		t.Errorf("the agent reported an untrusted certificate:\n%s", agent.log.String())
 	}
 }
