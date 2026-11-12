@@ -1127,3 +1127,72 @@ func TestHSTSLockedFromTheAPI(t *testing.T) {
 		t.Errorf("Strict-Transport-Security = %q, want max-age=300", got)
 	}
 }
+
+// stopACME sends POST /api/https/acme/stop as the signed-in admin and returns the status and the body.
+func (r *acmeRig) stopACME(c *http.Client, cookie *http.Cookie, csrf string) (int, string) {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodPost, r.base+"/api/https/acme/stop", nil)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// With HSTS on, Stop using Let's Encrypt is refused 409 hsts_on and the Let's Encrypt certificate stays
+// served; once HSTS is off the stop works, and the status says when browsers will have forgotten the
+// policy that was sent (D-26, T-16-41).
+func TestHSTSBlocksStop(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{}, nil)
+	// The rig's fake CA is the one root the trust verdict knows, so the certificate it issues is
+	// trusted and HSTS is really sent over it.
+	r.opts = append(r.opts, WithTrustRoots(r.fake.IssuerPool()))
+	srv := r.startNew()
+	selfSigned := r.client(r.mirrorPool())
+	cookie := r.signIn(selfSigned)
+	csrf := r.csrf(selfSigned, cookie)
+	r.issue()
+	if srv.https.Kind() != tlsKindACME {
+		t.Fatalf("served kind = %d after the issue, want Let's Encrypt", srv.https.Kind())
+	}
+	le := r.client(r.fake.IssuerPool())
+
+	if code, body := r.hstsPut(le, cookie, csrf, `{"enabled":true}`); code != http.StatusOK {
+		t.Fatalf("PUT hsts on: %d %s", code, body)
+	}
+	if got := r.hstsHeaderOverTheWire(le); got != "max-age=300" {
+		t.Fatalf("Strict-Transport-Security = %q, want max-age=300 sent over the Let's Encrypt certificate", got)
+	}
+
+	code, body := r.stopACME(le, cookie, csrf)
+	if code != http.StatusConflict || !strings.Contains(body, "hsts_on") {
+		t.Errorf("POST stop with HSTS on: %d %s, want 409 hsts_on", code, body)
+	}
+	if srv.https.Kind() != tlsKindACME {
+		t.Errorf("served kind = %d after a refused stop, want Let's Encrypt", srv.https.Kind())
+	}
+	if st, err := srv.acme.Status(testsupport.Context(t)); err != nil || st.Mode != "active" {
+		t.Errorf("Let's Encrypt mode = %q (%v) after a refused stop, want active", st.Mode, err)
+	}
+
+	if code, body := r.hstsPut(le, cookie, csrf, `{"enabled":false}`); code != http.StatusOK {
+		t.Fatalf("PUT hsts off: %d %s", code, body)
+	}
+	if code, body := r.stopACME(le, cookie, csrf); code != http.StatusNoContent {
+		t.Fatalf("POST stop with HSTS off: %d %s, want 204", code, body)
+	}
+	if srv.https.Kind() != tlsKindSelfSigned {
+		t.Errorf("served kind = %d after the stop, want self-signed", srv.https.Kind())
+	}
+	st := r.trustStatus(r.client(r.mirrorPool()), cookie).HSTS
+	if st == nil || st.ForgetBy == nil || !st.ForgetBy.After(r.clock.Now()) {
+		t.Errorf("hsts = %+v after the stop, want a forget-by time in the future", st)
+	}
+}

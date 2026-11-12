@@ -141,7 +141,7 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 		Summary:       "Stop using Let's Encrypt",
 		Description: "Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. " +
 			"409 " + problemACMENotActive + " when Let's Encrypt is not in use; 409 " + problemACMECertFiles + " while certificate files are set; 409 " + problemACMERunActive + " while a run is in progress; 409 " + problemACMELocked +
-			" while TIERPLAN_ACME is set, whichever value it has. Needs settings.write.",
+			" while TIERPLAN_ACME is set, whichever value it has; 409 " + problemHSTSOn + " while HSTS is on, because browsers that hold the policy would refuse the self-signed certificate: turn HSTS off first. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, _ *struct{}) (*struct{}, error) {
 		if d.ACME == nil {

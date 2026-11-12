@@ -4327,7 +4327,7 @@ export interface paths {
         put?: never;
         /**
          * Stop using Let's Encrypt
-         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress; 409 acme_locked while TIERPLAN_ACME is set, whichever value it has. Needs settings.write.
+         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress; 409 acme_locked while TIERPLAN_ACME is set, whichever value it has; 409 hsts_on while HSTS is on, because browsers that hold the policy would refuse the self-signed certificate: turn HSTS off first. Needs settings.write.
          */
         post: operations["stopACME"];
         delete?: never;

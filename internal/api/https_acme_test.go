@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,6 +76,8 @@ type acmeOpts struct {
 	dns *acme.DNSDeps
 	// env is what the TIERPLAN_ACME* variables say.
 	env config.ACMEEnv
+	// hstsOn is the manager's HSTS setting; nil is off.
+	hstsOn func() bool
 }
 
 // dnsDeps is d, or the zero value when a test gives none.
@@ -130,7 +133,7 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 		PublicURL: f.inst.PublicURL, AgentURL: f.inst.AgentURL, BasePath: f.inst.BasePath,
 		DialHosts: f.dialHosts, CertFiles: o.certFiles, Log: slog.New(slog.DiscardHandler),
 		Jitter: func() float64 { return 0 }, Rand: func(int64) int64 { return 0 },
-		DNS: dnsDeps(o.dns), Env: o.env,
+		DNS: dnsDeps(o.dns), Env: o.env, HSTSOn: o.hstsOn,
 	})
 
 	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"tierplan.example.com"}, nil)
@@ -963,4 +966,22 @@ func TestHTTPSACMEStatusCarriesTheLocks(t *testing.T) {
 	if none != (api.HTTPSLocksBody{}) {
 		t.Errorf("locks = %+v with no variable set, want no entry", none)
 	}
+}
+
+// Stop using Let's Encrypt is refused while HSTS is on: 409 hsts_on telling the admin to turn HSTS off first,
+// with nothing stopped. Once HSTS is off the request reaches the manager's other checks (D-26, T-16-41).
+func TestStopACMEIsRefusedWhileHSTSIsOnThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	var on atomic.Bool
+	on.Store(true)
+	f := newACMEFix(t, acmeOpts{hstsOn: on.Load})
+
+	rec := f.send(t, http.MethodPost, "/api/https/acme/stop", "")
+	acmeProblemOf(t, rec, http.StatusConflict, "hsts_on")
+	if !strings.Contains(rec.Body.String(), "HSTS is on. Turn it off first.") {
+		t.Errorf("body = %s, want the instruction to turn HSTS off first", rec.Body)
+	}
+
+	on.Store(false)
+	acmeProblemOf(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""), http.StatusConflict, "acme_not_active")
 }

@@ -62,6 +62,9 @@ var (
 	// ErrCertFiles means TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set: the files are
 	// served and the ACME setup is disabled (D-12, D-13).
 	ErrCertFiles = errors.New("certificate files are configured, so Let's Encrypt is disabled")
+	// ErrHSTSOn means HSTS is on, so Let's Encrypt cannot be stopped: browsers hold a policy for the host
+	// and would refuse the self-signed certificate that replaces it. Turn HSTS off first (D-26).
+	ErrHSTSOn = errors.New("HSTS is on, so Let's Encrypt cannot be stopped") //nolint:staticcheck // ST1005: Let's Encrypt is a proper name, and this is the text the screens show
 	// ErrNotActive means there is no Let's Encrypt certificate in use to renew or stop.
 	ErrNotActive = errors.New("Let's Encrypt is not in use") //nolint:staticcheck // ST1005: Let\'s Encrypt is a proper name, and this is the text the screens show
 	// ErrNotPaused means there is nothing to resume.
@@ -125,6 +128,10 @@ type Deps struct {
 	DialHosts func() []string
 	// CertFiles is whether TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set.
 	CertFiles bool
+	// HSTSOn is the effective HSTS setting. Stop using Let's Encrypt is refused while it reports true,
+	// because serving the self-signed certificate under a policy browsers hold would lock them out
+	// (D-26). Nil is off. The expiry fallback does not ask it: that path withdraws the header itself.
+	HSTSOn func() bool
 	// Env is what the TIERPLAN_ACME* variables say. They override the stored settings at the decision
 	// sites in env.go and are never saved (D-02).
 	Env config.ACMEEnv
@@ -556,12 +563,17 @@ func (m *Manager) Resume(ctx context.Context, actor string) error {
 
 // Stop serves the self-signed certificate again and stops renewals (D-14). The account and the stored
 // certificate are kept, so issuing again with the same names is one click and no order. A pause after
-// a restore is not lifted by it.
+// a restore is not lifted by it. It is refused with ErrHSTSOn while the effective HSTS setting is on.
 func (m *Manager) Stop(ctx context.Context, actor string) error {
 	// Either value of TIERPLAN_ACME fixes whether Let's Encrypt is stopped. On locks Stop (D-04); off
 	// leaves nothing to stop, and a Stop would rewrite the stored mode underneath the variable (D-02).
 	if m.d.Env.Enabled != nil {
 		return m.lockedACME()
+	}
+	// With HSTS on, browsers hold a policy for this host that the self-signed certificate cannot
+	// satisfy. The refusal is here and not in the API, so no caller can go around it (D-26).
+	if m.d.HSTSOn != nil && m.d.HSTSOn() {
+		return ErrHSTSOn
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()

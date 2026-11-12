@@ -529,6 +529,8 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 		return httpx.Problem(http.StatusConflict, locked.Problem, "Set by the "+locked.Var+" environment variable.")
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
+	case errors.Is(err, acme.ErrHSTSOn):
+		return httpx.Problem(http.StatusConflict, problemHSTSOn, "HSTS is on. Turn it off first.")
 	case errors.Is(err, acme.ErrCertFiles):
 		return httpx.Problem(http.StatusConflict, problemACMECertFiles, "Certificate files are set, so Let's Encrypt is turned off.")
 	case errors.Is(err, acme.ErrAccountExists):

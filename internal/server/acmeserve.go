@@ -123,7 +123,7 @@ type acmeWiring struct {
 // error that stops start-up.
 func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.Vault, inst *instance.Instance,
 	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps,
-	listening <-chan struct{}) (acmeWiring, error) {
+	hstsOn func() bool, listening <-chan struct{}) (acmeWiring, error) {
 	dir, err := acme.NewDirectory(cfg)
 	if err != nil {
 		return acmeWiring{}, err
@@ -166,6 +166,9 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 		// TIERPLAN_ACME* decide at the manager's decision sites and are never saved; the start-time issue
 		// waits for the listener, because the CA validates through it (D-07).
 		Env: cfg.ACME, Ready: listening,
+		// Stop using Let's Encrypt is refused while HSTS is on, because the self-signed certificate that
+		// would replace it is not one browsers holding a policy accept (D-26).
+		HSTSOn: hstsOn,
 	})
 	return acmeWiring{mgr: mgr, challenges: challenges}, nil
 }
