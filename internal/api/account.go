@@ -15,6 +15,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/agents"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/auth"
@@ -44,6 +45,14 @@ const (
 	warningRefusalBurst     = "refusal_burst"
 	warningBackupFailed     = "backup_failed"
 	warningUnknownAgents    = "unknown_agents"
+	// The https_ warnings are the HTTPS problems an instance admin sees in the bell
+	// (phase 17 D-01).
+	warningHTTPSFallback      = "https_cert_fallback"
+	warningHTTPSRenewalFailed = "https_renewal_failed"
+	warningHTTPSPaused        = "https_acme_paused"
+	warningHTTPSClockOff      = "https_clock_off"
+	warningHTTPSExpiring      = "https_cert_expiring"
+	warningHTTPSTXTLeft       = "https_txt_left"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -92,6 +101,11 @@ type AccountDeps struct {
 	// attempts alike, so a stolen session cannot guess the current password at
 	// the speed of the hash alone (T-01-60). Nil means no throttle.
 	Limiter *auth.IPLimiter
+	// HTTPS lists what is wrong with HTTPS now, for the https_ warnings. Nil means nothing is.
+	HTTPS func(ctx context.Context) ([]acme.Alert, error)
+	// ListenPort is the port TierPlan listens on, which the renewal-failed fix names when Let's
+	// Encrypt cannot reach it.
+	ListenPort int
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -121,7 +135,7 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents,https_cert_fallback,https_renewal_failed,https_acme_paused,https_clock_off,https_cert_expiring,https_txt_left" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
@@ -131,7 +145,32 @@ type WarningBody struct {
 	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed"`
 	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents TierPlan does not know"`
 	// Since is a pointer so that "no good backup yet" leaves it out.
-	Since *time.Time `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
+	Since *time.Time        `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
+	HTTPS *WarningHTTPSBody `json:"https,omitempty" doc:"For the https_ warnings: the facts the bell turns into a headline and a fix"`
+}
+
+// WarningHTTPSBody is the facts of one https_ warning: closed-vocabulary names, times and counts. The
+// CA's own problem text is never part of it; that stays on the HTTPS page.
+type WarningHTTPSBody struct {
+	Class         string     `json:"class,omitempty" doc:"For https_renewal_failed: the error class of the last failed order"`
+	Host          string     `json:"host,omitempty" doc:"For https_renewal_failed: the host the order was for"`
+	Port          int        `json:"port,omitempty" doc:"For https_renewal_failed: the port TierPlan listens on, which validation_unreachable names"`
+	Profile       string     `json:"profile,omitempty" doc:"For https_renewal_failed: the certificate profile the order asked for"`
+	TermsURL      string     `json:"termsUrl,omitempty" doc:"For https_renewal_failed: where the terms of service the CA wants agreed are"`
+	Zone          string     `json:"zone,omitempty" doc:"For https_renewal_failed: the DNS zone a DNS-01 failure was about"`
+	Target        string     `json:"target,omitempty" doc:"For https_renewal_failed: the delegation target of a DNS-01 failure"`
+	Resolvers     []string   `json:"resolvers,omitempty" doc:"For https_renewal_failed: the resolvers a DNS-01 failure asked"`
+	NoCertificate bool       `json:"noCertificate,omitempty" doc:"For https_renewal_failed: true when the failing order is the first one and there is no Let's Encrypt certificate yet"`
+	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty" doc:"For https_renewal_failed: when the order is tried again"`
+	Reason        string     `json:"reason,omitempty" enum:",restore,told_to_wait,failure_guard" doc:"For https_acme_paused: why Let's Encrypt is paused"`
+	Until         *time.Time `json:"until,omitempty" doc:"For https_acme_paused: when a Retry-After or the failure guard ends"`
+	Source        string     `json:"source,omitempty" enum:",lets_encrypt,cert_files,self_signed" doc:"For https_cert_expiring: where the served certificate comes from"`
+	NotAfter      *time.Time `json:"notAfter,omitempty" doc:"For https_cert_expiring and https_cert_fallback: when the certificate expires or expired"`
+	OffsetSeconds int64      `json:"offsetSeconds,omitempty" doc:"For https_clock_off: the clock difference to the CA in whole seconds, positive when TierPlan's clock is ahead"`
+	MeasuredAt    *time.Time `json:"measuredAt,omitempty" doc:"For https_clock_off: when the difference was measured"`
+	Record        string     `json:"record,omitempty" doc:"For https_txt_left: the first left-over TXT record"`
+	More          int        `json:"more,omitempty" doc:"For https_txt_left: how many other records are left over"`
+	RetryPaused   bool       `json:"retryPaused,omitempty" doc:"For https_txt_left: true when the removal retry has stopped"`
 }
 
 // WarningsBody lists the warnings that apply right now.
@@ -311,6 +350,7 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			"refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). " +
 			"backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). " +
 			"unknown_agents is listed, for instance admins only, while agents that were installed after the backup this TierPlan was restored from keep trying; count is how many (D-31). " +
+			"The https_ items are listed for instance admins only, derived from the Let's Encrypt state, the served certificate and the clock on every read, and cannot be acknowledged. " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {
@@ -343,6 +383,11 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("read the unknown agents", err)
 		}
 		items = append(items, unknown...)
+		httpsList, err := httpsItems(ctx, d)
+		if err != nil {
+			return nil, internal("read the HTTPS state", err)
+		}
+		items = append(items, httpsList...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -512,4 +557,62 @@ func unknownAgentsWarning(ctx context.Context, d AccountDeps) ([]WarningBody, er
 		return nil, nil
 	}
 	return []WarningBody{{ID: warningUnknownAgents, Count: len(list)}}, nil
+}
+
+// httpsWarningIDs maps each HTTPS alert kind to its warning ID.
+var httpsWarningIDs = map[acme.AlertKind]string{
+	acme.AlertFallback:      warningHTTPSFallback,
+	acme.AlertRenewalFailed: warningHTTPSRenewalFailed,
+	acme.AlertPaused:        warningHTTPSPaused,
+	acme.AlertClockOff:      warningHTTPSClockOff,
+	acme.AlertExpiring:      warningHTTPSExpiring,
+	acme.AlertTXTLeft:       warningHTTPSTXTLeft,
+}
+
+// httpsItems is the https_ warnings, for an active instance admin only: they name hosts, zones and
+// resolvers. Each is derived from the state on every read, so it goes with its cause and there is
+// nothing to acknowledge (D-02).
+func httpsItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.HTTPS == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	alerts, err := d.HTTPS(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []WarningBody
+	for _, al := range alerts {
+		id, ok := httpsWarningIDs[al.Kind]
+		if !ok {
+			continue
+		}
+		b := &WarningHTTPSBody{
+			Class: al.Class, Host: al.Host, Profile: al.Profile, TermsURL: al.TermsURL, Zone: al.Zone, Target: al.Target,
+			Resolvers: al.Resolvers, NoCertificate: al.NoCertificate, NextAttemptAt: timePtr(al.NextAttemptAt),
+			Reason: al.Reason, Until: timePtr(al.Until), Source: al.Source, NotAfter: timePtr(al.NotAfter),
+			OffsetSeconds: int64(al.Offset / time.Second), MeasuredAt: timePtr(al.MeasuredAt), Record: al.Record,
+			More: al.More, RetryPaused: al.RetryPaused,
+		}
+		if al.Kind == acme.AlertRenewalFailed {
+			b.Port = d.ListenPort
+		}
+		out = append(out, WarningBody{ID: id, HTTPS: b})
+	}
+	return out, nil
+}
+
+// timePtr is t in UTC, or nil when t is the zero time.
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }

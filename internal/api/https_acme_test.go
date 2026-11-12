@@ -145,6 +145,13 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 		Served:    func() api.ServedCertificate { return served },
 		CertFiles: o.certFiles, ACME: f.mgr, Jobs: f.hub, ListenPort: 7480, Log: slog.New(slog.DiscardHandler),
 	}
+	f.httpsAlerts = func(ctx context.Context) ([]acme.Alert, error) {
+		sv := acme.Served{Source: served.Source}
+		if served.Leaf != nil {
+			sv.NotBefore, sv.NotAfter = served.Leaf.NotBefore, served.Leaf.NotAfter
+		}
+		return f.mgr.Alerts(ctx, sv)
+	}
 	f.h = f.build(t)
 	f.cookie, f.csrf = f.signIn(t, "admin", false)
 	return f

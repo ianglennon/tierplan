@@ -21,6 +21,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/tierplan/internal/access"
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/agents"
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -119,6 +120,8 @@ type authFixture struct {
 	localHost api.LocalHostDeps
 	// https feeds the HTTPS routes (phase 14); a test sets it and calls build again.
 	https api.HTTPSDeps
+	// httpsAlerts feeds the https_ items of GET /api/warnings (phase 17); nil means none.
+	httpsAlerts func(context.Context) ([]acme.Alert, error)
 	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
 	// that talks to a registry of its own sets one that trusts that registry's certificate.
 	registryEgress registry.EgressPolicy
@@ -350,6 +353,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Sessions: f.sess, Instance: f.inst, Store: f.st, Audit: f.aud,
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now, Unknown: f.unknown,
+		HTTPS: f.httpsAlerts, ListenPort: 7480,
 	})
 	f.access = access.New(f.st, f.aud, checker, f.inviteTTL)
 	f.access.Now = f.clk.now
