@@ -13,22 +13,20 @@ import (
 )
 
 // tlsKind says where the live certificate comes from. It decides whether a pin
-// is published and whether HSTS may be sent.
+// is published. It does not decide HSTS: that is the policy in hsts.go, for every kind.
 type tlsKind uint8
 
 const (
 	// tlsKindSelfSigned is the certificate TierPlan generated. Agents pin its
-	// key, and HSTS is never sent with it (WR-09). The kinds start at 1, so the
-	// zero value is no kind at all and never reads as self-signed.
+	// key. The kinds start at 1, so the zero value is no kind at all and never reads as self-signed.
 	tlsKindSelfSigned tlsKind = iota + 1
-	// tlsKindSupplied is a certificate the operator provided or obtained. HSTS
-	// is allowed over it. No install command carries a pin for it, and a welcome
-	// still lists the install's self-signed pin (D-19).
+	// tlsKindSupplied is a certificate the operator provided or obtained. No install command
+	// carries a pin for it, and a welcome still lists the install's self-signed pin (D-19).
 	tlsKindSupplied
 	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No install
 	// command carries a pin (the certificate chains to the public roots). A welcome still lists the
 	// self-signed pin, so agents keep the key they were installed with and never start a PinOverlap
-	// countdown on it (D-19). HSTS is not sent in this phase.
+	// countdown on it (D-19).
 	tlsKindACME
 )
 
@@ -150,11 +148,6 @@ func (r *httpsRuntime) Pin() string {
 	}
 	return ""
 }
-
-// HSTSAllowed reports whether a response over TLS may carry
-// Strict-Transport-Security: only with a supplied certificate, never with the
-// generated one that a browser cannot be asked to trust for a year (D-04).
-func (r *httpsRuntime) HSTSAllowed() bool { return r.Kind() == tlsKindSupplied }
 
 // servedChain is the installed kind and the certificates a handshake would present, leaf first, parsed
 // from what GetCertificate answers and never from a stored copy. Both come from one read of the

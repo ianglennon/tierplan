@@ -391,6 +391,8 @@ func (r *acmeRig) mirrorLeaf() *x509.Certificate {
 // certificate at once.
 func TestACMEIssueSwap(t *testing.T) {
 	r := newACMERig(t, acmetest.Options{}, nil)
+	// The rig's fake CA is injected so the trust check can verify the certificate for the public host.
+	r.opts = append(r.opts, WithTrustRoots(r.fake.IssuerPool()))
 	srv := r.startNew()
 	pinBefore := srv.https.Pin()
 	if pinBefore == "" || len(srv.Tunnel().Pins()) != 1 || srv.Tunnel().Pins()[0] != pinBefore {
@@ -444,8 +446,11 @@ func TestACMEIssueSwap(t *testing.T) {
 	if got := srv.TLSPin(); got != "" {
 		t.Errorf("TLSPin() = %q with a Let's Encrypt certificate, want none", got)
 	}
-	if srv.https.HSTSAllowed() {
-		t.Error("HSTS is allowed with a Let's Encrypt certificate, want it off")
+	// HSTS is the policy's decision (D-10): with the stored toggle off, a trusted Let's Encrypt
+	// certificate gets max-age=0 so a browser forgets anything it held, never a positive lifetime.
+	srv.hsts.Recompute(context.Background())
+	if got := hstsHeaderFor(srv.hsts, r.host); got != "max-age=0" {
+		t.Errorf("Strict-Transport-Security = %q with a Let's Encrypt certificate and the toggle off, want max-age=0", got)
 	}
 	if got := srv.https.served().Source; got != api.SourceLetsEncrypt {
 		t.Errorf("served source = %q, want %q", got, api.SourceLetsEncrypt)
@@ -502,8 +507,9 @@ func TestACMEStopReturnsToTheSelfSignedPin(t *testing.T) {
 	if got := srv.TLSPin(); got != pinBefore {
 		t.Errorf("TLSPin() after Stop = %q, want %q", got, pinBefore)
 	}
-	if srv.https.HSTSAllowed() {
-		t.Error("HSTS is allowed over the self-signed certificate")
+	srv.hsts.Recompute(context.Background())
+	if got := hstsHeaderFor(srv.hsts, r.host); got != "" {
+		t.Errorf("Strict-Transport-Security = %q over the self-signed certificate, want none", got)
 	}
 	mirrorMatchesServed(t, srv, r.cfg.DataDir)
 	r.healthy()

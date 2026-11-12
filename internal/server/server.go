@@ -151,9 +151,12 @@ type Server struct {
 	agents  *agents.Service
 	updater *agents.Updater
 	router  *httpx.Router
-	// https is the live TLS state: every handshake, pin and HSTS decision reads
+	// https is the live TLS state: every handshake and pin decision reads
 	// it. Only Build and the ACME installer call Install (D-12).
 	https *httpsRuntime
+	// hsts decides Strict-Transport-Security for every certificate kind (D-10). The router reads its
+	// Header; tests ask it directly.
+	hsts *hstsPolicy
 	// challenge answers a plain request for /.well-known/acme-challenge/: the ACME manager's
 	// token store. Nil means 404. It is the only thing a plain connection reaches.
 	challenge http.Handler
@@ -1318,6 +1321,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		updater:    updater,
 		router:     router,
 		https:      rt,
+		hsts:       hsts,
 		acme:       acmeWire.mgr,
 		challenge:  challenges.Handler(),
 	}

@@ -108,8 +108,8 @@ func TestHTTPSRuntimeHasNoKindUntilInstalled(t *testing.T) {
 	if cert, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil || cert != nil {
 		t.Errorf("GetCertificate = %v, %v; want an error and no certificate before an install", cert, err)
 	}
-	if rt.WelcomePins() != nil || rt.Pin() != "" || rt.HSTSAllowed() {
-		t.Errorf("WelcomePins %v, Pin %q, HSTSAllowed %v; want none, empty and false", rt.WelcomePins(), rt.Pin(), rt.HSTSAllowed())
+	if rt.WelcomePins() != nil || rt.Pin() != "" {
+		t.Errorf("WelcomePins %v, Pin %q; want none and empty", rt.WelcomePins(), rt.Pin())
 	}
 }
 
@@ -137,7 +137,7 @@ func TestHTTPSRuntimeSwapReachesOnlyNewHandshakes(t *testing.T) {
 	}
 }
 
-func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
+func TestHTTPSRuntimePinsFollowTheKind(t *testing.T) {
 	rt := newHTTPSRuntime()
 
 	src, _, err := newCertSource(context.Background(), selfSignedConfig(t), newMemCertStore(), nil, nil, nowFn(fixedNow))
@@ -156,9 +156,6 @@ func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	if rt.Pin() != authn.SPKIPin(leaf) || rt.Kind() != tlsKindSelfSigned {
 		t.Errorf("self-signed Pin %q, Kind %v", rt.Pin(), rt.Kind())
 	}
-	if rt.HSTSAllowed() {
-		t.Error("HSTS is allowed over the self-signed certificate (WR-09)")
-	}
 
 	// Once the identity's pin is settled (Build does it), a certificate that is not the self-signed
 	// one still has welcomes list that pin and install commands carry none (D-19, TLS-08).
@@ -167,9 +164,6 @@ func TestHTTPSRuntimePinsAndHSTSFollowTheKind(t *testing.T) {
 	rt.Install(tlsKindSupplied, getter(supplied))
 	if got := rt.WelcomePins(); len(got) != 1 || got[0] != authn.SPKIPin(leaf) || rt.Pin() != "" {
 		t.Errorf("supplied WelcomePins %v, Pin %q; want [%s] and no install pin", got, rt.Pin(), authn.SPKIPin(leaf))
-	}
-	if !rt.HSTSAllowed() {
-		t.Error("HSTS is not allowed over a supplied certificate")
 	}
 	rt.Install(tlsKindACME, getter(supplied))
 	if got := rt.WelcomePins(); len(got) != 1 || got[0] != authn.SPKIPin(leaf) || rt.Pin() != "" {
