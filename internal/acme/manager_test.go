@@ -1128,6 +1128,67 @@ func TestStopRefusedWhileHSTSIsOn(t *testing.T) {
 	}
 }
 
+// heldInstaller is an installer that tells whether the HSTS toggle was held while it swapped.
+type heldInstaller struct {
+	recInstaller
+	// toggle is the lock a change of the HSTS setting takes.
+	toggle *sync.Mutex
+	// heldAtSwap is true when the toggle could not be taken during ServeSelfSigned.
+	heldAtSwap bool
+}
+
+func (h *heldInstaller) ServeSelfSigned() error {
+	if h.toggle.TryLock() {
+		h.toggle.Unlock()
+	} else {
+		h.heldAtSwap = true
+	}
+	return h.recInstaller.ServeSelfSigned()
+}
+
+// Stop reads the HSTS setting and swaps to the self-signed certificate with the toggle held, so an admin
+// who turns HSTS on at that moment waits for the stop and cannot slip in between the check and the swap
+// (D-26, WR-01). The toggle is one lock, and the test tries to take it from inside the manager's calls.
+func TestStopHoldsTheHSTSToggleFromTheCheckToTheSwap(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	var toggle sync.Mutex
+	inst := &heldInstaller{toggle: &toggle}
+	m := s.buildEnv(s.hub, inst, config.ACMEEnv{})
+	m.d.HSTSHold = func(fn func() error) error {
+		toggle.Lock()
+		defer toggle.Unlock()
+		return fn()
+	}
+	var heldAtCheck bool
+	m.d.HSTSOn = func() bool {
+		if toggle.TryLock() {
+			toggle.Unlock()
+		} else {
+			heldAtCheck = true
+		}
+		return false
+	}
+
+	if err := m.Stop(ctx, "user:1"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if !heldAtCheck {
+		t.Error("the HSTS setting was read with the toggle free, so a toggle can slip in before the swap")
+	}
+	if !inst.heldAtSwap {
+		t.Error("the self-signed certificate was served with the toggle free, so a toggle can slip in during the swap")
+	}
+	if inst.selfSigned != 1 {
+		t.Errorf("the self-signed certificate was served %d times, want once", inst.selfSigned)
+	}
+	if !toggle.TryLock() {
+		t.Fatal("the toggle is still held after Stop returned")
+	}
+	toggle.Unlock()
+}
+
 // Once HSTS is off, Stop works as before; a manager with no HSTS setting at all (a test, a build without
 // the policy) treats it as off (D-26).
 func TestStopWorksWhenHSTSIsOffOrAbsent(t *testing.T) {

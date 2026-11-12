@@ -132,6 +132,10 @@ type Deps struct {
 	// because serving the self-signed certificate under a policy browsers hold would lock them out
 	// (D-26). Nil is off. The expiry fallback does not ask it: that path withdraws the header itself.
 	HSTSOn func() bool
+	// HSTSHold runs fn while the HSTS setting cannot change, so the check of HSTSOn and the swap to the
+	// self-signed certificate in Stop are one step and a toggle cannot slip in between them (D-26). Nil
+	// runs fn at once.
+	HSTSHold func(fn func() error) error
 	// Env is what the TIERPLAN_ACME* variables say. They override the stored settings at the decision
 	// sites in env.go and are never saved (D-02).
 	Env config.ACMEEnv
@@ -570,13 +574,21 @@ func (m *Manager) Stop(ctx context.Context, actor string) error {
 	if m.d.Env.Enabled != nil {
 		return m.lockedACME()
 	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	if m.d.HSTSHold == nil {
+		return m.stopLocked(ctx, actor)
+	}
+	return m.d.HSTSHold(func() error { return m.stopLocked(ctx, actor) })
+}
+
+// stopLocked is Stop with opMu held and, when the HSTS setting is held, the setting unable to change.
+func (m *Manager) stopLocked(ctx context.Context, actor string) error {
 	// With HSTS on, browsers hold a policy for this host that the self-signed certificate cannot
 	// satisfy. The refusal is here and not in the API, so no caller can go around it (D-26).
 	if m.d.HSTSOn != nil && m.d.HSTSOn() {
 		return ErrHSTSOn
 	}
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
 	if m.d.CertFiles {
 		return ErrCertFiles
 	}

@@ -163,7 +163,7 @@ type acmeWiring struct {
 // error that stops start-up.
 func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.Vault, inst *instance.Instance,
 	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps,
-	hstsOn func() bool, listening <-chan struct{}) (acmeWiring, error) {
+	hsts *hstsPolicy, listening <-chan struct{}) (acmeWiring, error) {
 	dir, err := acme.NewDirectory(cfg)
 	if err != nil {
 		return acmeWiring{}, err
@@ -208,7 +208,10 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 		Env: cfg.ACME, Ready: listening,
 		// Stop using Let's Encrypt is refused while HSTS is on, because the self-signed certificate that
 		// would replace it is not one browsers holding a policy accept (D-26).
-		HSTSOn: hstsOn,
+		HSTSOn: hsts.Enabled,
+		// The check and the swap in Stop happen with the toggle held, so a toggle-on cannot slip in between
+		// them. Nothing here is on the request path.
+		HSTSHold: hsts.WithToggleLocked,
 	})
 	return acmeWiring{mgr: mgr, challenges: challenges}, nil
 }

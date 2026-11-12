@@ -1273,3 +1273,82 @@ func TestHSTSHeaderIgnoresADecisionMadeForAnotherKind(t *testing.T) {
 		t.Errorf("Strict-Transport-Security = %q after the recompute, want none", got)
 	}
 }
+
+// lockProbeStore reports, from inside the write of the toggle, whether the policy's locks are held.
+type lockProbeStore struct {
+	hstsStore
+	p *hstsPolicy
+	// toggleHeld and stateHeld are true when the write found toggleMu and mu held.
+	toggleHeld, stateHeld bool
+}
+
+func (s *lockProbeStore) SetHSTSEnabled(ctx context.Context, a sqlc.SetHSTSEnabledParams) error {
+	if s.p.toggleMu.TryLock() {
+		s.p.toggleMu.Unlock()
+	} else {
+		s.toggleHeld = true
+	}
+	if s.p.mu.TryLock() {
+		s.p.mu.Unlock()
+	} else {
+		s.stateHeld = true
+	}
+	return s.hstsStore.SetHSTSEnabled(ctx, a)
+}
+
+// A change of the toggle and a caller that checks it and then acts (the Let's Encrypt stop) are exclusive
+// of each other (D-26, WR-01). The test takes the locks from inside each side. The change also holds the
+// state lock from its write to its recompute, so a tick that read the old row cannot store the old toggle
+// over the new one.
+func TestHSTSPolicyToggleAndWithToggleLockedAreExclusive(t *testing.T) {
+	g := newHSTSRig(t)
+	g.serveForever(tlsKindACME)
+	probe := &lockProbeStore{hstsStore: g.db()}
+	p := g.policyOver(nil, probe, slog.New(slog.DiscardHandler))
+	probe.p = p
+	ctx := testsupport.Context(t)
+
+	if err := p.SetEnabled(ctx, true); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+	if !probe.toggleHeld || !probe.stateHeld {
+		t.Errorf("the toggle was written with toggleMu held %v and mu held %v, want both held", probe.toggleHeld, probe.stateHeld)
+	}
+	if !p.Enabled() {
+		t.Error("Enabled is false after SetEnabled(true)")
+	}
+	if got := hstsHeaderFor(p, hstsHost); got != "max-age=300" {
+		t.Errorf("Strict-Transport-Security = %q after the toggle, want max-age=300", got)
+	}
+
+	var inside bool
+	sentinel := errors.New("fn's error")
+	err := p.WithToggleLocked(func() error {
+		if p.toggleMu.TryLock() {
+			p.toggleMu.Unlock()
+		} else {
+			inside = true
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("WithToggleLocked returned %v, want fn's error", err)
+	}
+	if !inside {
+		t.Error("the toggle could be taken inside WithToggleLocked, so a change can run alongside it")
+	}
+	if !p.toggleMu.TryLock() {
+		t.Fatal("the toggle is still held after WithToggleLocked returned")
+	}
+	p.toggleMu.Unlock()
+
+	// A locked toggle (TIERPLAN_HSTS) cannot change, so it holds nothing back either.
+	locked := g.policy(boolPtr(true))
+	if err := locked.SetEnabled(ctx, true); err != nil {
+		t.Errorf("SetEnabled to the variable's own value: %v", err)
+	}
+	if !locked.toggleMu.TryLock() {
+		t.Fatal("an echo of the lock left the toggle held")
+	}
+	locked.toggleMu.Unlock()
+}

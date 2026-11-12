@@ -1002,7 +1002,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// listening is closed once the server accepts connections; the start-time issue of TIERPLAN_ACME=on
 	// waits for it.
 	listening := make(chan struct{})
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS, hsts.Enabled, listening)
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS, hsts, listening)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()

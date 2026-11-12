@@ -79,6 +79,9 @@ type hstsPolicy struct {
 	snap atomic.Pointer[hstsDecision]
 	wake chan struct{}
 
+	// toggleMu makes a change of the stored toggle and WithToggleLocked exclusive of each other. It is
+	// taken before mu and is never taken on the request path.
+	toggleMu sync.Mutex
 	// mu serialises Recompute, which runs off the request path, and guards what follows.
 	mu sync.Mutex
 	// loaded is whether the ramp has been read from the database. The ramp in memory is the truth
@@ -238,6 +241,11 @@ func withdrawWindow(lifetime time.Duration) time.Duration {
 func (p *hstsPolicy) Recompute(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.recomputeLocked(ctx)
+}
+
+// recomputeLocked is Recompute for a caller that holds mu.
+func (p *hstsPolicy) recomputeLocked(ctx context.Context) {
 	p.load(ctx)
 	now := p.now()
 	kind, chain := p.rt.servedChain()
@@ -384,6 +392,12 @@ func (p *hstsPolicy) SetEnabled(ctx context.Context, on bool) error {
 		}
 		return &ErrHSTSLocked{Var: config.EnvHSTS}
 	}
+	// Nothing that checks the toggle and then acts on it (WithToggleLocked) interleaves with the change,
+	// and a tick of the loop cannot store the toggle it read before the write over the one written.
+	p.toggleMu.Lock()
+	defer p.toggleMu.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var v int64
 	if on {
 		v = 1
@@ -393,8 +407,18 @@ func (p *hstsPolicy) SetEnabled(ctx context.Context, on bool) error {
 	}
 	p.storedOn.Store(on)
 	p.log.Info("HSTS setting changed", "enabled", on)
-	p.Recompute(ctx)
+	p.recomputeLocked(ctx)
 	return nil
+}
+
+// WithToggleLocked runs fn while the toggle cannot change, so a check of Enabled inside fn is still true
+// when fn acts on it (D-26). A change of the toggle waits for fn to return. fn may install a
+// certificate, whose hook only wakes the loop, but must not change the toggle itself. The request path
+// never takes this lock.
+func (p *hstsPolicy) WithToggleLocked(fn func() error) error {
+	p.toggleMu.Lock()
+	defer p.toggleMu.Unlock()
+	return fn()
 }
 
 // View describes the header the last decision sends, with the facts the HSTS card shows. It reads the
