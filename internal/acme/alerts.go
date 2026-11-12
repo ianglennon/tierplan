@@ -81,6 +81,12 @@ type Alert struct {
 	RetryPaused bool
 }
 
+// ExpiringWarnWithin is the longest time before a served certificate ends that it is listed as expiring
+// (D-04.5). A certificate with a lifetime under three times this is listed at a third of its lifetime
+// left instead, which lands after the renewal point of a certificate TierPlan renews itself (FallbackRenewAt
+// renews at half or two thirds of the lifetime), so a healthy short-lived certificate never raises it.
+const ExpiringWarnWithin = 14 * 24 * time.Hour
+
 // Served is the certificate the listener serves, as far as the alerts need it.
 type Served struct {
 	Source              string
@@ -90,11 +96,12 @@ type Served struct {
 // DeriveAlerts reports what is wrong with HTTPS at now, the worst first. It is pure: the state, the
 // served certificate and the clock come in as arguments.
 func DeriveAlerts(now time.Time, st Status, sv Served) []Alert {
-	_ = now
-	_ = sv
 	var out []Alert
 	if st.Fallback {
 		out = append(out, Alert{Kind: AlertFallback, NotAfter: st.ExpiredAt})
+	}
+	if a, ok := expiring(now, st, sv); ok {
+		out = append(out, a)
 	}
 	if a, ok := renewalFailed(st); ok {
 		out = append(out, a)
@@ -141,6 +148,22 @@ func paused(st Status) (Alert, bool) {
 		return Alert{Kind: AlertPaused, Reason: st.Block.Reason, Until: st.Block.Until}, true
 	}
 	return Alert{}, false
+}
+
+// expiring is the expiring item (D-04.5, D-05): the served certificate, from Let's Encrypt or from
+// certificate files, has strictly less than min(ExpiringWarnWithin, lifetime/3) left. A certificate
+// that has already ended is included: the time left is then negative. While the fallback is listed the
+// served certificate is TierPlan's own, and the fallback item says it all. TierPlan's ten-year
+// self-signed certificate never crosses the threshold, so it needs no case of its own.
+func expiring(now time.Time, st Status, sv Served) (Alert, bool) {
+	if st.Fallback || sv.Source == "" || sv.NotAfter.IsZero() {
+		return Alert{}, false
+	}
+	threshold := min(ExpiringWarnWithin, sv.NotAfter.Sub(sv.NotBefore)/3)
+	if sv.NotAfter.Sub(now) >= threshold {
+		return Alert{}, false
+	}
+	return Alert{Kind: AlertExpiring, Source: sv.Source, NotAfter: sv.NotAfter}, true
 }
 
 // Alerts reports what is wrong with HTTPS now, for the instance warnings feed. sv is the certificate

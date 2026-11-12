@@ -157,6 +157,89 @@ func TestDeriveAlerts(t *testing.T) {
 		}
 	})
 
+	// served is a certificate with the given lifetime that ends left from alertsNow.
+	served := func(source string, lifetime, left time.Duration) Served {
+		end := alertsNow.Add(left)
+		return Served{Source: source, NotBefore: end.Add(-lifetime), NotAfter: end}
+	}
+	const lifetime90 = 90 * 24 * time.Hour
+
+	t.Run("a 90-day certificate is expiring only when strictly under 14 days are left", func(t *testing.T) {
+		t.Parallel()
+		if got := DeriveAlerts(alertsNow, Status{Mode: ModeActive}, served("lets_encrypt", lifetime90, ExpiringWarnWithin)); len(got) != 0 {
+			t.Fatalf("with exactly 14 days left: %+v, want none", got)
+		}
+		sv := served("lets_encrypt", lifetime90, ExpiringWarnWithin-time.Second)
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive}, sv)
+		want := []Alert{{Kind: AlertExpiring, Source: "lets_encrypt", NotAfter: sv.NotAfter}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("with 14 days less a second left: %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a 160-hour certificate is expiring under a third of its lifetime", func(t *testing.T) {
+		t.Parallel()
+		const life = 160 * time.Hour
+		third := life / 3
+		if got := DeriveAlerts(alertsNow, Status{Mode: ModeActive}, served("lets_encrypt", life, third)); len(got) != 0 {
+			t.Fatalf("with exactly a third left: %+v, want none", got)
+		}
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive}, served("lets_encrypt", life, third-time.Second))
+		if len(got) != 1 || got[0].Kind != AlertExpiring {
+			t.Fatalf("with a third less a second left: %+v, want one expiring", got)
+		}
+		// Half way through, where such a certificate is renewed, is far from the threshold.
+		if got := DeriveAlerts(alertsNow, Status{Mode: ModeActive}, served("lets_encrypt", life, life/2)); len(got) != 0 {
+			t.Fatalf("at the renewal point: %+v, want none", got)
+		}
+	})
+
+	t.Run("the 10-year self-signed certificate never raises it", func(t *testing.T) {
+		t.Parallel()
+		tenYears := 10 * 365 * 24 * time.Hour
+		sv := Served{Source: "self_signed", NotBefore: alertsNow.Add(-24 * time.Hour), NotAfter: alertsNow.Add(-24*time.Hour + tenYears)}
+		if got := DeriveAlerts(alertsNow, Status{Mode: ModeOff}, sv); len(got) != 0 {
+			t.Fatalf("got %+v, want none", got)
+		}
+	})
+
+	t.Run("certificate files that have already ended are expiring", func(t *testing.T) {
+		t.Parallel()
+		sv := served("cert_files", lifetime90, -48*time.Hour)
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, CertFiles: true}, sv)
+		want := []Alert{{Kind: AlertExpiring, Source: "cert_files", NotAfter: sv.NotAfter}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("no served certificate gives no expiring alert", func(t *testing.T) {
+		t.Parallel()
+		if got := DeriveAlerts(alertsNow, Status{Mode: ModeActive}, Served{}); len(got) != 0 {
+			t.Fatalf("got %+v, want none", got)
+		}
+	})
+
+	t.Run("the fallback hides the expiring item for the expired Let's Encrypt leaf", func(t *testing.T) {
+		t.Parallel()
+		expired := alertsNow.Add(-time.Hour)
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Fallback: true, ExpiredAt: expired}, served("lets_encrypt", lifetime90, -time.Hour))
+		if !slices.Equal(kindsOf(got), []AlertKind{AlertFallback}) {
+			t.Fatalf("kinds = %v, want only the fallback", kindsOf(got))
+		}
+	})
+
+	t.Run("a failed renewal and an expiring certificate are both listed, the failure first", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{
+			Mode: ModeActive, Certificate: cert, LastError: failing, Failures: 1,
+		}, served("lets_encrypt", lifetime90, 5*24*time.Hour))
+		want := []AlertKind{AlertRenewalFailed, AlertExpiring}
+		if !slices.Equal(kindsOf(got), want) {
+			t.Fatalf("kinds = %v, want %v", kindsOf(got), want)
+		}
+	})
+
 	t.Run("the alert has nowhere to hold the CA's problem text", func(t *testing.T) {
 		t.Parallel()
 		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Certificate: cert, LastError: failing, Failures: 1}, Served{})
