@@ -418,3 +418,13 @@ export function httpsEnvOffStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
 export function httpsEnvOffEmptyStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
   return httpsStatus({ acme: httpsACME({ locks: acmeSwitchLock("off"), ...acme }) });
 }
+
+// The TIERPLAN_ACME_CHALLENGE lock as the status carries it: the effective method and the saved one.
+export function challengeLock(
+  value: "http-01" | "dns-01",
+  stored?: "http-01" | "dns-01",
+): HTTPSACME["locks"] {
+  return {
+    challengeType: { var: "TIERPLAN_ACME_CHALLENGE", value, ...(stored ? { stored } : {}) },
+  };
+}

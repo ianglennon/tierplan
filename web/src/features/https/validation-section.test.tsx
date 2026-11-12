@@ -14,6 +14,7 @@ import { type CardState, validationMode } from "@/features/https/card-state";
 import "@/i18n";
 import {
   acmeDNSStatus,
+  challengeLock,
   httpsACME,
   httpsCertFilesStatus,
   httpsRestoredStatus,
@@ -874,5 +875,93 @@ describe("Validation section: Remove token keyed on the saved method (J3, D-05)"
     expect(deletes).toHaveLength(1);
     const [node] = successToast.mock.calls[0] as [{ props: { children: string } }];
     expect(node.props.children).toBe("Token removed.");
+  });
+});
+
+describe("Validation section: the validation method locked by TIERPLAN_ACME_CHALLENGE (D-17)", () => {
+  const problem = (type: string) =>
+    Response.json(
+      { type, title: "x", status: 409 },
+      { status: 409, headers: { "Content-Type": "application/problem+json" } },
+    );
+
+  it("disables both radios with the effective method selected, and names the variable and the stored method", async () => {
+    status = () =>
+      Response.json(
+        withACME({ challengeType: "dns-01", locks: challengeLock("dns-01", "http-01") }),
+      );
+    await ready();
+    const radios = card().getAllByRole("radio");
+    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+    for (const radio of radios) expect(radio.matches(":disabled")).toBe(true);
+    expect(document.getElementById("acme-method-lock")?.textContent).toBe(
+      "Set by the TIERPLAN_ACME_CHALLENGE environment variable.Stored value: HTTP-01, used if TIERPLAN_ACME_CHALLENGE is removed.",
+    );
+  });
+
+  it("selects the environment's method even when the saved one differs", async () => {
+    status = () =>
+      Response.json(
+        withACME({ challengeType: "http-01", locks: challengeLock("http-01", "dns-01") }),
+      );
+    await ready();
+    expect(
+      card()
+        .getAllByRole("radio")
+        .map((r) => r.getAttribute("aria-checked")),
+    ).toEqual(["true", "false"]);
+  });
+
+  it("describes both radios by the lock note", async () => {
+    status = () => Response.json(withACME({ locks: challengeLock("http-01", "dns-01") }));
+    await ready();
+    for (const radio of card().getAllByRole("radio")) {
+      expect(radio.getAttribute("aria-describedby")).toContain("acme-method-lock");
+    }
+    expect(document.getElementById("acme-method-lock")).toBeTruthy();
+  });
+
+  it("does not draw the lock when no variable sets the method", async () => {
+    await ready();
+    expect(card().queryByText("TIERPLAN_ACME_CHALLENGE", { selector: "code" })).toBeNull();
+    for (const radio of card().getAllByRole("radio"))
+      expect(radio.matches(":disabled")).toBe(false);
+  });
+
+  it("sends the effective method with a save under the lock", async () => {
+    status = () =>
+      Response.json(
+        withACME({ challengeType: "dns-01", locks: challengeLock("dns-01", "http-01") }),
+      );
+    put = () => validationResultResponse({ test: undefined });
+    await ready();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN, resolvers: [] });
+  });
+
+  it("redraws as locked on a 409 acme_challenge_locked, with no failure alert and no error toast", async () => {
+    const errorToast = vi.spyOn(toast, "error");
+    put = () => {
+      status = () =>
+        Response.json(
+          withACME({ challengeType: "http-01", locks: challengeLock("http-01", "http-01") }),
+        );
+      return problem("acme_challenge_locked");
+    };
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(document.getElementById("acme-method-lock")).toBeTruthy());
+    expect(
+      card()
+        .getAllByRole("radio")
+        .map((r) => r.getAttribute("aria-checked")),
+    ).toEqual(["true", "false"]);
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+    expect(errorToast).not.toHaveBeenCalled();
+    expect(successToast).not.toHaveBeenCalled();
   });
 });

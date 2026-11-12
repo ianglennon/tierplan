@@ -11,6 +11,7 @@ import {
   type ACMETokenTest,
   ACMEValidationError,
   type HTTPSACME,
+  isLockProblem,
   useSaveACMEValidation,
   useTestACMEDNSToken,
 } from "@/api/https";
@@ -27,6 +28,7 @@ import {
   TestTokenNotes,
   TOKEN_ID,
 } from "@/features/https/dns-settings";
+import { LockedNote } from "@/features/https/locked-note";
 import { rich, Sentence, SLOT } from "@/features/https/sentence";
 import { REPLACE_ID, TokenSavedRow } from "@/features/https/token-saved-row";
 import { TokenTestResult } from "@/features/https/token-test-result";
@@ -73,6 +75,7 @@ function parseResolvers(text: string): string[] {
 }
 
 const HEADING_ID = "acme-validation-title";
+const CHALLENGE_LOCK_ID = "acme-method-lock";
 
 // What a save or a Test token answered, to show under the buttons: the token test it ran, and whether it
 // stored (null for Test token, which never stores).
@@ -98,7 +101,12 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
   const t = useT();
   const save = useSaveACMEValidation();
   const test = useTestACMEDNSToken();
-  const saved: Method = acme.challengeType === "dns-01" ? "dns-01" : "http-01";
+  // TIERPLAN_ACME_CHALLENGE fixes the method (D-17): the radios show the effective one, are disabled, and
+  // a save echoes it. The effective value is the lock's, which is also what acme.challengeType reports.
+  const challengeLock = acme.locks.challengeType;
+  const challengeLocked = challengeLock !== undefined;
+  const saved: Method =
+    (challengeLock?.value ?? acme.challengeType) === "dns-01" ? "dns-01" : "http-01";
   const tokenSaved = acme.dns.tokenSaved;
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   // "testing" while the server tests a typed token, "saving" from its answer until the status is read.
@@ -119,7 +127,9 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
     values: { challengeType: saved, token: "", replacing: false, resolvers: savedText },
     mode: "onSubmit",
   });
-  const method = useWatch({ control: form.control, name: "challengeType" });
+  const drafted = useWatch({ control: form.control, name: "challengeType" });
+  // Under a lock the draft is the environment's method, whatever was picked before the lock appeared.
+  const method: Method = challengeLocked ? saved : drafted;
   const replacing = useWatch({ control: form.control, name: "replacing" }) && tokenSaved;
   const typed = useWatch({ control: form.control, name: "token" }).trim() !== "";
   const resolversText = useWatch({ control: form.control, name: "resolvers" });
@@ -137,6 +147,18 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
     onDirtyChange?.(dirty);
     return () => onDirtyChange?.(false);
   }, [dirty, onDirtyChange]);
+
+  // A variable began to fix the method while a different one was drafted: the draft goes, as does what
+  // was typed for DNS-01 if the environment's method is HTTP-01 (nothing of it was sent).
+  useEffect(() => {
+    if (!challengeLocked || form.getValues("challengeType") === saved) return;
+    form.setValue("challengeType", saved);
+    if (saved === "http-01") {
+      form.setValue("token", "");
+      form.setValue("replacing", false);
+      form.clearErrors();
+    }
+  }, [challengeLocked, saved, form]);
 
   useEffect(() => {
     if (!focusToken || method !== "dns-01") return;
@@ -212,14 +234,18 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
     setFailed(false);
     setResolverProblem(null);
     setOutcome(null);
-    const token = v.challengeType === "dns-01" ? v.token.trim() : "";
+    // The method this save is for: the environment's under a lock, else the draft.
+    const chosen: Method = challengeLock ? saved : v.challengeType;
+    const token = chosen === "dns-01" ? v.token.trim() : "";
     setStage(token === "" ? "saving" : "testing");
     save.mutate(
       {
-        challengeType: v.challengeType,
+        // Always the effective method: under a lock the radios are disabled, so this is the echo the
+        // server takes as a no-op.
+        challengeType: chosen,
         ...(token === "" ? {} : { token }),
         // Resolvers travel with the DNS-01 draft only: an HTTP-01 save is the method alone (J9).
-        ...(v.challengeType === "dns-01" ? { resolvers: parseResolvers(v.resolvers) } : {}),
+        ...(chosen === "dns-01" ? { resolvers: parseResolvers(v.resolvers) } : {}),
         onAnswered: () => setStage("saving"),
       },
       {
@@ -228,7 +254,7 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
           if (!answer.saved) return;
           // Stored: the typed token leaves the form, and the status shows only that one is saved.
           form.reset({
-            challengeType: v.challengeType,
+            challengeType: chosen,
             token: "",
             replacing: false,
             resolvers: v.resolvers,
@@ -236,6 +262,9 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
           toastSuccess(t("https.validation.done"));
         },
         onError: (error) => {
+          // A variable now fixes a field: the status is read again (by the mutation) and the field
+          // redraws as locked. Nothing was stored, and it is not told as a failure.
+          if (isLockProblem(error)) return;
           if (error instanceof ACMEValidationError && error.type === "acme_dns_token_required") {
             form.setError("token", { type: "server", message: TOKEN_REQUIRED });
             return;
@@ -270,7 +299,7 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
           <RadioGroup
             value={method}
             onValueChange={pick}
-            disabled={locked}
+            disabled={locked || challengeLocked}
             aria-labelledby={HEADING_ID}
             className="gap-4"
           >
@@ -279,7 +308,7 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
                 <RadioGroupItem
                   value={m}
                   id={`acme-method-${m}`}
-                  aria-describedby={`acme-method-${m}-description`}
+                  aria-describedby={`acme-method-${m}-description${challengeLocked ? ` ${CHALLENGE_LOCK_ID}` : ""}`}
                   className="mt-0.5"
                 />
                 <div className="flex min-w-0 flex-col gap-1">
@@ -305,8 +334,27 @@ export function ValidationSection({ acme, mode, onDirtyChange }: ValidationSecti
             ))}
           </RadioGroup>
           <p className="text-sm text-muted-foreground">{t("https.validation.helper")}</p>
+          {challengeLock ? (
+            <LockedNote
+              id={CHALLENGE_LOCK_ID}
+              lock={challengeLock}
+              storedLabel={
+                challengeLock.stored
+                  ? t(
+                      challengeLock.stored === "dns-01"
+                        ? "https.validation.dns01.label"
+                        : "https.validation.http01.label",
+                    )
+                  : undefined
+              }
+            />
+          ) : null}
 
-          {suggestion && method === "http-01" && saved === "http-01" && editable ? (
+          {suggestion &&
+          method === "http-01" &&
+          saved === "http-01" &&
+          editable &&
+          !challengeLocked ? (
             <Alert role="note" className="text-foreground has-data-[slot=alert-action]:pr-2.5">
               <Info aria-hidden="true" />
               <AlertTitle>{t("https.validation.suggest.title")}</AlertTitle>
