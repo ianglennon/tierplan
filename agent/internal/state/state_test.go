@@ -224,6 +224,22 @@ func TestMergePinsKeepsAPinTheServerDroppedFor30DaysAndThenLetsItGo(t *testing.T
 	}
 }
 
+// D-19: a server that keeps listing the self-signed pin in every welcome (also while it serves a
+// public certificate) never starts the pin's overlap, however long the agent runs.
+func TestMergePinsNeverDatesAPinTheServerKeepsListingPastTheOverlap(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	got := MergePins(nil, []string{pin("S")}, now)
+	for _, later := range []time.Duration{PinOverlap - time.Hour, PinOverlap + time.Hour, 3 * PinOverlap} {
+		got = MergePins(got, []string{pin("S")}, now.Add(later))
+		if len(got) != 1 || got[0].Pin != pin("S") || !got[0].ExpiresAt.IsZero() {
+			t.Fatalf("after %v the pins are %+v, want S with no expiry", later, got)
+		}
+	}
+	if active := ActivePins(got, now.Add(10*PinOverlap)); len(active) != 1 || active[0] != pin("S") {
+		t.Errorf("active pins long after the overlap = %v, want S", active)
+	}
+}
+
 func TestMergePinsBringsBackAPinTheServerListsAgain(t *testing.T) {
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	current := []PinEntry{{Pin: pin("A"), ExpiresAt: now.Add(time.Hour)}}
