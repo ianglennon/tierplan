@@ -21,6 +21,7 @@ import {
   acmeStep,
   acmeSteps,
   acmeStepsDNS01,
+  acmeSwitchLock,
   httpsACME,
   httpsStatus,
 } from "@/test-https";
@@ -429,6 +430,34 @@ describe("E4: what stops an order", () => {
     await ready();
     expect(refusalAlert().querySelector("img")).toBeNull();
     expect(refusalAlert().textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+});
+
+describe("E5: the Can't issue yet list with TIERPLAN_ACME=on (D-07)", () => {
+  const NOTE = "TierPlan tries again by itself once these are fixed.";
+  const on = { locks: acmeSwitchLock("on"), mode: "active" as const };
+
+  it.each([
+    ["one refusal", ALL_REFUSALS.slice(0, 1)],
+    ["several refusals", ALL_REFUSALS],
+  ])("ends the list with the retry note, once: %s", async (_name, refusals) => {
+    status = () => withACME({ ...on, refusals });
+    await ready();
+    const notes = refusalAlert().textContent?.split(NOTE).length ?? 0;
+    expect(notes - 1).toBe(1);
+    const note = within(refusalAlert()).getByText(NOTE, { exact: false });
+    expect(note.className).toContain("text-xs");
+    expect(note.className).toContain("text-muted-foreground");
+    // After the last item, not among them.
+    expect(note.closest("li")).toBeNull();
+    const list = refusalAlert().querySelector("ul") as HTMLElement;
+    expect(list.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("has no retry note without the variable", async () => {
+    status = () => withACME({ refusals: ALL_REFUSALS });
+    await ready();
+    expect(refusalAlert().textContent).not.toContain(NOTE);
   });
 });
 

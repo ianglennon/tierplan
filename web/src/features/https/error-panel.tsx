@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { type ACMELastError, errorCopy } from "@/features/https/copy";
 import { Sentence, SLOT } from "@/features/https/sentence";
+import { Rich } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -27,12 +28,22 @@ interface ErrorPanelProps {
   // True only on the render right after a run failed in this session; a failure read from the stored
   // ledger is a note, so a reload does not announce it again.
   fresh: boolean;
+  // True while TIERPLAN_ACME is on and the card is not paused: TierPlan keeps trying by itself, and a
+  // restart does not hurry it, because the backoff is stored (D-07).
+  keepsTrying?: boolean;
 }
 
 // ErrorPanel is the last-run error panel (D-11, ACME-07): the classified headline and what to do, how
 // many attempts failed and when the next one is, and the CA's own problem document under Details. The
 // document is the CA's text, capped by the server, and is drawn as a text node only, never as HTML.
-export function ErrorPanel({ error, failures, values, quiet, fresh }: ErrorPanelProps) {
+export function ErrorPanel({
+  error,
+  failures,
+  values,
+  quiet,
+  fresh,
+  keepsTrying = false,
+}: ErrorPanelProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const { headline, fix } = errorCopy(t, error.code, values);
@@ -53,6 +64,11 @@ export function ErrorPanel({ error, failures, values, quiet, fresh }: ErrorPanel
           {failures > 0 ? <>{t("https.lastRun.attempts", { count: failures })} </> : null}
           {next ? t("https.lastRun.next", { time: next }) : null}
         </p>
+        {keepsTrying ? (
+          <p className="text-xs text-muted-foreground">
+            <Rich text={t("https.envState.keepsTrying")} />
+          </p>
+        ) : null}
         {detail === "" ? null : (
           <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col gap-2">
             <CollapsibleTrigger asChild>

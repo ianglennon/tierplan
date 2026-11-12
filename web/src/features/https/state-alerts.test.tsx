@@ -16,9 +16,12 @@ import "@/i18n";
 import {
   acmeActiveRun,
   acmeLastError,
+  acmeSwitchLock,
   httpsACME,
   httpsCertFilesKeptStatus,
   httpsCertFilesStatus,
+  httpsEnvOffEmptyStatus,
+  httpsEnvOffStatus,
   httpsEnvOnStatus,
   httpsFallbackStatus,
   httpsLetsEncryptStatus,
@@ -559,5 +562,123 @@ describe("TIERPLAN_ACME=on, waiting for the first certificate (D-07, UI-SPEC J5)
     await ready();
     expect(stateOf()).toBe("H");
     expect(noteWith(TITLE)).toBeUndefined();
+  });
+});
+
+describe("TIERPLAN_ACME=on on the other states (D-08, D-09)", () => {
+  const on = { locks: acmeSwitchLock("on") };
+
+  it("E: the names-changed alert ends with the environment sentence instead of the renewal one", async () => {
+    status = () => Response.json(httpsNamesChangedStatus(on));
+    await ready();
+    expect(stateOf()).toBe("E");
+    const alert = noteWith("The names have changed") as HTMLElement;
+    expect(alert.textContent).toContain("The certificate covers tierplan.example.com.");
+    expect(
+      alert.textContent?.endsWith(
+        "TIERPLAN_ACME is on, so TierPlan orders a certificate for the new names by itself.",
+      ),
+    ).toBe(true);
+    expect(alert.textContent).not.toContain("keeps renewing the old names");
+    expect([...alert.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "tierplan.example.com",
+      "tierplan.example.org",
+      "agents.example.org",
+      "TIERPLAN_ACME",
+    ]);
+  });
+
+  it("H: the restore alert keeps Resume Let's Encrypt and says TierPlan orders again as soon as you resume", async () => {
+    status = () => Response.json(httpsRestoredStatus(on));
+    await ready();
+    expect(stateOf()).toBe("H");
+    const alert = noteWith("Paused after restore") as HTMLElement;
+    expect(alert.textContent).toContain("The certificate being served is unchanged.");
+    expect(alert.textContent).toContain(
+      "TIERPLAN_ACME is on, so TierPlan orders again as soon as you resume.",
+    );
+    expect(within(alert).getByRole("button", { name: "Resume Let's Encrypt" })).toBeTruthy();
+  });
+
+  it("I and J: the certificate-files alerts add that TIERPLAN_ACME starts working when the files are removed", async () => {
+    const sentence =
+      "TIERPLAN_ACME is on and starts working when the certificate files are removed.";
+    status = () => Response.json(httpsCertFilesStatus(on));
+    await ready();
+    expect(stateOf()).toBe("I");
+    expect(notes().some((n) => n.textContent?.includes(sentence))).toBe(true);
+    cleanup();
+    queryClient.clear();
+
+    status = () => Response.json(httpsCertFilesKeptStatus(on));
+    await ready();
+    expect(stateOf()).toBe("J");
+    expect((noteWith("Paused by certificate files") as HTMLElement).textContent).toContain(
+      sentence,
+    );
+  });
+
+  it("leaves every alert as in Phases 14 and 15 when the variable is unset", async () => {
+    status = () => Response.json(httpsRestoredStatus());
+    await ready();
+    expect((noteWith("Paused after restore") as HTMLElement).textContent).not.toContain(
+      "TIERPLAN_ACME",
+    );
+    cleanup();
+    queryClient.clear();
+
+    status = () => Response.json(httpsCertFilesStatus());
+    await ready();
+    expect(notes().some((n) => n.textContent?.includes("TIERPLAN_ACME"))).toBe(false);
+  });
+});
+
+describe("TIERPLAN_ACME=off (D-02, D-04)", () => {
+  const TITLE = "Let's Encrypt is turned off by TIERPLAN_ACME";
+  // The variable name is its own element, so the title is found by its text content.
+  const warning = () =>
+    notes().find((n) => n.querySelector("[data-slot=alert-title]")?.textContent === TITLE) as
+      | HTMLElement
+      | undefined;
+
+  it("with a certificate, order and account kept, warns and says they are kept", async () => {
+    status = () => Response.json(httpsEnvOffStatus());
+    await ready();
+    const alert = warning() as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.className).toContain("border-status-warning");
+    expect(alert.textContent).toContain(
+      "TierPlan serves its self-signed certificate and makes no Let's Encrypt requests.",
+    );
+    expect(alert.textContent).toContain(
+      "Your Let's Encrypt certificate, order and account are kept.",
+    );
+    expect(alert.textContent).toContain(
+      "Remove TIERPLAN_ACME, or set it to on, to use them again.",
+    );
+    expect(
+      [...alert.querySelectorAll("code")].every((c) => c.className.includes("font-mono")),
+    ).toBe(true);
+    // The mode is off, so there is no Stop row.
+    expect(card().queryByRole("button", { name: "Stop using Let's Encrypt" })).toBeNull();
+  });
+
+  it("with nothing stored, is one sentence in an info alert", async () => {
+    status = () => Response.json(httpsEnvOffEmptyStatus());
+    await ready();
+    expect(warning()).toBeUndefined();
+    const note = notes().find(
+      (n) => n.textContent === "Let's Encrypt is turned off by TIERPLAN_ACME.",
+    );
+    expect(note).toBeTruthy();
+    expect(note?.className).not.toContain("border-status-warning");
+    expect(note?.querySelector("[data-slot=alert-title]")).toBeNull();
+    expect(card().queryByRole("button", { name: "Stop using Let's Encrypt" })).toBeNull();
+  });
+
+  it("is not drawn when the variable is unset", async () => {
+    status = () => Response.json(httpsStatus());
+    await ready();
+    expect(notes().some((n) => n.textContent?.includes("turned off by TIERPLAN_ACME"))).toBe(false);
   });
 });

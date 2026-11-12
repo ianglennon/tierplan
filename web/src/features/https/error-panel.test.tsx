@@ -18,6 +18,8 @@ import {
   acmeLastError,
   acmeRunFrame,
   acmeSteps,
+  acmeSwitchLock,
+  httpsEnvOnStatus,
   httpsLetsEncryptStatus,
   lastErrorDNS,
 } from "@/test-https";
@@ -54,7 +56,7 @@ function withACME(over: Partial<HTTPSACME>, top: Partial<HTTPSStatus> = {}): HTT
   return httpsLetsEncryptStatus(over, top);
 }
 
-async function renderPage() {
+async function renderPage(ready = "Last renewed") {
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -64,7 +66,7 @@ async function renderPage() {
       </TooltipProvider>
     </QueryClientProvider>,
   );
-  await screen.findByText("Last renewed");
+  await screen.findByText(ready);
   await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
 }
 
@@ -494,5 +496,53 @@ describe("Last-run error panel: role and place", () => {
     await waitFor(() => expect(panel()).toBeTruthy());
     await waitFor(() => expect(panel()?.getAttribute("role")).toBe("alert"));
     expect(screen.getByText("Issuing failed.")).toBeTruthy();
+  });
+});
+
+describe("Last-run error panel: TIERPLAN_ACME=on (D-07)", () => {
+  const NOTE =
+    "TierPlan keeps trying because TIERPLAN_ACME is on. A restart doesn't make it try sooner.";
+
+  it("keeps the Phase 14 panel, with the next automatic attempt, and adds the keeps-trying note under it", async () => {
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({
+          failures: 1,
+          lastError: acmeLastError(),
+          nextAttemptAt: NEXT,
+        }),
+      );
+    await renderPage("Mode");
+    const el = panel() as HTMLElement;
+    expect(el.textContent).toContain("Next automatic attempt");
+    expect(el.textContent).toContain(nextTime());
+    const note = [...el.querySelectorAll("p")].find((n) => n.textContent === NOTE) as HTMLElement;
+    expect(note).toBeTruthy();
+    expect(note.className).toContain("text-xs");
+    expect(note.className).toContain("text-muted-foreground");
+    expect([...note.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["TIERPLAN_ACME"]);
+    // It is the meta line's follower, not part of it.
+    expect(note.previousElementSibling?.textContent).toContain("Next automatic attempt");
+  });
+
+  it("is absent without the variable, and while the card is paused", async () => {
+    status = () =>
+      Response.json(withACME({ failures: 1, lastError: acmeLastError(), nextAttemptAt: NEXT }));
+    await renderPage();
+    expect((panel() as HTMLElement).textContent).not.toContain("keeps trying");
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        withACME({
+          failures: 1,
+          lastError: acmeLastError(),
+          locks: acmeSwitchLock("on"),
+          pausedReason: "restore",
+        }),
+      );
+    await renderPage();
+    expect((panel() as HTMLElement).textContent).not.toContain("keeps trying");
   });
 });

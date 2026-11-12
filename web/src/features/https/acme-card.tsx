@@ -16,6 +16,7 @@ import {
   accountMode,
   advancedMode,
   deriveCardState,
+  deriveEnvOverlay,
   validationMode,
 } from "@/features/https/card-state";
 import { errorValues } from "@/features/https/copy";
@@ -130,6 +131,7 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
           values={errorValues(t, acme.lastError, acme)}
           quiet={paused || acme.blocked !== undefined || acme.mode !== "active"}
           fresh={freshFailure}
+          keepsTrying={deriveEnvOverlay(status).env === "on" && !paused}
         />
       ) : null}
 

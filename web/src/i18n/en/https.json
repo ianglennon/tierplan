@@ -396,6 +396,7 @@
       "issuing": "Issuing certificate",
       "renewing": "Renewing certificate",
       "renewingAuto": "Renewing certificate automatically",
+      "issuingAuto": "Issuing certificate automatically",
       "started": "Started {{when}}.",
       "issued": "Certificate issued.",
       "renewed": "Certificate renewed.",
@@ -481,7 +482,8 @@
       },
       "namesChanged": {
         "title": "The names have changed",
-        "body": "The certificate covers {{old}}. The public URL and agent URL now need {{new}}. TierPlan keeps renewing the old names until you issue again."
+        "lead": "The certificate covers {{old}}. The public URL and agent URL now need {{new}}.",
+        "tail": "TierPlan keeps renewing the old names until you issue again."
       },
       "fallback": {
         "title": "Serving the self-signed certificate",
@@ -496,7 +498,17 @@
       "waiting": {
         "title": "TierPlan is getting a certificate",
         "body": "TIERPLAN_ACME is on, so TierPlan orders the certificate by itself as soon as it is ready. You don't need to press anything. The steps show here while it runs."
-      }
+      },
+      "keepsTrying": "TierPlan keeps trying because TIERPLAN_ACME is on. A restart doesn't make it try sooner.",
+      "retryRefusals": "TierPlan tries again by itself once these are fixed.",
+      "namesChanged": "TIERPLAN_ACME is on, so TierPlan orders a certificate for the new names by itself.",
+      "restore": "TIERPLAN_ACME is on, so TierPlan orders again as soon as you resume.",
+      "certFiles": "TIERPLAN_ACME is on and starts working when the certificate files are removed.",
+      "off": {
+        "title": "Let's Encrypt is turned off by TIERPLAN_ACME",
+        "body": "TierPlan serves its self-signed certificate and makes no Let's Encrypt requests. Your Let's Encrypt certificate, order and account are kept. Remove TIERPLAN_ACME, or set it to on, to use them again."
+      },
+      "offNothing": "Let's Encrypt is turned off by TIERPLAN_ACME."
     },
     "stop": {
       "action": "Stop using Let's Encrypt",

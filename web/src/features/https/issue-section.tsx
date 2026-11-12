@@ -20,12 +20,13 @@ import { useNow } from "@/components/relative-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import type { CardState } from "@/features/https/card-state";
+import { type CardState, deriveEnvOverlay } from "@/features/https/card-state";
 import { ChallengeChangedPrompt } from "@/features/https/challenge-changed-prompt";
 import { formatDate } from "@/features/https/copy";
 import { useACMERun } from "@/features/https/https-run-stream";
 import { LockedNote } from "@/features/https/locked-note";
 import { RunPanel } from "@/features/https/run-panel";
+import { Rich } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
 import { formatClock } from "@/lib/format";
 import { toastSuccess } from "@/lib/toast";
@@ -226,6 +227,8 @@ export function IssueSection({
   const locked = orderLock !== undefined;
   if (locked) reason = null;
 
+  // TIERPLAN_ACME=on: TierPlan orders again by itself once the refusals are fixed (D-07).
+  const envOn = deriveEnvOverlay(status).env === "on";
   const issueBlockedByNames = refusals.length > 0;
   const disabledAll = pending || reason !== null || locked;
   const issueDisabled = disabledAll || issueBlockedByNames;
@@ -310,6 +313,11 @@ export function IssueSection({
                 <RefusalItem key={`${r.code}:${r.host ?? ""}:${r.path ?? ""}`} refusal={r} />
               ))}
             </ul>
+            {envOn ? (
+              <p className="mt-3 text-xs text-muted-foreground">
+                <Rich text={t("https.envState.retryRefusals")} />
+              </p>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}
