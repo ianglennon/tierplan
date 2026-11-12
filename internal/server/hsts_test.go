@@ -852,3 +852,278 @@ func (s *Server) hstsRow(t *testing.T) sqlc.HttpsState {
 	}
 	return row
 }
+
+// view recomputes p and describes it.
+func (g *hstsRig) view(p *hstsPolicy) api.HSTSView {
+	g.t.Helper()
+	p.Recompute(testsupport.Context(g.t))
+	return p.View(testsupport.Context(g.t))
+}
+
+// stranger is a certificate for the public host that a root the rig does not trust signed.
+func (g *hstsRig) stranger() pkiCert {
+	other := pkiCA(g.t, "other root", nil, pkiFrom, pkiTo)
+	return pkiLeaf(g.t, &other, pkiFrom, pkiTo, hstsHost)
+}
+
+// The status says where the ramp is and when the next step comes: the step in force, the instant its
+// dwell ends, nothing at the last step a certificate may reach, and "capped" when a short-lived
+// certificate holds it at a week (D-11, D-22).
+func TestHSTSPolicyViewSending(t *testing.T) {
+	const day = 24 * time.Hour
+	t.Run("at step 2 the next step is a week after it began", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSupplied)
+		g.setStored(true)
+		g.seedRamp(hstsHost, 2, hstsStart, time.Time{})
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateSending || v.MaxAge != 604800 || v.Step != 2 || v.Clearing || v.Capped {
+			t.Errorf("view = %+v, want sending at step 2 with max-age 604800", v)
+		}
+		if want := hstsStart.Add(7 * day); !v.NextStepAt.Equal(want) {
+			t.Errorf("next step at %v, want %v", v.NextStepAt, want)
+		}
+		if !v.Enabled || !v.StoredEnabled || !v.ForgetBy.IsZero() || v.Lock != nil || v.Withdrawal != nil || v.NotSentReason != "" {
+			t.Errorf("view = %+v, want enabled, no forget-by, no lock, no withdrawal and no reason", v)
+		}
+	})
+	t.Run("at step 4 there is no next step", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSupplied)
+		g.setStored(true)
+		g.seedRamp(hstsHost, 4, hstsStart, time.Time{})
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateSending || v.Step != 4 || v.MaxAge != 31536000 || !v.NextStepAt.IsZero() || v.Capped {
+			t.Errorf("view = %+v, want sending at step 4, uncapped, with no next step", v)
+		}
+	})
+	t.Run("a short-lived certificate is capped and has no next step", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serve(tlsKindACME, g.leaf(hstsStart.Add(-time.Hour), hstsStart.Add(6*day), hstsHost))
+		g.setStored(true)
+		g.seedRamp(hstsHost, 2, hstsStart, time.Time{})
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateSending || v.Step != 2 || !v.Capped || !v.NextStepAt.IsZero() {
+			t.Errorf("view = %+v, want sending at step 2, capped, with no next step", v)
+		}
+	})
+	t.Run("a step that can still grow names the dwell of its own step", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindACME)
+		g.setStored(true)
+		v := g.view(g.policy(nil))
+		if v.Step != 1 || !v.NextStepAt.Equal(hstsStart.Add(day)) {
+			t.Errorf("view = %+v, want step 1 and the next step a day on", v)
+		}
+	})
+}
+
+// Off, and on but not sent: each of the situations the card words differently (D-10, D-14, D-23).
+func TestHSTSPolicyViewOffAndNotSent(t *testing.T) {
+	t.Run("off over a verified certificate clears", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSupplied)
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateOffClearing || !v.Clearing || v.Enabled || v.MaxAge != 0 || v.Step != 0 {
+			t.Errorf("view = %+v, want off and clearing", v)
+		}
+	})
+	t.Run("off over the self-signed certificate is silent", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSelfSigned)
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateOffSilent || v.Clearing {
+			t.Errorf("view = %+v, want off and silent", v)
+		}
+	})
+	t.Run("on over the self-signed certificate is not sent", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSelfSigned)
+		g.setStored(true)
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateNotSent || v.NotSentReason != trustSelfSigned || v.Clearing || !v.Enabled {
+			t.Errorf("view = %+v, want not sent because of %s", v, trustSelfSigned)
+		}
+	})
+	t.Run("on over an untrusted certificate file clears and gives the trust reason", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serve(tlsKindSupplied, g.stranger())
+		g.setStored(true)
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateNotSent || !v.Clearing || v.NotSentReason != trustUnknownAuthority {
+			t.Errorf("view = %+v, want not sent and clearing because of %s", v, trustUnknownAuthority)
+		}
+	})
+	t.Run("on over a test-directory Let's Encrypt certificate is not sent and does not clear", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serve(tlsKindACME, g.stranger())
+		g.setStored(true)
+		v := g.view(g.policy(nil))
+		if v.State != api.HSTSStateNotSent || v.Clearing || v.NotSentReason != trustUnknownAuthority {
+			t.Errorf("view = %+v, want not sent, not clearing, because of %s", v, trustUnknownAuthority)
+		}
+	})
+}
+
+// Inside the withdrawal window the card says so, with the certificate's end and where it came from (D-12).
+func TestHSTSPolicyViewWithdrawn(t *testing.T) {
+	const day = 24 * time.Hour
+	for _, tc := range []struct {
+		kind   tlsKind
+		source string
+	}{{tlsKindSupplied, api.SourceCertFiles}, {tlsKindACME, api.SourceLetsEncrypt}} {
+		t.Run(tc.source, func(t *testing.T) {
+			g := newHSTSRig(t)
+			notAfter := hstsStart.Add(3 * day)
+			g.serve(tc.kind, g.leaf(notAfter.Add(-90*day), notAfter, hstsHost))
+			g.setStored(true)
+			v := g.view(g.policy(nil))
+			if v.State != api.HSTSStateWithdrawn || !v.Clearing || v.Withdrawal == nil {
+				t.Fatalf("view = %+v, want withdrawn and clearing", v)
+			}
+			if !v.Withdrawal.NotAfter.Equal(notAfter) || v.Withdrawal.Source != tc.source {
+				t.Errorf("withdrawal = %+v, want %v from %s", v.Withdrawal, notAfter, tc.source)
+			}
+		})
+	}
+}
+
+// forgetBy is the time after which no browser can hold a policy that was sent: at least the max-age
+// after the last send, kept while the header is off, and gone once it has passed (D-26).
+func TestHSTSPolicyViewForgetBy(t *testing.T) {
+	g := newHSTSRig(t)
+	g.serveForever(tlsKindSupplied)
+	g.setStored(true)
+	g.seedRamp(hstsHost, 2, hstsStart, time.Time{})
+	p := g.policy(nil)
+
+	if v := g.view(p); !v.ForgetBy.IsZero() {
+		t.Fatalf("while sending forgetBy = %v, want none", v.ForgetBy)
+	}
+	g.clock.Advance(10 * time.Minute)
+	g.view(p)
+	turnedOff := g.clock.Now()
+	if err := p.SetEnabled(testsupport.Context(t), false); err != nil {
+		t.Fatal(err)
+	}
+	v := p.View(testsupport.Context(t))
+	if v.State != api.HSTSStateOffClearing {
+		t.Fatalf("view = %+v, want off and clearing", v)
+	}
+	if want := turnedOff.Add(604800 * time.Second); v.ForgetBy.Before(want) {
+		t.Errorf("forgetBy = %v, want at least %v", v.ForgetBy, want)
+	}
+	g.clock.Advance(v.ForgetBy.Sub(g.clock.Now()))
+	if got := g.view(p); !got.ForgetBy.IsZero() {
+		t.Errorf("at the forget-by time itself forgetBy = %v, want none", got.ForgetBy)
+	}
+}
+
+// A variable fixes the toggle: the card names it with the stored choice, a different value is refused
+// before anything is written, and the same value writes nothing (D-10, D-17, T-16-42).
+func TestHSTSPolicyViewAndSetEnabledUnderALock(t *testing.T) {
+	ctx := testsupport.Context(t)
+	t.Run("on over a stored off", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSupplied)
+		p := g.policy(boolPtr(true))
+		v := g.view(p)
+		if !v.Enabled || v.StoredEnabled {
+			t.Errorf("view = %+v, want enabled by the variable and stored off", v)
+		}
+		if v.Lock == nil || *v.Lock != (api.HTTPSLockBody{Var: "TIERPLAN_HSTS", Value: "on", Stored: "off"}) {
+			t.Errorf("lock = %+v, want TIERPLAN_HSTS on over a stored off", v.Lock)
+		}
+		var locked *ErrHSTSLocked
+		if err := p.SetEnabled(ctx, false); !errors.As(err, &locked) || locked.Var != "TIERPLAN_HSTS" {
+			t.Errorf("SetEnabled(false) = %v, want ErrHSTSLocked naming TIERPLAN_HSTS", err)
+		}
+		if err := p.SetEnabled(ctx, true); err != nil {
+			t.Errorf("SetEnabled(true), the variable's own value: %v", err)
+		}
+		if row := g.row(); row.HstsEnabled != 0 {
+			t.Errorf("stored toggle = %d after a refused change and an echo, want it untouched at 0", row.HstsEnabled)
+		}
+	})
+	t.Run("off over a stored on", func(t *testing.T) {
+		g := newHSTSRig(t)
+		g.serveForever(tlsKindSupplied)
+		g.setStored(true)
+		p := g.policy(boolPtr(false))
+		v := g.view(p)
+		if v.Enabled || !v.StoredEnabled || v.Lock == nil || v.Lock.Value != "off" || v.Lock.Stored != "on" {
+			t.Errorf("view = %+v, want disabled by the variable, stored on and a lock showing off over on", v)
+		}
+		if err := p.SetEnabled(ctx, true); err == nil {
+			t.Error("SetEnabled(true) under TIERPLAN_HSTS=off was accepted")
+		}
+		if row := g.row(); row.HstsEnabled != 1 {
+			t.Errorf("stored toggle = %d after a refused change, want 1", row.HstsEnabled)
+		}
+	})
+}
+
+// SetEnabled stores the choice and the header follows before it returns; Enabled is the effective
+// setting the Let's Encrypt manager asks (D-10, D-26).
+func TestHSTSPolicySetEnabledStoresAndRecomputes(t *testing.T) {
+	g := newHSTSRig(t)
+	g.serveForever(tlsKindSupplied)
+	p := g.policy(nil)
+	g.header(p, hstsHost)
+	ctx := testsupport.Context(t)
+
+	if p.Enabled() {
+		t.Fatal("HSTS is on in a fresh database")
+	}
+	if err := p.SetEnabled(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if row := g.row(); row.HstsEnabled != 1 || !p.Enabled() {
+		t.Errorf("stored toggle = %d, Enabled = %v, want 1 and true", row.HstsEnabled, p.Enabled())
+	}
+	if got := hstsHeaderFor(p, hstsHost); got != "max-age=300" {
+		t.Errorf("header right after SetEnabled(true) = %q, want max-age=300", got)
+	}
+	if err := p.SetEnabled(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if row := g.row(); row.HstsEnabled != 0 || p.Enabled() {
+		t.Errorf("stored toggle = %d, Enabled = %v, want 0 and false", row.HstsEnabled, p.Enabled())
+	}
+	if got := hstsHeaderFor(p, hstsHost); got != "max-age=0" {
+		t.Errorf("header right after SetEnabled(false) = %q, want max-age=0", got)
+	}
+}
+
+// Through the API, a variable-fixed toggle answers 409 hsts_locked with nothing stored, an echo of the
+// variable's value is a no-op, and the status names the lock (D-10, D-17, T-16-42).
+func TestHSTSLockedFromTheAPI(t *testing.T) {
+	root := pkiCA(t, "test root", nil, pkiFrom, pkiTo)
+	leaf := pkiLeaf(t, &root, pkiFrom, pkiTo, acmeHost)
+	crt, key := pkiWritePair(t, leaf)
+	r := newACMERig(t, acmetest.Options{}, map[string]string{
+		"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key, "TIERPLAN_HSTS": "on",
+	}, WithTrustRoots(pkiPool(root)))
+	srv := r.startNew()
+	client := r.client(pkiPool(root))
+	cookie := r.signIn(client)
+	csrf := r.csrf(client, cookie)
+
+	code, body := r.hstsPut(client, cookie, csrf, `{"enabled":false}`)
+	if code != http.StatusConflict || !strings.Contains(body, "hsts_locked") || !strings.Contains(body, "TIERPLAN_HSTS") {
+		t.Errorf("PUT enabled=false under TIERPLAN_HSTS=on: %d %s, want 409 hsts_locked naming the variable", code, body)
+	}
+	if code, body := r.hstsPut(client, cookie, csrf, `{"enabled":true}`); code != http.StatusOK {
+		t.Errorf("PUT enabled=true, the variable's value: %d %s, want 200", code, body)
+	}
+	if row := srv.hstsRow(t); row.HstsEnabled != 0 {
+		t.Errorf("stored toggle = %d, want it untouched at 0", row.HstsEnabled)
+	}
+	st := r.trustStatus(client, cookie).HSTS
+	if st == nil || !st.Enabled || st.StoredEnabled || st.Lock == nil || st.Lock.Var != "TIERPLAN_HSTS" || st.Lock.Value != "on" || st.Lock.Stored != "off" {
+		t.Errorf("hsts = %+v, want enabled by the variable, stored off and the lock", st)
+	}
+	if got := r.hstsHeaderOverTheWire(client); got != "max-age=300" {
+		t.Errorf("Strict-Transport-Security = %q, want max-age=300", got)
+	}
+}
