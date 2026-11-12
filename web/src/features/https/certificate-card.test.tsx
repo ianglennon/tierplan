@@ -15,6 +15,7 @@ import "@/i18n";
 import { formatAbsolute } from "@/lib/format";
 import {
   acmeLastError,
+  certFilesInfo,
   httpsCertFilesKeptStatus,
   httpsCertFilesStatus,
   httpsFallbackStatus,
@@ -317,6 +318,183 @@ describe("Certificate in use card: Mode row", () => {
     const sentence = within(rowValue("Mode")).getByText(/The Let's Encrypt certificate expired/);
     expect(sentence.className).toContain("break-words");
     expect(rowValue("Mode").className).toContain("min-w-0");
+  });
+});
+
+const filesBlock = () => within(screen.getByRole("region", { name: "Certificate files" }));
+
+function filesValue(label: string): HTMLElement {
+  const dt = filesBlock().getByText(label, { selector: "dt" });
+  const dd = dt.nextElementSibling;
+  if (!(dd instanceof HTMLElement)) throw new Error(`no value for ${label}`);
+  return dd;
+}
+
+function withFiles(over: Parameters<typeof certFilesInfo>[0] = {}): HTTPSStatus {
+  return { ...httpsCertFilesStatus(), certFilesInfo: certFilesInfo(over) };
+}
+
+describe("Certificate in use card: certificate files block", () => {
+  it("shows the two paths in mono with their lock sentences, and a verified certificate", async () => {
+    answer = () => Response.json(withFiles());
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    const cert = filesValue("Certificate file");
+    expect(within(cert).getByText("/run/secrets/tls.crt").className).toContain("font-mono");
+    expect(cert.textContent).toContain("Set by the TIERPLAN_TLS_CERT_FILE environment variable.");
+    expect(within(cert).getByRole("img", { name: "Locked" })).toBeTruthy();
+    const key = filesValue("Key file");
+    expect(within(key).getByText("/run/secrets/tls.key").className).toContain("font-mono");
+    expect(key.textContent).toContain("Set by the TIERPLAN_TLS_KEY_FILE environment variable.");
+    const trusted = filesValue("Trusted");
+    expect(trusted.textContent).toContain("Verifies for tierplan.example.com.");
+    expect(within(trusted).getByText("tierplan.example.com").className).toContain("font-mono");
+    expect(trusted.textContent).toContain("HSTS can be sent for it.");
+    // No stored-value line: these two variables have no stored counterpart.
+    expect(filesBlock().queryByText(/Stored value/)).toBeNull();
+  });
+
+  it("explains in the foot that the files are only read and checked again", async () => {
+    answer = () => Response.json(withFiles());
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    expect(
+      filesBlock().getByText(
+        "TierPlan only reads these files and checks them again about once a minute, so a renewed certificate is picked up without a restart. To use Let's Encrypt, remove both variables and restart.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it.each([
+    ["self_signed", "It is self-signed.", "Use a certificate from a public certificate authority."],
+    [
+      "unknown_authority",
+      "It isn't signed by an authority this server trusts.",
+      "Use a certificate from a public authority. If it is, the file may be missing the intermediate certificates: put them after the certificate in the same file.",
+    ],
+    ["expired", "It has expired or isn't valid yet.", "Renew the certificate."],
+    [
+      "name_mismatch",
+      "It doesn't cover tierplan.example.com.",
+      "Get a certificate that includes tierplan.example.com, or change the public URL in Settings > General.",
+    ],
+    [
+      "no_public_url",
+      "No public URL is set, so TierPlan can't check the name.",
+      "Set the public URL in Settings > General.",
+    ],
+  ] as const)(
+    "says why a %s certificate doesn't verify, and its fix",
+    async (reason, sentence, fix) => {
+      answer = () =>
+        Response.json(
+          withFiles({
+            trust: { checked: true, verified: false, reason, host: "tierplan.example.com" },
+          }),
+        );
+      renderCard();
+      await card().findByText("Certificate file", { selector: "dt" });
+      const trusted = filesValue("Trusted");
+      expect(trusted.textContent).toContain("Doesn't verify.");
+      expect(trusted.textContent).toContain(sentence);
+      expect(trusted.textContent).toContain(fix);
+      expect(trusted.textContent).toContain("HSTS is never sent for it.");
+      expect(trusted.textContent).not.toContain("HSTS can be sent for it.");
+      expect(trusted.textContent).not.toContain("Verifies for");
+    },
+  );
+
+  it("gives a leaf-only file the missing-intermediates hint", async () => {
+    answer = () =>
+      Response.json(
+        withFiles({ trust: { checked: true, verified: false, reason: "unknown_authority" } }),
+      );
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    expect(filesValue("Trusted").textContent).toContain("missing the intermediate certificates");
+  });
+
+  it("says 'Not checked yet.' when the status carries no verdict, and still shows the paths", async () => {
+    answer = () => Response.json(withFiles({ trust: { checked: false, verified: false } }));
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    const trusted = filesValue("Trusted");
+    expect(trusted.textContent).toContain("Not checked yet.");
+    expect(trusted.textContent).not.toContain("Doesn't verify");
+    expect(trusted.querySelector("svg")?.getAttribute("class")).toContain("text-muted-foreground");
+    expect(filesValue("Certificate file").textContent).toContain("/run/secrets/tls.crt");
+    expect(filesValue("Key file").textContent).toContain("/run/secrets/tls.key");
+  });
+
+  it("falls back to the unknown-authority sentence for a reason it does not know", async () => {
+    answer = () =>
+      Response.json(
+        withFiles({
+          trust: { checked: true, verified: false, reason: "from_the_future" as never },
+        }),
+      );
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    expect(filesValue("Trusted").textContent).toContain(
+      "It isn't signed by an authority this server trusts.",
+    );
+  });
+
+  it("draws no block when there is no certificate-files info", async () => {
+    answer = () => Response.json(httpsLetsEncryptStatus());
+    renderCard();
+    await card().findByText("Mode");
+    expect(screen.queryByRole("region", { name: "Certificate files" })).toBeNull();
+    expect(card().queryByText("Certificate file", { selector: "dt" })).toBeNull();
+  });
+
+  it("has nothing to edit: no input, button or link in the block", async () => {
+    answer = () => Response.json(withFiles());
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    expect(filesBlock().queryAllByRole("textbox")).toHaveLength(0);
+    expect(filesBlock().queryAllByRole("button")).toHaveLength(0);
+    expect(filesBlock().queryAllByRole("link")).toHaveLength(0);
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  it("wraps two 120 character paths and a long host with break-all and never widens the card", async () => {
+    const certPath = `/${"c".repeat(59)}/${"d".repeat(58)}.crt`;
+    const keyPath = `/${"k".repeat(59)}/${"l".repeat(58)}.key`;
+    const host = `${"a".repeat(55)}.${"b".repeat(55)}.example.com`;
+    expect(certPath.length).toBeGreaterThanOrEqual(120);
+    answer = () =>
+      Response.json(
+        withFiles({
+          certPath,
+          keyPath,
+          trust: { checked: true, verified: false, reason: "name_mismatch", host },
+        }),
+      );
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    expect(filesValue("Certificate file").className).toContain("break-all");
+    expect(filesValue("Certificate file").className).toContain("min-w-0");
+    expect(filesValue("Key file").className).toContain("break-all");
+    expect(filesValue("Key file").className).toContain("min-w-0");
+    expect(screen.getByRole("region", { name: "Certificate files" }).className).toContain(
+      "min-w-0",
+    );
+    const mismatch = within(filesValue("Trusted")).getAllByText(host);
+    expect(mismatch.length).toBeGreaterThan(0);
+    for (const el of mismatch) {
+      expect(el.className).toContain("font-mono");
+      expect(el.className).toContain("break-all");
+    }
+  });
+
+  it("shows markup in a path as text", async () => {
+    const certPath = "/x/<img src=x onerror=alert(1)>.crt";
+    answer = () => Response.json(withFiles({ certPath }));
+    renderCard();
+    await card().findByText("Certificate file", { selector: "dt" });
+    expect(filesValue("Certificate file").querySelector("img")).toBeNull();
+    expect(filesValue("Certificate file").textContent).toContain(certPath);
   });
 });
 

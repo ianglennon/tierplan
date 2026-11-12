@@ -9,6 +9,7 @@ import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { CertFilesBlock } from "@/features/https/cert-files-block";
 import { errorCopy, errorValues } from "@/features/https/copy";
 import { LAST_RUN_ID } from "@/features/https/error-panel";
 import { ModeLine } from "@/features/https/mode-line";
@@ -101,6 +102,7 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
         {failedOff ? <LetsEncryptRows acme={failedOff} active={false} /> : null}
       </dl>
       {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
+      {status.certFilesInfo ? <CertFilesBlock info={status.certFilesInfo} /> : null}
     </>
   );
 }

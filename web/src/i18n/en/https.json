@@ -46,6 +46,48 @@
         "pausedRestore": "Paused after a restore. Resume Let's Encrypt below to renew."
       }
     },
+    "certFiles": {
+      "title": "Certificate files",
+      "rows": {
+        "cert": "Certificate file",
+        "key": "Key file",
+        "trusted": "Trusted"
+      },
+      "setBy": "Set by the {{var}} environment variable.",
+      "verified": "Verifies for {{host}}.",
+      "hstsYes": "HSTS can be sent for it.",
+      "unverified": "Doesn't verify.",
+      "hstsNo": "HSTS is never sent for it.",
+      "notChecked": "Not checked yet.",
+      "foot": "TierPlan only reads these files and checks them again about once a minute, so a renewed certificate is picked up without a restart. To use Let's Encrypt, remove both variables and restart."
+    },
+    "trust": {
+      "hostFallback": "the public host",
+      "self_signed": {
+        "sentence": "It is self-signed.",
+        "fix": "Use a certificate from a public certificate authority."
+      },
+      "unknown_authority": {
+        "sentence": "It isn't signed by an authority this server trusts.",
+        "fix": "Use a certificate from a public authority. If it is, the file may be missing the intermediate certificates: put them after the certificate in the same file."
+      },
+      "test_ca": {
+        "sentence": "It comes from a test certificate authority.",
+        "fix": "Test certificates aren't trusted by browsers."
+      },
+      "expired": {
+        "sentence": "It has expired or isn't valid yet.",
+        "fix": "Renew the certificate."
+      },
+      "name_mismatch": {
+        "sentence": "It doesn't cover {{host}}.",
+        "fix": "Get a certificate that includes {{host}}, or change the public URL in Settings > General."
+      },
+      "no_public_url": {
+        "sentence": "No public URL is set, so TierPlan can't check the name.",
+        "fix": "Set the public URL in Settings > General."
+      }
+    },
     "acme": {
       "title": "Let's Encrypt",
       "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",

@@ -293,12 +293,26 @@ export function httpsRestoredStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus 
   return httpsLetsEncryptStatus({ pausedReason: "restore", renewal: undefined, ...acme });
 }
 
+// The paths of the certificate files and the verdict on them, as the status carries them while the
+// files fix the certificate: a certificate that verifies for the public host.
+export function certFilesInfo(
+  over: Partial<NonNullable<HTTPSStatus["certFilesInfo"]>> = {},
+): NonNullable<HTTPSStatus["certFilesInfo"]> {
+  return {
+    certPath: "/run/secrets/tls.crt",
+    keyPath: "/run/secrets/tls.key",
+    trust: { checked: true, verified: true, host: "tierplan.example.com" },
+    ...over,
+  };
+}
+
 // Certificate files are set and Let's Encrypt was never set up: the card is disabled (D-12).
 export function httpsCertFilesStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
   const base = httpsStatus();
   return {
     ...base,
     certFiles: true,
+    certFilesInfo: certFilesInfo(),
     certificate: { ...base.certificate, source: "cert_files", issuer: "Corporate CA" },
     acme: httpsACME({ pausedReason: "cert_files", ...acme }),
   };
@@ -310,6 +324,7 @@ export function httpsCertFilesKeptStatus(acme: Partial<HTTPSACME> = {}): HTTPSSt
   return {
     ...lets,
     certFiles: true,
+    certFilesInfo: certFilesInfo(),
     certificate: { ...lets.certificate, source: "cert_files", issuer: "Corporate CA" },
   };
 }
