@@ -55,13 +55,21 @@ func (m *Manager) issueLocked(ctx context.Context, st State, actor, trigger stri
 	})
 }
 
-// envIssueRound is the scheduler's start-time issue for TIERPLAN_ACME=on (D-07): with Let's Encrypt
-// switched on by the environment and no certificate in use, it registers the account, if there is none,
-// and orders, as a scheduled run under the persisted ledger. It does nothing until the listener is
-// bound, because the CA validates through it, and an install already on Let's Encrypt is the renewal
-// round's business. It reports whether a run was started.
+// envIssueRound is the scheduler's start-time issue for TIERPLAN_ACME=on (D-07, D-08): with Let's
+// Encrypt switched on by the environment it registers the account, if there is none, and orders, as a
+// scheduled run under the persisted ledger, in two cases: no certificate is in use, or the Let's Encrypt
+// certificate in use does not carry the names wanted now (a new TIERPLAN_PUBLIC_URL, say). With the
+// variable unset the second case waits for the admin, as it always has (14 D-05).
+//
+// Every guard is issueLocked's, on the ledger and run history the database holds: the backoff after a
+// failure, the CA's Retry-After and the three failed runs in an hour. There is no timer or counter here
+// that a restart could reset, so a process that keeps restarting orders no more often than a quiet one.
+// A refusal of the preflight (ACME-10) or a DNS-01 setup with no token starts nothing and charges
+// nothing, and is logged once; the round tries again on its own when it is put right. It does nothing
+// until the listener is bound, because the CA validates through it, nor while paused after a restore
+// (D-09): Resume lifts the pause and the next round orders. It reports whether a run was started.
 func (m *Manager) envIssueRound(ctx context.Context, st State) bool {
-	if !m.envOn() || !m.ready() || m.d.CertFiles || st.PausedReason != "" || st.Mode == ModeActive {
+	if !m.envOn() || !m.ready() || m.d.CertFiles || st.PausedReason != "" {
 		return false
 	}
 	m.opMu.Lock()
@@ -75,7 +83,7 @@ func (m *Manager) envIssueRound(ctx context.Context, st State) bool {
 		m.log.Error("the scheduler could not read the ACME state", "error", err)
 		return false
 	}
-	if st.PausedReason != "" || st.Mode == ModeActive {
+	if st.PausedReason != "" {
 		return false
 	}
 	// An open order is the resume round's: it continues it when the ledger allows, and a person's
@@ -85,6 +93,24 @@ func (m *Manager) envIssueRound(ctx context.Context, st State) bool {
 		return false
 	} else if found {
 		return false
+	}
+	if st.Mode == ModeActive && !m.namesChanged(ctx, st) {
+		return false
+	}
+	// DNS-01 with no token anywhere could only fail at the provider, and the failure would be charged
+	// to the ledger. It waits for a token instead, and the status shows that none is saved.
+	if m.challenge(st) == ChallengeDNS01 {
+		provider := m.provider(st)
+		saved, err := m.tokenSaved(ctx, provider)
+		if err != nil {
+			m.noteEnvIssue("the scheduler could not look for the DNS API token", err)
+			return false
+		}
+		if !saved {
+			m.noteEnvIssue("TIERPLAN_ACME is on with DNS-01 validation but no DNS API token is set for "+provider+
+				", so no certificate is ordered until one is", nil)
+			return false
+		}
 	}
 	var reg *registerSpec
 	if _, ok, err := m.d.Client.Account(ctx); err != nil {
@@ -108,10 +134,30 @@ func (m *Manager) envIssueRound(ctx context.Context, st State) bool {
 		return false
 	}
 	m.resetEnvNote()
-	if !rs.Reused {
+	switch {
+	case rs.Reused:
+	case st.Mode == ModeActive:
+		m.log.Info("TIERPLAN_ACME is on and the Let's Encrypt certificate does not carry the wanted names, so one for the new names is being ordered")
+	default:
 		m.log.Info("TIERPLAN_ACME is on and no Let's Encrypt certificate is in use, so one is being ordered")
 	}
 	return true
+}
+
+// namesChanged reports whether the Let's Encrypt certificate in use lacks the names wanted now. A
+// preflight that refuses counts as changed, so the round reaches issueLocked and says why nothing is
+// ordered. No stored certificate is not a change: that case is the plain start-time issue's.
+func (m *Manager) namesChanged(ctx context.Context, st State) bool {
+	leaf, found, err := m.storedLeaf(ctx)
+	if err != nil {
+		m.log.Error("the scheduler could not read the stored Let's Encrypt certificate", "error", err)
+		return false
+	}
+	if !found {
+		return false
+	}
+	ns, refusals := m.preflight(st)
+	return len(refusals) > 0 || !SameNames(leaf.DNSNames, ns.Names)
 }
 
 // registerAccount registers the account a start-time issue needs, inside the run, as its first step. An
