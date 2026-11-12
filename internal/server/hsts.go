@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
@@ -42,6 +44,16 @@ type hstsDecision struct {
 	reason string
 	// step is the ramp step in force, 0 when the policy is not sending.
 	step int
+	// The rest is what the status reports about the decision (D-11, D-12, D-14, D-22, D-23). enabled is
+	// the effective toggle the decision was made with and source the kind of certificate it judged.
+	enabled bool
+	source  tlsKind
+	// limit is the last ramp step this certificate may reach, and since the instant (unix nanoseconds)
+	// the step in force began. Both are set only while sending.
+	limit int
+	since int64
+	// notAfter is the served leaf's end, which the withdrawal is measured from.
+	notAfter time.Time
 }
 
 // hstsPolicy decides Strict-Transport-Security (TLS-06). It is off by default, sends only over a
@@ -56,6 +68,9 @@ type hstsPolicy struct {
 	// env is TIERPLAN_HSTS: nil when unset, otherwise the toggle.
 	env *bool
 	db  hstsStore
+	// storedOn is the stored toggle as the last read or write saw it. It is atomic so Enabled, which
+	// the Let's Encrypt manager asks from another goroutine, takes no lock.
+	storedOn atomic.Bool
 	// clock is the clock the periodic loop waits on. It is separate from now's clock because an
 	// extra timer on the ACME clock breaks the rigs' armed-timer counting.
 	clock stackops.Clock
@@ -69,10 +84,9 @@ type hstsPolicy struct {
 	// loaded is whether the ramp has been read from the database. The ramp in memory is the truth
 	// from then on; saved is the part of it the database is known to hold, so a failed write is
 	// retried by the next recompute.
-	loaded   bool
-	ramp     hstsRamp
-	saved    hstsRamp
-	storedOn bool
+	loaded bool
+	ramp   hstsRamp
+	saved  hstsRamp
 	// writeWarned is whether a failed write has been logged since the last write that worked.
 	writeWarned bool
 }
@@ -82,6 +96,7 @@ type hstsStore interface {
 	GetHTTPSState(ctx context.Context) (sqlc.HttpsState, error)
 	SaveHSTSRamp(ctx context.Context, arg sqlc.SaveHSTSRampParams) error
 	SaveHSTSHeldUntil(ctx context.Context, arg sqlc.SaveHSTSHeldUntilParams) error
+	SetHSTSEnabled(ctx context.Context, arg sqlc.SetHSTSEnabledParams) error
 }
 
 // hstsDB reads from the read pool and writes through the write pool.
@@ -97,6 +112,10 @@ func (d hstsDB) SaveHSTSRamp(ctx context.Context, arg sqlc.SaveHSTSRampParams) e
 
 func (d hstsDB) SaveHSTSHeldUntil(ctx context.Context, arg sqlc.SaveHSTSHeldUntilParams) error {
 	return d.w.SaveHSTSHeldUntil(ctx, arg)
+}
+
+func (d hstsDB) SetHSTSEnabled(ctx context.Context, arg sqlc.SetHSTSEnabledParams) error {
+	return d.w.SetHSTSEnabled(ctx, arg)
 }
 
 // newHSTSPolicy returns a policy that decides nothing until the first Recompute.
@@ -168,8 +187,12 @@ func (p *hstsPolicy) enabled() bool {
 	if p.env != nil {
 		return *p.env
 	}
-	return p.storedOn
+	return p.storedOn.Load()
 }
+
+// Enabled is the effective HSTS setting, for the callers that must not act while it is on. It takes no
+// lock and does no I/O.
+func (p *hstsPolicy) Enabled() bool { return p.enabled() }
 
 // hstsSteps are the max-age values of the ramp in seconds (D-11), after hstspreload.org's guidance.
 // hstsDwell[i] is how long step i+1 must have been sent before step i+2 is.
@@ -229,7 +252,7 @@ func (p *hstsPolicy) load(ctx context.Context) {
 		p.warn("read the HSTS state", err)
 		return
 	}
-	p.storedOn = row.HstsEnabled != 0
+	p.storedOn.Store(row.HstsEnabled != 0)
 	if p.loaded {
 		return
 	}
@@ -296,7 +319,7 @@ type hstsInput struct {
 func hstsDecide(in hstsInput, ramp hstsRamp) (hstsDecision, hstsRamp) {
 	v := in.verdict
 	lifetime := in.notAfter.Sub(in.notBefore)
-	var d hstsDecision
+	d := hstsDecision{enabled: in.enabled, source: in.kind, notAfter: in.notAfter}
 	switch {
 	case in.kind == 0 || !v.Checked:
 	case in.kind == tlsKindSelfSigned:
@@ -334,9 +357,100 @@ func hstsDecide(in hstsInput, ramp hstsRamp) (hstsDecision, hstsRamp) {
 	if limit < len(hstsSteps) && ramp.step == limit {
 		d.reason = "capped"
 	}
-	d.step, d.maxAge = ramp.step, hstsSteps[ramp.step-1]
+	d.step, d.maxAge, d.limit, d.since = ramp.step, hstsSteps[ramp.step-1], limit, ramp.since
 	if need := now + d.maxAge*int64(time.Second); ramp.held < need {
 		ramp.held = need + int64(hstsHeldSlack)
 	}
 	return d, ramp
 }
+
+// ErrHSTSLocked is what SetEnabled returns while TIERPLAN_HSTS fixes the toggle and the request asks
+// for the other value (D-10, D-17).
+type ErrHSTSLocked = api.ErrHSTSLocked
+
+// SetEnabled stores the admin's choice and recomputes before it returns, so the next TLS response
+// carries the new decision. TIERPLAN_HSTS decides when it is set: its own value is accepted and writes
+// nothing, any other is refused with ErrHSTSLocked before anything is written (D-10, D-17).
+func (p *hstsPolicy) SetEnabled(ctx context.Context, on bool) error {
+	if p.env != nil {
+		if *p.env == on {
+			return nil
+		}
+		return &ErrHSTSLocked{Var: config.EnvHSTS}
+	}
+	var v int64
+	if on {
+		v = 1
+	}
+	if err := p.db.SetHSTSEnabled(ctx, sqlc.SetHSTSEnabledParams{HstsEnabled: v, UpdatedAt: p.now().UnixNano()}); err != nil {
+		return err
+	}
+	p.storedOn.Store(on)
+	p.log.Info("HSTS setting changed", "enabled", on)
+	p.Recompute(ctx)
+	return nil
+}
+
+// View describes the header the last decision sends, with the facts the HSTS card shows. It reads the
+// decision and the ramp as they were left by the last recompute, which every change of the setting
+// forces.
+func (p *hstsPolicy) View(_ context.Context) api.HSTSView {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	v := api.HSTSView{Enabled: p.enabled(), StoredEnabled: p.storedOn.Load()}
+	if p.env != nil {
+		v.Lock = &api.HTTPSLockBody{Var: config.EnvHSTS, Value: onOff(*p.env), Stored: onOff(p.storedOn.Load())}
+	}
+	d := p.snap.Load()
+	if d == nil {
+		d = &hstsDecision{enabled: v.Enabled}
+	}
+	switch {
+	case d.kind == hstsSend:
+		v.State, v.MaxAge, v.Step = api.HSTSStateSending, d.maxAge, d.step
+		v.Capped = d.reason == "capped"
+		if d.step < d.limit {
+			v.NextStepAt = time.Unix(0, d.since).Add(hstsDwell[d.step-1])
+		}
+	case !d.enabled:
+		v.State = api.HSTSStateOffSilent
+		if d.kind == hstsWithdraw {
+			v.State, v.Clearing = api.HSTSStateOffClearing, true
+		}
+	case d.kind == hstsWithdraw && d.reason == "withdrawn":
+		v.State, v.Clearing = api.HSTSStateWithdrawn, true
+		v.Withdrawal = &api.HSTSWithdrawal{NotAfter: d.notAfter, Source: withdrawalSource(d.source)}
+	default:
+		v.State, v.Clearing, v.NotSentReason = api.HSTSStateNotSent, d.kind == hstsWithdraw, d.reason
+	}
+	// What a browser may still hold is bounded by the persisted held-until, whichever way the decision
+	// went since: while a policy is being sent the bound moves with it and is not an answer.
+	if d.kind != hstsSend && p.ramp.held > now.UnixNano() {
+		v.ForgetBy = time.Unix(0, p.ramp.held)
+	}
+	return v
+}
+
+// onOff is a toggle in the words of the lock the page shows.
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
+// withdrawalSource names the certificate a withdrawal is measured from.
+func withdrawalSource(k tlsKind) string {
+	if k == tlsKindACME {
+		return api.SourceLetsEncrypt
+	}
+	return api.SourceCertFiles
+}
+
+// hstsAPI is the policy as the HTTPS routes use it.
+type hstsAPI struct{ p *hstsPolicy }
+
+func (a hstsAPI) HSTSView(ctx context.Context) (api.HSTSView, error) { return a.p.View(ctx), nil }
+
+func (a hstsAPI) SetHSTSEnabled(ctx context.Context, on bool) error { return a.p.SetEnabled(ctx, on) }

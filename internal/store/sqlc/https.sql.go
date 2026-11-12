@@ -68,3 +68,19 @@ func (q *Queries) SaveHSTSRamp(ctx context.Context, arg SaveHSTSRampParams) erro
 	)
 	return err
 }
+
+const setHSTSEnabled = `-- name: SetHSTSEnabled :exec
+UPDATE https_state SET hsts_enabled = ?, updated_at = ? WHERE id = 1
+`
+
+type SetHSTSEnabledParams struct {
+	HstsEnabled int64
+	UpdatedAt   int64
+}
+
+// The admin's HSTS choice. Written apart from the ramp and the held-until bound, so turning the header
+// off or on never forgets what browsers may still hold.
+func (q *Queries) SetHSTSEnabled(ctx context.Context, arg SetHSTSEnabledParams) error {
+	_, err := q.db.ExecContext(ctx, setHSTSEnabled, arg.HstsEnabled, arg.UpdatedAt)
+	return err
+}

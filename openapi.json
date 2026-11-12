@@ -8471,6 +8471,111 @@
         ],
         "type": "object"
       },
+      "HTTPSHSTSBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capped": {
+            "description": "True when a short-lived certificate stops the ramp at a week",
+            "type": "boolean"
+          },
+          "clearing": {
+            "description": "True while max-age=0 is sent",
+            "type": "boolean"
+          },
+          "enabled": {
+            "description": "The effective HSTS setting: TIERPLAN_HSTS when it is set, otherwise the stored choice",
+            "type": "boolean"
+          },
+          "forgetBy": {
+            "description": "The time after which no browser can still hold a policy TierPlan sent. Left out while a policy is being sent and when none can be held. Stopping Let's Encrypt is safe once HSTS is off and this has passed",
+            "format": "date-time",
+            "type": "string"
+          },
+          "lock": {
+            "$ref": "#/components/schemas/HTTPSLockBody",
+            "description": "Set while the TIERPLAN_HSTS environment variable fixes the setting. Value and stored are on or off"
+          },
+          "maxAge": {
+            "description": "The max-age in seconds being sent, 0 when none is or when clearing",
+            "format": "int64",
+            "type": "integer"
+          },
+          "nextStepAt": {
+            "description": "When the next, longer step is sent; left out at the last step this certificate may reach and when nothing positive is sent",
+            "format": "date-time",
+            "type": "string"
+          },
+          "notSentReason": {
+            "description": "Why HSTS is on but not sent: the certificate is the self-signed one, or does not verify for the public URL's host (unknown_authority, expired, name_mismatch, no_public_url). Empty otherwise",
+            "enum": [
+              "",
+              "self_signed",
+              "unknown_authority",
+              "expired",
+              "name_mismatch",
+              "no_public_url"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "description": "What TierPlan does with Strict-Transport-Security now: sending (a positive max-age for the public host), off_clearing (max-age=0, so a browser drops a policy it holds), off_silent (nothing, because no policy could have been sent), not_sent (on, but the certificate is not one HSTS may be sent over; see notSentReason) or withdrawn (max-age=0 ahead of the certificate's end)",
+            "enum": [
+              "sending",
+              "off_clearing",
+              "off_silent",
+              "not_sent",
+              "withdrawn"
+            ],
+            "type": "string"
+          },
+          "step": {
+            "description": "The ramp step being sent: 1 is five minutes, 2 a week, 3 thirty days, 4 a year. 0 when nothing positive is sent",
+            "format": "int64",
+            "type": "integer"
+          },
+          "storedEnabled": {
+            "description": "The choice kept in the database, which TIERPLAN_HSTS overrides without changing and which comes back when the variable is removed",
+            "type": "boolean"
+          },
+          "withdrawal": {
+            "$ref": "#/components/schemas/HTTPSHSTSWithdrawalBody",
+            "description": "Set while the header is withdrawn ahead of the certificate's end"
+          }
+        },
+        "required": [
+          "enabled",
+          "storedEnabled",
+          "state",
+          "clearing",
+          "maxAge",
+          "step",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "HTTPSHSTSWithdrawalBody": {
+        "additionalProperties": false,
+        "properties": {
+          "notAfter": {
+            "description": "When the certificate ends. The header is withdrawn from a week before, or a third of its life before for a certificate shorter than three weeks",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where that certificate comes from: Let's Encrypt, or the certificate files you supplied",
+            "enum": [
+              "lets_encrypt",
+              "cert_files"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "notAfter",
+          "source"
+        ],
+        "type": "object"
+      },
       "HTTPSLockBody": {
         "additionalProperties": false,
         "properties": {
@@ -8557,6 +8662,10 @@
           "certificate": {
             "$ref": "#/components/schemas/HTTPSCertificateBody",
             "description": "The certificate the listener serves now"
+          },
+          "hsts": {
+            "$ref": "#/components/schemas/HTTPSHSTSBody",
+            "description": "The HSTS state: the switch, the ramp step and when the next one comes, why it is on but not sent, the withdrawal date, when browsers will have forgotten it, and the environment lock. Left out when this build has no HSTS policy"
           }
         },
         "required": [
@@ -14529,6 +14638,19 @@
           "frequency",
           "timeUtc",
           "keep"
+        ],
+        "type": "object"
+      },
+      "PutHTTPSHSTSInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "True to send Strict-Transport-Security over a certificate that verifies for the public host; false to stop and tell browsers to forget it",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
         ],
         "type": "object"
       },
@@ -41678,6 +41800,55 @@
           }
         },
         "summary": "Choose how the names are validated",
+        "tags": [
+          "https"
+        ]
+      }
+    },
+    "/api/https/hsts": {
+      "put": {
+        "description": "Stores the choice and recomputes the header at once, so the next TLS response carries the new decision. It is off by default. HSTS is sent only over a certificate that verifies for the public host, ramping from five minutes to a year, and is withdrawn ahead of the certificate's end. Turning it off sends max-age=0 so browsers forget it. Answers the whole HSTS card. While TIERPLAN_HSTS is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 hsts_locked. 503 https_unavailable on a server without the policy. Needs settings.write.",
+        "operationId": "putHTTPSHSTS",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutHTTPSHSTSInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPSHSTSBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Turn HSTS on or off",
         "tags": [
           "https"
         ]

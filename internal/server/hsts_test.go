@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
@@ -749,4 +751,104 @@ func TestHSTSHeaderValuesAreExact(t *testing.T) {
 			t.Errorf("the grid never produced %q", want)
 		}
 	}
+}
+
+// hstsPut sends PUT /api/https/hsts as the signed-in admin and returns the status and the body.
+func (r *acmeRig) hstsPut(c *http.Client, cookie *http.Cookie, csrf, body string) (int, string) {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodPut, r.base+"/api/https/hsts", strings.NewReader(body))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// hstsHeaderOverTheWire is the Strict-Transport-Security header of a real TLS response for the public host.
+func (r *acmeRig) hstsHeaderOverTheWire(c *http.Client) string {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodGet, r.base+"/healthz", nil)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.Header.Get("Strict-Transport-Security")
+}
+
+// An admin turns HSTS on and off from the API: the choice is stored, the policy recomputes at once so the
+// next TLS response carries the new decision, and the status shows the step (D-10, D-11, TLS-06).
+func TestHSTSToggleFromTheAPI(t *testing.T) {
+	root := pkiCA(t, "test root", nil, pkiFrom, pkiTo)
+	leaf := pkiLeaf(t, &root, pkiFrom, pkiTo, acmeHost)
+	crt, key := pkiWritePair(t, leaf)
+	r := newACMERig(t, acmetest.Options{}, map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key},
+		WithTrustRoots(pkiPool(root)))
+	srv := r.startNew()
+	client := r.client(pkiPool(root))
+	cookie := r.signIn(client)
+	csrf := r.csrf(client, cookie)
+
+	st := r.trustStatus(client, cookie)
+	if st.HSTS == nil {
+		t.Fatal("the status has no hsts block")
+	}
+	if st.HSTS.Enabled || st.HSTS.State != api.HSTSStateOffClearing || !st.HSTS.Clearing || st.HSTS.Lock != nil {
+		t.Errorf("before the switch hsts = %+v, want off and clearing with no lock", st.HSTS)
+	}
+	if got := r.hstsHeaderOverTheWire(client); got != "max-age=0" {
+		t.Errorf("Strict-Transport-Security before the switch = %q, want max-age=0", got)
+	}
+
+	if code, body := r.hstsPut(client, cookie, csrf, `{"enabled":true}`); code != http.StatusOK {
+		t.Fatalf("PUT hsts on: %d %s", code, body)
+	}
+	if got := r.hstsHeaderOverTheWire(client); got != "max-age=300" {
+		t.Errorf("Strict-Transport-Security after switching on = %q, want max-age=300", got)
+	}
+	on := r.trustStatus(client, cookie).HSTS
+	if !on.Enabled || !on.StoredEnabled || on.State != api.HSTSStateSending || on.Step != 1 || on.MaxAge != 300 || on.Clearing {
+		t.Errorf("after switching on hsts = %+v, want sending at step 1 with max-age 300", on)
+	}
+	if on.NextStepAt == nil || on.ForgetBy != nil {
+		t.Errorf("after switching on next step %v and forget-by %v, want a next step and no forget-by", on.NextStepAt, on.ForgetBy)
+	}
+	if row := srv.hstsRow(t); row.HstsEnabled != 1 {
+		t.Errorf("stored toggle = %d, want 1", row.HstsEnabled)
+	}
+
+	if code, body := r.hstsPut(client, cookie, csrf, `{"enabled":false}`); code != http.StatusOK {
+		t.Fatalf("PUT hsts off: %d %s", code, body)
+	}
+	if got := r.hstsHeaderOverTheWire(client); got != "max-age=0" {
+		t.Errorf("Strict-Transport-Security after switching off = %q, want max-age=0", got)
+	}
+	off := r.trustStatus(client, cookie).HSTS
+	if off.Enabled || off.State != api.HSTSStateOffClearing || !off.Clearing || off.Step != 0 {
+		t.Errorf("after switching off hsts = %+v, want off and clearing", off)
+	}
+	if off.ForgetBy == nil {
+		t.Error("after a policy was sent and switched off the status names no forget-by time")
+	}
+}
+
+// hstsRow is the stored HSTS row of the server's database.
+func (s *Server) hstsRow(t *testing.T) sqlc.HttpsState {
+	t.Helper()
+	row, err := s.Store().RQ.GetHTTPSState(testsupport.Context(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
 }

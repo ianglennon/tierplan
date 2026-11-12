@@ -1255,7 +1255,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
 		HTTPS: api.HTTPSDeps{
 			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
-			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
 		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,

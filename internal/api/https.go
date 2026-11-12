@@ -64,6 +64,9 @@ type HTTPSDeps struct {
 	// ACME is the Let's Encrypt manager. Nil leaves the status without its acme block and answers the
 	// Let's Encrypt routes 503.
 	ACME HTTPSACME
+	// HSTS is the Strict-Transport-Security policy. Nil leaves the status without its hsts block and
+	// answers the HSTS route 503.
+	HSTS HTTPSHSTS
 	// Jobs is the hub the Let's Encrypt run jobs live in; the run stream follows them.
 	Jobs *jobs.Hub
 	// ListenPort is the port TierPlan listens on, which the page names when it explains the port-80
@@ -111,6 +114,7 @@ type HTTPSStatusBody struct {
 	AgentTrust    string               `json:"agentTrust" enum:"pin,public,unverified" doc:"How an agent installed now trusts this server: pin (it pins the self-signed certificate), public (the certificate verifies against the public CAs, so the agent needs no pin) or unverified (the certificate does not verify for the public URL's host and no pin can stand in for it; an agent installed without a pin keeps the self-signed pin it receives on connecting). The page words it"`
 	CertFilesInfo *HTTPSCertFilesBody  `json:"certFilesInfo,omitempty" doc:"The paths of the certificate files and whether the certificate is trusted; present only when certificate files fix the certificate"`
 	ACME          *HTTPSACMEBody       `json:"acme,omitempty" doc:"The Let's Encrypt state; left out when this build has no Let's Encrypt support"`
+	HSTS          *HTTPSHSTSBody       `json:"hsts,omitempty" doc:"The HSTS state: the switch, the ramp step and when the next one comes, why it is on but not sent, the withdrawal date, when browsers will have forgotten it, and the environment lock. Left out when this build has no HSTS policy"`
 }
 
 // HTTPSStatusOutput wraps HTTPSStatusBody for huma.
@@ -181,11 +185,19 @@ func RegisterHTTPS(r *httpx.Router, d HTTPSDeps) {
 			body.ACME = acmeStatusBody(st, d.ListenPort)
 			body.Certificate.TestCA = served.Source == SourceLetsEncrypt && st.DirectoryOverridden
 		}
+		if d.HSTS != nil {
+			v, err := d.HSTS.HSTSView(ctx)
+			if err != nil {
+				return nil, acmeInternal(d.Log, "read the HSTS state", err)
+			}
+			body.HSTS = hstsBody(v)
+		}
 		return &HTTPSStatusOutput{CacheControl: "no-store", Body: body}, nil
 	})
 	// The routes are always registered so the published contract does not depend on the build; a server
 	// without a manager answers them 503.
 	registerHTTPSACME(r, d)
+	registerHTTPSHSTS(r, d)
 	registerHTTPSACMERuns(r, d)
 	registerHTTPSACMEDNS(r, d)
 	registerHTTPSACMEStream(r, d)
