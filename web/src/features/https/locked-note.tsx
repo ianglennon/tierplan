@@ -29,8 +29,9 @@ export function LockedIcon({ className }: { className?: string }) {
 }
 
 // What line 1 says. set is the common sentence; accepted is the terms checkbox (acceptance is not a
-// stored setting, so it has no line 2); order and stop are the reasons a locked action gives.
-export type LockVariant = "set" | "accepted" | "order" | "stop";
+// stored setting, so it has no line 2); order, stop and stopHsts are the reasons a locked action gives
+// (stopHsts is Stop using Let's Encrypt locked because TIERPLAN_HSTS keeps HSTS on, D-26).
+export type LockVariant = "set" | "accepted" | "order" | "stop" | "stopHsts";
 
 interface LockedNoteProps {
   // The id the control or button is described by (aria-describedby): it covers both lines.

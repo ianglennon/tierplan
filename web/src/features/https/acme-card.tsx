@@ -17,6 +17,8 @@ import {
   advancedMode,
   deriveCardState,
   deriveEnvOverlay,
+  type HstsView,
+  hstsView,
   validationMode,
 } from "@/features/https/card-state";
 import { errorValues } from "@/features/https/copy";
@@ -34,6 +36,8 @@ import { useT } from "@/i18n/use-t";
 
 // The two lock lines of Stop using Let's Encrypt while TIERPLAN_ACME=on.
 const STOP_LOCK_ID = "acme-stop-lock";
+// Why Stop is refused while HSTS is on (D-26): the pointer to the HSTS card, or the TIERPLAN_HSTS lock.
+const STOP_HSTS_ID = "acme-stop-hsts";
 
 // AcmeCard is the "Let's Encrypt" card of Settings > HTTPS. It is built in sections in the order of
 // the UI-SPEC: the validation method with its detail, the names, the account, then the slots later plans
@@ -83,6 +87,9 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
   const listable = acme.pausedReason === "" && !status.certFiles;
   // TIERPLAN_ACME=on keeps Let's Encrypt on, so Stop is locked (D-04); Issue certificate never is.
   const stopLock = acme.locks.acme?.value === "on" ? acme.locks.acme : undefined;
+  // HSTS on (stored or TIERPLAN_HSTS) keeps Stop disabled too: stopping would serve the self-signed
+  // certificate to browsers that must refuse it (D-26).
+  const hsts = hstsView(status);
 
   return (
     <div className="flex flex-col gap-6" data-state={state}>
@@ -137,10 +144,15 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
 
       {acme.mode === "active" && state !== "I" && state !== "J" ? (
         canWrite ? (
-          <StopRow running={state === "C" || runActive} lock={stopLock} />
-        ) : stopLock ? (
-          // No button without settings.write, but the lock still says why Let's Encrypt stays on.
-          <LockedNote id={STOP_LOCK_ID} lock={stopLock} variant="stop" />
+          <StopRow running={state === "C" || runActive} lock={stopLock} hsts={hsts} />
+        ) : stopLock || hsts?.lock ? (
+          // No button without settings.write, but the locks still say why Let's Encrypt stays on.
+          <div className="flex flex-col gap-4">
+            {stopLock ? <LockedNote id={STOP_LOCK_ID} lock={stopLock} variant="stop" /> : null}
+            {hsts?.blocksStop && hsts.lock ? (
+              <LockedNote id={STOP_HSTS_ID} lock={hsts.lock} variant="stopHsts" />
+            ) : null}
+          </div>
         ) : null
       ) : null}
 
@@ -154,12 +166,30 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
 // StopRow is the last part of the card (D-14): a destructive button under a Separator that opens the
 // confirmation. It is drawn only while Let's Encrypt is in use and the certificate files are not the
 // control. While a run is active the button stays focusable but does nothing, and the run line above
-// says why.
-function StopRow({ running, lock }: { running: boolean; lock: LockInfo | undefined }) {
+// says why. It is locked the same way by TIERPLAN_ACME=on and by HSTS being on (D-26); each lock gives
+// its own reason, TIERPLAN_ACME first, and the HSTS reason names the route that works in the state shown:
+// the Switch when it can be changed, the variable when it cannot.
+function StopRow({
+  running,
+  lock,
+  hsts,
+}: {
+  running: boolean;
+  lock: LockInfo | undefined;
+  hsts: HstsView | undefined;
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const locked = lock !== undefined;
-  const blocked = running || locked;
+  const hstsBlocked = hsts?.blocksStop === true;
+  const blocked = running || locked || hstsBlocked;
+  const describedBy = [
+    locked ? STOP_LOCK_ID : null,
+    hstsBlocked ? STOP_HSTS_ID : null,
+    running ? ISSUE_NOTE_ID : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <>
       <Separator />
@@ -169,19 +199,39 @@ function StopRow({ running, lock }: { running: boolean; lock: LockInfo | undefin
             type="button"
             variant="destructive"
             aria-disabled={blocked}
-            aria-describedby={locked ? STOP_LOCK_ID : running ? ISSUE_NOTE_ID : undefined}
+            aria-describedby={describedBy === "" ? undefined : describedBy}
             className="h-11 max-md:w-full md:h-8 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             onClick={() => {
               if (!blocked) setOpen(true);
             }}
           >
-            {locked ? <Lock aria-hidden="true" /> : null}
+            {locked || hstsBlocked ? <Lock aria-hidden="true" /> : null}
             {t("https.stop.action")}
           </Button>
         </div>
         {lock ? <LockedNote id={STOP_LOCK_ID} lock={lock} variant="stop" /> : null}
+        {hsts?.blocksStop ? <HstsStopReason hsts={hsts} /> : null}
       </div>
       <StopDialog open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+// The reason Stop is refused while HSTS is on. With the Switch editable the way out is the Switch, so a
+// pointer to its card follows; with TIERPLAN_HSTS set the Switch is locked, so the reason is the lock
+// text and no dead-end pointer is drawn.
+function HstsStopReason({ hsts }: { hsts: HstsView }) {
+  const t = useT();
+  if (hsts.lock) return <LockedNote id={STOP_HSTS_ID} lock={hsts.lock} variant="stopHsts" />;
+  return (
+    <p id={STOP_HSTS_ID} className="text-sm text-muted-foreground">
+      {t("https.stop.hstsReason")}{" "}
+      <a
+        href="#hsts"
+        className="rounded-sm text-accent-ink underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        {t("https.stop.hstsPointer")}
+      </a>
+    </p>
   );
 }

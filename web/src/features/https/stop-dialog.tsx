@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { useQuery } from "@tanstack/react-query";
+import { TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
-import { ACMEControlError, useStopACME } from "@/api/https";
+import { ACMEControlError, httpsStatusQuery, useStopACME } from "@/api/https";
+import { useNow } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -16,6 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { hstsView } from "@/features/https/card-state";
+import { formatDate } from "@/features/https/copy";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 
@@ -31,10 +36,15 @@ interface StopDialogProps {
 // issuing again is one click, nobody is signed out), so there is nothing to type. Focus starts on
 // "Keep Let's Encrypt", and nothing closes the dialog while the request is in flight. A failure stays
 // in the dialog; a success closes it once the status says the certificate is self-signed again, and a
-// 409 (the page was out of date) closes it so the re-read card can say why.
+// 409 (the page was out of date, or HSTS was turned on: hsts_on) closes it so the re-read card can say
+// why, with no toast. While browsers may still hold an HSTS policy TierPlan sent (hsts.forgetBy is in the
+// future) it warns, and the confirm stays available: with HSTS off the dialog warns and does not block.
 export function StopDialog({ open, onOpenChange }: StopDialogProps) {
   const t = useT();
   const stop = useStopACME();
+  const now = useNow();
+  const status = useQuery(httpsStatusQuery).data;
+  const forgetBy = status ? hstsView(status, now)?.forgetBy : undefined;
   const [failed, setFailed] = useState(false);
   const pending = stop.isPending;
 
@@ -70,6 +80,14 @@ export function StopDialog({ open, onOpenChange }: StopDialogProps) {
           <AlertDialogTitle>{t("https.stop.title")}</AlertDialogTitle>
           <AlertDialogDescription>{t("https.stop.body")}</AlertDialogDescription>
         </AlertDialogHeader>
+        {forgetBy ? (
+          <Alert variant="warning" role="note">
+            <TriangleAlert aria-hidden="true" />
+            <AlertDescription>
+              {t("https.stop.browserWarning", { date: formatDate(forgetBy) })}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {failed ? (
           <Alert variant="destructive" role="alert">
             <AlertDescription>{t("common.mutationFailed")}</AlertDescription>

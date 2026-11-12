@@ -9,9 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { httpsStatusQuery } from "@/api/https";
 import { queryClient } from "@/api/query-client";
+import { formatDate } from "@/features/https/copy";
 import { StopDialog } from "@/features/https/stop-dialog";
 import "@/i18n";
-import { httpsLetsEncryptStatus, httpsStatus } from "@/test-https";
+import { hstsBody, httpsLetsEncryptStatus, httpsStatus } from "@/test-https";
 
 let sent: { path: string; method: string; csrf: string | null }[];
 let stop: () => Response | Promise<Response>;
@@ -172,7 +173,7 @@ describe("Stop using Let's Encrypt dialog (D-14)", () => {
     expect(stops()).toHaveLength(2);
   });
 
-  it.each(["acme_run_active", "acme_not_active"])(
+  it.each(["acme_run_active", "acme_not_active", "hsts_on"])(
     "a 409 %s (the page was out of date) closes, reads the status again and toasts nothing",
     async (type) => {
       stop = () =>
@@ -193,4 +194,67 @@ describe("Stop using Let's Encrypt dialog (D-14)", () => {
       );
     },
   );
+});
+
+// What the dialog tells the truth about (D-19, D-26): agents keep connecting, and a browser that has not
+// opened TierPlan since HSTS was turned off may refuse the self-signed certificate until a date.
+describe("Stop dialog: agents and browsers (D-19, D-26)", () => {
+  const warning = () =>
+    dialog().queryByText(/Browsers that haven't opened TierPlan since HSTS was turned off/);
+  const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();
+
+  it("says agents keep connecting because they already hold the self-signed pin", () => {
+    renderDialog();
+    expect(
+      dialog().getByText(/Agents keep connecting, because they already hold the self-signed pin\./),
+    ).toBeTruthy();
+    expect(dialog().queryByText(/Agents that use the self-signed pin keep working/)).toBeNull();
+  });
+
+  it("warns, with the forget-by date, while hsts.forgetBy is in the future, and the confirm stays available", async () => {
+    const forgetBy = inDays(3);
+    status = () => Response.json(httpsStatus({ hsts: hstsBody({ forgetBy }) }));
+    renderDialog();
+    const text = await dialog().findByText(
+      /Browsers that haven't opened TierPlan since HSTS was turned off/,
+    );
+    expect(text.textContent).toContain(`until ${formatDate(forgetBy)}.`);
+    expect(text.textContent).toContain("That includes this page.");
+    const note = text.closest("[data-slot=alert]") as HTMLElement;
+    expect(note.getAttribute("role")).toBe("note");
+    expect(note.className).not.toContain("destructive");
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("false");
+    // Between the body and the footer.
+    const body = dialog().getByText(/TierPlan goes back to its own self-signed certificate/);
+    const footer = dialog().getByRole("button", { name: "Keep Let's Encrypt" });
+    expect(body.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    ["in the past", () => hstsBody({ forgetBy: inDays(-1) })],
+    ["absent", () => hstsBody()],
+  ])("draws no warning when hsts.forgetBy is %s", async (_name, hsts) => {
+    status = () => Response.json(httpsStatus({ hsts: hsts() }));
+    renderDialog();
+    await waitFor(() => expect(sent.some((s) => s.path === "/api/https/status")).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(warning()).toBeNull();
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("false");
+  });
+
+  it("keeps the warning visible while the stop is pending", async () => {
+    status = () => Response.json(httpsStatus({ hsts: hstsBody({ forgetBy: inDays(2) }) }));
+    const release = holdStop();
+    renderDialog();
+    await dialog().findByText(/Browsers that haven't opened TierPlan since HSTS was turned off/);
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(confirmButton().textContent).toBe("Stopping..."));
+    expect(warning()).toBeTruthy();
+    status = () => Response.json(httpsStatus());
+    await act(async () => release());
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
 });

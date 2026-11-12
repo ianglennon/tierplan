@@ -22,6 +22,9 @@ import {
   acmeSteps,
   acmeStepsDNS01,
   acmeSwitchLock,
+  hstsBody,
+  hstsLock,
+  hstsSending,
   httpsACME,
   httpsStatus,
 } from "@/test-https";
@@ -50,6 +53,7 @@ let me: () => Response;
 // What a press of Issue certificate or Renew now is answered with.
 let issueAnswer: () => Response | Promise<Response>;
 let renewAnswer: () => Response | Promise<Response>;
+let stopAnswer: () => Response | Promise<Response>;
 let successToast: ReturnType<typeof vi.spyOn>;
 
 const instanceAdmin = () => Response.json(makeMe({ instanceAdmin: true }));
@@ -121,6 +125,7 @@ beforeEach(() => {
   me = instanceAdmin;
   issueAnswer = () => Response.json({ jobId: "job-1", reused: false }, { status: 202 });
   renewAnswer = () => Response.json({ jobId: "job-1", reused: false }, { status: 202 });
+  stopAnswer = () => new Response(null, { status: 204 });
   successToast = vi.spyOn(toast, "success");
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -136,9 +141,7 @@ beforeEach(() => {
       }
       if (path === "/api/https/acme/issue" && req.method === "POST") return issueAnswer();
       if (path === "/api/https/acme/renew" && req.method === "POST") return renewAnswer();
-      if (path === "/api/https/acme/stop" && req.method === "POST") {
-        return new Response(null, { status: 204 });
-      }
+      if (path === "/api/https/acme/stop" && req.method === "POST") return stopAnswer();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -1222,5 +1225,111 @@ describe("actions locked by TIERPLAN_ACME", () => {
     await waitFor(() => expect(document.getElementById("acme-issue-lock")).not.toBeNull());
     expect(isDisabled(issueButton())).toBe(true);
     expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+  });
+});
+
+// Stop using Let's Encrypt is refused while HSTS is on (D-26, TLS-06): the button says which route lifts
+// it, and the manager refuses with 409 hsts_on regardless.
+describe("Stop using Let's Encrypt while HSTS is on (D-26)", () => {
+  const stopButton = () => card().queryByRole("button", { name: "Stop using Let's Encrypt" });
+  const ON = { var: "TIERPLAN_ACME", value: "on", stored: "off" };
+  const withHsts = (hsts: ReturnType<typeof hstsBody>, acme: Partial<HTTPSACME> = {}) => ({
+    ...served(acme),
+    hsts,
+  });
+  // The text of every element the button is described by, in order.
+  const reasons = (button: HTMLElement | null) =>
+    (button?.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent ?? "");
+
+  it("an editable Switch: aria-disabled and focusable, 'Turn HSTS off first.' with a pointer to the HSTS card, and the dialog cannot open", async () => {
+    status = () => withHsts(hstsSending(1));
+    await ready();
+    const stop = stopButton();
+    expect(isDisabled(stop)).toBe(true);
+    expect(stop?.hasAttribute("disabled")).toBe(false);
+    expect(stop?.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+    expect(reasons(stop)).toEqual(["Turn HSTS off first. Go to the HSTS setting"]);
+    const pointer = card().getByRole("link", { name: "Go to the HSTS setting" });
+    expect(pointer.getAttribute("href")).toBe("#hsts");
+    (stop as HTMLElement).focus();
+    expect(document.activeElement).toBe(stop);
+    fireEvent.click(stop as HTMLElement);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(posts()).toEqual([]);
+  });
+
+  it("TIERPLAN_HSTS set: the reason is the lock text naming it and its stored value, with no pointer", async () => {
+    status = () => withHsts(hstsBody({ ...hstsSending(2), ...hstsLock("on", "off") }));
+    await ready();
+    const stop = stopButton();
+    expect(isDisabled(stop)).toBe(true);
+    expect(reasons(stop)).toEqual([
+      "Set by the TIERPLAN_HSTS environment variable. Set it to off to stop.Stored value: off, used if TIERPLAN_HSTS is removed.",
+    ]);
+    expect(card().queryByRole("link", { name: "Go to the HSTS setting" })).toBeNull();
+    expect(card().queryByText("Turn HSTS off first.")).toBeNull();
+    fireEvent.click(stop as HTMLElement);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("TIERPLAN_ACME on as well: both reasons are drawn, TIERPLAN_ACME first", async () => {
+    status = () =>
+      withHsts(hstsBody({ ...hstsSending(2), ...hstsLock("on", "off") }), { locks: { acme: ON } });
+    await ready();
+    const stop = stopButton();
+    expect(stop?.getAttribute("aria-describedby")).toBe("acme-stop-lock acme-stop-hsts");
+    const [first, second] = reasons(stop);
+    expect(first).toContain("Set by the TIERPLAN_ACME environment variable.");
+    expect(second).toContain("Set by the TIERPLAN_HSTS environment variable.");
+  });
+
+  it("HSTS off: Stop opens the dialog, as before", async () => {
+    status = () => withHsts(hstsBody());
+    await ready();
+    expect(isDisabled(stopButton())).toBe(false);
+    expect(document.getElementById("acme-stop-hsts")).toBeNull();
+    fireEvent.click(stopButton() as HTMLElement);
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+
+  it("a status without an HSTS block leaves Stop as before", async () => {
+    status = () => served();
+    await ready();
+    expect(isDisabled(stopButton())).toBe(false);
+  });
+
+  it("without settings.write there is no button, and an HSTS lock still shows as text", async () => {
+    me = viewer;
+    status = () => withHsts(hstsBody({ ...hstsSending(2), ...hstsLock("on", "off") }));
+    renderCard();
+    await card().findByText("Names on the certificate");
+    await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
+    expect(stopButton()).toBeNull();
+    expect(document.getElementById("acme-stop-hsts")?.textContent).toContain(
+      "Set it to off to stop.",
+    );
+  });
+
+  it("a 409 hsts_on from Stop closes the dialog, toasts nothing, reads the status again and redraws the button disabled", async () => {
+    let turnedOn = false;
+    status = () => (turnedOn ? withHsts(hstsSending(1)) : withHsts(hstsBody()));
+    stopAnswer = () => {
+      turnedOn = true;
+      return problem(409, "hsts_on");
+    };
+    await ready();
+    fireEvent.click(stopButton() as HTMLElement);
+    const dialog = within(screen.getByRole("alertdialog"));
+    fireEvent.click(dialog.getByRole("button", { name: "Stop using Let's Encrypt" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(isDisabled(stopButton())).toBe(true));
+    expect(document.getElementById("acme-stop-hsts")?.textContent).toContain(
+      "Turn HSTS off first.",
+    );
+    expect(toasts()).toEqual([]);
+    expect(screen.queryByText("Something went wrong. Try again.")).toBeNull();
   });
 });

@@ -592,11 +592,14 @@
     "stop": {
       "action": "Stop using Let's Encrypt",
       "title": "Stop using Let's Encrypt?",
-      "body": "TierPlan goes back to its own self-signed certificate right away, with no restart, and stops renewing. Browsers will warn again. Agents that use the self-signed pin keep working. Your Let's Encrypt account is kept, so you can issue again with one click.",
+      "body": "TierPlan goes back to its own self-signed certificate right away, with no restart, and stops renewing. Browsers will warn again. Agents keep connecting, because they already hold the self-signed pin. Your Let's Encrypt account is kept, so you can issue again with one click.",
       "cancel": "Keep Let's Encrypt",
       "confirm": "Stop using Let's Encrypt",
       "pending": "Stopping...",
-      "done": "Back on the self-signed certificate."
+      "done": "Back on the self-signed certificate.",
+      "browserWarning": "Browsers that haven't opened TierPlan since HSTS was turned off may still refuse the self-signed certificate, with no way past the warning, until {{date}}. That includes this page. Open TierPlan once in each browser first to make it forget the setting.",
+      "hstsReason": "Turn HSTS off first.",
+      "hstsPointer": "Go to the HSTS setting"
     },
     "lock": {
       "set": "Set by the {{var}} environment variable.",
@@ -611,7 +614,8 @@
         "body": "Locked settings show a lock and the variable that sets them. Change them in your compose file or container settings, then restart TierPlan. The value saved here is kept and used again if you remove the variable."
       },
       "tokenSaved": "token saved",
-      "tokenNone": "no token saved"
+      "tokenNone": "no token saved",
+      "stopHsts": "Set by the {{var}} environment variable. Set it to off to stop."
     }
   }
 }
