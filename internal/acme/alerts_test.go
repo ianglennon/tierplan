@@ -85,6 +85,78 @@ func TestDeriveAlerts(t *testing.T) {
 		})
 	}
 
+	t.Run("the expiry fallback is a fallback alert with when it expired", func(t *testing.T) {
+		t.Parallel()
+		expired := alertsNow.Add(-time.Hour)
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Fallback: true, ExpiredAt: expired}, Served{})
+		want := []Alert{{Kind: AlertFallback, NotAfter: expired}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a restore pause is one paused alert whatever the mode", func(t *testing.T) {
+		t.Parallel()
+		for _, mode := range []string{ModeActive, ModeOff} {
+			got := DeriveAlerts(alertsNow, Status{Mode: mode, PausedReason: PausedRestore}, Served{})
+			want := []Alert{{Kind: AlertPaused, Reason: PausedRestore}}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("mode %q: got %+v, want %+v", mode, got, want)
+			}
+		}
+	})
+
+	until := alertsNow.Add(45 * time.Minute)
+	for _, reason := range []string{BlockToldToWait, BlockFailureGuard} {
+		t.Run(reason+" on an active install is one paused alert with the time", func(t *testing.T) {
+			t.Parallel()
+			got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Certificate: cert, Block: &BlockView{Until: until, Reason: reason}}, Served{})
+			want := []Alert{{Kind: AlertPaused, Reason: reason, Until: until}}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %+v, want %+v", got, want)
+			}
+		})
+		t.Run(reason+" with the mode off and no certificate is listed too, and is no renewal_failed", func(t *testing.T) {
+			t.Parallel()
+			// Three failed manual Issues: the failures are on the page, the pause is in the bell.
+			got := DeriveAlerts(alertsNow, Status{
+				Mode: ModeOff, LastError: failing, Failures: 3, LastRun: adminIssue, Block: &BlockView{Until: until, Reason: reason},
+			}, Served{})
+			want := []Alert{{Kind: AlertPaused, Reason: reason, Until: until}}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %+v, want %+v", got, want)
+			}
+		})
+	}
+
+	t.Run("the certificate-files pause gives no alert", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, CertFiles: true, PausedReason: PausedCertFiles}, Served{})
+		if len(got) != 0 {
+			t.Fatalf("got %+v, want none", got)
+		}
+	})
+
+	t.Run("certificate files with a block set give no alert", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, CertFiles: true, Block: &BlockView{Until: until, Reason: BlockToldToWait}}, Served{})
+		if len(got) != 0 {
+			t.Fatalf("got %+v, want none", got)
+		}
+	})
+
+	t.Run("fallback, renewal failed and paused come out in that order", func(t *testing.T) {
+		t.Parallel()
+		got := DeriveAlerts(alertsNow, Status{
+			Mode: ModeActive, Certificate: cert, Fallback: true, ExpiredAt: alertsNow, LastError: failing, Failures: 1,
+			Block: &BlockView{Until: until, Reason: BlockFailureGuard},
+		}, Served{})
+		want := []AlertKind{AlertFallback, AlertRenewalFailed, AlertPaused}
+		if !slices.Equal(kindsOf(got), want) {
+			t.Fatalf("kinds = %v, want %v", kindsOf(got), want)
+		}
+	})
+
 	t.Run("the alert has nowhere to hold the CA's problem text", func(t *testing.T) {
 		t.Parallel()
 		got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Certificate: cert, LastError: failing, Failures: 1}, Served{})

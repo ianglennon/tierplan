@@ -93,7 +93,13 @@ func DeriveAlerts(now time.Time, st Status, sv Served) []Alert {
 	_ = now
 	_ = sv
 	var out []Alert
+	if st.Fallback {
+		out = append(out, Alert{Kind: AlertFallback, NotAfter: st.ExpiredAt})
+	}
 	if a, ok := renewalFailed(st); ok {
+		out = append(out, a)
+	}
+	if a, ok := paused(st); ok {
 		out = append(out, a)
 	}
 	slices.SortStableFunc(out, func(a, b Alert) int { return a.Kind.rank() - b.Kind.rank() })
@@ -118,6 +124,23 @@ func renewalFailed(st Status) (Alert, bool) {
 		Zone: e.Zone, Target: e.Target, Resolvers: slices.Clone(e.Resolvers),
 		NoCertificate: st.Mode != ModeActive, NextAttemptAt: st.NextAttemptAt,
 	}, true
+}
+
+// paused is the pause item (D-04.4): Let's Encrypt waits after a restore, or under a CA Retry-After or
+// the three-failures guard. It reads neither the mode nor the certificate: a backoff is listed whether or
+// not a certificate exists. The pause certificate files cause (14 D-13) is a deliberate configuration and
+// gives none.
+func paused(st Status) (Alert, bool) {
+	if st.CertFiles {
+		return Alert{}, false
+	}
+	switch {
+	case st.PausedReason == PausedRestore:
+		return Alert{Kind: AlertPaused, Reason: PausedRestore}, true
+	case st.Block != nil:
+		return Alert{Kind: AlertPaused, Reason: st.Block.Reason, Until: st.Block.Until}, true
+	}
+	return Alert{}, false
 }
 
 // Alerts reports what is wrong with HTTPS now, for the instance warnings feed. sv is the certificate

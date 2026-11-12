@@ -64,6 +64,24 @@ func TestWarningsHTTPS(t *testing.T) {
 		}
 	})
 
+	t.Run("a restore pause on the real manager is listed as https_acme_paused with its reason", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		ctx := context.Background()
+		st, err := f.store.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.PausedReason = acme.PausedRestore
+		if err := f.store.SaveState(ctx, st); err != nil {
+			t.Fatal(err)
+		}
+		rec, w := f.httpsWarnings(t)
+		if len(w.Items) != 1 || w.Items[0].ID != "https_acme_paused" || w.Items[0].HTTPS == nil || w.Items[0].HTTPS.Reason != "restore" {
+			t.Fatalf("got %s, want one https_acme_paused with reason restore", rec.Body)
+		}
+	})
+
 	t.Run("a user without settings.read is refused and told nothing", func(t *testing.T) {
 		t.Parallel()
 		f := newACMEFix(t, acmeOpts{})
