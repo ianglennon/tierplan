@@ -130,13 +130,19 @@ func newHSTSPolicy(now func() time.Time, trust *trustChecker, rt *httpsRuntime, 
 }
 
 // Header is the router's hook: the value of Strict-Transport-Security for this request, or "". It
-// reads the snapshot only: no database, no clock and no lock.
+// reads the snapshot and the installed kind only: no database, no clock and no lock.
 func (p *hstsPolicy) Header(r *http.Request) string {
 	if r.TLS == nil {
 		return ""
 	}
 	d := p.snap.Load()
 	if d == nil {
+		return ""
+	}
+	// The decision judged one kind of certificate and the recompute that follows a swap is
+	// asynchronous. A decision made for another kind than the one installed now is stale, and nothing
+	// HSTS-related is ever sent over a self-signed certificate (D-14). The comparison is one atomic load.
+	if p.rt.Kind() != d.source {
 		return ""
 	}
 	switch d.kind {

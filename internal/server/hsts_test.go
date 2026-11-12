@@ -725,6 +725,11 @@ func TestHSTSHeaderValuesAreExact(t *testing.T) {
 	lifetimes := []time.Duration{day, 6 * day, 10*day - 1, 10 * day, 90 * day}
 	seen := map[string]bool{}
 	for _, kind := range kinds {
+		// The runtime serves the kind the decision judges, as it does once the recompute has caught up.
+		rt := newHTTPSRuntime()
+		if kind != 0 {
+			rt.Install(kind, nil)
+		}
 		for _, v := range verdicts {
 			for _, enabled := range []bool{false, true} {
 				for _, life := range lifetimes {
@@ -733,7 +738,7 @@ func TestHSTSHeaderValuesAreExact(t *testing.T) {
 							notBefore := hstsStart.Add(-offset)
 							in := hstsInput{kind: kind, verdict: v, enabled: enabled, now: hstsStart, notBefore: notBefore, notAfter: notBefore.Add(life)}
 							d, _ := hstsDecide(in, hstsRamp{host: hstsHost, step: step, since: hstsStart.Add(-40 * day).UnixNano()})
-							p := &hstsPolicy{}
+							p := &hstsPolicy{rt: rt}
 							p.snap.Store(&d)
 							got := hstsHeaderFor(p, hstsHost)
 							if got != "" && !valid.MatchString(got) {
@@ -1231,5 +1236,40 @@ func TestACMEEnvOffRefusedWhileStoredHSTSIsOn(t *testing.T) {
 	srv = r.startNew()
 	if k := srv.https.Kind(); k != tlsKindSelfSigned {
 		t.Errorf("served kind = %d with TIERPLAN_ACME=off and TIERPLAN_HSTS=off, want self-signed", k)
+	}
+}
+
+// The decision is recomputed asynchronously after a swap, so for a moment it was made for another
+// certificate than the one installed. A positive or zero max-age must not go out over the self-signed
+// certificate in that moment (D-14, WR-02), and the answer must follow the kind with no recompute at all.
+func TestHSTSHeaderIgnoresADecisionMadeForAnotherKind(t *testing.T) {
+	g := newHSTSRig(t)
+	g.setStored(true)
+	g.serveForever(tlsKindACME)
+	p := g.policy(nil)
+	if got := g.header(p, hstsHost); got != "max-age=300" {
+		t.Fatalf("Strict-Transport-Security = %q over a verified Let's Encrypt certificate, want max-age=300", got)
+	}
+
+	// The swap to the self-signed certificate: no recompute has run, so the snapshot is still the send.
+	g.rt.Install(tlsKindSelfSigned, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, errors.New("not read") })
+	if got := hstsHeaderFor(p, hstsHost); got != "" {
+		t.Errorf("Strict-Transport-Security = %q over the self-signed certificate on a stale send, want none", got)
+	}
+
+	// Withdrawing is no different: a stale max-age=0 is not sent over the self-signed certificate either.
+	g.setStored(false)
+	g.serveForever(tlsKindSupplied)
+	if got := g.header(p, hstsHost); got != "max-age=0" {
+		t.Fatalf("Strict-Transport-Security = %q over a verified certificate with the toggle off, want max-age=0", got)
+	}
+	g.rt.Install(tlsKindSelfSigned, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, errors.New("not read") })
+	if got := hstsHeaderFor(p, hstsHost); got != "" {
+		t.Errorf("Strict-Transport-Security = %q over the self-signed certificate on a stale withdrawal, want none", got)
+	}
+
+	// Once the recompute has judged the new kind, nothing changes: self-signed still gets no header.
+	if got := g.header(p, hstsHost); got != "" {
+		t.Errorf("Strict-Transport-Security = %q after the recompute, want none", got)
 	}
 }
