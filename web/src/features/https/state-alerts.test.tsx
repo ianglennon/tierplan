@@ -11,10 +11,12 @@ import { queryClient } from "@/api/query-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { AcmeCard } from "@/features/https/acme-card";
+import { deriveEnvOverlay } from "@/features/https/card-state";
 import { HttpsPage } from "@/features/https/https-page";
 import "@/i18n";
 import {
   acmeActiveRun,
+  acmeDNSStatus,
   acmeLastError,
   acmeSwitchLock,
   httpsACME,
@@ -680,5 +682,74 @@ describe("TIERPLAN_ACME=off (D-02, D-04)", () => {
     status = () => Response.json(httpsStatus());
     await ready();
     expect(notes().some((n) => n.textContent?.includes("turned off by TIERPLAN_ACME"))).toBe(false);
+  });
+});
+
+describe("TIERPLAN_ACME=on with DNS-01 and no token anywhere (D-07)", () => {
+  const TITLE = "Waiting for a Cloudflare token";
+  const GETTING = "TierPlan is getting a certificate";
+  const noToken = (dns: Parameters<typeof acmeDNSStatus>[0] = {}) =>
+    httpsEnvOnStatus({
+      challengeType: "dns-01",
+      dns: acmeDNSStatus({ tokenSource: "none", ...dns }),
+    });
+
+  it("shows the warning with the variable names in mono, and no error panel or other waiting alert", async () => {
+    status = () => Response.json(noToken());
+    await ready();
+    const alert = noteWith(TITLE) as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.textContent).toContain(
+      "TIERPLAN_ACME is on and DNS-01 is selected, but there is no token. TierPlan orders nothing until there is one. Add a token above, or set TIERPLAN_CLOUDFLARE_API_TOKEN_FILE.",
+    );
+    expect([...alert.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "TIERPLAN_ACME",
+      "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE",
+    ]);
+    expect(alert.getAttribute("role")).toBe("note");
+    expect(noteWith(GETTING)).toBeUndefined();
+    expect(card().queryByText(/Next automatic attempt/)).toBeNull();
+    expect(card().queryByText(/TierPlan keeps trying/)).toBeNull();
+  });
+
+  it("is not shown when the environment supplies the token: the ordinary waiting alert shows", async () => {
+    status = () => Response.json(noToken({ tokenSource: "env" }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    expect(noteWith(GETTING)).toBeTruthy();
+  });
+
+  it("is not shown when a saved token is in use", async () => {
+    status = () => Response.json(noToken({ tokenSource: "stored", tokenSaved: true }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("is not shown under HTTP-01, or with TIERPLAN_ACME unset", async () => {
+    status = () =>
+      Response.json(httpsEnvOnStatus({ challengeType: "http-01", dns: acmeDNSStatus() }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsPendingStatus({
+          challengeType: "dns-01",
+          dns: acmeDNSStatus({ tokenSource: "none" }),
+        }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("reads from deriveEnvOverlay: waitingForToken is set and waiting is not", () => {
+    expect(deriveEnvOverlay(noToken())).toMatchObject({ waitingForToken: true, waiting: false });
+    expect(deriveEnvOverlay(noToken({ tokenSource: "env" }))).toMatchObject({
+      waitingForToken: false,
+      waiting: true,
+    });
+    expect(deriveEnvOverlay(httpsPendingStatus()).waitingForToken).toBe(false);
   });
 });

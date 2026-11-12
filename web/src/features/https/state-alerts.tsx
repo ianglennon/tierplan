@@ -158,6 +158,7 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
         </Alert>
       );
     default:
+      if (overlay.waitingForToken) return <WaitingForTokenAlert />;
       if (overlay.waiting) return <WaitingAlert />;
       if (overlay.env === "off") return <OffAlert kept={overlay.offWithState} />;
       return null;
@@ -201,6 +202,21 @@ function WaitingAlert() {
       <AlertTitle>{t("https.envState.waiting.title")}</AlertTitle>
       <AlertDescription className="text-foreground">
         <Rich text={t("https.envState.waiting.body")} />
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+// WaitingForTokenAlert says TIERPLAN_ACME is on and DNS-01 is selected but there is no token anywhere
+// (D-07). Nothing is attempted, so nothing is charged and no error shows; the alert says what is missing.
+function WaitingForTokenAlert() {
+  const t = useT();
+  return (
+    <Alert variant="warning" role="note">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>{t("https.envState.waitingToken.title")}</AlertTitle>
+      <AlertDescription>
+        <Rich text={t("https.envState.waitingToken.body")} />
       </AlertDescription>
     </Alert>
   );

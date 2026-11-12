@@ -428,3 +428,40 @@ export function challengeLock(
     challengeType: { var: "TIERPLAN_ACME_CHALLENGE", value, ...(stored ? { stored } : {}) },
   };
 }
+
+// The DNS provider and its token locked together by a Cloudflare token variable (D-05). The token's
+// entry names the variable and carries nothing else: no value, no stored value.
+export function dnsEnvLocks(
+  tokenVar = "TIERPLAN_CLOUDFLARE_API_TOKEN",
+  storedProvider = "cloudflare",
+): HTTPSACME["locks"] {
+  return {
+    dnsProvider: { var: "TIERPLAN_DNS_PROVIDER", value: "cloudflare", stored: storedProvider },
+    dnsToken: { var: tokenVar },
+  };
+}
+
+// The TIERPLAN_DNS_RESOLVERS lock: the effective list and the saved one, comma-joined as host:port.
+export function resolversLock(value: string, stored?: string): HTTPSACME["locks"] {
+  return {
+    resolvers: {
+      var: "TIERPLAN_DNS_RESOLVERS",
+      value,
+      ...(stored === undefined ? {} : { stored }),
+    },
+  };
+}
+
+// The Let's Encrypt card with DNS-01 in force and the environment supplying the token: the registered
+// account is there and dns.tokenSource is env, unless the test says otherwise.
+export function httpsDnsLockedStatus(
+  locks: HTTPSACME["locks"],
+  dns: Partial<HTTPSACME["dns"]> = {},
+  acme: Partial<HTTPSACME> = {},
+): HTTPSStatus {
+  return httpsLockedStatus(locks, {
+    challengeType: "dns-01",
+    dns: acmeDNSStatus({ tokenSource: "env", ...dns }),
+    ...acme,
+  });
+}

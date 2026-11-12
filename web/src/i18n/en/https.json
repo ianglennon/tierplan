@@ -220,14 +220,16 @@
         "helper": "Comma-separated, each as host or host:port. When set, TierPlan asks only these while it waits for a record to appear. Leave it empty to ask the zone's own nameservers, which is right for most installs.",
         "delegation": "If {{name}} is a CNAME, TierPlan follows it and writes the record at the target. The target must be in a Cloudflare zone this token can edit. There is nothing to set.",
         "error": "{{entry}} isn't a valid resolver. Use host or host:port, separated by commas.",
-        "errorList": "The resolver list isn't valid. Use host or host:port, separated by commas, with at most five."
+        "errorList": "The resolver list isn't valid. Use host or host:port, separated by commas, with at most five.",
+        "lockedDefault": "The zone's own name servers"
       },
       "test": {
         "action": "Test token",
         "pending": "Testing token...",
         "helper": "Test token checks the names above without placing an order. It adds a test TXT record at each name and deletes it again.",
         "hint": "This can take a minute while TierPlan waits for the record to appear.",
-        "required": "Enter a Cloudflare API token to test."
+        "required": "Enter a Cloudflare API token to test.",
+        "helperEnv": "Test token checks the token from {{var}} against the names above, without placing an order. It adds a test TXT record at each name and deletes it again."
       },
       "result": {
         "passed": "Token test passed",
@@ -508,7 +510,11 @@
         "title": "Let's Encrypt is turned off by TIERPLAN_ACME",
         "body": "TierPlan serves its self-signed certificate and makes no Let's Encrypt requests. Your Let's Encrypt certificate, order and account are kept. Remove TIERPLAN_ACME, or set it to on, to use them again."
       },
-      "offNothing": "Let's Encrypt is turned off by TIERPLAN_ACME."
+      "offNothing": "Let's Encrypt is turned off by TIERPLAN_ACME.",
+      "waitingToken": {
+        "title": "Waiting for a Cloudflare token",
+        "body": "TIERPLAN_ACME is on and DNS-01 is selected, but there is no token. TierPlan orders nothing until there is one. Add a token above, or set TIERPLAN_CLOUDFLARE_API_TOKEN_FILE."
+      }
     },
     "stop": {
       "action": "Stop using Let's Encrypt",
@@ -530,7 +536,9 @@
       "notice": {
         "title": "Some settings are set by environment variables",
         "body": "Locked settings show a lock and the variable that sets them. Change them in your compose file or container settings, then restart TierPlan. The value saved here is kept and used again if you remove the variable."
-      }
+      },
+      "tokenSaved": "token saved",
+      "tokenNone": "no token saved"
     }
   }
 }

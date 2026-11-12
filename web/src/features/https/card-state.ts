@@ -103,6 +103,9 @@ export interface EnvOverlay {
   // TIERPLAN_ACME is on and TierPlan has no Let's Encrypt certificate yet, with nothing running,
   // refused, failed or told to wait: it orders by itself and the admin presses nothing.
   waiting: boolean;
+  // TIERPLAN_ACME is on, DNS-01 is in force and there is no DNS token anywhere, so nothing can be
+  // ordered until one is added (D-07). No attempt is made, so no attempt is charged and no error shows.
+  waitingForToken: boolean;
   // TIERPLAN_ACME is off and a Let's Encrypt certificate, order or account is kept (D-02).
   offWithState: boolean;
 }
@@ -116,22 +119,23 @@ export function deriveEnvOverlay(status: HTTPSStatus): EnvOverlay {
   const acme = status.acme;
   const value = acme?.locks?.acme?.value;
   const env = value === "on" || value === "off" ? value : null;
-  if (!acme || env === null) return { env: null, waiting: false, offWithState: false };
+  if (!acme || env === null) {
+    return { env: null, waiting: false, waitingForToken: false, offWithState: false };
+  }
   const stored = acme.hasState || !!acme.account || !!acme.certificate;
   // DNS-01 with no token anywhere is its own waiting state, which says what is missing.
   const noToken = acme.challengeType === "dns-01" && acme.dns.tokenSource === "none";
-  const waiting =
+  // Nothing to order for: no certificate yet, none served, no files, no pause and no run in progress.
+  const idle =
     env === "on" &&
     !acme.certificate &&
     status.certificate.source !== "lets_encrypt" &&
     !status.certFiles &&
     acme.pausedReason === "" &&
-    !acme.activeRun &&
-    !acme.lastError &&
-    (acme.refusals ?? []).length === 0 &&
-    !acme.blocked &&
-    !noToken;
-  return { env, waiting, offWithState: env === "off" && stored };
+    !acme.activeRun;
+  const waiting =
+    idle && !acme.lastError && (acme.refusals ?? []).length === 0 && !acme.blocked && !noToken;
+  return { env, waiting, waitingForToken: idle && noToken, offWithState: env === "off" && stored };
 }
 
 // deriveMode is the one place that decides which TLS mode the install is in and why (D-15, SET-01).
