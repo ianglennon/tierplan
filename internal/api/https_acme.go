@@ -228,7 +228,10 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	if b.Mode == "" {
 		b.Mode = acme.ModeOff
 	}
-	b.Locks = HTTPSLocksBody{ACME: httpsLockBody(st.Locks.ACME), Profile: httpsLockBody(st.Locks.Profile)}
+	b.Locks = HTTPSLocksBody{
+		ACME: httpsLockBody(st.Locks.ACME), Email: httpsLockBody(st.Locks.Email),
+		AcceptTOS: httpsLockBody(st.Locks.AcceptTOS), Profile: httpsLockBody(st.Locks.Profile),
+	}
 	refusedHost := map[string]bool{}
 	noPublicURL := false
 	for _, r := range st.Refusals {
@@ -396,7 +399,10 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 			"The account key is created and sealed on the server and never returned. 422 " + problemACMETOSRequired + " when agreeTos is not true; " +
 			"422 " + problemACMEContactInvalid + " (field body.email) for an address the CA or TierPlan refuses; 409 " + problemACMEAccountExists +
 			" when one is registered already; 409 " + problemACMEPaused + " after a restore, until it is resumed; 409 " + problemACMECertFiles +
-			" while certificate files are set; 502 " + problemACMECAError + " when the CA fails, with its class in the first error's message. Needs settings.write.",
+			" while certificate files are set; 502 " + problemACMECAError + " when the CA fails, with its class in the first error's message. " +
+			"While TIERPLAN_ACME_EMAIL is set it names the address: none typed uses it, the same address is accepted, and any other is refused with 409 " + problemACMEEmailLocked +
+			". While TIERPLAN_ACME_ACCEPT_TOS is set a request that does not agree to the terms is refused with 409 " + problemACMETOSLocked +
+			". A refused registration creates no account, and an existing account keeps its contact. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *RegisterACMEAccountInput) (*RegisterACMEAccountOutput, error) {
 		if d.ACME == nil {

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -830,4 +831,118 @@ func TestHTTPSACMEActionsLockedByTheEnvironment(t *testing.T) {
 		// With a certificate stored, Renew now is allowed and Stop is still refused.
 		lockedDetail(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""))
 	})
+}
+
+// problemDetail is the detail of a problem answer.
+func problemDetail(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var p struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	return p.Detail
+}
+
+// A registration against TIERPLAN_ACME_EMAIL or TIERPLAN_ACME_ACCEPT_TOS answers 409 with the field's own
+// problem type and creates no account; the variable's address is used when none is typed (phase 16, D-17,
+// UI-SPEC A2, A3). The detail names the variable and never an address.
+func TestRegisterACMEAccountLockedByTheEnvironment(t *testing.T) {
+	t.Parallel()
+	env := config.ACMEEnv{Email: "ops@example.com", AcceptTOS: true}
+
+	for _, tc := range []struct {
+		name, body, ptype, variable string
+	}{
+		{"a different email", `{"agreeTos":true,"email":"other@example.org"}`, "acme_email_locked", "TIERPLAN_ACME_EMAIL"},
+		{"terms not agreed", `{"agreeTos":false,"email":"ops@example.com"}`, "acme_tos_locked", "TIERPLAN_ACME_ACCEPT_TOS"},
+		{"terms left out", `{}`, "acme_tos_locked", "TIERPLAN_ACME_ACCEPT_TOS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newACMEFix(t, acmeOpts{env: env})
+			rec := f.send(t, http.MethodPost, "/api/https/acme/account", tc.body)
+			acmeProblemOf(t, rec, http.StatusConflict, tc.ptype)
+			if got, want := problemDetail(t, rec), "Set by the "+tc.variable+" environment variable."; got != want {
+				t.Errorf("detail = %q, want %q", got, want)
+			}
+			if strings.Contains(rec.Body.String(), "ops@example.com") || strings.Contains(rec.Body.String(), "other@example.org") {
+				t.Errorf("the answer shows an address: %s", rec.Body)
+			}
+			if n := len(f.fake.AccountsSeen()); n != 0 {
+				t.Errorf("the CA created %d accounts from a refused registration, want none", n)
+			}
+			if f.status(t).ACME.Account != nil {
+				t.Error("the status shows an account after a refused registration")
+			}
+		})
+	}
+
+	t.Run("no email typed takes the variable's", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: env})
+		if rec := f.send(t, http.MethodPost, "/api/https/acme/account", `{"agreeTos":true}`); rec.Code != http.StatusCreated {
+			t.Fatalf("POST account: %d %s, want 201", rec.Code, rec.Body)
+		}
+		if got := f.fake.AccountsSeen(); len(got) != 1 || !slices.Equal(got[0].Contact, []string{"mailto:ops@example.com"}) {
+			t.Errorf("the CA saw %+v, want one account with the variable's address", got)
+		}
+		if a := f.status(t).ACME.Account; a == nil || a.Contact != "ops@example.com" {
+			t.Errorf("account = %+v, want the contact ops@example.com", a)
+		}
+	})
+}
+
+// While TIERPLAN_ACME_PROFILE is set, a different profile answers 409 acme_profile_locked and stores
+// nothing, and the variable's own value is accepted without a write.
+func TestPutACMEProfileLockedByTheEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Profile: "shortlived"}})
+
+	rec := f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":"classic"}`)
+	acmeProblemOf(t, rec, http.StatusConflict, "acme_profile_locked")
+	if got, want := problemDetail(t, rec), "Set by the TIERPLAN_ACME_PROFILE environment variable."; got != want {
+		t.Errorf("detail = %q, want %q", got, want)
+	}
+	rec = f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":""}`)
+	acmeProblemOf(t, rec, http.StatusConflict, "acme_profile_locked")
+
+	rec = f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":"shortlived"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT the variable's own profile: %d %s, want 200", rec.Code, rec.Body)
+	}
+	st, err := f.store.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Profile != "" {
+		t.Errorf("stored profile = %q, want nothing stored by a refused write or an echo", st.Profile)
+	}
+}
+
+// The status carries one entry for each field a variable fixes, with the variable's name, its value and
+// the stored value beneath it; a field no variable fixes has none. The terms agreement has no stored value.
+func TestHTTPSACMEStatusCarriesTheLocks(t *testing.T) {
+	t.Parallel()
+	off := false
+	f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &off, Email: "ops@example.com", AcceptTOS: true, Profile: "shortlived"}})
+	f.register(t, "")
+
+	l := f.status(t).ACME.Locks
+	check := func(name string, got *api.HTTPSLockBody, want api.HTTPSLockBody) {
+		t.Helper()
+		if got == nil || *got != want {
+			t.Errorf("locks.%s = %+v, want %+v", name, got, want)
+		}
+	}
+	check("acme", l.ACME, api.HTTPSLockBody{Var: "TIERPLAN_ACME", Value: "off", Stored: "off"})
+	check("email", l.Email, api.HTTPSLockBody{Var: "TIERPLAN_ACME_EMAIL", Value: "ops@example.com"})
+	check("acceptTos", l.AcceptTOS, api.HTTPSLockBody{Var: "TIERPLAN_ACME_ACCEPT_TOS", Value: "true"})
+	check("profile", l.Profile, api.HTTPSLockBody{Var: "TIERPLAN_ACME_PROFILE", Value: "shortlived"})
+
+	none := newACMEFix(t, acmeOpts{}).status(t).ACME.Locks
+	if none != (api.HTTPSLocksBody{}) {
+		t.Errorf("locks = %+v with no variable set, want no entry", none)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -277,5 +278,219 @@ func TestEnvUnsetLocksNothing(t *testing.T) {
 	}
 	if got := s.state().Mode; got != ModeOff {
 		t.Errorf("stored mode = %q after Stop, want off", got)
+	}
+}
+
+// requireFieldLocked fails the test unless err is the lock on field, naming variable and answering problem.
+func requireFieldLocked(t *testing.T, what string, err error, field, variable, problem string) {
+	t.Helper()
+	var le *ErrLocked
+	if !errors.As(err, &le) {
+		t.Fatalf("%s = %v, want *ErrLocked", what, err)
+	}
+	if le.Field != field || le.Var != variable || le.Problem != problem {
+		t.Errorf("%s = %+v, want field %q, var %q, problem %s", what, le, field, variable, problem)
+	}
+}
+
+// accountsAtTheCA is how many accounts the fake CA has created since noAccount.
+func (s *schedEnv) accountsAtTheCA() int { return len(s.fake.AccountsSeen()) - s.accountsBefore }
+
+// noAccount forgets the account the environment registered, so a registration starts from none, the way a
+// fresh install does. The CA keeps its record of that first account; accountsAtTheCA counts from here.
+func (s *schedEnv) noAccount() {
+	s.t.Helper()
+	if err := s.client.Forget(context.Background()); err != nil {
+		s.t.Fatal(err)
+	}
+	s.accountsBefore = len(s.fake.AccountsSeen())
+}
+
+// With TIERPLAN_ACME_EMAIL set, a registration with no address types the variable's, the variable's own
+// address is accepted, and any other address is refused before the CA is asked (D-17, UI-SPEC A2).
+func TestEnvEmailLockDecidesTheRegisteredContact(t *testing.T) {
+	ctx := context.Background()
+	env := config.ACMEEnv{Email: "ops@example.com"}
+
+	for _, typed := range []string{"", "ops@example.com"} {
+		t.Run("typed="+typed, func(t *testing.T) {
+			s := newSchedEnv(t, acmetest.Options{})
+			s.noAccount()
+			m := s.buildEnv(s.hub, s.inst, env)
+			acct, err := m.Register(ctx, typed, true)
+			if err != nil {
+				t.Fatalf("Register(%q): %v", typed, err)
+			}
+			if acct.Contact != "mailto:ops@example.com" {
+				t.Errorf("contact = %q, want the variable's address", acct.Contact)
+			}
+			seen := s.fake.AccountsSeen()[s.accountsBefore:]
+			if len(seen) != 1 || !slices.Equal(seen[0].Contact, []string{"mailto:ops@example.com"}) {
+				t.Errorf("the CA saw %+v, want one account with the variable's address", seen)
+			}
+		})
+	}
+
+	t.Run("a different address is refused", func(t *testing.T) {
+		s := newSchedEnv(t, acmetest.Options{})
+		s.noAccount()
+		m := s.buildEnv(s.hub, s.inst, env)
+		before := counts(s.mgrEnv)
+		_, err := m.Register(ctx, "other@example.com", true)
+		requireFieldLocked(t, "Register", err, LockEmail, config.EnvACMEEmail, "acme_email_locked")
+		if strings.Contains(err.Error(), "ops@example.com") || strings.Contains(err.Error(), "other@example.com") {
+			t.Errorf("the refusal %q shows an address, want the variable's name only", err)
+		}
+		s.noCARequests(before)
+		if n := s.accountsAtTheCA(); n != 0 {
+			t.Errorf("%d accounts at the CA after a refused registration, want none", n)
+		}
+		if _, ok, err := s.client.Account(ctx); err != nil || ok {
+			t.Errorf("Account = found %v, %v; want nothing stored", ok, err)
+		}
+	})
+}
+
+// With TIERPLAN_ACME_ACCEPT_TOS set, a registration that does not agree to the terms is refused, and one
+// that does is accepted (D-17, UI-SPEC A3).
+func TestEnvAcceptTOSLockRefusesADisagreement(t *testing.T) {
+	ctx := context.Background()
+	env := config.ACMEEnv{AcceptTOS: true}
+
+	s := newSchedEnv(t, acmetest.Options{TermsOfService: "https://acme.example/tos"})
+	s.noAccount()
+	m := s.buildEnv(s.hub, s.inst, env)
+	before := counts(s.mgrEnv)
+	_, err := m.Register(ctx, "a@example.com", false)
+	requireFieldLocked(t, "Register", err, LockAcceptTOS, config.EnvACMEAcceptTOS, "acme_tos_locked")
+	s.noCARequests(before)
+	if n := s.accountsAtTheCA(); n != 0 {
+		t.Errorf("%d accounts at the CA after a refused registration, want none", n)
+	}
+
+	if _, err := m.Register(ctx, "a@example.com", true); err != nil {
+		t.Fatalf("Register with the terms agreed: %v", err)
+	}
+	if n := s.accountsAtTheCA(); n != 1 {
+		t.Errorf("%d accounts at the CA, want one", n)
+	}
+}
+
+// With neither variable set the registration is exactly what the person typed.
+func TestEnvRegisterWithoutTheVariablesIsUnchanged(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.noAccount()
+	if _, err := s.mgr.Register(ctx, "a@example.com", false); !errors.Is(err, ErrTOSNotAccepted) {
+		t.Errorf("Register without the terms = %v, want ErrTOSNotAccepted, not a lock", err)
+	}
+	acct, err := s.mgr.Register(ctx, "a@example.com", true)
+	if err != nil || acct.Contact != "mailto:a@example.com" {
+		t.Errorf("Register = %+v, %v; want the typed address", acct, err)
+	}
+}
+
+// An account that exists keeps its contact: the variable names the address for a registration, it does
+// not rewrite an account, and the status shows the account's real contact (UI-SPEC A2).
+func TestEnvEmailLockLeavesAnExistingAccountAlone(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.noAccount()
+	if _, err := s.mgr.Register(ctx, "a@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	m := s.buildEnv(s.hub, s.inst, config.ACMEEnv{Email: "b@example.com"})
+	before := counts(s.mgrEnv)
+
+	if _, err := m.Register(ctx, "", true); !errors.Is(err, ErrAccountExists) {
+		t.Errorf("Register over an existing account = %v, want ErrAccountExists", err)
+	}
+	s.noCARequests(before)
+	if n := s.accountsAtTheCA(); n != 1 {
+		t.Errorf("%d accounts at the CA, want only the first", n)
+	}
+	st, err := m.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Account == nil || st.Account.Contact != "mailto:a@example.com" {
+		t.Errorf("Status.Account = %+v, want the account's own contact a@example.com", st.Account)
+	}
+	if want := (&Lock{Var: config.EnvACMEEmail, Value: "b@example.com"}); st.Locks.Email == nil || *st.Locks.Email != *want {
+		t.Errorf("Status.Locks.Email = %+v, want %+v", st.Locks.Email, want)
+	}
+}
+
+// The status names the variable that fixes each field, its value and what is stored beneath it; a field
+// no variable fixes has no entry, and the terms agreement has no stored value.
+func TestEnvLocksReportEachFieldTheEnvironmentFixes(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	if err := s.mgr.SetProfile(ctx, "shortlived"); err != nil {
+		t.Fatal(err)
+	}
+
+	all := s.buildEnv(s.hub, s.inst, config.ACMEEnv{
+		Enabled: new(false), Email: "ops@example.com", AcceptTOS: true, Profile: "classic",
+	})
+	st, err := all.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Locks{
+		ACME:      &Lock{Var: config.EnvACME, Value: "off", Stored: "on"},
+		Email:     &Lock{Var: config.EnvACMEEmail, Value: "ops@example.com"},
+		AcceptTOS: &Lock{Var: config.EnvACMEAcceptTOS, Value: "true"},
+		Profile:   &Lock{Var: config.EnvACMEProfile, Value: "classic", Stored: "shortlived"},
+	}
+	for name, p := range map[string][2]*Lock{
+		"acme": {st.Locks.ACME, want.ACME}, "email": {st.Locks.Email, want.Email},
+		"acceptTos": {st.Locks.AcceptTOS, want.AcceptTOS}, "profile": {st.Locks.Profile, want.Profile},
+	} {
+		if p[0] == nil || *p[0] != *p[1] {
+			t.Errorf("Locks.%s = %+v, want %+v", name, p[0], p[1])
+		}
+	}
+	if st.Profile != "classic" {
+		t.Errorf("Status.Profile = %q, want the variable's profile in force", st.Profile)
+	}
+	if got := s.state().Profile; got != "shortlived" {
+		t.Errorf("stored profile = %q, want shortlived kept beneath the variable", got)
+	}
+
+	none, err := s.mgr.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.Locks != (Locks{}) {
+		t.Errorf("Locks = %+v with nothing set, want every entry nil", none.Locks)
+	}
+	if none.Profile != "shortlived" {
+		t.Errorf("Status.Profile = %q once the variable is gone, want the stored shortlived back", none.Profile)
+	}
+}
+
+// The profile a renewal asks for is the variable's when it is set, otherwise the stored one (D-24).
+func TestEnvProfileDecidesTheRenewalOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	if err := s.mgr.SetProfile(ctx, "classic"); err != nil {
+		t.Fatal(err)
+	}
+	m := s.buildEnv(s.hub, s.inst, config.ACMEEnv{Profile: "shortlived"})
+
+	rs, err := m.RenewNow(ctx, "user:1")
+	if err != nil {
+		t.Fatalf("RenewNow: %v", err)
+	}
+	s.wait(rs)
+	if got := s.awaitRun(); got != OutcomeSucceeded {
+		t.Fatalf("the renewal ended %q, want succeeded", got)
+	}
+	orders := s.fake.Orders()
+	if len(orders) != 2 || orders[1].Profile != "shortlived" {
+		t.Errorf("orders = %+v, want the renewal to ask for shortlived, not the stored classic", orders)
 	}
 }

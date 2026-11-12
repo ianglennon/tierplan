@@ -370,8 +370,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Register creates the Let's Encrypt account (D-06).
+// Register creates the Let's Encrypt account (D-06). While TIERPLAN_ACME_EMAIL or
+// TIERPLAN_ACME_ACCEPT_TOS is set the variable decides what is registered (registerTerms), and a request
+// that disagrees is refused with ErrLocked before anything is read or sent.
 func (m *Manager) Register(ctx context.Context, email string, agreeTOS bool) (Account, error) {
+	email, err := m.registerTerms(email, agreeTOS)
+	if err != nil {
+		return Account{}, err
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	if _, err := m.mutable(ctx); err != nil {

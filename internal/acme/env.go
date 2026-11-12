@@ -77,6 +77,10 @@ func (m *Manager) ready() bool {
 const (
 	// LockACME is the switch TIERPLAN_ACME fixes.
 	LockACME = "acme"
+	// LockEmail is the account contact TIERPLAN_ACME_EMAIL fixes (D-17).
+	LockEmail = "email"
+	// LockAcceptTOS is the agreement to the CA's terms TIERPLAN_ACME_ACCEPT_TOS fixes (D-17).
+	LockAcceptTOS = "acceptTos"
 	// LockProfile is the certificate profile TIERPLAN_ACME_PROFILE fixes (D-24).
 	LockProfile = "profile"
 )
@@ -105,13 +109,36 @@ type Lock struct {
 
 // Locks are the settings the environment currently fixes; a nil field is a setting that is free.
 type Locks struct {
-	ACME    *Lock
-	Profile *Lock
+	ACME      *Lock
+	Email     *Lock
+	AcceptTOS *Lock
+	Profile   *Lock
 }
 
 // lockedACME is the refusal of an action TIERPLAN_ACME fixes.
 func (m *Manager) lockedACME() error {
 	return &ErrLocked{Field: LockACME, Var: config.EnvACME, Problem: "acme_locked"}
+}
+
+// registerTerms settles what a registration sends once the variables have spoken (D-17, UI-SPEC A2,
+// A3). TIERPLAN_ACME_EMAIL names the address: none typed takes the variable's, the same one is accepted
+// and any other is refused. TIERPLAN_ACME_ACCEPT_TOS=true fixes the terms as agreed, so a request that
+// does not agree is refused. It reads no state and calls no one, so a refusal leaves everything as it was,
+// and an account that already exists is never touched by it: only a registration reads the variables.
+func (m *Manager) registerTerms(email string, agreeTOS bool) (string, error) {
+	if fixed := m.d.Env.Email; fixed != "" {
+		switch email {
+		case "":
+			email = fixed
+		case fixed:
+		default:
+			return "", &ErrLocked{Field: LockEmail, Var: config.EnvACMEEmail, Problem: "acme_email_locked"}
+		}
+	}
+	if m.d.Env.AcceptTOS && !agreeTOS {
+		return "", &ErrLocked{Field: LockAcceptTOS, Var: config.EnvACMEAcceptTOS, Problem: "acme_tos_locked"}
+	}
+	return email, nil
 }
 
 // lockedProfile is the refusal of a profile TIERPLAN_ACME_PROFILE does not name.
@@ -124,6 +151,14 @@ func (m *Manager) locks(st State) Locks {
 	var l Locks
 	if e := m.d.Env.Enabled; e != nil {
 		l.ACME = &Lock{Var: config.EnvACME, Value: onOff(*e), Stored: onOff(st.Mode == ModeActive)}
+	}
+	// The contact and the terms have no stored setting beneath them: an account keeps the contact it
+	// was registered with, and the agreement is made when registering, so neither carries a stored value.
+	if e := m.d.Env.Email; e != "" {
+		l.Email = &Lock{Var: config.EnvACMEEmail, Value: e}
+	}
+	if m.d.Env.AcceptTOS {
+		l.AcceptTOS = &Lock{Var: config.EnvACMEAcceptTOS, Value: "true"}
 	}
 	if p := m.d.Env.Profile; p != "" {
 		l.Profile = &Lock{Var: config.EnvACMEProfile, Value: p, Stored: st.Profile}

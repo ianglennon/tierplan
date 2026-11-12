@@ -4167,7 +4167,7 @@ export interface paths {
         put?: never;
         /**
          * Register the Let's Encrypt account
-         * @description Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. The account key is created and sealed on the server and never returned. 422 acme_tos_required when agreeTos is not true; 422 acme_contact_invalid (field body.email) for an address the CA or TierPlan refuses; 409 acme_account_exists when one is registered already; 409 acme_paused after a restore, until it is resumed; 409 acme_cert_files while certificate files are set; 502 acme_ca_error when the CA fails, with its class in the first error's message. Needs settings.write.
+         * @description Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. The account key is created and sealed on the server and never returned. 422 acme_tos_required when agreeTos is not true; 422 acme_contact_invalid (field body.email) for an address the CA or TierPlan refuses; 409 acme_account_exists when one is registered already; 409 acme_paused after a restore, until it is resumed; 409 acme_cert_files while certificate files are set; 502 acme_ca_error when the CA fails, with its class in the first error's message. While TIERPLAN_ACME_EMAIL is set it names the address: none typed uses it, the same address is accepted, and any other is refused with 409 acme_email_locked. While TIERPLAN_ACME_ACCEPT_TOS is set a request that does not agree to the terms is refused with 409 acme_tos_locked. A refused registration creates no account, and an existing account keeps its contact. Needs settings.write.
          */
         post: operations["registerACMEAccount"];
         delete?: never;
@@ -4247,7 +4247,7 @@ export interface paths {
         put?: never;
         /**
          * Get a Let's Encrypt certificate for the public address
-         * @description Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
+         * @description Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered; 409 acme_locked while TIERPLAN_ACME=off fixes Let's Encrypt off (the variable's name is the detail; nothing is ordered). 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
          */
         post: operations["issueACMECertificate"];
         delete?: never;
@@ -4287,7 +4287,7 @@ export interface paths {
         put?: never;
         /**
          * Renew the Let's Encrypt certificate now
-         * @description Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
+         * @description Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered; 409 acme_locked while TIERPLAN_ACME=off fixes Let's Encrypt off. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
          */
         post: operations["renewACMECertificate"];
         delete?: never;
@@ -4327,7 +4327,7 @@ export interface paths {
         put?: never;
         /**
          * Stop using Let's Encrypt
-         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.
+         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress; 409 acme_locked while TIERPLAN_ACME is set, whichever value it has. Needs settings.write.
          */
         post: operations["stopACME"];
         delete?: never;

@@ -82,7 +82,7 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 		Description: "Orders a certificate for the names the public address and the agent address say now, in the background. " +
 			"202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered " +
 			"(and Let's Encrypt is served again if it had been stopped). 422 " + problemACMERefused + " lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; " +
-			"409 " + problemACMENoAccount + " before an account is registered. " + problems + ". Needs settings.write.",
+			"409 " + problemACMENoAccount + " before an account is registered; 409 " + problemACMELocked + " while TIERPLAN_ACME=off fixes Let's Encrypt off (the variable's name is the detail; nothing is ordered). " + problems + ". Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMERunStartOutput, error) {
 		if d.ACME == nil {
@@ -101,7 +101,7 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 		Path:        "/api/https/acme/renew",
 		Summary:     "Renew the Let's Encrypt certificate now",
 		Description: "Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. " +
-			"409 " + problemACMENotActive + " when Let's Encrypt is not in use or there is no certificate; 409 " + problemACMENoAccount + " before an account is registered. " + problems + ". Needs settings.write.",
+			"409 " + problemACMENotActive + " when Let's Encrypt is not in use or there is no certificate; 409 " + problemACMENoAccount + " before an account is registered; 409 " + problemACMELocked + " while TIERPLAN_ACME=off fixes Let's Encrypt off. " + problems + ". Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMERunStartOutput, error) {
 		if d.ACME == nil {
@@ -140,7 +140,8 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 		DefaultStatus: http.StatusNoContent,
 		Summary:       "Stop using Let's Encrypt",
 		Description: "Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. " +
-			"409 " + problemACMENotActive + " when Let's Encrypt is not in use; 409 " + problemACMECertFiles + " while certificate files are set; 409 " + problemACMERunActive + " while a run is in progress. Needs settings.write.",
+			"409 " + problemACMENotActive + " when Let's Encrypt is not in use; 409 " + problemACMECertFiles + " while certificate files are set; 409 " + problemACMERunActive + " while a run is in progress; 409 " + problemACMELocked +
+			" while TIERPLAN_ACME is set, whichever value it has. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, _ *struct{}) (*struct{}, error) {
 		if d.ACME == nil {
