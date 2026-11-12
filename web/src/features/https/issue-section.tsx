@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Lock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -11,6 +12,7 @@ import {
   type HTTPSACME,
   type HTTPSStatus,
   httpsStatusPoll,
+  isLockProblem,
   useIssueCertificate,
   useRenewNow,
 } from "@/api/https";
@@ -22,6 +24,7 @@ import type { CardState } from "@/features/https/card-state";
 import { ChallengeChangedPrompt } from "@/features/https/challenge-changed-prompt";
 import { formatDate } from "@/features/https/copy";
 import { useACMERun } from "@/features/https/https-run-stream";
+import { LockedNote } from "@/features/https/locked-note";
 import { RunPanel } from "@/features/https/run-panel";
 import { useT } from "@/i18n/use-t";
 import { formatClock } from "@/lib/format";
@@ -34,6 +37,9 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 export const ISSUE_NOTE_ID = "acme-issue-note";
 const NOTE_ID = ISSUE_NOTE_ID;
 const REFUSALS_ID = "acme-issue-refusals";
+// The two lock lines of Issue certificate and Renew now while TIERPLAN_ACME=off; they replace the
+// ordinary reason, so the buttons are described by them (D-04, UI-SPEC A1).
+const ISSUE_LOCK_ID = "acme-issue-lock";
 
 type Which = "issue" | "renew";
 
@@ -214,11 +220,23 @@ export function IssueSection({
   // Lowest priority: a run, a pause or a wait is explained first (J4).
   else if (validationUnsaved) reason = { key: "https.issue.validationUnsaved" };
 
+  // TIERPLAN_ACME=off: nothing may order, so Issue and Renew now are locked and the lock is the reason,
+  // ahead of every other one because nothing else matters until it is lifted (D-04, UI-SPEC A1).
+  const orderLock = acme.locks.acme?.value === "off" ? acme.locks.acme : undefined;
+  const locked = orderLock !== undefined;
+  if (locked) reason = null;
+
   const issueBlockedByNames = refusals.length > 0;
-  const disabledAll = pending || reason !== null;
+  const disabledAll = pending || reason !== null || locked;
   const issueDisabled = disabledAll || issueBlockedByNames;
-  const issueDescribedBy = reason ? NOTE_ID : issueBlockedByNames ? REFUSALS_ID : undefined;
-  const renewDescribedBy = reason ? NOTE_ID : undefined;
+  const issueDescribedBy = locked
+    ? ISSUE_LOCK_ID
+    : reason
+      ? NOTE_ID
+      : issueBlockedByNames
+        ? REFUSALS_ID
+        : undefined;
+  const renewDescribedBy = locked ? ISSUE_LOCK_ID : reason ? NOTE_ID : undefined;
 
   const press = (which: Which) => {
     if (which === "issue" ? issueDisabled : disabledAll) return;
@@ -240,6 +258,9 @@ export function IssueSection({
       },
       onError: (error) => {
         setStartedBy(null);
+        // TIERPLAN_ACME now fixes the switch: the status is read again (by the mutation) and the
+        // buttons redraw locked. Nothing is told as a failure.
+        if (isLockProblem(error)) return;
         if (!(error instanceof ACMERunError)) {
           setFailed(true);
           return;
@@ -304,7 +325,9 @@ export function IssueSection({
             />
           ) : null}
           <p className="text-sm text-muted-foreground">{t("https.issue.helper")}</p>
-          {reason ? (
+          {orderLock ? (
+            <LockedNote id={ISSUE_LOCK_ID} lock={orderLock} variant="order" />
+          ) : reason ? (
             <p id={NOTE_ID} className="text-sm text-muted-foreground">
               {t(reason.key, { time: reason.time })}
             </p>
@@ -325,7 +348,10 @@ export function IssueSection({
                     {t("https.issue.issuing")}
                   </>
                 ) : (
-                  t("https.issue.issue")
+                  <>
+                    {locked ? <Lock aria-hidden="true" /> : null}
+                    {t("https.issue.issue")}
+                  </>
                 )}
               </Button>
             ) : null}
@@ -344,12 +370,20 @@ export function IssueSection({
                     {t("https.issue.renewing")}
                   </>
                 ) : (
-                  t("https.issue.renew")
+                  <>
+                    {locked ? <Lock aria-hidden="true" /> : null}
+                    {t("https.issue.renew")}
+                  </>
                 )}
               </Button>
             ) : null}
           </div>
         </>
+      ) : null}
+
+      {/* Without settings.write there are no buttons, but the lock still explains why nothing orders. */}
+      {orderLock && !canWrite && (buttons.issue || buttons.renew) ? (
+        <LockedNote id={ISSUE_LOCK_ID} lock={orderLock} variant="order" />
       ) : null}
 
       {state === "A" && canWrite ? (

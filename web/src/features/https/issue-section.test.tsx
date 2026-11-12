@@ -1050,3 +1050,148 @@ describe("E6: the 'Validation method changed' prompt (D-03)", () => {
     expect(prompt()).toBeNull();
   });
 });
+
+// TIERPLAN_ACME fixes the Let's Encrypt switch, and the actions it makes impossible say who can lift
+// the lock (D-04, SET-02, UI-SPEC A1/E6).
+describe("actions locked by TIERPLAN_ACME", () => {
+  const OFF = { var: "TIERPLAN_ACME", value: "off", stored: "on" };
+  const ON = { var: "TIERPLAN_ACME", value: "on", stored: "off" };
+  const stopButton = () => card().queryByRole("button", { name: "Stop using Let's Encrypt" });
+  const names = [{ name: "new.example.com", refused: false }];
+  const REASON_OFF =
+    "Set by the TIERPLAN_ACME environment variable. Set it to on, or remove it, to order certificates.";
+
+  it("off: Issue certificate and Renew now are aria-disabled and focusable, lead with a Lock icon, and are described by both lock lines", async () => {
+    status = () => served({ namesMismatch: true, names, locks: { acme: OFF } });
+    await ready();
+    for (const button of [issueButton(), renewButton()]) {
+      expect(isDisabled(button)).toBe(true);
+      expect(button?.hasAttribute("disabled")).toBe(false);
+      expect(button?.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+      expect(button?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+      expect(button?.getAttribute("aria-describedby")).toBe("acme-issue-lock");
+      expect(describedBy(button)).toBe(
+        `${REASON_OFF}Stored value: on, used if TIERPLAN_ACME is removed.`,
+      );
+    }
+    // Focusable: it takes focus like any button.
+    (issueButton() as HTMLElement).focus();
+    expect(document.activeElement).toBe(issueButton());
+  });
+
+  it("off: a click does nothing", async () => {
+    status = () => served({ namesMismatch: true, names, locks: { acme: OFF } });
+    await ready();
+    fireEvent.click(issueButton() as HTMLElement);
+    fireEvent.click(renewButton() as HTMLElement);
+    await flush();
+    expect(posts()).toEqual([]);
+    expect(filledButtons()).toEqual([]);
+  });
+
+  it("off: the lock reason comes first, before a wait, and the wait is not drawn beside it", async () => {
+    status = () =>
+      served({
+        namesMismatch: true,
+        names,
+        locks: { acme: OFF },
+        blocked: { reason: "told_to_wait", until: inAnHour() },
+      });
+    await ready();
+    expect(describedBy(issueButton())).toContain(REASON_OFF);
+    expect(card().queryByText(/asked TierPlan to wait/)).toBeNull();
+  });
+
+  it("off, empty: a switch with no stored value reads none beneath", async () => {
+    status = () =>
+      served({
+        namesMismatch: true,
+        names,
+        locks: { acme: { var: "TIERPLAN_ACME", value: "off" } },
+      });
+    await ready();
+    expect(describedBy(issueButton())).toContain(
+      "Stored value: none, used if TIERPLAN_ACME is removed.",
+    );
+  });
+
+  it("on: Stop using Let's Encrypt is aria-disabled with its reason and the stored line, and opens nothing", async () => {
+    status = () => served({ namesMismatch: true, names, locks: { acme: ON } });
+    await ready();
+    const stop = stopButton();
+    expect(isDisabled(stop)).toBe(true);
+    expect(stop?.hasAttribute("disabled")).toBe(false);
+    expect(stop?.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+    expect(stop?.getAttribute("aria-describedby")).toBe("acme-stop-lock");
+    expect(describedBy(stop)).toBe(
+      "Set by the TIERPLAN_ACME environment variable. Set it to off, or remove it, to stop.Stored value: off, used if TIERPLAN_ACME is removed.",
+    );
+    fireEvent.click(stop as HTMLElement);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("on: Issue certificate and Renew now are not locked", async () => {
+    status = () => served({ namesMismatch: true, names, locks: { acme: ON } });
+    await ready();
+    expect(isDisabled(issueButton())).toBe(false);
+    expect(isDisabled(renewButton())).toBe(false);
+    expect(issueButton()?.querySelector("svg")).toBeNull();
+    fireEvent.click(issueButton() as HTMLElement);
+    await waitFor(() => expect(posts()).toEqual(["/api/https/acme/issue"]));
+  });
+
+  it("off: Stop is not drawn, as the mode is off", async () => {
+    status = () => withACME({ mode: "off", locks: { acme: OFF } });
+    await ready();
+    expect(stopButton()).toBeNull();
+    expect(isDisabled(issueButton())).toBe(true);
+  });
+
+  it("no lock: the buttons behave as before", async () => {
+    status = () => served({ namesMismatch: true, names });
+    await ready();
+    expect(isDisabled(issueButton())).toBe(false);
+    expect(isDisabled(renewButton())).toBe(false);
+    expect(isDisabled(stopButton())).toBe(false);
+    expect(document.getElementById("acme-issue-lock")).toBeNull();
+    expect(document.getElementById("acme-stop-lock")).toBeNull();
+  });
+
+  it("without settings.write there are no buttons, and the lock lines still show as text", async () => {
+    me = viewer;
+    status = () => served({ namesMismatch: true, names, locks: { acme: OFF } });
+    renderCard();
+    await card().findByText("Names on the certificate");
+    await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
+    expect(issueButton()).toBeNull();
+    expect(renewButton()).toBeNull();
+    expect(document.getElementById("acme-issue-lock")?.textContent).toContain(REASON_OFF);
+    cleanup();
+    queryClient.clear();
+    status = () => served({ locks: { acme: ON } });
+    renderCard();
+    await card().findByText("Names on the certificate");
+    await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
+    expect(stopButton()).toBeNull();
+    expect(document.getElementById("acme-stop-lock")?.textContent).toContain(
+      "Set it to off, or remove it, to stop.",
+    );
+  });
+
+  it("a 409 acme_locked from Issue reads the status again and shows no failure line", async () => {
+    let refused = false;
+    status = () =>
+      refused
+        ? served({ namesMismatch: true, names, locks: { acme: OFF } })
+        : served({ namesMismatch: true, names });
+    issueAnswer = () => {
+      refused = true;
+      return problem(409, "acme_locked");
+    };
+    await ready();
+    fireEvent.click(issueButton() as HTMLElement);
+    await waitFor(() => expect(document.getElementById("acme-issue-lock")).not.toBeNull());
+    expect(isDisabled(issueButton())).toBe(true);
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+  });
+});
