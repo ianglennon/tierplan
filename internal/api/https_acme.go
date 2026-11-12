@@ -31,6 +31,17 @@ const (
 	problemACMERunActive      = "acme_run_active"
 	problemACMECAError        = "acme_ca_error"
 
+	// The 409 an environment variable's lock answers with (D-17). They equal the Problem of the
+	// acme.ErrLocked the manager returns; the route descriptions name them.
+	problemACMELocked            = "acme_locked"
+	problemACMEEmailLocked       = "acme_email_locked"
+	problemACMETOSLocked         = "acme_tos_locked"
+	problemACMEProfileLocked     = "acme_profile_locked"
+	problemACMEChallengeLocked   = "acme_challenge_locked"
+	problemACMEDNSProviderLocked = "acme_dns_provider_locked"
+	problemACMEDNSTokenLocked    = "acme_dns_token_locked" //nolint:gosec // G101: a problem type name, not a credential
+	problemACMEResolversLocked   = "acme_resolvers_locked"
+
 	problemACMEDNSTokenRequired = "acme_dns_token_required" //nolint:gosec // G101: a problem type name, not a credential
 	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
 	problemACMEDNSTokenInUse    = "acme_dns_token_in_use" //nolint:gosec // G101: a problem type name, not a credential
@@ -144,7 +155,7 @@ type HTTPSACMEBody struct {
 	Refusals            []HTTPSACMERefusalBody    `json:"refusals" doc:"Every reason an order cannot start, empty when one could"`
 	Certificate         *HTTPSACMECertificateBody `json:"certificate,omitempty" doc:"The stored Let's Encrypt certificate"`
 	NamesMismatch       bool                      `json:"namesMismatch" doc:"True when the stored certificate's names are not the names wanted now"`
-	Profile             string                    `json:"profile" doc:"The profile orders ask for; empty is the CA's default"`
+	Profile             string                    `json:"profile" doc:"The profile orders ask for: the one TIERPLAN_ACME_PROFILE sets when it is set, otherwise the saved one; empty is the CA's default"`
 	Renewal             *HTTPSACMERenewalBody     `json:"renewal,omitempty" doc:"The next renewal; left out unless Let's Encrypt is in use"`
 	Fallback            *HTTPSACMEFallbackBody    `json:"fallback,omitempty" doc:"Set when the certificate has expired and the self-signed one is served"`
 	LastError           *HTTPSACMEErrorBody       `json:"lastError,omitempty" doc:"The last failure, until a run succeeds"`
@@ -156,14 +167,44 @@ type HTTPSACMEBody struct {
 	ValidationUntested  bool                      `json:"validationUntested" doc:"True when the saved validation method has not been proved by a run yet; false while a run is in progress"`
 	SuggestDNS01        *HTTPSACMESuggestionBody  `json:"suggestDns01,omitempty" doc:"Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better"`
 	DNS                 HTTPSACMEDNSBody          `json:"dns" doc:"The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned"`
+	Locks               HTTPSLocksBody            `json:"locks" doc:"The settings an environment variable fixes, each with the variable's name. A setting no variable fixes has no entry, and a locked setting cannot be changed through the API"`
+}
+
+// HTTPSLockBody says that an environment variable fixes a setting. The variable's name always comes from
+// the server, so the page never spells one itself.
+type HTTPSLockBody struct {
+	Var    string `json:"var" doc:"The environment variable that fixes the setting, for example TIERPLAN_ACME_PROFILE"`
+	Value  string `json:"value,omitempty" doc:"What the variable sets. Never set for a secret"`
+	Stored string `json:"stored,omitempty" doc:"The value kept in the database, used again when the variable is removed. Never set for a secret, and left out when nothing is stored"`
+}
+
+// HTTPSLocksBody is one entry for each setting the environment fixes; a setting no variable fixes is left out.
+type HTTPSLocksBody struct {
+	ACME          *HTTPSLockBody `json:"acme,omitempty" doc:"The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off"`
+	Email         *HTTPSLockBody `json:"email,omitempty" doc:"The account contact, fixed by TIERPLAN_ACME_EMAIL"`
+	AcceptTOS     *HTTPSLockBody `json:"acceptTos,omitempty" doc:"The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value"`
+	Profile       *HTTPSLockBody `json:"profile,omitempty" doc:"The certificate profile, fixed by TIERPLAN_ACME_PROFILE"`
+	ChallengeType *HTTPSLockBody `json:"challengeType,omitempty" doc:"The validation method, fixed by TIERPLAN_ACME_CHALLENGE. Value is http-01 or dns-01 and stored is the saved method"`
+	DNSProvider   *HTTPSLockBody `json:"dnsProvider,omitempty" doc:"The DNS provider, fixed by TIERPLAN_DNS_PROVIDER or by a Cloudflare token variable: the provider and its token lock together. Value is the provider id and stored the saved one"`
+	DNSToken      *HTTPSLockBody `json:"dnsToken,omitempty" doc:"The DNS API token, supplied by TIERPLAN_CLOUDFLARE_API_TOKEN or TIERPLAN_CLOUDFLARE_API_TOKEN_FILE, whichever var names. It is a secret: it has no value and no stored value, and a saved token is not removed or replaced while it is locked"`
+	Resolvers     *HTTPSLockBody `json:"resolvers,omitempty" doc:"The propagation-check resolvers, fixed by TIERPLAN_DNS_RESOLVERS. Value and stored are the lists as host:port joined by commas; value is empty when the variable fixes the zone's own name servers"`
+}
+
+// httpsLockBody maps a lock onto the contract; nil stays nil.
+func httpsLockBody(l *acme.Lock) *HTTPSLockBody {
+	if l == nil {
+		return nil
+	}
+	return &HTTPSLockBody{Var: l.Var, Value: l.Value, Stored: l.Stored}
 }
 
 // HTTPSACMEDNSBody is the DNS-01 side of the status.
 type HTTPSACMEDNSBody struct {
-	Provider   string                  `json:"provider" doc:"The DNS provider id the saved token is for, for example cloudflare"`
-	TokenSaved bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved. The token is never returned"`
-	Resolvers  []string                `json:"resolvers" doc:"The resolvers the propagation check asks, as host:port; empty means the zone's own name servers"`
-	LeftOver   []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
+	Provider    string                  `json:"provider" doc:"The DNS provider id the saved token is for, for example cloudflare"`
+	TokenSaved  bool                    `json:"tokenSaved" doc:"True when a DNS API token is saved in the database. A token an environment variable supplies is not a saved one. The token is never returned"`
+	TokenSource string                  `json:"tokenSource" enum:"env,stored,none" doc:"Which token DNS-01 uses: env when an environment variable supplies it (it is never stored), stored for the saved one, none when there is no token. The token is never returned"`
+	Resolvers   []string                `json:"resolvers" doc:"The resolvers the propagation check asks, as host:port; empty means the zone's own name servers"`
+	LeftOver    []HTTPSACMELeftOverBody `json:"leftOver" doc:"TXT records TierPlan created at the DNS provider and could not delete yet, oldest first; empty when none"`
 }
 
 // HTTPSACMESuggestionBody is the DNS-01 suggestion: the host and the private address it resolves to.
@@ -195,6 +236,12 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	}
 	if b.Mode == "" {
 		b.Mode = acme.ModeOff
+	}
+	b.Locks = HTTPSLocksBody{
+		ACME: httpsLockBody(st.Locks.ACME), Email: httpsLockBody(st.Locks.Email),
+		AcceptTOS: httpsLockBody(st.Locks.AcceptTOS), Profile: httpsLockBody(st.Locks.Profile),
+		ChallengeType: httpsLockBody(st.Locks.ChallengeType), DNSProvider: httpsLockBody(st.Locks.DNSProvider),
+		DNSToken: httpsLockBody(st.Locks.DNSToken), Resolvers: httpsLockBody(st.Locks.Resolvers),
 	}
 	refusedHost := map[string]bool{}
 	noPublicURL := false
@@ -249,7 +296,7 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	b.ActiveRun = acmeRunBody(st.ActiveRun)
 	b.LastRun = acmeRunBody(st.LastRun)
 	b.DNS = HTTPSACMEDNSBody{
-		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
+		Provider: st.DNS.Provider, TokenSaved: st.DNS.TokenSaved, TokenSource: st.DNS.TokenSource, Resolvers: nonNil(slices.Clone(st.DNS.Resolvers)),
 		LeftOver: make([]HTTPSACMELeftOverBody, 0, len(st.DNS.LeftOver)),
 	}
 	for _, l := range st.DNS.LeftOver {
@@ -363,7 +410,10 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 			"The account key is created and sealed on the server and never returned. 422 " + problemACMETOSRequired + " when agreeTos is not true; " +
 			"422 " + problemACMEContactInvalid + " (field body.email) for an address the CA or TierPlan refuses; 409 " + problemACMEAccountExists +
 			" when one is registered already; 409 " + problemACMEPaused + " after a restore, until it is resumed; 409 " + problemACMECertFiles +
-			" while certificate files are set; 502 " + problemACMECAError + " when the CA fails, with its class in the first error's message. Needs settings.write.",
+			" while certificate files are set; 502 " + problemACMECAError + " when the CA fails, with its class in the first error's message. " +
+			"While TIERPLAN_ACME_EMAIL is set it names the address: none typed uses it, the same address is accepted, and any other is refused with 409 " + problemACMEEmailLocked +
+			". While TIERPLAN_ACME_ACCEPT_TOS is set a request that does not agree to the terms is refused with 409 " + problemACMETOSLocked +
+			". A refused registration creates no account, and an existing account keeps its contact. Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *RegisterACMEAccountInput) (*RegisterACMEAccountOutput, error) {
 		if d.ACME == nil {
@@ -420,7 +470,9 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 		Summary:     "Choose the certificate profile",
 		Description: "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 " +
 			problemACMEProfileUnknown + " when its directory can be read, and kept as given when it cannot. 409 " + problemACMERunActive +
-			" while a run is in progress, 409 " + problemACMEPaused + " after a restore, 409 " + problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+			" while a run is in progress, 409 " + problemACMEPaused + " after a restore, 409 " + problemACMECertFiles + " while certificate files are set. " +
+			"While TIERPLAN_ACME_PROFILE is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 " +
+			problemACMEProfileLocked + ". Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *PutACMEProfileInput) (*HTTPSACMEProfileOutput, error) {
 		if d.ACME == nil {
@@ -470,9 +522,15 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 		return p
 	}
 	var resolverErr *dnscheck.ResolverError
+	var locked *acme.ErrLocked
 	switch {
+	case errors.As(err, &locked):
+		// The variable's name, never its value (a token's least of all).
+		return httpx.Problem(http.StatusConflict, locked.Problem, "Set by the "+locked.Var+" environment variable.")
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
+	case errors.Is(err, acme.ErrHSTSOn):
+		return httpx.Problem(http.StatusConflict, problemHSTSOn, "HSTS is on. Turn it off first.")
 	case errors.Is(err, acme.ErrCertFiles):
 		return httpx.Problem(http.StatusConflict, problemACMECertFiles, "Certificate files are set, so Let's Encrypt is turned off.")
 	case errors.Is(err, acme.ErrAccountExists):

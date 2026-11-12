@@ -12,8 +12,11 @@ import { AcmeCard } from "@/features/https/acme-card";
 import "@/i18n";
 import {
   acmeDNSStatus,
+  dnsEnvLocks,
   httpsACME,
+  httpsDnsLockedStatus,
   httpsStatus,
+  resolversLock,
   tokenTestName,
   tokenTestResult,
 } from "@/test-https";
@@ -495,5 +498,171 @@ describe("Test token: a result for earlier settings", () => {
     await card().findByText("Token saved");
     expect(card().getByText("Token test passed")).toBeTruthy();
     expect(card().queryByText(STALE)).toBeNull();
+  });
+});
+
+describe("DNS-01 fields fixed by the environment (D-03, D-05, D-17)", () => {
+  const FILE_VAR = "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE";
+  const lockText = (id: string) => document.getElementById(id)?.textContent;
+  const buttonNamed = (name: RegExp) => card().queryByRole("button", { name });
+
+  it("draws the provider and the token locked together, naming the _FILE variable and that a token is saved", async () => {
+    status = () =>
+      Response.json(
+        httpsDnsLockedStatus(dnsEnvLocks(FILE_VAR), { tokenSaved: true, tokenSource: "env" }),
+      );
+    await ready();
+    expect(lockText("acme-dns-provider-lock")).toBe(
+      "Set by the TIERPLAN_DNS_PROVIDER environment variable.Stored value: Cloudflare, used if TIERPLAN_DNS_PROVIDER is removed.",
+    );
+    expect(lockText("acme-dns-token-lock")).toBe(
+      `Set by the ${FILE_VAR} environment variable.Stored value: token saved, used if ${FILE_VAR} is removed.`,
+    );
+    // The row shows the effective provider above its lock note.
+    expect(document.getElementById("acme-dns-provider-lock")?.parentElement?.textContent).toMatch(
+      /^Cloudflare/,
+    );
+  });
+
+  it("names the plain variable and says no token is saved when none is", async () => {
+    status = () =>
+      Response.json(
+        httpsDnsLockedStatus(dnsEnvLocks("TIERPLAN_CLOUDFLARE_API_TOKEN"), { tokenSaved: false }),
+      );
+    await ready();
+    expect(lockText("acme-dns-token-lock")).toBe(
+      "Set by the TIERPLAN_CLOUDFLARE_API_TOKEN environment variable.Stored value: no token saved, used if TIERPLAN_CLOUDFLARE_API_TOKEN is removed.",
+    );
+  });
+
+  it("offers no input, Replace token, Remove token or Keep the saved token while the token is locked", async () => {
+    status = () => Response.json(httpsDnsLockedStatus(dnsEnvLocks(), { tokenSaved: true }));
+    await ready();
+    expect(card().queryByLabelText(/Cloudflare API token/)).toBeNull();
+    expect(buttonNamed(/Replace token/)).toBeNull();
+    expect(buttonNamed(/Remove token/)).toBeNull();
+    expect(buttonNamed(/Keep the saved token/)).toBeNull();
+    expect(card().queryByTestId("token-saved")).toBeNull();
+  });
+
+  it("draws both locked when only the token entry is present", async () => {
+    status = () =>
+      Response.json(httpsDnsLockedStatus({ dnsToken: { var: "TIERPLAN_CLOUDFLARE_API_TOKEN" } }));
+    await ready();
+    expect(lockText("acme-dns-token-lock")).toContain("TIERPLAN_CLOUDFLARE_API_TOKEN");
+    expect(document.getElementById("acme-dns-provider-lock")).toBeTruthy();
+    expect(card().queryByLabelText(/Cloudflare API token/)).toBeNull();
+  });
+
+  it("draws both locked when only the provider entry is present", async () => {
+    const locks = dnsEnvLocks();
+    status = () => Response.json(httpsDnsLockedStatus({ dnsProvider: locks.dnsProvider }));
+    await ready();
+    expect(document.getElementById("acme-dns-token-lock")).toBeTruthy();
+    expect(document.getElementById("acme-dns-provider-lock")).toBeTruthy();
+    expect(card().queryByLabelText(/Cloudflare API token/)).toBeNull();
+  });
+
+  it("draws no lock when no variable sets the provider or the token", async () => {
+    status = () => Response.json(withACME({ challengeType: "dns-01" }));
+    await ready();
+    expect(document.getElementById("acme-dns-provider-lock")).toBeNull();
+    expect(document.getElementById("acme-dns-token-lock")).toBeNull();
+    expect(tokenInput()).toBeTruthy();
+  });
+
+  it("never renders a token string, even one the status wrongly carried", async () => {
+    const leaky = {
+      dnsToken: { var: "TIERPLAN_CLOUDFLARE_API_TOKEN", value: TOKEN, stored: TOKEN },
+    };
+    status = () => Response.json(httpsDnsLockedStatus({ ...dnsEnvLocks(), ...leaky }));
+    await ready();
+    fireEvent.click(testButton());
+    await card().findByText("Token test passed");
+    expect(document.body.textContent).not.toContain(TOKEN);
+    expect(document.body.innerHTML).not.toContain(TOKEN);
+  });
+
+  it("keeps Test token, names the variable in its helper, and sends no token", async () => {
+    status = () => Response.json(httpsDnsLockedStatus(dnsEnvLocks(FILE_VAR)));
+    await ready();
+    expect(
+      card().getByText(
+        (_, el) =>
+          el?.tagName === "P" &&
+          el.textContent ===
+            `Test token checks the token from ${FILE_VAR} against the names above, without placing an order. It adds a test TXT record at each name and deletes it again.`,
+      ),
+    ).toBeTruthy();
+    fireEvent.click(testButton());
+    await card().findByText("Token test passed");
+    expect(tests()).toHaveLength(1);
+    expect(tests()[0]?.body).toEqual({ resolvers: [] });
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("shows a refused environment token as the classified DNS error and leaves the page usable", async () => {
+    status = () => Response.json(httpsDnsLockedStatus(dnsEnvLocks()));
+    testToken = () =>
+      Response.json(
+        tokenTestResult({
+          passed: false,
+          names: [
+            tokenTestName({
+              steps: [
+                { id: "zone", state: "failed" },
+                { id: "created", state: "skipped" },
+                { id: "read", state: "skipped" },
+                { id: "deleted", state: "skipped" },
+              ],
+              error: { code: "dns_token_invalid", host: "tierplan.example.com" },
+              info: { resolvers: null, seconds: 0, state: "not_checked" },
+            }),
+          ],
+        }),
+      );
+    await ready();
+    fireEvent.click(testButton());
+    await card().findByText("Token test failed");
+    expect(card().getByText("Cloudflare didn't accept the API token.")).toBeTruthy();
+    expect(testButton().getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  it("draws the resolvers as a read-only input with the lock, mono, and the Advanced DNS disclosure open", async () => {
+    status = () =>
+      Response.json(
+        httpsDnsLockedStatus(resolversLock("10.0.0.53:53,192.168.1.1:53", "1.1.1.1:53"), {
+          resolvers: ["10.0.0.53:53", "192.168.1.1:53"],
+        }),
+      );
+    await ready();
+    const input = card().getByLabelText("DNS resolvers (optional)") as HTMLInputElement;
+    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe("10.0.0.53:53,192.168.1.1:53");
+    expect(input.className).toContain("font-mono");
+    const group = input.closest('[data-slot="input-group"]') as HTMLElement;
+    expect(within(group).getByRole("img", { name: "Locked" })).toBeTruthy();
+    expect(input.getAttribute("aria-describedby")).toContain("acme-dns-resolvers-lock");
+    expect(lockText("acme-dns-resolvers-lock")).toBe(
+      "Set by the TIERPLAN_DNS_RESOLVERS environment variable.Stored value: 1.1.1.1:53, used if TIERPLAN_DNS_RESOLVERS is removed.",
+    );
+  });
+
+  it("shows the zone's own name servers and 'none' when the variable fixes an empty list over nothing saved", async () => {
+    status = () => Response.json(httpsDnsLockedStatus(resolversLock("")));
+    await ready();
+    const input = card().getByLabelText("DNS resolvers (optional)") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("The zone's own name servers");
+    expect(lockText("acme-dns-resolvers-lock")).toContain("Stored value: none");
+  });
+
+  it("sends no resolvers with Test token while they are locked", async () => {
+    status = () =>
+      Response.json(httpsDnsLockedStatus({ ...dnsEnvLocks(), ...resolversLock("10.0.0.53:53") }));
+    await ready();
+    fireEvent.click(testButton());
+    await card().findByText("Token test passed");
+    expect(tests()[0]?.body).toEqual({});
   });
 });

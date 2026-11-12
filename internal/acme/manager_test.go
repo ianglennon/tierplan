@@ -12,15 +12,18 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-acme/lego/v5/acme/api"
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -1080,5 +1083,188 @@ func assertClean(t *testing.T, what string, job jobs.Job, hub *jobs.Hub, texts .
 		if strings.Contains(all, bad) {
 			t.Errorf("%s carries %q: %s", what, bad, all)
 		}
+	}
+}
+
+// hstsManager is a Manager over the environment's stored state whose HSTS setting is on; env is what
+// the TIERPLAN_ACME* variables say. asked counts how often the manager asked.
+func (s *schedEnv) hstsManager(inst Installer, env config.ACMEEnv, hstsOn func() bool, asked *atomic.Int32) *Manager {
+	m := s.buildEnv(s.hub, inst, env)
+	if hstsOn != nil {
+		m.d.HSTSOn = func() bool { asked.Add(1); return hstsOn() }
+	}
+	return m
+}
+
+// While HSTS is on, Stop using Let's Encrypt is refused by the manager itself, so no caller can lock
+// browsers onto a certificate they would then reject; nothing is stopped, served or written (D-26, T-16-41).
+func TestStopRefusedWhileHSTSIsOn(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	inst := &recInstaller{}
+	var asked atomic.Int32
+	m := s.hstsManager(inst, config.ACMEEnv{}, func() bool { return true }, &asked)
+	before := s.state()
+
+	if err := m.Stop(ctx, "user:1"); !errors.Is(err, ErrHSTSOn) {
+		t.Fatalf("Stop = %v, want ErrHSTSOn", err)
+	}
+
+	if after := s.state(); !reflect.DeepEqual(after, before) {
+		t.Errorf("the stored state changed from %+v to %+v by a refused Stop", before, after)
+	}
+	if got := s.state().Mode; got != ModeActive {
+		t.Errorf("the stored mode is %q after a refused Stop, want active", got)
+	}
+	if inst.selfSigned != 0 {
+		t.Errorf("the self-signed certificate was served %d times by a refused Stop", inst.selfSigned)
+	}
+	if _, _, found, err := s.store.Certificate(ctx); err != nil || !found {
+		t.Errorf("the stored certificate: found %v, err %v; want it kept", found, err)
+	}
+	if asked.Load() != 1 {
+		t.Errorf("the manager asked for the HSTS setting %d times, want once", asked.Load())
+	}
+}
+
+// heldInstaller is an installer that tells whether the HSTS toggle was held while it swapped.
+type heldInstaller struct {
+	recInstaller
+	// toggle is the lock a change of the HSTS setting takes.
+	toggle *sync.Mutex
+	// heldAtSwap is true when the toggle could not be taken during ServeSelfSigned.
+	heldAtSwap bool
+}
+
+func (h *heldInstaller) ServeSelfSigned() error {
+	if h.toggle.TryLock() {
+		h.toggle.Unlock()
+	} else {
+		h.heldAtSwap = true
+	}
+	return h.recInstaller.ServeSelfSigned()
+}
+
+// Stop reads the HSTS setting and swaps to the self-signed certificate with the toggle held, so an admin
+// who turns HSTS on at that moment waits for the stop and cannot slip in between the check and the swap
+// (D-26, WR-01). The toggle is one lock, and the test tries to take it from inside the manager's calls.
+func TestStopHoldsTheHSTSToggleFromTheCheckToTheSwap(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	var toggle sync.Mutex
+	inst := &heldInstaller{toggle: &toggle}
+	m := s.buildEnv(s.hub, inst, config.ACMEEnv{})
+	m.d.HSTSHold = func(fn func() error) error {
+		toggle.Lock()
+		defer toggle.Unlock()
+		return fn()
+	}
+	var heldAtCheck bool
+	m.d.HSTSOn = func() bool {
+		if toggle.TryLock() {
+			toggle.Unlock()
+		} else {
+			heldAtCheck = true
+		}
+		return false
+	}
+
+	if err := m.Stop(ctx, "user:1"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if !heldAtCheck {
+		t.Error("the HSTS setting was read with the toggle free, so a toggle can slip in before the swap")
+	}
+	if !inst.heldAtSwap {
+		t.Error("the self-signed certificate was served with the toggle free, so a toggle can slip in during the swap")
+	}
+	if inst.selfSigned != 1 {
+		t.Errorf("the self-signed certificate was served %d times, want once", inst.selfSigned)
+	}
+	if !toggle.TryLock() {
+		t.Fatal("the toggle is still held after Stop returned")
+	}
+	toggle.Unlock()
+}
+
+// Once HSTS is off, Stop works as before; a manager with no HSTS setting at all (a test, a build without
+// the policy) treats it as off (D-26).
+func TestStopWorksWhenHSTSIsOffOrAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hsts  func() bool
+		asked int32
+	}{
+		{"off", func() bool { return false }, 1},
+		{"absent", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newSchedEnv(t, acmetest.Options{})
+			s.issueFirst()
+			inst := &recInstaller{}
+			var asked atomic.Int32
+			m := s.hstsManager(inst, config.ACMEEnv{}, tc.hsts, &asked)
+
+			if err := m.Stop(ctx, "user:1"); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			if got := s.state().Mode; got != ModeOff {
+				t.Errorf("stored mode = %q after Stop, want off", got)
+			}
+			if inst.selfSigned != 1 {
+				t.Errorf("the self-signed certificate was served %d times, want once", inst.selfSigned)
+			}
+			if asked.Load() != tc.asked {
+				t.Errorf("the manager asked for the HSTS setting %d times, want %d", asked.Load(), tc.asked)
+			}
+		})
+	}
+}
+
+// TIERPLAN_ACME decides first: with it set and HSTS on, Stop is the acme_locked refusal, not hsts_on.
+func TestStopACMELockIsCheckedBeforeHSTS(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	var asked atomic.Int32
+	m := s.hstsManager(&recInstaller{}, envSwitch(true), func() bool { return true }, &asked)
+
+	err := m.Stop(ctx, "user:1")
+	requireLocked(t, "Stop", err)
+	if errors.Is(err, ErrHSTSOn) {
+		t.Error("Stop answered the HSTS refusal while TIERPLAN_ACME locks it")
+	}
+	if asked.Load() != 0 {
+		t.Errorf("the manager asked for the HSTS setting %d times behind the environment lock, want 0", asked.Load())
+	}
+}
+
+// The expiry fallback is not blocked by HSTS: when the certificate being served lapses the manager puts the
+// self-signed one back by itself, whatever HSTS says (D-12, D-26).
+func TestStopHSTSDoesNotBlockTheExpiryFallback(t *testing.T) {
+	s := newSchedEnv(t, acmetest.Options{})
+	s.issueFirst()
+	first := leafOf(t, s.inst.chains[0])
+	var asked atomic.Int32
+	s.mgr.d.HSTSOn = func() bool { asked.Add(1); return true }
+	s.failOrders(2, refusal)
+	s.schedule(s.mgr)
+
+	s.stepTo(s.state().RenewAt)
+	if got := s.awaitRun(); got != OutcomeFailed {
+		t.Fatalf("the first renewal ended %q, want failed", got)
+	}
+	s.stepTo(first.NotAfter)
+	if got := s.awaitRun(); got != OutcomeFailed {
+		t.Fatalf("the renewal at expiry ended %q, want failed", got)
+	}
+	if n := s.inst.selfSignedCount(); n != 1 {
+		t.Errorf("self-signed was served %d times at expiry with HSTS on, want exactly once", n)
+	}
+	if asked.Load() != 0 {
+		t.Errorf("the expiry fallback asked for the HSTS setting %d times, want 0", asked.Load())
 	}
 }

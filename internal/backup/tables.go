@@ -77,6 +77,11 @@ var Tables = map[string]Class{
 	"acme_dns_credentials": Included, // token_sealed is re-wrapped by RewrapAll
 	"acme_dns_records":     Excluded, // a restored clone must never delete records by the source install's IDs
 
+	// The HSTS toggle and the progress of its ramp (Phase 16). The toggle is the admin's choice and
+	// travels; the ramp restarts on restore (16-12), because a restored clone may have a different
+	// certificate history.
+	"https_state": Included, // the toggle travels; the ramp restarts on restore (16-12)
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key

@@ -316,6 +316,7 @@ describe("E5: the run panel", () => {
     ["issue", "admin", "running", "Issuing certificate"],
     ["renew", "admin", "running", "Renewing certificate"],
     ["renew", "schedule", "running", "Renewing certificate automatically"],
+    ["issue", "schedule", "running", "Issuing certificate automatically"],
     ["issue", "resume", "running", "Issuing certificate"],
     ["issue", "admin", "done", "Certificate issued."],
     ["renew", "schedule", "done", "Certificate renewed."],
@@ -325,6 +326,21 @@ describe("E5: the run panel", () => {
   ] as const)("headlines a %s run started by %s that is %s", (kind, trigger, state, header) => {
     draw(live({ run: acmeRunFrame({ kind, trigger, state }) }));
     expect(screen.getByText(header)).toBeTruthy();
+  });
+
+  it("has no Cancel button on an order TIERPLAN_ACME started: nothing on the panel stops it (D-07)", () => {
+    draw(live({ run: acmeRunFrame({ kind: "issue", trigger: "schedule" }) }));
+    expect(screen.getByText("Issuing certificate automatically")).toBeTruthy();
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("keeps the renewal's own header for a scheduled renewal, and 'automatically' off an admin's order", () => {
+    draw(live({ run: acmeRunFrame({ kind: "renew", trigger: "schedule" }) }));
+    expect(screen.getByText("Renewing certificate automatically")).toBeTruthy();
+    expect(screen.queryByText("Issuing certificate automatically")).toBeNull();
+    cleanup();
+    draw(live({ run: acmeRunFrame({ kind: "issue", trigger: "admin" }) }));
+    expect(screen.queryByText(/automatically/)).toBeNull();
   });
 
   it("shows earlier steps as done and the account as skipped for a run joined midway (partial)", () => {

@@ -119,6 +119,26 @@ nothing else to do.
 If you cannot set the variable right away, you can still go back: [Rolling back](#rolling-back)
 works as before.
 
+## HSTS for certificate files
+
+Before this version, an install that supplied its own certificate files sent a one-year
+`Strict-Transport-Security` header on every HTTPS response. That is no longer the default. HSTS is
+now off for every certificate until you turn it on, because a browser that holds a long HSTS
+policy for a host cannot be talked out of it if the certificate later goes wrong.
+
+**What you will see.**
+
+- If your certificate is trusted for your public host, TierPlan now sends `max-age=0`. A browser
+  that remembered the old one-year header forgets it the next time it visits.
+- If your certificate is not trusted, TierPlan sends `max-age=0` too, for the same reason: it
+  never leaves a policy in a browser that the certificate can no longer honour.
+- TierPlan does not send a positive HSTS lifetime until you ask for one.
+
+**To opt in.** Turn HSTS on in **Settings > HTTPS**, or set `TIERPLAN_HSTS=on` (see the
+environment table in the [README](../README.md)). TierPlan then starts at 5 minutes and lengthens
+the lifetime in steps over the following weeks while the certificate stays trusted, up to one
+year. It starts again at 5 minutes after a restore from a backup.
+
 ## After the upgrade
 
 - Agents reconnect on their own. Give them a short grace period, then look at Settings,

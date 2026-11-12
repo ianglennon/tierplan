@@ -19,15 +19,19 @@ const (
 type Status struct {
 	DirectoryURL        string
 	DirectoryOverridden bool
-	// Mode is ModeOff or ModeActive.
+	// Mode is ModeOff or ModeActive, as it applies now: ModeOff while TIERPLAN_ACME=off, whatever is stored.
 	Mode string
+	// Locks are the settings the environment fixes.
+	Locks Locks
 	// PausedReason is "" when renewals run, PausedRestore after a restore, or PausedCertFiles when
 	// certificate files are set and Let's Encrypt state is kept.
 	PausedReason string
 	CertFiles    bool
 	// HasState is whether a stored certificate or an open order exists.
-	HasState      bool
-	Account       *AccountView
+	HasState bool
+	Account  *AccountView
+	// ChallengeType is the validation method in use now: TIERPLAN_ACME_CHALLENGE when it is set, else
+	// the saved one (http-01 when none is saved).
 	ChallengeType string
 	// Names and Refusals are what the URLs say today; Refusals is empty when an order could start.
 	Names    []string
@@ -36,7 +40,8 @@ type Status struct {
 	Certificate *CertView
 	// NamesMismatch is true when the certificate's names are not the names wanted today.
 	NamesMismatch bool
-	Profile       string
+	// Profile is the profile orders ask for now: TIERPLAN_ACME_PROFILE when set, else the saved one.
+	Profile string
 	// RenewAt and RenewBasis are when and why the certificate is next renewed; zero unless Mode is
 	// active.
 	RenewAt    time.Time
@@ -124,17 +129,15 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	st := snap.State
+	mode := m.mode(st)
 	dir := m.d.Client.Directory()
 	ns, refusals := m.preflight(st)
 
 	out := Status{
-		DirectoryURL: dir.URL, DirectoryOverridden: dir.Overridden, Mode: st.Mode,
-		CertFiles: m.d.CertFiles, ChallengeType: st.ChallengeType, Profile: st.Profile,
+		DirectoryURL: dir.URL, DirectoryOverridden: dir.Overridden, Mode: mode, Locks: m.locks(st),
+		CertFiles: m.d.CertFiles, ChallengeType: m.challenge(st), Profile: m.profile(st),
 		Names: slices.Clone(ns.Names), Refusals: refusals,
 		Failures: st.ConsecutiveFailures, NextAttemptAt: st.NextAttemptAt,
-	}
-	if out.ChallengeType == "" {
-		out.ChallengeType = ChallengeHTTP01
 	}
 
 	// The key is not opened: the page shows the account, and an unreadable key must not take the whole
@@ -180,10 +183,10 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		}
 		out.NamesMismatch = !SameNames(leaf.DNSNames, ns.Names)
 	}
-	if st.Mode == ModeActive && !m.d.CertFiles {
+	if mode == ModeActive && !m.d.CertFiles {
 		out.Fallback, out.ExpiredAt = m.fallback(leaf, now)
 	}
-	if st.Mode == ModeActive {
+	if mode == ModeActive {
 		out.RenewAt, out.RenewBasis = st.RenewAt, RenewBasis(st.RenewBasis)
 	}
 

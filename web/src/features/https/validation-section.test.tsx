@@ -14,10 +14,14 @@ import { type CardState, validationMode } from "@/features/https/card-state";
 import "@/i18n";
 import {
   acmeDNSStatus,
+  challengeLock,
+  dnsEnvLocks,
   httpsACME,
   httpsCertFilesStatus,
+  httpsDnsLockedStatus,
   httpsRestoredStatus,
   httpsStatus,
+  resolversLock,
   tokenTestName,
   tokenTestResult,
   validationResult,
@@ -874,5 +878,200 @@ describe("Validation section: Remove token keyed on the saved method (J3, D-05)"
     expect(deletes).toHaveLength(1);
     const [node] = successToast.mock.calls[0] as [{ props: { children: string } }];
     expect(node.props.children).toBe("Token removed.");
+  });
+});
+
+describe("Validation section: the validation method locked by TIERPLAN_ACME_CHALLENGE (D-17)", () => {
+  const problem = (type: string) =>
+    Response.json(
+      { type, title: "x", status: 409 },
+      { status: 409, headers: { "Content-Type": "application/problem+json" } },
+    );
+
+  it("disables both radios with the effective method selected, and names the variable and the stored method", async () => {
+    status = () =>
+      Response.json(
+        withACME({ challengeType: "dns-01", locks: challengeLock("dns-01", "http-01") }),
+      );
+    await ready();
+    const radios = card().getAllByRole("radio");
+    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+    for (const radio of radios) expect(radio.matches(":disabled")).toBe(true);
+    expect(document.getElementById("acme-method-lock")?.textContent).toBe(
+      "Set by the TIERPLAN_ACME_CHALLENGE environment variable.Stored value: HTTP-01, used if TIERPLAN_ACME_CHALLENGE is removed.",
+    );
+  });
+
+  it("selects the environment's method even when the saved one differs", async () => {
+    status = () =>
+      Response.json(
+        withACME({ challengeType: "http-01", locks: challengeLock("http-01", "dns-01") }),
+      );
+    await ready();
+    expect(
+      card()
+        .getAllByRole("radio")
+        .map((r) => r.getAttribute("aria-checked")),
+    ).toEqual(["true", "false"]);
+  });
+
+  it("describes both radios by the lock note", async () => {
+    status = () => Response.json(withACME({ locks: challengeLock("http-01", "dns-01") }));
+    await ready();
+    for (const radio of card().getAllByRole("radio")) {
+      expect(radio.getAttribute("aria-describedby")).toContain("acme-method-lock");
+    }
+    expect(document.getElementById("acme-method-lock")).toBeTruthy();
+  });
+
+  it("does not draw the lock when no variable sets the method", async () => {
+    await ready();
+    expect(card().queryByText("TIERPLAN_ACME_CHALLENGE", { selector: "code" })).toBeNull();
+    for (const radio of card().getAllByRole("radio"))
+      expect(radio.matches(":disabled")).toBe(false);
+  });
+
+  it("sends the effective method with a save under the lock", async () => {
+    status = () =>
+      Response.json(
+        withACME({ challengeType: "dns-01", locks: challengeLock("dns-01", "http-01") }),
+      );
+    put = () => validationResultResponse({ test: undefined });
+    await ready();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN, resolvers: [] });
+  });
+
+  it("redraws as locked on a 409 acme_challenge_locked, with no failure alert and no error toast", async () => {
+    const errorToast = vi.spyOn(toast, "error");
+    put = () => {
+      status = () =>
+        Response.json(
+          withACME({ challengeType: "http-01", locks: challengeLock("http-01", "http-01") }),
+        );
+      return problem("acme_challenge_locked");
+    };
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(document.getElementById("acme-method-lock")).toBeTruthy());
+    expect(
+      card()
+        .getAllByRole("radio")
+        .map((r) => r.getAttribute("aria-checked")),
+    ).toEqual(["true", "false"]);
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+    expect(errorToast).not.toHaveBeenCalled();
+    expect(successToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("Validation section: Save under locks (D-03, D-05, D-17)", () => {
+  const savePresent = () => card().queryByRole("button", { name: /Save validation settings/ });
+
+  it("is not drawn when the method, the provider, the token and the resolvers are all locked, and Test token stays", async () => {
+    status = () =>
+      Response.json(
+        httpsDnsLockedStatus(
+          {
+            ...challengeLock("dns-01", "dns-01"),
+            ...dnsEnvLocks(),
+            ...resolversLock("10.0.0.53:53"),
+          },
+          { tokenSaved: true },
+        ),
+      );
+    await ready();
+    expect(savePresent()).toBeNull();
+    expect(card().getByRole("button", { name: "Test token" })).toBeTruthy();
+  });
+
+  it("is not drawn when the environment's method is HTTP-01: there is nothing left to change", async () => {
+    status = () => Response.json(withACME({ locks: challengeLock("http-01", "http-01") }));
+    await ready();
+    expect(savePresent()).toBeNull();
+  });
+
+  it("is drawn when the method is locked to DNS-01 and the token is still editable", async () => {
+    status = () =>
+      Response.json(
+        withACME({
+          challengeType: "dns-01",
+          locks: challengeLock("dns-01", "dns-01"),
+        }),
+      );
+    await ready();
+    expect(savePresent()).toBeTruthy();
+  });
+
+  it("is drawn with only the token locked, and its payload carries no token", async () => {
+    status = () =>
+      Response.json(
+        withACME({
+          locks: dnsEnvLocks(),
+          dns: acmeDNSStatus({ tokenSource: "env", tokenSaved: true }),
+        }),
+      );
+    put = () => validationResultResponse({ test: undefined });
+    await ready();
+    pickDNS();
+    expect(card().queryByLabelText(/Cloudflare API token/)).toBeNull();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", resolvers: [] });
+    expect(Object.keys(puts()[0]?.body ?? {})).not.toContain("token");
+  });
+
+  it("leaves the resolvers out of the payload while they are locked", async () => {
+    status = () => Response.json(withACME({ locks: resolversLock("10.0.0.53:53") }));
+    put = () => validationResultResponse({ test: undefined });
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ challengeType: "dns-01", token: TOKEN });
+  });
+
+  it("offers no Remove token under HTTP-01 while the environment supplies the token", async () => {
+    status = () =>
+      Response.json(
+        withACME({
+          locks: dnsEnvLocks(),
+          dns: acmeDNSStatus({ tokenSource: "env", tokenSaved: true }),
+        }),
+      );
+    await ready();
+    expect(card().queryByRole("button", { name: /Remove token/ })).toBeNull();
+    expect(card().queryByRole("button", { name: /Replace token/ })).toBeNull();
+  });
+
+  it("redraws a token lock that a save hit as 409 acme_dns_token_locked, with no failure alert", async () => {
+    const errorToast = vi.spyOn(toast, "error");
+    put = () => {
+      status = () =>
+        Response.json(
+          withACME({
+            challengeType: "dns-01",
+            locks: dnsEnvLocks(),
+            dns: acmeDNSStatus({ tokenSource: "env" }),
+          }),
+        );
+      return Response.json(
+        { type: "acme_dns_token_locked", title: "x", status: 409 },
+        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+      );
+    };
+    await ready();
+    pickDNS();
+    type(tokenInput(), TOKEN);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(document.getElementById("acme-dns-token-lock")).toBeTruthy());
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+    expect(errorToast).not.toHaveBeenCalled();
+    expect(card().queryByLabelText(/Cloudflare API token/)).toBeNull();
   });
 });

@@ -14,8 +14,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +74,10 @@ type acmeOpts struct {
 	served func(t *testing.T) api.ServedCertificate
 	// dns replaces the manager's DNS-01 dependencies; nil keeps the production ones.
 	dns *acme.DNSDeps
+	// env is what the TIERPLAN_ACME* variables say.
+	env config.ACMEEnv
+	// hstsOn is the manager's HSTS setting; nil is off.
+	hstsOn func() bool
 }
 
 // dnsDeps is d, or the zero value when a test gives none.
@@ -127,7 +133,7 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 		PublicURL: f.inst.PublicURL, AgentURL: f.inst.AgentURL, BasePath: f.inst.BasePath,
 		DialHosts: f.dialHosts, CertFiles: o.certFiles, Log: slog.New(slog.DiscardHandler),
 		Jitter: func() float64 { return 0 }, Rand: func(int64) int64 { return 0 },
-		DNS: dnsDeps(o.dns),
+		DNS: dnsDeps(o.dns), Env: o.env, HSTSOn: o.hstsOn,
 	})
 
 	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"tierplan.example.com"}, nil)
@@ -624,9 +630,15 @@ func TestHTTPSStatusFlagsTheTestDirectory(t *testing.T) {
 	}
 }
 
+// envDNSToken is the token an environment variable supplies in the tests below; no response may hold it.
+const envDNSToken = "cf-env-token-b19e04d7a6c3825f" //nolint:gosec // G101: a recognisable fake token, so a test can prove it never leaks
+
 func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 	t.Parallel()
-	f := newACMEFix(t, acmeOpts{})
+	// The DNS provider and its token come from the environment, so the locks are in every answer.
+	f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{
+		DNSProvider: "cloudflare", CloudflareToken: envDNSToken, TokenVar: config.EnvCloudflareTokenFile,
+	}})
 	f.register(t, "ops@example.org")
 	ctx := context.Background()
 	rs, err := f.mgr.Issue(ctx, "user:test")
@@ -677,6 +689,11 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 		// A token is sent with a resolver that is refused first, so no request leaves the test.
 		"save refused": f.send(t, http.MethodPut, "/api/https/acme/validation", `{"challengeType":"dns-01","token":"cf-token-7f3a91c2d04b8e65","resolvers":["bad/entry"]}`).Body.String(),
 		"test refused": f.send(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"cf-token-7f3a91c2d04b8e65","resolvers":["bad/entry"]}`).Body.String(),
+		// The environment's token is locked: a typed token and a removal are refused, and the answers name the
+		// variable, never the token.
+		"save locked":   f.send(t, http.MethodPut, "/api/https/acme/validation", `{"challengeType":"dns-01","token":"cf-token-7f3a91c2d04b8e65"}`).Body.String(),
+		"test locked":   f.send(t, http.MethodPost, "/api/https/acme/dns/test", `{"token":"cf-token-7f3a91c2d04b8e65"}`).Body.String(),
+		"remove locked": f.send(t, http.MethodDelete, "/api/https/acme/dns/token", "").Body.String(),
 	}
 	for name, body := range bodies {
 		if body == "" {
@@ -687,8 +704,8 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 				t.Errorf("%s holds %q: %s", name, bad, body)
 			}
 		}
-		if strings.Contains(body, "cf-token-7f3a91c2d04b8e65") {
-			t.Errorf("%s holds the DNS token: %s", name, body)
+		if strings.Contains(body, "cf-token-7f3a91c2d04b8e65") || strings.Contains(body, envDNSToken) {
+			t.Errorf("%s holds a DNS token: %s", name, body)
 		}
 		for _, secret := range secrets {
 			if strings.Contains(body, secret) {
@@ -714,6 +731,13 @@ func TestHTTPSResponsesNeverCarryKeys(t *testing.T) {
 	}
 	if a.Account == nil || a.Account.Contact != "ops@example.org" {
 		t.Errorf("account = %+v, want the contact without its mailto: prefix", a.Account)
+	}
+	// The environment's token is in use and locked, and the status says so without a trace of it.
+	if a.DNS.TokenSource != "env" || a.DNS.TokenSaved {
+		t.Errorf("dns = %+v, want the token from env and none saved", a.DNS)
+	}
+	if l := a.Locks.DNSToken; l == nil || l.Var != "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE" || l.Value != "" || l.Stored != "" {
+		t.Errorf("locks.dnsToken = %+v, want only the variable's name", l)
 	}
 }
 
@@ -782,4 +806,182 @@ func TestPutACMEProfileDuringARunIsRefused(t *testing.T) {
 	if got := f.status(t).ACME; got.Profile != "" || got.ActiveRun == nil || got.ActiveRun.Outcome != "running" {
 		t.Errorf("profile %q active run %+v, want the profile unchanged and the run shown as running", got.Profile, got.ActiveRun)
 	}
+}
+
+// The actions TIERPLAN_ACME fixes answer 409 acme_locked with the variable's name and nothing changed
+// (phase 16, D-04, D-17): Issue and Renew now with the variable off, Stop with either value; Issue stays
+// allowed with it on.
+func TestHTTPSACMEActionsLockedByTheEnvironment(t *testing.T) {
+	t.Parallel()
+	lockedDetail := func(t *testing.T, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		acmeProblemOf(t, rec, http.StatusConflict, "acme_locked")
+		var p struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Detail != "Set by the TIERPLAN_ACME environment variable." {
+			t.Errorf("detail = %q, want it to name the variable and nothing else", p.Detail)
+		}
+	}
+	on, off := true, false
+
+	t.Run("off", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &off}})
+		f.register(t, "")
+		for _, path := range []string{"/api/https/acme/issue", "/api/https/acme/renew", "/api/https/acme/stop"} {
+			lockedDetail(t, f.send(t, http.MethodPost, path, ""))
+		}
+		if n := f.ordersSeen(); n != 0 {
+			t.Errorf("the CA saw %d orders from refused actions, want none", n)
+		}
+	})
+	t.Run("on", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &on}})
+		f.register(t, "")
+		lockedDetail(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""))
+		// Issue is the manual retry and stays allowed.
+		f.awaitRun(t, startRun(t, f.issue(t)))
+		if n := f.ordersSeen(); n != 1 {
+			t.Errorf("the CA saw %d orders, want the one the allowed Issue placed", n)
+		}
+		// With a certificate stored, Renew now is allowed and Stop is still refused.
+		lockedDetail(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""))
+	})
+}
+
+// problemDetail is the detail of a problem answer.
+func problemDetail(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var p struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	return p.Detail
+}
+
+// A registration against TIERPLAN_ACME_EMAIL or TIERPLAN_ACME_ACCEPT_TOS answers 409 with the field's own
+// problem type and creates no account; the variable's address is used when none is typed (phase 16, D-17,
+// UI-SPEC A2, A3). The detail names the variable and never an address.
+func TestRegisterACMEAccountLockedByTheEnvironment(t *testing.T) {
+	t.Parallel()
+	env := config.ACMEEnv{Email: "ops@example.com", AcceptTOS: true}
+
+	for _, tc := range []struct {
+		name, body, ptype, variable string
+	}{
+		{"a different email", `{"agreeTos":true,"email":"other@example.org"}`, "acme_email_locked", "TIERPLAN_ACME_EMAIL"},
+		{"terms not agreed", `{"agreeTos":false,"email":"ops@example.com"}`, "acme_tos_locked", "TIERPLAN_ACME_ACCEPT_TOS"},
+		{"terms left out", `{}`, "acme_tos_locked", "TIERPLAN_ACME_ACCEPT_TOS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newACMEFix(t, acmeOpts{env: env})
+			rec := f.send(t, http.MethodPost, "/api/https/acme/account", tc.body)
+			acmeProblemOf(t, rec, http.StatusConflict, tc.ptype)
+			if got, want := problemDetail(t, rec), "Set by the "+tc.variable+" environment variable."; got != want {
+				t.Errorf("detail = %q, want %q", got, want)
+			}
+			if strings.Contains(rec.Body.String(), "ops@example.com") || strings.Contains(rec.Body.String(), "other@example.org") {
+				t.Errorf("the answer shows an address: %s", rec.Body)
+			}
+			if n := len(f.fake.AccountsSeen()); n != 0 {
+				t.Errorf("the CA created %d accounts from a refused registration, want none", n)
+			}
+			if f.status(t).ACME.Account != nil {
+				t.Error("the status shows an account after a refused registration")
+			}
+		})
+	}
+
+	t.Run("no email typed takes the variable's", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: env})
+		if rec := f.send(t, http.MethodPost, "/api/https/acme/account", `{"agreeTos":true}`); rec.Code != http.StatusCreated {
+			t.Fatalf("POST account: %d %s, want 201", rec.Code, rec.Body)
+		}
+		if got := f.fake.AccountsSeen(); len(got) != 1 || !slices.Equal(got[0].Contact, []string{"mailto:ops@example.com"}) {
+			t.Errorf("the CA saw %+v, want one account with the variable's address", got)
+		}
+		if a := f.status(t).ACME.Account; a == nil || a.Contact != "ops@example.com" {
+			t.Errorf("account = %+v, want the contact ops@example.com", a)
+		}
+	})
+}
+
+// While TIERPLAN_ACME_PROFILE is set, a different profile answers 409 acme_profile_locked and stores
+// nothing, and the variable's own value is accepted without a write.
+func TestPutACMEProfileLockedByTheEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Profile: "shortlived"}})
+
+	rec := f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":"classic"}`)
+	acmeProblemOf(t, rec, http.StatusConflict, "acme_profile_locked")
+	if got, want := problemDetail(t, rec), "Set by the TIERPLAN_ACME_PROFILE environment variable."; got != want {
+		t.Errorf("detail = %q, want %q", got, want)
+	}
+	rec = f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":""}`)
+	acmeProblemOf(t, rec, http.StatusConflict, "acme_profile_locked")
+
+	rec = f.send(t, http.MethodPut, "/api/https/acme/profile", `{"profile":"shortlived"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT the variable's own profile: %d %s, want 200", rec.Code, rec.Body)
+	}
+	st, err := f.store.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Profile != "" {
+		t.Errorf("stored profile = %q, want nothing stored by a refused write or an echo", st.Profile)
+	}
+}
+
+// The status carries one entry for each field a variable fixes, with the variable's name, its value and
+// the stored value beneath it; a field no variable fixes has none. The terms agreement has no stored value.
+func TestHTTPSACMEStatusCarriesTheLocks(t *testing.T) {
+	t.Parallel()
+	off := false
+	f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &off, Email: "ops@example.com", AcceptTOS: true, Profile: "shortlived"}})
+	f.register(t, "")
+
+	l := f.status(t).ACME.Locks
+	check := func(name string, got *api.HTTPSLockBody, want api.HTTPSLockBody) {
+		t.Helper()
+		if got == nil || *got != want {
+			t.Errorf("locks.%s = %+v, want %+v", name, got, want)
+		}
+	}
+	check("acme", l.ACME, api.HTTPSLockBody{Var: "TIERPLAN_ACME", Value: "off", Stored: "off"})
+	check("email", l.Email, api.HTTPSLockBody{Var: "TIERPLAN_ACME_EMAIL", Value: "ops@example.com"})
+	check("acceptTos", l.AcceptTOS, api.HTTPSLockBody{Var: "TIERPLAN_ACME_ACCEPT_TOS", Value: "true"})
+	check("profile", l.Profile, api.HTTPSLockBody{Var: "TIERPLAN_ACME_PROFILE", Value: "shortlived"})
+
+	none := newACMEFix(t, acmeOpts{}).status(t).ACME.Locks
+	if none != (api.HTTPSLocksBody{}) {
+		t.Errorf("locks = %+v with no variable set, want no entry", none)
+	}
+}
+
+// Stop using Let's Encrypt is refused while HSTS is on: 409 hsts_on telling the admin to turn HSTS off first,
+// with nothing stopped. Once HSTS is off the request reaches the manager's other checks (D-26, T-16-41).
+func TestStopACMEIsRefusedWhileHSTSIsOnThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	var on atomic.Bool
+	on.Store(true)
+	f := newACMEFix(t, acmeOpts{hstsOn: on.Load})
+
+	rec := f.send(t, http.MethodPost, "/api/https/acme/stop", "")
+	acmeProblemOf(t, rec, http.StatusConflict, "hsts_on")
+	if !strings.Contains(rec.Body.String(), "HSTS is on. Turn it off first.") {
+		t.Errorf("body = %s, want the instruction to turn HSTS off first", rec.Body)
+	}
+
+	on.Store(false)
+	acmeProblemOf(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""), http.StatusConflict, "acme_not_active")
 }

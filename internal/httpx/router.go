@@ -77,14 +77,11 @@ type Options struct {
 	PublicOrigin func() string
 	// Logger receives policy warnings and errors. Nil means slog.Default().
 	Logger *slog.Logger
-	// HSTS decides per request whether to send Strict-Transport-Security. It
-	// should be true when the request arrived over TLS or the public URL is
-	// https (D-37). Nil never sends it.
-	HSTS func(*http.Request) bool
+	// HSTS decides per request what Strict-Transport-Security carries: the whole header value, such
+	// as "max-age=300", or "" to send none. The value is the caller's to decide and to keep safe
+	// (D-10): the router only passes it through. Nil never sends the header.
+	HSTS func(*http.Request) string
 }
-
-// hstsMaxAge is one year, in seconds.
-const hstsMaxAge = "max-age=31536000"
 
 // Router is the chi mux, the huma API and the registry of registered routes.
 type Router struct {
@@ -239,18 +236,20 @@ func writeProblemType(w http.ResponseWriter, status int, ptype, detail string) {
 	_, _ = w.Write(body)
 }
 
-func securityHeaders(hsts func(*http.Request) bool) func(http.Handler) http.Handler {
+func securityHeaders(hsts func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			h := w.Header()
 			h.Set("Content-Security-Policy", contentSecurityPolicy)
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "no-referrer")
-			// Sent only where https is how the browser reached us: on plain
-			// HTTP the header is ignored, and sending it from an http public
-			// URL would pin the host to a scheme it may not serve.
-			if hsts != nil && hsts(req) {
-				h.Set("Strict-Transport-Security", hstsMaxAge)
+			// Whether to send it, and with what lifetime, is the hook's decision (D-10): it
+			// answers "" for a request that did not come over TLS and for a certificate a
+			// browser cannot be asked to trust for the lifetime it would be told.
+			if hsts != nil {
+				if v := hsts(req); v != "" {
+					h.Set("Strict-Transport-Security", v)
+				}
 			}
 			next.ServeHTTP(w, req)
 		})

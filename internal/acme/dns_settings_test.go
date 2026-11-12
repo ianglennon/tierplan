@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -1013,5 +1014,376 @@ func TestSaveValidationCancelledRequestStoresNothing(t *testing.T) {
 	}
 	if e.mgr.runActive() {
 		t.Error("the DNS slot is still held after the save was cancelled")
+	}
+}
+
+// The DNS-01 locks of the environment (phase 16, SET-02, D-03, D-05, D-06, D-17).
+
+// envDNSVars are the variables of an install that describes DNS-01 entirely by environment: the
+// challenge, the provider with its token (from a file) and the resolvers.
+func envDNSVars(token string, resolvers ...string) config.ACMEEnv {
+	return config.ACMEEnv{
+		Challenge: ChallengeDNS01, DNSProvider: dnsProviderID,
+		CloudflareToken: token, TokenVar: config.EnvCloudflareTokenFile,
+		Resolvers: resolvers, ResolversSet: true,
+	}
+}
+
+// withEnv rebuilds the environment's manager over the same data with env as the variables.
+func (e *dnsEnv) withEnv(env config.ACMEEnv) {
+	e.env = env
+	e.mgr = e.build(false)
+}
+
+// requireDNSLocked fails the test unless err is the ErrLocked of field, answered as problem, that names the
+// variable and never holds secret.
+func requireDNSLocked(t *testing.T, err error, field, variable, problem string, secrets ...string) {
+	t.Helper()
+	var locked *ErrLocked
+	if !errors.As(err, &locked) {
+		t.Fatalf("error = %v, want an ErrLocked for %s", err, field)
+	}
+	if locked.Field != field || locked.Var != variable || locked.Problem != problem {
+		t.Errorf("ErrLocked = %+v, want field %s, variable %s and problem %s", locked, field, variable, problem)
+	}
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(err.Error(), secret) {
+			t.Errorf("the error %q holds a secret", err)
+		}
+	}
+}
+
+func TestEnvDNSLocksReportEveryVariable(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.save(ChallengeHTTP01, []string{"8.8.8.8:53"})
+
+	free, err := e.mgr.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := free.Locks; l.ChallengeType != nil || l.DNSProvider != nil || l.DNSToken != nil || l.Resolvers != nil {
+		t.Errorf("locks with no variables = %+v, want none of the four", l)
+	}
+	if free.DNS.TokenSource != TokenSourceStored || !free.DNS.TokenSaved {
+		t.Errorf("token source = %q saved %v, want stored and saved", free.DNS.TokenSource, free.DNS.TokenSaved)
+	}
+	e.forgetToken()
+	if none, err := e.mgr.Status(ctx); err != nil || none.DNS.TokenSource != TokenSourceNone || none.DNS.TokenSaved {
+		t.Errorf("with no token: source %q saved %v (%v), want none and not saved", none.DNS.TokenSource, none.DNS.TokenSaved, err)
+	}
+
+	e.withEnv(envDNSVars(dnsToken, "1.1.1.1:53", "9.9.9.9:53"))
+	st, err := e.mgr.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]*Lock{
+		"challenge": {Var: "TIERPLAN_ACME_CHALLENGE", Value: "dns-01", Stored: "http-01"},
+		"provider":  {Var: "TIERPLAN_DNS_PROVIDER", Value: dnsProviderID, Stored: dnsProviderID},
+		"token":     {Var: "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE"},
+		"resolvers": {Var: "TIERPLAN_DNS_RESOLVERS", Value: "1.1.1.1:53,9.9.9.9:53", Stored: "8.8.8.8:53"},
+	}
+	got := map[string]*Lock{
+		"challenge": st.Locks.ChallengeType, "provider": st.Locks.DNSProvider, "token": st.Locks.DNSToken, "resolvers": st.Locks.Resolvers,
+	}
+	for name, w := range want {
+		if g := got[name]; g == nil || *g != *w {
+			t.Errorf("%s lock = %+v, want %+v", name, g, w)
+		}
+	}
+	if st.ChallengeType != ChallengeDNS01 {
+		t.Errorf("challengeType = %q, want the variable's dns-01", st.ChallengeType)
+	}
+	// The variable's token counts as in use but is not a saved one.
+	if st.DNS.TokenSource != TokenSourceEnv || st.DNS.TokenSaved {
+		t.Errorf("token source = %q saved %v, want env and nothing saved", st.DNS.TokenSource, st.DNS.TokenSaved)
+	}
+	if !slices.Equal(st.DNS.Resolvers, []string{"1.1.1.1:53", "9.9.9.9:53"}) {
+		t.Errorf("resolvers in use = %v, want the variable's", st.DNS.Resolvers)
+	}
+
+	// A saved token beside the variable's: the variable is in use and the saved one is still reported.
+	e.save(ChallengeHTTP01, []string{"8.8.8.8:53"})
+	both, err := e.mgr.Status(ctx)
+	if err != nil || both.DNS.TokenSource != TokenSourceEnv || !both.DNS.TokenSaved {
+		t.Errorf("with both: source %q saved %v (%v), want env and saved", both.DNS.TokenSource, both.DNS.TokenSaved, err)
+	}
+}
+
+// The provider and its token lock together: either variable gives both entries (SET-02, D-05).
+func TestEnvDNSLocksProviderAndTokenLockTogether(t *testing.T) {
+	for name, env := range map[string]config.ACMEEnv{
+		"provider only": {DNSProvider: dnsProviderID},
+		"token only":    {CloudflareToken: dnsToken, TokenVar: config.EnvCloudflareToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newDNSEnv(t, ChallengeHTTP01)
+			e.withEnv(env)
+			st, err := e.mgr.Status(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Locks.DNSProvider == nil || st.Locks.DNSToken == nil {
+				t.Fatalf("locks = provider %+v token %+v, want both", st.Locks.DNSProvider, st.Locks.DNSToken)
+			}
+			if st.Locks.ChallengeType != nil || st.Locks.Resolvers != nil {
+				t.Errorf("locks = challenge %+v resolvers %+v, want them free", st.Locks.ChallengeType, st.Locks.Resolvers)
+			}
+			if v := st.Locks.DNSToken.Var; v != config.EnvCloudflareToken && v != config.EnvCloudflareTokenFile {
+				t.Errorf("token lock variable = %q, want one of the token variables", v)
+			}
+			if v := st.Locks.DNSProvider.Var; v != config.EnvDNSProvider {
+				t.Errorf("provider lock variable = %q, want %s", v, config.EnvDNSProvider)
+			}
+		})
+	}
+}
+
+func TestEnvDNSLocksASaveThatHitsALockStoresNothing(t *testing.T) {
+	ctx := context.Background()
+	const typed = "a-typed-token-that-must-not-appear" //nolint:gosec // G101: a recognisable fake token, not a credential
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.save(ChallengeHTTP01, []string{"8.8.8.8:53"})
+	e.withEnv(config.ACMEEnv{
+		Challenge: ChallengeDNS01, DNSProvider: dnsProviderID, CloudflareToken: dnsToken, TokenVar: config.EnvCloudflareToken,
+		Resolvers: []string{"1.1.1.1:53", "9.9.9.9:53"}, ResolversSet: true,
+	})
+	before := e.state()
+	api := func(list ...string) *[]string { return &list }
+
+	for name, c := range map[string]struct {
+		in       ValidationInput
+		field    string
+		variable string
+		problem  string
+	}{
+		"another method": {
+			in:    ValidationInput{ChallengeType: ChallengeHTTP01},
+			field: LockChallenge, variable: "TIERPLAN_ACME_CHALLENGE", problem: "acme_challenge_locked",
+		},
+		"an unknown method": {
+			in:    ValidationInput{ChallengeType: "tls-alpn-01"},
+			field: LockChallenge, variable: "TIERPLAN_ACME_CHALLENGE", problem: "acme_challenge_locked",
+		},
+		"a typed token": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Token: typed},
+			field: LockDNSToken, variable: "TIERPLAN_CLOUDFLARE_API_TOKEN", problem: "acme_dns_token_locked",
+		},
+		"another resolver list": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: api("8.8.8.8")},
+			field: LockResolvers, variable: "TIERPLAN_DNS_RESOLVERS", problem: "acme_resolvers_locked",
+		},
+		"a reordered list": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: api("9.9.9.9", "1.1.1.1")},
+			field: LockResolvers, variable: "TIERPLAN_DNS_RESOLVERS", problem: "acme_resolvers_locked",
+		},
+		"a shorter list": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: api("1.1.1.1")},
+			field: LockResolvers, variable: "TIERPLAN_DNS_RESOLVERS", problem: "acme_resolvers_locked",
+		},
+		"an empty list": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: api()},
+			field: LockResolvers, variable: "TIERPLAN_DNS_RESOLVERS", problem: "acme_resolvers_locked",
+		},
+		"an entry that cannot be parsed": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: api("bad/entry")},
+			field: LockResolvers, variable: "TIERPLAN_DNS_RESOLVERS", problem: "acme_resolvers_locked",
+		},
+		"the echo of every field but a typed token": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Token: typed, Resolvers: api("1.1.1.1", "9.9.9.9")},
+			field: LockDNSToken, variable: "TIERPLAN_CLOUDFLARE_API_TOKEN", problem: "acme_dns_token_locked",
+		},
+		"the echo of the challenge with another list": {
+			in:    ValidationInput{ChallengeType: ChallengeDNS01, Resolvers: api("1.1.1.1")},
+			field: LockResolvers, variable: "TIERPLAN_DNS_RESOLVERS", problem: "acme_resolvers_locked",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			builtBefore := e.built.Load()
+			res, err := e.mgr.SaveValidation(ctx, c.in)
+			requireDNSLocked(t, err, c.field, c.variable, c.problem, typed, dnsToken)
+			if res.Saved || res.Test != nil {
+				t.Errorf("result = %+v, want nothing saved and no test", res)
+			}
+			if e.built.Load() != builtBefore {
+				t.Error("a provider was built: the typed token was tested although the save was refused")
+			}
+			e.unchanged(before, dnsToken)
+			if _, _, open, err := e.store.OpenOrder(ctx); err != nil || open {
+				t.Errorf("open order = %v (%v), want none", open, err)
+			}
+		})
+	}
+}
+
+func TestEnvDNSLocksAnEchoIsANoOp(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.save(ChallengeHTTP01, []string{"8.8.8.8:53"})
+	e.withEnv(config.ACMEEnv{
+		Challenge: ChallengeDNS01, DNSProvider: dnsProviderID, CloudflareToken: dnsToken, TokenVar: config.EnvCloudflareToken,
+		Resolvers: []string{"1.1.1.1:53", "9.9.9.9:53"}, ResolversSet: true,
+	})
+	before := e.state()
+	builtBefore := e.built.Load()
+
+	for name, in := range map[string]ValidationInput{
+		"the challenge alone":                 {ChallengeType: ChallengeDNS01},
+		"the challenge in upper case":         {ChallengeType: "DNS-01"},
+		"every field, as the page sends them": {ChallengeType: ChallengeDNS01, Resolvers: &[]string{"1.1.1.1:53", "9.9.9.9:53"}},
+		"the list spelled another way":        {ChallengeType: ChallengeDNS01, Resolvers: &[]string{"1.1.1.1", "9.9.9.9", "1.1.1.1:53"}},
+	} {
+		res, err := e.mgr.SaveValidation(ctx, in)
+		if err != nil || !res.Saved || res.Test != nil {
+			t.Fatalf("%s: SaveValidation = %+v, %v, want an accepted save with no token test", name, res, err)
+		}
+		e.unchanged(before, dnsToken)
+	}
+	if st := e.state(); st.ChallengeType != ChallengeHTTP01 || !slices.Equal(st.DNSResolvers, []string{"8.8.8.8:53"}) {
+		t.Errorf("stored challenge %q resolvers %v, want http-01 and 8.8.8.8:53: the variables are never stored", st.ChallengeType, st.DNSResolvers)
+	}
+	if e.built.Load() != builtBefore {
+		t.Error("a provider was built by an echo")
+	}
+
+	// A resolver variable that is set but empty means the zone's own name servers, and fixes that.
+	e.withEnv(config.ACMEEnv{ResolversSet: true})
+	if res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeHTTP01, Resolvers: &[]string{}}); err != nil || !res.Saved {
+		t.Errorf("echo of the empty list = %+v, %v, want accepted", res, err)
+	}
+	_, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeHTTP01, Resolvers: &[]string{"1.1.1.1"}})
+	requireDNSLocked(t, err, LockResolvers, "TIERPLAN_DNS_RESOLVERS", "acme_resolvers_locked")
+	e.unchanged(before, dnsToken)
+}
+
+// An echo of a locked challenge closes no order; only a change of the stored challenge does.
+func TestEnvDNSLocksAnEchoedChallengeLeavesTheOpenOrder(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	release := e.crashHeld(OrderRequest{Kind: KindIssue, Names: []string{testHost}})
+	defer release()
+	e.openOrder()
+	e.withEnv(config.ACMEEnv{Challenge: ChallengeDNS01})
+
+	if res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01}); err != nil || !res.Saved {
+		t.Fatalf("SaveValidation = %+v, %v", res, err)
+	}
+
+	if _, _, open, err := e.store.OpenOrder(ctx); err != nil || !open {
+		t.Errorf("open order = %v (%v), want it left open by an echo", open, err)
+	}
+	if got := e.state().ChallengeType; got != ChallengeHTTP01 {
+		t.Errorf("stored challenge = %q, want http-01", got)
+	}
+}
+
+func TestEnvDNSLocksTheEnvironmentsTokenSatisfiesDNS01(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.forgetToken()
+
+	_, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01})
+	if !errors.Is(err, ErrDNSTokenRequired) {
+		t.Fatalf("with no token anywhere: %v, want ErrDNSTokenRequired", err)
+	}
+
+	e.withEnv(config.ACMEEnv{DNSProvider: dnsProviderID, CloudflareToken: dnsToken, TokenVar: config.EnvCloudflareToken})
+	res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01})
+	if err != nil || !res.Saved || res.Test != nil {
+		t.Fatalf("with the environment's token: %+v, %v, want saved with no token test", res, err)
+	}
+	if got := e.state().ChallengeType; got != ChallengeDNS01 {
+		t.Errorf("stored challenge = %q, want dns-01", got)
+	}
+	if got := e.savedToken(); got != "" {
+		t.Errorf("saved token = %q, want the environment's token never stored", got)
+	}
+}
+
+func TestEnvDNSLocksTestTokenTestsTheEnvironmentsToken(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	if err := e.store.SaveDNSToken(ctx, dnsProviderID, "saved-but-wrong-token", e.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	e.withEnv(config.ACMEEnv{DNSProvider: dnsProviderID, CloudflareToken: dnsToken, TokenVar: config.EnvCloudflareToken})
+	before := e.state()
+
+	tt := e.testToken(TestRequest{})
+	if !tt.Passed || len(tt.Names) != 1 {
+		t.Fatalf("result = %+v, want the environment's token to pass, not the saved one", tt)
+	}
+	if got := e.savedToken(); got != "saved-but-wrong-token" {
+		t.Errorf("saved token = %q, want it untouched", got)
+	}
+	if st := e.state(); st.ChallengeType != before.ChallengeType || st.ValidationUntested != before.ValidationUntested {
+		t.Errorf("state = %q untested %v, want it unchanged", st.ChallengeType, st.ValidationUntested)
+	}
+
+	// With no saved token at all the environment's still tests.
+	e.forgetToken()
+	if tt := e.testToken(TestRequest{}); !tt.Passed {
+		t.Errorf("result = %+v, want the environment's token to pass with none saved", tt)
+	}
+	if got := e.savedToken(); got != "" {
+		t.Errorf("saved token = %q, want the test to store nothing", got)
+	}
+
+	// A token typed while the variable rules is refused before anything is tried.
+	builtBefore := e.built.Load()
+	_, err := e.mgr.TestToken(ctx, TestRequest{Token: dnsToken})
+	requireDNSLocked(t, err, LockDNSToken, "TIERPLAN_CLOUDFLARE_API_TOKEN", "acme_dns_token_locked", dnsToken)
+	if e.built.Load() != builtBefore {
+		t.Error("a provider was built for a refused typed token")
+	}
+}
+
+func TestEnvDNSLocksTestTokenWithLockedResolvers(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.withEnv(config.ACMEEnv{Resolvers: []string{e.dns.Addr()}, ResolversSet: true})
+
+	// The variable's list answers the test, the saved list notwithstanding; its echo is accepted.
+	if tt := e.testToken(TestRequest{Resolvers: &[]string{e.dns.Addr()}}); !tt.Passed {
+		t.Errorf("result = %+v, want a pass through the variable's resolvers", tt)
+	}
+	_, err := e.mgr.TestToken(ctx, TestRequest{Resolvers: &[]string{"1.1.1.1"}})
+	requireDNSLocked(t, err, LockResolvers, "TIERPLAN_DNS_RESOLVERS", "acme_resolvers_locked")
+}
+
+// A well-formed token from the environment that the provider refuses is a test result with the classified
+// error, never an error of the call (D-06).
+func TestEnvDNSLocksARefusedEnvironmentTokenIsAResult(t *testing.T) {
+	e := newDNSEnv(t, ChallengeHTTP01)
+	e.withEnv(config.ACMEEnv{DNSProvider: dnsProviderID, CloudflareToken: refusedToken, TokenVar: config.EnvCloudflareToken})
+
+	tt := e.testToken(TestRequest{})
+
+	if tt.Passed || len(tt.Names) != 1 {
+		t.Fatalf("result = %+v, want one name that failed", tt)
+	}
+	if got := tt.Names[0].Steps[0]; got.State != TestFailed || got.Class != dns.ClassTokenInvalid {
+		t.Errorf("zone row = %+v, want failed as dns_token_invalid", got)
+	}
+	if strings.Contains(e.logs.String(), refusedToken) {
+		t.Error("the log holds the token")
+	}
+}
+
+func TestEnvDNSLocksRemoveTokenIsRefusedWhileAVariableRules(t *testing.T) {
+	ctx := context.Background()
+	e := newDNSEnv(t, ChallengeHTTP01) // a saved token and http-01: the removal is otherwise allowed
+	if err := e.mgr.RemoveToken(ctx); err != nil {
+		t.Fatalf("RemoveToken with no variable: %v", err)
+	}
+	e.save(ChallengeHTTP01, nil)
+	e.withEnv(config.ACMEEnv{DNSProvider: dnsProviderID, CloudflareToken: dnsToken, TokenVar: config.EnvCloudflareTokenFile})
+
+	err := e.mgr.RemoveToken(ctx)
+
+	requireDNSLocked(t, err, LockDNSToken, "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE", "acme_dns_token_locked", dnsToken)
+	if got := e.savedToken(); got != dnsToken {
+		t.Errorf("saved token = %q, want it still there", got)
 	}
 }

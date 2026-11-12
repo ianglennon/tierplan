@@ -93,6 +93,35 @@ func newCertSource(ctx context.Context, cfg config.Config, store tlsCertStore, p
 	return src, tlsKindSelfSigned, nil
 }
 
+// selfSignedIdentityPin makes sure the install has a self-signed identity and returns its SPKI pin,
+// for an install that serves a certificate from files (D-21). It builds the wanted names the way
+// newSelfSignedSource does and calls prepareSelfSigned once, which loads the stored row or imports or
+// generates one and seals the key, and refuses to replace a key it cannot read. It starts no refresh
+// loop and installs nothing: the cert files stay the only served source. The mirror file
+// prepareSelfSigned writes is not read in this mode, because the healthcheck reads the cert file.
+// Keeping the identity means welcomes can list its pin, and an install that later drops the files
+// serves the key every agent already holds.
+func selfSignedIdentityPin(ctx context.Context, store tlsCertStore, cfg config.Config, publicURL, agentURL func() string, now func() time.Time) (string, error) {
+	if now == nil {
+		now = time.Now
+	}
+	if publicURL == nil {
+		publicURL = func() string { return "" }
+	}
+	if agentURL == nil {
+		agentURL = func() string { return "" }
+	}
+	cert, _, err := prepareSelfSigned(ctx, store, cfg.DataDir, wantedNames(publicURL(), agentURL()), now())
+	if err != nil {
+		return "", err
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return "", fmt.Errorf("read the self-signed certificate: %w", err)
+	}
+	return authn.SPKIPin(leaf), nil
+}
+
 // certSource serves the current certificate and keeps it fresh. It holds the
 // pair in memory, so a failed renewal or reload leaves the working certificate
 // in place. A handshake only loads an atomic pointer: it takes no lock, reads no

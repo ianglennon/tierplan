@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/dnstest"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
@@ -64,6 +65,9 @@ type dnsEnv struct {
 
 	// built counts the providers the manager built, and so the tokens it opened for one.
 	built atomic.Int32
+
+	// env is what the TIERPLAN_ACME* variables say, applied by build; the zero value is no variables.
+	env config.ACMEEnv
 
 	// lookupIP is the manager's host lookup (DNSDeps.LookupIP), applied by build; nil is the default.
 	lookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
@@ -145,7 +149,7 @@ func (e *dnsEnv) build(certFiles bool) *Manager {
 	return NewManager(Deps{
 		Store: e.store, Client: e.client, Challenges: e.tokens, Jobs: e.hub, Installer: e.inst, Clock: e.clock,
 		PublicURL: e.urls.getPublic, AgentURL: e.urls.getAgent, BasePath: e.urls.getBase,
-		CertFiles: certFiles, Log: slog.New(slog.NewTextHandler(e.logs, nil)),
+		CertFiles: certFiles, Log: slog.New(slog.NewTextHandler(e.logs, nil)), Env: e.env,
 		Jitter: func() float64 { return 0 },
 		Rand:   func(int64) int64 { return 0 },
 		DNS: DNSDeps{

@@ -653,6 +653,59 @@ func TestRestorePausesACMEWhenTheBackupHasAnAccount(t *testing.T) {
 	}
 }
 
+// TestRestoreRestartsTheHSTSRamp: a backup taken at a long HSTS lifetime restores to step 0. The
+// admin's choice (hsts_enabled) and the bound on what browsers may still hold (hsts_held_until)
+// travel; the step and its start do not, so a clone starts again at the shortest lifetime.
+func TestRestoreRestartsTheHSTSRamp(t *testing.T) {
+	f := newExportFixture(t)
+	const heldUntil = int64(1_900_000_000_000_000_000)
+	f.exec(t, `UPDATE https_state SET hsts_enabled = 1, hsts_host = 'tierplan.example.org', hsts_step = 4,
+		hsts_step_since = 1700000000000000000, hsts_held_until = ?, updated_at = 1 WHERE id = 1`, heldUntil)
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	staged, err := backup.Stage(ctx, bytes.NewReader(file), []byte(exportPass), dataDir, schemaOfBinary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.Discard()
+	o := restoreOptions
+	o.Now = func() time.Time { return at }
+	if err := staged.Prepare(ctx, targetVault(t), o); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if _, err := staged.Swap(ctx, dataDir, at); err != nil {
+		t.Fatalf("Swap: %v", err)
+	}
+
+	st, err := store.Open(ctx, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var enabled, step, since, held, updated int64
+	var host string
+	if err := st.Read.QueryRow(`SELECT hsts_enabled, hsts_host, hsts_step, hsts_step_since, hsts_held_until, updated_at
+		FROM https_state WHERE id = 1`).Scan(&enabled, &host, &step, &since, &held, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 || host != "tierplan.example.org" || held != heldUntil {
+		t.Errorf("https_state = enabled %d host %q held_until %d; want the choice and the held bound kept (1, tierplan.example.org, %d)",
+			enabled, host, held, heldUntil)
+	}
+	if step != 0 || since != 0 {
+		t.Errorf("https_state ramp = step %d since %d; want 0, 0 after a restore", step, since)
+	}
+	if updated != at.UnixNano() {
+		t.Errorf("https_state.updated_at = %d, want the restore time %d", updated, at.UnixNano())
+	}
+}
+
 func TestRestoreDoesNotPauseACMEWithoutAnAccount(t *testing.T) {
 	f := newExportFixture(t)
 	_, file, err := f.export(t, exportPass, testOptions)

@@ -375,3 +375,23 @@ func TestEveryCoreGetsItsOwnHTTPClient(t *testing.T) {
 		t.Errorf("timeout = %v, want 30s", a.Timeout)
 	}
 }
+
+// TestEnvChallengeLiteralsMatchTheACMEConstants pins the literals config accepts for
+// TIERPLAN_ACME_CHALLENGE to the challenge names this package uses; config cannot import acme.
+func TestEnvChallengeLiteralsMatchTheACMEConstants(t *testing.T) {
+	for _, challenge := range []string{ChallengeHTTP01, ChallengeDNS01} {
+		env := func(k string) string {
+			if k == config.EnvACMEChallenge {
+				return challenge
+			}
+			return ""
+		}
+		c, err := config.Load(nil, env, func(string) ([]byte, error) { return nil, errors.New("no files") })
+		if err != nil {
+			t.Fatalf("%s=%q was refused: %v", config.EnvACMEChallenge, challenge, err)
+		}
+		if c.ACME.Challenge != challenge {
+			t.Errorf("%s=%q loaded as %q", config.EnvACMEChallenge, challenge, c.ACME.Challenge)
+		}
+	}
+}

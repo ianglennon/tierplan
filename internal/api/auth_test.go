@@ -250,6 +250,9 @@ type authFixture struct {
 	// tlsPin is the pin TierPlan's own self-signed certificate would have; empty
 	// means it serves none (plan 02-09).
 	tlsPin string
+	// tlsTrust is how agents installed now trust the server: pin, public or unverified. Empty leaves
+	// the answer to be derived from tlsPin.
+	tlsTrust string
 	// agentSvc and liveAgents, when set, replace the agents service the agent routes
 	// use and say which tunnel hub the node list reads live state from (plan 02-15).
 	// A test with a real hub sets them to the tunneltest server's, so a revoke closes
@@ -363,7 +366,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
 		Envs: f.envSvc, Agents: agents.NewService(f.st, f.v, f.aud, f.clk.now), Instance: f.inst,
-		TLSPin: func() string { return f.tlsPin }, Checker: checker, Updater: f.updater, Log: log,
+		TLSPin: func() string { return f.tlsPin }, TLSTrust: func() string { return f.tlsTrust }, Checker: checker, Updater: f.updater, Log: log,
 	})
 	if f.fleet != nil && f.envSvc != nil {
 		fleetDeps := *f.fleet
@@ -383,7 +386,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		foldedNodes = f.envSvc
 	}
 	api.RegisterAgents(r, api.AgentsDeps{
-		Agents: agentSvc, Local: foldedNodes, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
+		Agents: agentSvc, Local: foldedNodes, Live: f.liveAgents, Cluster: f.agentCluster, Instance: f.inst, TLSPin: func() string { return f.tlsPin }, TLSTrust: func() string { return f.tlsTrust },
 		Updater: f.updater, ServerVersion: f.serverVersion, Log: log,
 	})
 	gitx.InstallTransport(registry.NewEgressPolicy(nil))

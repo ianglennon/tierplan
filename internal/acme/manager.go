@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/cloudflare"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
@@ -61,6 +62,9 @@ var (
 	// ErrCertFiles means TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set: the files are
 	// served and the ACME setup is disabled (D-12, D-13).
 	ErrCertFiles = errors.New("certificate files are configured, so Let's Encrypt is disabled")
+	// ErrHSTSOn means HSTS is on, so Let's Encrypt cannot be stopped: browsers hold a policy for the host
+	// and would refuse the self-signed certificate that replaces it. Turn HSTS off first (D-26).
+	ErrHSTSOn = errors.New("HSTS is on, so Let's Encrypt cannot be stopped") //nolint:staticcheck // ST1005: Let's Encrypt is a proper name, and this is the text the screens show
 	// ErrNotActive means there is no Let's Encrypt certificate in use to renew or stop.
 	ErrNotActive = errors.New("Let's Encrypt is not in use") //nolint:staticcheck // ST1005: Let\'s Encrypt is a proper name, and this is the text the screens show
 	// ErrNotPaused means there is nothing to resume.
@@ -124,6 +128,20 @@ type Deps struct {
 	DialHosts func() []string
 	// CertFiles is whether TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set.
 	CertFiles bool
+	// HSTSOn is the effective HSTS setting. Stop using Let's Encrypt is refused while it reports true,
+	// because serving the self-signed certificate under a policy browsers hold would lock them out
+	// (D-26). Nil is off. The expiry fallback does not ask it: that path withdraws the header itself.
+	HSTSOn func() bool
+	// HSTSHold runs fn while the HSTS setting cannot change, so the check of HSTSOn and the swap to the
+	// self-signed certificate in Stop are one step and a toggle cannot slip in between them (D-26). Nil
+	// runs fn at once.
+	HSTSHold func(fn func() error) error
+	// Env is what the TIERPLAN_ACME* variables say. They override the stored settings at the decision
+	// sites in env.go and are never saved (D-02).
+	Env config.ACMEEnv
+	// Ready is closed once the listener is bound, so an order placed at start can be validated; nil
+	// means ready.
+	Ready <-chan struct{}
 	// DNS is what DNS-01 works with; its nil fields take the production defaults.
 	DNS DNSDeps
 	Log *slog.Logger
@@ -174,6 +192,9 @@ type Manager struct {
 	// refusal that was logged (scheduler.go).
 	wire       servedCert
 	installErr string
+	// envNote is the last refusal of the start-time issue that was logged, so one that lasts is logged
+	// once and not every tick (envissue.go).
+	envNote string
 
 	// suggest is the last answer of the DNS-01 suggestion's host lookup (dns_status.go).
 	suggest suggestCache
@@ -250,7 +271,7 @@ func (m *Manager) dialHosts() []string {
 func (m *Manager) preflight(st State) (NameSet, []Refusal) {
 	return Preflight(PreflightInput{
 		PublicURL: m.publicURL(), AgentURL: m.agentURL(), BasePath: m.basePath(),
-		ChallengeType: challengeOf(st), DirectoryOverridden: m.d.Client.Directory().Overridden,
+		ChallengeType: m.challenge(st), DirectoryOverridden: m.d.Client.Directory().Overridden,
 		DialHosts: m.dialHosts(),
 	})
 }
@@ -329,7 +350,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if st.Mode != ModeActive {
+	if m.mode(st) != ModeActive {
 		return nil
 	}
 	chain, key, found, err := m.d.Store.Certificate(ctx)
@@ -360,8 +381,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Register creates the Let's Encrypt account (D-06).
+// Register creates the Let's Encrypt account (D-06). While TIERPLAN_ACME_EMAIL or
+// TIERPLAN_ACME_ACCEPT_TOS is set the variable decides what is registered (registerTerms), and a request
+// that disagrees is refused with ErrLocked before anything is read or sent.
 func (m *Manager) Register(ctx context.Context, email string, agreeTOS bool) (Account, error) {
+	email, err := m.registerTerms(email, agreeTOS)
+	if err != nil {
+		return Account{}, err
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	if _, err := m.mutable(ctx); err != nil {
@@ -385,7 +412,17 @@ func (m *Manager) Directory(ctx context.Context) (DirectoryMeta, error) {
 // SetProfile saves the certificate profile the next orders ask for; empty is the CA's default. A name
 // the directory does not offer is refused when the directory can be read, and accepted as given when
 // it cannot.
+//
+// While TIERPLAN_ACME_PROFILE is set it decides (D-24): the variable's own value is accepted and changes
+// nothing, since the page echoes what it was shown, and any other value is refused with ErrLocked. Both
+// answers come before anything is read or stored, so a refused request leaves the saved profile as it was.
 func (m *Manager) SetProfile(ctx context.Context, profile string) error {
+	if fixed := m.d.Env.Profile; fixed != "" {
+		if profile == fixed {
+			return nil
+		}
+		return m.lockedProfile()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)
@@ -408,43 +445,32 @@ func (m *Manager) SetProfile(ctx context.Context, profile string) error {
 }
 
 // Issue orders a certificate for the names the URLs say now, in the background. It is the only way
-// new names are ordered (D-05): a URL change, a save or a scheduled round never starts one.
+// new names are ordered by a person (D-05): a URL change, a save or a scheduled round never starts one
+// (TIERPLAN_ACME=on is the one exception, envissue.go).
 //
 // The guards run in this order, each before anything that could reach the CA: certificate files,
 // pause, account, a run in progress, every preflight refusal, the ledger's manual block, and reuse of
-// a stored certificate that already covers the names and is not yet due.
+// a stored certificate that already covers the names and is not yet due (issueLocked).
 func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
+	// TIERPLAN_ACME=off fixes Let's Encrypt off; on leaves Issue allowed, as the manual retry (D-04).
+	if m.envOff() {
+		return RunStart{}, m.lockedACME()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)
 	if err != nil {
 		return RunStart{}, err
 	}
-	if err := m.needAccount(ctx); err != nil {
-		return RunStart{}, err
-	}
-	if m.runActive() {
-		return RunStart{}, ErrRunActive
-	}
-	ns, refusals := m.preflight(st)
-	if len(refusals) > 0 {
-		return RunStart{}, &RefusedError{Refusals: refusals}
-	}
-	if err := m.manualBlock(ctx, st); err != nil {
-		return RunStart{}, err
-	}
-	if rs, reused, err := m.reuse(ctx, st, ns.Names); err != nil || reused {
-		return rs, err
-	}
-	return m.startRun(runParams{
-		trigger: TriggerAdmin, actor: actor, challenge: challengeOf(st),
-		req: OrderRequest{Kind: KindIssue, Names: slices.Clone(ns.Names), Profile: st.Profile},
-	})
+	return m.issueLocked(ctx, st, actor, TriggerAdmin, nil)
 }
 
 // RenewNow renews the certificate now, for the names it already carries: never the names the URLs
 // want today (D-05). It names the certificate it replaces when the CA offers renewal information.
 func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) {
+	if m.envOff() {
+		return RunStart{}, m.lockedACME()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)
@@ -454,7 +480,7 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 	if m.runActive() {
 		return RunStart{}, ErrRunActive
 	}
-	if st.Mode != ModeActive {
+	if m.mode(st) != ModeActive {
 		return RunStart{}, ErrNotActive
 	}
 	leaf, found, err := m.storedLeaf(ctx)
@@ -471,18 +497,18 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 		return RunStart{}, err
 	}
 	return m.startRun(runParams{
-		trigger: TriggerAdmin, actor: actor, challenge: challengeOf(st),
+		trigger: TriggerAdmin, actor: actor, challenge: m.challenge(st),
 		req: m.renewRequest(ctx, st, leaf),
 	})
 }
 
-// renewRequest is the order that renews leaf: its own names, the saved profile, and the certificate
+// renewRequest is the order that renews leaf: its own names, the profile in force (m.profile), and the certificate
 // it replaces when the directory offers renewalInfo and leaf was issued to the account that orders the
 // renewal. A CA refuses to let one account replace a certificate issued to another, so after the CA
 // forgot the account and a new one was registered the renewal names nothing; so does a certificate
 // whose account is not known.
 func (m *Manager) renewRequest(ctx context.Context, st State, leaf *x509.Certificate) OrderRequest {
-	req := OrderRequest{Kind: KindRenew, Names: slices.Clone(leaf.DNSNames), Profile: st.Profile}
+	req := OrderRequest{Kind: KindRenew, Names: slices.Clone(leaf.DNSNames), Profile: m.profile(st)}
 	if meta, err := m.d.Client.Meta(ctx); err != nil || !meta.RenewalInfo {
 		return req
 	}
@@ -541,10 +567,28 @@ func (m *Manager) Resume(ctx context.Context, actor string) error {
 
 // Stop serves the self-signed certificate again and stops renewals (D-14). The account and the stored
 // certificate are kept, so issuing again with the same names is one click and no order. A pause after
-// a restore is not lifted by it.
+// a restore is not lifted by it. It is refused with ErrHSTSOn while the effective HSTS setting is on.
 func (m *Manager) Stop(ctx context.Context, actor string) error {
+	// Either value of TIERPLAN_ACME fixes whether Let's Encrypt is stopped. On locks Stop (D-04); off
+	// leaves nothing to stop, and a Stop would rewrite the stored mode underneath the variable (D-02).
+	if m.d.Env.Enabled != nil {
+		return m.lockedACME()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
+	if m.d.HSTSHold == nil {
+		return m.stopLocked(ctx, actor)
+	}
+	return m.d.HSTSHold(func() error { return m.stopLocked(ctx, actor) })
+}
+
+// stopLocked is Stop with opMu held and, when the HSTS setting is held, the setting unable to change.
+func (m *Manager) stopLocked(ctx context.Context, actor string) error {
+	// With HSTS on, browsers hold a policy for this host that the self-signed certificate cannot
+	// satisfy. The refusal is here and not in the API, so no caller can go around it (D-26).
+	if m.d.HSTSOn != nil && m.d.HSTSOn() {
+		return ErrHSTSOn
+	}
 	if m.d.CertFiles {
 		return ErrCertFiles
 	}
@@ -932,6 +976,10 @@ type runParams struct {
 	req            OrderRequest
 	// challenge is the challenge type the run answers, as saved when the run was started.
 	challenge string
+	// register, when set, is an account the run registers first: the start-time issue of
+	// TIERPLAN_ACME=on has none yet, and registering inside the run charges a failure to the persisted
+	// backoff like any other (envissue.go).
+	register *registerSpec
 }
 
 // startRun starts the one background run. The caller has checked that none is active; the check is
@@ -1017,6 +1065,13 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 	// may have changed since the record was made (D-17). A failure here never stops the order.
 	m.sweepDNS(ctx, false)
 
+	if p.register != nil {
+		if err := m.registerAccount(ctx, steps, *p.register); err != nil {
+			m.failed(ctx, bg, x, steps, err, p)
+			return
+		}
+	}
+
 	solver, err := m.newSolver(bg, steps, p.challenge)
 	if err != nil {
 		m.failed(ctx, bg, x, steps, err, p)
@@ -1040,11 +1095,7 @@ func (m *Manager) newSolver(ctx context.Context, steps *jobSteps, challenge stri
 	if err != nil {
 		return nil, err
 	}
-	provider := st.DNSProvider
-	if provider == "" {
-		provider = defaultDNSProvider
-	}
-	return &dnsSolver{m: m, steps: steps, provider: provider, servers: dnscheck.Resolvers(st.DNSResolvers)}, nil
+	return &dnsSolver{m: m, steps: steps, provider: m.provider(st), servers: dnscheck.Resolvers(m.resolvers(st))}, nil
 }
 
 // failed records a run that did not end in a certificate. What is served is not touched.

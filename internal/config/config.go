@@ -18,9 +18,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/mail"
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +30,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"golang.org/x/net/idna"
+
+	"github.com/ianglennon/tierplan/internal/acme/resolvers"
 )
 
 // The two agent timing settings are named in the table and in the check that
@@ -42,6 +46,41 @@ const (
 	envACMEDirectoryURL = "TIERPLAN_ACME_DIRECTORY_URL"
 	envACMECAFile       = "TIERPLAN_ACME_CA_FILE"
 )
+
+// The environment variables that set TierPlan's HTTPS and ACME behaviour. They are exported so the
+// acme and api packages name a variable in a lock label or a message without repeating the string.
+const (
+	// EnvACME turns Let's Encrypt on or off (on|off).
+	EnvACME = "TIERPLAN_ACME"
+	// EnvACMEAcceptTOS accepts the CA's terms of service; TIERPLAN_ACME=on requires it.
+	EnvACMEAcceptTOS = "TIERPLAN_ACME_ACCEPT_TOS"
+	// EnvACMEEmail is the CA account's contact address.
+	EnvACMEEmail = "TIERPLAN_ACME_EMAIL"
+	// EnvACMEChallenge is the challenge type: http-01 or dns-01.
+	EnvACMEChallenge = "TIERPLAN_ACME_CHALLENGE"
+	// EnvDNSProvider is the DNS provider for dns-01: cloudflare.
+	EnvDNSProvider = "TIERPLAN_DNS_PROVIDER"
+	// EnvCloudflareToken is the Cloudflare API token; EnvCloudflareTokenFile reads it from a file.
+	EnvCloudflareToken     = "TIERPLAN_CLOUDFLARE_API_TOKEN"      //nolint:gosec // G101: a variable name, not a credential
+	EnvCloudflareTokenFile = "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE" //nolint:gosec // G101: a variable name, not a credential
+	// EnvDNSResolvers is the resolver list the dns-01 propagation check queries.
+	EnvDNSResolvers = "TIERPLAN_DNS_RESOLVERS"
+	// EnvACMEProfile is the CA's certificate profile name.
+	EnvACMEProfile = "TIERPLAN_ACME_PROFILE"
+	// EnvHSTS turns the Strict-Transport-Security header on or off.
+	EnvHSTS = "TIERPLAN_HSTS"
+)
+
+// The challenge and provider names the environment accepts. They equal acme.ChallengeHTTP01,
+// acme.ChallengeDNS01 and the one DNS provider; config cannot import acme, so a test in acme pins them.
+const (
+	challengeHTTP01 = "http-01"
+	challengeDNS01  = "dns-01"
+	providerCF      = "cloudflare"
+)
+
+// profileName is what a CA certificate profile name looks like; the API's profile endpoint accepts the same.
+var profileName = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
 
 // redactedMark replaces the value of a set secret in Redacted.
 const redactedMark = "[redacted]"
@@ -86,6 +125,11 @@ type Config struct {
 	// TierPlan's own host. Optional: when it is not there the check says so.
 	HostRouteFile string
 
+	// ACME is the HTTPS and Let's Encrypt side of the environment, parsed and validated once at start.
+	// It is env-only: it is never written to the database, and the ACME manager applies it through
+	// accessors so a set variable locks the matching Settings field (D-02).
+	ACME ACMEEnv
+
 	TLSCertFile string
 	TLSKeyFile  string
 	// ACMEDirectoryURL overrides the ACME directory TierPlan talks to, and ACMECAFile is the PEM of the
@@ -127,6 +171,35 @@ type Config struct {
 
 	// raw holds the resolved text of every setting, for Redacted.
 	raw map[string]string
+}
+
+// ACMEEnv is what the TIERPLAN_ACME* variables say. A field left at its zero value (nil for a switch)
+// means the variable is unset, and then the stored setting applies.
+type ACMEEnv struct {
+	// Enabled is TIERPLAN_ACME: nil when unset, otherwise whether Let's Encrypt is on.
+	Enabled *bool
+	// AcceptTOS is TIERPLAN_ACME_ACCEPT_TOS=true: the CA's terms of service are accepted.
+	AcceptTOS bool
+	// Email is TIERPLAN_ACME_EMAIL, a bare address; empty when unset.
+	Email string
+	// Challenge is TIERPLAN_ACME_CHALLENGE held lower-case: "http-01", "dns-01" or "" when unset.
+	Challenge string
+	// DNSProvider is TIERPLAN_DNS_PROVIDER held lower-case: "cloudflare" or "" when unset.
+	DNSProvider string
+	// CloudflareToken is the Cloudflare API token. It is a secret: Redacted masks it and it must never
+	// be logged.
+	CloudflareToken string
+	// TokenVar names the variable that supplied the token (EnvCloudflareToken or EnvCloudflareTokenFile),
+	// "" when there is none, so a lock label names the variable in use.
+	TokenVar string
+	// Resolvers is TIERPLAN_DNS_RESOLVERS as resolvers.ParseResolvers normalised it, in the operator's
+	// order with later duplicates dropped. ResolversSet is whether the variable was set at all.
+	Resolvers    []string
+	ResolversSet bool
+	// Profile is TIERPLAN_ACME_PROFILE; empty when unset.
+	Profile string
+	// HSTS is TIERPLAN_HSTS: nil when unset, otherwise whether the header is on.
+	HSTS *bool
 }
 
 // setting is one row of the table.
@@ -252,6 +325,111 @@ var settings = []setting{
 		}},
 	{env: envACMECAFile, flag: "acme-ca-file", desc: "PEM file of the CA that signs the ACME directory's HTTPS certificate. Testing only and unsupported",
 		apply: func(c *Config, raw string) error { c.ACMECAFile = raw; return nil }},
+	{env: EnvACME, desc: "turns Let's Encrypt on or off and locks Issue and Stop to match",
+		apply: func(c *Config, raw string) error {
+			if raw == "" {
+				c.ACME.Enabled = nil
+				return nil
+			}
+			on, err := parseSwitch(raw)
+			if err != nil {
+				return err
+			}
+			c.ACME.Enabled = &on
+			return nil
+		}},
+	{env: EnvACMEAcceptTOS, desc: "accepts the CA's terms of service; TIERPLAN_ACME=on requires it",
+		apply: func(c *Config, raw string) error {
+			switch asciiLower(raw) {
+			case "":
+				c.ACME.AcceptTOS = false
+			case "true", "on":
+				c.ACME.AcceptTOS = true
+			default:
+				return errors.New("must be true")
+			}
+			return nil
+		}},
+	{env: EnvACMEEmail, desc: "contact address for the CA account, a bare email such as admin@example.com",
+		apply: func(c *Config, raw string) error {
+			if raw != "" && !ValidContactEmail(raw) {
+				return errors.New("must be a bare email address like admin@example.com")
+			}
+			c.ACME.Email = raw
+			return nil
+		}},
+	{env: EnvACMEChallenge, desc: "challenge type for Let's Encrypt: http-01 or dns-01",
+		apply: func(c *Config, raw string) error {
+			v := asciiLower(raw)
+			if v != "" && v != challengeHTTP01 && v != challengeDNS01 {
+				return errors.New("must be http-01 or dns-01")
+			}
+			c.ACME.Challenge = v
+			return nil
+		}},
+	{env: EnvDNSProvider, desc: "DNS provider for dns-01 (cloudflare); needs a Cloudflare API token",
+		apply: func(c *Config, raw string) error {
+			v := asciiLower(raw)
+			if v != "" && v != providerCF {
+				return errors.New("must be cloudflare")
+			}
+			c.ACME.DNSProvider = v
+			return nil
+		}},
+	{env: EnvCloudflareToken, secret: true, desc: "Cloudflare API token for dns-01 (also TIERPLAN_CLOUDFLARE_API_TOKEN_FILE, preferred)",
+		apply: func(c *Config, raw string) error {
+			// A stray space or newline from a template or a secret file is not part of the token, so the
+			// ends are trimmed. What is left must be able to be a bearer token: a token that is not would
+			// fail every name as dns_token_invalid at run time, with the field locked on the page, so it is
+			// refused here. The error never carries the value (D-05, D-06).
+			if raw == "" {
+				c.ACME.CloudflareToken = ""
+				return nil
+			}
+			tok := strings.TrimSpace(raw)
+			if !apiTokenShape(tok) {
+				return errors.New("is not a usable API token: it must be 1 to 256 printable ASCII characters with no spaces or control characters")
+			}
+			c.ACME.CloudflareToken = tok
+			return nil
+		}},
+	{env: EnvDNSResolvers, desc: "comma-separated DNS resolvers (host or host:port) the dns-01 propagation check asks; unset means the zone's own nameservers",
+		apply: func(c *Config, raw string) error {
+			if raw == "" {
+				c.ACME.Resolvers, c.ACME.ResolversSet = nil, false
+				return nil
+			}
+			list, err := resolvers.ParseResolvers([]string{raw})
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				return errors.New("lists no resolver")
+			}
+			c.ACME.Resolvers, c.ACME.ResolversSet = list, true
+			return nil
+		}},
+	{env: EnvACMEProfile, desc: "the CA's certificate profile name, such as shortlived",
+		apply: func(c *Config, raw string) error {
+			if raw != "" && !profileName.MatchString(raw) {
+				return errors.New("must be 1 to 64 characters of a-z, 0-9, dot, underscore or hyphen")
+			}
+			c.ACME.Profile = raw
+			return nil
+		}},
+	{env: EnvHSTS, desc: "turns the Strict-Transport-Security header on or off; on needs a trusted certificate and cannot be combined with TIERPLAN_ACME=off",
+		apply: func(c *Config, raw string) error {
+			if raw == "" {
+				c.ACME.HSTS = nil
+				return nil
+			}
+			on, err := parseSwitch(raw)
+			if err != nil {
+				return err
+			}
+			c.ACME.HSTS = &on
+			return nil
+		}},
 	{env: "TIERPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", desc: "deprecated and without effect: TierPlan always serves HTTPS with a self-signed certificate unless a certificate file is supplied; any value is accepted and logged at start",
 		apply: func(c *Config, raw string) error {
 			// A stale value must never stop startup, so one that is not a boolean reads as not true.
@@ -349,10 +527,35 @@ func Load(flags *pflag.FlagSet, env func(string) string, readFile func(string) (
 		}
 		c.raw[s.env] = raw
 	}
+	if c.ACME.CloudflareToken != "" {
+		c.ACME.TokenVar = EnvCloudflareToken
+		if env(EnvCloudflareTokenFile) != "" {
+			c.ACME.TokenVar = EnvCloudflareTokenFile
+		}
+	}
 	if err := c.crossCheck(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// maxAPITokenBytes is the longest DNS API token that is tried. It matches the limit the Let's Encrypt
+// manager puts on a token typed into the page.
+const maxAPITokenBytes = 256
+
+// apiTokenShape reports whether tok can be a bearer token: 1 to 256 printable ASCII characters, with no
+// space or control character in it. It is the rule the page's token field applies (internal/acme), so a
+// token from the environment and one from the page are held to the same shape.
+func apiTokenShape(tok string) bool {
+	if tok == "" || len(tok) > maxAPITokenBytes {
+		return false
+	}
+	for i := 0; i < len(tok); i++ {
+		if c := tok[i]; c <= 0x20 || c >= 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // resolve applies the precedence rules to one setting.
@@ -402,6 +605,20 @@ func (c Config) crossCheck() error {
 	if c.ACMECAFile != "" && c.ACMEDirectoryURL == "" {
 		return fmt.Errorf("%s is set without %s; the CA file only applies to a directory you name", envACMECAFile, envACMEDirectoryURL)
 	}
+	if c.ACME.Enabled != nil && *c.ACME.Enabled && !c.ACME.AcceptTOS {
+		return fmt.Errorf("%s is on without %s=true; Let's Encrypt needs its terms of service accepted", EnvACME, EnvACMEAcceptTOS)
+	}
+	if c.ACME.DNSProvider != "" && c.ACME.CloudflareToken == "" {
+		return fmt.Errorf("%s is set without %s or %s; the provider and its token are set together",
+			EnvDNSProvider, EnvCloudflareToken, EnvCloudflareTokenFile)
+	}
+	if c.ACME.DNSProvider == "" && c.ACME.CloudflareToken != "" {
+		return fmt.Errorf("%s is set without %s; the provider and its token are set together", c.ACME.TokenVar, EnvDNSProvider)
+	}
+	// Stopping Let's Encrypt while HSTS is on would lock browsers out of a certificate nobody renews.
+	if c.ACME.HSTS != nil && *c.ACME.HSTS && c.ACME.Enabled != nil && !*c.ACME.Enabled {
+		return fmt.Errorf("%s is on while %s is off; turn HSTS off, because stopping Let's Encrypt under HSTS would lock browsers out", EnvHSTS, EnvACME)
+	}
 	// A window shorter than two heartbeats would call an agent offline after one
 	// late or lost heartbeat.
 	if c.AgentOfflineAfter < 2*c.AgentHeartbeatInterval {
@@ -435,6 +652,36 @@ func Names() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ValidContactEmail reports whether s is a bare email address: net/mail must parse it and return it
+// byte for byte, so a display name, a list or a stray space is refused. It is the one rule for the
+// ACME contact, shared by TIERPLAN_ACME_EMAIL and the account registration.
+func ValidContactEmail(s string) bool {
+	addr, err := mail.ParseAddress(s)
+	return err == nil && addr.Address == s
+}
+
+// asciiLower lower-cases the ASCII letters of s and leaves every other byte alone.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// parseSwitch reads an on/off switch: on, off, true or false, in any ASCII case.
+func parseSwitch(raw string) (bool, error) {
+	switch asciiLower(raw) {
+	case "on", "true":
+		return true, nil
+	case "off", "false":
+		return false, nil
+	}
+	return false, errors.New("must be on or off")
 }
 
 func parseInt(raw string, minimum int) (int, error) {

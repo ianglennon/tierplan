@@ -7,11 +7,12 @@ import { type HTTPSACME, type HTTPSStatus, httpsStatusQuery } from "@/api/https"
 import { CertExpiry } from "@/components/cert-expiry";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { CertFilesBlock } from "@/features/https/cert-files-block";
 import { errorCopy, errorValues } from "@/features/https/copy";
 import { LAST_RUN_ID } from "@/features/https/error-panel";
+import { ModeLine } from "@/features/https/mode-line";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { useT } from "@/i18n/use-t";
 import { formatAbsolute } from "@/lib/format";
@@ -55,9 +56,7 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
   const note =
     cert.source === "self_signed" && !lets?.fallback
       ? t("https.certificate.note.self_signed")
-      : cert.source === "cert_files"
-        ? t("https.certificate.note.cert_files")
-        : null;
+      : null;
 
   return (
     <>
@@ -65,13 +64,8 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
         <dt className="text-sm font-medium text-muted-foreground">
           {t("https.certificate.rows.source")}
         </dt>
-        <dd className="min-w-0 break-all text-sm">
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">{t(`https.certificate.source.${cert.source}`)}</Badge>
-            {cert.testCA ? (
-              <Badge variant="destructive">{t("https.certificate.testCA")}</Badge>
-            ) : null}
-          </span>
+        <dd className="min-w-0 text-sm">
+          <ModeLine status={status} />
         </dd>
 
         <dt className="text-sm font-medium text-muted-foreground">
@@ -108,6 +102,7 @@ function CertificateRows({ status }: { status: HTTPSStatus }) {
         {failedOff ? <LetsEncryptRows acme={failedOff} active={false} /> : null}
       </dl>
       {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
+      {status.certFilesInfo ? <CertFilesBlock info={status.certFilesInfo} /> : null}
     </>
   );
 }

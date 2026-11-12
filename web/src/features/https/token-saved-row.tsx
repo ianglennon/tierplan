@@ -5,6 +5,7 @@ import { Check } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { LockedNote } from "@/features/https/locked-note";
 import { RemoveTokenDialog } from "@/features/https/remove-token-dialog";
 import { useT } from "@/i18n/use-t";
 
@@ -13,6 +14,8 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 
 // The id of Replace token, so the DNS-01 suggestion can move focus to it.
 export const REPLACE_ID = "acme-dns-replace";
+// The id of the token lock note, which the Test token button is described by.
+export const TOKEN_LOCK_ID = "acme-dns-token-lock";
 
 interface TokenSavedRowProps {
   // Draws the Replace token button, which swaps the empty field in. Left out, the row has no action.
@@ -77,6 +80,30 @@ export function TokenSavedRow({
         <p className="w-full text-xs text-muted-foreground">{t("https.dns.remove.unavailable")}</p>
       ) : null}
       <RemoveTokenDialog open={removing} onOpenChange={setRemoving} leftOverCount={leftOverCount} />
+    </div>
+  );
+}
+
+interface TokenLockBlockProps {
+  // The variable that supplies the token: TIERPLAN_CLOUDFLARE_API_TOKEN or its _FILE form, as the API says.
+  varName: string;
+  // Whether a token is saved in the database beneath the lock. Only that is known; no token is ever sent
+  // to the page, so there is no value here to show.
+  saved: boolean;
+}
+
+// TokenLockBlock stands in for the write-only field and the Token saved row while a variable supplies
+// the token (D-03, D-05, UI-SPEC "Token lock"): who sets it, and whether a token is saved underneath. It
+// has no input, no Replace token and no Remove token, and no slot for a value.
+export function TokenLockBlock({ varName, saved }: TokenLockBlockProps) {
+  const t = useT();
+  return (
+    <div data-testid="token-locked">
+      <LockedNote
+        id={TOKEN_LOCK_ID}
+        lock={{ var: varName, stored: saved ? "saved" : "none" }}
+        storedLabel={t(saved ? "https.lock.tokenSaved" : "https.lock.tokenNone")}
+      />
     </div>
   );
 }

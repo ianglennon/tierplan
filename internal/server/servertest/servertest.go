@@ -83,6 +83,11 @@ type Options struct {
 	// and the lookups of the propagation check (server.WithACMEDNS). Nil keeps the production ones. It
 	// is kept across Restart.
 	ACMEDNS *acme.DNSDeps
+	// TrustRoots are the roots the served certificate is judged against when the status says whether it
+	// is trusted for the public host and whether agents installed now use the public CAs
+	// (server.WithTrustRoots). Nil keeps the system roots, so a certificate from a test CA reads as
+	// unverified. It is kept across Restart, like ACMEClock.
+	TrustRoots *x509.CertPool
 }
 
 // Server is a running TierPlan with an admin signed in.
@@ -144,6 +149,9 @@ func Start(t testing.TB, o Options) *Server {
 	}
 	if o.ACMEDNS != nil {
 		s.opts = append(s.opts, server.WithACMEDNS(*o.ACMEDNS))
+	}
+	if o.TrustRoots != nil {
+		s.opts = append(s.opts, server.WithTrustRoots(o.TrustRoots))
 	}
 	if !o.JanitorSchedule {
 		s.opts = append(s.opts, server.WithoutJanitorScheduler())

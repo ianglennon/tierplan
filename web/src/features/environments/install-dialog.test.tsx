@@ -35,6 +35,7 @@ function install(extra: Partial<InstallInfo> = {}, generation = 1): InstallInfo 
       swarm: " docker service rm tierplan-agent",
     },
     secretName: secret,
+    trust: "public",
     standalone: {
       command: ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${TOKEN}' ghcr.io/ianglennon/tierplan-agent:0.1.0`,
       composeFile: `services:\n  agent:\n    environment:\n      TIERPLAN_AGENT_JOIN_TOKEN: '${TOKEN}'\n`,
@@ -371,7 +372,7 @@ describe("InstallDialog step 2", () => {
   });
 
   it("shows the certificate pin row when the install has a pin", async () => {
-    createResponse = created({ pin: "sha256/AbCdEf0123=" });
+    createResponse = created({ pin: "sha256/AbCdEf0123=", trust: "pin" });
     await mount({ mode: "add" });
     await createWith("edge");
     expect(screen.getByText("Server certificate pin")).toBeTruthy();
@@ -379,7 +380,7 @@ describe("InstallDialog step 2", () => {
   });
 
   it("puts the proxy-pin hint directly under the pin, linked to the agent docs", async () => {
-    createResponse = created({ pin: "sha256/AbCdEf0123=" });
+    createResponse = created({ pin: "sha256/AbCdEf0123=", trust: "pin" });
     await mount({ mode: "add" });
     await createWith("edge");
     const pin = screen.getByText("sha256/AbCdEf0123=");
@@ -395,6 +396,45 @@ describe("InstallDialog step 2", () => {
     const link = within(hint).getByRole("link", { name: "agent docs" });
     expect(link.getAttribute("href")).toBe(
       "https://github.com/ianglennon/tierplan/blob/main/docs/agent.md#a-proxy-with-its-own-certificate-tierplan_agent_pin",
+    );
+  });
+
+  it("says a public certificate needs no pin, and that going back to self-signed needs no reinstall", async () => {
+    createResponse = created({ trust: "public" });
+    await mount({ mode: "add" });
+    await createWith("edge");
+    expect(screen.getByText("Server certificate")).toBeTruthy();
+    expect(screen.queryByText("Server certificate pin")).toBeNull();
+    const value = screen.getByText(
+      "Trusted through public certificate authorities. This command carries no pin.",
+    );
+    const note = screen.getByText(
+      "The agent keeps the self-signed pin it receives when it connects, so going back to self-signed needs no reinstall.",
+    );
+    expect(note.closest("dd")).toBe(value.closest("dd"));
+    expect(note.className).toContain("text-sm");
+    expect(note.className).toContain("text-muted-foreground");
+    expect(screen.queryByText(/Behind a proxy with its own certificate/)).toBeNull();
+  });
+
+  it("warns that an unverified certificate carries no pin and keeps the proxy hint", async () => {
+    createResponse = created({ trust: "unverified" });
+    await mount({ mode: "add" });
+    await createWith("edge");
+    expect(screen.getByText("Server certificate")).toBeTruthy();
+    const warning = screen.getByText(
+      "This certificate isn't trusted through public certificate authorities, so this command carries no pin and the agent can't verify it.",
+    );
+    expect(warning.closest("dd")?.querySelector("svg")?.getAttribute("class")).toContain(
+      "text-status-warning-text",
+    );
+    const hint = screen.getByText(/Behind a proxy with its own certificate\?/);
+    expect(hint.textContent).toBe(
+      "Behind a proxy with its own certificate? Use that certificate's pin instead. See the agent docs.",
+    );
+    expect(hint.closest("dd")).toBe(warning.closest("dd"));
+    expect(within(hint).getByRole("link", { name: "agent docs" }).getAttribute("target")).toBe(
+      "_blank",
     );
   });
 
@@ -516,6 +556,23 @@ describe("InstallDialog rotate flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(sent).toEqual([]);
+  });
+
+  it("shows the same trust row as the add flow", async () => {
+    rotateResponse = () =>
+      Response.json({
+        install: install({ trust: "public" }, 2),
+        envType: undefined,
+        hasAgents: false,
+      });
+    await mount({ mode: "rotate", envId: "e1" });
+    fireEvent.click(screen.getByRole("button", { name: "Generate new token" }));
+    expect(await screen.findByText("Server certificate")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The agent keeps the self-signed pin it receives when it connects, so going back to self-signed needs no reinstall.",
+      ),
+    ).toBeTruthy();
   });
 
   it("Escape cancels without a request", async () => {

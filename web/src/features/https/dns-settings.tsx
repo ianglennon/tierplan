@@ -5,6 +5,7 @@ import { ChevronRight, Eye, EyeOff, Info } from "lucide-react";
 import { useState } from "react";
 import type { UseFormRegisterReturn } from "react-hook-form";
 
+import type { HTTPSACME } from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -17,8 +18,9 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
+import { LockedIcon, LockedNote } from "@/features/https/locked-note";
 import { rich } from "@/features/https/sentence";
-import { TokenSavedRow } from "@/features/https/token-saved-row";
+import { TokenLockBlock, TokenSavedRow } from "@/features/https/token-saved-row";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +30,30 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 const CLOUDFLARE_TOKENS_URL = "https://dash.cloudflare.com/profile/api-tokens";
 export const TOKEN_ID = "acme-dns-token";
 export const RESOLVERS_ID = "acme-dns-resolvers";
+export const PROVIDER_LOCK_ID = "acme-dns-provider-lock";
+export const RESOLVERS_LOCK_ID = "acme-dns-resolvers-lock";
+
+// The cloudflare id as the page names it; any other id the server sends is shown as it is.
+function useProviderName() {
+  const t = useT();
+  return (id: string) => (id === "cloudflare" ? t("https.dns.provider.cloudflare") : id);
+}
+
+// The DNS locks of a status (D-03, D-05, D-17). The provider and its token lock together: either entry
+// fixes both, so the page never offers a token field beside a provider the environment names. tokenVar
+// and providerVar are always the API's, so the label names the variable in use.
+export function dnsLocks(locks: HTTPSACME["locks"]) {
+  const provider = locks.dnsProvider;
+  const token = locks.dnsToken;
+  const tokenLocked = provider !== undefined || token !== undefined;
+  return {
+    tokenLocked,
+    provider,
+    providerVar: provider?.var ?? token?.var ?? "",
+    tokenVar: token?.var ?? provider?.var ?? "",
+    resolvers: locks.resolvers,
+  };
+}
 
 interface DnsSettingsProps {
   // True when a token is saved. Only this is known: the token itself is never sent to the page.
@@ -55,6 +81,8 @@ interface DnsSettingsProps {
   // token button and its dialog (D-05, D-18).
   savedChallenge: "http-01" | "dns-01";
   leftOverCount: number;
+  // The locks the environment puts on the provider, the token and the resolvers.
+  locks: HTTPSACME["locks"];
 }
 
 // DnsSettings is the DNS-01 detail of the Validation section (CHAL-01, D-02, D-06, UI-SPEC J1): the
@@ -75,8 +103,11 @@ export function DnsSettings({
   onAdvancedOpenChange,
   savedChallenge,
   leftOverCount,
+  locks,
 }: DnsSettingsProps) {
   const t = useT();
+  const providerName = useProviderName();
+  const lock = dnsLocks(locks);
   const link = (
     <a
       href={CLOUDFLARE_TOKENS_URL}
@@ -94,7 +125,16 @@ export function DnsSettings({
         <dt className="text-sm font-medium text-muted-foreground">
           {t("https.dns.provider.label")}
         </dt>
-        <dd className="min-w-0 break-words text-sm">{t("https.dns.provider.cloudflare")}</dd>
+        <dd className="flex min-w-0 flex-col gap-1 break-words text-sm">
+          {providerName(lock.provider?.value ?? "cloudflare")}
+          {lock.tokenLocked ? (
+            <LockedNote
+              id={PROVIDER_LOCK_ID}
+              lock={{ var: lock.providerVar, stored: lock.provider?.stored }}
+              storedLabel={lock.provider?.stored ? providerName(lock.provider.stored) : undefined}
+            />
+          ) : null}
+        </dd>
       </dl>
 
       <Alert role="note" className="text-foreground">
@@ -111,7 +151,9 @@ export function DnsSettings({
         </AlertDescription>
       </Alert>
 
-      {tokenSaved && !replacing ? (
+      {lock.tokenLocked ? (
+        <TokenLockBlock varName={lock.tokenVar} saved={tokenSaved} />
+      ) : tokenSaved && !replacing ? (
         <TokenSavedRow
           onReplace={editable ? onReplace : undefined}
           savedChallenge={savedChallenge}
@@ -145,6 +187,7 @@ export function DnsSettings({
         field={resolversField}
         problem={resolversProblem}
         busy={busy}
+        lock={lock.resolvers}
       />
     </div>
   );
@@ -156,11 +199,13 @@ interface AdvancedDnsProps {
   field: UseFormRegisterReturn<"resolvers">;
   problem?: { entry?: string };
   busy: boolean;
+  // TIERPLAN_DNS_RESOLVERS fixes the list: the field is read-only and shows the effective list.
+  lock?: HTTPSACME["locks"]["resolvers"];
 }
 
 // AdvancedDns is the disclosure that holds the optional resolver list (CHAL-05, D-12, D-14). There is
 // no switch to skip the propagation check: the list only chooses who is asked.
-function AdvancedDns({ open, onOpenChange, field, problem, busy }: AdvancedDnsProps) {
+function AdvancedDns({ open, onOpenChange, field, problem, busy, lock }: AdvancedDnsProps) {
   const t = useT();
   const error = problem
     ? problem.entry
@@ -184,20 +229,41 @@ function AdvancedDns({ open, onOpenChange, field, problem, busy }: AdvancedDnsPr
       <CollapsibleContent className="flex flex-col gap-2">
         <Field data-invalid={error ? true : undefined}>
           <FieldLabel htmlFor={RESOLVERS_ID}>{t("https.dns.resolvers.label")}</FieldLabel>
-          <Input
-            id={RESOLVERS_ID}
-            type="text"
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder={t("https.dns.resolvers.placeholder")}
-            aria-invalid={Boolean(error)}
-            aria-disabled={busy}
-            aria-describedby={`${RESOLVERS_ID}-helper${error ? ` ${RESOLVERS_ID}-error` : ""}`}
-            className={`${TOUCH_HEIGHT} font-mono`}
-            {...field}
-          />
+          {lock ? (
+            <>
+              <InputGroup className={TOUCH_HEIGHT}>
+                <InputGroupAddon>
+                  <LockedIcon />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id={RESOLVERS_ID}
+                  type="text"
+                  readOnly
+                  value={lock.value ?? ""}
+                  placeholder={t("https.dns.resolvers.lockedDefault")}
+                  autoComplete="off"
+                  aria-describedby={`${RESOLVERS_LOCK_ID} ${RESOLVERS_ID}-helper`}
+                  className="h-full min-w-0 font-mono"
+                />
+              </InputGroup>
+              <LockedNote id={RESOLVERS_LOCK_ID} lock={lock} showIcon={false} mono />
+            </>
+          ) : (
+            <Input
+              id={RESOLVERS_ID}
+              type="text"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder={t("https.dns.resolvers.placeholder")}
+              aria-invalid={Boolean(error)}
+              aria-disabled={busy}
+              aria-describedby={`${RESOLVERS_ID}-helper${error ? ` ${RESOLVERS_ID}-error` : ""}`}
+              className={`${TOUCH_HEIGHT} font-mono`}
+              {...field}
+            />
+          )}
           <FieldDescription id={`${RESOLVERS_ID}-helper`}>
             {t("https.dns.resolvers.helper")}
           </FieldDescription>
@@ -297,11 +363,23 @@ export function TestTokenButton({ busy, testing, onTest }: TestTokenButtonProps)
 
 // TestTokenNotes is the text under the button row: what a test does, and while one runs that it can
 // take a minute (UI-SPEC J8).
-export function TestTokenNotes({ pending }: { pending: boolean }) {
+export function TestTokenNotes({
+  pending,
+  tokenVar,
+}: {
+  pending: boolean;
+  // The variable that supplies the token, when one does: the helper then names it, since Test token
+  // tests the environment's token (D-05).
+  tokenVar?: string;
+}) {
   const t = useT();
   return (
     <>
-      <p className="text-sm text-muted-foreground">{t("https.dns.test.helper")}</p>
+      <p className="text-sm text-muted-foreground">
+        {tokenVar
+          ? rich(t, "https.dns.test.helperEnv", { var: tokenVar })
+          : t("https.dns.test.helper")}
+      </p>
       {pending ? <p className="text-xs text-muted-foreground">{t("https.dns.test.hint")}</p> : null}
     </>
   );

@@ -89,6 +89,25 @@ func resolversOf(st State, draft *[]string) ([]string, error) {
 	return dnscheck.ParseResolvers(*draft)
 }
 
+// resolversInUse are the resolvers a token test asks: TIERPLAN_DNS_RESOLVERS when it is set, else the
+// draft list or the saved one. A draft is vetted against a variable by checkResolverLock before this.
+func (m *Manager) resolversInUse(st State, draft *[]string) ([]string, error) {
+	if m.d.Env.ResolversSet {
+		return m.resolvers(st), nil
+	}
+	return resolversOf(st, draft)
+}
+
+// resolversToStore is the list a save writes: the draft or the saved list, and while a variable fixes
+// the resolvers always the saved list, since the draft was only an echo of the variable and the variable
+// is never written.
+func (m *Manager) resolversToStore(st State, draft *[]string) ([]string, error) {
+	if m.d.Env.ResolversSet {
+		draft = nil
+	}
+	return resolversOf(st, draft)
+}
+
 // tokenUsable reports whether token can be a bearer token: 1 to 256 printable ASCII characters, with no
 // space or control character in it. Anything else is dns_token_invalid without a request being made.
 func tokenUsable(token string) bool {
@@ -150,6 +169,21 @@ func (m *Manager) runTokenTest(ctx context.Context, st State, provider, token st
 	return t, nil
 }
 
+// checkChallengeLock settles a requested validation method against TIERPLAN_ACME_CHALLENGE. With the
+// variable unset the request is free. With it set, the variable's own method (compared after ASCII
+// lower-casing) is an echo, which the caller replaces by the stored method so that nothing the
+// environment says is ever written, and any other value is refused.
+func (m *Manager) checkChallengeLock(requested string) (echo bool, err error) {
+	fixed := m.d.Env.Challenge
+	if fixed == "" {
+		return false, nil
+	}
+	if strings.ToLower(requested) != fixed {
+		return false, m.lockedChallenge()
+	}
+	return true, nil
+}
+
 // SaveValidation saves the challenge type, the DNS resolvers and, when one is typed, the DNS token. A
 // typed token is tested first against the current certificate names and is stored only when every name
 // passed: on a failed name nothing at all is stored, and the result says so (D-07). The token, the
@@ -159,24 +193,45 @@ func (m *Manager) runTokenTest(ctx context.Context, st State, provider, token st
 // While it runs it holds the DNS slot: a run, another save, a test and the scheduler see a run as
 // active, so a test and an order never write _acme-challenge at once.
 func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveResult, error) {
+	// Every lock is checked before the slot is taken and before anything is read or stored (D-17), so a
+	// refused save changes nothing and never tests a typed token. A value that equals the variable's is
+	// the page echoing what it was shown: it is accepted and the save then writes the stored value,
+	// never the variable's.
+	echo, err := m.checkChallengeLock(in.ChallengeType)
+	if err != nil {
+		return SaveResult{}, err
+	}
+	token := strings.TrimSpace(in.Token)
+	if token != "" && m.tokenLocked() {
+		return SaveResult{}, m.lockedDNSToken()
+	}
+	if err := m.checkResolverLock(in.Resolvers); err != nil {
+		return SaveResult{}, err
+	}
 	st, release, err := m.claimForDNS(ctx)
 	if err != nil {
 		return SaveResult{}, err
 	}
 	defer release()
 
+	if echo {
+		in.ChallengeType = challengeOf(st)
+	}
 	if in.ChallengeType != ChallengeHTTP01 && in.ChallengeType != ChallengeDNS01 {
 		return SaveResult{}, ErrChallengeUnknown
 	}
-	resolvers, err := resolversOf(st, in.Resolvers)
+	resolvers, err := m.resolversToStore(st, in.Resolvers)
 	if err != nil {
 		return SaveResult{}, err
 	}
-	provider := dnsProviderOf(st)
-	token := strings.TrimSpace(in.Token)
+	tested, err := m.resolversInUse(st, in.Resolvers)
+	if err != nil {
+		return SaveResult{}, err
+	}
+	provider := m.provider(st)
 	if in.ChallengeType == ChallengeDNS01 && token == "" {
-		// Saved or typed: DNS-01 cannot be the method with no token to answer it.
-		saved, err := m.d.Store.DNSTokenSaved(ctx, provider)
+		// Saved, typed or the environment's: DNS-01 cannot be the method with no token to answer it.
+		saved, err := m.tokenSaved(ctx, provider)
 		if err != nil {
 			return SaveResult{}, err
 		}
@@ -187,7 +242,7 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 
 	var test *TokenTest
 	if token != "" {
-		t, err := m.runTokenTest(ctx, st, provider, token, dnscheck.Resolvers(resolvers))
+		t, err := m.runTokenTest(ctx, st, provider, token, dnscheck.Resolvers(tested))
 		if err != nil {
 			return SaveResult{}, err
 		}
@@ -211,10 +266,13 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 	if err != nil {
 		return SaveResult{}, err
 	}
+	if echo {
+		in.ChallengeType = challengeOf(st) // the state as it is now, not as it was before the test
+	}
 	methodChanged := challengeOf(st) != in.ChallengeType
 	changed := methodChanged || token != "" || !slices.Equal(st.DNSResolvers, resolvers)
 	w := ValidationWrite{
-		ChallengeType: in.ChallengeType, Provider: provider, Resolvers: resolvers,
+		ChallengeType: in.ChallengeType, Provider: dnsProviderOf(st), Resolvers: resolvers,
 		// Untested stays as it was unless this save changes something a run has not proved yet.
 		Untested:         st.ValidationUntested || (hasAccount && changed),
 		CloseOpenOrder:   methodChanged,
@@ -237,27 +295,34 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 //
 // It holds the DNS slot while it runs, like SaveValidation does.
 func (m *Manager) TestToken(ctx context.Context, req TestRequest) (TokenTest, error) {
+	token := strings.TrimSpace(req.Token)
+	if token != "" && m.tokenLocked() {
+		return TokenTest{}, m.lockedDNSToken()
+	}
+	if err := m.checkResolverLock(req.Resolvers); err != nil {
+		return TokenTest{}, err
+	}
 	st, release, err := m.claimForDNS(ctx)
 	if err != nil {
 		return TokenTest{}, err
 	}
 	defer release()
 
-	resolvers, err := resolversOf(st, req.Resolvers)
+	resolvers, err := m.resolversInUse(st, req.Resolvers)
 	if err != nil {
 		return TokenTest{}, err
 	}
-	provider := dnsProviderOf(st)
-	token := strings.TrimSpace(req.Token)
+	provider := m.provider(st)
 	if token == "" {
-		saved, found, err := m.d.Store.DNSToken(ctx, provider)
+		// The environment's token when it gives one, else the saved one. It is only held in memory here.
+		held, found, err := m.token(ctx, provider)
 		if err != nil {
 			return TokenTest{}, err
 		}
 		if !found {
 			return TokenTest{}, ErrDNSTokenRequired
 		}
-		token = saved
+		token = held
 	}
 	return m.runTokenTest(ctx, st, provider, token, dnscheck.Resolvers(resolvers))
 }
@@ -265,6 +330,11 @@ func (m *Manager) TestToken(ctx context.Context, req TestRequest) (TokenTest, er
 // RemoveToken deletes the saved DNS token. It is refused while DNS-01 is the saved method, because a
 // renewal would then fail with no way for TierPlan to say why, and while a run or a test holds the slot.
 func (m *Manager) RemoveToken(ctx context.Context) error {
+	// A token a variable supplies is not the admin's to remove, and removing the saved one beside it
+	// would be a change the variable hides (D-05).
+	if m.tokenLocked() {
+		return m.lockedDNSToken()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)

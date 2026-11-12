@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 var fixedNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -741,6 +742,123 @@ func TestAStoredKeyThatCannotBeReadStopsStartupAndIsNotReplaced(t *testing.T) {
 	if string(f.store.rows[selfSignedID].key) != "not a key" || f.store.inserts != 1 || f.store.updates != 0 {
 		t.Error("the unreadable row was replaced or rewritten")
 	}
+}
+
+// A cert-files install keeps a self-signed identity it does not serve (D-21): the row is created on
+// a fresh volume, an existing one is loaded and not replaced, an unreadable key stops startup, and
+// the pin it returns is the one a welcome lists while the files are served.
+func TestCertFilesKeepTheSelfSignedIdentity(t *testing.T) {
+	ctx := context.Background()
+	filesCfg := func(t *testing.T) config.Config {
+		t.Helper()
+		src := t.TempDir()
+		writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
+		return config.Config{
+			DataDir: t.TempDir(), TLSCertFile: filepath.Join(src, "c.pem"), TLSKeyFile: filepath.Join(src, "k.pem"),
+		}
+	}
+	rowPin := func(t *testing.T, st *memCertStore) string {
+		t.Helper()
+		block, _ := pem.Decode(st.rows[selfSignedID].cert)
+		if block == nil {
+			t.Fatal("the self-signed row holds no certificate")
+		}
+		leaf, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return authn.SPKIPin(leaf)
+	}
+
+	t.Run("a fresh volume gets a row and its pin", func(t *testing.T) {
+		st := newMemCertStore()
+		pin, err := selfSignedIdentityPin(ctx, st, filesCfg(t), nil, nil, nowFn(fixedNow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := st.rows[selfSignedID]; !ok || st.inserts != 1 {
+			t.Fatalf("rows %v, inserts %d; want the selfsigned row created once", st.rows, st.inserts)
+		}
+		if pin == "" || pin != rowPin(t, st) || !strings.HasPrefix(pin, "sha256/") {
+			t.Errorf("pin = %q, want the pin of the stored certificate %q", pin, rowPin(t, st))
+		}
+	})
+
+	t.Run("an existing row is loaded, not replaced", func(t *testing.T) {
+		f := newSSFixture(t)
+		want := spkiPin(f.tlsConfig(t, "", "", fixedNow))
+		keyBefore := string(f.store.rows[selfSignedID].key)
+		pin, err := selfSignedIdentityPin(ctx, f.store, filesCfg(t), nil, nil, nowFn(fixedNow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pin != want {
+			t.Errorf("pin = %q, want the pin the self-signed install had, %q", pin, want)
+		}
+		if f.store.inserts != 1 || string(f.store.rows[selfSignedID].key) != keyBefore {
+			t.Error("the stored key was replaced")
+		}
+	})
+
+	t.Run("an unreadable stored key stops startup and is not replaced", func(t *testing.T) {
+		f := newSSFixture(t)
+		f.tlsConfig(t, "", "", fixedNow)
+		row := f.store.rows[selfSignedID]
+		row.key = []byte("not a key")
+		f.store.rows[selfSignedID] = row
+		_, err := selfSignedIdentityPin(ctx, f.store, filesCfg(t), nil, nil, nowFn(fixedNow))
+		if err == nil || !strings.Contains(err.Error(), "was not replaced") {
+			t.Fatalf("err = %v, want one that says the stored key was not replaced", err)
+		}
+		if string(f.store.rows[selfSignedID].key) != "not a key" || f.store.inserts != 1 {
+			t.Error("the unreadable row was replaced")
+		}
+	})
+
+	build := func(t *testing.T, env map[string]string) *Server {
+		t.Helper()
+		srv, err := Build(ctx, testConfig(t, env), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return srv
+	}
+
+	t.Run("Build lists the identity's pin, serves the files, and the same volume serves that identity once the files are gone", func(t *testing.T) {
+		dir := t.TempDir() + "/data"
+		src := t.TempDir()
+		suppliedLeaf := writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
+		withFiles := build(t, map[string]string{
+			"TIERPLAN_DATA_DIR": dir, "TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"), "TIERPLAN_TLS_KEY_FILE": filepath.Join(src, "k.pem"),
+		})
+		if got := leafOf(t, withFiles.https.Config()); !got.Equal(suppliedLeaf) {
+			t.Error("the server did not serve the supplied certificate")
+		}
+		listed := withFiles.Tunnel().Pins()
+		if len(listed) != 1 || withFiles.TLSPin() != "" {
+			t.Fatalf("welcome pins %v, install pin %q; want one welcome pin and no install pin", listed, withFiles.TLSPin())
+		}
+		if listed[0] == authn.SPKIPin(suppliedLeaf) {
+			t.Error("the welcome lists the supplied certificate's pin")
+		}
+		if err := withFiles.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		again := build(t, map[string]string{"TIERPLAN_DATA_DIR": dir})
+		t.Cleanup(func() { _ = again.Close() })
+		if again.TLSPin() != listed[0] {
+			t.Errorf("without the files the server serves pin %q, want the one listed while they were served, %q", again.TLSPin(), listed[0])
+		}
+	})
+
+	t.Run("self-signed mode is unchanged", func(t *testing.T) {
+		srv := build(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data"})
+		t.Cleanup(func() { _ = srv.Close() })
+		if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != srv.TLSPin() || got[0] != spkiPin(srv.https.Config()) {
+			t.Errorf("welcome pins %v, install pin %q, served pin %q; want all the same", got, srv.TLSPin(), spkiPin(srv.https.Config()))
+		}
+	})
 }
 
 func TestLoadKeyReadsAnEncodedKeyFile(t *testing.T) {

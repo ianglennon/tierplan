@@ -28,6 +28,8 @@ type schedEnv struct {
 	ended chan string
 	// picks counts the draws the scheduler made inside an ARI window.
 	picks atomic.Int32
+	// accountsBefore is how many accounts the fake CA had created when noAccount forgot the first.
+	accountsBefore int
 }
 
 func newSchedEnv(t *testing.T, opts acmetest.Options) *schedEnv {

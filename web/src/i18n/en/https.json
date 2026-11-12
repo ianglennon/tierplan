@@ -6,7 +6,7 @@
     "certificate": {
       "title": "Certificate in use",
       "rows": {
-        "source": "Source",
+        "source": "Mode",
         "issuer": "Issuer",
         "names": "Names",
         "expires": "Expires",
@@ -21,8 +21,7 @@
       },
       "issuerUnknown": "Unknown",
       "note": {
-        "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files.",
-        "cert_files": "TierPlan serves the files named by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE."
+        "self_signed": "TierPlan made this certificate for this install. Browsers warn about it until you use Let's Encrypt or your own certificate files."
       },
       "testCA": "Test CA",
       "issuedWhen": "Issued {{when}}",
@@ -31,6 +30,151 @@
       "pausedNextFiles": "Paused while certificate files are set",
       "noError": "None",
       "detailsBelow": "Details below"
+    },
+    "mode": {
+      "reason": {
+        "default": "This is the default. No certificate files and no Let's Encrypt certificate are set up.",
+        "pending": "Let's Encrypt is set up, but no certificate has been issued yet.",
+        "envPending": "TIERPLAN_ACME is on. TierPlan is getting a certificate by itself.",
+        "stopped": "Let's Encrypt is stopped. Issue a certificate to use it again.",
+        "fallback": "The Let's Encrypt certificate expired. TierPlan serves its own certificate until a renewal works.",
+        "envOff": "Let's Encrypt is turned off by TIERPLAN_ACME.",
+        "files": "Set by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE. Certificate files take priority over Let's Encrypt.",
+        "filesPaused": "Set by TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE. Let's Encrypt is paused while they are set.",
+        "issued": "TierPlan got this certificate from Let's Encrypt and renews it.",
+        "issuedEnv": "Turned on by TIERPLAN_ACME. TierPlan renews it by itself.",
+        "pausedRestore": "Paused after a restore. Resume Let's Encrypt below to renew."
+      }
+    },
+    "certFiles": {
+      "title": "Certificate files",
+      "rows": {
+        "cert": "Certificate file",
+        "key": "Key file",
+        "trusted": "Trusted"
+      },
+      "setBy": "Set by the {{var}} environment variable.",
+      "verified": "Verifies for {{host}}.",
+      "hstsYes": "HSTS can be sent for it.",
+      "unverified": "Doesn't verify.",
+      "hstsNo": "HSTS is never sent for it.",
+      "notChecked": "Not checked yet.",
+      "foot": "TierPlan only reads these files and checks them again about once a minute, so a renewed certificate is picked up without a restart. To use Let's Encrypt, remove both variables and restart."
+    },
+    "trust": {
+      "hostFallback": "the public host",
+      "self_signed": {
+        "sentence": "It is self-signed.",
+        "fix": "Use a certificate from a public certificate authority."
+      },
+      "unknown_authority": {
+        "sentence": "It isn't signed by an authority this server trusts.",
+        "fix": "Use a certificate from a public authority. If it is, the file may be missing the intermediate certificates: put them after the certificate in the same file."
+      },
+      "test_ca": {
+        "sentence": "It comes from a test certificate authority.",
+        "fix": "Test certificates aren't trusted by browsers."
+      },
+      "expired": {
+        "sentence": "It has expired or isn't valid yet.",
+        "fix": "Renew the certificate."
+      },
+      "name_mismatch": {
+        "sentence": "It doesn't cover {{host}}.",
+        "fix": "Get a certificate that includes {{host}}, or change the public URL in Settings > General."
+      },
+      "no_public_url": {
+        "sentence": "No public URL is set, so TierPlan can't check the name.",
+        "fix": "Set the public URL in Settings > General."
+      }
+    },
+    "hsts": {
+      "title": "HSTS",
+      "description": "HSTS tells browsers to use only HTTPS for this address. TierPlan sends it only while a certificate that browsers trust is served, and it starts with a short lifetime.",
+      "switch": "Send HSTS",
+      "helper": "Off by default. Once a browser has seen HSTS it refuses plain HTTP for this address until the lifetime ends. TierPlan never adds includeSubDomains or preload.",
+      "draftOn": "The lifetime starts at 5 minutes and only grows while TierPlan serves a trusted certificate without a problem.",
+      "draftOff": "Browsers that visit while a trusted certificate is served are told to forget HSTS (max-age=0).",
+      "save": "Save HSTS setting",
+      "saving": "Saving...",
+      "onDone": "HSTS turned on.",
+      "offDone": "HSTS turned off.",
+      "status": {
+        "label": "Status",
+        "lifetime": "Lifetime",
+        "next": "Next step",
+        "why": "Why",
+        "sending": {
+          "value": "Sending",
+          "extra": "The browser keeps the policy for the lifetime shown."
+        },
+        "off_clearing": {
+          "value": "Off",
+          "extra": "TierPlan tells browsers to forget HSTS (max-age=0). This also clears the one-year setting that earlier versions sent for certificate files."
+        },
+        "off_silent": {
+          "value": "Off",
+          "extra": "Nothing is sent."
+        },
+        "not_sent": {
+          "value": "On, but not sent",
+          "extra": "HSTS is only sent over a certificate that browsers trust."
+        },
+        "not_sent_clearing": {
+          "value": "On, but not sent",
+          "extra": "TierPlan sends max-age=0, so a browser that trusts this certificate forgets the one-year HSTS that earlier versions sent. A self-signed certificate gets no HSTS header at all."
+        },
+        "withdrawn": {
+          "value": "Withdrawn for now",
+          "extra": "See the notice below."
+        }
+      },
+      "lifetimeValue": "max-age={{seconds}}",
+      "stepOf": "step {{n}} of 4, {{label}}",
+      "nextAfter": "if nothing goes wrong before then",
+      "nextFinal": "Final step",
+      "nextCapped": "Capped at 1 week for this certificate",
+      "withdrawn": {
+        "lets_encrypt": {
+          "title": "HSTS is withdrawn until the certificate is renewed",
+          "body": "The certificate expires on {{date}} and renewal isn't working. While it still works, TierPlan tells browsers to forget HSTS (max-age=0), because a browser that keeps HSTS would refuse the self-signed certificate that takes over, with no way to click past the warning. When a renewal works, HSTS comes back and the lifetime starts again at 5 minutes."
+        },
+        "cert_files": {
+          "title": "HSTS is withdrawn until the certificate is replaced",
+          "body": "The certificate expires on {{date}}. While it still works, TierPlan tells browsers to forget HSTS (max-age=0), because a browser that keeps HSTS would refuse the self-signed certificate that takes over, with no way to click past the warning. When the files hold a new certificate, HSTS comes back and the lifetime starts again at 5 minutes."
+        }
+      },
+      "port": {
+        "title": "HSTS covers every port on this name",
+        "body": "TierPlan's public URL uses port {{port}}, but browsers apply HSTS to the whole name, not one port. While it is on, a browser that visits TierPlan also refuses plain HTTP for any other service on {{host}}, such as a site on port 80, until the lifetime ends.",
+        "bodyNoHost": "TierPlan's public URL uses port {{port}}, but browsers apply HSTS to the whole name, not one port. While it is on, a browser that visits TierPlan also refuses plain HTTP for any other service on the same name, such as a site on port 80, until the lifetime ends."
+      },
+      "steps": {
+        "title": "Lifetime steps",
+        "label": {
+          "1": "5 minutes",
+          "2": "1 week",
+          "3": "1 month",
+          "4": "1 year"
+        },
+        "done": "Done",
+        "current": "Current",
+        "later": "Later",
+        "unused": "Not used for this certificate",
+        "startsLater": "The lifetime starts at step 1 when HSTS is sent.",
+        "foot": "A step lasts a day, a week and a month. A withdrawal, an untrusted certificate or a new public host starts again at step 1. A restore starts again too.",
+        "unusedState": "Not used"
+      }
+    },
+    "agents": {
+      "title": "Agent trust",
+      "pin": "Install commands for new agents carry the pin of this certificate. An agent connects only if the certificate it sees matches.",
+      "public": "Agents trust this certificate through public certificate authorities, so install commands carry no pin. Every agent also keeps the self-signed pin it receives when it connects. If TierPlan goes back to its self-signed certificate, agents keep connecting and nothing needs reinstalling.",
+      "unverified": {
+        "before": "Public certificate authorities don't vouch for this certificate, so install commands carry no pin and agents can't verify it that way. Behind a proxy or a private authority, give each agent the pin of the certificate it will see. See the",
+        "link": "agent docs",
+        "after": "."
+      }
     },
     "acme": {
       "title": "Let's Encrypt",
@@ -154,14 +298,16 @@
         "helper": "Comma-separated, each as host or host:port. When set, TierPlan asks only these while it waits for a record to appear. Leave it empty to ask the zone's own nameservers, which is right for most installs.",
         "delegation": "If {{name}} is a CNAME, TierPlan follows it and writes the record at the target. The target must be in a Cloudflare zone this token can edit. There is nothing to set.",
         "error": "{{entry}} isn't a valid resolver. Use host or host:port, separated by commas.",
-        "errorList": "The resolver list isn't valid. Use host or host:port, separated by commas, with at most five."
+        "errorList": "The resolver list isn't valid. Use host or host:port, separated by commas, with at most five.",
+        "lockedDefault": "The zone's own name servers"
       },
       "test": {
         "action": "Test token",
         "pending": "Testing token...",
         "helper": "Test token checks the names above without placing an order. It adds a test TXT record at each name and deletes it again.",
         "hint": "This can take a minute while TierPlan waits for the record to appear.",
-        "required": "Enter a Cloudflare API token to test."
+        "required": "Enter a Cloudflare API token to test.",
+        "helperEnv": "Test token checks the token from {{var}} against the names above, without placing an order. It adds a test TXT record at each name and deletes it again."
       },
       "result": {
         "passed": "Token test passed",
@@ -330,6 +476,7 @@
       "issuing": "Issuing certificate",
       "renewing": "Renewing certificate",
       "renewingAuto": "Renewing certificate automatically",
+      "issuingAuto": "Issuing certificate automatically",
       "started": "Started {{when}}.",
       "issued": "Certificate issued.",
       "renewed": "Certificate renewed.",
@@ -415,7 +562,8 @@
       },
       "namesChanged": {
         "title": "The names have changed",
-        "body": "The certificate covers {{old}}. The public URL and agent URL now need {{new}}. TierPlan keeps renewing the old names until you issue again."
+        "lead": "The certificate covers {{old}}. The public URL and agent URL now need {{new}}.",
+        "tail": "TierPlan keeps renewing the old names until you issue again."
       },
       "fallback": {
         "title": "Serving the self-signed certificate",
@@ -426,14 +574,53 @@
         "body": "TIERPLAN_ACME_DIRECTORY_URL is set, so TierPlan talks to {{url}} instead of Let's Encrypt. This is for testing only and isn't supported. Certificates from it aren't trusted by browsers."
       }
     },
+    "envState": {
+      "waiting": {
+        "title": "TierPlan is getting a certificate",
+        "body": "TIERPLAN_ACME is on, so TierPlan orders the certificate by itself as soon as it is ready. You don't need to press anything. The steps show here while it runs."
+      },
+      "keepsTrying": "TierPlan keeps trying because TIERPLAN_ACME is on. A restart doesn't make it try sooner.",
+      "retryRefusals": "TierPlan tries again by itself once these are fixed.",
+      "namesChanged": "TIERPLAN_ACME is on, so TierPlan orders a certificate for the new names by itself.",
+      "restore": "TIERPLAN_ACME is on, so TierPlan orders again as soon as you resume.",
+      "certFiles": "TIERPLAN_ACME is on and starts working when the certificate files are removed.",
+      "off": {
+        "title": "Let's Encrypt is turned off by TIERPLAN_ACME",
+        "body": "TierPlan serves its self-signed certificate and makes no Let's Encrypt requests. Your Let's Encrypt certificate, order and account are kept. Remove TIERPLAN_ACME, or set it to on, to use them again."
+      },
+      "offNothing": "Let's Encrypt is turned off by TIERPLAN_ACME.",
+      "waitingToken": {
+        "title": "Waiting for a Cloudflare token",
+        "body": "TIERPLAN_ACME is on and DNS-01 is selected, but there is no token. TierPlan orders nothing until there is one. Add a token above, or set TIERPLAN_CLOUDFLARE_API_TOKEN_FILE."
+      }
+    },
     "stop": {
       "action": "Stop using Let's Encrypt",
       "title": "Stop using Let's Encrypt?",
-      "body": "TierPlan goes back to its own self-signed certificate right away, with no restart, and stops renewing. Browsers will warn again. Agents that use the self-signed pin keep working. Your Let's Encrypt account is kept, so you can issue again with one click.",
+      "body": "TierPlan goes back to its own self-signed certificate right away, with no restart, and stops renewing. Browsers will warn again. Agents keep connecting, because they already hold the self-signed pin. Your Let's Encrypt account is kept, so you can issue again with one click.",
       "cancel": "Keep Let's Encrypt",
       "confirm": "Stop using Let's Encrypt",
       "pending": "Stopping...",
-      "done": "Back on the self-signed certificate."
+      "done": "Back on the self-signed certificate.",
+      "browserWarning": "Browsers that haven't opened TierPlan since HSTS was turned off may still refuse the self-signed certificate, with no way past the warning, until {{date}}. That includes this page. Open TierPlan once in each browser first to make it forget the setting.",
+      "hstsReason": "Turn HSTS off first.",
+      "hstsPointer": "Go to the HSTS setting"
+    },
+    "lock": {
+      "set": "Set by the {{var}} environment variable.",
+      "accepted": "Accepted by the {{var}} environment variable.",
+      "order": "Set by the {{var}} environment variable. Set it to on, or remove it, to order certificates.",
+      "stop": "Set by the {{var}} environment variable. Set it to off, or remove it, to stop.",
+      "stored": "Stored value: {{value}}, used if {{var}} is removed.",
+      "none": "none",
+      "contactKept": "TierPlan doesn't change the contact of an account that already exists.",
+      "notice": {
+        "title": "Some settings are set by environment variables",
+        "body": "Locked settings show a lock and the variable that sets them. Change them in your compose file or container settings, then restart TierPlan. The value saved here is kept and used again if you remove the variable."
+      },
+      "tokenSaved": "token saved",
+      "tokenNone": "no token saved",
+      "stopHsts": "Set by the {{var}} environment variable. Set it to off to stop."
     }
   }
 }

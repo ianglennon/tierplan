@@ -4,7 +4,6 @@
 package httpx
 
 import (
-	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,37 +18,41 @@ func hstsFor(t *testing.T, opts Options, req *http.Request) string {
 	return rec.Header().Get("Strict-Transport-Security")
 }
 
-func TestHSTSIsSentWhenTheHookSaysSo(t *testing.T) {
-	opts := Options{HSTS: func(r *http.Request) bool { return r.TLS != nil }}
-
-	plain := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	if got := hstsFor(t, opts, plain); got != "" {
-		t.Errorf("plain HTTP request: Strict-Transport-Security = %q, want none", got)
+// The router sends whatever the hook returns and nothing of its own: the lifetime is the hook's
+// decision (D-10), so a value other than the old one-year constant passes through unchanged.
+func TestHSTSIsSentWithTheValueTheHookReturns(t *testing.T) {
+	for _, value := range []string{"max-age=300", "max-age=0", "max-age=31536000"} {
+		opts := Options{HSTS: func(*http.Request) string { return value }}
+		req := httptest.NewRequest(http.MethodGet, "https://tierplan.example/healthz", nil)
+		if got := hstsFor(t, opts, req); got != value {
+			t.Errorf("hook returned %q: Strict-Transport-Security = %q", value, got)
+		}
 	}
+}
 
-	secure := httptest.NewRequest(http.MethodGet, "https://tierplan.example/healthz", nil)
-	secure.TLS = &tls.ConnectionState{}
-	if got := hstsFor(t, opts, secure); got != "max-age=31536000" {
-		t.Errorf("TLS request: Strict-Transport-Security = %q, want max-age=31536000", got)
+func TestHSTSIsNotSentWhenTheHookReturnsNothing(t *testing.T) {
+	opts := Options{HSTS: func(*http.Request) string { return "" }}
+	req := httptest.NewRequest(http.MethodGet, "https://tierplan.example/healthz", nil)
+	if got := hstsFor(t, opts, req); got != "" {
+		t.Errorf("empty value: Strict-Transport-Security = %q, want none", got)
 	}
 }
 
 func TestHSTSIsAbsentWithoutAHook(t *testing.T) {
-	secure := httptest.NewRequest(http.MethodGet, "https://tierplan.example/healthz", nil)
-	secure.TLS = &tls.ConnectionState{}
-	if got := hstsFor(t, Options{}, secure); got != "" {
+	req := httptest.NewRequest(http.MethodGet, "https://tierplan.example/healthz", nil)
+	if got := hstsFor(t, Options{}, req); got != "" {
 		t.Errorf("no hook: Strict-Transport-Security = %q, want none", got)
 	}
 }
 
 func TestHSTSIsAlsoSentOnErrorsAndNotFound(t *testing.T) {
-	opts := Options{HSTS: func(*http.Request) bool { return true }}
+	opts := Options{HSTS: func(*http.Request) string { return "max-age=300" }}
 	r := New(opts)
 	// chi runs its middleware chain only once a route exists.
 	r.Exempt(http.MethodGet, "/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nope", nil))
-	if rec.Code != http.StatusNotFound || rec.Header().Get("Strict-Transport-Security") == "" {
+	if rec.Code != http.StatusNotFound || rec.Header().Get("Strict-Transport-Security") != "max-age=300" {
 		t.Errorf("status %d, HSTS %q: a 404 must carry the header too", rec.Code, rec.Header().Get("Strict-Transport-Security"))
 	}
 }

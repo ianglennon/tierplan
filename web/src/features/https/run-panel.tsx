@@ -29,12 +29,12 @@ interface RunPanelProps {
 }
 
 // The header of a run: what it is doing while it runs, how it ended after. A renewal the scheduler
-// started says so (UI-SPEC "Run panel").
+// started says so, and so does an order TIERPLAN_ACME starts by itself (D-07, UI-SPEC "Run panel").
 function headerKey(run: ACMERun): string {
   const renew = run.kind === "renew";
   switch (run.state) {
     case "running":
-      if (!renew) return "https.run.issuing";
+      if (!renew) return run.trigger === "schedule" ? "https.run.issuingAuto" : "https.run.issuing";
       return run.trigger === "schedule" ? "https.run.renewingAuto" : "https.run.renewing";
     case "done":
       return renew ? "https.run.renewed" : "https.run.issued";

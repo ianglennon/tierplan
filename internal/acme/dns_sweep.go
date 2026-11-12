@@ -68,11 +68,11 @@ func (m *Manager) sweepDNS(ctx context.Context, dueOnly bool) {
 	}
 }
 
-// sweepProvider builds the provider for a sweep from its saved token. When it cannot, it returns the
+// sweepProvider builds the provider for a sweep from the effective token (the environment's, else the saved one). When it cannot, it returns the
 // class the rows are stamped with: no token saved, or one that does not open, is a token the admin has
 // to enter again.
 func (m *Manager) sweepProvider(ctx context.Context, provider string) (dns.Provider, string) {
-	token, found, err := m.d.Store.DNSToken(ctx, provider)
+	token, found, err := m.token(ctx, provider)
 	if err != nil {
 		m.log.Error("the DNS sweep could not open the saved token", "provider", provider, "error", err)
 		return nil, dns.ClassTokenInvalid

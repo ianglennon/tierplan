@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 // deprecationText is the start of the line logged for a leftover TIERPLAN_TLS_SELF_SIGNED.
@@ -66,8 +67,10 @@ func TestCertFilesWinOverTheDefaultAndTheDeprecatedSwitch(t *testing.T) {
 		if got := leafOf(t, srv.https.Config()); !got.Equal(want) {
 			t.Error("the server did not serve the supplied certificate")
 		}
-		if pins := srv.Tunnel().Pins(); len(pins) != 0 {
-			t.Errorf("welcome pins = %v for a supplied certificate, want none", pins)
+		// The install keeps a self-signed identity it does not serve, and welcomes list its pin so
+		// an install that drops the files strands no agent (D-21). No install command carries it.
+		if pins := srv.Tunnel().Pins(); len(pins) != 1 || pins[0] == authn.SPKIPin(want) || srv.TLSPin() != "" {
+			t.Errorf("welcome pins = %v, install pin %q for a supplied certificate, want the self-signed pin and no install pin", pins, srv.TLSPin())
 		}
 		if n := strings.Count(logged, deprecationText); n != 1 {
 			t.Errorf("the deprecation line appeared %d times, want once", n)
@@ -82,8 +85,10 @@ func TestCertFilesWinOverTheDefaultAndTheDeprecatedSwitch(t *testing.T) {
 		if got := leafOf(t, srv.https.Config()); !got.Equal(want) {
 			t.Error("the server did not serve the supplied certificate")
 		}
-		if pins := srv.Tunnel().Pins(); len(pins) != 0 {
-			t.Errorf("welcome pins = %v for a supplied certificate, want none", pins)
+		// The install keeps a self-signed identity it does not serve, and welcomes list its pin so
+		// an install that drops the files strands no agent (D-21). No install command carries it.
+		if pins := srv.Tunnel().Pins(); len(pins) != 1 || pins[0] == authn.SPKIPin(want) || srv.TLSPin() != "" {
+			t.Errorf("welcome pins = %v, install pin %q for a supplied certificate, want the self-signed pin and no install pin", pins, srv.TLSPin())
 		}
 		if strings.Contains(logged, "deprecated") {
 			t.Error("a deprecation line was logged with the switch unset")

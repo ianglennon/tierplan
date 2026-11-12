@@ -4167,7 +4167,7 @@ export interface paths {
         put?: never;
         /**
          * Register the Let's Encrypt account
-         * @description Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. The account key is created and sealed on the server and never returned. 422 acme_tos_required when agreeTos is not true; 422 acme_contact_invalid (field body.email) for an address the CA or TierPlan refuses; 409 acme_account_exists when one is registered already; 409 acme_paused after a restore, until it is resumed; 409 acme_cert_files while certificate files are set; 502 acme_ca_error when the CA fails, with its class in the first error's message. Needs settings.write.
+         * @description Registers TierPlan with the certificate authority, agreeing to its terms of service. The email is optional. The account key is created and sealed on the server and never returned. 422 acme_tos_required when agreeTos is not true; 422 acme_contact_invalid (field body.email) for an address the CA or TierPlan refuses; 409 acme_account_exists when one is registered already; 409 acme_paused after a restore, until it is resumed; 409 acme_cert_files while certificate files are set; 502 acme_ca_error when the CA fails, with its class in the first error's message. While TIERPLAN_ACME_EMAIL is set it names the address: none typed uses it, the same address is accepted, and any other is refused with 409 acme_email_locked. While TIERPLAN_ACME_ACCEPT_TOS is set a request that does not agree to the terms is refused with 409 acme_tos_locked. A refused registration creates no account, and an existing account keeps its contact. Needs settings.write.
          */
         post: operations["registerACMEAccount"];
         delete?: never;
@@ -4207,7 +4207,7 @@ export interface paths {
         put?: never;
         /**
          * Test a DNS API token
-         * @description Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Tests the typed token, or the saved one when none is typed, against the names a certificate would carry now: for each name it finds the zone, creates a test TXT record, reads it back, notes whether the resolvers show it and deletes it. No order is placed and the CA is not contacted. Nothing is stored. A failing token is 200 with passed false and the classified error of each failing name. 422 acme_dns_token_required (field body.token) when none is typed or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value); 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or another test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. With no token typed it tests the token DNS-01 uses: the environment's when a variable supplies one (it is held in memory, never stored or returned), else the saved one. A typed token while a variable supplies the token is refused with 409 acme_dns_token_locked, and so is a list other than TIERPLAN_DNS_RESOLVERS's with 409 acme_resolvers_locked (the variable's list answers the test). A token the provider refuses is a 200 with the classified error of each name, never a failure of the page. Needs settings.write.
          */
         post: operations["testACMEDNSToken"];
         delete?: never;
@@ -4228,7 +4228,7 @@ export interface paths {
         post?: never;
         /**
          * Remove the saved DNS API token
-         * @description Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Deletes the saved token. 409 acme_dns_token_in_use while DNS-01 is the saved validation method, because renewals would stop; 409 acme_dns_token_locked while an environment variable supplies the token; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
          */
         delete: operations["deleteACMEDNSToken"];
         options?: never;
@@ -4247,7 +4247,7 @@ export interface paths {
         put?: never;
         /**
          * Get a Let's Encrypt certificate for the public address
-         * @description Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
+         * @description Orders a certificate for the names the public address and the agent address say now, in the background. 202 with a job id to follow on the run stream; 200 reused with the certificate's expiry when it already covers exactly these names and is not yet due, in which case nothing is ordered (and Let's Encrypt is served again if it had been stopped). 422 acme_refused lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; 409 acme_no_account before an account is registered; 409 acme_locked while TIERPLAN_ACME=off fixes Let's Encrypt off (the variable's name is the detail; nothing is ordered). 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
          */
         post: operations["issueACMECertificate"];
         delete?: never;
@@ -4266,7 +4266,7 @@ export interface paths {
         get?: never;
         /**
          * Choose the certificate profile
-         * @description Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_PROFILE is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 acme_profile_locked. Needs settings.write.
          */
         put: operations["putACMEProfile"];
         post?: never;
@@ -4287,7 +4287,7 @@ export interface paths {
         put?: never;
         /**
          * Renew the Let's Encrypt certificate now
-         * @description Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
+         * @description Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. 409 acme_not_active when Let's Encrypt is not in use or there is no certificate; 409 acme_no_account before an account is registered; 409 acme_locked while TIERPLAN_ACME=off fixes Let's Encrypt off. 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set, 409 acme_run_active while a run is in progress, 429 acme_blocked while the CA has asked TierPlan to wait or three runs failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). Needs settings.write.
          */
         post: operations["renewACMECertificate"];
         delete?: never;
@@ -4327,7 +4327,7 @@ export interface paths {
         put?: never;
         /**
          * Stop using Let's Encrypt
-         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress. Needs settings.write.
+         * @description Goes back to the self-signed certificate and stops renewals. The account and the stored certificate are kept, so issuing again for the same names is one step and no order. 204. 409 acme_not_active when Let's Encrypt is not in use; 409 acme_cert_files while certificate files are set; 409 acme_run_active while a run is in progress; 409 acme_locked while TIERPLAN_ACME is set, whichever value it has; 409 hsts_on while HSTS is on, because browsers that hold the policy would refuse the self-signed certificate: turn HSTS off first. Needs settings.write.
          */
         post: operations["stopACME"];
         delete?: never;
@@ -4346,9 +4346,29 @@ export interface paths {
         get?: never;
         /**
          * Choose how the names are validated
-         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Saves the validation method (http-01 or dns-01), the DNS resolvers and, when one is given, the DNS API token. A new token is tested against the certificate names first, with no order placed and the CA not contacted; when any name fails, nothing at all is stored and the answer is 200 with saved false and the per-name test. The token is stored sealed and never returned. 422 acme_dns_token_required (field body.token) when DNS-01 is chosen and no token is given or saved; 422 acme_dns_resolver_invalid (field body.resolvers, the entry as the value) for a resolver that is not a host or host:port or a list of more than five; 422 acme_challenge_unknown; 422 acme_refused when no certificate could be ordered for the names; 409 acme_run_active while a run or a token test holds the DNS slot; 409 acme_paused after a restore; 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_CHALLENGE is set it decides: its own method is accepted and the save keeps the saved method, and any other method is refused with 409 acme_challenge_locked, storing nothing. A typed token while TIERPLAN_DNS_PROVIDER or a Cloudflare token variable is set is refused with 409 acme_dns_token_locked: the provider and its token lock together (locks.dnsProvider and locks.dnsToken), and a change of provider would be refused with 409 acme_dns_provider_locked, though no route offers one. With the environment's token alone DNS-01 needs no saved one. While TIERPLAN_DNS_RESOLVERS is set the same list in the same order is accepted and the save keeps the saved list, and any other list is refused with 409 acme_resolvers_locked; every lock is checked before anything is stored, so a refused save stores nothing. Needs settings.write.
          */
         put: operations["putACMEValidation"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/https/hsts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn HSTS on or off
+         * @description Stores the choice and recomputes the header at once, so the next TLS response carries the new decision. It is off by default. HSTS is sent only over a certificate that verifies for the public host, ramping from five minutes to a year, and is withdrawn ahead of the certificate's end. Turning it off sends max-age=0 so browsers forget it. Answers the whole HSTS card. While TIERPLAN_HSTS is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 hsts_locked. 503 https_unavailable on a server without the policy. Needs settings.write.
+         */
+        put: operations["putHTTPSHSTS"];
         post?: never;
         delete?: never;
         options?: never;
@@ -4365,7 +4385,7 @@ export interface paths {
         };
         /**
          * Get the certificate the server serves
-         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
+         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity, and a trust verdict: whether a client that knows only the system roots trusts it for the public URL's host, or why not. When certificate files fix the certificate the answer also carries their two paths and the verdict, never their contents. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
          */
         get: operations["getHTTPSStatus"];
         put?: never;
@@ -8786,6 +8806,8 @@ export interface components {
              * @description The port TierPlan listens on
              */
             listenPort: number;
+            /** @description The settings an environment variable fixes, each with the variable's name. A setting no variable fixes has no entry, and a locked setting cannot be changed through the API */
+            locks: components["schemas"]["HTTPSLocksBody"];
             /**
              * @description active when Let's Encrypt is in use
              * @enum {string}
@@ -8805,7 +8827,7 @@ export interface components {
              * @enum {string}
              */
             pausedReason: "" | "restore" | "cert_files";
-            /** @description The profile orders ask for; empty is the CA's default */
+            /** @description The profile orders ask for: the one TIERPLAN_ACME_PROFILE sets when it is set, otherwise the saved one; empty is the CA's default */
             profile: string;
             /** @description The host of the public address, empty when none is set */
             publicHost: string;
@@ -8846,8 +8868,13 @@ export interface components {
             provider: string;
             /** @description The resolvers the propagation check asks, as host:port; empty means the zone's own name servers */
             resolvers: string[] | null;
-            /** @description True when a DNS API token is saved. The token is never returned */
+            /** @description True when a DNS API token is saved in the database. A token an environment variable supplies is not a saved one. The token is never returned */
             tokenSaved: boolean;
+            /**
+             * @description Which token DNS-01 uses: env when an environment variable supplies it (it is never stored), stored for the saved one, none when there is no token. The token is never returned
+             * @enum {string}
+             */
+            tokenSource: "env" | "stored" | "none";
         };
         HTTPSACMEDNSErrorBody: {
             /** @description The class of the failure, one of the codes of lastError in the status */
@@ -9089,7 +9116,7 @@ export interface components {
             passed: boolean;
         };
         HTTPSACMEValidationOutputBody: {
-            /** @description The validation method saved now */
+            /** @description The validation method in use now: TIERPLAN_ACME_CHALLENGE when it is set, else the saved one */
             challengeType: string;
             /** @description The resolvers saved now */
             resolvers: string[] | null;
@@ -9099,6 +9126,14 @@ export interface components {
             test?: components["schemas"]["HTTPSACMETokenTestBody"];
             /** @description True when a DNS API token is saved now. The token is never returned */
             tokenSaved: boolean;
+        };
+        HTTPSCertFilesBody: {
+            /** @description The certificate file, from TIERPLAN_TLS_CERT_FILE */
+            certPath: string;
+            /** @description The private key file, from TIERPLAN_TLS_KEY_FILE. Only the path is shown */
+            keyPath: string;
+            /** @description Whether the certificate in those files is trusted for the public URL's host */
+            trust: components["schemas"]["HTTPSTrustBody"];
         };
         HTTPSCertificateBody: {
             /** @description Who issued it: the issuer's common name, else its organisation, else empty */
@@ -9122,14 +9157,125 @@ export interface components {
             source: "self_signed" | "cert_files" | "lets_encrypt";
             /** @description True when the certificate comes from Let's Encrypt but the directory was overridden for testing, so browsers will not trust it */
             testCA: boolean;
+            /** @description Whether a client that knows only the system's root certificates trusts this certificate for the public URL's host, which is how an agent without a pin judges it */
+            trust: components["schemas"]["HTTPSTrustBody"];
+        };
+        HTTPSHSTSBody: {
+            /** @description True when a short-lived certificate stops the ramp at a week */
+            capped: boolean;
+            /** @description True while max-age=0 is sent */
+            clearing: boolean;
+            /** @description The effective HSTS setting: TIERPLAN_HSTS when it is set, otherwise the stored choice */
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description The time after which no browser can still hold a policy TierPlan sent. Left out while a policy is being sent and when none can be held. Stopping Let's Encrypt is safe once HSTS is off and this has passed
+             */
+            forgetBy?: string;
+            /** @description Set while the TIERPLAN_HSTS environment variable fixes the setting. Value and stored are on or off */
+            lock?: components["schemas"]["HTTPSLockBody"];
+            /**
+             * Format: int64
+             * @description The max-age in seconds being sent, 0 when none is or when clearing
+             */
+            maxAge: number;
+            /**
+             * Format: date-time
+             * @description When the next, longer step is sent; left out at the last step this certificate may reach and when nothing positive is sent
+             */
+            nextStepAt?: string;
+            /**
+             * @description Why HSTS is on but not sent: the certificate is the self-signed one, or does not verify for the public URL's host (unknown_authority, expired, name_mismatch, no_public_url). Empty otherwise
+             * @enum {string}
+             */
+            notSentReason?: "" | "self_signed" | "unknown_authority" | "expired" | "name_mismatch" | "no_public_url";
+            /**
+             * Format: int64
+             * @description The public URL's port when it is not 443. HSTS covers every port of the host name, so a policy sent here also makes browsers use HTTPS for other services on the same name. Left out on port 443
+             */
+            publicPort?: number;
+            /**
+             * @description What TierPlan does with Strict-Transport-Security now: sending (a positive max-age for the public host), off_clearing (max-age=0, so a browser drops a policy it holds), off_silent (nothing, because no policy could have been sent), not_sent (on, but the certificate is not one HSTS may be sent over; see notSentReason) or withdrawn (max-age=0 ahead of the certificate's end)
+             * @enum {string}
+             */
+            state: "sending" | "off_clearing" | "off_silent" | "not_sent" | "withdrawn";
+            /**
+             * Format: int64
+             * @description The ramp step being sent: 1 is five minutes, 2 a week, 3 thirty days, 4 a year. 0 when nothing positive is sent
+             */
+            step: number;
+            /** @description The choice kept in the database, which TIERPLAN_HSTS overrides without changing and which comes back when the variable is removed */
+            storedEnabled: boolean;
+            /** @description Set while the header is withdrawn ahead of the certificate's end */
+            withdrawal?: components["schemas"]["HTTPSHSTSWithdrawalBody"];
+        };
+        HTTPSHSTSWithdrawalBody: {
+            /**
+             * Format: date-time
+             * @description When the certificate ends. The header is withdrawn from a week before, or a third of its life before for a certificate shorter than three weeks
+             */
+            notAfter: string;
+            /**
+             * @description Where that certificate comes from: Let's Encrypt, or the certificate files you supplied
+             * @enum {string}
+             */
+            source: "lets_encrypt" | "cert_files";
+        };
+        HTTPSLockBody: {
+            /** @description The value kept in the database, used again when the variable is removed. Never set for a secret, and left out when nothing is stored */
+            stored?: string;
+            /** @description What the variable sets. Never set for a secret */
+            value?: string;
+            /** @description The environment variable that fixes the setting, for example TIERPLAN_ACME_PROFILE */
+            var: string;
+        };
+        HTTPSLocksBody: {
+            /** @description The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value */
+            acceptTos?: components["schemas"]["HTTPSLockBody"];
+            /** @description The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off */
+            acme?: components["schemas"]["HTTPSLockBody"];
+            /** @description The validation method, fixed by TIERPLAN_ACME_CHALLENGE. Value is http-01 or dns-01 and stored is the saved method */
+            challengeType?: components["schemas"]["HTTPSLockBody"];
+            /** @description The DNS provider, fixed by TIERPLAN_DNS_PROVIDER or by a Cloudflare token variable: the provider and its token lock together. Value is the provider id and stored the saved one */
+            dnsProvider?: components["schemas"]["HTTPSLockBody"];
+            /** @description The DNS API token, supplied by TIERPLAN_CLOUDFLARE_API_TOKEN or TIERPLAN_CLOUDFLARE_API_TOKEN_FILE, whichever var names. It is a secret: it has no value and no stored value, and a saved token is not removed or replaced while it is locked */
+            dnsToken?: components["schemas"]["HTTPSLockBody"];
+            /** @description The account contact, fixed by TIERPLAN_ACME_EMAIL */
+            email?: components["schemas"]["HTTPSLockBody"];
+            /** @description The certificate profile, fixed by TIERPLAN_ACME_PROFILE */
+            profile?: components["schemas"]["HTTPSLockBody"];
+            /** @description The propagation-check resolvers, fixed by TIERPLAN_DNS_RESOLVERS. Value and stored are the lists as host:port joined by commas; value is empty when the variable fixes the zone's own name servers */
+            resolvers?: components["schemas"]["HTTPSLockBody"];
         };
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */
             acme?: components["schemas"]["HTTPSACMEBody"];
+            /**
+             * @description How an agent installed now trusts this server: pin (it pins the self-signed certificate), public (the certificate verifies against the public CAs, so the agent needs no pin) or unverified (the certificate does not verify for the public URL's host and no pin can stand in for it; an agent installed without a pin keeps the self-signed pin it receives on connecting). The page words it
+             * @enum {string}
+             */
+            agentTrust: "pin" | "public" | "unverified";
             /** @description Whether certificate files from the environment fix the certificate */
             certFiles: boolean;
+            /** @description The paths of the certificate files and whether the certificate is trusted; present only when certificate files fix the certificate */
+            certFilesInfo?: components["schemas"]["HTTPSCertFilesBody"];
             /** @description The certificate the listener serves now */
             certificate: components["schemas"]["HTTPSCertificateBody"];
+            /** @description The HSTS state: the switch, the ramp step and when the next one comes, why it is on but not sent, the withdrawal date, when browsers will have forgotten it, and the environment lock. Left out when this build has no HSTS policy */
+            hsts?: components["schemas"]["HTTPSHSTSBody"];
+        };
+        HTTPSTrustBody: {
+            /** @description False when nothing was judged, because no certificate could be read */
+            checked: boolean;
+            /** @description The public URL's host the certificate was checked for; empty when there is no public URL */
+            host?: string;
+            /**
+             * @description Why it does not verify: self_signed, unknown_authority (the chain does not reach a trusted root, or the intermediates are missing), expired, name_mismatch, or no_public_url (no public URL is set to check the name against). Empty when it verifies
+             * @enum {string}
+             */
+            reason?: "" | "self_signed" | "unknown_authority" | "expired" | "name_mismatch" | "no_public_url";
+            /** @description True when the certificate chain verifies against the system roots for the public URL's host now */
+            verified: boolean;
         };
         ImageDetailBody: {
             /** @description The CPU architecture the image is built for */
@@ -9484,6 +9630,11 @@ export interface components {
             standalone: components["schemas"]["InstallStandaloneBody"];
             /** @description The install for a swarm */
             swarm: components["schemas"]["InstallSwarmBody"];
+            /**
+             * @description Why the pin is present or absent. pin: the self-signed certificate is served and the commands carry its pin. public: the certificate verifies against the public CAs and the agent needs no pin. unverified: the certificate does not verify for the public URL's host, so no pin is carried; an agent installed without a pin keeps the self-signed pin it receives on connecting
+             * @enum {string}
+             */
+            trust: "pin" | "public" | "unverified";
         };
         InstallCleanupBody: {
             /** @description One line that removes the agent container and its volume */
@@ -11534,6 +11685,10 @@ export interface components {
              * @description For a weekly schedule: the day, 0 for Sunday to 6 for Saturday
              */
             weekday?: number;
+        };
+        PutHTTPSHSTSInputBody: {
+            /** @description True to send Strict-Transport-Security over a certificate that verifies for the public host; false to stop and tell browsers to forget it */
+            enabled: boolean;
         };
         ReassignBody: {
             /** @description The automation's kind, as the owned list gives it */
@@ -25381,6 +25536,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPSACMEValidationOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    putHTTPSHSTS: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutHTTPSHSTSInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPSHSTSBody"];
                 };
             };
             /** @description Error */

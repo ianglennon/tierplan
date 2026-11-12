@@ -11,17 +11,24 @@ import { queryClient } from "@/api/query-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { AcmeCard } from "@/features/https/acme-card";
+import { deriveEnvOverlay } from "@/features/https/card-state";
 import { HttpsPage } from "@/features/https/https-page";
 import "@/i18n";
 import {
   acmeActiveRun,
+  acmeDNSStatus,
   acmeLastError,
+  acmeSwitchLock,
   httpsACME,
   httpsCertFilesKeptStatus,
   httpsCertFilesStatus,
+  httpsEnvOffEmptyStatus,
+  httpsEnvOffStatus,
+  httpsEnvOnStatus,
   httpsFallbackStatus,
   httpsLetsEncryptStatus,
   httpsNamesChangedStatus,
+  httpsPendingStatus,
   httpsRestoredStatus,
   httpsStatus,
   httpsTestCAStatus,
@@ -475,5 +482,274 @@ describe("Stop row (D-14)", () => {
         name: "Stop using Let's Encrypt",
       }),
     ).toBeNull();
+  });
+});
+
+describe("TIERPLAN_ACME=on, waiting for the first certificate (D-07, UI-SPEC J5)", () => {
+  const TITLE = "TierPlan is getting a certificate";
+
+  it("says TierPlan orders by itself, asks for no click and adds no state letter", async () => {
+    status = () => Response.json(httpsEnvOnStatus());
+    await ready();
+    expect(stateOf()).toBe("B");
+    const alert = noteWith(TITLE) as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.textContent).toContain("orders the certificate by itself as soon as it is ready");
+    expect(alert.textContent).toContain("You don't need to press anything.");
+    expect(alert.textContent).toContain("The steps show here while it runs.");
+    expect([...alert.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "TIERPLAN_ACME",
+    ]);
+    expect(alert.getAttribute("role")).toBe("note");
+  });
+
+  it("is not shown while a start-time order runs, and the run panel takes over", async () => {
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({ activeRun: acmeActiveRun({ trigger: "schedule", kind: "issue" }) }),
+      );
+    await ready();
+    expect(stateOf()).toBe("C");
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("is not shown once the order failed, refused or was told to wait", async () => {
+    status = () => Response.json(httpsEnvOnStatus({ lastError: acmeLastError(), failures: 1 }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({
+          refusals: [{ code: "names_ip", host: "10.0.0.1" }],
+        }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsEnvOnStatus({
+          blocked: {
+            reason: "told_to_wait",
+            until: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+        }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("is not shown when the variable is unset, or once a certificate is served", async () => {
+    status = () => Response.json(httpsPendingStatus());
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsLetsEncryptStatus({ locks: { acme: { var: "TIERPLAN_ACME", value: "on" } } }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("gives way to the pause alerts, which say what is missing", async () => {
+    status = () => Response.json(httpsEnvOnStatus({ pausedReason: "restore" }));
+    await ready();
+    expect(stateOf()).toBe("H");
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+});
+
+describe("TIERPLAN_ACME=on on the other states (D-08, D-09)", () => {
+  const on = { locks: acmeSwitchLock("on") };
+
+  it("E: the names-changed alert ends with the environment sentence instead of the renewal one", async () => {
+    status = () => Response.json(httpsNamesChangedStatus(on));
+    await ready();
+    expect(stateOf()).toBe("E");
+    const alert = noteWith("The names have changed") as HTMLElement;
+    expect(alert.textContent).toContain("The certificate covers tierplan.example.com.");
+    expect(
+      alert.textContent?.endsWith(
+        "TIERPLAN_ACME is on, so TierPlan orders a certificate for the new names by itself.",
+      ),
+    ).toBe(true);
+    expect(alert.textContent).not.toContain("keeps renewing the old names");
+    expect([...alert.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "tierplan.example.com",
+      "tierplan.example.org",
+      "agents.example.org",
+      "TIERPLAN_ACME",
+    ]);
+  });
+
+  it("H: the restore alert keeps Resume Let's Encrypt and says TierPlan orders again as soon as you resume", async () => {
+    status = () => Response.json(httpsRestoredStatus(on));
+    await ready();
+    expect(stateOf()).toBe("H");
+    const alert = noteWith("Paused after restore") as HTMLElement;
+    expect(alert.textContent).toContain("The certificate being served is unchanged.");
+    expect(alert.textContent).toContain(
+      "TIERPLAN_ACME is on, so TierPlan orders again as soon as you resume.",
+    );
+    expect(within(alert).getByRole("button", { name: "Resume Let's Encrypt" })).toBeTruthy();
+  });
+
+  it("I and J: the certificate-files alerts add that TIERPLAN_ACME starts working when the files are removed", async () => {
+    const sentence =
+      "TIERPLAN_ACME is on and starts working when the certificate files are removed.";
+    status = () => Response.json(httpsCertFilesStatus(on));
+    await ready();
+    expect(stateOf()).toBe("I");
+    expect(notes().some((n) => n.textContent?.includes(sentence))).toBe(true);
+    cleanup();
+    queryClient.clear();
+
+    status = () => Response.json(httpsCertFilesKeptStatus(on));
+    await ready();
+    expect(stateOf()).toBe("J");
+    expect((noteWith("Paused by certificate files") as HTMLElement).textContent).toContain(
+      sentence,
+    );
+  });
+
+  it("leaves every alert as in Phases 14 and 15 when the variable is unset", async () => {
+    status = () => Response.json(httpsRestoredStatus());
+    await ready();
+    expect((noteWith("Paused after restore") as HTMLElement).textContent).not.toContain(
+      "TIERPLAN_ACME",
+    );
+    cleanup();
+    queryClient.clear();
+
+    status = () => Response.json(httpsCertFilesStatus());
+    await ready();
+    expect(notes().some((n) => n.textContent?.includes("TIERPLAN_ACME"))).toBe(false);
+  });
+});
+
+describe("TIERPLAN_ACME=off (D-02, D-04)", () => {
+  const TITLE = "Let's Encrypt is turned off by TIERPLAN_ACME";
+  // The variable name is its own element, so the title is found by its text content.
+  const warning = () =>
+    notes().find((n) => n.querySelector("[data-slot=alert-title]")?.textContent === TITLE) as
+      | HTMLElement
+      | undefined;
+
+  it("with a certificate, order and account kept, warns and says they are kept", async () => {
+    status = () => Response.json(httpsEnvOffStatus());
+    await ready();
+    const alert = warning() as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.className).toContain("border-status-warning");
+    expect(alert.textContent).toContain(
+      "TierPlan serves its self-signed certificate and makes no Let's Encrypt requests.",
+    );
+    expect(alert.textContent).toContain(
+      "Your Let's Encrypt certificate, order and account are kept.",
+    );
+    expect(alert.textContent).toContain(
+      "Remove TIERPLAN_ACME, or set it to on, to use them again.",
+    );
+    expect(
+      [...alert.querySelectorAll("code")].every((c) => c.className.includes("font-mono")),
+    ).toBe(true);
+    // The mode is off, so there is no Stop row.
+    expect(card().queryByRole("button", { name: "Stop using Let's Encrypt" })).toBeNull();
+  });
+
+  it("with nothing stored, is one sentence in an info alert", async () => {
+    status = () => Response.json(httpsEnvOffEmptyStatus());
+    await ready();
+    expect(warning()).toBeUndefined();
+    const note = notes().find(
+      (n) => n.textContent === "Let's Encrypt is turned off by TIERPLAN_ACME.",
+    );
+    expect(note).toBeTruthy();
+    expect(note?.className).not.toContain("border-status-warning");
+    expect(note?.querySelector("[data-slot=alert-title]")).toBeNull();
+    expect(card().queryByRole("button", { name: "Stop using Let's Encrypt" })).toBeNull();
+  });
+
+  it("is not drawn when the variable is unset", async () => {
+    status = () => Response.json(httpsStatus());
+    await ready();
+    expect(notes().some((n) => n.textContent?.includes("turned off by TIERPLAN_ACME"))).toBe(false);
+  });
+});
+
+describe("TIERPLAN_ACME=on with DNS-01 and no token anywhere (D-07)", () => {
+  const TITLE = "Waiting for a Cloudflare token";
+  const GETTING = "TierPlan is getting a certificate";
+  const noToken = (dns: Parameters<typeof acmeDNSStatus>[0] = {}) =>
+    httpsEnvOnStatus({
+      challengeType: "dns-01",
+      dns: acmeDNSStatus({ tokenSource: "none", ...dns }),
+    });
+
+  it("shows the warning with the variable names in mono, and no error panel or other waiting alert", async () => {
+    status = () => Response.json(noToken());
+    await ready();
+    const alert = noteWith(TITLE) as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(alert.textContent).toContain(
+      "TIERPLAN_ACME is on and DNS-01 is selected, but there is no token. TierPlan orders nothing until there is one. Add a token above, or set TIERPLAN_CLOUDFLARE_API_TOKEN_FILE.",
+    );
+    expect([...alert.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "TIERPLAN_ACME",
+      "TIERPLAN_CLOUDFLARE_API_TOKEN_FILE",
+    ]);
+    expect(alert.getAttribute("role")).toBe("note");
+    expect(noteWith(GETTING)).toBeUndefined();
+    expect(card().queryByText(/Next automatic attempt/)).toBeNull();
+    expect(card().queryByText(/TierPlan keeps trying/)).toBeNull();
+  });
+
+  it("is not shown when the environment supplies the token: the ordinary waiting alert shows", async () => {
+    status = () => Response.json(noToken({ tokenSource: "env" }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    expect(noteWith(GETTING)).toBeTruthy();
+  });
+
+  it("is not shown when a saved token is in use", async () => {
+    status = () => Response.json(noToken({ tokenSource: "stored", tokenSaved: true }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("is not shown under HTTP-01, or with TIERPLAN_ACME unset", async () => {
+    status = () =>
+      Response.json(httpsEnvOnStatus({ challengeType: "http-01", dns: acmeDNSStatus() }));
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        httpsPendingStatus({
+          challengeType: "dns-01",
+          dns: acmeDNSStatus({ tokenSource: "none" }),
+        }),
+      );
+    await ready();
+    expect(noteWith(TITLE)).toBeUndefined();
+  });
+
+  it("reads from deriveEnvOverlay: waitingForToken is set and waiting is not", () => {
+    expect(deriveEnvOverlay(noToken())).toMatchObject({ waitingForToken: true, waiting: false });
+    expect(deriveEnvOverlay(noToken({ tokenSource: "env" }))).toMatchObject({
+      waitingForToken: false,
+      waiting: true,
+    });
+    expect(deriveEnvOverlay(httpsPendingStatus()).waitingForToken).toBe(false);
   });
 });

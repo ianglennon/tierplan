@@ -9,6 +9,8 @@ import type { components } from "@/api/schema";
 
 export type HTTPSStatus = components["schemas"]["HTTPSStatusBody"];
 export type HTTPSCertificate = components["schemas"]["HTTPSCertificateBody"];
+// The HSTS block of the status, and the answer of the HSTS save (the same body).
+export type HTTPSHSTS = components["schemas"]["HTTPSHSTSBody"];
 
 // The ["https", "status"] query: the certificate the listener serves now, whatever its source.
 // It is read again every minute and when the window gets focus back, so a renewal shows up.
@@ -22,6 +24,15 @@ export const httpsStatusQuery = queryOptions({
   refetchInterval: 60_000,
   refetchOnWindowFocus: true,
 });
+
+// isLockProblem says whether a refused write was refused because a TIERPLAN_* variable fixes the
+// setting (SET-02): the problem type is a per-field *_locked one (acme_locked, acme_email_locked,
+// acme_tos_locked, acme_profile_locked, ...). The page does not treat it as a failure: the status is
+// read again and the field redraws as locked, with no toast.
+export function isLockProblem(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("type" in error)) return false;
+  return typeof error.type === "string" && error.type.endsWith("_locked");
+}
 
 export type HTTPSACME = components["schemas"]["HTTPSACMEBody"];
 export type ACMEDirectory = components["schemas"]["HTTPSACMEDirectoryBody"];
@@ -85,6 +96,10 @@ export function useRegisterACMEAccount() {
       return data;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
   });
 }
 
@@ -119,6 +134,10 @@ export function useSaveACMEProfile() {
       return data.profile;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
   });
 }
 
@@ -413,6 +432,10 @@ export function useIssueCertificate() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
     },
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
   });
 }
 
@@ -424,6 +447,10 @@ export function useRenewNow() {
     retry: false,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
     },
   });
 }
@@ -476,6 +503,43 @@ export function useStopACME() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
     onError: (error) => {
       if (error instanceof ACMEControlError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+      }
+    },
+  });
+}
+
+// HSTSError is an HSTS save the server refused. type is the problem type ("hsts_locked" while
+// TIERPLAN_HSTS fixes the setting, "https_unavailable" on a build without the policy), when it sent one.
+export class HSTSError extends Error {
+  readonly status: number;
+  readonly type: string | undefined;
+
+  constructor(status: number, type?: string) {
+    super(`PUT /api/https/hsts failed with ${status}`);
+    this.name = "HSTSError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// useSaveHSTS turns HSTS on or off (TLS-06). The mutation stays pending until the status has been read
+// again, so the card already shows the new state when it ends. A refusal because TIERPLAN_HSTS now
+// fixes the setting (a 409 hsts_locked) reads the status again too, so the Switch redraws locked.
+export function useSaveHSTS() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (enabled: boolean): Promise<HTTPSHSTS> => {
+      const { data, error, response } = await api.PUT("/api/https/hsts", { body: { enabled } });
+      if (!data) {
+        throw new HSTSError(response.status, readProblem(error, response).type);
+      }
+      return data;
+    },
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (isLockProblem(error) || (error instanceof HSTSError && error.status === 409)) {
         void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
       }
     },

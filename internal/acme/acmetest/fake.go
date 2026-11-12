@@ -104,6 +104,14 @@ type Options struct {
 	// LookupTXT returns the TXT values found at fqdn, for dns-01 validation. Nil marks dns-01
 	// challenges valid without looking, as a nil Validate does for http-01.
 	LookupTXT func(fqdn string) []string
+	// Intermediate makes the fake sign leaves with an intermediate CA it creates under its root, as
+	// Let's Encrypt does, and serve leaf plus intermediate. IssuerFile and IssuerPool still hold only
+	// the root, so a client that verifies an issued certificate must use the intermediate the server
+	// sends with it. The default serves the leaf and the root's own certificate.
+	Intermediate bool
+	// LeafOnly, with Intermediate, serves the leaf alone: the incomplete chain a misconfigured CA
+	// bundle gives, which a client holding only the root cannot build a path from.
+	LeafOnly bool
 }
 
 // OrderSeen is what the fake was asked for in one accepted newOrder request.
@@ -129,6 +137,10 @@ type Fake struct {
 
 	caCert *x509.Certificate
 	caKey  *ecdsa.PrivateKey
+
+	// signCert and signKey sign the leaves: the root itself, or the intermediate under it.
+	signCert *x509.Certificate
+	signKey  *ecdsa.PrivateKey
 
 	mu       sync.Mutex
 	seq      int
@@ -300,6 +312,39 @@ func (f *Fake) newCA(t testing.TB) {
 		t.Fatalf("acmetest: parse CA certificate: %v", err)
 	}
 	f.caKey, f.caCert = key, cert
+	f.signKey, f.signCert = key, cert
+	if f.opts.Intermediate {
+		f.newIntermediate(t)
+	}
+}
+
+// newIntermediate makes the intermediate CA under the root that signs the leaves when
+// Options.Intermediate is set.
+func (f *Fake) newIntermediate(t testing.TB) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("acmetest: intermediate key: %v", err)
+	}
+	now := f.clock.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "TierPlan fake ACME intermediate"},
+		NotBefore:             now.AddDate(-10, 0, 0),
+		NotAfter:              now.AddDate(20, 0, 0),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.caCert, &key.PublicKey, f.caKey)
+	if err != nil {
+		t.Fatalf("acmetest: intermediate certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("acmetest: parse intermediate certificate: %v", err)
+	}
+	f.signKey, f.signCert = key, cert
 }
 
 // DirectoryURL is the URL of the directory, for the ACME client's CA directory setting.
@@ -968,7 +1013,7 @@ func (f *Fake) issue(o *order, csr *x509.CertificateRequest) error {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.caCert, csr.PublicKey, f.caKey)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.signCert, csr.PublicKey, f.signKey)
 	if err != nil {
 		return fmt.Errorf("sign the certificate: %w", err)
 	}
@@ -981,7 +1026,9 @@ func (f *Fake) issue(o *order, csr *x509.CertificateRequest) error {
 		return err
 	}
 	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
-	chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.caCert.Raw})...)
+	if !f.opts.LeafOnly {
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.signCert.Raw})...)
+	}
 	c := &issued{id: f.nextID(), ari: ari, owner: o.owner, leaf: leaf, chain: chain, order: o}
 	f.certs[c.id] = c
 	f.byARI[ari] = c

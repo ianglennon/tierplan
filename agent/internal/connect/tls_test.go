@@ -439,6 +439,145 @@ func TestPinsFromAnUnverifiedSessionAreNeverStored(t *testing.T) {
 	}
 }
 
+// --- the switch to a public certificate and back (D-19, D-20, TLS-08) ---
+
+// fencedWelcome is a welcome that lists pins and is followed by a fence, so a test can wait for the
+// agent to have handled it (swappableServer.awaitConnection).
+func fencedWelcome(pins ...string) reply { return reply{pins: pins, toAgent: []string{fenceLine}} }
+
+// swapEnv is the agent's test environment for the swap tests: the generated root stands in for the
+// system roots and the pin deadline follows clk, which the test moves. The certificate validity
+// stays on the wall clock.
+func swapEnv(root *x509.Certificate, clk *clock) (runEnv, <-chan struct{}) {
+	env, rounds := countingEnv()
+	env.now = clk.now
+	env.roots = poolOf(certPair{cert: root})
+	return env, rounds
+}
+
+// storedPin is the entry of the agent's pins file for pin, failing the test when there is none.
+func storedPin(t *testing.T, dir, pin string) state.PinEntry {
+	t.Helper()
+	ps, err := state.LoadPins(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ps {
+		if e.Pin == pin {
+			return e
+		}
+	}
+	t.Fatalf("the agent stores %v, want the pin %s", ps, pin)
+	return state.PinEntry{}
+}
+
+// An agent installed with the self-signed pin keeps connecting while the server switches to a public
+// chain and back, and keeps the pin past PinOverlap, because every welcome lists it (D-19, D-20
+// steps 1 to 4).
+func TestPinnedAgentKeepsTheSelfSignedPinPastTheOverlap(t *testing.T) {
+	root, chain := newTestChain(t, "127.0.0.1")
+	self, selfTLS := newSelfSigned(t)
+	selfPin := self.pin()
+	f := newSwappableServerTLS(t, func(int, wire.Auth) reply { return fencedWelcome(selfPin) })
+	f.start(t, &selfTLS)
+	dir := t.TempDir()
+	clk := newClock(time.Now())
+	env, _ := swapEnv(root, clk)
+
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{selfPin}, StateDir: dir}, env)
+	f.awaitConnection(t, 1)
+
+	// The server switches to the public chain; the agent reconnects through the intermediate to the root.
+	f.serve(&chain)
+	f.dropAll()
+	f.awaitConnection(t, 2)
+
+	// Past the overlap, the server falls back to self-signed. The pin is still live.
+	clk.advance(state.PinOverlap + 24*time.Hour)
+	f.serve(&selfTLS)
+	f.dropAll()
+	f.awaitConnection(t, 3)
+	if e := storedPin(t, dir, selfPin); !e.ExpiresAt.IsZero() {
+		t.Errorf("the self-signed pin has the deadline %s, want none: every welcome listed it", e.ExpiresAt)
+	}
+}
+
+// An agent installed with no pin verifies the first connection against the public roots, stores the
+// self-signed pin from that welcome with no deadline, and survives the fallback and a restart
+// without its join token.
+func TestPinlessAgentGainsTheSelfSignedPinFromItsWelcome(t *testing.T) {
+	root, chain := newTestChain(t, "127.0.0.1")
+	self, selfTLS := newSelfSigned(t)
+	selfPin := self.pin()
+	f := newSwappableServerTLS(t, func(int, wire.Auth) reply { return fencedWelcome(selfPin) })
+	f.start(t, &chain)
+	dir := t.TempDir()
+	clk := newClock(time.Now())
+	env, _ := swapEnv(root, clk)
+
+	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", StateDir: dir}, env)
+	f.awaitConnection(t, 1)
+	if e := storedPin(t, dir, selfPin); !e.ExpiresAt.IsZero() {
+		t.Fatalf("the pin from the first welcome has the deadline %s, want none", e.ExpiresAt)
+	}
+
+	// Past the overlap, the server falls back to self-signed, which only the stored pin covers.
+	clk.advance(state.PinOverlap + 24*time.Hour)
+	f.serve(&selfTLS)
+	f.dropAll()
+	f.awaitConnection(t, 2)
+
+	// A restart has no join token and no install pin: only what it stored.
+	cancel()
+	restartEnv, _ := swapEnv(root, clk)
+	startAgent(t, Config{URL: f.url(), StateDir: dir}, restartEnv)
+	a, _ := f.authN(t, 3)
+	if a.Mode != wire.ModeHello {
+		t.Fatalf("the restarted agent said %q, want hello", a.Mode)
+	}
+	f.awaitFence(t)
+}
+
+// The control: a server that lists the pin in the first welcome only, as before D-19, strands a
+// pinless agent once PinOverlap has passed and the server falls back to self-signed. It shows that
+// the two tests above can fail.
+func TestAgentDropsAnUnlistedPinAfterTheOverlap(t *testing.T) {
+	root, chain := newTestChain(t, "127.0.0.1")
+	self, selfTLS := newSelfSigned(t)
+	selfPin := self.pin()
+	f := newSwappableServerTLS(t, func(n int, _ wire.Auth) reply {
+		if n == 1 {
+			return fencedWelcome(selfPin)
+		}
+		return fencedWelcome()
+	})
+	f.start(t, &chain)
+	dir := t.TempDir()
+	clk := newClock(time.Now())
+	env, rounds := swapEnv(root, clk)
+	logs := &lockedBuffer{}
+
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", StateDir: dir, Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
+	f.awaitConnection(t, 1)
+
+	// The second welcome leaves the pin out, which starts its overlap.
+	f.dropAll()
+	f.awaitConnection(t, 2)
+	if e := storedPin(t, dir, selfPin); e.ExpiresAt.IsZero() {
+		t.Fatal("the pin has no deadline although the second welcome left it out")
+	}
+
+	clk.advance(state.PinOverlap + 24*time.Hour)
+	f.serve(&selfTLS)
+	f.dropAll()
+	for !strings.Contains(logs.String(), "code=tls_untrusted") {
+		testsupport.Await(t, "a round of attempts that ends in tls_untrusted", rounds)
+	}
+	if n := f.attempts(); n != 2 {
+		t.Fatalf("the server saw %d handshakes, want 2: the agent authenticated to a certificate it does not trust", n)
+	}
+}
+
 // --- the confinement gate ---
 
 func TestTheInsecureTLSGateFailsWhenTheSettingAppearsInAnotherFile(t *testing.T) {

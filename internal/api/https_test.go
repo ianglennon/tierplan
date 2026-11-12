@@ -55,16 +55,19 @@ func httpsLeaf(t *testing.T, issuer pkix.Name, dns []string, ips []net.IP) *x509
 }
 
 type httpsCertJSON struct {
-	Source    string   `json:"source"`
-	Issuer    string   `json:"issuer"`
-	Names     []string `json:"names"`
-	NotBefore string   `json:"notBefore"`
-	NotAfter  string   `json:"notAfter"`
+	Source    string             `json:"source"`
+	Issuer    string             `json:"issuer"`
+	Names     []string           `json:"names"`
+	NotBefore string             `json:"notBefore"`
+	NotAfter  string             `json:"notAfter"`
+	Trust     api.HTTPSTrustBody `json:"trust"`
 }
 
 type httpsStatusJSON struct {
-	Certificate httpsCertJSON `json:"certificate"`
-	CertFiles   bool          `json:"certFiles"`
+	Certificate   httpsCertJSON           `json:"certificate"`
+	CertFiles     bool                    `json:"certFiles"`
+	CertFilesInfo *api.HTTPSCertFilesBody `json:"certFilesInfo"`
+	AgentTrust    string                  `json:"agentTrust"`
 }
 
 // httpsStatus signs in as admin, serves served and reads the status.
@@ -107,15 +110,44 @@ func TestHTTPSStatusShowsTheServedCertificate(t *testing.T) {
 	if got.CertFiles {
 		t.Error("certFiles is true without certificate files")
 	}
+	if got.CertFilesInfo != nil {
+		t.Errorf("certFilesInfo = %+v without certificate files, want none", got.CertFilesInfo)
+	}
+	if strings.Contains(rec.Body.String(), "certFilesInfo") {
+		t.Errorf("the body names certFilesInfo without certificate files: %s", rec.Body)
+	}
+}
+
+// The self-signed certificate is shown with its verdict and no cert-files block, even when the deps
+// carry paths.
+func TestHTTPSStatusSelfSignedHasNoCertFilesInfo(t *testing.T) {
+	t.Parallel()
+	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"localhost"}, nil)
+	rec, got := httpsStatus(t, api.HTTPSDeps{
+		CertFile: "/ignored.crt", KeyFile: "/ignored.key",
+		Served: func() api.ServedCertificate {
+			return api.ServedCertificate{Source: api.SourceSelfSigned, Leaf: leaf, Trust: api.CertTrust{Checked: true, Reason: "self_signed"}}
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if got.CertFilesInfo != nil {
+		t.Errorf("certFilesInfo = %+v for the self-signed certificate, want none", got.CertFilesInfo)
+	}
+	if got.Certificate.Trust.Verified || got.Certificate.Trust.Reason != "self_signed" {
+		t.Errorf("trust = %+v, want self_signed and not verified", got.Certificate.Trust)
+	}
 }
 
 func TestHTTPSStatusForCertificateFiles(t *testing.T) {
 	t.Parallel()
 	leaf := httpsLeaf(t, pkix.Name{CommonName: "Example CA"}, []string{"xn--bcher-kva.example", "b.example.com"}, nil)
+	trust := api.CertTrust{Checked: true, Reason: "unknown_authority", Host: "b.example.com"}
 	rec, got := httpsStatus(t, api.HTTPSDeps{
-		CertFiles: true,
+		CertFiles: true, CertFile: "/certs/tls.crt", KeyFile: "/certs/tls.key",
 		Served: func() api.ServedCertificate {
-			return api.ServedCertificate{Source: api.SourceCertFiles, Leaf: leaf}
+			return api.ServedCertificate{Source: api.SourceCertFiles, Leaf: leaf, Trust: trust}
 		},
 	})
 	if rec.Code != http.StatusOK {
@@ -123,6 +155,13 @@ func TestHTTPSStatusForCertificateFiles(t *testing.T) {
 	}
 	if got.Certificate.Source != "cert_files" || !got.CertFiles {
 		t.Errorf("source %q certFiles %v, want cert_files and true", got.Certificate.Source, got.CertFiles)
+	}
+	wantTrust := api.HTTPSTrustBody{Checked: true, Reason: "unknown_authority", Host: "b.example.com"}
+	if got.Certificate.Trust != wantTrust {
+		t.Errorf("certificate.trust = %+v, want %+v", got.Certificate.Trust, wantTrust)
+	}
+	if info := got.CertFilesInfo; info == nil || info.CertPath != "/certs/tls.crt" || info.KeyPath != "/certs/tls.key" || info.Trust != wantTrust {
+		t.Errorf("certFilesInfo = %+v, want both paths and the verdict", info)
 	}
 	// Names are returned exactly as the certificate carries them: A-labels stay A-labels.
 	if want := []string{"xn--bcher-kva.example", "b.example.com"}; !slices.Equal(got.Certificate.Names, want) {
@@ -196,5 +235,33 @@ func TestHTTPSStatusWithoutACertificateIsUnavailable(t *testing.T) {
 	rec, _ := httpsStatus(t, api.HTTPSDeps{Served: func() api.ServedCertificate { return api.ServedCertificate{} }})
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "https_unavailable") {
 		t.Errorf("status = %d: %s, want 503 https_unavailable", rec.Code, rec.Body)
+	}
+}
+
+// The status says how agents trust the server now, from the deps' AgentTrust; without a source it says
+// unverified, the answer that claims nothing.
+func TestHTTPSStatusAgentTrust(t *testing.T) {
+	t.Parallel()
+	leaf := httpsLeaf(t, pkix.Name{CommonName: "Example CA"}, []string{"b.example.com"}, nil)
+	served := func() api.ServedCertificate { return api.ServedCertificate{Source: api.SourceCertFiles, Leaf: leaf} }
+	for name, tc := range map[string]struct {
+		source func() string
+		want   string
+	}{
+		"pin":        {func() string { return "pin" }, "pin"},
+		"public":     {func() string { return "public" }, "public"},
+		"unverified": {func() string { return "unverified" }, "unverified"},
+		"no source":  {nil, "unverified"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec, got := httpsStatus(t, api.HTTPSDeps{Served: served, AgentTrust: tc.source})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+			}
+			if got.AgentTrust != tc.want {
+				t.Errorf("agentTrust = %q, want %q", got.AgentTrust, tc.want)
+			}
+		})
 	}
 }

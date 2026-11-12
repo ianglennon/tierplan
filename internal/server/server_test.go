@@ -925,11 +925,15 @@ func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 	})
 }
 
+// hstsCleared is what a certificate that is not trusted gets over TLS: a header that clears a
+// policy earlier versions sent, never a positive lifetime (D-14, D-23).
+const hstsCleared = "max-age=0"
+
 // hstsFor is hstsOf with the request shaped by mutate: the peer address, a forwarded header or TLS.
-func hstsFor(t *testing.T, env map[string]string, mutate func(*http.Request)) string {
+func hstsFor(t *testing.T, env map[string]string, mutate func(*http.Request), opts ...Option) string {
 	t.Helper()
 	env["TIERPLAN_DATA_DIR"] = t.TempDir() + "/data"
-	srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
+	srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -951,15 +955,16 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 		t.Errorf("self-signed with an https public URL: Strict-Transport-Security = %q, want none", got)
 	}
 
-	// A supplied certificate is the operator's own: HSTS is sent (D-37).
+	// A supplied certificate that no root vouches for is not trusted: a browser that trusts its CA is
+	// told to forget the one-year policy earlier versions sent (D-14, D-23). Nothing positive.
 	src := t.TempDir()
 	writePair(t, filepath.Join(src, "c.pem"), filepath.Join(src, "k.pem"), "supplied.example.com")
 	supplied := map[string]string{
 		"TIERPLAN_TLS_CERT_FILE": filepath.Join(src, "c.pem"),
 		"TIERPLAN_TLS_KEY_FILE":  filepath.Join(src, "k.pem"),
 	}
-	if got := hstsOf(t, supplied, true); got != "max-age=31536000" {
-		t.Errorf("supplied certificate: Strict-Transport-Security = %q, want max-age=31536000", got)
+	if got := hstsOf(t, supplied, true); got != hstsCleared {
+		t.Errorf("untrusted supplied certificate: Strict-Transport-Security = %q, want %s", got, hstsCleared)
 	}
 
 	// A plain request with nothing marking it https is not sent HSTS, whatever the public URL says.
@@ -971,7 +976,7 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 func TestHSTSIsSentOnlyOverTLS(t *testing.T) {
 	const trustedPeer = "203.0.113.9:40000"
 	const untrustedPeer = "198.51.100.7:40000"
-	const hsts = "max-age=31536000"
+	const hsts = hstsCleared
 	forwarded := func(peer, proto string, overTLS bool) func(*http.Request) {
 		return func(r *http.Request) {
 			r.RemoteAddr = peer
@@ -1013,8 +1018,8 @@ func TestHSTSIsSentOnlyOverTLS(t *testing.T) {
 		{"no TLS, loopback peer", withEnv(supplied), forwarded("127.0.0.1:40000", "", false), ""},
 		{"no TLS, self-signed, trusted proxy saying https", withEnv(nil), forwarded(trustedPeer, "https", false), ""},
 		// Over TLS the certificate kind decides.
-		{"TLS with a supplied certificate", withEnv(supplied), forwarded(untrustedPeer, "", true), hsts},
-		{"TLS with a supplied certificate and a forwarded http", withEnv(supplied), forwarded(trustedPeer, "http", true), hsts},
+		{"TLS with an untrusted supplied certificate", withEnv(supplied), forwarded(untrustedPeer, "", true), hsts},
+		{"TLS with an untrusted supplied certificate and a forwarded http", withEnv(supplied), forwarded(trustedPeer, "http", true), hsts},
 		{"TLS with the self-signed certificate", withEnv(nil), forwarded(untrustedPeer, "", true), ""},
 		{"TLS with the self-signed certificate and a trusted proxy saying https", withEnv(nil), forwarded(trustedPeer, "https", true), ""},
 	}

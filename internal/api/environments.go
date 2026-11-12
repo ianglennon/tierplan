@@ -59,6 +59,9 @@ type EnvironmentsDeps struct {
 	// "" when it serves a supplied certificate or plain HTTP, and then the install
 	// carries no pin (D-06). Nil means none.
 	TLSPin func() string
+	// TLSTrust says how an agent installed now trusts the server: "pin", "public" or "unverified". Nil
+	// derives it from TLSPin: a pin means "pin", none means "unverified".
+	TLSTrust func() string
 	// Checker filters the list to the environments the caller may read.
 	Checker *rbac.Checker
 	// Updater is asked to look at an environment's agents when automatic updates
@@ -198,6 +201,7 @@ type InstallBody struct {
 	AgentURL      string                `json:"agentUrl" doc:"The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request"`
 	Image         string                `json:"image" doc:"The agent image. Its tag is this server's exact version, or edge for a development or edge server"`
 	Pin           string                `json:"pin,omitempty" doc:"The SPKI pin of the self-signed certificate TierPlan serves, which the agent trusts instead of system roots. Present only when TierPlan serves its own self-signed certificate"`
+	Trust         string                `json:"trust" enum:"pin,public,unverified" doc:"Why the pin is present or absent. pin: the self-signed certificate is served and the commands carry its pin. public: the certificate verifies against the public CAs and the agent needs no pin. unverified: the certificate does not verify for the public URL's host, so no pin is carried; an agent installed without a pin keeps the self-signed pin it receives on connecting"`
 	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, tierplan-agent-token-g followed by the generation"`
 	Generation    int                   `json:"generation" doc:"Which token this is for the environment, from 1; each rotation adds one"`
 	Swarm         InstallSwarmBody      `json:"swarm" doc:"The install for a swarm"`
@@ -588,6 +592,7 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 	install, err := agents.BuildInstall(agents.InstallParams{
 		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation,
 	})
+	trust := installTrust(pin, d.TLSTrust)
 	if err != nil {
 		// The environment exists and its token cannot be shown again. A value that
 		// breaks the quoting is a server bug, so it is logged and not hidden.
@@ -595,14 +600,28 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 	}
 	return &AddEnvironmentOutput{CacheControl: "no-store", Body: AddEnvironmentBody{
 		EnvironmentBody: environmentBody(e),
-		Install:         installBody(install),
+		Install:         installBody(install, trust),
 	}}, nil
 }
 
+// installTrust is how an agent installed now trusts the server. A server that says so is believed;
+// otherwise a pin means pin and none means unverified, which claims nothing.
+func installTrust(pin string, source func() string) string {
+	if source != nil {
+		if t := source(); t != "" {
+			return t
+		}
+	}
+	if pin != "" {
+		return "pin"
+	}
+	return "unverified"
+}
+
 // installBody maps the built install to its API shape.
-func installBody(in agents.Install) *InstallBody {
+func installBody(in agents.Install, trust string) *InstallBody {
 	return &InstallBody{
-		JoinToken: in.JoinToken, AgentURL: in.AgentURL, Image: in.Image, Pin: in.Pin,
+		JoinToken: in.JoinToken, AgentURL: in.AgentURL, Image: in.Image, Pin: in.Pin, Trust: trust,
 		SecretName: in.SecretName, Generation: in.Generation,
 		Swarm:         InstallSwarmBody{Command: in.SwarmCommand, StackFile: in.SwarmStackFile, RotateCommand: in.SwarmRotateCommand},
 		Standalone:    InstallStandaloneBody{Command: in.StandaloneCommand, ComposeFile: in.StandaloneComposeFile},

@@ -13,20 +13,20 @@ import (
 )
 
 // tlsKind says where the live certificate comes from. It decides whether a pin
-// is published and whether HSTS may be sent.
+// is published. It does not decide HSTS: that is the policy in hsts.go, for every kind.
 type tlsKind uint8
 
 const (
 	// tlsKindSelfSigned is the certificate TierPlan generated. Agents pin its
-	// key, and HSTS is never sent with it (WR-09). The kinds start at 1, so the
-	// zero value is no kind at all and never reads as self-signed.
+	// key. The kinds start at 1, so the zero value is no kind at all and never reads as self-signed.
 	tlsKindSelfSigned tlsKind = iota + 1
-	// tlsKindSupplied is a certificate the operator provided or obtained. HSTS
-	// is allowed over it and no pin is published.
+	// tlsKindSupplied is a certificate the operator provided or obtained. No install command
+	// carries a pin for it, and a welcome still lists the install's self-signed pin (D-19).
 	tlsKindSupplied
-	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No pin is
-	// published (the certificate chains to the public roots, and agents keep the pin of the
-	// self-signed key they were installed with), and HSTS is not sent in this phase.
+	// tlsKindACME is a Let's Encrypt certificate TierPlan obtained and renews itself. No install
+	// command carries a pin (the certificate chains to the public roots). A welcome still lists the
+	// self-signed pin, so agents keep the key they were installed with and never start a PinOverlap
+	// countdown on it (D-19).
 	tlsKindACME
 )
 
@@ -48,6 +48,13 @@ type liveTLS struct {
 type httpsRuntime struct {
 	cur atomic.Pointer[liveTLS]
 	cfg *tls.Config
+	// selfPin is the SPKI pin of the install's self-signed identity, settled once by Build. It is
+	// never read from the served certificate, so a Let's Encrypt leaf's pin is never published and
+	// a renewal never changes what welcomes list (D-19).
+	selfPin atomic.Pointer[string]
+	// onInstall is told after every Install, so the HSTS policy decides for a swapped certificate at
+	// once instead of at its next tick (D-10).
+	onInstall atomic.Pointer[func()]
 }
 
 // newHTTPSRuntime returns a runtime with nothing installed.
@@ -70,6 +77,19 @@ func newHTTPSRuntime() *httpsRuntime {
 // connection already open keeps the certificate it was set up with.
 func (r *httpsRuntime) Install(kind tlsKind, get func(*tls.ClientHelloInfo) (*tls.Certificate, error)) {
 	r.cur.Store(&liveTLS{kind: kind, get: get})
+	if f := r.onInstall.Load(); f != nil {
+		(*f)()
+	}
+}
+
+// SetOnInstall registers f to be called after every Install. f must not block: it is called on the
+// goroutine that installs a certificate. A nil f removes the hook.
+func (r *httpsRuntime) SetOnInstall(f func()) {
+	if f == nil {
+		r.onInstall.Store(nil)
+		return
+	}
+	r.onInstall.Store(&f)
 }
 
 // Kind is the kind of the installed source, 0 when nothing is installed. That
@@ -89,9 +109,24 @@ func (r *httpsRuntime) Config() *tls.Config { return r.cfg }
 // ServerConfig is the config a TLS listener serves with. It is never nil.
 func (r *httpsRuntime) ServerConfig() *tls.Config { return r.cfg }
 
-// Pins is the SPKI pin list a welcome carries: the generated certificate's pin
-// and nothing else. A supplied certificate publishes none.
-func (r *httpsRuntime) Pins() []string {
+// SetSelfSignedPin records the pin of the install's self-signed identity. Build calls it once,
+// before any goroutine starts: the key is never rotated while the server runs (13.1 D-12).
+func (r *httpsRuntime) SetSelfSignedPin(pin string) {
+	if pin == "" {
+		r.selfPin.Store(nil)
+		return
+	}
+	r.selfPin.Store(&pin)
+}
+
+// WelcomePins is the SPKI pin list a welcome, a control-stream catch-up and an address push carry:
+// the self-signed identity's pin, whatever certificate is served, so no agent sees its pin
+// disappear and starts a PinOverlap countdown (D-19). A runtime that was never given a pin and
+// serves the self-signed kind falls back to the served certificate's pin. Otherwise it is nil.
+func (r *httpsRuntime) WelcomePins() []string {
+	if p := r.selfPin.Load(); p != nil {
+		return []string{*p}
+	}
 	if r.Kind() != tlsKindSelfSigned {
 		return nil
 	}
@@ -101,26 +136,66 @@ func (r *httpsRuntime) Pins() []string {
 	return nil
 }
 
-// Pin is the pin an install command carries: the first of Pins, or "".
+// Pin is the pin an install, rotate or manual-update command carries: the self-signed pin while
+// the self-signed certificate is served, and "" under Let's Encrypt or cert files, whose
+// certificates chain to a root the host already trusts or are the operator's own (TLS-08, D-18).
 func (r *httpsRuntime) Pin() string {
-	if p := r.Pins(); len(p) > 0 {
+	if r.Kind() != tlsKindSelfSigned {
+		return ""
+	}
+	if p := r.WelcomePins(); len(p) > 0 {
 		return p[0]
 	}
 	return ""
 }
 
-// HSTSAllowed reports whether a response over TLS may carry
-// Strict-Transport-Security: only with a supplied certificate, never with the
-// generated one that a browser cannot be asked to trust for a year (D-04).
-func (r *httpsRuntime) HSTSAllowed() bool { return r.Kind() == tlsKindSupplied }
+// servedChain is the installed kind and the certificates a handshake would present, leaf first, parsed
+// from what GetCertificate answers and never from a stored copy. Both come from one read of the
+// installed source, so a swap while the caller works never pairs one source's kind with another's
+// chain. The chain is nil when nothing is installed or the certificate cannot be read; a certificate
+// after the leaf that cannot be parsed is left out.
+func (r *httpsRuntime) servedChain() (tlsKind, []*x509.Certificate) {
+	l := r.cur.Load()
+	if l == nil || l.get == nil {
+		return 0, nil
+	}
+	cert, err := l.get(&tls.ClientHelloInfo{})
+	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+		return l.kind, nil
+	}
+	chain := make([]*x509.Certificate, 0, len(cert.Certificate))
+	for i, der := range cert.Certificate {
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			if i == 0 {
+				return l.kind, nil
+			}
+			continue
+		}
+		chain = append(chain, c)
+	}
+	return l.kind, chain
+}
 
-// served is the certificate a browser receives now: the installed kind mapped
-// to a source and the leaf parsed from what GetCertificate answers, never a
-// stored copy. Nothing installed, or a certificate that cannot be parsed, gives
-// a nil Leaf.
-func (r *httpsRuntime) served() api.ServedCertificate {
+// agentTrust is how an agent installed now trusts the server, read from one read of the served
+// certificate (pin, public or unverified).
+func (r *httpsRuntime) agentTrust(tc *trustChecker) string {
+	kind, chain := r.servedChain()
+	return tc.AgentTrust(kind, chain)
+}
+
+// served is the certificate a browser receives now: the installed kind mapped to a source and the
+// leaf parsed from what GetCertificate answers. Nothing installed, or a certificate that cannot be
+// parsed, gives a nil Leaf.
+func (r *httpsRuntime) served() api.ServedCertificate { return r.servedWith(nil) }
+
+// servedWith is served with the trust verdict of the same read attached, so the certificate a status
+// shows and the verdict beside it can never come from two different certificates (SET-01). A nil
+// checker leaves the verdict unchecked.
+func (r *httpsRuntime) servedWith(tc *trustChecker) api.ServedCertificate {
+	kind, chain := r.servedChain()
 	var s api.ServedCertificate
-	switch r.Kind() {
+	switch kind {
 	case tlsKindSelfSigned:
 		s.Source = api.SourceSelfSigned
 	case tlsKindSupplied:
@@ -130,15 +205,14 @@ func (r *httpsRuntime) served() api.ServedCertificate {
 	default:
 		return s
 	}
-	cert, err := r.cfg.GetCertificate(&tls.ClientHelloInfo{})
-	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+	if len(chain) == 0 {
 		return s
 	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return s
+	s.Leaf = chain[0]
+	if tc != nil {
+		v := tc.verdictFor(kind, chain)
+		s.Trust = api.CertTrust{Checked: v.Checked, Verified: v.Verified, Reason: v.Reason, Host: v.Host}
 	}
-	s.Leaf = leaf
 	return s
 }
 

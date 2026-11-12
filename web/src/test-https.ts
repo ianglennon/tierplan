@@ -12,11 +12,18 @@ import type {
 import type { ACMELastError } from "@/features/https/copy";
 import type { ACMERun, ACMEStep } from "@/features/https/https-run-stream";
 
-// The DNS block of the status: Cloudflare, no token saved, no resolvers and nothing left over.
+// The DNS block of the status: Cloudflare, no token anywhere, no resolvers and nothing left over.
 export type LeftOverRecord = NonNullable<HTTPSACME["dns"]["leftOver"]>[number];
 
 export function acmeDNSStatus(over: Partial<HTTPSACME["dns"]> = {}): HTTPSACME["dns"] {
-  return { leftOver: [], provider: "cloudflare", resolvers: [], tokenSaved: false, ...over };
+  return {
+    leftOver: [],
+    provider: "cloudflare",
+    resolvers: [],
+    tokenSaved: false,
+    tokenSource: "none",
+    ...over,
+  };
 }
 
 // A TXT record TierPlan could not delete as the status lists it: the last delete failed because the
@@ -46,6 +53,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     failures: 0,
     hasState: false,
     listenPort: 7480,
+    locks: {},
     mode: "off",
     names: [{ name: "tierplan.example.com", refused: false }],
     namesMismatch: false,
@@ -70,7 +78,14 @@ export function httpsStatus(over: Partial<HTTPSStatus> = {}): HTTPSStatus {
       notBefore: new Date(Date.now() - 86_400_000).toISOString(),
       notAfter: new Date(Date.now() + 364 * 86_400_000).toISOString(),
       testCA: false,
+      trust: {
+        checked: true,
+        verified: false,
+        reason: "self_signed",
+        host: "tierplan.example.com",
+      },
     },
+    agentTrust: "pin",
     acme: httpsACME(),
     ...over,
   };
@@ -233,7 +248,9 @@ export function httpsLetsEncryptStatus(
       notBefore: issuedAt,
       notAfter,
       testCA: false,
+      trust: { checked: true, verified: true, host: "tierplan.example.com" },
     },
+    agentTrust: "public",
     acme: httpsACME({
       mode: "active",
       hasState: true,
@@ -284,12 +301,26 @@ export function httpsRestoredStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus 
   return httpsLetsEncryptStatus({ pausedReason: "restore", renewal: undefined, ...acme });
 }
 
+// The paths of the certificate files and the verdict on them, as the status carries them while the
+// files fix the certificate: a certificate that verifies for the public host.
+export function certFilesInfo(
+  over: Partial<NonNullable<HTTPSStatus["certFilesInfo"]>> = {},
+): NonNullable<HTTPSStatus["certFilesInfo"]> {
+  return {
+    certPath: "/run/secrets/tls.crt",
+    keyPath: "/run/secrets/tls.key",
+    trust: { checked: true, verified: true, host: "tierplan.example.com" },
+    ...over,
+  };
+}
+
 // Certificate files are set and Let's Encrypt was never set up: the card is disabled (D-12).
 export function httpsCertFilesStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
   const base = httpsStatus();
   return {
     ...base,
     certFiles: true,
+    certFilesInfo: certFilesInfo(),
     certificate: { ...base.certificate, source: "cert_files", issuer: "Corporate CA" },
     acme: httpsACME({ pausedReason: "cert_files", ...acme }),
   };
@@ -301,6 +332,7 @@ export function httpsCertFilesKeptStatus(acme: Partial<HTTPSACME> = {}): HTTPSSt
   return {
     ...lets,
     certFiles: true,
+    certFilesInfo: certFilesInfo(),
     certificate: { ...lets.certificate, source: "cert_files", issuer: "Corporate CA" },
   };
 }
@@ -316,4 +348,191 @@ export function httpsNamesChangedStatus(acme: Partial<HTTPSACME> = {}): HTTPSSta
     ],
     ...acme,
   });
+}
+
+// Let's Encrypt is set up (an account, mode active) and nothing has been issued yet: the self-signed
+// certificate is served.
+export function httpsPendingStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const lets = httpsLetsEncryptStatus({ certificate: undefined, renewal: undefined, ...acme });
+  return { ...lets, certificate: httpsStatus().certificate, agentTrust: "pin" };
+}
+
+// Let's Encrypt was stopped: the self-signed certificate is served and the account and the old
+// certificate are kept.
+export function httpsStoppedStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  const lets = httpsLetsEncryptStatus({ mode: "off", renewal: undefined, ...acme });
+  return { ...lets, certificate: httpsStatus().certificate, agentTrust: "pin" };
+}
+
+// The Let's Encrypt card with locks from the environment (SET-02, D-17): the registered account is
+// there (so Advanced and the Issue certificate button show, state B), and the locks are the ones given.
+// A lock is { var, stored? }; the variable's name is the one the test wants the page to print.
+export function httpsLockedStatus(
+  locks: HTTPSACME["locks"],
+  acme: Partial<HTTPSACME> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  return httpsStatus({
+    acme: httpsACME({
+      account: {
+        contact: "ops@example.com",
+        registeredAt: "2026-11-10T08:00:00Z",
+        termsOfServiceUrl: "",
+      },
+      locks,
+      ...acme,
+    }),
+    ...top,
+  });
+}
+
+// The TIERPLAN_ACME lock as the status carries it: the variable's value and what is stored.
+export function acmeSwitchLock(
+  value: "on" | "off",
+  stored: "on" | "off" = "off",
+): HTTPSACME["locks"] {
+  return { acme: { var: "TIERPLAN_ACME", value, stored } };
+}
+
+// An install whose Let's Encrypt is turned on by TIERPLAN_ACME and has no certificate yet: the account
+// is registered, nothing is running, refused or failed, and the self-signed certificate is served.
+export function httpsEnvOnStatus(
+  acme: Partial<HTTPSACME> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  return { ...httpsPendingStatus({ locks: acmeSwitchLock("on"), ...acme }), ...top };
+}
+
+// The same once the certificate is issued: TIERPLAN_ACME is on and a Let's Encrypt certificate is served.
+export function httpsEnvOnIssuedStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsLetsEncryptStatus({ locks: acmeSwitchLock("on"), ...acme });
+}
+
+// TIERPLAN_ACME=off over a Let's Encrypt certificate, order and account that are kept: the self-signed
+// certificate is served and Let's Encrypt makes no requests.
+export function httpsEnvOffStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsStoppedStatus({ locks: acmeSwitchLock("off", "on"), ...acme });
+}
+
+// TIERPLAN_ACME=off on an install that never set Let's Encrypt up: nothing is kept.
+export function httpsEnvOffEmptyStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
+  return httpsStatus({ acme: httpsACME({ locks: acmeSwitchLock("off"), ...acme }) });
+}
+
+// The TIERPLAN_ACME_CHALLENGE lock as the status carries it: the effective method and the saved one.
+export function challengeLock(
+  value: "http-01" | "dns-01",
+  stored?: "http-01" | "dns-01",
+): HTTPSACME["locks"] {
+  return {
+    challengeType: { var: "TIERPLAN_ACME_CHALLENGE", value, ...(stored ? { stored } : {}) },
+  };
+}
+
+// The DNS provider and its token locked together by a Cloudflare token variable (D-05). The token's
+// entry names the variable and carries nothing else: no value, no stored value.
+export function dnsEnvLocks(
+  tokenVar = "TIERPLAN_CLOUDFLARE_API_TOKEN",
+  storedProvider = "cloudflare",
+): HTTPSACME["locks"] {
+  return {
+    dnsProvider: { var: "TIERPLAN_DNS_PROVIDER", value: "cloudflare", stored: storedProvider },
+    dnsToken: { var: tokenVar },
+  };
+}
+
+// The TIERPLAN_DNS_RESOLVERS lock: the effective list and the saved one, comma-joined as host:port.
+export function resolversLock(value: string, stored?: string): HTTPSACME["locks"] {
+  return {
+    resolvers: {
+      var: "TIERPLAN_DNS_RESOLVERS",
+      value,
+      ...(stored === undefined ? {} : { stored }),
+    },
+  };
+}
+
+// The Let's Encrypt card with DNS-01 in force and the environment supplying the token: the registered
+// account is there and dns.tokenSource is env, unless the test says otherwise.
+export function httpsDnsLockedStatus(
+  locks: HTTPSACME["locks"],
+  dns: Partial<HTTPSACME["dns"]> = {},
+  acme: Partial<HTTPSACME> = {},
+): HTTPSStatus {
+  return httpsLockedStatus(locks, {
+    challengeType: "dns-01",
+    dns: acmeDNSStatus({ tokenSource: "env", ...dns }),
+    ...acme,
+  });
+}
+
+// The HSTS block of the status as the server answers it on a fresh install: off, nothing sent, because
+// no trusted certificate is served and none could have been.
+export type HSTSBody = NonNullable<HTTPSStatus["hsts"]>;
+
+export function hstsBody(over: Partial<HSTSBody> = {}): HSTSBody {
+  return {
+    capped: false,
+    clearing: false,
+    enabled: false,
+    maxAge: 0,
+    state: "off_silent",
+    step: 0,
+    storedEnabled: false,
+    ...over,
+  };
+}
+
+const HSTS_MAX_AGES = [0, 300, 604_800, 2_592_000, 31_536_000];
+
+// HSTS on and being sent at the given ramp step (1 to 4): max-age for that step and, below the last
+// step, the time of the next one.
+export function hstsSending(step: 1 | 2 | 3 | 4, over: Partial<HSTSBody> = {}): HSTSBody {
+  return hstsBody({
+    enabled: true,
+    storedEnabled: true,
+    state: "sending",
+    step,
+    maxAge: HSTS_MAX_AGES[step] ?? 0,
+    ...(step < 4 ? { nextStepAt: new Date(Date.now() + 86_400_000).toISOString() } : {}),
+    ...over,
+  });
+}
+
+// HSTS on over a certificate it may not be sent over: nothing is sent, and the reason says why.
+export function hstsNotSent(
+  reason: NonNullable<HSTSBody["notSentReason"]> = "self_signed",
+  over: Partial<HSTSBody> = {},
+): HSTSBody {
+  return hstsBody({
+    enabled: true,
+    storedEnabled: true,
+    state: "not_sent",
+    notSentReason: reason,
+    ...over,
+  });
+}
+
+// The status of an install that serves a Let's Encrypt certificate (so a trusted one) with the given
+// HSTS block.
+export function httpsHSTSStatus(
+  hsts: Partial<HSTSBody> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  return { ...httpsLetsEncryptStatus(), hsts: hstsBody(hsts), ...top };
+}
+
+// The HSTS block while TIERPLAN_HSTS fixes the setting: value is what the variable says, stored what the
+// database holds under it.
+export function hstsLock(
+  value: "on" | "off",
+  stored: "on" | "off" = "off",
+  over: Partial<HSTSBody> = {},
+): Partial<HSTSBody> {
+  return {
+    enabled: value === "on",
+    storedEnabled: stored === "on",
+    lock: { var: "TIERPLAN_HSTS", value, stored },
+    ...over,
+  };
 }

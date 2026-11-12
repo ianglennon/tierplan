@@ -61,6 +61,12 @@
       "connectsTo": "Connects to",
       "changeUrl": "Change the agent URL",
       "pin": "Server certificate pin",
+      "trust": {
+        "label": "Server certificate",
+        "public": "Trusted through public certificate authorities. This command carries no pin.",
+        "publicNote": "The agent keeps the self-signed pin it receives when it connects, so going back to self-signed needs no reinstall.",
+        "unverified": "This certificate isn't trusted through public certificate authorities, so this command carries no pin and the agent can't verify it."
+      },
       "pinProxyHint": {
         "before": "Behind a proxy with its own certificate? Use that certificate's pin instead. See the",
         "link": "agent docs",

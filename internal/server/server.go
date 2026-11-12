@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -150,9 +151,12 @@ type Server struct {
 	agents  *agents.Service
 	updater *agents.Updater
 	router  *httpx.Router
-	// https is the live TLS state: every handshake, pin and HSTS decision reads
+	// https is the live TLS state: every handshake and pin decision reads
 	// it. Only Build and the ACME installer call Install (D-12).
 	https *httpsRuntime
+	// hsts decides Strict-Transport-Security for every certificate kind (D-10). The router reads its
+	// Header; tests ask it directly.
+	hsts *hstsPolicy
 	// challenge answers a plain request for /.well-known/acme-challenge/: the ACME manager's
 	// token store. Nil means 404. It is the only thing a plain connection reaches.
 	challenge http.Handler
@@ -302,6 +306,8 @@ type buildOptions struct {
 	tlsRefreshClock stackops.Clock
 	acmeClock       stackops.Clock
 	acmeDNS         *acme.DNSDeps
+	trustRoots      *x509.CertPool
+	hstsClock       stackops.Clock
 	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
@@ -349,6 +355,15 @@ func WithACMEClock(c stackops.Clock) Option {
 	return func(o *buildOptions) { o.acmeClock = c }
 }
 
+// WithHSTSClock replaces the clock the HSTS policy's periodic loop waits on. It is separate from the
+// ACME clock, which the policy reads the time from: an extra timer on that clock would break the
+// armed-timer counting of the ACME rigs. It exists for tests. It is a Go option only, like
+// WithACMEClock: no setting, flag or environment variable reaches it, so a production build always
+// waits on the wall clock. A nil clock keeps the wall clock.
+func WithHSTSClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.hstsClock = c }
+}
+
 // WithACMEDNS replaces the DNS-01 dependencies of the Let's Encrypt manager: the DNS providers, the
 // querier of the propagation check and the lookups behind it. It exists for tests, which point the
 // provider at a fake and the nameservers at a local responder. It is a Go option only, like
@@ -357,6 +372,16 @@ func WithACMEClock(c stackops.Clock) Option {
 // Cloudflare factory on its real base URL. A DNSDeps with nil Providers still gets that factory.
 func WithACMEDNS(d acme.DNSDeps) Option {
 	return func(o *buildOptions) { o.acmeDNS = &d }
+}
+
+// WithTrustRoots replaces the roots the served certificate is judged against when the status says
+// whether it is trusted for the public host and whether agents installed now can use the public CAs
+// (D-10, D-18). It exists for tests, whose certificates come from a CA that no system trusts. It is a
+// Go option only, like WithACMEClock: no setting, flag or environment variable reaches it, so a
+// production build, which calls Build without it, judges against the system roots. A nil pool keeps
+// the system roots.
+func WithTrustRoots(pool *x509.CertPool) Option {
+	return func(o *buildOptions) { o.trustRoots = pool }
 }
 
 // WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
@@ -758,6 +783,22 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	rt := newHTTPSRuntime()
 	rt.Install(tlsSrcKind, tlsSrc.GetCertificate)
+	// The pin welcomes list is settled once, from the self-signed identity and never from the
+	// served certificate (D-19): a Let's Encrypt leaf's pin is not published and a renewal does
+	// not change what a welcome lists. In cert-files mode the identity is kept without being
+	// served (D-21).
+	if tlsSrcKind == tlsKindSelfSigned {
+		rt.SetSelfSignedPin(spkiPin(&tls.Config{GetCertificate: tlsSrc.GetCertificate}))
+	} else {
+		var identityPin string
+		identityPin, err = selfSignedIdentityPin(ctx, sealedCertStore{st: st, v: vlt}, cfg, inst.PublicURL, inst.AgentURL, tlsClock.Now)
+		if err != nil {
+			_ = st.Close()
+			// A key that cannot be read comes from restored state, as in the self-signed branch above.
+			return nil, restoredStateError{fmt.Errorf("prepare the self-signed identity: %w", err)}
+		}
+		rt.SetSelfSignedPin(identityPin)
+	}
 	switch rt.Kind() {
 	case tlsKindSelfSigned:
 		log.Info("TierPlan serves HTTPS with its own self-signed certificate. Your browser will warn about it: check that the warning shows this SHA-256 fingerprint before you continue",
@@ -827,6 +868,20 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// both read when asked: the pin changes only if the self-signed key is
 	// replaced, and the endpoint follows Settings.
 	tlsPin := rt.Pin
+	// Whether the served certificate is trusted for the public host is judged at the ACME clock's time,
+	// the clock the tests move, and read when asked: the public URL changes with Settings.
+	trustNow := time.Now
+	if bo.acmeClock != nil {
+		trustNow = bo.acmeClock.Now
+	}
+	trust := newTrustChecker(bo.trustRoots, trustNow, func() string { return hostOf(inst.PublicURL()) })
+	agentTrust := func() string { return rt.agentTrust(trust) }
+	// Strict-Transport-Security is the policy's decision, made off the request path and read from an
+	// atomic snapshot (D-10). It reads time from the same clock as the certificates and the trust
+	// verdict, and waits on a clock of its own.
+	hsts := newHSTSPolicy(trustNow, trust, rt, cfg.ACME.HSTS, bo.hstsClock, hstsDB{r: st.RQ, w: st.Q}, log)
+	hsts.publicURL = inst.PublicURL
+	rt.SetOnInstall(hsts.Wake)
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -843,7 +898,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// Every welcome, and every push when an address changes, carries the
 		// endpoint agents are told to dial (D-19).
 		WithEndpoint(inst.AgentEndpoint).
-		WithPins(rt.Pins).
+		WithPins(rt.WelcomePins).
 		WithTiming(cfg.AgentHeartbeatInterval, cfg.AgentOfflineAfter).
 		WithLastSeen(agentSvc).
 		WithServerVersion(buildinfo.Get().Version).
@@ -945,7 +1000,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Let's Encrypt: the manager swaps the live certificate through the installer and answers the
 	// HTTP-01 check from its token store on the existing listener (D-01, D-02). A bad directory
 	// setting stops start-up.
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS)
+	// listening is closed once the server accepts connections; the start-time issue of TIERPLAN_ACME=on
+	// waits for it.
+	listening := make(chan struct{})
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS, hsts, listening)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()
@@ -1122,12 +1180,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Proxy:          proxyObs,
 			PublicOrigin:   inst.PublicOrigin,
 			Logger:         log,
-			// Strict-Transport-Security only on a response to a request that came
-			// over TLS: no plain response exists to carry it, and an
-			// X-Forwarded-Proto header decides nothing here. Not for TierPlan's own
-			// self-signed certificate: a browser pinned to it could not click through
-			// a regenerated one (WR-09).
-			HSTS: func(r *http.Request) bool { return r.TLS != nil && rt.HSTSAllowed() },
+			// Strict-Transport-Security is the policy's decision (D-10): only on a
+			// response to a request that came over TLS, an X-Forwarded-Proto header
+			// decides nothing here, and never over TierPlan's own self-signed
+			// certificate, which a browser could not click through once regenerated
+			// (WR-09).
+			HSTS: hsts.Header,
 		},
 		System: api.SystemDeps{Ready: ready},
 		Setup:  setupDeps,
@@ -1164,9 +1222,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Log:       log,
 		},
 		LocalHost:     api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Updater: updater, Log: log},
+		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, TLSTrust: agentTrust, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
-		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Updater: updater, Log: log},
+		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, TLSTrust: agentTrust, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
 		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
@@ -1196,8 +1254,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
-		HTTPS:         api.HTTPSDeps{Served: rt.served, CertFiles: cfg.TLSCertFile != "", Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
-		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
+		HTTPS: api.HTTPSDeps{
+			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
+		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
 			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,
@@ -1219,8 +1279,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		return nil, err
 	}
 	challenges := acmeWire.challenges
+	// TIERPLAN_ACME=off over a stored Let's Encrypt setup with HSTS on would serve the self-signed
+	// certificate to browsers that hold the policy (D-26), so start-up stops before it can.
+	startErr := refuseACMEOffUnderHSTS(ctx, cfg, st, acme.NewStore(st, vlt))
 	// A stored Let's Encrypt certificate is served before the server listens (ACME-04).
-	if err := acmeWire.mgr.Start(ctx); err != nil {
+	if startErr == nil {
+		if err := acmeWire.mgr.Start(ctx); err != nil {
+			startErr = fmt.Errorf("start Let's Encrypt: %w", err)
+		}
+	}
+	if startErr != nil {
 		jobHub.Close()
 		statsHub.Close()
 		tunnelHub.Close()
@@ -1228,12 +1296,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		hub.Close()
 		monitor.StopAll()
 		_ = st.Close()
-		return nil, fmt.Errorf("start Let's Encrypt: %w", err)
+		return nil, startErr
 	}
 	srv = &Server{
 		unlock:     unlock,
 		restart:    restart,
-		listening:  make(chan struct{}),
+		listening:  listening,
 		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
@@ -1262,6 +1330,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		updater:    updater,
 		router:     router,
 		https:      rt,
+		hsts:       hsts,
 		acme:       acmeWire.mgr,
 		challenge:  challenges.Handler(),
 	}
@@ -1275,6 +1344,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
 	// Renewals, the expiry fallback and the resume of an open order run on the ACME clock.
 	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
+	// The header is decided once before anything is served, then again on every certificate install
+	// and every minute.
+	hsts.Recompute(ctx)
+	srv.background.Go(func() { hsts.Run(bg) })
 	// A setting another store handle wrote, such as a restore or a CLI user command, is applied here
 	// within one poll, so the redirect gate, the cookie scope and the Origin check follow it without
 	// a restart. The watcher only reloads the instance's cached values: it pushes no address to
@@ -1535,6 +1608,9 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// connection (D-01); plain carries only the ACME challenge, so the scheme is always https.
 	const scheme = "https"
 	go func() { errc <- srv.Serve(newSniffListener(ln, s.https, nil)) }()
+	// ln is bound, so connections are accepted from here on. Run has closed this already; a caller that
+	// serves a listener of its own (the ACME rigs) is announced here.
+	s.listeningOnce.Do(func() { close(s.listening) })
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
 	// bound address, so ":0" shows as the real port.

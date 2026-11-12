@@ -8,7 +8,7 @@ import { ACMEControlError, type HTTPSStatus, useResumeACME } from "@/api/https";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { deriveCardState } from "@/features/https/card-state";
+import { deriveCardState, deriveEnvOverlay } from "@/features/https/card-state";
 import { formatDate } from "@/features/https/copy";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -105,6 +105,8 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
   const t = useT();
   const acme = status.acme;
   if (!acme) return null;
+  const overlay = deriveEnvOverlay(status);
+  const envOn = overlay.env === "on";
   switch (deriveCardState(status)) {
     case "I":
       return (
@@ -112,6 +114,7 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
           <Info aria-hidden="true" />
           <AlertDescription className="text-foreground">
             <Rich text={t("https.alerts.certFilesOnly")} />
+            {envOn ? <Rich text={` ${t("https.envState.certFiles")}`} /> : null}
           </AlertDescription>
         </Alert>
       );
@@ -122,11 +125,12 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
           <AlertTitle>{t("https.alerts.certFilesKept.title")}</AlertTitle>
           <AlertDescription>
             <Rich text={t("https.alerts.certFilesKept.body")} />
+            {envOn ? <Rich text={` ${t("https.envState.certFiles")}`} /> : null}
           </AlertDescription>
         </Alert>
       );
     case "H":
-      return <RestoreAlert canWrite={canWrite} />;
+      return <RestoreAlert canWrite={canWrite} envOn={envOn} />;
     case "E":
       return (
         <Alert variant="warning" role="note">
@@ -134,7 +138,9 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
           <AlertTitle>{t("https.alerts.namesChanged.title")}</AlertTitle>
           <AlertDescription>
             <Rich
-              text={t("https.alerts.namesChanged.body", { old: FIRST, new: SECOND })}
+              text={`${t("https.alerts.namesChanged.lead", { old: FIRST, new: SECOND })} ${t(
+                envOn ? "https.envState.namesChanged" : "https.alerts.namesChanged.tail",
+              )}`}
               first={<MonoList values={acme.certificate?.names ?? []} />}
               second={<MonoList values={(acme.names ?? []).map((n) => n.name)} />}
             />
@@ -152,13 +158,73 @@ export function StateAlerts({ status, canWrite }: StateAlertsProps) {
         </Alert>
       );
     default:
+      if (overlay.waitingForToken) return <WaitingForTokenAlert />;
+      if (overlay.waiting) return <WaitingAlert />;
+      if (overlay.env === "off") return <OffAlert kept={overlay.offWithState} />;
       return null;
   }
 }
 
+// OffAlert says TIERPLAN_ACME=off: nothing is ordered and, when there is something, what is kept
+// (D-02, D-04). With nothing stored it is one sentence.
+function OffAlert({ kept }: { kept: boolean }) {
+  const t = useT();
+  if (!kept) {
+    return (
+      <Alert role="note" className="text-foreground">
+        <Info aria-hidden="true" />
+        <AlertDescription className="text-foreground">
+          <Rich text={t("https.envState.offNothing")} />
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return (
+    <Alert variant="warning" role="note">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>
+        <Rich text={t("https.envState.off.title")} />
+      </AlertTitle>
+      <AlertDescription>
+        <Rich text={t("https.envState.off.body")} />
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+// WaitingAlert says TierPlan orders the certificate by itself because TIERPLAN_ACME is on (D-07): no
+// certificate yet, nothing running, refused or failed. It sits above the buttons and asks for nothing.
+function WaitingAlert() {
+  const t = useT();
+  return (
+    <Alert role="note" className="text-foreground">
+      <Info aria-hidden="true" />
+      <AlertTitle>{t("https.envState.waiting.title")}</AlertTitle>
+      <AlertDescription className="text-foreground">
+        <Rich text={t("https.envState.waiting.body")} />
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+// WaitingForTokenAlert says TIERPLAN_ACME is on and DNS-01 is selected but there is no token anywhere
+// (D-07). Nothing is attempted, so nothing is charged and no error shows; the alert says what is missing.
+function WaitingForTokenAlert() {
+  const t = useT();
+  return (
+    <Alert variant="warning" role="note">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>{t("https.envState.waitingToken.title")}</AlertTitle>
+      <AlertDescription>
+        <Rich text={t("https.envState.waitingToken.body")} />
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 // RestoreAlert is the pause a restore puts on Let's Encrypt (D-20), with the one filled button of the
 // card: Resume. Without settings.write the alert is only an explanation.
-function RestoreAlert({ canWrite }: { canWrite: boolean }) {
+function RestoreAlert({ canWrite, envOn }: { canWrite: boolean; envOn: boolean }) {
   const t = useT();
   const resume = useResumeACME();
 
@@ -179,7 +245,10 @@ function RestoreAlert({ canWrite }: { canWrite: boolean }) {
     <Alert variant="warning" role="note" className="has-data-[slot=alert-action]:pr-2.5">
       <TriangleAlert aria-hidden="true" />
       <AlertTitle>{t("https.alerts.restore.title")}</AlertTitle>
-      <AlertDescription>{t("https.alerts.restore.body")}</AlertDescription>
+      <AlertDescription>
+        {t("https.alerts.restore.body")}
+        {envOn ? <Rich text={` ${t("https.envState.restore")}`} /> : null}
+      </AlertDescription>
       {canWrite ? (
         <AlertAction className="static col-start-2 mt-2">
           <Button
