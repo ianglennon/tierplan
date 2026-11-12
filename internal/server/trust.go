@@ -81,9 +81,11 @@ func trustReason(leaf *x509.Certificate, err error) string {
 	}
 }
 
-// isSelfSigned reports whether the certificate is its own issuer and signed by its own key.
+// isSelfSigned reports whether the certificate is its own issuer and signed by its own key. It checks
+// the signature with the certificate's own key directly, because CheckSignatureFrom refuses a parent
+// that is not marked as a CA, and a self-signed server certificate usually is not.
 func isSelfSigned(c *x509.Certificate) bool {
-	return bytes.Equal(c.RawIssuer, c.RawSubject) && c.CheckSignatureFrom(c) == nil
+	return bytes.Equal(c.RawIssuer, c.RawSubject) && c.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature) == nil
 }
 
 // trustKey is what one verdict was computed for. The minute of the injected clock is in it, so an
