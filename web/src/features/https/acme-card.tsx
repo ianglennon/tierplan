@@ -91,7 +91,7 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
       <NamesSection acme={acme} />
 
       <Separator />
-      <AccountSection account={acme.account} mode={mode} />
+      <AccountSection account={acme.account} mode={mode} locks={acme.locks} />
 
       {advanced === "hidden" ? null : (
         <>

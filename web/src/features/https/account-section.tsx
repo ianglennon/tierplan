@@ -10,6 +10,8 @@ import {
   type ACMEAccount,
   ACMEAccountError,
   acmeDirectoryQuery,
+  type HTTPSACME,
+  isLockProblem,
   useRegisterACMEAccount,
 } from "@/api/https";
 import { RelativeTime } from "@/components/relative-time";
@@ -18,9 +20,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import type { AccountMode } from "@/features/https/card-state";
 import { errorCopy } from "@/features/https/copy";
+import { LockedIcon, LockedNote } from "@/features/https/locked-note";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
@@ -58,12 +62,14 @@ function httpsUrl(value: string | undefined): string | undefined {
 interface AccountSectionProps {
   account: ACMEAccount | undefined;
   mode: AccountMode;
+  // The locks TIERPLAN_ACME_EMAIL and TIERPLAN_ACME_ACCEPT_TOS put on this section (D-17).
+  locks: HTTPSACME["locks"];
 }
 
 // AccountSection is the Let's Encrypt account (ACME-01, D-06): the registration form until there
 // is an account, then a summary of when it was made and who the CA may write to. The account key
 // is never shown. The disabled modes keep the section drawn and draw no action button.
-export function AccountSection({ account, mode }: AccountSectionProps) {
+export function AccountSection({ account, mode, locks }: AccountSectionProps) {
   const t = useT();
   return (
     <section className="flex flex-col gap-4" aria-labelledby="https-account-title">
@@ -72,19 +78,33 @@ export function AccountSection({ account, mode }: AccountSectionProps) {
       </h4>
       {mode === "summary" || mode === "summary-disabled" ? (
         account ? (
-          <AccountSummary account={account} />
+          <AccountSummary account={account} emailLock={locks.email} />
         ) : null
       ) : (
         <>
           <p className="text-sm text-muted-foreground">{t("https.account.empty")}</p>
-          <RegisterForm disabled={mode === "form-disabled"} />
+          <RegisterForm
+            // A lock that appears after the page loaded starts the form again: the draft it held was
+            // never going to be sent, and the fields redraw from the locked values.
+            key={`${locks.email?.var ?? ""}:${locks.email?.value ?? ""}:${locks.acceptTos?.var ?? ""}`}
+            disabled={mode === "form-disabled"}
+            locks={locks}
+          />
         </>
       )}
     </section>
   );
 }
 
-function AccountSummary({ account }: { account: ACMEAccount }) {
+// The summary shows the account's real contact, never TIERPLAN_ACME_EMAIL's value: an account that
+// exists is not changed by the variable (A2), so the variable's address is not in force.
+function AccountSummary({
+  account,
+  emailLock,
+}: {
+  account: ACMEAccount;
+  emailLock: HTTPSACME["locks"]["email"];
+}) {
   const t = useT();
   return (
     <div className="flex flex-col gap-1 text-sm">
@@ -101,24 +121,34 @@ function AccountSummary({ account }: { account: ACMEAccount }) {
           </>
         )}
       </p>
+      {emailLock ? (
+        <div className="flex flex-col gap-1">
+          <LockedNote id="acme-email-lock" lock={emailLock} showStored={false} />
+          <p className="text-xs text-muted-foreground">{t("https.lock.contactKept")}</p>
+        </div>
+      ) : null}
       <p className="text-muted-foreground">{t("https.account.keyNote")}</p>
     </div>
   );
 }
 
-function RegisterForm({ disabled }: { disabled: boolean }) {
+function RegisterForm({ disabled, locks }: { disabled: boolean; locks: HTTPSACME["locks"] }) {
   const t = useT();
   const queryClient = useQueryClient();
   const directory = useQuery({ ...acmeDirectoryQuery, enabled: !disabled });
   const termsUrl = httpsUrl(directory.data?.termsOfServiceUrl);
   const register = useRegisterACMEAccount();
+  // The environment decides the contact and the agreement when it sets them: the form shows its values,
+  // sends no email of its own and agrees as the variable does.
+  const emailLock = locks.email;
+  const tosLock = locks.acceptTos;
   // The CA failure class and a general failure are shown inside the section; the form keeps its values.
   const [caClass, setCaClass] = useState<string | undefined>();
   const [failed, setFailed] = useState(false);
 
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: { email: "", agreeTos: false },
+    defaultValues: { email: "", agreeTos: tosLock !== undefined },
     mode: "onSubmit",
   });
   const errors = form.formState.errors;
@@ -132,10 +162,16 @@ function RegisterForm({ disabled }: { disabled: boolean }) {
     setCaClass(undefined);
     setFailed(false);
     register.mutate(
-      { email: v.email.trim(), agreeTos: v.agreeTos },
+      {
+        email: emailLock ? "" : v.email.trim(),
+        agreeTos: tosLock ? true : v.agreeTos,
+      },
       {
         onSuccess: () => toastSuccess(t("https.account.done")),
         onError: (error) => {
+          // A variable now fixes the field: the status is read again (by the mutation) and the form
+          // redraws as locked. Nothing is told as a failure and nothing was stored.
+          if (isLockProblem(error)) return;
           if (error instanceof ACMEAccountError) {
             if (error.type === "acme_contact_invalid") {
               form.setError("email", { type: "server", message: KEY.email });
@@ -181,24 +217,44 @@ function RegisterForm({ disabled }: { disabled: boolean }) {
     <form noValidate onSubmit={submit} className="flex flex-col gap-4">
       <fieldset disabled={disabled || pending} className="contents">
         <FieldGroup className="gap-4">
-          <Field data-invalid={errors.email ? true : undefined}>
-            <FieldLabel htmlFor="acme-email">{t("https.account.email.label")}</FieldLabel>
-            <Input
-              id="acme-email"
-              type="email"
-              autoComplete="email"
-              aria-invalid={Boolean(errors.email)}
-              aria-describedby={errors.email ? "acme-email-error" : "acme-email-helper"}
-              className={`${TOUCH_HEIGHT} w-full`}
-              {...form.register("email")}
-            />
-            <FieldDescription id="acme-email-helper">
-              {t("https.account.email.helper")}
-            </FieldDescription>
-            {errors.email ? (
-              <FieldError id="acme-email-error">{messageOf("email")}</FieldError>
-            ) : null}
-          </Field>
+          {emailLock ? (
+            <Field>
+              <FieldLabel htmlFor="acme-email">{t("https.account.email.label")}</FieldLabel>
+              <InputGroup className={TOUCH_HEIGHT}>
+                <InputGroupAddon>
+                  <LockedIcon />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id="acme-email"
+                  readOnly
+                  value={emailLock.value ?? ""}
+                  autoComplete="off"
+                  aria-describedby="acme-email-lock"
+                  className="h-full font-mono"
+                />
+              </InputGroup>
+              <LockedNote id="acme-email-lock" lock={emailLock} showIcon={false} mono />
+            </Field>
+          ) : (
+            <Field data-invalid={errors.email ? true : undefined}>
+              <FieldLabel htmlFor="acme-email">{t("https.account.email.label")}</FieldLabel>
+              <Input
+                id="acme-email"
+                type="email"
+                autoComplete="email"
+                aria-invalid={Boolean(errors.email)}
+                aria-describedby={errors.email ? "acme-email-error" : "acme-email-helper"}
+                className={`${TOUCH_HEIGHT} w-full`}
+                {...form.register("email")}
+              />
+              <FieldDescription id="acme-email-helper">
+                {t("https.account.email.helper")}
+              </FieldDescription>
+              {errors.email ? (
+                <FieldError id="acme-email-error">{messageOf("email")}</FieldError>
+              ) : null}
+            </Field>
+          )}
 
           <Field data-invalid={errors.agreeTos ? true : undefined}>
             <div className="flex items-start gap-3">
@@ -210,10 +266,13 @@ function RegisterForm({ disabled }: { disabled: boolean }) {
                     id="acme-terms"
                     // A 16px box is too small to touch: the pointer area grows under 768px.
                     className="relative max-md:after:absolute max-md:after:-inset-3.5"
-                    checked={field.value}
+                    checked={tosLock ? true : field.value}
                     onCheckedChange={(v) => field.onChange(v === true)}
+                    disabled={tosLock !== undefined}
                     aria-invalid={Boolean(errors.agreeTos)}
-                    aria-describedby={errors.agreeTos ? "acme-terms-error" : undefined}
+                    aria-describedby={
+                      tosLock ? "acme-terms-lock" : errors.agreeTos ? "acme-terms-error" : undefined
+                    }
                   />
                 )}
               />
@@ -226,6 +285,7 @@ function RegisterForm({ disabled }: { disabled: boolean }) {
                 </span>
               </FieldLabel>
             </div>
+            {tosLock ? <LockedNote id="acme-terms-lock" lock={tosLock} variant="accepted" /> : null}
             {errors.agreeTos ? (
               <FieldError id="acme-terms-error">{messageOf("agreeTos")}</FieldError>
             ) : null}

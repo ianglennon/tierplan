@@ -17,7 +17,13 @@ import {
   deriveCardState,
 } from "@/features/https/card-state";
 import "@/i18n";
-import { acmeDirectory, acmeLastError, httpsACME, httpsStatus } from "@/test-https";
+import {
+  acmeDirectory,
+  acmeLastError,
+  httpsACME,
+  httpsLockedStatus,
+  httpsStatus,
+} from "@/test-https";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
@@ -35,6 +41,7 @@ let status: () => Response | Promise<Response>;
 let me: () => Response;
 let directory: () => Response;
 let post: (body: Record<string, unknown>) => Response | Promise<Response>;
+let put: (body: Record<string, unknown>) => Response | Promise<Response>;
 let successToast: ReturnType<typeof vi.spyOn>;
 
 const instanceAdmin = () => Response.json(makeMe({ instanceAdmin: true }));
@@ -66,13 +73,14 @@ beforeEach(() => {
   me = instanceAdmin;
   directory = () => Response.json(acmeDirectory());
   post = () => Response.json(accountOf(), { status: 201 });
+  put = (body) => Response.json({ profile: body.profile });
   successToast = vi.spyOn(toast, "success");
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       const entry: Sent = { path, method: req.method, csrf: req.headers.get("X-CSRF-Token") };
-      if (req.method === "POST") entry.body = await req.clone().json();
+      if (req.method === "POST" || req.method === "PUT") entry.body = await req.clone().json();
       sent.push(entry);
       if (path === "/api/me") return me();
       if (path === "/api/https/status") return status();
@@ -80,6 +88,7 @@ beforeEach(() => {
       if (path === "/api/https/acme/account" && req.method === "POST") {
         return post(entry.body ?? {});
       }
+      if (path === "/api/https/acme/profile" && req.method === "PUT") return put(entry.body ?? {});
       return Response.json({}, { status: 404 });
     }),
   );
@@ -592,5 +601,216 @@ describe("accountMode and advancedMode", () => {
       expect(advancedMode(s, true)).toBe("shown");
       expect(advancedMode(s, false)).toBe("disabled");
     }
+  });
+});
+
+describe("Account fields fixed by the environment (D-17, A2)", () => {
+  const EMAIL_VAR = "TIERPLAN_ACME_EMAIL";
+  const noteText = (id: string) => document.getElementById(id)?.textContent;
+
+  it("populated, no account: the contact is read-only in a lock group, mono, with both lock lines", async () => {
+    status = () =>
+      Response.json(
+        httpsLockedStatus(
+          { email: { var: EMAIL_VAR, value: "ops@example.com" } },
+          { account: undefined },
+        ),
+      );
+    await ready();
+    expect(email().readOnly).toBe(true);
+    expect(email().value).toBe("ops@example.com");
+    expect(email().className).toContain("font-mono");
+    expect(email().getAttribute("aria-describedby")).toBe("acme-email-lock");
+    expect(
+      email().closest("[data-slot='input-group']")?.querySelector("[role='img']"),
+    ).not.toBeNull();
+    // E3 empty: the account has no stored contact, and line 2 says so.
+    expect(noteText("acme-email-lock")).toBe(
+      "Set by the TIERPLAN_ACME_EMAIL environment variable.Stored value: none, used if TIERPLAN_ACME_EMAIL is removed.",
+    );
+  });
+
+  it("long text: a long contact stays on one mono line that scrolls inside its input", async () => {
+    const long = `${"a".repeat(90)}@example.com`;
+    status = () =>
+      Response.json(
+        httpsLockedStatus({ email: { var: EMAIL_VAR, value: long } }, { account: undefined }),
+      );
+    await ready();
+    expect(email().value).toBe(long);
+    expect(email().className).toContain("font-mono");
+  });
+
+  it("registers without sending the locked email, and the terms as accepted", async () => {
+    status = () =>
+      Response.json(
+        httpsLockedStatus(
+          {
+            email: { var: EMAIL_VAR, value: "ops@example.com" },
+            acceptTos: { var: "TIERPLAN_ACME_ACCEPT_TOS" },
+          },
+          { account: undefined },
+        ),
+      );
+    post = (body) => {
+      expect(body).toEqual({ agreeTos: true });
+      status = () => Response.json(httpsLockedStatus({}, { account: accountOf() }));
+      return Response.json(accountOf(), { status: 201 });
+    };
+    await ready();
+    fireEvent.click(registerButton() as HTMLElement);
+    await card().findByText("Registered");
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("terms locked: the box is checked and disabled, line 1 says accepted and there is no stored line", async () => {
+    status = () =>
+      Response.json(
+        httpsLockedStatus(
+          { acceptTos: { var: "TIERPLAN_ACME_ACCEPT_TOS" } },
+          { account: undefined },
+        ),
+      );
+    await ready();
+    expect(terms().getAttribute("aria-checked")).toBe("true");
+    expect(terms().matches(":disabled")).toBe(true);
+    expect(terms().getAttribute("aria-describedby")).toBe("acme-terms-lock");
+    expect(noteText("acme-terms-lock")).toBe(
+      "Accepted by the TIERPLAN_ACME_ACCEPT_TOS environment variable.",
+    );
+    expect(card().queryByText(/Stored value/)).toBeNull();
+  });
+
+  it("zero-one-many, account exists: shows the account's real contact, the lock line and the note, never the variable's address", async () => {
+    status = () =>
+      Response.json(
+        httpsLockedStatus(
+          { email: { var: EMAIL_VAR, value: "other@example.com" } },
+          { account: accountOf({ contact: "a@example.com" }) },
+        ),
+      );
+    await ready();
+    expect(card().getByText("a@example.com")).toBeTruthy();
+    expect(noteText("acme-email-lock")).toBe(
+      "Set by the TIERPLAN_ACME_EMAIL environment variable.",
+    );
+    expect(
+      card().getByText("TierPlan doesn't change the contact of an account that already exists."),
+    ).toBeTruthy();
+    expect(card().queryByText(/Stored value/)).toBeNull();
+    expect(document.body.textContent).not.toContain("other@example.com");
+    expect(registerButton()).toBeNull();
+  });
+
+  it("partial: a locked terms box beside an unlocked email leaves the email editable", async () => {
+    status = () =>
+      Response.json(
+        httpsLockedStatus(
+          { acceptTos: { var: "TIERPLAN_ACME_ACCEPT_TOS" } },
+          { account: undefined },
+        ),
+      );
+    post = (body) => {
+      expect(body).toEqual({ email: "me@example.com", agreeTos: true });
+      status = () => Response.json(httpsLockedStatus({}, { account: accountOf() }));
+      return Response.json(accountOf(), { status: 201 });
+    };
+    await ready();
+    expect(email().readOnly).toBe(false);
+    fireEvent.change(email(), { target: { value: "me@example.com" } });
+    fireEvent.click(registerButton() as HTMLElement);
+    await card().findByText("Registered");
+  });
+
+  it("without settings.write the lock lines still show, as text, with no button", async () => {
+    me = viewer;
+    status = () =>
+      Response.json(
+        httpsLockedStatus(
+          { email: { var: EMAIL_VAR, value: "ops@example.com" } },
+          { account: undefined },
+        ),
+      );
+    renderCard();
+    await card().findByText("Names on the certificate");
+    await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
+    expect(noteText("acme-email-lock")).toContain("Set by the TIERPLAN_ACME_EMAIL");
+    expect(registerButton()).toBeNull();
+  });
+
+  it("error: a 409 acme_email_locked redraws the form locked, with no toast, and the typed draft is gone", async () => {
+    let refused = false;
+    status = () =>
+      Response.json(
+        refused
+          ? httpsLockedStatus(
+              { email: { var: EMAIL_VAR, value: "ops@example.com" } },
+              { account: undefined },
+            )
+          : httpsStatus(),
+      );
+    post = () => {
+      refused = true;
+      return problem(409, "acme_email_locked", []);
+    };
+    const errorToast = vi.spyOn(toast, "error");
+    await ready();
+    fireEvent.change(email(), { target: { value: "typed@example.com" } });
+    fireEvent.click(terms());
+    fireEvent.click(registerButton() as HTMLElement);
+    await waitFor(() => expect(email().readOnly).toBe(true));
+    expect(email().value).toBe("ops@example.com");
+    expect(document.body.textContent).not.toContain("typed@example.com");
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+    expect(successToast).not.toHaveBeenCalled();
+    expect(errorToast).not.toHaveBeenCalled();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("error: a 409 acme_profile_locked redraws the profile locked, with no toast", async () => {
+    let refused = false;
+    const open = httpsLockedStatus({}, { account: accountOf() });
+    status = () =>
+      Response.json(
+        refused
+          ? httpsLockedStatus(
+              { profile: { var: "TIERPLAN_ACME_PROFILE", stored: "" } },
+              { account: accountOf(), profile: "tlsserver" },
+            )
+          : open,
+      );
+    directory = () =>
+      Response.json(acmeDirectory({ profiles: [{ name: "tlsserver", description: "" }] }));
+    put = () => {
+      refused = true;
+      return problem(409, "acme_profile_locked", []);
+    };
+    const errorToast = vi.spyOn(toast, "error");
+    await ready();
+    fireEvent.click(await card().findByRole("button", { name: "Advanced" }));
+    const select = await card().findByRole("combobox", { name: "Certificate profile" });
+    await waitFor(() => expect(select.matches(":disabled")).toBe(false));
+    fireEvent.keyDown(select, { key: "Enter" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: /tlsserver/ }), { key: "Enter" });
+    const save = await card().findByRole("button", { name: "Save profile" });
+    await waitFor(() => expect(save.matches(":disabled")).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(noteText("acme-profile-lock")).toBeTruthy());
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+    expect(card().queryByRole("button", { name: "Save profile" })).toBeNull();
+    expect(successToast).not.toHaveBeenCalled();
+    expect(errorToast).not.toHaveBeenCalled();
+  });
+
+  it("any other 409 keeps today's handling: the general failure line and the status read again", async () => {
+    post = () => problem(409, "acme_account_exists", []);
+    await ready();
+    const before = sent.filter((s) => s.path === "/api/https/status").length;
+    fireEvent.click(terms());
+    fireEvent.click(registerButton() as HTMLElement);
+    await card().findByText("Something went wrong. Try again.");
+    await waitFor(() =>
+      expect(sent.filter((s) => s.path === "/api/https/status").length).toBeGreaterThan(before),
+    );
   });
 });
