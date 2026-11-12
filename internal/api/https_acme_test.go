@@ -133,7 +133,7 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 		PublicURL: f.inst.PublicURL, AgentURL: f.inst.AgentURL, BasePath: f.inst.BasePath,
 		DialHosts: f.dialHosts, CertFiles: o.certFiles, Log: slog.New(slog.DiscardHandler),
 		Jitter: func() float64 { return 0 }, Rand: func(int64) int64 { return 0 },
-		DNS: dnsDeps(o.dns), Env: o.env, HSTSOn: o.hstsOn,
+		DNS: dnsDeps(o.dns), Env: o.env, HSTSOn: o.hstsOn, Audit: f.aud.Record,
 	})
 
 	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"tierplan.example.com"}, nil)
@@ -143,7 +143,7 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 	}
 	f.https = api.HTTPSDeps{
 		Served:    func() api.ServedCertificate { return served },
-		CertFiles: o.certFiles, ACME: f.mgr, Jobs: f.hub, ListenPort: 7480, Log: slog.New(slog.DiscardHandler),
+		CertFiles: o.certFiles, ACME: f.mgr, Jobs: f.hub, ListenPort: 7480, Log: slog.New(slog.DiscardHandler), Audit: f.aud,
 	}
 	f.httpsAlerts = func(ctx context.Context) ([]acme.Alert, error) {
 		sv := acme.Served{Source: served.Source}

@@ -16,6 +16,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -66,6 +67,19 @@ func runStartOutput(rs acme.RunStart) *HTTPSACMERunStartOutput {
 	return &HTTPSACMERunStartOutput{Status: http.StatusAccepted, CacheControl: "no-store", Body: HTTPSACMERunStartBody{JobID: rs.JobID}}
 }
 
+// HTTPSACMEActionInput is the input of the run actions: nothing the admin sends, only the User-Agent the audit row
+// records. The hidden header leaves the published contract unchanged.
+type HTTPSACMEActionInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// auditFailed answers a request whose audit row could not be written. The state change the request asked for may
+// already have happened (a run started, the pause lifted), which the 500 does not undo; the row is the record, so a
+// request that cannot be recorded is not reported as a clean success.
+func auditFailed(d HTTPSDeps, err error) error {
+	return acmeInternal(d.Log, "audit the Let's Encrypt request", err)
+}
+
 // registerHTTPSACMERuns wires the run actions: issue, renew now, resume and stop. Each needs
 // settings.write (D-10); the stream that follows a run is in https_stream.go.
 func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
@@ -84,13 +98,21 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 			"(and Let's Encrypt is served again if it had been stopped). 422 " + problemACMERefused + " lists every refusal with its code and data (errors[].message is the code, errors[].value the data) and nothing reaches the CA; " +
 			"409 " + problemACMENoAccount + " before an account is registered; 409 " + problemACMELocked + " while TIERPLAN_ACME=off fixes Let's Encrypt off (the variable's name is the detail; nothing is ordered). " + problems + ". Needs settings.write.",
 		Tags: []string{"https"},
-	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMERunStartOutput, error) {
+	}, write, func(ctx context.Context, in *HTTPSACMEActionInput) (*HTTPSACMERunStartOutput, error) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
-		rs, err := d.ACME.Issue(ctx, actorOf(ctx))
+		ra := &runAuditor{d: d, ua: in.UserAgent, action: audit.ActionHTTPSIssueRequested}
+		rs, err := d.ACME.Issue(ra.context(ctx), actorOf(ctx))
+		var problem error
 		if err != nil {
-			return nil, acmeProblem(d.Log, "start the Let's Encrypt issue", err)
+			problem = acmeProblem(d.Log, "start the Let's Encrypt issue", err)
+		}
+		if aerr := ra.after(ctx, rs, err, problem); aerr != nil {
+			return nil, auditFailed(d, aerr)
+		}
+		if problem != nil {
+			return nil, problem
 		}
 		return runStartOutput(rs), nil
 	})
@@ -103,13 +125,21 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 		Description: "Renews the certificate at once, for the names it already carries, and names it as the one it replaces when the CA supports that. 202 with a job id to follow on the run stream. " +
 			"409 " + problemACMENotActive + " when Let's Encrypt is not in use or there is no certificate; 409 " + problemACMENoAccount + " before an account is registered; 409 " + problemACMELocked + " while TIERPLAN_ACME=off fixes Let's Encrypt off. " + problems + ". Needs settings.write.",
 		Tags: []string{"https"},
-	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMERunStartOutput, error) {
+	}, write, func(ctx context.Context, in *HTTPSACMEActionInput) (*HTTPSACMERunStartOutput, error) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
-		rs, err := d.ACME.RenewNow(ctx, actorOf(ctx))
+		ra := &runAuditor{d: d, ua: in.UserAgent, action: audit.ActionHTTPSRenewRequested}
+		rs, err := d.ACME.RenewNow(ra.context(ctx), actorOf(ctx))
+		var problem error
 		if err != nil {
-			return nil, acmeProblem(d.Log, "start the Let's Encrypt renewal", err)
+			problem = acmeProblem(d.Log, "start the Let's Encrypt renewal", err)
+		}
+		if aerr := ra.after(ctx, rs, err, problem); aerr != nil {
+			return nil, auditFailed(d, aerr)
+		}
+		if problem != nil {
+			return nil, problem
 		}
 		return runStartOutput(rs), nil
 	})
@@ -123,14 +153,11 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 		Description: "Lifts the pause a restore puts on renewals, once the person has seen what was restored. 204. " +
 			"409 " + problemACMENotPaused + " when nothing is paused; 409 " + problemACMECertFiles + " while certificate files are set; 409 " + problemACMERunActive + " while a run is in progress. Needs settings.write.",
 		Tags: []string{"https"},
-	}, write, func(ctx context.Context, _ *struct{}) (*struct{}, error) {
+	}, write, func(ctx context.Context, in *HTTPSACMEActionInput) (*struct{}, error) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
-		if err := d.ACME.Resume(ctx, actorOf(ctx)); err != nil {
-			return nil, acmeProblem(d.Log, "resume Let's Encrypt", err)
-		}
-		return nil, nil
+		return nil, d.simpleAction(ctx, in.UserAgent, audit.ActionHTTPSResumed, "resume Let's Encrypt", d.ACME.Resume(ctx, actorOf(ctx)))
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -143,15 +170,25 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 			"409 " + problemACMENotActive + " when Let's Encrypt is not in use; 409 " + problemACMECertFiles + " while certificate files are set; 409 " + problemACMERunActive + " while a run is in progress; 409 " + problemACMELocked +
 			" while TIERPLAN_ACME is set, whichever value it has; 409 " + problemHSTSOn + " while HSTS is on, because browsers that hold the policy would refuse the self-signed certificate: turn HSTS off first. Needs settings.write.",
 		Tags: []string{"https"},
-	}, write, func(ctx context.Context, _ *struct{}) (*struct{}, error) {
+	}, write, func(ctx context.Context, in *HTTPSACMEActionInput) (*struct{}, error) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
-		if err := d.ACME.Stop(ctx, actorOf(ctx)); err != nil {
-			return nil, acmeProblem(d.Log, "stop using Let's Encrypt", err)
-		}
-		return nil, nil
+		return nil, d.simpleAction(ctx, in.UserAgent, audit.ActionHTTPSStopped, "stop using Let's Encrypt", d.ACME.Stop(ctx, actorOf(ctx)))
 	})
+}
+
+// simpleAction records an action that starts no run (resume, stop) and answers it: the row of the action, as a failure
+// row when the manager refused it, then the mapped problem or the audit failure.
+func (d HTTPSDeps) simpleAction(ctx context.Context, ua, action, what string, err error) error {
+	var problem error
+	if err != nil {
+		problem = acmeProblem(d.Log, what, err)
+	}
+	if aerr := d.audit(ctx, ua, action, problem, nil); aerr != nil {
+		return auditFailed(d, aerr)
+	}
+	return problem
 }
 
 // runProblem maps the errors only the run actions return; it is nil for any other error.

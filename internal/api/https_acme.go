@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -347,7 +348,9 @@ func acmeRunBody(r *acme.RunView) *HTTPSACMERunBody {
 
 // RegisterACMEAccountInput is the body of the registration.
 type RegisterACMEAccountInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Email    string `json:"email,omitempty" maxLength:"254" doc:"Where the CA may send expiry and account notices. Optional: without one no contact is sent"`
 		AgreeTOS bool   `json:"agreeTos,omitempty" doc:"Must be true: the person registering agrees to the CA's terms of service"`
 	}
@@ -420,8 +423,20 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 			return nil, acmeUnavailable()
 		}
 		acct, err := d.ACME.Register(ctx, strings.TrimSpace(in.Body.Email), in.Body.AgreeTOS)
+		var problem error
+		var details map[string]string
 		if err != nil {
-			return nil, acmeProblem(d.Log, "register the Let's Encrypt account", err)
+			// A refused registration records no details at all: the address typed, which the CA or TierPlan may
+			// have refused, is never stored (T-17-10).
+			problem = acmeProblem(d.Log, "register the Let's Encrypt account", err)
+		} else {
+			details = d.registeredDetails(ctx, strings.TrimPrefix(acct.Contact, "mailto:"))
+		}
+		if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSAccountRegistered, problem, details); aerr != nil {
+			return nil, auditFailed(d, aerr)
+		}
+		if problem != nil {
+			return nil, problem
 		}
 		return &RegisterACMEAccountOutput{CacheControl: "no-store", Body: HTTPSACMEAccountBody{
 			RegisteredAt: acct.CreatedAt.UTC(), Contact: strings.TrimPrefix(acct.Contact, "mailto:"), TermsOfServiceURL: acct.TermsOfService,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -69,6 +70,9 @@ type HTTPSDeps struct {
 	HSTS HTTPSHSTS
 	// Jobs is the hub the Let's Encrypt run jobs live in; the run stream follows them.
 	Jobs *jobs.Hub
+	// Audit writes the audit rows of the admin's Let's Encrypt requests (Phase 17, SET-04). Nil writes no rows, which
+	// only test fixtures that do not read the log leave; the server always sets it.
+	Audit *audit.Writer
 	// ListenPort is the port TierPlan listens on, which the page names when it explains the port-80
 	// challenge listener.
 	ListenPort int
