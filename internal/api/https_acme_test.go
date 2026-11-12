@@ -72,6 +72,8 @@ type acmeOpts struct {
 	served func(t *testing.T) api.ServedCertificate
 	// dns replaces the manager's DNS-01 dependencies; nil keeps the production ones.
 	dns *acme.DNSDeps
+	// env is what the TIERPLAN_ACME* variables say.
+	env config.ACMEEnv
 }
 
 // dnsDeps is d, or the zero value when a test gives none.
@@ -127,7 +129,7 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 		PublicURL: f.inst.PublicURL, AgentURL: f.inst.AgentURL, BasePath: f.inst.BasePath,
 		DialHosts: f.dialHosts, CertFiles: o.certFiles, Log: slog.New(slog.DiscardHandler),
 		Jitter: func() float64 { return 0 }, Rand: func(int64) int64 { return 0 },
-		DNS: dnsDeps(o.dns),
+		DNS: dnsDeps(o.dns), Env: o.env,
 	})
 
 	leaf := httpsLeaf(t, pkix.Name{CommonName: "TierPlan self-signed"}, []string{"tierplan.example.com"}, nil)
@@ -782,4 +784,50 @@ func TestPutACMEProfileDuringARunIsRefused(t *testing.T) {
 	if got := f.status(t).ACME; got.Profile != "" || got.ActiveRun == nil || got.ActiveRun.Outcome != "running" {
 		t.Errorf("profile %q active run %+v, want the profile unchanged and the run shown as running", got.Profile, got.ActiveRun)
 	}
+}
+
+// The actions TIERPLAN_ACME fixes answer 409 acme_locked with the variable's name and nothing changed
+// (phase 16, D-04, D-17): Issue and Renew now with the variable off, Stop with either value; Issue stays
+// allowed with it on.
+func TestHTTPSACMEActionsLockedByTheEnvironment(t *testing.T) {
+	t.Parallel()
+	lockedDetail := func(t *testing.T, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		acmeProblemOf(t, rec, http.StatusConflict, "acme_locked")
+		var p struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Detail != "Set by the TIERPLAN_ACME environment variable." {
+			t.Errorf("detail = %q, want it to name the variable and nothing else", p.Detail)
+		}
+	}
+	on, off := true, false
+
+	t.Run("off", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &off}})
+		f.register(t, "")
+		for _, path := range []string{"/api/https/acme/issue", "/api/https/acme/renew", "/api/https/acme/stop"} {
+			lockedDetail(t, f.send(t, http.MethodPost, path, ""))
+		}
+		if n := f.ordersSeen(); n != 0 {
+			t.Errorf("the CA saw %d orders from refused actions, want none", n)
+		}
+	})
+	t.Run("on", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &on}})
+		f.register(t, "")
+		lockedDetail(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""))
+		// Issue is the manual retry and stays allowed.
+		f.awaitRun(t, startRun(t, f.issue(t)))
+		if n := f.ordersSeen(); n != 1 {
+			t.Errorf("the CA saw %d orders, want the one the allowed Issue placed", n)
+		}
+		// With a certificate stored, Renew now is allowed and Stop is still refused.
+		lockedDetail(t, f.send(t, http.MethodPost, "/api/https/acme/stop", ""))
+	})
 }

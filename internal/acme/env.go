@@ -3,6 +3,12 @@
 
 package acme
 
+import (
+	"fmt"
+
+	"github.com/ianglennon/tierplan/internal/config"
+)
+
 // The TIERPLAN_ACME* variables override what is stored (D-02): a variable that is set decides, and one
 // that is unset leaves the stored setting in force.
 //
@@ -56,4 +62,56 @@ func (m *Manager) ready() bool {
 	default:
 		return false
 	}
+}
+
+// LockACME is the field name an ErrLocked carries for the switch TIERPLAN_ACME fixes.
+const LockACME = "acme"
+
+// ErrLocked is returned when an action is refused because an environment variable fixes the setting it
+// would change (D-04, D-17). The manager returns it itself, so no caller can go around the lock. Only
+// the variable's name is ever shown, never its value.
+type ErrLocked struct {
+	// Field is the setting that is locked, such as LockACME.
+	Field string
+	// Var is the environment variable that locks it.
+	Var string
+	// Problem is the code the API answers with.
+	Problem string
+}
+
+func (e *ErrLocked) Error() string {
+	return fmt.Sprintf("%s is set by the %s environment variable", e.Field, e.Var)
+}
+
+// Lock says that a variable fixes a setting: what it sets, and what is stored and comes back when the
+// variable is removed. Both are in the page's vocabulary, so the stored mode reads "on" or "off".
+type Lock struct {
+	Var, Value, Stored string
+}
+
+// Locks are the settings the environment currently fixes; a nil field is a setting that is free.
+type Locks struct {
+	ACME *Lock
+}
+
+// lockedACME is the refusal of an action TIERPLAN_ACME fixes.
+func (m *Manager) lockedACME() error {
+	return &ErrLocked{Field: LockACME, Var: config.EnvACME, Problem: "acme_locked"}
+}
+
+// locks reports which settings the environment fixes now. st is only read, for the stored values.
+func (m *Manager) locks(st State) Locks {
+	var l Locks
+	if e := m.d.Env.Enabled; e != nil {
+		l.ACME = &Lock{Var: config.EnvACME, Value: onOff(*e), Stored: onOff(st.Mode == ModeActive)}
+	}
+	return l
+}
+
+// onOff is a switch in the vocabulary of the variable and the page.
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }

@@ -470,7 +470,11 @@ func acmeProblem(log *slog.Logger, what string, err error) error {
 		return p
 	}
 	var resolverErr *dnscheck.ResolverError
+	var locked *acme.ErrLocked
 	switch {
+	case errors.As(err, &locked):
+		// The variable's name, never its value.
+		return httpx.Problem(http.StatusConflict, locked.Problem, "Set by the "+locked.Var+" environment variable.")
 	case errors.Is(err, acme.ErrPaused):
 		return httpx.Problem(http.StatusConflict, problemACMEPaused, "Let's Encrypt is paused after a restore. Resume it first.")
 	case errors.Is(err, acme.ErrCertFiles):

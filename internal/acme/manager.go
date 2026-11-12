@@ -425,6 +425,10 @@ func (m *Manager) SetProfile(ctx context.Context, profile string) error {
 // pause, account, a run in progress, every preflight refusal, the ledger's manual block, and reuse of
 // a stored certificate that already covers the names and is not yet due (issueLocked).
 func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
+	// TIERPLAN_ACME=off fixes Let's Encrypt off; on leaves Issue allowed, as the manual retry (D-04).
+	if m.envOff() {
+		return RunStart{}, m.lockedACME()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)
@@ -437,6 +441,9 @@ func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
 // RenewNow renews the certificate now, for the names it already carries: never the names the URLs
 // want today (D-05). It names the certificate it replaces when the CA offers renewal information.
 func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) {
+	if m.envOff() {
+		return RunStart{}, m.lockedACME()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)
@@ -446,7 +453,7 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 	if m.runActive() {
 		return RunStart{}, ErrRunActive
 	}
-	if st.Mode != ModeActive {
+	if m.mode(st) != ModeActive {
 		return RunStart{}, ErrNotActive
 	}
 	leaf, found, err := m.storedLeaf(ctx)
@@ -535,6 +542,11 @@ func (m *Manager) Resume(ctx context.Context, actor string) error {
 // certificate are kept, so issuing again with the same names is one click and no order. A pause after
 // a restore is not lifted by it.
 func (m *Manager) Stop(ctx context.Context, actor string) error {
+	// Either value of TIERPLAN_ACME fixes whether Let's Encrypt is stopped. On locks Stop (D-04); off
+	// leaves nothing to stop, and a Stop would rewrite the stored mode underneath the variable (D-02).
+	if m.d.Env.Enabled != nil {
+		return m.lockedACME()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	if m.d.CertFiles {
