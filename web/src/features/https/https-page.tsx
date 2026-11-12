@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { httpsStatusQuery } from "@/api/https";
 import { AcmeCard } from "@/features/https/acme-card";
+import { AgentTrustCard } from "@/features/https/agent-trust-card";
 import { CertificateCard } from "@/features/https/certificate-card";
 import { TestDirectoryAlert } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
@@ -24,6 +25,7 @@ export function HttpsPage() {
       {acme?.directoryOverridden ? <TestDirectoryAlert url={acme.directoryUrl} /> : null}
       <CertificateCard />
       <AcmeCard />
+      <AgentTrustCard />
     </div>
   );
 }

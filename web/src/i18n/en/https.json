@@ -88,6 +88,16 @@
         "fix": "Set the public URL in Settings > General."
       }
     },
+    "agents": {
+      "title": "Agent trust",
+      "pin": "Install commands for new agents carry the pin of this certificate. An agent connects only if the certificate it sees matches.",
+      "public": "Agents trust this certificate through public certificate authorities, so install commands carry no pin. Every agent also keeps the self-signed pin it receives when it connects. If TierPlan goes back to its self-signed certificate, agents keep connecting and nothing needs reinstalling.",
+      "unverified": {
+        "before": "Public certificate authorities don't vouch for this certificate, so install commands carry no pin and agents can't verify it that way. Behind a proxy or a private authority, give each agent the pin of the certificate it will see. See the",
+        "link": "agent docs",
+        "after": "."
+      }
+    },
     "acme": {
       "title": "Let's Encrypt",
       "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",

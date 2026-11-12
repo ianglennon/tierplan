@@ -4,6 +4,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { TriangleAlert } from "lucide-react";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import {
@@ -45,6 +46,12 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 declare const __TIERPLAN_SOURCE_URL__: string;
 const PROXY_PIN_DOCS_PATH =
   "/blob/main/docs/agent.md#a-proxy-with-its-own-certificate-tierplan_agent_pin";
+
+// The agent docs section on a proxy with its own certificate. The Agent trust card on Settings > HTTPS
+// links to the same place.
+export function proxyPinDocsUrl(): string {
+  return `${__TIERPLAN_SOURCE_URL__}${PROXY_PIN_DOCS_PATH}`;
+}
 
 type EnvKind = "swarm" | "standalone";
 type View = "command" | "composeFile";
@@ -241,26 +248,7 @@ function InstallStep({ info, envId, envName, envType, hasAgents, onClose }: Inst
             {t("install.details.changeUrl")}
           </Link>
         </dd>
-        {info.pin ? (
-          <>
-            <dt className="text-muted-foreground">{t("install.details.pin")}</dt>
-            <dd>
-              <span className="block font-mono break-all">{info.pin}</span>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {t("install.details.pinProxyHint.before")}{" "}
-                <a
-                  href={`${__TIERPLAN_SOURCE_URL__}${PROXY_PIN_DOCS_PATH}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-sm underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                >
-                  {t("install.details.pinProxyHint.link")}
-                </a>
-                {t("install.details.pinProxyHint.after")}
-              </p>
-            </dd>
-          </>
-        ) : null}
+        <TrustRow info={info} />
       </dl>
 
       <Alert variant="warning" role="note">
@@ -270,6 +258,74 @@ function InstallStep({ info, envId, envName, envType, hasAgents, onClose }: Inst
       {/* An environment that already has agents has nothing to wait for. */}
       {hasAgents ? null : <WaitingPanel envId={envId} envName={envName} agentUrl={info.agentUrl} />}
     </div>
+  );
+}
+
+// The proxy-pin hint under a pin, or under the warning for a certificate that does not verify.
+function ProxyPinHint() {
+  const t = useT();
+  return (
+    <p className="mt-1 text-sm text-muted-foreground">
+      {t("install.details.pinProxyHint.before")}{" "}
+      <a
+        href={proxyPinDocsUrl()}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="rounded-sm underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        {t("install.details.pinProxyHint.link")}
+      </a>
+      {t("install.details.pinProxyHint.after")}
+    </p>
+  );
+}
+
+// TrustRow is the install details row that says how the agent will trust the server (D-18, TLS-08),
+// chosen by what the server says in install.trust. pin is the row as it was: the pin of the self-signed
+// certificate and the proxy hint. public says the command carries no pin and why a fallback needs no
+// reinstall. unverified warns that the agent has nothing to verify the certificate with. A value this
+// build does not know is drawn as pin, which shows the pin only when the server sent one.
+function TrustRow({ info }: { info: InstallInfo }) {
+  const t = useT();
+  if (info.trust === "public") {
+    return (
+      <>
+        <dt className="text-muted-foreground">{t("install.details.trust.label")}</dt>
+        <dd>
+          <span className="block">{t("install.details.trust.public")}</span>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t("install.details.trust.publicNote")}
+          </p>
+        </dd>
+      </>
+    );
+  }
+  if (info.trust === "unverified") {
+    return (
+      <>
+        <dt className="text-muted-foreground">{t("install.details.trust.label")}</dt>
+        <dd>
+          <span className="flex items-start gap-2">
+            <TriangleAlert
+              className="mt-0.5 size-4 shrink-0 text-status-warning-text"
+              aria-hidden="true"
+            />
+            <span>{t("install.details.trust.unverified")}</span>
+          </span>
+          <ProxyPinHint />
+        </dd>
+      </>
+    );
+  }
+  if (!info.pin) return null;
+  return (
+    <>
+      <dt className="text-muted-foreground">{t("install.details.pin")}</dt>
+      <dd>
+        <span className="block font-mono break-all">{info.pin}</span>
+        <ProxyPinHint />
+      </dd>
+    </>
   );
 }
 
