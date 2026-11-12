@@ -31,7 +31,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/net/idna"
 
-	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/acme/resolvers"
 )
 
 // The two agent timing settings are named in the table and in the check that
@@ -192,7 +192,7 @@ type ACMEEnv struct {
 	// TokenVar names the variable that supplied the token (EnvCloudflareToken or EnvCloudflareTokenFile),
 	// "" when there is none, so a lock label names the variable in use.
 	TokenVar string
-	// Resolvers is TIERPLAN_DNS_RESOLVERS as dnscheck.ParseResolvers normalised it, in the operator's
+	// Resolvers is TIERPLAN_DNS_RESOLVERS as resolvers.ParseResolvers normalised it, in the operator's
 	// order with later duplicates dropped. ResolversSet is whether the variable was set at all.
 	Resolvers    []string
 	ResolversSet bool
@@ -384,7 +384,7 @@ var settings = []setting{
 				c.ACME.Resolvers, c.ACME.ResolversSet = nil, false
 				return nil
 			}
-			list, err := dnscheck.ParseResolvers([]string{raw})
+			list, err := resolvers.ParseResolvers([]string{raw})
 			if err != nil {
 				return err
 			}
