@@ -9,6 +9,7 @@ import { AgentTrustCard } from "@/features/https/agent-trust-card";
 import { hasEnvLocks } from "@/features/https/card-state";
 import { CertificateCard } from "@/features/https/certificate-card";
 import { EnvLockNotice } from "@/features/https/env-lock-notice";
+import { HstsCard } from "@/features/https/hsts-card";
 import { TestDirectoryAlert } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
 
@@ -29,6 +30,7 @@ export function HttpsPage() {
       {acme?.directoryOverridden ? <TestDirectoryAlert url={acme.directoryUrl} /> : null}
       <CertificateCard />
       <AcmeCard />
+      <HstsCard />
       <AgentTrustCard />
     </div>
   );

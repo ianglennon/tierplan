@@ -88,6 +88,78 @@
         "fix": "Set the public URL in Settings > General."
       }
     },
+    "hsts": {
+      "title": "HSTS",
+      "description": "HSTS tells browsers to use only HTTPS for this address. TierPlan sends it only while a certificate that browsers trust is served, and it starts with a short lifetime.",
+      "switch": "Send HSTS",
+      "helper": "Off by default. Once a browser has seen HSTS it refuses plain HTTP for this address until the lifetime ends. TierPlan never adds includeSubDomains or preload.",
+      "draftOn": "The lifetime starts at 5 minutes and only grows while TierPlan serves a trusted certificate without a problem.",
+      "draftOff": "Browsers that visit while a trusted certificate is served are told to forget HSTS (max-age=0).",
+      "save": "Save HSTS setting",
+      "saving": "Saving...",
+      "onDone": "HSTS turned on.",
+      "offDone": "HSTS turned off.",
+      "status": {
+        "label": "Status",
+        "lifetime": "Lifetime",
+        "next": "Next step",
+        "why": "Why",
+        "sending": {
+          "value": "Sending",
+          "extra": "The browser keeps the policy for the lifetime shown."
+        },
+        "off_clearing": {
+          "value": "Off",
+          "extra": "TierPlan tells browsers to forget HSTS (max-age=0). This also clears the one-year setting that earlier versions sent for certificate files."
+        },
+        "off_silent": {
+          "value": "Off",
+          "extra": "Nothing is sent."
+        },
+        "not_sent": {
+          "value": "On, but not sent",
+          "extra": "HSTS is only sent over a certificate that browsers trust."
+        },
+        "not_sent_clearing": {
+          "value": "On, but not sent",
+          "extra": "TierPlan sends max-age=0, so a browser that trusts this certificate forgets the one-year HSTS that earlier versions sent. A self-signed certificate gets no HSTS header at all."
+        },
+        "withdrawn": {
+          "value": "Withdrawn for now",
+          "extra": "See the notice below."
+        }
+      },
+      "lifetimeValue": "max-age={{seconds}}",
+      "stepOf": "step {{n}} of 4, {{label}}",
+      "nextAfter": "if nothing goes wrong before then",
+      "nextFinal": "Final step",
+      "nextCapped": "Capped at 1 week for this certificate",
+      "withdrawn": {
+        "lets_encrypt": {
+          "title": "HSTS is withdrawn until the certificate is renewed",
+          "body": "The certificate expires on {{date}} and renewal isn't working. While it still works, TierPlan tells browsers to forget HSTS (max-age=0), because a browser that keeps HSTS would refuse the self-signed certificate that takes over, with no way to click past the warning. When a renewal works, HSTS comes back and the lifetime starts again at 5 minutes."
+        },
+        "cert_files": {
+          "title": "HSTS is withdrawn until the certificate is replaced",
+          "body": "The certificate expires on {{date}}. While it still works, TierPlan tells browsers to forget HSTS (max-age=0), because a browser that keeps HSTS would refuse the self-signed certificate that takes over, with no way to click past the warning. When the files hold a new certificate, HSTS comes back and the lifetime starts again at 5 minutes."
+        }
+      },
+      "steps": {
+        "title": "Lifetime steps",
+        "label": {
+          "1": "5 minutes",
+          "2": "1 week",
+          "3": "1 month",
+          "4": "1 year"
+        },
+        "done": "Done",
+        "current": "Current",
+        "later": "Later",
+        "unused": "Not used for this certificate",
+        "startsLater": "The lifetime starts at step 1 when HSTS is sent.",
+        "foot": "A step lasts a day, a week and a month. A withdrawal, an untrusted certificate or a new public host starts again at step 1. A restore starts again too."
+      }
+    },
     "agents": {
       "title": "Agent trust",
       "pin": "Install commands for new agents carry the pin of this certificate. An agent connects only if the certificate it sees matches.",

@@ -465,3 +465,74 @@ export function httpsDnsLockedStatus(
     ...acme,
   });
 }
+
+// The HSTS block of the status as the server answers it on a fresh install: off, nothing sent, because
+// no trusted certificate is served and none could have been.
+export type HSTSBody = NonNullable<HTTPSStatus["hsts"]>;
+
+export function hstsBody(over: Partial<HSTSBody> = {}): HSTSBody {
+  return {
+    capped: false,
+    clearing: false,
+    enabled: false,
+    maxAge: 0,
+    state: "off_silent",
+    step: 0,
+    storedEnabled: false,
+    ...over,
+  };
+}
+
+const HSTS_MAX_AGES = [0, 300, 604_800, 2_592_000, 31_536_000];
+
+// HSTS on and being sent at the given ramp step (1 to 4): max-age for that step and, below the last
+// step, the time of the next one.
+export function hstsSending(step: 1 | 2 | 3 | 4, over: Partial<HSTSBody> = {}): HSTSBody {
+  return hstsBody({
+    enabled: true,
+    storedEnabled: true,
+    state: "sending",
+    step,
+    maxAge: HSTS_MAX_AGES[step] ?? 0,
+    ...(step < 4 ? { nextStepAt: new Date(Date.now() + 86_400_000).toISOString() } : {}),
+    ...over,
+  });
+}
+
+// HSTS on over a certificate it may not be sent over: nothing is sent, and the reason says why.
+export function hstsNotSent(
+  reason: NonNullable<HSTSBody["notSentReason"]> = "self_signed",
+  over: Partial<HSTSBody> = {},
+): HSTSBody {
+  return hstsBody({
+    enabled: true,
+    storedEnabled: true,
+    state: "not_sent",
+    notSentReason: reason,
+    ...over,
+  });
+}
+
+// The status of an install that serves a Let's Encrypt certificate (so a trusted one) with the given
+// HSTS block.
+export function httpsHSTSStatus(
+  hsts: Partial<HSTSBody> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  return { ...httpsLetsEncryptStatus(), hsts: hstsBody(hsts), ...top };
+}
+
+// The HSTS block while TIERPLAN_HSTS fixes the setting: value is what the variable says, stored what the
+// database holds under it.
+export function hstsLock(
+  value: "on" | "off",
+  stored: "on" | "off" = "off",
+  over: Partial<HSTSBody> = {},
+): Partial<HSTSBody> {
+  return {
+    enabled: value === "on",
+    storedEnabled: stored === "on",
+    lock: { var: "TIERPLAN_HSTS", value, stored },
+    ...over,
+  };
+}

@@ -175,9 +175,146 @@ export function deriveMode(status: HTTPSStatus): Mode {
 
 // hasEnvLocks says whether any HTTPS field is fixed by a TIERPLAN_* variable, which is when the page
 // explains locks at the top (SET-02). The public and agent URL locks live on Settings > General and are
-// not part of this status, so they never trigger it.
+// not part of this status, so they never trigger it. The HSTS lock counts (D-10, D-17).
 export function hasEnvLocks(status: HTTPSStatus): boolean {
+  if (status.hsts?.lock !== undefined) return true;
   const locks = status.acme?.locks;
   if (!locks) return false;
   return Object.values(locks).some((lock) => lock !== undefined);
+}
+
+// The HSTS lifetime ramp (D-11): the max-age of each of the four steps, in seconds.
+export const HSTS_MAX_AGES = [300, 604_800, 2_592_000, 31_536_000] as const;
+
+// What the HSTS card's Status row says (UI-SPEC "Status values"). not_sent_clearing is not_sent while
+// max-age=0 goes out, so a browser that trusts the certificate forgets the one-year policy earlier
+// versions sent for certificate files (D-23).
+export type HstsStatusKey =
+  | "sending"
+  | "off_clearing"
+  | "off_silent"
+  | "not_sent"
+  | "not_sent_clearing"
+  | "withdrawn";
+
+// done, current and later are the ramp as it stands; unused is a step a short-lived certificate never
+// reaches (D-22).
+export type HstsStepState = "done" | "current" | "later" | "unused";
+
+export interface HstsStep {
+  // 1 to 4: five minutes, a week, a month, a year.
+  n: 1 | 2 | 3 | 4;
+  maxAge: number;
+  state: HstsStepState;
+}
+
+// The Next step row: when the longer step comes, that this is the last step, or that the certificate
+// stops the ramp at a week.
+export type HstsNext = { kind: "at"; at: string } | { kind: "final" } | { kind: "capped" };
+
+export interface HstsView {
+  state: HstsStatusKey;
+  // The effective setting, which TIERPLAN_HSTS decides when it is set.
+  enabled: boolean;
+  // The choice kept in the database; the Switch's draft is compared with it.
+  storedEnabled: boolean;
+  // The lock, when TIERPLAN_HSTS fixes the setting.
+  lock: { var: string; stored?: string } | undefined;
+  maxAge: number;
+  step: number;
+  // The Next step row, left out when it has nothing to say.
+  next: HstsNext | undefined;
+  clearing: boolean;
+  // Why HSTS is on but not sent: the trust reason code (test_ca when the certificate comes from a test
+  // directory), and the host it was judged for. Both only while the state is not_sent.
+  reason: string | undefined;
+  host: string | undefined;
+  withdrawal: NonNullable<HTTPSStatus["hsts"]>["withdrawal"];
+  // The time after which no browser can still hold a policy TierPlan sent, only while that is still in
+  // the future: the Stop dialog warns until then (D-26).
+  forgetBy: string | undefined;
+  // The four lifetime steps, shown while the setting is on (steps is empty when it is off).
+  steps: HstsStep[];
+  // Every step is Later and the list says the lifetime starts when HSTS is sent (not sent, withdrawn).
+  startsLater: boolean;
+  // Stop using Let's Encrypt is refused while the effective setting is on (D-26).
+  blocksStop: boolean;
+}
+
+function hstsStatusKey(hsts: NonNullable<HTTPSStatus["hsts"]>): HstsStatusKey {
+  switch (hsts.state) {
+    case "sending":
+      return "sending";
+    case "withdrawn":
+      return "withdrawn";
+    case "off_clearing":
+      return "off_clearing";
+    case "off_silent":
+      return "off_silent";
+    case "not_sent":
+      return hsts.clearing ? "not_sent_clearing" : "not_sent";
+    default:
+      // A state this build does not know: say what is certain from the setting alone.
+      return hsts.enabled ? "not_sent" : "off_silent";
+  }
+}
+
+// hstsView is the one place that reads status.hsts into what the HSTS card and the Stop button say
+// (TLS-06, D-10 to D-14, D-22, D-23, D-26): the Status row's state, the ramp with its done, current,
+// later and unused steps, the Next step row, the trust reason (test_ca when the certificate is from a
+// test directory), and whether Stop is blocked. now is the clock the Stop dialog's warning is judged by.
+// It returns undefined for a build without the HSTS policy.
+export function hstsView(status: HTTPSStatus, now: number = Date.now()): HstsView | undefined {
+  const hsts = status.hsts;
+  if (!hsts) return undefined;
+  const state = hstsStatusKey(hsts);
+  const sending = state === "sending";
+  const notSent = state === "not_sent" || state === "not_sent_clearing";
+
+  let next: HstsNext | undefined;
+  if (sending) {
+    if (hsts.step >= 4) next = { kind: "final" };
+    else if (hsts.capped && hsts.step >= 2) next = { kind: "capped" };
+    else if (hsts.nextStepAt) next = { kind: "at", at: hsts.nextStepAt };
+  }
+
+  const steps: HstsStep[] = hsts.enabled
+    ? HSTS_MAX_AGES.map((maxAge, i): HstsStep => {
+        const n = (i + 1) as HstsStep["n"];
+        let stepState: HstsStepState = "later";
+        if (sending) {
+          if (hsts.capped && n > 2) stepState = "unused";
+          else if (n < hsts.step) stepState = "done";
+          else if (n === hsts.step) stepState = "current";
+        }
+        return { n, maxAge, state: stepState };
+      })
+    : [];
+
+  const forgetMs = hsts.forgetBy ? Date.parse(hsts.forgetBy) : Number.NaN;
+  const forgetBy = Number.isFinite(forgetMs) && forgetMs > now ? hsts.forgetBy : undefined;
+
+  return {
+    state,
+    enabled: hsts.enabled,
+    storedEnabled: hsts.storedEnabled,
+    lock: hsts.lock
+      ? { var: hsts.lock.var, ...(hsts.lock.stored ? { stored: hsts.lock.stored } : {}) }
+      : undefined,
+    maxAge: hsts.maxAge,
+    step: hsts.step,
+    next,
+    clearing: hsts.clearing,
+    reason: notSent
+      ? status.certificate.testCA
+        ? "test_ca"
+        : hsts.notSentReason || "unknown_authority"
+      : undefined,
+    host: notSent ? status.certificate.trust.host : undefined,
+    withdrawal: hsts.withdrawal,
+    forgetBy,
+    steps,
+    startsLater: hsts.enabled && !sending,
+    blocksStop: hsts.enabled,
+  };
 }
