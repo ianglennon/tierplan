@@ -362,6 +362,15 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 		now.UnixNano()); err != nil {
 		return fmt.Errorf("pause automatic ACME after the restore: %w", err)
 	}
+	// The HSTS ramp starts again on a restore: a restored clone may serve a different certificate
+	// history, so it must not resume a long lifetime on its first day. The admin's choice
+	// (hsts_enabled) and the bound on what browsers may still hold (hsts_held_until) travel, so the
+	// page keeps reporting the safe direction. Written in the same transaction as the pause above.
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE https_state SET hsts_step = 0, hsts_step_since = 0, updated_at = ? WHERE id = 1",
+		now.UnixNano()); err != nil {
+		return fmt.Errorf("restart the HSTS ramp after the restore: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("prepare the staged database: %w", err)
 	}
