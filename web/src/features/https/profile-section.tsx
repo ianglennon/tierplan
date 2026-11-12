@@ -9,6 +9,7 @@ import {
   ACMEProfileError,
   acmeDirectoryQuery,
   type HTTPSACME,
+  isLockProblem,
   useSaveACMEProfile,
 } from "@/api/https";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import type { AdvancedMode } from "@/features/https/card-state";
+import { LockedNote } from "@/features/https/locked-note";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -57,7 +59,10 @@ export function ProfileSection({ acme, mode, listable }: ProfileSectionProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string | undefined>();
   const [failed, setFailed] = useState(false);
-  const disabled = mode === "disabled";
+  // TIERPLAN_ACME_PROFILE fixes the profile (D-24): the select shows the effective one (acme.profile
+  // already is it), nothing can be saved, and the lock says which variable and what is kept underneath.
+  const lock = acme.locks.profile;
+  const disabled = mode === "disabled" || lock !== undefined;
 
   const saved = acme.profile;
   const choice = draft ?? saved;
@@ -86,6 +91,12 @@ export function ProfileSection({ acme, mode, listable }: ProfileSectionProps) {
         toastSuccess(t("https.profile.done"));
       },
       onError: (error) => {
+        // A variable now fixes the profile: the status is read again (by the mutation) and the field
+        // redraws as locked. The draft was never sent, so it goes, and nothing is told as a failure.
+        if (isLockProblem(error)) {
+          setDraft(undefined);
+          return;
+        }
         // The page was out of date: a run began, the card was paused, or the CA dropped the profile.
         if (error instanceof ACMEProfileError && error.status === 409) {
           void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
@@ -133,7 +144,9 @@ export function ProfileSection({ acme, mode, listable }: ProfileSectionProps) {
                 <SelectTrigger
                   id="acme-profile"
                   title={labelOf(choice)}
-                  aria-describedby="acme-profile-helper"
+                  aria-describedby={
+                    lock ? "acme-profile-lock acme-profile-helper" : "acme-profile-helper"
+                  }
                   className={cn(TOUCH_HEIGHT, "w-full min-w-0 md:max-w-sm")}
                 >
                   <SelectValue>
@@ -162,6 +175,7 @@ export function ProfileSection({ acme, mode, listable }: ProfileSectionProps) {
                 </SelectContent>
               </Select>
             )}
+            {lock ? <LockedNote id="acme-profile-lock" lock={lock} mono /> : null}
             {unreadable ? (
               <p className="text-sm text-muted-foreground">{t("https.profile.unreadable")}</p>
             ) : null}

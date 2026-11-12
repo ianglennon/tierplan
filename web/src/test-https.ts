@@ -356,3 +356,25 @@ export function httpsStoppedStatus(acme: Partial<HTTPSACME> = {}): HTTPSStatus {
   const lets = httpsLetsEncryptStatus({ mode: "off", renewal: undefined, ...acme });
   return { ...lets, certificate: httpsStatus().certificate, agentTrust: "pin" };
 }
+
+// The Let's Encrypt card with locks from the environment (SET-02, D-17): the registered account is
+// there (so Advanced and the Issue certificate button show, state B), and the locks are the ones given.
+// A lock is { var, stored? }; the variable's name is the one the test wants the page to print.
+export function httpsLockedStatus(
+  locks: HTTPSACME["locks"],
+  acme: Partial<HTTPSACME> = {},
+  top: Partial<HTTPSStatus> = {},
+): HTTPSStatus {
+  return httpsStatus({
+    acme: httpsACME({
+      account: {
+        contact: "ops@example.com",
+        registeredAt: "2026-11-10T08:00:00Z",
+        termsOfServiceUrl: "",
+      },
+      locks,
+      ...acme,
+    }),
+    ...top,
+  });
+}

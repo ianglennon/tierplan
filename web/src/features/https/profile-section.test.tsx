@@ -12,7 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { AcmeCard } from "@/features/https/acme-card";
 import "@/i18n";
-import { acmeDirectory, httpsACME, httpsStatus } from "@/test-https";
+import { acmeDirectory, httpsACME, httpsLockedStatus, httpsStatus } from "@/test-https";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
@@ -364,5 +364,81 @@ describe("ProfileSection", () => {
     expect(el.matches(":disabled")).toBe(true);
     expect(saveButton()).toBeNull();
     expect(puts()).toHaveLength(0);
+  });
+});
+
+describe("a profile fixed by TIERPLAN_ACME_PROFILE (D-24)", () => {
+  const locked = (stored?: string) =>
+    httpsLockedStatus(
+      { profile: { var: "TIERPLAN_ACME_PROFILE", ...(stored ? { stored } : {}) } },
+      { profile: "tlsserver" },
+    );
+
+  it("shows the effective profile in a disabled select, with no Save, and the variable and stored value beneath", async () => {
+    status = () => Response.json(locked("classic"));
+    const el = await opened();
+    expect(el.matches(":disabled")).toBe(true);
+    expect(el.textContent).toContain("tlsserver");
+    expect(saveButton()).toBeNull();
+    const note = document.getElementById("acme-profile-lock") as HTMLElement;
+    expect(note.textContent).toBe(
+      "Set by the TIERPLAN_ACME_PROFILE environment variable.Stored value: classic, used if TIERPLAN_ACME_PROFILE is removed.",
+    );
+    // The select is described by the lock lines.
+    expect(el.getAttribute("aria-describedby")).toContain("acme-profile-lock");
+    expect(within(note).getByRole("img", { name: "Locked" })).toBeTruthy();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("reads 'none' beneath when nothing is stored", async () => {
+    status = () => Response.json(locked());
+    await opened();
+    expect(document.getElementById("acme-profile-lock")?.textContent).toContain(
+      "Stored value: none, used if TIERPLAN_ACME_PROFILE is removed.",
+    );
+  });
+
+  it("names the variable the API gives, not a fixed one", async () => {
+    status = () =>
+      Response.json(
+        httpsLockedStatus({ profile: { var: "TIERPLAN_OTHER", stored: "x" } }, { profile: "" }),
+      );
+    const el = await opened();
+    expect(el.textContent).toContain("CA default");
+    expect(document.getElementById("acme-profile-lock")?.textContent).toContain(
+      "Set by the TIERPLAN_OTHER environment variable.",
+    );
+  });
+
+  it("keeps the lock note for a viewer, who sees no Save either", async () => {
+    me = viewer;
+    status = () => Response.json(locked("classic"));
+    await opened();
+    expect(document.getElementById("acme-profile-lock")).not.toBeNull();
+    expect(saveButton()).toBeNull();
+  });
+
+  it("redraws as locked on a 409 acme_profile_locked, with no failure line and no toast", async () => {
+    // The variable is added after the page loaded: only the status read after the refusal has it.
+    let refused = false;
+    status = () => Response.json(refused ? locked("classic") : withACME({ profile: "classic" }));
+    put = () => {
+      refused = true;
+      return Response.json(
+        { type: "acme_profile_locked", title: "x", status: 409, detail: "d" },
+        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+      );
+    };
+    await opened();
+    await choose(/^shortlived/);
+    await waitFor(() => expect(saveButton()?.matches(":disabled")).toBe(false));
+    fireEvent.click(saveButton() as HTMLElement);
+    await waitFor(() => expect(document.getElementById("acme-profile-lock")).not.toBeNull());
+    expect(card().queryByText("Something went wrong. Try again.")).toBeNull();
+    expect(successToast).not.toHaveBeenCalled();
+    expect(select().matches(":disabled")).toBe(true);
+    // The unsent draft is gone: the select shows what the environment fixes.
+    expect(select().textContent).toContain("tlsserver");
+    expect(saveButton()).toBeNull();
   });
 });

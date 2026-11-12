@@ -500,6 +500,19 @@
       "confirm": "Stop using Let's Encrypt",
       "pending": "Stopping...",
       "done": "Back on the self-signed certificate."
+    },
+    "lock": {
+      "set": "Set by the {{var}} environment variable.",
+      "accepted": "Accepted by the {{var}} environment variable.",
+      "order": "Set by the {{var}} environment variable. Set it to on, or remove it, to order certificates.",
+      "stop": "Set by the {{var}} environment variable. Set it to off, or remove it, to stop.",
+      "stored": "Stored value: {{value}}, used if {{var}} is removed.",
+      "none": "none",
+      "contactKept": "TierPlan doesn't change the contact of an account that already exists.",
+      "notice": {
+        "title": "Some settings are set by environment variables",
+        "body": "Locked settings show a lock and the variable that sets them. Change them in your compose file or container settings, then restart TierPlan. The value saved here is kept and used again if you remove the variable."
+      }
     }
   }
 }

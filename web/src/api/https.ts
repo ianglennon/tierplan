@@ -23,6 +23,15 @@ export const httpsStatusQuery = queryOptions({
   refetchOnWindowFocus: true,
 });
 
+// isLockProblem says whether a refused write was refused because a TIERPLAN_* variable fixes the
+// setting (SET-02): the problem type is a per-field *_locked one (acme_locked, acme_email_locked,
+// acme_tos_locked, acme_profile_locked, ...). The page does not treat it as a failure: the status is
+// read again and the field redraws as locked, with no toast.
+export function isLockProblem(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("type" in error)) return false;
+  return typeof error.type === "string" && error.type.endsWith("_locked");
+}
+
 export type HTTPSACME = components["schemas"]["HTTPSACMEBody"];
 export type ACMEDirectory = components["schemas"]["HTTPSACMEDirectoryBody"];
 export type ACMEAccount = components["schemas"]["HTTPSACMEAccountBody"];
@@ -85,6 +94,10 @@ export function useRegisterACMEAccount() {
       return data;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
   });
 }
 
@@ -119,6 +132,10 @@ export function useSaveACMEProfile() {
       return data.profile;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["https", "status"] }),
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
   });
 }
 
@@ -413,6 +430,10 @@ export function useIssueCertificate() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
     },
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
   });
 }
 
@@ -424,6 +445,10 @@ export function useRenewNow() {
     retry: false,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
+    },
+    onError: (error) => {
+      if (isLockProblem(error))
+        void queryClient.invalidateQueries({ queryKey: ["https", "status"] });
     },
   });
 }

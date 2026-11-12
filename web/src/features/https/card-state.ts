@@ -128,3 +128,12 @@ export function deriveMode(status: HTTPSStatus): Mode {
   if (acme?.mode === "off" && acme.hasState) return { kind: "self_signed", reason: "stopped" };
   return { kind: "self_signed", reason: "default" };
 }
+
+// hasEnvLocks says whether any HTTPS field is fixed by a TIERPLAN_* variable, which is when the page
+// explains locks at the top (SET-02). The public and agent URL locks live on Settings > General and are
+// not part of this status, so they never trigger it.
+export function hasEnvLocks(status: HTTPSStatus): boolean {
+  const locks = status.acme?.locks;
+  if (!locks) return false;
+  return Object.values(locks).some((lock) => lock !== undefined);
+}
