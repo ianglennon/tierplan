@@ -1352,3 +1352,44 @@ func TestHSTSPolicyToggleAndWithToggleLockedAreExclusive(t *testing.T) {
 	}
 	locked.toggleMu.Unlock()
 }
+
+// HSTS covers every port of a host name, so the card is told the public URL's port whenever it is
+// not 443 (WR-04). Nothing is refused; the port only reaches the view.
+func TestHSTSPolicyViewReportsANonDefaultPort(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		url  string
+		want int
+	}{
+		{"https://tierplan.example.com:8443", 8443},
+		{"https://tierplan.example.com:8443/tierplan", 8443},
+		{"https://[2001:db8::1]:9443", 9443},
+		{"https://tierplan.example.com", 0},
+		{"https://tierplan.example.com:443", 0},
+		{"HTTPS://tierplan.example.com:443/", 0},
+		{"http://tierplan.example.com:8080", 0},
+		{"", 0},
+		{"://bad", 0},
+	}
+	for _, tc := range tests {
+		if got := nonDefaultPort(tc.url); got != tc.want {
+			t.Errorf("nonDefaultPort(%q) = %d, want %d", tc.url, got, tc.want)
+		}
+	}
+
+	url := "https://tierplan.example.com:8443"
+	p := &hstsPolicy{now: fixedHSTSNow, publicURL: func() string { return url }}
+	if got := p.View(context.Background()).PublicPort; got != 8443 {
+		t.Fatalf("View().PublicPort = %d, want 8443", got)
+	}
+	url = "https://tierplan.example.com"
+	if got := p.View(context.Background()).PublicPort; got != 0 {
+		t.Fatalf("View().PublicPort after a move to 443 = %d, want 0", got)
+	}
+	if got := (&hstsPolicy{now: fixedHSTSNow}).View(context.Background()).PublicPort; got != 0 {
+		t.Fatalf("View().PublicPort with no public URL = %d, want 0", got)
+	}
+}
+
+// fixedHSTSNow is a clock that never moves, for views that do not depend on time.
+func fixedHSTSNow() time.Time { return hstsStart }

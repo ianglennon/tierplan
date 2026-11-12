@@ -88,6 +88,8 @@ type HSTSView struct {
 	ForgetBy time.Time
 	// Lock is set while TIERPLAN_HSTS fixes the toggle; Stored is "on" or "off".
 	Lock *HTTPSLockBody
+	// PublicPort is the public URL's port when it is https on a port other than 443, otherwise 0.
+	PublicPort int
 }
 
 // HTTPSHSTS is the HSTS policy as the HTTPS routes use it.
@@ -119,6 +121,7 @@ type HTTPSHSTSBody struct {
 	Withdrawal    *HTTPSHSTSWithdrawalBody `json:"withdrawal,omitempty" doc:"Set while the header is withdrawn ahead of the certificate's end"`
 	ForgetBy      *time.Time               `json:"forgetBy,omitempty" doc:"The time after which no browser can still hold a policy TierPlan sent. Left out while a policy is being sent and when none can be held. Stopping Let's Encrypt is safe once HSTS is off and this has passed"`
 	Lock          *HTTPSLockBody           `json:"lock,omitempty" doc:"Set while the TIERPLAN_HSTS environment variable fixes the setting. Value and stored are on or off"`
+	PublicPort    int                      `json:"publicPort,omitempty" doc:"The public URL's port when it is not 443. HSTS covers every port of the host name, so a policy sent here also makes browsers use HTTPS for other services on the same name. Left out on port 443"`
 }
 
 // hstsBody maps the policy's view onto the contract.
@@ -126,7 +129,7 @@ func hstsBody(v HSTSView) *HTTPSHSTSBody {
 	b := &HTTPSHSTSBody{
 		Enabled: v.Enabled, StoredEnabled: v.StoredEnabled, State: v.State, Clearing: v.Clearing,
 		MaxAge: v.MaxAge, Step: v.Step, Capped: v.Capped, NotSentReason: v.NotSentReason,
-		NextStepAt: utcOrNil(v.NextStepAt), ForgetBy: utcOrNil(v.ForgetBy), Lock: v.Lock,
+		NextStepAt: utcOrNil(v.NextStepAt), ForgetBy: utcOrNil(v.ForgetBy), Lock: v.Lock, PublicPort: v.PublicPort,
 	}
 	if w := v.Withdrawal; w != nil {
 		b.Withdrawal = &HTTPSHSTSWithdrawalBody{NotAfter: w.NotAfter.UTC(), Source: w.Source}

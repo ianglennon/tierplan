@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,6 +76,9 @@ type hstsPolicy struct {
 	// extra timer on the ACME clock breaks the rigs' armed-timer counting.
 	clock stackops.Clock
 	log   *slog.Logger
+	// publicURL is the public URL as saved now, read for the port the card warns about (WR-04). Nil
+	// reads as no public URL.
+	publicURL func() string
 
 	snap atomic.Pointer[hstsDecision]
 	wake chan struct{}
@@ -429,6 +433,9 @@ func (p *hstsPolicy) View(_ context.Context) api.HSTSView {
 	defer p.mu.Unlock()
 	now := p.now()
 	v := api.HSTSView{Enabled: p.enabled(), StoredEnabled: p.storedOn.Load()}
+	if p.publicURL != nil {
+		v.PublicPort = nonDefaultPort(p.publicURL())
+	}
 	if p.env != nil {
 		v.Lock = &api.HTTPSLockBody{Var: config.EnvHSTS, Value: onOff(*p.env), Stored: onOff(p.storedOn.Load())}
 	}
@@ -460,6 +467,21 @@ func (p *hstsPolicy) View(_ context.Context) api.HSTSView {
 		v.ForgetBy = time.Unix(0, p.ramp.held)
 	}
 	return v
+}
+
+// nonDefaultPort is the port of an https public URL when it is not 443, or 0. HSTS applies to every
+// port of a host name, so a policy sent from TierPlan on another port also upgrades whatever the
+// same name serves on 80 and 443 (WR-04). The card warns; nothing is refused.
+func nonDefaultPort(publicURL string) int {
+	u, err := url.Parse(publicURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Port() == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(u.Port())
+	if err != nil || n == 443 || n <= 0 || n > 65535 {
+		return 0
+	}
+	return n
 }
 
 // onOff is a toggle in the words of the lock the page shows.

@@ -170,6 +170,7 @@ function HstsBody({ view }: { view: HstsView }) {
         ) : null}
       </div>
 
+      <PortNotice view={view} />
       <StatusRows view={view} />
       <WithdrawalNotice view={view} />
       <HstsRamp view={view} />
@@ -270,6 +271,25 @@ function WhyRow({ reason, host }: { reason: string; host: string | undefined }) 
         </div>
       </dd>
     </>
+  );
+}
+
+// PortNotice warns, whether HSTS is on or off, that the public URL is on a port other than 443 while
+// browsers apply HSTS to the whole name (WR-04). It is a warning only: HSTS may still be turned on.
+function PortNotice({ view }: { view: HstsView }) {
+  const t = useT();
+  if (!view.port) return null;
+  const { port, host } = view.port;
+  return (
+    <Alert variant="warning" role="note" data-testid="hsts-port-notice">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>{t("https.hsts.port.title")}</AlertTitle>
+      <AlertDescription className="break-words">
+        {host
+          ? t("https.hsts.port.body", { port, host })
+          : t("https.hsts.port.bodyNoHost", { port })}
+      </AlertDescription>
+    </Alert>
   );
 }
 

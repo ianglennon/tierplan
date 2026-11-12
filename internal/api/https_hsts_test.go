@@ -240,6 +240,11 @@ func TestHSTSStatusCarriesEveryField(t *testing.T) {
 			},
 		},
 		{
+			name: "a public URL on a port other than 443 carries the port (WR-04)",
+			view: api.HSTSView{State: api.HSTSStateOffSilent, PublicPort: 8443},
+			want: api.HTTPSHSTSBody{State: "off_silent", PublicPort: 8443},
+		},
+		{
 			name: "the variable fixes the toggle over the stored one",
 			view: api.HSTSView{
 				Enabled: true, State: api.HSTSStateNotSent, NotSentReason: "self_signed",

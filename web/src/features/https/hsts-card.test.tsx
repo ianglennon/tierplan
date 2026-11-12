@@ -556,3 +556,30 @@ describe("the env-lock notice counts the HSTS lock (SET-02, D-17)", () => {
     expect(hasEnvLocks(httpsHSTSStatus())).toBe(false);
   });
 });
+
+// HSTS covers every port of a name (WR-04): a public URL on another port warns, with HSTS on or off,
+// and nothing is refused.
+describe("HSTS card port warning", () => {
+  it("warns with the port and host when the public URL is not on 443", async () => {
+    status = () => httpsHSTSStatus({ publicPort: 8443 });
+    renderCard();
+    const notice = await card().findByTestId("hsts-port-notice");
+    expect(within(notice).getByText("HSTS covers every port on this name")).toBeTruthy();
+    expect(notice.textContent).toContain("port 8443");
+    expect(notice.textContent).toContain("any other service on tierplan.example.com");
+    await waitFor(() => expect((switchControl() as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("still warns while HSTS is being sent", async () => {
+    status = () => httpsHSTSStatus(hstsSending(2, { publicPort: 9443 }));
+    renderCard();
+    const notice = await card().findByTestId("hsts-port-notice");
+    expect(notice.textContent).toContain("port 9443");
+  });
+
+  it("says nothing about the port on 443", async () => {
+    renderCard();
+    await card().findByRole("switch", { name: "Send HSTS" });
+    expect(card().queryByTestId("hsts-port-notice")).toBeNull();
+  });
+});

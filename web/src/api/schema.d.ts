@@ -9190,6 +9190,11 @@ export interface components {
              */
             notSentReason?: "" | "self_signed" | "unknown_authority" | "expired" | "name_mismatch" | "no_public_url";
             /**
+             * Format: int64
+             * @description The public URL's port when it is not 443. HSTS covers every port of the host name, so a policy sent here also makes browsers use HTTPS for other services on the same name. Left out on port 443
+             */
+            publicPort?: number;
+            /**
              * @description What TierPlan does with Strict-Transport-Security now: sending (a positive max-age for the public host), off_clearing (max-age=0, so a browser drops a policy it holds), off_silent (nothing, because no policy could have been sent), not_sent (on, but the certificate is not one HSTS may be sent over; see notSentReason) or withdrawn (max-age=0 ahead of the certificate's end)
              * @enum {string}
              */

@@ -144,6 +144,11 @@
           "body": "The certificate expires on {{date}}. While it still works, TierPlan tells browsers to forget HSTS (max-age=0), because a browser that keeps HSTS would refuse the self-signed certificate that takes over, with no way to click past the warning. When the files hold a new certificate, HSTS comes back and the lifetime starts again at 5 minutes."
         }
       },
+      "port": {
+        "title": "HSTS covers every port on this name",
+        "body": "TierPlan's public URL uses port {{port}}, but browsers apply HSTS to the whole name, not one port. While it is on, a browser that visits TierPlan also refuses plain HTTP for any other service on {{host}}, such as a site on port 80, until the lifetime ends.",
+        "bodyNoHost": "TierPlan's public URL uses port {{port}}, but browsers apply HSTS to the whole name, not one port. While it is on, a browser that visits TierPlan also refuses plain HTTP for any other service on the same name, such as a site on port 80, until the lifetime ends."
+      },
       "steps": {
         "title": "Lifetime steps",
         "label": {

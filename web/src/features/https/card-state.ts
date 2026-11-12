@@ -239,6 +239,9 @@ export interface HstsView {
   startsLater: boolean;
   // Stop using Let's Encrypt is refused while the effective setting is on (D-26).
   blocksStop: boolean;
+  // The public URL's port when it is not 443, and the host it belongs to: HSTS covers every port of
+  // the name, so the card warns (WR-04).
+  port: { port: number; host: string | undefined } | undefined;
 }
 
 function hstsStatusKey(hsts: NonNullable<HTTPSStatus["hsts"]>): HstsStatusKey {
@@ -316,5 +319,8 @@ export function hstsView(status: HTTPSStatus, now: number = Date.now()): HstsVie
     steps,
     startsLater: hsts.enabled && !sending,
     blocksStop: hsts.enabled,
+    port: hsts.publicPort
+      ? { port: hsts.publicPort, host: status.certificate.trust.host || undefined }
+      : undefined,
   };
 }
