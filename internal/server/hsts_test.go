@@ -1190,8 +1190,26 @@ func TestHSTSBlocksStop(t *testing.T) {
 	if code, body := r.hstsPut(le, cookie, csrf, `{"enabled":false}`); code != http.StatusOK {
 		t.Fatalf("PUT hsts off: %d %s", code, body)
 	}
+	// WR-01 through the live wiring: the swap to the self-signed certificate must happen with the HSTS
+	// toggle held, so a toggle-on cannot land between Stop's check and the swap. The install hook runs
+	// inside that swap and records whether the toggle could be taken there. Without Deps.HSTSHold
+	// wired it could, and this fails.
+	var installs, heldAtInstall atomic.Int32
+	srv.https.SetOnInstall(func() {
+		installs.Add(1)
+		if srv.hsts.toggleMu.TryLock() {
+			srv.hsts.toggleMu.Unlock()
+		} else {
+			heldAtInstall.Add(1)
+		}
+		srv.hsts.Wake()
+	})
 	if code, body := r.stopACME(le, cookie, csrf); code != http.StatusNoContent {
 		t.Fatalf("POST stop with HSTS off: %d %s, want 204", code, body)
+	}
+	if installs.Load() == 0 || heldAtInstall.Load() != installs.Load() {
+		t.Errorf("Stop installed %d certificate(s), %d with the HSTS toggle held; want every install inside the hold (WR-01)",
+			installs.Load(), heldAtInstall.Load())
 	}
 	if srv.https.Kind() != tlsKindSelfSigned {
 		t.Errorf("served kind = %d after the stop, want self-signed", srv.https.Kind())

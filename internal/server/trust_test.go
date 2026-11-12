@@ -471,3 +471,71 @@ func TestAgentTrustInTheStatusAndTheInstallAnswer(t *testing.T) {
 		})
 	}
 }
+
+// A certificate swapped while a status is being built never pairs one certificate with another's
+// verdict (SET-01, the 16-03 backstop). The swap is provoked at both points it could split the read:
+// while the served certificate is being fetched, and while the verdict is being worked out. Each
+// time the answer must be the certificate first read, its source, and the verdict for that chain.
+func TestPublicTrustSwapMidStatusKeepsOneRead(t *testing.T) {
+	files := pkiLeaf(t, nil, pkiFrom, pkiTo, "tierplan.example.com")
+	other := pkiLeaf(t, nil, pkiFrom, pkiTo, "other.example.com")
+	serve := func(c pkiCert) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return &tls.Certificate{Certificate: [][]byte{c.cert.Raw}, PrivateKey: c.key}, nil
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		swapInGet bool
+	}{
+		{"swapped while the certificate is fetched", true},
+		{"swapped while the verdict is worked out", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newHTTPSRuntime()
+			var swapped bool
+			swap := func() {
+				if !swapped {
+					swapped = true
+					rt.Install(tlsKindSelfSigned, serve(other))
+				}
+			}
+			get := serve(files)
+			rt.Install(tlsKindSupplied, func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				if tc.swapInGet {
+					swap()
+				}
+				return get(h)
+			})
+
+			c := newTrustChecker(nil, func() time.Time { return trustAt }, func() string { return "tierplan.example.com" })
+			var judged []*x509.Certificate
+			c.verify = func(chain []*x509.Certificate, host string, _ *x509.CertPool, _ time.Time) trustVerdict {
+				if !tc.swapInGet {
+					swap()
+				}
+				judged = chain
+				return trustVerdict{Checked: true, Verified: true, Host: host}
+			}
+
+			s := rt.servedWith(c)
+			if !swapped {
+				t.Fatal("the swap was never provoked")
+			}
+			if s.Source != api.SourceCertFiles || s.Leaf == nil || !s.Leaf.Equal(files.cert) {
+				t.Fatalf("served = source %q leaf %v, want the cert-files leaf first read", s.Source, s.Leaf != nil)
+			}
+			if len(judged) == 0 || !judged[0].Equal(files.cert) {
+				t.Fatal("the verdict was worked out for a different certificate than the one shown")
+			}
+			if want := (api.CertTrust{Checked: true, Verified: true, Host: "tierplan.example.com"}); s.Trust != want {
+				t.Errorf("trust = %+v, want %+v (the verdict for the cert-files chain, not self_signed)", s.Trust, want)
+			}
+			// The next status reads the swapped-in certificate whole.
+			if next := rt.servedWith(c); next.Source != api.SourceSelfSigned || next.Trust.Reason != trustSelfSigned {
+				t.Errorf("next status = source %q reason %q, want the self-signed certificate and its verdict", next.Source, next.Trust.Reason)
+			}
+		})
+	}
+}
