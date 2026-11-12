@@ -168,6 +168,13 @@ func (r *httpsRuntime) servedChain() (tlsKind, []*x509.Certificate) {
 	return l.kind, chain
 }
 
+// agentTrust is how an agent installed now trusts the server, read from one read of the served
+// certificate (pin, public or unverified).
+func (r *httpsRuntime) agentTrust(tc *trustChecker) string {
+	kind, chain := r.servedChain()
+	return tc.AgentTrust(kind, chain)
+}
+
 // served is the certificate a browser receives now: the installed kind mapped to a source and the
 // leaf parsed from what GetCertificate answers. Nothing installed, or a certificate that cannot be
 // parsed, gives a nil Leaf.

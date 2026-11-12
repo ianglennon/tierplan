@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,6 +367,106 @@ func TestPublicTrustJudgesLetsEncryptLikeCertFiles(t *testing.T) {
 			}
 			if got.CertFilesInfo != nil {
 				t.Errorf("certFilesInfo = %+v under Let's Encrypt, want none", got.CertFilesInfo)
+			}
+		})
+	}
+}
+
+// AgentTrust is pin for the self-signed certificate, public only for a certificate that verifies for the
+// public host, and unverified for everything else, including a leaf sent without its intermediates and
+// nothing served (D-18).
+func TestAgentTrustFollowsTheVerdict(t *testing.T) {
+	root := pkiCA(t, "test root", nil, pkiFrom, pkiTo)
+	inter := pkiCA(t, "test intermediate", &root, pkiFrom, pkiTo)
+	leaf := pkiLeaf(t, &inter, pkiFrom, pkiTo, "tierplan.example.com")
+	private := pkiCA(t, "private root", nil, pkiFrom, pkiTo)
+	privateLeaf := pkiLeaf(t, &private, pkiFrom, pkiTo, "tierplan.example.com")
+	full := []*x509.Certificate{leaf.cert, inter.cert}
+	host := "tierplan.example.com"
+	c := newTrustChecker(pkiPool(root), func() time.Time { return trustAt }, func() string { return host })
+
+	for _, tc := range []struct {
+		name  string
+		kind  tlsKind
+		chain []*x509.Certificate
+		host  string
+		want  string
+	}{
+		{"self-signed", tlsKindSelfSigned, []*x509.Certificate{leaf.cert}, host, "pin"},
+		{"cert files that verify", tlsKindSupplied, full, host, "public"},
+		{"Let's Encrypt that verifies", tlsKindACME, full, host, "public"},
+		{"a private CA", tlsKindSupplied, []*x509.Certificate{privateLeaf.cert}, host, "unverified"},
+		{"a leaf without its intermediate", tlsKindSupplied, []*x509.Certificate{leaf.cert}, host, "unverified"},
+		{"no public URL", tlsKindSupplied, full, "", "unverified"},
+		{"nothing served", 0, nil, host, "unverified"},
+	} {
+		host = tc.host
+		if got := c.AgentTrust(tc.kind, tc.chain); got != tc.want {
+			t.Errorf("%s: AgentTrust = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// installAnswer is what POST /api/environments says about how the new agent trusts the server.
+func (r *acmeRig) installAnswer(c *http.Client, cookie *http.Cookie) (pin, trust string) {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodPost, r.base+"/api/environments",
+		strings.NewReader(`{"kind":"agent"}`))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", r.csrf(c, cookie))
+	req.AddCookie(cookie)
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var got struct {
+		Install struct {
+			Pin   string `json:"pin"`
+			Trust string `json:"trust"`
+		} `json:"install"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil || resp.StatusCode != http.StatusCreated {
+		r.t.Fatalf("POST /api/environments: %d (%v)", resp.StatusCode, err)
+	}
+	return got.Install.Pin, got.Install.Trust
+}
+
+// The status and the install answer agree on how agents trust the server, for the self-signed
+// certificate, for cert files whose root the test injected and for cert files it did not (TLS-08, D-18).
+func TestAgentTrustInTheStatusAndTheInstallAnswer(t *testing.T) {
+	root := pkiCA(t, "test root", nil, pkiFrom, pkiTo)
+	leaf := pkiLeaf(t, &root, pkiFrom, pkiTo, acmeHost)
+	crt, key := pkiWritePair(t, leaf)
+	files := map[string]string{"TIERPLAN_TLS_CERT_FILE": crt, "TIERPLAN_TLS_KEY_FILE": key}
+
+	for _, tc := range []struct {
+		name     string
+		env      map[string]string
+		opts     []Option
+		want     string
+		wantPin  bool
+		clientOf func(r *acmeRig) *x509.CertPool
+	}{
+		{"self-signed", nil, nil, "pin", true, func(r *acmeRig) *x509.CertPool { return r.mirrorPool() }},
+		{"cert files whose root is trusted", files, []Option{WithTrustRoots(pkiPool(root))}, "public", false, func(*acmeRig) *x509.CertPool { return pkiPool(root) }},
+		{"cert files whose root is not", files, nil, "unverified", false, func(*acmeRig) *x509.CertPool { return pkiPool(root) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newACMERig(t, acmetest.Options{}, tc.env, tc.opts...)
+			r.startNew()
+			client := r.client(tc.clientOf(r))
+			cookie := r.signIn(client)
+
+			if got := r.trustStatus(client, cookie).AgentTrust; got != tc.want {
+				t.Errorf("status agentTrust = %q, want %q", got, tc.want)
+			}
+			pin, trust := r.installAnswer(client, cookie)
+			if trust != tc.want || (pin != "") != tc.wantPin {
+				t.Errorf("install trust %q pin %q, want %q and a pin: %v", trust, pin, tc.want, tc.wantPin)
 			}
 		})
 	}

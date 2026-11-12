@@ -35,6 +35,7 @@ function install(extra: Partial<InstallInfo> = {}, generation = 1): InstallInfo 
       swarm: " docker service rm tierplan-agent",
     },
     secretName: secret,
+    trust: "public",
     standalone: {
       command: ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${TOKEN}' ghcr.io/ianglennon/tierplan-agent:0.1.0`,
       composeFile: `services:\n  agent:\n    environment:\n      TIERPLAN_AGENT_JOIN_TOKEN: '${TOKEN}'\n`,

@@ -27,6 +27,8 @@ import (
 type rotatedBody struct {
 	Install *struct {
 		JoinToken  string `json:"joinToken"`
+		Pin        string `json:"pin"`
+		Trust      string `json:"trust"`
 		SecretName string `json:"secretName"`
 		Generation int    `json:"generation"`
 		Swarm      struct {
@@ -1239,5 +1241,33 @@ func TestAPatchWithAnInvalidNameDoesNotApplyOrAuditTheAutoUpdateSwitch(t *testin
 		if got := f.audits(t, audit.ActionEnvironmentAutoUpdateChanged); len(got) != 0 {
 			t.Fatalf("PATCH with name %q audited an auto-update change: %+v", name, got)
 		}
+	}
+}
+
+// A rotate answer states the same trust and pin as an install does for the same served certificate.
+func TestTokenRotateStatesHowAgentsTrustTheServer(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, pin, trust string }{
+		{"self-signed is pinned", "sha256/PINPINPIN", "pin"},
+		{"a verified certificate is public", "", "public"},
+		{"an unverified certificate has no pin", "", "unverified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newEnvFix(t, dockertest.FakeConfig{})
+			f.tlsPin, f.tlsTrust = tc.pin, tc.trust
+			id, _ := f.agentEnv(t)
+			rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments/" + id + "/token", cookie: f.cookie, csrf: f.csrf})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+			}
+			var got rotatedBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Install == nil {
+				t.Fatalf("decode %s: %v", rec.Body, err)
+			}
+			if got.Install.Trust != tc.trust || got.Install.Pin != tc.pin {
+				t.Errorf("trust %q pin %q, want %q and %q", got.Install.Trust, got.Install.Pin, tc.trust, tc.pin)
+			}
+		})
 	}
 }

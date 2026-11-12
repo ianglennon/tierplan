@@ -67,6 +67,7 @@ type httpsStatusJSON struct {
 	Certificate   httpsCertJSON           `json:"certificate"`
 	CertFiles     bool                    `json:"certFiles"`
 	CertFilesInfo *api.HTTPSCertFilesBody `json:"certFilesInfo"`
+	AgentTrust    string                  `json:"agentTrust"`
 }
 
 // httpsStatus signs in as admin, serves served and reads the status.
@@ -234,5 +235,33 @@ func TestHTTPSStatusWithoutACertificateIsUnavailable(t *testing.T) {
 	rec, _ := httpsStatus(t, api.HTTPSDeps{Served: func() api.ServedCertificate { return api.ServedCertificate{} }})
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "https_unavailable") {
 		t.Errorf("status = %d: %s, want 503 https_unavailable", rec.Code, rec.Body)
+	}
+}
+
+// The status says how agents trust the server now, from the deps' AgentTrust; without a source it says
+// unverified, the answer that claims nothing.
+func TestHTTPSStatusAgentTrust(t *testing.T) {
+	t.Parallel()
+	leaf := httpsLeaf(t, pkix.Name{CommonName: "Example CA"}, []string{"b.example.com"}, nil)
+	served := func() api.ServedCertificate { return api.ServedCertificate{Source: api.SourceCertFiles, Leaf: leaf} }
+	for name, tc := range map[string]struct {
+		source func() string
+		want   string
+	}{
+		"pin":        {func() string { return "pin" }, "pin"},
+		"public":     {func() string { return "public" }, "public"},
+		"unverified": {func() string { return "unverified" }, "unverified"},
+		"no source":  {nil, "unverified"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec, got := httpsStatus(t, api.HTTPSDeps{Served: served, AgentTrust: tc.source})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+			}
+			if got.AgentTrust != tc.want {
+				t.Errorf("agentTrust = %q, want %q", got.AgentTrust, tc.want)
+			}
+		})
 	}
 }

@@ -57,7 +57,10 @@ type HTTPSDeps struct {
 	// CertFile and KeyFile are the paths of the certificate files (TIERPLAN_TLS_CERT_FILE and
 	// TIERPLAN_TLS_KEY_FILE). Only the paths are ever shown, never what the files hold.
 	CertFile, KeyFile string
-	Log               *slog.Logger
+	// AgentTrust is how an agent installed now trusts the server: "pin", "public" or "unverified".
+	// Nil means unverified.
+	AgentTrust func() string
+	Log        *slog.Logger
 	// ACME is the Let's Encrypt manager. Nil leaves the status without its acme block and answers the
 	// Let's Encrypt routes 503.
 	ACME HTTPSACME
@@ -105,6 +108,7 @@ type HTTPSCertFilesBody struct {
 type HTTPSStatusBody struct {
 	Certificate   HTTPSCertificateBody `json:"certificate" doc:"The certificate the listener serves now"`
 	CertFiles     bool                 `json:"certFiles" doc:"Whether certificate files from the environment fix the certificate"`
+	AgentTrust    string               `json:"agentTrust" enum:"pin,public,unverified" doc:"How an agent installed now trusts this server: pin (it pins the self-signed certificate), public (the certificate verifies against the public CAs, so the agent needs no pin) or unverified (the certificate does not verify for the public URL's host and no pin can stand in for it; an agent installed without a pin keeps the self-signed pin it receives on connecting). The page words it"`
 	CertFilesInfo *HTTPSCertFilesBody  `json:"certFilesInfo,omitempty" doc:"The paths of the certificate files and whether the certificate is trusted; present only when certificate files fix the certificate"`
 	ACME          *HTTPSACMEBody       `json:"acme,omitempty" doc:"The Let's Encrypt state; left out when this build has no Let's Encrypt support"`
 }
@@ -162,6 +166,10 @@ func RegisterHTTPS(r *httpx.Router, d HTTPSDeps) {
 			return nil, httpx.Problem(http.StatusServiceUnavailable, problemHTTPSUnavailable, "The server has no readable certificate.")
 		}
 		body := HTTPSStatusBody{Certificate: certificateBody(served), CertFiles: d.CertFiles}
+		body.AgentTrust = "unverified"
+		if d.AgentTrust != nil {
+			body.AgentTrust = d.AgentTrust()
+		}
 		if d.CertFiles {
 			body.CertFilesInfo = &HTTPSCertFilesBody{CertPath: d.CertFile, KeyPath: d.KeyFile, Trust: trustBody(served.Trust)}
 		}

@@ -862,6 +862,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		trustNow = bo.acmeClock.Now
 	}
 	trust := newTrustChecker(bo.trustRoots, trustNow, func() string { return hostOf(inst.PublicURL()) })
+	agentTrust := func() string { return rt.agentTrust(trust) }
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -1199,9 +1200,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Log:       log,
 		},
 		LocalHost:     api.LocalHostDeps{DockerHost: cfg.DockerHost, Log: log, Envs: envSvc},
-		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, Checker: checker, Updater: updater, Log: log},
+		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, TLSTrust: agentTrust, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
-		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, Updater: updater, Log: log},
+		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, TLSTrust: agentTrust, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Updates: updateService, Log: log},
 		Fleet:         api.FleetDeps{Envs: envSvc, Aggregator: aggregator, Clusters: clusters, Updates: updateService, AddressSpaces: addressSpaces, Checker: checker, Store: st, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
@@ -1233,7 +1234,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
 		HTTPS: api.HTTPSDeps{
 			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
-			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
 		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,

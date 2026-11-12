@@ -49,6 +49,8 @@ type AgentsDeps struct {
 	// TLSPin returns the SPKI pin of the self-signed certificate TierPlan serves, or
 	// "" when it serves none. Nil means none.
 	TLSPin func() string
+	// TLSTrust says how an agent installed now trusts the server, as for adding an environment.
+	TLSTrust func() string
 	// Local says which node of an environment is the folded local host, so the node
 	// list can show it beside the agents. Nil means none is (D-48).
 	Local FoldedNodes
@@ -452,7 +454,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			// quoting is a server bug, so it is logged and not hidden.
 			return nil, fail("build the install", err)
 		}
-		body := installBody(install)
+		body := installBody(install, installTrust(pin, d.TLSTrust))
 		// The rotate command swaps a running service over to the new secret. Without a
 		// swarm that has agents there is no service to swap, so it is left out.
 		if rot.EnvType != agents.EnvTypeSwarm || !rot.HasAgents {

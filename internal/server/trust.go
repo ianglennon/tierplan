@@ -140,6 +140,20 @@ func (c *trustChecker) verdictFor(kind tlsKind, chain []*x509.Certificate) trust
 	return c.verdict
 }
 
+// AgentTrust is how an agent installed now trusts this server: "pin" while the self-signed certificate
+// is served, "public" while a certificate that verifies for the public host is, and "unverified"
+// otherwise (D-18). "unverified" is the answer that claims nothing: an agent installed without a pin
+// keeps the self-signed pin it receives on connecting (D-19), and one that cannot verify says so.
+func (c *trustChecker) AgentTrust(kind tlsKind, chain []*x509.Certificate) string {
+	if kind == tlsKindSelfSigned {
+		return "pin"
+	}
+	if c.verdictFor(kind, chain).Verified {
+		return "public"
+	}
+	return "unverified"
+}
+
 // hostOf is the lower-cased host name of a public URL, without its port, or "" when there is none.
 func hostOf(publicURL string) string {
 	u, err := url.Parse(publicURL)

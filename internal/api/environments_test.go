@@ -641,6 +641,7 @@ type fullInstall struct {
 		AgentURL   string `json:"agentUrl"`
 		Image      string `json:"image"`
 		Pin        string `json:"pin"`
+		Trust      string `json:"trust"`
 		SecretName string `json:"secretName"`
 		Generation int    `json:"generation"`
 		Swarm      struct {
@@ -1478,5 +1479,44 @@ func TestEnvironmentsAddressSpaceColumn(t *testing.T) {
 	// The swarm was never read.
 	if sw := s.environment(t, s.env.ID); sw.AddressSpace != nil {
 		t.Errorf("the swarm that was never read answers %+v, want null", *sw.AddressSpace)
+	}
+}
+
+// The answer to adding an agent environment says how agents trust the server, and carries a pin only
+// for the self-signed certificate (D-18, TLS-08).
+func TestEnvironmentAddAgentStatesHowAgentsTrustTheServer(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, pin, trust string }{
+		{"self-signed is pinned", "sha256/PINPINPIN", "pin"},
+		{"a verified certificate is public", "", "public"},
+		{"an unverified certificate has no pin", "", "unverified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newEnvFix(t, dockertest.FakeConfig{})
+			f.inst.Apply("TierPlan", "https://example.com/tierplan")
+			f.tlsPin, f.tlsTrust = tc.pin, tc.trust
+			got, rec := f.addAgent(t)
+			if rec.code != http.StatusCreated || got.Install == nil {
+				t.Fatalf("status = %d: %s", rec.code, rec.body)
+			}
+			if got.Install.Trust != tc.trust || got.Install.Pin != tc.pin {
+				t.Errorf("trust %q pin %q, want %q and %q", got.Install.Trust, got.Install.Pin, tc.trust, tc.pin)
+			}
+		})
+	}
+}
+
+// Without a trust source the answer is derived from the pin: a pin means pin, none means unverified.
+func TestEnvironmentAddAgentWithoutATrustSourceDerivesItFromThePin(t *testing.T) {
+	t.Parallel()
+	for pin, want := range map[string]string{"sha256/PINPINPIN": "pin", "": "unverified"} {
+		f := newEnvFix(t, dockertest.FakeConfig{})
+		f.inst.Apply("TierPlan", "https://example.com/tierplan")
+		f.tlsPin = pin
+		got, _ := f.addAgent(t)
+		if got.Install == nil || got.Install.Trust != want {
+			t.Errorf("pin %q: trust = %+v, want %q", pin, got.Install, want)
+		}
 	}
 }

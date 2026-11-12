@@ -82,6 +82,7 @@ function served(over: Partial<HTTPSACME> = {}): HTTPSStatus {
         notBefore: new Date(Date.now() - 86_400_000).toISOString(),
         notAfter: NOT_AFTER,
         testCA: false,
+        trust: { checked: true, verified: true, host: "tierplan.example.com" },
       },
     },
   );

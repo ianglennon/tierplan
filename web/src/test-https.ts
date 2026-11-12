@@ -70,7 +70,14 @@ export function httpsStatus(over: Partial<HTTPSStatus> = {}): HTTPSStatus {
       notBefore: new Date(Date.now() - 86_400_000).toISOString(),
       notAfter: new Date(Date.now() + 364 * 86_400_000).toISOString(),
       testCA: false,
+      trust: {
+        checked: true,
+        verified: false,
+        reason: "self_signed",
+        host: "tierplan.example.com",
+      },
     },
+    agentTrust: "pin",
     acme: httpsACME(),
     ...over,
   };
@@ -233,7 +240,9 @@ export function httpsLetsEncryptStatus(
       notBefore: issuedAt,
       notAfter,
       testCA: false,
+      trust: { checked: true, verified: true, host: "tierplan.example.com" },
     },
+    agentTrust: "public",
     acme: httpsACME({
       mode: "active",
       hasState: true,

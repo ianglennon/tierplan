@@ -9136,6 +9136,11 @@ export interface components {
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */
             acme?: components["schemas"]["HTTPSACMEBody"];
+            /**
+             * @description How an agent installed now trusts this server: pin (it pins the self-signed certificate), public (the certificate verifies against the public CAs, so the agent needs no pin) or unverified (the certificate does not verify for the public URL's host and no pin can stand in for it; an agent installed without a pin keeps the self-signed pin it receives on connecting). The page words it
+             * @enum {string}
+             */
+            agentTrust: "pin" | "public" | "unverified";
             /** @description Whether certificate files from the environment fix the certificate */
             certFiles: boolean;
             /** @description The paths of the certificate files and whether the certificate is trusted; present only when certificate files fix the certificate */
@@ -9509,6 +9514,11 @@ export interface components {
             standalone: components["schemas"]["InstallStandaloneBody"];
             /** @description The install for a swarm */
             swarm: components["schemas"]["InstallSwarmBody"];
+            /**
+             * @description Why the pin is present or absent. pin: the self-signed certificate is served and the commands carry its pin. public: the certificate verifies against the public CAs and the agent needs no pin. unverified: the certificate does not verify for the public URL's host, so no pin is carried; an agent installed without a pin keeps the self-signed pin it receives on connecting
+             * @enum {string}
+             */
+            trust: "pin" | "public" | "unverified";
         };
         InstallCleanupBody: {
             /** @description One line that removes the agent container and its volume */
