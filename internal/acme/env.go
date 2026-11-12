@@ -4,7 +4,9 @@
 package acme
 
 import (
+	"context"
 	"fmt"
+	"slices"
 
 	"github.com/ianglennon/tierplan/internal/config"
 )
@@ -57,6 +59,53 @@ func (m *Manager) profile(st State) string {
 		return p
 	}
 	return st.Profile
+}
+
+// provider is the DNS provider a DNS-01 run uses: TIERPLAN_DNS_PROVIDER when it is set, otherwise the
+// saved provider, otherwise the default (D-05).
+func (m *Manager) provider(st State) string {
+	if p := m.d.Env.DNSProvider; p != "" {
+		return p
+	}
+	return dnsProviderOf(st)
+}
+
+// resolvers are the resolvers the DNS-01 propagation check asks: TIERPLAN_DNS_RESOLVERS when it is set,
+// even when it is empty, which means the zone's own nameservers, otherwise the saved list. The result is
+// a copy, so a caller cannot change what the environment or the state holds.
+func (m *Manager) resolvers(st State) []string {
+	if m.d.Env.ResolversSet {
+		return slices.Clone(m.d.Env.Resolvers)
+	}
+	return slices.Clone(st.DNSResolvers)
+}
+
+// token is the API token of provider: the one the environment gave when it gave one, otherwise the one
+// saved. The environment's token is only ever returned from here, held in memory; it is never sealed,
+// stored or logged (D-05), so removing the variable leaves the database exactly as it was.
+func (m *Manager) token(ctx context.Context, provider string) (string, bool, error) {
+	if t := m.d.Env.CloudflareToken; t != "" && provider == m.envProvider() {
+		return t, true, nil
+	}
+	return m.d.Store.DNSToken(ctx, provider)
+}
+
+// tokenSaved reports whether a token is available for provider, without opening a saved one. A token
+// given by the environment counts as present.
+func (m *Manager) tokenSaved(ctx context.Context, provider string) (bool, error) {
+	if m.d.Env.CloudflareToken != "" && provider == m.envProvider() {
+		return true, nil
+	}
+	return m.d.Store.DNSTokenSaved(ctx, provider)
+}
+
+// envProvider is the provider the environment's token belongs to: the token and the provider are set
+// together (config validation), so the token is the provider's.
+func (m *Manager) envProvider() string {
+	if p := m.d.Env.DNSProvider; p != "" {
+		return p
+	}
+	return defaultDNSProvider
 }
 
 // ready reports whether the listener is bound, so an order placed now can be validated: the CA reaches

@@ -151,14 +151,14 @@ var _ Solver = (*dnsSolver)(nil)
 // Type reports ChallengeDNS01.
 func (s *dnsSolver) Type() string { return ChallengeDNS01 }
 
-// open builds the provider from the saved token, once per run.
+// open builds the provider from the environment's token or else the saved one, once per run.
 func (s *dnsSolver) open(ctx context.Context) (dns.Provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.p != nil {
 		return s.p, nil
 	}
-	token, found, err := s.m.d.Store.DNSToken(ctx, s.provider)
+	token, found, err := s.m.token(ctx, s.provider)
 	if err != nil {
 		return nil, err
 	}

@@ -1071,11 +1071,7 @@ func (m *Manager) newSolver(ctx context.Context, steps *jobSteps, challenge stri
 	if err != nil {
 		return nil, err
 	}
-	provider := st.DNSProvider
-	if provider == "" {
-		provider = defaultDNSProvider
-	}
-	return &dnsSolver{m: m, steps: steps, provider: provider, servers: dnscheck.Resolvers(st.DNSResolvers)}, nil
+	return &dnsSolver{m: m, steps: steps, provider: m.provider(st), servers: dnscheck.Resolvers(m.resolvers(st))}, nil
 }
 
 // failed records a run that did not end in a certificate. What is served is not touched.

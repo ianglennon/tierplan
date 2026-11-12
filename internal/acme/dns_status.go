@@ -7,7 +7,6 @@ import (
 	"context"
 	"net"
 	"net/netip"
-	"slices"
 	"sync"
 	"time"
 )
@@ -38,11 +37,8 @@ type LeftOverView struct {
 // dnsView reads the DNS settings and the record ledger for the status. paused is why deletes are not
 // being tried ("" when they are).
 func (m *Manager) dnsView(ctx context.Context, st State, paused string) (DNSView, error) {
-	provider := st.DNSProvider
-	if provider == "" {
-		provider = defaultDNSProvider
-	}
-	saved, err := m.d.Store.DNSTokenSaved(ctx, provider)
+	provider := m.provider(st)
+	saved, err := m.tokenSaved(ctx, provider)
 	if err != nil {
 		return DNSView{}, err
 	}
@@ -52,7 +48,7 @@ func (m *Manager) dnsView(ctx context.Context, st State, paused string) (DNSView
 	}
 	out := DNSView{
 		Provider: provider, TokenSaved: saved,
-		Resolvers: slices.Clone(st.DNSResolvers), LeftOver: make([]LeftOverView, 0, len(rows)),
+		Resolvers: m.resolvers(st), LeftOver: make([]LeftOverView, 0, len(rows)),
 	}
 	if out.Resolvers == nil {
 		out.Resolvers = []string{}
