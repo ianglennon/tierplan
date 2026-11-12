@@ -4266,7 +4266,7 @@ export interface paths {
         get?: never;
         /**
          * Choose the certificate profile
-         * @description Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. Needs settings.write.
+         * @description Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_PROFILE is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 acme_profile_locked. Needs settings.write.
          */
         put: operations["putACMEProfile"];
         post?: never;
@@ -8786,6 +8786,8 @@ export interface components {
              * @description The port TierPlan listens on
              */
             listenPort: number;
+            /** @description The settings an environment variable fixes, each with the variable's name. A setting no variable fixes has no entry, and a locked setting cannot be changed through the API */
+            locks: components["schemas"]["HTTPSLocksBody"];
             /**
              * @description active when Let's Encrypt is in use
              * @enum {string}
@@ -8805,7 +8807,7 @@ export interface components {
              * @enum {string}
              */
             pausedReason: "" | "restore" | "cert_files";
-            /** @description The profile orders ask for; empty is the CA's default */
+            /** @description The profile orders ask for: the one TIERPLAN_ACME_PROFILE sets when it is set, otherwise the saved one; empty is the CA's default */
             profile: string;
             /** @description The host of the public address, empty when none is set */
             publicHost: string;
@@ -9132,6 +9134,24 @@ export interface components {
             testCA: boolean;
             /** @description Whether a client that knows only the system's root certificates trusts this certificate for the public URL's host, which is how an agent without a pin judges it */
             trust: components["schemas"]["HTTPSTrustBody"];
+        };
+        HTTPSLockBody: {
+            /** @description The value kept in the database, used again when the variable is removed. Never set for a secret, and left out when nothing is stored */
+            stored?: string;
+            /** @description What the variable sets. Never set for a secret */
+            value?: string;
+            /** @description The environment variable that fixes the setting, for example TIERPLAN_ACME_PROFILE */
+            var: string;
+        };
+        HTTPSLocksBody: {
+            /** @description The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value */
+            acceptTos?: components["schemas"]["HTTPSLockBody"];
+            /** @description The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off */
+            acme?: components["schemas"]["HTTPSLockBody"];
+            /** @description The account contact, fixed by TIERPLAN_ACME_EMAIL */
+            email?: components["schemas"]["HTTPSLockBody"];
+            /** @description The certificate profile, fixed by TIERPLAN_ACME_PROFILE */
+            profile?: components["schemas"]["HTTPSLockBody"];
         };
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */

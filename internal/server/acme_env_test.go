@@ -5,7 +5,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/acme"
@@ -119,5 +123,84 @@ func TestACMEEnvUnsetNeverIssuesAtStart(t *testing.T) {
 	}
 	if srv.https.Kind() == tlsKindACME {
 		t.Error("a Let's Encrypt certificate is served with TIERPLAN_ACME unset")
+	}
+}
+
+// putProfile sends PUT /api/https/acme/profile as the signed-in admin and returns the status code and the
+// problem type the answer carries.
+func (r *acmeRig) putProfile(c *http.Client, cookie *http.Cookie, csrf, profile string) (int, string) {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(testsupport.Context(r.t), http.MethodPut, r.base+"/api/https/acme/profile",
+		strings.NewReader(`{"profile":"`+profile+`"}`))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(cookie)
+	resp, err := c.Do(req)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	var problem struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(body, &problem)
+	return resp.StatusCode, problem.Type
+}
+
+// storedProfile is the profile in the database, read from the store and never from the status.
+func (r *acmeRig) storedProfile() string {
+	r.t.Helper()
+	st, err := acme.NewStore(r.srv.Store(), r.srv.Vault()).State(context.Background())
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return st.Profile
+}
+
+// TIERPLAN_ACME_PROFILE locks the profile end to end (D-24, D-17): the status names the variable, a
+// different value answers 409 and stores nothing, the variable's own value is accepted and stores
+// nothing, and an order asks the CA for the variable's profile.
+func TestACMEEnvLocksTheProfile(t *testing.T) {
+	r := newACMERig(t, acmetest.Options{TermsOfService: envTOS}, map[string]string{"TIERPLAN_ACME_PROFILE": "shortlived"})
+	srv := r.startNew()
+	awaitListening(t, srv)
+	client := r.client(r.mirrorPool())
+	cookie := r.signIn(client)
+	csrf := r.csrf(client, cookie)
+
+	got := r.trustStatus(client, cookie).ACME
+	if got == nil || got.Locks.Profile == nil {
+		t.Fatalf("status = %+v, want locks.profile", got)
+	}
+	if l := got.Locks.Profile; l.Var != "TIERPLAN_ACME_PROFILE" || l.Value != "shortlived" || l.Stored != "" {
+		t.Errorf("locks.profile = %+v, want var TIERPLAN_ACME_PROFILE, value shortlived and nothing stored", l)
+	}
+	if got.Profile != "shortlived" {
+		t.Errorf("profile = %q, want the variable's profile in force", got.Profile)
+	}
+	if l := got.Locks; l.ACME != nil || l.Email != nil || l.AcceptTOS != nil {
+		t.Errorf("locks = %+v, want only the profile locked: no other variable is set", l)
+	}
+
+	if code, typ := r.putProfile(client, cookie, csrf, "classic"); code != http.StatusConflict || typ != "acme_profile_locked" {
+		t.Errorf("PUT profile classic = %d %q, want 409 acme_profile_locked", code, typ)
+	}
+	if p := r.storedProfile(); p != "" {
+		t.Errorf("stored profile = %q after a refused write, want nothing stored", p)
+	}
+	if code, typ := r.putProfile(client, cookie, csrf, "shortlived"); code != http.StatusOK {
+		t.Errorf("PUT profile shortlived = %d %q, want 200: echoing the fixed value is not a change", code, typ)
+	}
+	if p := r.storedProfile(); p != "" {
+		t.Errorf("stored profile = %q after the echo, want nothing stored", p)
+	}
+
+	r.issue()
+	if got := r.fake.Orders(); len(got) != 1 || got[0].Profile != "shortlived" {
+		t.Errorf("orders = %+v, want one that asks for the profile shortlived", got)
 	}
 }

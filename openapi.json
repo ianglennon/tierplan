@@ -7591,6 +7591,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "locks": {
+            "$ref": "#/components/schemas/HTTPSLocksBody",
+            "description": "The settings an environment variable fixes, each with the variable's name. A setting no variable fixes has no entry, and a locked setting cannot be changed through the API"
+          },
           "mode": {
             "description": "active when Let's Encrypt is in use",
             "enum": [
@@ -7628,7 +7632,7 @@
             "type": "string"
           },
           "profile": {
-            "description": "The profile orders ask for; empty is the CA's default",
+            "description": "The profile orders ask for: the one TIERPLAN_ACME_PROFILE sets when it is set, otherwise the saved one; empty is the CA's default",
             "type": "string"
           },
           "publicHost": {
@@ -7673,7 +7677,8 @@
           "profile",
           "failures",
           "validationUntested",
-          "dns"
+          "dns",
+          "locks"
         ],
         "type": "object"
       },
@@ -8454,6 +8459,49 @@
           "testCA",
           "trust"
         ],
+        "type": "object"
+      },
+      "HTTPSLockBody": {
+        "additionalProperties": false,
+        "properties": {
+          "stored": {
+            "description": "The value kept in the database, used again when the variable is removed. Never set for a secret, and left out when nothing is stored",
+            "type": "string"
+          },
+          "value": {
+            "description": "What the variable sets. Never set for a secret",
+            "type": "string"
+          },
+          "var": {
+            "description": "The environment variable that fixes the setting, for example TIERPLAN_ACME_PROFILE",
+            "type": "string"
+          }
+        },
+        "required": [
+          "var"
+        ],
+        "type": "object"
+      },
+      "HTTPSLocksBody": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptTos": {
+            "$ref": "#/components/schemas/HTTPSLockBody",
+            "description": "The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value"
+          },
+          "acme": {
+            "$ref": "#/components/schemas/HTTPSLockBody",
+            "description": "The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off"
+          },
+          "email": {
+            "$ref": "#/components/schemas/HTTPSLockBody",
+            "description": "The account contact, fixed by TIERPLAN_ACME_EMAIL"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/HTTPSLockBody",
+            "description": "The certificate profile, fixed by TIERPLAN_ACME_PROFILE"
+          }
+        },
         "type": "object"
       },
       "HTTPSStatusBody": {
@@ -41424,7 +41472,7 @@
     },
     "/api/https/acme/profile": {
       "put": {
-        "description": "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. Needs settings.write.",
+        "description": "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 acme_profile_unknown when its directory can be read, and kept as given when it cannot. 409 acme_run_active while a run is in progress, 409 acme_paused after a restore, 409 acme_cert_files while certificate files are set. While TIERPLAN_ACME_PROFILE is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 acme_profile_locked. Needs settings.write.",
         "operationId": "putACMEProfile",
         "requestBody": {
           "content": {

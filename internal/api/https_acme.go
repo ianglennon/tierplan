@@ -31,6 +31,13 @@ const (
 	problemACMERunActive      = "acme_run_active"
 	problemACMECAError        = "acme_ca_error"
 
+	// The 409 an environment variable's lock answers with (D-17). They equal the Problem of the
+	// acme.ErrLocked the manager returns; the route descriptions name them.
+	problemACMELocked        = "acme_locked"
+	problemACMEEmailLocked   = "acme_email_locked"
+	problemACMETOSLocked     = "acme_tos_locked"
+	problemACMEProfileLocked = "acme_profile_locked"
+
 	problemACMEDNSTokenRequired = "acme_dns_token_required" //nolint:gosec // G101: a problem type name, not a credential
 	problemACMEDNSResolverBad   = "acme_dns_resolver_invalid"
 	problemACMEDNSTokenInUse    = "acme_dns_token_in_use" //nolint:gosec // G101: a problem type name, not a credential
@@ -144,7 +151,7 @@ type HTTPSACMEBody struct {
 	Refusals            []HTTPSACMERefusalBody    `json:"refusals" doc:"Every reason an order cannot start, empty when one could"`
 	Certificate         *HTTPSACMECertificateBody `json:"certificate,omitempty" doc:"The stored Let's Encrypt certificate"`
 	NamesMismatch       bool                      `json:"namesMismatch" doc:"True when the stored certificate's names are not the names wanted now"`
-	Profile             string                    `json:"profile" doc:"The profile orders ask for; empty is the CA's default"`
+	Profile             string                    `json:"profile" doc:"The profile orders ask for: the one TIERPLAN_ACME_PROFILE sets when it is set, otherwise the saved one; empty is the CA's default"`
 	Renewal             *HTTPSACMERenewalBody     `json:"renewal,omitempty" doc:"The next renewal; left out unless Let's Encrypt is in use"`
 	Fallback            *HTTPSACMEFallbackBody    `json:"fallback,omitempty" doc:"Set when the certificate has expired and the self-signed one is served"`
 	LastError           *HTTPSACMEErrorBody       `json:"lastError,omitempty" doc:"The last failure, until a run succeeds"`
@@ -156,6 +163,31 @@ type HTTPSACMEBody struct {
 	ValidationUntested  bool                      `json:"validationUntested" doc:"True when the saved validation method has not been proved by a run yet; false while a run is in progress"`
 	SuggestDNS01        *HTTPSACMESuggestionBody  `json:"suggestDns01,omitempty" doc:"Set when HTTP-01 is saved and the public host resolves to a private address, so DNS-01 may suit this install better"`
 	DNS                 HTTPSACMEDNSBody          `json:"dns" doc:"The DNS-01 settings and the DNS records TierPlan could not delete yet. The token itself is never returned"`
+	Locks               HTTPSLocksBody            `json:"locks" doc:"The settings an environment variable fixes, each with the variable's name. A setting no variable fixes has no entry, and a locked setting cannot be changed through the API"`
+}
+
+// HTTPSLockBody says that an environment variable fixes a setting. The variable's name always comes from
+// the server, so the page never spells one itself.
+type HTTPSLockBody struct {
+	Var    string `json:"var" doc:"The environment variable that fixes the setting, for example TIERPLAN_ACME_PROFILE"`
+	Value  string `json:"value,omitempty" doc:"What the variable sets. Never set for a secret"`
+	Stored string `json:"stored,omitempty" doc:"The value kept in the database, used again when the variable is removed. Never set for a secret, and left out when nothing is stored"`
+}
+
+// HTTPSLocksBody is one entry for each setting the environment fixes; a setting no variable fixes is left out.
+type HTTPSLocksBody struct {
+	ACME      *HTTPSLockBody `json:"acme,omitempty" doc:"The Let's Encrypt switch, fixed by TIERPLAN_ACME. Value and stored are on or off"`
+	Email     *HTTPSLockBody `json:"email,omitempty" doc:"The account contact, fixed by TIERPLAN_ACME_EMAIL"`
+	AcceptTOS *HTTPSLockBody `json:"acceptTos,omitempty" doc:"The agreement to the CA's terms, fixed by TIERPLAN_ACME_ACCEPT_TOS. It has no stored value"`
+	Profile   *HTTPSLockBody `json:"profile,omitempty" doc:"The certificate profile, fixed by TIERPLAN_ACME_PROFILE"`
+}
+
+// httpsLockBody maps a lock onto the contract; nil stays nil.
+func httpsLockBody(l *acme.Lock) *HTTPSLockBody {
+	if l == nil {
+		return nil
+	}
+	return &HTTPSLockBody{Var: l.Var, Value: l.Value, Stored: l.Stored}
 }
 
 // HTTPSACMEDNSBody is the DNS-01 side of the status.
@@ -196,6 +228,7 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	if b.Mode == "" {
 		b.Mode = acme.ModeOff
 	}
+	b.Locks = HTTPSLocksBody{ACME: httpsLockBody(st.Locks.ACME), Profile: httpsLockBody(st.Locks.Profile)}
 	refusedHost := map[string]bool{}
 	noPublicURL := false
 	for _, r := range st.Refusals {
@@ -420,7 +453,9 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 		Summary:     "Choose the certificate profile",
 		Description: "Saves the profile later orders ask for; an empty name is the CA's default. A name the CA does not offer is refused with 422 " +
 			problemACMEProfileUnknown + " when its directory can be read, and kept as given when it cannot. 409 " + problemACMERunActive +
-			" while a run is in progress, 409 " + problemACMEPaused + " after a restore, 409 " + problemACMECertFiles + " while certificate files are set. Needs settings.write.",
+			" while a run is in progress, 409 " + problemACMEPaused + " after a restore, 409 " + problemACMECertFiles + " while certificate files are set. " +
+			"While TIERPLAN_ACME_PROFILE is set it decides: its own value is accepted and stores nothing, and any other value is refused with 409 " +
+			problemACMEProfileLocked + ". Needs settings.write.",
 		Tags: []string{"https"},
 	}, write, func(ctx context.Context, in *PutACMEProfileInput) (*HTTPSACMEProfileOutput, error) {
 		if d.ACME == nil {

@@ -396,6 +396,7 @@ func (m *Manager) renewalRound(ctx context.Context, st State, leaf *x509.Certifi
 		}
 		return
 	}
+	// The renewal asks for the profile in force, m.profile(st): TIERPLAN_ACME_PROFILE when set (D-24).
 	req := m.renewRequest(ctx, st, leaf)
 	m.log.Info("starting a scheduled renewal of the Let's Encrypt certificate", "renew_at", st.RenewAt)
 	if _, err := m.startRun(runParams{trigger: TriggerSchedule, challenge: m.challenge(st), req: req}); err != nil && !errors.Is(err, ErrRunActive) {

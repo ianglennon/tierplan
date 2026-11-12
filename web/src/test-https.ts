@@ -46,6 +46,7 @@ export function httpsACME(over: Partial<HTTPSACME> = {}): HTTPSACME {
     failures: 0,
     hasState: false,
     listenPort: 7480,
+    locks: {},
     mode: "off",
     names: [{ name: "tierplan.example.com", refused: false }],
     namesMismatch: false,

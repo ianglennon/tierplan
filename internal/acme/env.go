@@ -50,6 +50,15 @@ func (m *Manager) challenge(st State) string {
 	return challengeOf(st)
 }
 
+// profile is the certificate profile an order asks for: TIERPLAN_ACME_PROFILE when it is set,
+// otherwise the saved profile (D-24). Empty is the CA's default.
+func (m *Manager) profile(st State) string {
+	if p := m.d.Env.Profile; p != "" {
+		return p
+	}
+	return st.Profile
+}
+
 // ready reports whether the listener is bound, so an order placed now can be validated: the CA reaches
 // the HTTP-01 answer only once the server accepts connections. A manager with no Ready channel is ready.
 func (m *Manager) ready() bool {
@@ -64,8 +73,13 @@ func (m *Manager) ready() bool {
 	}
 }
 
-// LockACME is the field name an ErrLocked carries for the switch TIERPLAN_ACME fixes.
-const LockACME = "acme"
+// The field names an ErrLocked carries, one for each setting a variable can fix.
+const (
+	// LockACME is the switch TIERPLAN_ACME fixes.
+	LockACME = "acme"
+	// LockProfile is the certificate profile TIERPLAN_ACME_PROFILE fixes (D-24).
+	LockProfile = "profile"
+)
 
 // ErrLocked is returned when an action is refused because an environment variable fixes the setting it
 // would change (D-04, D-17). The manager returns it itself, so no caller can go around the lock. Only
@@ -91,7 +105,8 @@ type Lock struct {
 
 // Locks are the settings the environment currently fixes; a nil field is a setting that is free.
 type Locks struct {
-	ACME *Lock
+	ACME    *Lock
+	Profile *Lock
 }
 
 // lockedACME is the refusal of an action TIERPLAN_ACME fixes.
@@ -99,11 +114,19 @@ func (m *Manager) lockedACME() error {
 	return &ErrLocked{Field: LockACME, Var: config.EnvACME, Problem: "acme_locked"}
 }
 
+// lockedProfile is the refusal of a profile TIERPLAN_ACME_PROFILE does not name.
+func (m *Manager) lockedProfile() error {
+	return &ErrLocked{Field: LockProfile, Var: config.EnvACMEProfile, Problem: "acme_profile_locked"}
+}
+
 // locks reports which settings the environment fixes now. st is only read, for the stored values.
 func (m *Manager) locks(st State) Locks {
 	var l Locks
 	if e := m.d.Env.Enabled; e != nil {
 		l.ACME = &Lock{Var: config.EnvACME, Value: onOff(*e), Stored: onOff(st.Mode == ModeActive)}
+	}
+	if p := m.d.Env.Profile; p != "" {
+		l.Profile = &Lock{Var: config.EnvACMEProfile, Value: p, Stored: st.Profile}
 	}
 	return l
 }

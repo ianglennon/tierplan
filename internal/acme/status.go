@@ -38,7 +38,8 @@ type Status struct {
 	Certificate *CertView
 	// NamesMismatch is true when the certificate's names are not the names wanted today.
 	NamesMismatch bool
-	Profile       string
+	// Profile is the profile orders ask for now: TIERPLAN_ACME_PROFILE when set, else the saved one.
+	Profile string
 	// RenewAt and RenewBasis are when and why the certificate is next renewed; zero unless Mode is
 	// active.
 	RenewAt    time.Time
@@ -132,7 +133,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 
 	out := Status{
 		DirectoryURL: dir.URL, DirectoryOverridden: dir.Overridden, Mode: mode, Locks: m.locks(st),
-		CertFiles: m.d.CertFiles, ChallengeType: st.ChallengeType, Profile: st.Profile,
+		CertFiles: m.d.CertFiles, ChallengeType: st.ChallengeType, Profile: m.profile(st),
 		Names: slices.Clone(ns.Names), Refusals: refusals,
 		Failures: st.ConsecutiveFailures, NextAttemptAt: st.NextAttemptAt,
 	}

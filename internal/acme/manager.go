@@ -395,7 +395,17 @@ func (m *Manager) Directory(ctx context.Context) (DirectoryMeta, error) {
 // SetProfile saves the certificate profile the next orders ask for; empty is the CA's default. A name
 // the directory does not offer is refused when the directory can be read, and accepted as given when
 // it cannot.
+//
+// While TIERPLAN_ACME_PROFILE is set it decides (D-24): the variable's own value is accepted and changes
+// nothing, since the page echoes what it was shown, and any other value is refused with ErrLocked. Both
+// answers come before anything is read or stored, so a refused request leaves the saved profile as it was.
 func (m *Manager) SetProfile(ctx context.Context, profile string) error {
+	if fixed := m.d.Env.Profile; fixed != "" {
+		if profile == fixed {
+			return nil
+		}
+		return m.lockedProfile()
+	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	st, err := m.mutable(ctx)
@@ -475,13 +485,13 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 	})
 }
 
-// renewRequest is the order that renews leaf: its own names, the saved profile, and the certificate
+// renewRequest is the order that renews leaf: its own names, the profile in force (m.profile), and the certificate
 // it replaces when the directory offers renewalInfo and leaf was issued to the account that orders the
 // renewal. A CA refuses to let one account replace a certificate issued to another, so after the CA
 // forgot the account and a new one was registered the renewal names nothing; so does a certificate
 // whose account is not known.
 func (m *Manager) renewRequest(ctx context.Context, st State, leaf *x509.Certificate) OrderRequest {
-	req := OrderRequest{Kind: KindRenew, Names: slices.Clone(leaf.DNSNames), Profile: st.Profile}
+	req := OrderRequest{Kind: KindRenew, Names: slices.Clone(leaf.DNSNames), Profile: m.profile(st)}
 	if meta, err := m.d.Client.Meta(ctx); err != nil || !meta.RenewalInfo {
 		return req
 	}

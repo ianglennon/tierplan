@@ -50,7 +50,7 @@ func (m *Manager) issueLocked(ctx context.Context, st State, actor, trigger stri
 	}
 	return m.startRun(runParams{
 		trigger: trigger, actor: actor, challenge: m.challenge(st),
-		req:      OrderRequest{Kind: KindIssue, Names: slices.Clone(ns.Names), Profile: st.Profile},
+		req:      OrderRequest{Kind: KindIssue, Names: slices.Clone(ns.Names), Profile: m.profile(st)},
 		register: reg,
 	})
 }
