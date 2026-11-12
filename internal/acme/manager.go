@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/acme/dns/cloudflare"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
@@ -124,6 +125,12 @@ type Deps struct {
 	DialHosts func() []string
 	// CertFiles is whether TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE are set.
 	CertFiles bool
+	// Env is what the TIERPLAN_ACME* variables say. They override the stored settings at the decision
+	// sites in env.go and are never saved (D-02).
+	Env config.ACMEEnv
+	// Ready is closed once the listener is bound, so an order placed at start can be validated; nil
+	// means ready.
+	Ready <-chan struct{}
 	// DNS is what DNS-01 works with; its nil fields take the production defaults.
 	DNS DNSDeps
 	Log *slog.Logger
@@ -174,6 +181,9 @@ type Manager struct {
 	// refusal that was logged (scheduler.go).
 	wire       servedCert
 	installErr string
+	// envNote is the last refusal of the start-time issue that was logged, so one that lasts is logged
+	// once and not every tick (envissue.go).
+	envNote string
 
 	// suggest is the last answer of the DNS-01 suggestion's host lookup (dns_status.go).
 	suggest suggestCache
@@ -250,7 +260,7 @@ func (m *Manager) dialHosts() []string {
 func (m *Manager) preflight(st State) (NameSet, []Refusal) {
 	return Preflight(PreflightInput{
 		PublicURL: m.publicURL(), AgentURL: m.agentURL(), BasePath: m.basePath(),
-		ChallengeType: challengeOf(st), DirectoryOverridden: m.d.Client.Directory().Overridden,
+		ChallengeType: m.challenge(st), DirectoryOverridden: m.d.Client.Directory().Overridden,
 		DialHosts: m.dialHosts(),
 	})
 }
@@ -329,7 +339,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if st.Mode != ModeActive {
+	if m.mode(st) != ModeActive {
 		return nil
 	}
 	chain, key, found, err := m.d.Store.Certificate(ctx)
@@ -408,11 +418,12 @@ func (m *Manager) SetProfile(ctx context.Context, profile string) error {
 }
 
 // Issue orders a certificate for the names the URLs say now, in the background. It is the only way
-// new names are ordered (D-05): a URL change, a save or a scheduled round never starts one.
+// new names are ordered by a person (D-05): a URL change, a save or a scheduled round never starts one
+// (TIERPLAN_ACME=on is the one exception, envissue.go).
 //
 // The guards run in this order, each before anything that could reach the CA: certificate files,
 // pause, account, a run in progress, every preflight refusal, the ledger's manual block, and reuse of
-// a stored certificate that already covers the names and is not yet due.
+// a stored certificate that already covers the names and is not yet due (issueLocked).
 func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -420,26 +431,7 @@ func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
 	if err != nil {
 		return RunStart{}, err
 	}
-	if err := m.needAccount(ctx); err != nil {
-		return RunStart{}, err
-	}
-	if m.runActive() {
-		return RunStart{}, ErrRunActive
-	}
-	ns, refusals := m.preflight(st)
-	if len(refusals) > 0 {
-		return RunStart{}, &RefusedError{Refusals: refusals}
-	}
-	if err := m.manualBlock(ctx, st); err != nil {
-		return RunStart{}, err
-	}
-	if rs, reused, err := m.reuse(ctx, st, ns.Names); err != nil || reused {
-		return rs, err
-	}
-	return m.startRun(runParams{
-		trigger: TriggerAdmin, actor: actor, challenge: challengeOf(st),
-		req: OrderRequest{Kind: KindIssue, Names: slices.Clone(ns.Names), Profile: st.Profile},
-	})
+	return m.issueLocked(ctx, st, actor, TriggerAdmin, nil)
 }
 
 // RenewNow renews the certificate now, for the names it already carries: never the names the URLs
@@ -471,7 +463,7 @@ func (m *Manager) RenewNow(ctx context.Context, actor string) (RunStart, error) 
 		return RunStart{}, err
 	}
 	return m.startRun(runParams{
-		trigger: TriggerAdmin, actor: actor, challenge: challengeOf(st),
+		trigger: TriggerAdmin, actor: actor, challenge: m.challenge(st),
 		req: m.renewRequest(ctx, st, leaf),
 	})
 }
@@ -932,6 +924,10 @@ type runParams struct {
 	req            OrderRequest
 	// challenge is the challenge type the run answers, as saved when the run was started.
 	challenge string
+	// register, when set, is an account the run registers first: the start-time issue of
+	// TIERPLAN_ACME=on has none yet, and registering inside the run charges a failure to the persisted
+	// backoff like any other (envissue.go).
+	register *registerSpec
 }
 
 // startRun starts the one background run. The caller has checked that none is active; the check is
@@ -1016,6 +1012,13 @@ func (m *Manager) runBody(ctx context.Context, r *jobs.Reporter, ar *activeRun, 
 	// Whatever an earlier run left at the DNS provider goes first, for any challenge: the saved method
 	// may have changed since the record was made (D-17). A failure here never stops the order.
 	m.sweepDNS(ctx, false)
+
+	if p.register != nil {
+		if err := m.registerAccount(ctx, steps, *p.register); err != nil {
+			m.failed(ctx, bg, x, steps, err, p)
+			return
+		}
+	}
 
 	solver, err := m.newSolver(bg, steps, p.challenge)
 	if err != nil {

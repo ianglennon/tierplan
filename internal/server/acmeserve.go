@@ -122,7 +122,8 @@ type acmeWiring struct {
 // before the server listens and runs the scheduler in the background. A bad directory setting is an
 // error that stops start-up.
 func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.Vault, inst *instance.Instance,
-	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps) (acmeWiring, error) {
+	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps,
+	listening <-chan struct{}) (acmeWiring, error) {
 	dir, err := acme.NewDirectory(cfg)
 	if err != nil {
 		return acmeWiring{}, err
@@ -162,6 +163,9 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 			return hosts
 		},
 		CertFiles: cfg.TLSCertFile != "", Log: log, DNS: dnsD,
+		// TIERPLAN_ACME* decide at the manager's decision sites and are never saved; the start-time issue
+		// waits for the listener, because the CA validates through it (D-07).
+		Env: cfg.ACME, Ready: listening,
 	})
 	return acmeWiring{mgr: mgr, challenges: challenges}, nil
 }

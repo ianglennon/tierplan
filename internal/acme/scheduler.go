@@ -26,13 +26,34 @@ const (
 // Run is the scheduler: once a Tick on the injected clock it keeps renew_at current and starts the
 // renewals nobody asked for, until ctx ends. It never waits on anything but the clock and ctx, and a
 // run it started is a jobs.Hub job like any other, so it ends with the hub.
+//
+// With TIERPLAN_ACME=on the start-time issue waits for the listener (Deps.Ready). Rather than waiting
+// out the rest of a tick, Run takes one extra round the moment the listener is bound, on the timer it
+// already armed: each cycle arms exactly one After(Tick), so the tests that count armed timers stay
+// exact, and one start places one order.
 func (m *Manager) Run(ctx context.Context) {
+	ready := m.d.Ready
 	for {
 		m.round(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-m.clock.After(Tick):
+		if m.ready() {
+			ready = nil
+		}
+		timer := m.clock.After(Tick)
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer:
+				break wait
+			case <-ready:
+				ready = nil
+				// Only the start-time issue waits for the listener, so there is nothing to catch up on
+				// for any other install.
+				if m.envOn() {
+					m.round(ctx)
+				}
+			}
 		}
 	}
 }
@@ -65,7 +86,10 @@ func (m *Manager) round(ctx context.Context) {
 	if m.resumeRound(ctx) {
 		return
 	}
-	if st.Mode != ModeActive {
+	if m.envIssueRound(ctx, st) {
+		return
+	}
+	if m.mode(st) != ModeActive {
 		return
 	}
 	leaf, found, err := m.storedLeaf(ctx)
@@ -124,7 +148,7 @@ func (m *Manager) syncServed(ctx context.Context) {
 		m.log.Error("the scheduler could not read the ACME state", "error", err)
 		return
 	}
-	if st.Mode != ModeActive {
+	if m.mode(st) != ModeActive {
 		return
 	}
 	leaf, found, err := m.storedLeaf(ctx)
@@ -288,7 +312,7 @@ func (m *Manager) resumeRound(ctx context.Context) bool {
 		m.log.Error("the scheduler could not read the ACME state", "error", err)
 		return false
 	}
-	if st.PausedReason != "" || m.runActive() {
+	if st.PausedReason != "" || m.runActive() || m.envOff() {
 		return false
 	}
 	ord, _, found, err := m.d.Store.OpenOrder(ctx)
@@ -315,7 +339,7 @@ func (m *Manager) resumeRound(ctx context.Context) bool {
 		// one, and the certificate it named is that account's: the new account may not replace it.
 		req.Replaces = ""
 	}
-	if _, err := m.startRun(runParams{trigger: TriggerResume, challenge: challengeOf(st), req: req}); err != nil {
+	if _, err := m.startRun(runParams{trigger: TriggerResume, challenge: m.challenge(st), req: req}); err != nil {
 		if !errors.Is(err, ErrRunActive) {
 			m.log.Error("the scheduler could not continue the open order", "error", err)
 		}
@@ -342,7 +366,7 @@ func (m *Manager) renewalRound(ctx context.Context, st State, leaf *x509.Certifi
 		m.log.Error("the scheduler could not read the ACME state", "error", err)
 		return
 	}
-	if st.PausedReason != "" || st.Mode != ModeActive || m.runActive() {
+	if st.PausedReason != "" || m.mode(st) != ModeActive || m.runActive() {
 		return
 	}
 	cur, found, err := m.storedLeaf(ctx)
@@ -374,7 +398,7 @@ func (m *Manager) renewalRound(ctx context.Context, st State, leaf *x509.Certifi
 	}
 	req := m.renewRequest(ctx, st, leaf)
 	m.log.Info("starting a scheduled renewal of the Let's Encrypt certificate", "renew_at", st.RenewAt)
-	if _, err := m.startRun(runParams{trigger: TriggerSchedule, challenge: challengeOf(st), req: req}); err != nil && !errors.Is(err, ErrRunActive) {
+	if _, err := m.startRun(runParams{trigger: TriggerSchedule, challenge: m.challenge(st), req: req}); err != nil && !errors.Is(err, ErrRunActive) {
 		m.log.Error("the scheduler could not start a renewal", "error", err)
 	}
 }

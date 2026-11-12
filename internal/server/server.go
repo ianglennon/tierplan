@@ -981,7 +981,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Let's Encrypt: the manager swaps the live certificate through the installer and answers the
 	// HTTP-01 check from its token store on the existing listener (D-01, D-02). A bad directory
 	// setting stops start-up.
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS)
+	// listening is closed once the server accepts connections; the start-time issue of TIERPLAN_ACME=on
+	// waits for it.
+	listening := make(chan struct{})
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS, listening)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()
@@ -1271,7 +1274,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv = &Server{
 		unlock:     unlock,
 		restart:    restart,
-		listening:  make(chan struct{}),
+		listening:  listening,
 		refusals:   refusals,
 		cfg:        cfg,
 		log:        log,
@@ -1573,6 +1576,9 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// connection (D-01); plain carries only the ACME challenge, so the scheme is always https.
 	const scheme = "https"
 	go func() { errc <- srv.Serve(newSniffListener(ln, s.https, nil)) }()
+	// ln is bound, so connections are accepted from here on. Run has closed this already; a caller that
+	// serves a listener of its own (the ACME rigs) is announced here.
+	s.listeningOnce.Do(func() { close(s.listening) })
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
 	// bound address, so ":0" shows as the real port.
