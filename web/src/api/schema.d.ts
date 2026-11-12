@@ -4365,7 +4365,7 @@ export interface paths {
         };
         /**
          * Get the certificate the server serves
-         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
+         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity, and a trust verdict: whether a client that knows only the system roots trusts it for the public URL's host, or why not. When certificate files fix the certificate the answer also carries their two paths and the verdict, never their contents. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
          */
         get: operations["getHTTPSStatus"];
         put?: never;
@@ -9100,6 +9100,14 @@ export interface components {
             /** @description True when a DNS API token is saved now. The token is never returned */
             tokenSaved: boolean;
         };
+        HTTPSCertFilesBody: {
+            /** @description The certificate file, from TIERPLAN_TLS_CERT_FILE */
+            certPath: string;
+            /** @description The private key file, from TIERPLAN_TLS_KEY_FILE. Only the path is shown */
+            keyPath: string;
+            /** @description Whether the certificate in those files is trusted for the public URL's host */
+            trust: components["schemas"]["HTTPSTrustBody"];
+        };
         HTTPSCertificateBody: {
             /** @description Who issued it: the issuer's common name, else its organisation, else empty */
             issuer: string;
@@ -9122,14 +9130,31 @@ export interface components {
             source: "self_signed" | "cert_files" | "lets_encrypt";
             /** @description True when the certificate comes from Let's Encrypt but the directory was overridden for testing, so browsers will not trust it */
             testCA: boolean;
+            /** @description Whether a client that knows only the system's root certificates trusts this certificate for the public URL's host, which is how an agent without a pin judges it */
+            trust: components["schemas"]["HTTPSTrustBody"];
         };
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */
             acme?: components["schemas"]["HTTPSACMEBody"];
             /** @description Whether certificate files from the environment fix the certificate */
             certFiles: boolean;
+            /** @description The paths of the certificate files and whether the certificate is trusted; present only when certificate files fix the certificate */
+            certFilesInfo?: components["schemas"]["HTTPSCertFilesBody"];
             /** @description The certificate the listener serves now */
             certificate: components["schemas"]["HTTPSCertificateBody"];
+        };
+        HTTPSTrustBody: {
+            /** @description False when nothing was judged, because no certificate could be read */
+            checked: boolean;
+            /** @description The public URL's host the certificate was checked for; empty when there is no public URL */
+            host?: string;
+            /**
+             * @description Why it does not verify: self_signed, unknown_authority (the chain does not reach a trusted root, or the intermediates are missing), expired, name_mismatch, or no_public_url (no public URL is set to check the name against). Empty when it verifies
+             * @enum {string}
+             */
+            reason?: "" | "self_signed" | "unknown_authority" | "expired" | "name_mismatch" | "no_public_url";
+            /** @description True when the certificate chain verifies against the system roots for the public URL's host now */
+            verified: boolean;
         };
         ImageDetailBody: {
             /** @description The CPU architecture the image is built for */

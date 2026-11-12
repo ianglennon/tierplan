@@ -140,13 +140,46 @@ func (r *httpsRuntime) Pin() string {
 // generated one that a browser cannot be asked to trust for a year (D-04).
 func (r *httpsRuntime) HSTSAllowed() bool { return r.Kind() == tlsKindSupplied }
 
-// served is the certificate a browser receives now: the installed kind mapped
-// to a source and the leaf parsed from what GetCertificate answers, never a
-// stored copy. Nothing installed, or a certificate that cannot be parsed, gives
-// a nil Leaf.
-func (r *httpsRuntime) served() api.ServedCertificate {
+// servedChain is the installed kind and the certificates a handshake would present, leaf first, parsed
+// from what GetCertificate answers and never from a stored copy. Both come from one read of the
+// installed source, so a swap while the caller works never pairs one source's kind with another's
+// chain. The chain is nil when nothing is installed or the certificate cannot be read; a certificate
+// after the leaf that cannot be parsed is left out.
+func (r *httpsRuntime) servedChain() (tlsKind, []*x509.Certificate) {
+	l := r.cur.Load()
+	if l == nil || l.get == nil {
+		return 0, nil
+	}
+	cert, err := l.get(&tls.ClientHelloInfo{})
+	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+		return l.kind, nil
+	}
+	chain := make([]*x509.Certificate, 0, len(cert.Certificate))
+	for i, der := range cert.Certificate {
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			if i == 0 {
+				return l.kind, nil
+			}
+			continue
+		}
+		chain = append(chain, c)
+	}
+	return l.kind, chain
+}
+
+// served is the certificate a browser receives now: the installed kind mapped to a source and the
+// leaf parsed from what GetCertificate answers. Nothing installed, or a certificate that cannot be
+// parsed, gives a nil Leaf.
+func (r *httpsRuntime) served() api.ServedCertificate { return r.servedWith(nil) }
+
+// servedWith is served with the trust verdict of the same read attached, so the certificate a status
+// shows and the verdict beside it can never come from two different certificates (SET-01). A nil
+// checker leaves the verdict unchecked.
+func (r *httpsRuntime) servedWith(tc *trustChecker) api.ServedCertificate {
+	kind, chain := r.servedChain()
 	var s api.ServedCertificate
-	switch r.Kind() {
+	switch kind {
 	case tlsKindSelfSigned:
 		s.Source = api.SourceSelfSigned
 	case tlsKindSupplied:
@@ -156,15 +189,14 @@ func (r *httpsRuntime) served() api.ServedCertificate {
 	default:
 		return s
 	}
-	cert, err := r.cfg.GetCertificate(&tls.ClientHelloInfo{})
-	if err != nil || cert == nil || len(cert.Certificate) == 0 {
+	if len(chain) == 0 {
 		return s
 	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return s
+	s.Leaf = chain[0]
+	if tc != nil {
+		v := tc.verdictFor(kind, chain)
+		s.Trust = api.CertTrust{Checked: v.Checked, Verified: v.Verified, Reason: v.Reason, Host: v.Host}
 	}
-	s.Leaf = leaf
 	return s
 }
 

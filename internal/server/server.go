@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -302,6 +303,7 @@ type buildOptions struct {
 	tlsRefreshClock stackops.Clock
 	acmeClock       stackops.Clock
 	acmeDNS         *acme.DNSDeps
+	trustRoots      *x509.CertPool
 	settingsClock   instance.Clock
 	noJanitorSched  bool
 	noUpdateSched   bool
@@ -357,6 +359,16 @@ func WithACMEClock(c stackops.Clock) Option {
 // Cloudflare factory on its real base URL. A DNSDeps with nil Providers still gets that factory.
 func WithACMEDNS(d acme.DNSDeps) Option {
 	return func(o *buildOptions) { o.acmeDNS = &d }
+}
+
+// WithTrustRoots replaces the roots the served certificate is judged against when the status says
+// whether it is trusted for the public host and whether agents installed now can use the public CAs
+// (D-10, D-18). It exists for tests, whose certificates come from a CA that no system trusts. It is a
+// Go option only, like WithACMEClock: no setting, flag or environment variable reaches it, so a
+// production build, which calls Build without it, judges against the system roots. A nil pool keeps
+// the system roots.
+func WithTrustRoots(pool *x509.CertPool) Option {
+	return func(o *buildOptions) { o.trustRoots = pool }
 }
 
 // WithSettingsClock replaces the clock the settings watcher waits on, which decides when the stored
@@ -843,6 +855,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// both read when asked: the pin changes only if the self-signed key is
 	// replaced, and the endpoint follows Settings.
 	tlsPin := rt.Pin
+	// Whether the served certificate is trusted for the public host is judged at the ACME clock's time,
+	// the clock the tests move, and read when asked: the public URL changes with Settings.
+	trustNow := time.Now
+	if bo.acmeClock != nil {
+		trustNow = bo.acmeClock.Now
+	}
+	trust := newTrustChecker(bo.trustRoots, trustNow, func() string { return hostOf(inst.PublicURL()) })
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -1212,8 +1231,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
-		HTTPS:         api.HTTPSDeps{Served: rt.served, CertFiles: cfg.TLSCertFile != "", Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
-		Backup:        api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
+		HTTPS: api.HTTPSDeps{
+			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, Log: log, ACME: acmeWire.mgr, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
+		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
 			Setup: setupDeps, DataDir: info.Path, AppVersion: buildinfo.Get().Version, Log: log,
