@@ -78,6 +78,7 @@ const TEXT_NEEDS: Record<string, string[]> = {
   type_mismatch: ["host", "hostType", "environment", "envType"],
   host_mismatch: ["environment"],
   host_already_connected: ["node"],
+  node_not_in_swarm: ["node"],
 };
 const HINT_NEEDS: Record<string, string[]> = {
   duplicate_environment: ["environment"],

@@ -709,9 +709,12 @@ const stoppingLog = "the agent is stopping while it was trying its join token; i
 const takenBackLog = "TierPlan did not accept the enrolment with the join token either; the agent took back the identity it had set aside and keeps it"
 
 // transient reports whether a refusal is the server's trouble rather than the
-// agent's: it will pass, so the agent retries instead of ending.
+// agent's: it will pass, so the agent retries instead of ending. A node the server
+// has not seen in a node list yet (node_not_in_swarm) is such a lag: the server reads
+// the list again within about a minute, and a node that just joined the swarm is
+// accepted at the retry after that.
 func transient(code string) bool {
-	return code == wire.RefuseRateLimited || code == wire.RefuseInternal
+	return code == wire.RefuseRateLimited || code == wire.RefuseInternal || code == wire.RefuseNodeNotInSwarm
 }
 
 // waitsAtMax reports whether a refusal is one the agent can do nothing about but
@@ -744,7 +747,14 @@ func (r *runner) hint(code string) string {
 	case wire.ReasonBlocked:
 		return "this host is on TierPlan's block list; an administrator can unblock it in the environment's settings"
 	case wire.RefuseHostAlreadyConnected:
-		return "another agent of this host is connected to this TierPlan environment now, such as a second agent container or service on the host or a cloned VM; remove the duplicate. This agent tries again once a minute and enrols by itself once the other one is gone"
+		return "another agent of this host is connected to this TierPlan environment now, such as a second agent container or service on the host; remove the duplicate. " +
+			"A VM cloned from this host shares its Docker engine ID and is refused this way: on the clone, stop Docker, delete the engine-id file in Docker's data root " +
+			"(by default /var/lib/docker/engine-id), start Docker, remove the clone's tierplan-agent container and volume (they hold the original's identity), " +
+			"and add the clone as its own environment, because a standalone environment manages one host. " +
+			"This agent tries again once a minute and enrols by itself once the other one is gone"
+	case wire.RefuseNodeNotInSwarm:
+		return "this node is not in the swarm's node list as TierPlan last read it; a node that just joined enrols by itself within about a minute; " +
+			"a node that was removed from the swarm must join it again, or remove the agent from the host"
 	case wire.ReasonCertExpired:
 		return "the agent's certificate expired; start the agent with a join token (TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN) to enrol again"
 	case wire.ReasonAuthRejected:

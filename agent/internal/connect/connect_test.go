@@ -980,6 +980,83 @@ func TestAHostWhoseOtherAgentIsConnectedWaitsTheMaximumAndNeverEnds(t *testing.T
 	}
 }
 
+// TierPlan refuses the enrolment of a swarm node that its node list does not hold
+// (node_not_in_swarm). That is a lag on the server's side that passes once the node is listed,
+// so the agent backs off in the ordinary way and never ends for it, not even at its first
+// enrolment with no identity.
+func TestANodeThatIsNotInTheSwarmsNodeListBacksOffAndNeverEnds(t *testing.T) {
+	for name, enrolled := range map[string]bool{"a first enrolment": false, "an enrolment after a revoke": true} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if enrolled {
+				enrolledState(t, dir)
+			}
+			srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+				if a.Mode == wire.ModeHello {
+					return reply{refuse: wire.ReasonRevoked}
+				}
+				return reply{refuse: wire.RefuseNodeNotInSwarm}
+			})
+			var logs lockedBuffer
+			sl, err := runUntilSleeps(t, Config{
+				URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+				SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+			}, 4)
+			if err != nil {
+				t.Fatalf("Run = %v; node_not_in_swarm must make the agent back off, not end", err)
+			}
+			waits := sl.all()
+			first := 0
+			if enrolled {
+				first = 1 // the wait after the revoked hello is whatever the rejoin needs
+			}
+			// The ordinary backoff: the n-th failure waits between half of min*2^(n-1) and all of it.
+			for i, d := range waits[first:] {
+				step := time.Second << i
+				if d < step/2 || d > step {
+					t.Errorf("wait %d = %v, want the ordinary backoff of %v to %v, not pinned at the maximum", i+first+1, d, step/2, step)
+				}
+			}
+			if n := srv.attempts(); n != len(waits) {
+				t.Errorf("the agent made %d attempts for %d waits; it must try once per wait", n, len(waits))
+			}
+			for n := first + 1; n <= srv.attempts(); n++ {
+				if a, _ := srv.authN(t, n); a.Mode != wire.ModeEnrol {
+					t.Errorf("attempt %d used mode %q, want enrol", n, a.Mode)
+				}
+			}
+			out := logs.String()
+			if n := strings.Count(out, "code="+wire.RefuseNodeNotInSwarm); n != 1 {
+				t.Errorf("the code was logged %d times, want once:\n%s", n, out)
+			}
+			if !strings.Contains(out, "node list") {
+				t.Errorf("the hint does not say the node is not in the swarm's node list:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestTheDuplicateHostHintNamesAClonedVMAndTheEngineIDFix(t *testing.T) {
+	dir := t.TempDir()
+	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.RefuseHostAlreadyConnected} })
+	var logs lockedBuffer
+	if _, err := runUntilSleeps(t, Config{
+		URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+		SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+	}, 1); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	out := logs.String()
+	for _, want := range []string{"cloned", "engine ID", "engine-id", "container and volume", "own environment"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the hint lacks %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "remove the duplicate") {
+		t.Errorf("the hint no longer tells the operator to remove the duplicate:\n%s", out)
+	}
+}
+
 // A manually revoked host is also blocked. The agent drops the revoked identity
 // and enrols once; the block refuses it, and from there it waits the maximum
 // between tries: no loop of enrolments faster than the backoff, and no exit that

@@ -177,6 +177,12 @@ func TestAnEnrolmentOfAHostWhoseEarlierAgentIsConnectedIsRefusedAndRetiresNothin
 				!strings.Contains(ref.Detail, "connected") || !strings.Contains(ref.Detail, "remove the duplicate") {
 				t.Fatalf("refusal = %+v, want host_already_connected telling the operator to remove the duplicate agent", ref)
 			}
+			// The cloned VM is the other usual cause: the Detail names it and the fix.
+			for _, want := range []string{"cloned", "engine ID", "engine-id", "its own environment"} {
+				if !strings.Contains(ref.Detail, want) {
+					t.Errorf("the detail %q lacks %q, the cloned-VM case and its fix", ref.Detail, want)
+				}
+			}
 			if got := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID); got != agentsBefore {
 				t.Errorf("agent rows = %d, want %d: a refused enrolment writes no row", got, agentsBefore)
 			}

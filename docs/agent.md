@@ -441,7 +441,8 @@ An agent that is refused when it first connects also gets one of these. They app
 | `duplicate_environment` | The host already belongs to another environment. | Open that environment, or remove it first, then enrol again. |
 | `type_mismatch` | A swarm manager used a standalone environment's command, or the other way round. | Add the host as its own environment. |
 | `host_mismatch` | A standalone environment already manages a different host. | Add this host as its own environment. |
-| `host_already_connected` | The host already has an agent in this environment that is connected now: a second agent container or service on the host (for example a leftover `docker run` agent next to the global service, or an install command run again with another container name or volume), or a cloned VM. TierPlan refuses the new agent rather than replacing the connected one, so two agents on one host never replace each other. | Remove the duplicate agent from the host. The refused agent does not stop: it tries again once a minute and enrols by itself once the other agent is gone. An agent that was only stopping (its connection had not ended yet) is gone within about a minute, and no action is needed. |
+| `host_already_connected` | The host already has an agent in this environment that is connected now: a second agent container or service on the host (for example a leftover `docker run` agent next to the global service, or an install command run again with another container name or volume), or a **VM cloned from the host**, which shares its Docker engine ID. TierPlan refuses the new agent rather than replacing the connected one, so two agents on one host never replace each other. | Remove the duplicate agent from the host. For a cloned VM, give the clone its own engine ID and add it as its own environment: see [Cloned machines and the engine ID](#cloned-machines-and-the-engine-id). The refused agent does not stop: it tries again once a minute and enrols by itself once the other agent is gone. An agent that was only stopping (its connection had not ended yet) is gone within about a minute, and no action is needed. |
+| `node_not_in_swarm` | The swarm node the agent reports is not in the node list that TierPlan read from a manager in the last two minutes. A node that just joined the swarm is not in the list until TierPlan reads it again (about every 15 seconds while a manager is connected), or the node was removed from the swarm with `docker node rm`. | Nothing for a node that just joined: the agent backs off, tries again and enrols by itself within about a minute, and never stops for this refusal, not even at its first enrolment. A node that was removed from the swarm must join it again, or its agent must be removed from the host. |
 | `insecure_transport` (agent log: HTTP 403 "did not arrive over TLS") | The agent's connection reached TierPlan without TLS. This is almost always a reverse proxy that talks plain HTTP to TierPlan, because TierPlan serves HTTPS only and does not take `X-Forwarded-Proto` as proof of TLS. | Point the proxy at TierPlan's `https://` port (HTTPS upstream) as described in [Running TierPlan behind a reverse proxy](reverse-proxy.md). |
 | `rate_limited` | Too many connection attempts from one address, too many handshakes at once, or more than 16 handshakes at once from one address (an IPv6 /64 counts as one address). | The agent waits as long as TierPlan asks and tries again. |
 | `internal_error` | TierPlan failed while handling a valid request. | The agent retries. Look at TierPlan's log. |
@@ -457,17 +458,25 @@ A few things that are not codes:
 
 ## Cloned machines and the engine ID
 
-TierPlan recognises a host by its Docker **engine ID**, which Docker stores in `/var/lib/docker`. A virtual machine cloned from another one **shares that ID**, so TierPlan sees the clone as the same host and refuses it as `duplicate_environment` (or, in a swarm, as a node it already has).
+TierPlan recognises a host by its Docker **engine ID**, which Docker keeps in the file `engine-id` in its data root (by default `/var/lib/docker/engine-id`; Engine 24 to 29 all store it there, and its content is the ID `docker info` prints). A virtual machine cloned from another one **shares that ID**, so TierPlan sees the clone as the same host. It refuses the clone as `duplicate_environment` (the host already belongs to an environment), as `host_mismatch` (a standalone environment manages one host), or as `host_already_connected` while the original's agent is connected. In a swarm the clone also shares the node ID.
 
-On the clone, give the Docker engine a new identity before you install the agent:
+TierPlan cannot tell a clone from a second agent container on the same host, because both report the same engine ID, so the refusal names both causes.
+
+On the clone, give the Docker engine a new ID before you install the agent. Delete only the `engine-id` file, with Docker stopped; Docker makes a new one when it starts, and nothing else in the data root is touched. The data root is where `docker info --format '{{.DockerRootDir}}'` points:
 
 ```sh
-sudo systemctl stop docker
-sudo rm -rf /var/lib/docker      # this removes every image, container and volume on the host
+ROOT=$(docker info --format '{{.DockerRootDir}}')   # by default /var/lib/docker
+sudo systemctl stop docker.socket docker
+sudo rm "$ROOT/engine-id"
 sudo systemctl start docker
+docker info --format '{{.ID}}'                       # a new ID, not the original's
 ```
 
-If you cannot wipe `/var/lib/docker`, give the clone a clean Docker data directory. Swarm nodes cloned from one another also share a node ID and need `docker swarm leave --force` and a fresh join after the engine has its new ID.
+Then:
+
+- **Remove the agent the clone copied from the original**, with its volume: `docker rm -f tierplan-agent && docker volume rm tierplan-agent` (on a swarm clone, the service and its secret as in [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one)). The copied `tierplan-agent` volume holds the original's key and certificate, so the clone would present the original's identity.
+- **Add the clone as its own environment** and install the agent with that environment's command. One standalone environment manages one host, so the clone cannot enrol into the original's environment (`host_mismatch`).
+- A swarm node cloned from another also shares its swarm node ID. On the clone run `docker swarm leave --force` first, then change the engine ID as above, then join the swarm again with a fresh `docker swarm join`.
 
 ## Who can manage an environment's agents
 
@@ -483,6 +492,11 @@ Settings, Environments, the environment, the nodes list, **Actions, Revoke node*
 - **Unblock node** lets the host enrol again. The agent that was revoked is not revived. If it still has its join token (a standalone agent keeps it in its environment, a swarm agent in its secret), it discards its old identity and enrols again by itself, within about a minute, as a **new** entry. If it does not have the token, install the agent on the host again.
 - A node that leaves a swarm (`docker node rm`) is revoked automatically after two checks, without a block, so it can enrol again if it comes back.
 - After TierPlan is reinstalled, or restored to an empty data directory, it no longer knows the agents' identities and refuses them `auth_rejected`. Remove the old agent from each host, keeping its volume, as in [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one), then run the new install command. Each agent then starts with the new join token on its old `tierplan-agent` volume, sets aside the identity TierPlan no longer accepts and enrols with the new token by itself within about a minute; once TierPlan accepts the enrolment the old identity is deleted. If the enrolment is refused the agent takes its old identity back; it tries the same token again a minute later only when the refusal was not `auth_rejected`, and a token refused `auth_rejected` is not tried again with that identity until the agent is started with another one. An agent started with the join token it has on record keeps its identity and keeps waiting, because that token cannot fix it. When an agent enrols again into the same environment from the same host, TierPlan retires the host's earlier agent entry (revoked with the reason `replaced`, without a block), so the node list does not show the host twice. It does that only while the earlier agent is not connected; while it is, the new enrolment is refused `host_already_connected` and the earlier agent is left alone.
+- On a swarm, TierPlan also checks the node the enrolling agent reports against the node list of a manager (the one it already reads every 15 seconds), because the node ID is only the agent's own claim:
+  - A list read in the last two minutes that holds the node: the agent enrols and the node's earlier offline entry is retired as above.
+  - A list read in the last two minutes that does not hold the node: the enrolment is refused `node_not_in_swarm`, and nothing is written. That refusal passes by itself, so the agent backs off and tries again, and never stops for it; a node that just joined the swarm enrols at a retry after the next read of the list.
+  - No list that fresh (the first agent of a swarm, or no manager has answered for two minutes): the agent is accepted and the audit row says `node_check=unverified`, but no earlier entry is retired at that moment. TierPlan retires the node's older offline entry (reason `replaced`, audit detail `source=node_list`) at the first node list that shows the node. A connected agent is never retired.
+  - A standalone host is checked by its engine ID only.
 
 ### Reinstall an agent on a host that ran one
 
