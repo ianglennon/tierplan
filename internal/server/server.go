@@ -881,6 +881,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// verdict, and waits on a clock of its own.
 	hsts := newHSTSPolicy(trustNow, trust, rt, cfg.ACME.HSTS, bo.hstsClock, hstsDB{r: st.RQ, w: st.Q}, log)
 	hsts.publicURL = inst.PublicURL
+	hsts.SetAudit(aud.Record)
 	rt.SetOnInstall(hsts.Wake)
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.

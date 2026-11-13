@@ -17,6 +17,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
@@ -82,6 +83,9 @@ type hstsPolicy struct {
 
 	snap atomic.Pointer[hstsDecision]
 	wake chan struct{}
+	// audit writes the rows of the automatic withdrawal and its return (Phase 17, D-10). Nil writes
+	// nothing. It is set once at build, before the loop runs.
+	audit atomic.Pointer[func(context.Context, audit.Entry) error]
 
 	// toggleMu makes a change of the stored toggle and WithToggleLocked exclusive of each other. It is
 	// taken before mu and is never taken on the request path.
@@ -134,6 +138,16 @@ func newHSTSPolicy(now func() time.Time, trust *trustChecker, rt *httpsRuntime, 
 		log = slog.Default()
 	}
 	return &hstsPolicy{now: now, trust: trust, rt: rt, env: env, db: db, clock: clock, log: log, wake: make(chan struct{}, 1)}
+}
+
+// SetAudit sets where the policy writes the rows of its own transitions: HSTS withdrawn ahead of a
+// certificate's end and sent again after a renewal. A nil fn writes nothing.
+func (p *hstsPolicy) SetAudit(fn func(context.Context, audit.Entry) error) {
+	if fn == nil {
+		p.audit.Store(nil)
+		return
+	}
+	p.audit.Store(&fn)
 }
 
 // Header is the router's hook: the value of Strict-Transport-Security for this request, or "". It
@@ -259,8 +273,43 @@ func (p *hstsPolicy) recomputeLocked(ctx context.Context) {
 	}
 	d, ramp := hstsDecide(in, p.ramp)
 	p.ramp = ramp
-	p.snap.Store(&d)
+	prev := p.snap.Swap(&d)
 	p.persist(ctx, now)
+	p.auditTransition(ctx, prev, &d)
+}
+
+// auditTransition writes one row when the policy itself starts withdrawing HSTS because the certificate
+// is inside its withdrawal window, and one when a renewed certificate lets it send again (D-10). Only
+// the move between two decisions counts: the first decision after a start has nothing to compare with,
+// and a ramp step, the admin's toggle and an untrusted certificate write nothing. A failed write is
+// logged once and never changes the decision.
+func (p *hstsPolicy) auditTransition(ctx context.Context, prev, d *hstsDecision) {
+	if prev == nil {
+		return
+	}
+	var action string
+	switch {
+	case prev.kind == hstsSend && d.kind == hstsWithdraw && d.reason == "withdrawn":
+		action = audit.ActionHTTPSHSTSWithdrawn
+	case prev.kind == hstsWithdraw && prev.reason == "withdrawn" && d.kind == hstsSend:
+		action = audit.ActionHTTPSHSTSRestored
+	default:
+		return
+	}
+	fn := p.audit.Load()
+	if fn == nil {
+		return
+	}
+	err := (*fn)(context.WithoutCancel(ctx), audit.Entry{
+		Actor: audit.SystemACME, Action: action, TargetType: "https", TargetID: "https", Result: audit.ResultSuccess,
+		Details: map[string]string{
+			"not_after": d.notAfter.UTC().Format(time.RFC3339),
+			"source":    withdrawalSource(d.source),
+		},
+	})
+	if err != nil {
+		p.warn("write the HSTS audit entry", err)
+	}
 }
 
 // load reads the stored toggle every time and the ramp the first time it can.
