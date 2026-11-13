@@ -21,6 +21,9 @@ const (
 	// removedNodeReason is the reason recorded for an agent whose node an administrator removed
 	// from its swarm.
 	removedNodeReason = "node_removed"
+	// replacedReason is the reason recorded for an agent whose host enrolled again into the
+	// same environment (Service.Enrol, review 17 CR-02).
+	replacedReason = "replaced"
 )
 
 // Reaper revokes the agents of nodes that have left their swarm (D-10). A node that

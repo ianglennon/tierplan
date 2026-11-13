@@ -569,12 +569,94 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	}); err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("audit agent enrolled: %w", err)
 	}
+	replaced, err := s.retireReplaced(ctx, tx, q, envID, agentID, req, ts)
+	if err != nil {
+		return tunnel.EnrolResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("commit: %w", err)
 	}
 	// An agent listed as unknown that has now enrolled with the same key is known.
 	s.unknown.Forget(envID, KeyFingerprint(req.Pub))
+	s.afterRevoke(envID, replaced...)
 	return tunnel.EnrolResult{AgentID: agentID, EnvID: envID, Cert: leaf.DER, NotAfter: leaf.NotAfter}, nil
+}
+
+// retireReplaced revokes, inside the enrolment's transaction, every active agent of the
+// environment that runs on the host that is enrolling: the same engine ID and the same
+// swarm node (none for a standalone host). The host enrols again with a join token when its
+// agent gave up its identity, as after an agent reinstalled with a new install command or an
+// identity the server rejected for a cause the agent cannot tell (review 17 CR-02); the old
+// row would otherwise stay active forever with no session, as an offline node whose
+// certificate never renews. Each is revoked with the reason replaced and no block (the host
+// is the one enrolling), under the enrolment's system actor, with one agent.revoked row
+// naming the agent that replaced it. A host that reports no engine ID cannot be matched and
+// retires nothing. It returns the IDs it revoked, for afterRevoke once the transaction has
+// committed.
+func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, envID, agentID string, req tunnel.EnrolRequest, ts int64) ([]string, error) {
+	if req.Facts.EngineID == "" {
+		return nil, nil
+	}
+	var node string
+	if sw := req.Facts.Swarm; sw != nil {
+		node = sw.NodeID
+	}
+	olds, err := q.ActiveAgentsOfHost(ctx, sqlc.ActiveAgentsOfHostParams{EnvID: envID, EngineID: req.Facts.EngineID, SwarmNodeID: node})
+	if err != nil {
+		return nil, fmt.Errorf("look up the host's earlier agents: %w", err)
+	}
+	actor := rbac.System(enrolActor).AuditActor()
+	var ids []string
+	for _, old := range olds {
+		if old.ID == agentID {
+			continue
+		}
+		changed, err := q.RevokeAgent(ctx, sqlc.RevokeAgentParams{
+			RevokedAt: sql.NullInt64{Int64: ts, Valid: true}, RevokedBy: sql.NullString{String: actor.ID, Valid: true},
+			RevokeReason: sql.NullString{String: replacedReason, Valid: true}, ID: old.ID, EnvID: envID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("retire the host's earlier agent: %w", err)
+		}
+		if changed == 0 {
+			continue
+		}
+		if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionAgentRevoked, TargetType: targetAgent, TargetID: old.ID,
+			EnvID: envID, Result: audit.ResultSuccess, IP: req.IP, UserAgent: "tierplan-agent/" + req.AgentVersion,
+			Details: map[string]string{
+				"node": old.Name, "fingerprint": old.CertFingerprint, "reason": replacedReason,
+				"swarm_node": old.SwarmNodeID.String, "replaced_by": agentID,
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("audit agent revoked: %w", err)
+		}
+		ids = append(ids, old.ID)
+	}
+	return ids, nil
+}
+
+// afterRevoke is what follows the commit of a revoke of agentIDs in envID that makes no
+// block: their sessions are closed, as revoked, and the environment's health is
+// recomputed once. Nothing happens for no agents.
+func (s *Service) afterRevoke(envID string, agentIDs ...string) {
+	if len(agentIDs) == 0 {
+		return
+	}
+	s.seenMu.Lock()
+	for _, id := range agentIDs {
+		delete(s.seen, id)
+	}
+	s.seenMu.Unlock()
+	// After the commit, so the hub's check of the agent's status sees the revoke.
+	if s.kicker != nil {
+		for _, id := range agentIDs {
+			s.kicker.Kick(id, tunnel.DisconnectRevoked)
+		}
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(envID)
+	}
 }
 
 // identityRefused is what Enrol and Hello return for a failed identity check. A
@@ -741,16 +823,7 @@ func (s *Service) revokeKeepingHost(ctx context.Context, actor audit.Actor, envI
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
-	s.seenMu.Lock()
-	delete(s.seen, agentID)
-	s.seenMu.Unlock()
-	// After the commit, so the hub's check of the agent's status sees the revoke.
-	if s.kicker != nil {
-		s.kicker.Kick(agentID, tunnel.DisconnectRevoked)
-	}
-	if s.notifier != nil {
-		s.notifier.Notify(envID)
-	}
+	s.afterRevoke(envID, agentID)
 	return nil
 }
 
@@ -1249,9 +1322,13 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 		return tunnel.HelloResult{}, reject("environment_mismatch")
 	}
 	if row.Status != statusActive {
+		detail := "an administrator revoked this agent"
+		if row.RevokeReason.String == replacedReason {
+			detail = "this host enrolled again as a new agent, which replaced this one"
+		}
 		return tunnel.HelloResult{}, &tunnel.Refusal{
 			Code:        wire.ReasonRevoked,
-			Detail:      "an administrator revoked this agent",
+			Detail:      detail,
 			AuditReason: wire.ReasonRevoked,
 		}
 	}

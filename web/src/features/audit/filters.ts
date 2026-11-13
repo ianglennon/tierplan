@@ -476,6 +476,10 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     const scope = details?.scope === "image" ? details.image : details?.workload;
     if (scope) return t(`audit.actions.${key}_named`, { scope });
   }
+  // An agent the server retired because its host enrolled again says so; any other revoke is plain.
+  if (key === "agent.revoked" && details?.reason === "replaced") {
+    return t("audit.actions.agent.revoked_replaced");
+  }
   // A change of an HTTPS setting names the section it was about, when the build has a label for it.
   if (key === "https.settings_updated" && details?.section) {
     if (HTTPS_SETTINGS_SECTIONS.includes(details.section)) {

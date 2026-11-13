@@ -44,6 +44,64 @@ func (q *Queries) ActiveAgentRoles(ctx context.Context, envID string) ([]ActiveA
 	return items, nil
 }
 
+const activeAgentsOfHost = `-- name: ActiveAgentsOfHost :many
+SELECT id, env_id, name, role, engine_id, swarm_node_id, public_key, cert_serial, cert_fingerprint, cert_not_after, agent_version, status, created_at, last_seen_at, revoked_at, revoked_by, revoke_reason FROM agents
+WHERE env_id = ?1 AND status = 'active' AND engine_id = ?2
+  AND IFNULL(swarm_node_id, '') = CAST(?3 AS TEXT)
+ORDER BY created_at, id
+`
+
+type ActiveAgentsOfHostParams struct {
+	EnvID       string
+	EngineID    string
+	SwarmNodeID string
+}
+
+// The active agents of an environment that run on one host: the same engine ID and
+// the same swarm node, or none for a standalone host. An enrolment from that host
+// retires them in the transaction that inserts its own agent, so a host that enrols
+// again never has two active rows (review 17 CR-02).
+func (q *Queries) ActiveAgentsOfHost(ctx context.Context, arg ActiveAgentsOfHostParams) ([]Agent, error) {
+	rows, err := q.db.QueryContext(ctx, activeAgentsOfHost, arg.EnvID, arg.EngineID, arg.SwarmNodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Agent
+	for rows.Next() {
+		var i Agent
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.Name,
+			&i.Role,
+			&i.EngineID,
+			&i.SwarmNodeID,
+			&i.PublicKey,
+			&i.CertSerial,
+			&i.CertFingerprint,
+			&i.CertNotAfter,
+			&i.AgentVersion,
+			&i.Status,
+			&i.CreatedAt,
+			&i.LastSeenAt,
+			&i.RevokedAt,
+			&i.RevokedBy,
+			&i.RevokeReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adoptPendingCluster = `-- name: AdoptPendingCluster :execrows
 UPDATE environments
 SET swarm_cluster_id = pending_cluster_id, pending_cluster_id = NULL, cluster_changed_at = NULL, updated_at = ?

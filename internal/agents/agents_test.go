@@ -951,13 +951,18 @@ func TestRotateTokenAnAgentEnrolledEarlierStillSaysHelloAndOldAndNewTokensAreJud
 		t.Errorf("agent.enrol_refused reason = %q, want token_superseded", reason)
 	}
 
-	// The new one enrols a second agent.
-	if c := srv.Dial(t, tunneltest.Agent{Token: rot.JoinToken}); c.Welcome == nil {
-		t.Fatalf("enrol with the new token was refused: %+v (err %v)", c.Refuse, c.Err)
-	}
 	// The agent enrolled before the rotation reconnects with its certificate.
 	if c := srv.Hello(t, first.Identity); c.Welcome == nil {
 		t.Fatalf("hello after the rotation was refused: %+v (err %v)", c.Refuse, c.Err)
+	}
+	// The new one enrols. The test agent reports the same host as the first, and an
+	// enrolment from a host retires that host's earlier agent in the environment
+	// (review 17 CR-02), so the first is revoked as replaced from now on.
+	if c := srv.Dial(t, tunneltest.Agent{Token: rot.JoinToken}); c.Welcome == nil {
+		t.Fatalf("enrol with the new token was refused: %+v (err %v)", c.Refuse, c.Err)
+	}
+	if c := srv.Hello(t, first.Identity); c.Refuse == nil || c.Refuse.Code != wire.ReasonRevoked {
+		t.Fatalf("hello of the replaced agent: refuse = %+v (err %v), want revoked", c.Refuse, c.Err)
 	}
 }
 

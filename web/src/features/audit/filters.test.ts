@@ -816,3 +816,23 @@ describe("actionLabel (HTTPS)", () => {
     for (const key of HTTPS_ACTIONS) expect(ENV_SCOPED_ACTIONS, key).not.toContain(key);
   });
 });
+
+describe("actionLabel (agent replaced)", () => {
+  const real = (key: string) => {
+    const parts = key.split(".");
+    let node: unknown = audit;
+    for (const part of parts) node = (node as Record<string, unknown>)?.[part];
+    return typeof node === "string" ? node : key;
+  };
+
+  it("says an agent retired by its host's new enrolment was replaced", () => {
+    expect(actionLabel("agent.revoked", real, { reason: "replaced", node: "edge-1" })).toBe(
+      "Agent replaced (the host enrolled again)",
+    );
+  });
+
+  it("keeps the plain label for every other revoke", () => {
+    expect(actionLabel("agent.revoked", real, { reason: "node_removed" })).toBe("Agent revoked");
+    expect(actionLabel("agent.revoked", real)).toBe("Agent revoked");
+  });
+});

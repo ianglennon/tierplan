@@ -102,6 +102,7 @@
         "enrol_refused": "Agent enrolment refused",
         "cert_renewed": "Agent certificate renewed",
         "revoked": "Agent revoked",
+        "revoked_replaced": "Agent replaced (the host enrolled again)",
         "blocked": "Node blocked",
         "unblocked": "Node unblocked",
         "auto_revoked": "Agent revoked (left the swarm)",

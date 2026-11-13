@@ -102,6 +102,16 @@ INSERT INTO agents (id, env_id, name, role, engine_id, swarm_node_id, public_key
                     cert_fingerprint, cert_not_after, agent_version, status, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?);
 
+-- The active agents of an environment that run on one host: the same engine ID and
+-- the same swarm node, or none for a standalone host. An enrolment from that host
+-- retires them in the transaction that inserts its own agent, so a host that enrols
+-- again never has two active rows (review 17 CR-02).
+-- name: ActiveAgentsOfHost :many
+SELECT * FROM agents
+WHERE env_id = sqlc.arg(env_id) AND status = 'active' AND engine_id = sqlc.arg(engine_id)
+  AND IFNULL(swarm_node_id, '') = CAST(sqlc.arg(swarm_node_id) AS TEXT)
+ORDER BY created_at, id;
+
 -- name: GetAgent :one
 SELECT * FROM agents WHERE id = ?;
 
