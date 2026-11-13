@@ -52,7 +52,7 @@ Work through this in order for every release. No release has been cut yet; the f
     7. The bell has no HTTPS item.
     8. Optional: with HSTS off, **Stop using Let's Encrypt**. The agent stays connected over its pin.
 
-  Last run: 2026-11-13 | build b6a3bd5d005e063472e63978a0434bfba446ee2d | pass: Let's Encrypt certificate issued and served, agents stayed connected through the swap and reconnected after a server restart
+  Last run: 2026-11-13 | build c15b6e214e4a84accbd911d51f1e06973454df66 | pass: Let's Encrypt certificate issued and served, agents re-enrolled by themselves, stayed connected through the swap and reconnected after a server restart
 - [ ] Tag `vX.Y.Z` (for example `v0.1.0`) on the release commit and push the tag. Only a `v*` tag runs the release workflow.
 - [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the image, and the signatures and SBOMs below.
 - [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect:
