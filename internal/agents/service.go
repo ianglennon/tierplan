@@ -777,12 +777,19 @@ func (s *Service) retireRows(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, e
 // retireListedDuplicates is the retire an unverified swarm enrolment left for later (the
 // reaper calls it with each node list it believes). listed is the set of node IDs of that
 // list. Among the active agents of the environment that run on a listed swarm node, those of
-// one engine and node form a group; in a group of two or more the newest row stays and each
-// older row that is not connected now is revoked as replaced, with replaced_by the newest and
-// the detail source=node_list, under the reaper's actor. Without this an unverified
-// enrolment's older offline row would stay the oldest active row of the node, and
-// ActiveAgentOfSwarmNode would route node-local calls to a dead agent for good. A connected
-// older row is left, as at enrolment. A node the list does not show is not touched here.
+// one engine and node form a group; in a group of two or more whose newest row's agent is
+// connected now, each older row that is not connected is revoked as replaced, with
+// replaced_by the newest and the detail source=node_list, under the reaper's actor. The
+// enrolment's own retire rests on the new agent being there at that moment; this one can run
+// long after, so it asks the same of the newest row now. A group whose newest agent is gone
+// (a stray duplicate that enrolled and went away) is left whole: retiring the real agent's
+// older row in its favour would revoke the agent that is actually on the node. Without this
+// retire an unverified enrolment's older offline row would stay active: the node would show
+// a stale offline duplicate in its agent list and health, and ActiveAgentOfSwarmNode, which
+// takes the oldest active row and is what revokes the agent of a node an admin removes,
+// would find that row instead of the live one. Node-local calls are not affected: they go
+// through live sessions. A connected older row is left, as at enrolment. A node the list does
+// not show is not touched here.
 func (s *Service) retireListedDuplicates(ctx context.Context, envID string, listed map[string]struct{}) error {
 	// Most lists find nothing to retire; look before taking the writer.
 	rows, err := s.st.RQ.ListAgentsByEnv(ctx, envID)
@@ -828,7 +835,9 @@ type duplicate struct {
 }
 
 // duplicatesToRetire is the older, not connected, active rows of the listed nodes that have a
-// newer active row of the same engine and node. rows are in created_at, id order.
+// newer active row of the same engine and node whose agent is connected now. rows are in
+// created_at, id order. Without a LiveSessions nothing can be shown to be connected, so
+// nothing is retired.
 func (s *Service) duplicatesToRetire(rows []sqlc.Agent, listed map[string]struct{}) []duplicate {
 	type key struct{ engine, node string }
 	groups := map[key][]sqlc.Agent{}
@@ -853,8 +862,12 @@ func (s *Service) duplicatesToRetire(rows []sqlc.Agent, listed map[string]struct
 			continue
 		}
 		newest := g[len(g)-1].ID
+		if s.live == nil || !s.live.Live(newest) {
+			// The row that would stay is not the agent that is there now: retire nothing.
+			continue
+		}
 		for _, old := range g[:len(g)-1] {
-			if s.live != nil && s.live.Live(old.ID) {
+			if s.live.Live(old.ID) {
 				continue
 			}
 			out = append(out, duplicate{old: old, newest: newest})

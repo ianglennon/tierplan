@@ -38,8 +38,9 @@ const (
 //
 // It also finishes what an enrolment could not (Service.Enrol): a swarm agent whose node no
 // fresh list had shown enrols without retiring the earlier agent of its node, and at the first
-// list that shows the node the older offline row is retired as replaced, so the node's
-// node-local calls go to the agent that is there (Service.retireListedDuplicates).
+// list that shows the node, while that newest agent is connected, the older offline row is
+// retired as replaced, so the node does not keep a stale offline duplicate in its agent list
+// and health (Service.retireListedDuplicates).
 type Reaper struct {
 	svc *Service
 

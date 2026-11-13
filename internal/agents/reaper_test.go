@@ -317,6 +317,7 @@ func unverifiedDuplicate(t *testing.T) (*rig, *swarmEnv, member) {
 
 func TestReaperAListThatShowsTheNodeRetiresTheOlderOfflineDuplicateAndKicksIt(t *testing.T) {
 	r, s, again := unverifiedDuplicate(t)
+	r.svc.WithLive(liveSet{again.id: true}) // the agent that enrolled again is there
 
 	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
 
@@ -355,7 +356,7 @@ func TestReaperAListThatShowsTheNodeRetiresTheOlderOfflineDuplicateAndKicksIt(t 
 
 func TestReaperAListLeavesAnOlderDuplicateThatIsConnected(t *testing.T) {
 	r, s, again := unverifiedDuplicate(t)
-	r.svc.WithLive(liveSet{s.w2.id: true})
+	r.svc.WithLive(liveSet{s.w2.id: true, again.id: true})
 
 	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
 
@@ -367,6 +368,47 @@ func TestReaperAListLeavesAnOlderDuplicateThatIsConnected(t *testing.T) {
 	}
 	if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 0 {
 		t.Errorf("agent.revoked rows = %v, want none", rows)
+	}
+}
+
+// The retire keeps the newest row only while its agent is there. A duplicate that enrolled
+// unverified and went away, with the real agent on the older row connected or between sessions,
+// is no reason to retire the real agent: nothing is retired, now or at a later list.
+func TestReaperAListRetiresNothingWhileTheNewestDuplicateIsNotConnected(t *testing.T) {
+	for name, live := range map[string]func(s *swarmEnv) liveSet{
+		"the older agent is connected": func(s *swarmEnv) liveSet { return liveSet{s.w2.id: true} },
+		"neither is connected":         func(*swarmEnv) liveSet { return liveSet{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, s, again := unverifiedDuplicate(t)
+			r.svc.WithLive(live(s))
+
+			for range 3 {
+				s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
+			}
+			for name, id := range map[string]string{"older": s.w2.id, "newest": again.id} {
+				if a := r.agentRow(t, id); a.status != "active" {
+					t.Errorf("the %s row is %+v, want it left active", name, a)
+				}
+			}
+			if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 0 {
+				t.Errorf("agent.revoked rows = %v, want none", rows)
+			}
+			if len(s.kicked.agents) != 0 {
+				t.Errorf("kicked %v, want none", s.kicked.agents)
+			}
+		})
+	}
+}
+
+// Without a LiveSessions nothing shows the newest agent is there, so nothing is retired.
+func TestReaperWithoutLiveSessionsRetiresNoDuplicate(t *testing.T) {
+	r, s, again := unverifiedDuplicate(t)
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
+	for _, id := range []string{s.w2.id, again.id} {
+		if a := r.agentRow(t, id); a.status != "active" {
+			t.Errorf("row %s is %+v, want it left active", id, a)
+		}
 	}
 }
 
@@ -397,7 +439,8 @@ func TestReaperASingleRowPerNodeRetiresNothing(t *testing.T) {
 }
 
 func TestReaperAListThatNamesNoAnswererRetiresNoDuplicate(t *testing.T) {
-	r, s, _ := unverifiedDuplicate(t)
+	r, s, again := unverifiedDuplicate(t)
+	r.svc.WithLive(liveSet{again.id: true})
 	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), "")
 	if a := r.agentRow(t, s.w2.id); a.status != "active" {
 		t.Errorf("a list with no answerer retired the older row: %+v", a)
