@@ -1985,12 +1985,18 @@ describe("HealthBell HTTPS items", () => {
 
     it("judges the expiry against the time it is given", () => {
       const notAfter = "2026-11-13T12:00:00Z";
-      const w = httpsWarning("https_cert_expiring", { source: "cert_files", notAfter });
+      const w = {
+        id: "https_cert_expiring" as const,
+        https: { source: "cert_files" as const, notAfter },
+      };
       const severity = (now: number) =>
         bellEntries([], { keyBackup: false, proxy: [], https: [w] }, now)[0]?.severity;
       expect(severity(Date.parse(notAfter) - 1)).toBe("warning");
       expect(severity(Date.parse(notAfter))).toBe("error");
-      const noTime = httpsWarning("https_cert_expiring", { source: "cert_files" });
+      const noTime = {
+        id: "https_cert_expiring" as const,
+        https: { source: "cert_files" as const },
+      };
       expect(
         bellEntries([], { keyBackup: false, proxy: [], https: [noTime] }, Date.parse(notAfter))[0]
           ?.severity,
