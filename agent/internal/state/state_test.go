@@ -671,3 +671,114 @@ func TestDialableURLAllowsOnlyWSS(t *testing.T) {
 		}
 	}
 }
+
+// --- the join token the identity was enrolled with ---
+
+func TestTheEnrolTokenRecordRoundTripsTheHashAndNeverHoldsTheToken(t *testing.T) {
+	dir := t.TempDir()
+	const token = "tpjt_0190d2a4-7a3b-7c3d-8e4f-123456789abc_c2VjcmV0LXRoYXQtbmV2ZXItbGVhdmVz" //nolint:gosec // G101: a made-up token for the test
+	hash := TokenHash(token)
+	if len(hash) != 64 || hash != strings.ToLower(hash) {
+		t.Fatalf("TokenHash = %q, want 64 lower-case hex characters", hash)
+	}
+	if hash == TokenHash(token+"x") {
+		t.Fatal("two different tokens have the same hash")
+	}
+	if err := SaveEnrolToken(dir, hash); err != nil {
+		t.Fatalf("SaveEnrolToken: %v", err)
+	}
+	got, ok, err := LoadEnrolToken(dir)
+	if err != nil || !ok || got != hash {
+		t.Fatalf("LoadEnrolToken = %q, %v, %v; want %q", got, ok, err, hash)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, EnrolTokenFile)) //nolint:gosec // a test reads the file it just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), token) || strings.Contains(string(raw), "c2VjcmV0") {
+		t.Errorf("%s holds the token itself: %s", EnrolTokenFile, raw)
+	}
+	fi, err := os.Stat(filepath.Join(dir, EnrolTokenFile))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("%s mode = %v, %v; want 0600", EnrolTokenFile, fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, EnrolTokenFile+tmpSuffix)); !os.IsNotExist(err) {
+		t.Errorf("the temporary file was left behind: %v", err)
+	}
+	// A second save replaces the first.
+	other := TokenHash("tpjt_another")
+	if err := SaveEnrolToken(dir, other); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, _ := LoadEnrolToken(dir); !ok || got != other {
+		t.Errorf("after a second save LoadEnrolToken = %q, %v; want %q", got, ok, other)
+	}
+}
+
+func TestAnAbsentOrUnusableEnrolTokenRecordReadsAsNotKnown(t *testing.T) {
+	for name, body := range map[string]string{
+		"absent":     "",
+		"empty hash": `{"sha256":""}`,
+		"not hex":    `{"sha256":"` + strings.Repeat("z", 64) + `"}`,
+		"too short":  `{"sha256":"abcd"}`,
+		"upper case": `{"sha256":"` + strings.ToUpper(TokenHash("t")) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if body != "" {
+				if err := os.WriteFile(filepath.Join(dir, EnrolTokenFile), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, ok, err := LoadEnrolToken(dir)
+			if err != nil || ok || got != "" {
+				t.Errorf("LoadEnrolToken = %q, %v, %v; want not known and no error", got, ok, err)
+			}
+		})
+	}
+	t.Run("damaged", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, EnrolTokenFile), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := LoadEnrolToken(dir); err == nil || ok {
+			t.Errorf("LoadEnrolToken of a damaged file = %v, %v; want an error", ok, err)
+		}
+	})
+}
+
+func TestSaveEnrolTokenRefusesAnythingButAHash(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{"", "tpjt_a-token-in-the-clear", strings.ToUpper(TokenHash("t"))} {
+		if err := SaveEnrolToken(dir, bad); err == nil {
+			t.Errorf("SaveEnrolToken(%q) succeeded; only a TokenHash may be recorded", bad)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, EnrolTokenFile)); !os.IsNotExist(err) {
+		t.Errorf("a refused save wrote the record: %v", err)
+	}
+}
+
+func TestDiscardRemovesTheEnrolTokenRecordAndItsLeftover(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveEnrolToken(dir, TokenHash("tpjt_tok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, EnrolTokenFile+tmpSuffix), []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Discard(dir); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	for _, name := range []string{EnrolTokenFile, EnrolTokenFile + tmpSuffix} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still there after Discard: %v", name, err)
+		}
+	}
+	if _, ok, err := LoadEnrolToken(dir); ok || err != nil {
+		t.Errorf("LoadEnrolToken after Discard = %v, %v; want not known", ok, err)
+	}
+}

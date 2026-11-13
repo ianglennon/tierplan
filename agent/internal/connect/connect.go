@@ -143,7 +143,9 @@ func muxConfig() *yamux.Config {
 // Run connects and serves until ctx ends. It returns nil only when ctx ended: a
 // dropped connection or a refusal is retried with backoff. An agent that is
 // refused revoked and has a join token drops its identity and enrols again as a
-// new agent (D-10); a blocked host waits at the maximum backoff until an
+// new agent (D-10); so does one refused auth_rejected that was started with a
+// different join token than it enrolled with, as after TierPlan was reinstalled
+// and the agent with it. A blocked host waits at the maximum backoff until an
 // administrator unblocks it. It returns an error for a configuration the agent
 // cannot work with, and for a refusal of the very first enrolment (a
 // *RefusedError) other than blocked, because a wrong token does not fix itself.
@@ -168,10 +170,14 @@ type runner struct {
 	mu   sync.Mutex
 	cur  state.State
 	have bool
+	// enrolHash is the state.TokenHash of the join token cur was enrolled with, empty
+	// when that is not known (an identity enrolled before the agent kept the record).
+	// mu guards it with cur.
+	enrolHash string
 	// forceEnrol makes the next attempt enrol although an identity exists: the
 	// certificate expired and a join token is at hand.
 	forceEnrol bool
-	// rejoinedAt is when the agent last dropped a revoked identity to enrol again.
+	// rejoinedAt is when the agent last dropped an identity to enrol again.
 	// It keeps an agent that is revoked again at once from enrolling a new agent
 	// every few seconds.
 	rejoinedAt time.Time
@@ -250,6 +256,17 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			return err
 		}
 		r.cur, r.have = cur, ok
+		if ok {
+			// A record that cannot be read reads as unknown: on an auth_rejected hello
+			// the agent then enrols again with the token it has, which is what it does
+			// for an identity enrolled before the record existed.
+			hash, known, err := state.LoadEnrolToken(cfg.StateDir)
+			if err != nil {
+				log.Warn("the agent could not read which join token it enrolled with; it treats it as unknown", "error", err)
+			} else if known {
+				r.enrolHash = hash
+			}
+		}
 		// A pins file that cannot be read leaves the agent with fewer pins, which
 		// can only make it refuse more, never trust more.
 		if r.pins, err = state.LoadPins(cfg.StateDir); err != nil {
@@ -352,11 +369,19 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 // A revoked agent with a join token drops its identity and enrols again at once,
 // as a new agent (see rejoin). An agent the server does not know (unknown_agent, as
 // after a restore from a backup older than the agent) is handled the same way: its
-// identity is one the server will never accept, and only a new enrolment helps. Without a token, and for a blocked host, nothing
-// the agent can do changes the answer, so it keeps its identity and waits the
-// maximum; only an administrator, or an operator who adds a token, can help. An
-// expired certificate with a join token at hand enrols again at once; without
-// one it waits the maximum too. Anything else backs off as an ordinary failure.
+// identity is one the server will never accept, and only a new enrolment helps.
+// A hello refused auth_rejected is handled the same way only when the agent was
+// started with a join token other than the one it enrolled with, or it does not
+// know which one that was (see newToken): the operator reinstalled it with a new
+// install command, most often because TierPlan itself was reinstalled and no
+// longer has the environment the identity belongs to. The server does not say why
+// it rejected the identity (T-02-21), so with the same token the agent keeps it and
+// backs off as before: a token that enrolled the identity cannot fix it. Without a
+// token, and for a blocked host, nothing the agent can do changes the answer, so it
+// keeps its identity and waits the maximum; only an administrator, or an operator
+// who adds a token, can help. An expired certificate with a join token at hand
+// enrols again at once; without one it waits the maximum too. Anything else backs
+// off as an ordinary failure.
 func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	if re.Code != r.lastCode {
 		r.lastCode = re.Code
@@ -365,6 +390,10 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	switch re.Code {
 	case wire.ReasonRevoked, wire.ReasonUnknownAgent:
 		return r.rejoin(re.Code)
+	case wire.ReasonAuthRejected:
+		if r.newToken() {
+			return r.rejoin(re.Code)
+		}
 	case wire.ReasonBlocked:
 		return r.cfg.BackoffMax
 	case wire.ReasonCertExpired:
@@ -379,16 +408,37 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 	return max(wait, min(re.RetryAfter, maxRetryAfter))
 }
 
-// rejoin handles a hello that was refused revoked (D-10) or unknown_agent (D-31).
-// The server keeps a revoked agent revoked for good, also after an unblock, and an
-// agent it does not know stays unknown, so in both cases the identity can never
+// newToken reports whether a hello the server refused auth_rejected should make the
+// agent enrol again: it holds an identity, the attempt was a hello and not an
+// enrolment, and it has a join token that is not the one the identity was enrolled
+// with, or it does not know which one that was. The operator who starts an agent
+// with a new token has reinstalled it, and an identity TierPlan rejects is of no
+// more use (an environment that no longer exists, as after TierPlan was reinstalled
+// with an empty data directory, is refused auth_rejected like any other bad
+// certificate, T-02-21).
+func (r *runner) newToken() bool {
+	if r.cfg.JoinToken == "" || r.forceEnrol {
+		return false
+	}
+	r.mu.Lock()
+	have, hash := r.have, r.enrolHash
+	r.mu.Unlock()
+	return have && hash != state.TokenHash(r.cfg.JoinToken)
+}
+
+// rejoin handles a hello that was refused revoked (D-10) or unknown_agent (D-31),
+// or auth_rejected by an agent started with a new join token (newToken). The
+// server keeps a revoked agent revoked for good, also after an unblock, an agent
+// it does not know stays unknown, and an identity it rejects with a token the
+// operator replaced is one they gave up on, so in each case the identity can never
 // work again. With a join token the agent deletes it and enrols again with
 // a fresh key: a host that left its swarm and rejoined then comes back by itself,
-// while a host an administrator blocked is refused blocked at that enrolment and
-// waits. It returns how long to wait before the next attempt: none when it
-// enrols again now, the maximum when it cannot or should not.
+// and so does an agent reinstalled with the install command of a TierPlan that was
+// itself reinstalled, while a host an administrator blocked is refused blocked at
+// that enrolment and waits. It returns how long to wait before the next attempt:
+// none when it enrols again now, the maximum when it cannot or should not.
 //
-// An agent that rejoined less than the maximum backoff ago and is revoked again
+// An agent that rejoined less than the maximum backoff ago and is refused again
 // waits the maximum before it does so a second time, so at most one new agent
 // per minute is ever enrolled.
 func (r *runner) rejoin(code string) time.Duration {
@@ -403,20 +453,23 @@ func (r *runner) rejoin(code string) time.Duration {
 		if err := state.Discard(r.cfg.StateDir); err != nil {
 			if _, still, _ := state.Load(r.cfg.StateDir); still {
 				// Nothing was removed: keep the identity and the old behaviour.
-				r.log.Error("the agent could not remove its revoked identity, so it will not enrol again; fix the permissions of its state directory", "dir", r.cfg.StateDir, "error", err)
+				r.log.Error("the agent could not remove its old identity, so it will not enrol again; fix the permissions of its state directory", "dir", r.cfg.StateDir, "error", err)
 				return r.cfg.BackoffMax
 			}
 			// The identity is gone and only leftovers remain; the next save replaces them.
-			r.log.Warn("the agent removed its revoked identity but could not remove every file of it", "dir", r.cfg.StateDir, "error", err)
+			r.log.Warn("the agent removed its old identity but could not remove every file of it", "dir", r.cfg.StateDir, "error", err)
 		}
 	}
 	r.mu.Lock()
-	r.cur, r.have, r.forceEnrol = state.State{}, false, false
+	r.cur, r.have, r.enrolHash, r.forceEnrol = state.State{}, false, "", false
 	r.mu.Unlock()
 	r.rejoinedAt = now
-	if code == wire.ReasonUnknownAgent {
+	switch code {
+	case wire.ReasonUnknownAgent:
 		r.log.Info("the agent's identity is not known to this TierPlan; it dropped it and will enrol again with its join token")
-	} else {
+	case wire.ReasonAuthRejected:
+		r.log.Info("TierPlan did not accept the agent's identity and the agent was started with a different join token than it enrolled with; it dropped the old identity and will enrol again with the new token")
+	default:
 		r.log.Info("the agent's identity was revoked; it dropped it and will enrol again with its join token")
 	}
 	return 0
@@ -451,7 +504,7 @@ func (r *runner) hint(code string) string {
 	case wire.ReasonCertExpired:
 		return "the agent's certificate expired; start the agent with a join token (TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN) to enrol again"
 	case wire.ReasonAuthRejected:
-		return "TierPlan did not accept the agent's credentials; check the join token and TIERPLAN_AGENT_URL. If TierPlan's agent address changed while this agent was offline, start it again with the new address in TIERPLAN_AGENT_URL on the same volume, and it keeps its identity"
+		return "TierPlan did not accept the agent's credentials; check the join token and TIERPLAN_AGENT_URL. If TierPlan's agent address changed while this agent was offline, start it again with the new address in TIERPLAN_AGENT_URL on the same volume, and it keeps its identity. An enrolled agent started with a different join token than it enrolled with (reinstalled with a new install command, for example after TierPlan was reinstalled) drops the identity TierPlan rejects and enrols again with the new token; with the same token it keeps its identity and retries"
 	case wire.ReasonVersionIncompatible:
 		return "upgrade the agent to the version TierPlan runs"
 	case wire.ReasonClockSkew:
@@ -729,8 +782,14 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target
 			return errors.New("the server welcomed the agent without a certificate")
 		}
 		cur := state.State{AgentID: w.AgentID, EnvID: w.EnvID, Key: cr.priv, Cert: w.Cert}
+		// Only the hash of the token is kept, never the token. credentials never
+		// enrols without one; an empty one is recorded as unknown all the same.
+		var hash string
+		if cr.token != "" {
+			hash = state.TokenHash(cr.token)
+		}
 		r.mu.Lock()
-		r.cur, r.have = cur, true
+		r.cur, r.have, r.enrolHash = cur, true, hash
 		r.mu.Unlock()
 		r.log.Info("enrolled with TierPlan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
 		if r.cfg.StateDir != "" {
@@ -738,6 +797,13 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target
 				// Staying connected beats stopping: the identity is in memory, and
 				// the agent says so loudly because a restart will enrol again.
 				r.log.Error("the agent could not save its identity; a restart will enrol it again as a new agent", "dir", r.cfg.StateDir, "error", err)
+			} else if hash != "" {
+				if err := state.SaveEnrolToken(r.cfg.StateDir, hash); err != nil {
+					// The identity is good. Without the record a hello refused
+					// auth_rejected after a restart enrols again with the token at
+					// hand, as for an identity enrolled before the record existed.
+					r.log.Warn("the agent could not record which join token it enrolled with", "dir", r.cfg.StateDir, "error", err)
+				}
 			}
 		}
 	default:
