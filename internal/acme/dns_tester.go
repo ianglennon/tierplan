@@ -90,8 +90,9 @@ type TestInfo struct {
 	Seconds int
 }
 
-// passed reports whether all four rows are done.
-func (n NameTest) passed() bool {
+// Passed reports whether all four rows are done. It is the one definition of a name that passed: the
+// verdict (TokenTest.Passed) and the https.dns_tested audit row's count both use it.
+func (n NameTest) Passed() bool {
 	for _, s := range n.Steps {
 		if s.State != TestDone {
 			return false

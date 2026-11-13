@@ -101,13 +101,7 @@ func validationDetails(c acme.ValidationChanges) map[string]string {
 func dnsTestedDetails(t acme.TokenTest, dnsView acme.DNSView, typed bool) map[string]string {
 	passed := 0
 	for _, n := range t.Names {
-		ok := true
-		for _, s := range n.Steps {
-			if s.State != acme.TestDone {
-				ok = false
-			}
-		}
-		if ok {
+		if n.Passed() {
 			passed++
 		}
 	}

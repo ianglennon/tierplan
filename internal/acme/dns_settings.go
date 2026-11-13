@@ -192,7 +192,7 @@ func (m *Manager) runTokenTest(ctx context.Context, st State, provider, token st
 
 	t := TokenTest{Passed: true, Names: results}
 	for _, n := range results {
-		if !n.passed() {
+		if !n.Passed() {
 			t.Passed = false
 		}
 	}
