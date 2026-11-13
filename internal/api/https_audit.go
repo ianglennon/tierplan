@@ -124,15 +124,15 @@ func (a *runAuditor) after(ctx context.Context, rs acme.RunStart, err, problem e
 }
 
 // registeredDetails are the facts of a registered account: the contact it was registered with (left out when it has
-// none), that the terms were agreed, the CA directory and that an admin did it. The contact is the address the
-// account holds, never the text of a refused request.
+// none), that the terms were agreed, the CA directory host (the form the system row names it in) and that an admin
+// did it. The contact is the address the account holds, never the text of a refused request.
 func (d HTTPSDeps) registeredDetails(ctx context.Context, contact string) map[string]string {
 	details := map[string]string{"terms_agreed": "true", "trigger": "admin"}
 	if contact != "" {
 		details["contact"] = contact
 	}
 	if st, err := d.ACME.Status(ctx); err == nil && st.DirectoryURL != "" {
-		details["directory"] = st.DirectoryURL
+		details["directory"] = acme.DirectoryHost(st.DirectoryURL)
 	}
 	return details
 }

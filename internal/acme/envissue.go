@@ -180,7 +180,7 @@ func (m *Manager) registerAccount(ctx context.Context, steps *jobSteps, reg regi
 		if contact := strings.TrimPrefix(acct.Contact, "mailto:"); contact != "" {
 			d["contact"] = contact
 		}
-		if host := directoryHost(m.d.Client.Directory().URL); host != "" {
+		if host := DirectoryHost(m.d.Client.Directory().URL); host != "" {
 			d["directory"] = host
 		}
 		// The account exists whatever happens to the run, so the row is written even when the run was cancelled.
@@ -190,9 +190,9 @@ func (m *Manager) registerAccount(ctx context.Context, steps *jobSteps, reg regi
 	return nil
 }
 
-// directoryHost is the host of a CA directory URL, the form audit rows name the CA in; the whole URL when it does
+// DirectoryHost is the host of a CA directory URL, the form audit rows name the CA in; the whole URL when it does
 // not parse.
-func directoryHost(dirURL string) string {
+func DirectoryHost(dirURL string) string {
 	u, err := url.Parse(dirURL)
 	if err != nil || u.Host == "" {
 		return dirURL

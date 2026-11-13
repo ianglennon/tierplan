@@ -1158,7 +1158,7 @@ func (m *Manager) failed(ctx, bg context.Context, x *run, steps *jobSteps, runEr
 		} else {
 			// TierPlan dropped the account by itself, so the log says so, before the run is told to have ended.
 			m.record(bg, audit.ActionHTTPSAccountForgotten, audit.ResultSuccess, "", map[string]string{
-				"directory": directoryHost(m.d.Client.Directory().URL), "job": x.id,
+				"directory": DirectoryHost(m.d.Client.Directory().URL), "job": x.id,
 			})
 		}
 	}

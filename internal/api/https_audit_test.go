@@ -367,6 +367,10 @@ func TestHTTPSAuditRegister(t *testing.T) {
 		if d["contact"] != "ops@example.com" || d["terms_agreed"] != "true" || d["trigger"] != "admin" {
 			t.Errorf("details = %+v, want contact ops@example.com, terms_agreed true, trigger admin", d)
 		}
+		// The CA is named by its directory host, the same form as the system row of an env-driven registration.
+		if dir := d["directory"]; dir == "" || strings.Contains(dir, "/") {
+			t.Errorf("directory = %q, want the CA directory host only", dir)
+		}
 	})
 
 	t.Run("registered without an email", func(t *testing.T) {
