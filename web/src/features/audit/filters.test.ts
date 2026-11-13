@@ -793,9 +793,20 @@ describe("actionLabel (HTTPS)", () => {
   });
 
   it("names the section a settings change was about", () => {
-    expect(actionLabel("https.settings_updated", real, { section: "dns_credential" })).toBe(
-      "Changed the Cloudflare token",
-    );
+    expect(
+      actionLabel("https.settings_updated", real, {
+        section: "dns_credential",
+        fields: "dns_credential",
+        dns_credential: "replaced",
+      }),
+    ).toBe("Changed the Cloudflare token");
+    expect(
+      actionLabel("https.settings_updated", real, {
+        section: "dns_credential",
+        fields: "dns_credential",
+        dns_credential: "removed",
+      }),
+    ).toBe("Changed the Cloudflare token");
     expect(actionLabel("https.settings_updated", real, { section: "validation" })).toBe(
       "Changed the validation method",
     );
@@ -803,6 +814,19 @@ describe("actionLabel (HTTPS)", () => {
       "Changed the certificate profile",
     );
     expect(actionLabel("https.settings_updated", real, { section: "hsts" })).toBe("Changed HSTS");
+  });
+
+  // Review 17 IN-03: the row a save writes when the typed token failed its test is not a change.
+  it("does not call a failed token test a change of the token", () => {
+    expect(
+      actionLabel("https.settings_updated", real, {
+        section: "dns_credential",
+        failed_classes: "dns_auth",
+      }),
+    ).toBe("Cloudflare token failed its test, nothing saved");
+    expect(actionLabel("https.settings_updated", real, { section: "dns_credential" })).toBe(
+      "Cloudflare token failed its test, nothing saved",
+    );
   });
 
   it("reads the base label for an unknown or absent section", () => {

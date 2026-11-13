@@ -294,6 +294,8 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 		switch {
 		case !res.Saved && res.Test != nil:
 			row = errTokenTestFailed
+			// No dns_credential value: nothing was set, replaced or removed, and the audit list labels a
+			// dns_credential row without one as a failed test rather than a change (review 17 IN-03).
 			details = map[string]string{"section": sectionDNSCredential}
 			if classes := failedClasses(*res.Test); classes != "" {
 				details["failed_classes"] = classes

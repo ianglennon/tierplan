@@ -381,6 +381,7 @@
         "settings_updated_profile": "Changed the certificate profile",
         "settings_updated_hsts": "Changed HSTS",
         "settings_updated_dns_credential": "Changed the Cloudflare token",
+        "settings_updated_dns_credential_failed": "Cloudflare token failed its test, nothing saved",
         "issue_requested": "Asked for a Let's Encrypt certificate",
         "renew_requested": "Asked to renew the certificate",
         "issued": "Issued Let's Encrypt certificate",

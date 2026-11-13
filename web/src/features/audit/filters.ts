@@ -480,6 +480,15 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   if (key === "agent.revoked" && details?.reason === "replaced") {
     return t("audit.actions.agent.revoked_replaced");
   }
+  // A save refused because the typed Cloudflare token failed its test changed nothing. Its row has the
+  // section but no dns_credential value (set, replaced or removed), which every saved change has.
+  if (
+    key === "https.settings_updated" &&
+    details?.section === "dns_credential" &&
+    !details.dns_credential
+  ) {
+    return t("audit.actions.https.settings_updated_dns_credential_failed");
+  }
   // A change of an HTTPS setting names the section it was about, when the build has a label for it.
   if (key === "https.settings_updated" && details?.section) {
     if (HTTPS_SETTINGS_SECTIONS.includes(details.section)) {
