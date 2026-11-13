@@ -35,6 +35,11 @@ const (
 // a revoke. Nothing short of that is enough: a node that is only down, drained or
 // paused is still in the list, and a list that fails is never shown to it. It is
 // safe for concurrent use.
+//
+// It also finishes what an enrolment could not (Service.Enrol): a swarm agent whose node no
+// fresh list had shown enrols without retiring the earlier agent of its node, and at the first
+// list that shows the node the older offline row is retired as replaced, so the node's
+// node-local calls go to the agent that is there (Service.retireListedDuplicates).
 type Reaper struct {
 	svc *Service
 
@@ -109,6 +114,9 @@ func (r *Reaper) Observe(ctx context.Context, envID string, list dockerx.Cluster
 			delete(misses, id)
 		}
 	}
+	// The older rows of a node this list shows, left by enrolments no list had confirmed yet.
+	// An error is ignored as AutoRevoke's is: the next list tries again.
+	_ = r.svc.retireListedDuplicates(ctx, envID, listed)
 }
 
 // Forget drops what is counted for a removed environment.

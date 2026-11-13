@@ -361,6 +361,11 @@ const (
 	// replace each other forever (review 17-2 WR-02). It passes once the other agent
 	// is gone, so the agent waits the maximum backoff and tries again.
 	RefuseHostAlreadyConnected = "host_already_connected"
+	// RefuseNodeNotInSwarm means the swarm node an enrolling agent reports is not in the node
+	// list a manager of the environment last gave the server. It passes once the node is
+	// listed, so the agent retries with ordinary backoff: a node that just joined enrols at
+	// a retry after the next read of the list.
+	RefuseNodeNotInSwarm = "node_not_in_swarm"
 	// RefuseInternal means the server failed while handling an otherwise valid
 	// handshake. The agent should retry with backoff.
 	RefuseInternal = "internal_error"

@@ -6,6 +6,7 @@ package agents_test
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -293,5 +294,112 @@ func TestReaperObservingFromManyGoroutinesPassesTheRaceDetectorAndRevokesOnce(t 
 	}
 	if rows := auditRows(t, r.st, "agent.auto_revoked"); len(rows) != 1 {
 		t.Errorf("agent.auto_revoked rows = %v, want exactly one", rows)
+	}
+}
+
+// An enrolment whose node no fresh list had shown leaves the earlier row of the node active
+// (Service.Enrol, unverified). The first list that shows the node retires the older row that
+// is not connected: until then the oldest active row would stay the node's agent for routing.
+
+// unverifiedDuplicate is a swarm of three whose worker 2 enrolled again with no node list held,
+// so it has two active rows. The provider stays unset for the list: none is held.
+func unverifiedDuplicate(t *testing.T) (*rig, *swarmEnv, member) {
+	t.Helper()
+	r := newRig(t)
+	s := newSwarmEnv(t, r, "prod")
+	r.svc.WithNodeLists(&fakeNodeLists{})
+	again := r.enrolFacts(t, s.c, worker("ENG:W2-prod", "node-w2-prod", "wrk-2"))
+	if a := r.agentRow(t, s.w2.id); a.status != "active" {
+		t.Fatalf("the unverified enrolment retired the earlier row: %+v", a)
+	}
+	return r, s, again
+}
+
+func TestReaperAListThatShowsTheNodeRetiresTheOlderOfflineDuplicateAndKicksIt(t *testing.T) {
+	r, s, again := unverifiedDuplicate(t)
+
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
+
+	a := r.agentRow(t, s.w2.id)
+	if a.status != "revoked" || a.reason != "replaced" || a.revokedBy != "system:agent-reaper" {
+		t.Fatalf("the older row is %+v, want revoked as replaced by system:agent-reaper", a)
+	}
+	if a := r.agentRow(t, again.id); a.status != "active" {
+		t.Errorf("the newest row is %+v, want it active", a)
+	}
+	rows := auditRows(t, r.st, "agent.revoked")
+	if len(rows) != 1 || !strings.Contains(rows[0], `"replaced_by":"`+again.id+`"`) || !strings.Contains(rows[0], `"source":"node_list"`) ||
+		!strings.Contains(rows[0], `"reason":"replaced"`) || !strings.Contains(rows[0], `"swarm_node":"node-w2-prod"`) {
+		t.Fatalf("agent.revoked rows = %v, want one naming the newest row, the reason replaced and source=node_list", rows)
+	}
+	if k := s.kicked; len(k.agents) != 1 || k.agents[0] != s.w2.id || k.statusAtKick != "revoked" {
+		t.Errorf("sessions closed = %v (row was %q), want the older row's, after the commit", k.agents, k.statusAtKick)
+	}
+	if n := count(t, r.st, `SELECT COUNT(*) FROM agent_blocks WHERE env_id = ?`, s.c.EnvID); n != 0 {
+		t.Errorf("the retire made %d block rows, want none", n)
+	}
+	if got := activeAgentsOf(t, r, s.c.EnvID); got != 3 {
+		t.Errorf("active agents = %d, want 3: one per node", got)
+	}
+	// The node's agent for routing is the newest now.
+	if id, err := r.svc.ActiveAgentOfSwarmNode(r.ctx, s.c.EnvID, "node-w2-prod"); err != nil || id != again.id {
+		t.Errorf("the agent of the node is %q, %v; want the newest row %s", id, err, again.id)
+	}
+
+	// The next list finds nothing to retire.
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
+	if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 1 {
+		t.Errorf("a second list retired again: %v", rows)
+	}
+}
+
+func TestReaperAListLeavesAnOlderDuplicateThatIsConnected(t *testing.T) {
+	r, s, again := unverifiedDuplicate(t)
+	r.svc.WithLive(liveSet{s.w2.id: true})
+
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
+
+	if a := r.agentRow(t, s.w2.id); a.status != "active" {
+		t.Fatalf("the connected older row is %+v, want it left", a)
+	}
+	if a := r.agentRow(t, again.id); a.status != "active" {
+		t.Errorf("the newest row is %+v, want it active", a)
+	}
+	if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 0 {
+		t.Errorf("agent.revoked rows = %v, want none", rows)
+	}
+}
+
+func TestReaperANodeMissingFromTheListIsOnlyCountedNotRetiredAsADuplicate(t *testing.T) {
+	r, s, again := unverifiedDuplicate(t)
+
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1"), s.managerRow.ID) // w2 is not listed
+	for name, id := range map[string]string{"older": s.w2.id, "newest": again.id} {
+		if a := r.agentRow(t, id); a.status != "active" {
+			t.Errorf("after one miss the %s row is %+v, want active", name, a)
+		}
+	}
+	if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 0 {
+		t.Errorf("agent.revoked rows = %v, want none for a node the list lacks", rows)
+	}
+}
+
+func TestReaperASingleRowPerNodeRetiresNothing(t *testing.T) {
+	r := newRig(t)
+	s := newSwarmEnv(t, r, "prod")
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), s.managerRow.ID)
+	if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 0 {
+		t.Errorf("agent.revoked rows = %v, want none", rows)
+	}
+	if got := activeAgentsOf(t, r, s.c.EnvID); got != 3 {
+		t.Errorf("active agents = %d, want 3", got)
+	}
+}
+
+func TestReaperAListThatNamesNoAnswererRetiresNoDuplicate(t *testing.T) {
+	r, s, _ := unverifiedDuplicate(t)
+	s.reaper.Observe(r.ctx, s.c.EnvID, s.list("prod", "w1", "w2"), "")
+	if a := r.agentRow(t, s.w2.id); a.status != "active" {
+		t.Errorf("a list with no answerer retired the older row: %+v", a)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -788,6 +789,42 @@ func TestRunRefreshesEnvironmentsOnAnIntervalAndStopsWhenItsContextEnds(t *testi
 	case <-done:
 	case <-testsupport.Context(t).Done():
 		t.Fatal("Run did not return after its context ended")
+	}
+}
+
+func TestSwarmNodeIDsAreTheCachedNodeListAndAbsentWithoutOneOrWithoutAQuorum(t *testing.T) {
+	// No manager has answered yet: nothing is held.
+	bare := newSwarmRigBare(t, managerNodes(), nil)
+	if ids, at, ok := bare.c.SwarmNodeIDs(bare.env.ID); ok || ids != nil || !at.IsZero() {
+		t.Fatalf("before any read: %v %v %v, want no list", ids, at, ok)
+	}
+
+	s := newSwarmRig(t, managerNodes(), nil)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids, at, ok := s.c.SwarmNodeIDs(s.env.ID)
+	st, _ := s.c.Cached(s.env.ID)
+	slices.Sort(ids)
+	if !ok || !slices.Equal(ids, []string{"node-m1", "node-m2", "node-m3"}) || at.IsZero() || !at.Equal(st.FetchedAt) {
+		t.Fatalf("after a read: %v %v %v, want the three nodes and the time of the read (%v)", ids, at, ok, st.FetchedAt)
+	}
+	if _, _, ok := s.c.SwarmNodeIDs("no-such-environment"); ok {
+		t.Error("an unknown environment has a node list")
+	}
+
+	// A quorum that is lost makes the held list no basis for a refusal.
+	for i, a := range s.m {
+		cfg := managerConfig(i+1, s.nodes, nil)
+		cfg.QuorumLost = true
+		a.fake.Reconfigure(cfg)
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err == nil || ReasonFor(err) != ReasonNoQuorum {
+		t.Fatalf("Refresh = %v, want no_quorum", err)
+	}
+	if ids, _, ok := s.c.SwarmNodeIDs(s.env.ID); ok || ids != nil {
+		t.Errorf("while the quorum is lost: %v %v, want no list", ids, ok)
 	}
 }
 

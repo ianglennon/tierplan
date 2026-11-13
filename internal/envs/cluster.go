@@ -266,6 +266,25 @@ func (c *Clusters) Cached(envID string) (ClusterState, bool) {
 	return e.state, true
 }
 
+// SwarmNodeIDs is the IDs of the swarm nodes in the node list last read for envID, and when
+// that list was read. ok is false when no list is held (nothing was read yet, or the
+// environment is not a swarm) or the quorum is lost, and for a list without nodes: those are
+// no basis to say a node is not in the swarm. It does no I/O and takes no refresh lock, so
+// the agents service can ask on every enrolment. The agents service is its consumer: it
+// believes a node an agent claims at enrolment only when this list holds it, and it checks
+// how old the list is itself (the D-10 reaper's sibling, which reads the same lists).
+func (c *Clusters) SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time, ok bool) {
+	st, found := c.Cached(envID)
+	if !found || !st.Known() || len(st.Read.Nodes) == 0 {
+		return nil, time.Time{}, false
+	}
+	ids = make([]string, 0, len(st.Read.Nodes))
+	for _, n := range st.Read.Nodes {
+		ids = append(ids, n.ID)
+	}
+	return ids, st.FetchedAt, true
+}
+
 // SetRestartLoopMute puts a mute or an unmute of a service into the cached state at once, so
 // the page that asked sees it without waiting for the next read (the mute itself is in the
 // store already). The maps of a state are shared with whoever holds a copy, so they are

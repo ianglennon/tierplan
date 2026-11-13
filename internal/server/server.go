@@ -939,6 +939,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Grace: cfg.FailingServiceGrace, Log: log,
 	})
 	envSvc.WithClusters(clusters)
+	// An enrolling swarm agent's node is checked against the node list a manager last gave. This
+	// is set here, before the agent endpoint is mounted and so before any enrolment can run.
+	agentSvc.WithNodeLists(clusters)
 	// After a server upgrade the updater brings agents of an older release up to date
 	// through the tunnel, one message per swarm through its leading manager, one per
 	// standalone host, unless the environment or the host switched it off (D-24, D-28).

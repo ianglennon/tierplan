@@ -23,6 +23,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,17 +172,43 @@ type LiveSessions interface {
 	Live(agentID string) bool
 }
 
+// NodeLists says which nodes a swarm environment's managers last listed. envs.Clusters is one.
+type NodeLists interface {
+	// SwarmNodeIDs is the node IDs of the swarm of envID in the node list last read, and
+	// when it was read. ok is false when no list is held or the quorum is lost.
+	SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time, ok bool)
+}
+
+// nodeListMaxAge is how old a node list may be and still decide an enrolment. The cluster
+// cache re-reads every 15 seconds, so a list older than this means no manager has answered
+// for a while (the quorum is lost, the only manager is the one enrolling, or none is
+// connected), and a list that stale is no basis for a refusal.
+const nodeListMaxAge = 2 * time.Minute
+
+// nodeVerdict is what the node list says about the swarm node an enrolling agent reports.
+type nodeVerdict int
+
+const (
+	// nodeNotChecked: a standalone host, or no NodeLists provider is set.
+	nodeNotChecked nodeVerdict = iota
+	// nodeUnverified: no fresh list to check against, or the agent reports no node ID.
+	nodeUnverified
+	// nodeListed: a fresh list holds the node.
+	nodeListed
+)
+
 // Service creates agent environments and enrols agents.
 type Service struct {
 	st  *store.Store
 	v   *vault.Vault
 	aud *audit.Writer
 	now func() time.Time
-	// kicker, notifier and live are set before the service is used (WithKicker,
-	// WithNotifier, WithLive).
+	// kicker, notifier, live and nodes are set before the service is used (WithKicker,
+	// WithNotifier, WithLive, WithNodeLists).
 	kicker   SessionKicker
 	notifier EnvNotifier
 	live     LiveSessions
+	nodes    NodeLists
 
 	// seen is when last_seen_at was last written for each agent, so TouchLastSeen
 	// can skip all but one write a minute.
@@ -226,6 +254,45 @@ func (s *Service) WithNotifier(n EnvNotifier) *Service {
 func (s *Service) WithLive(l LiveSessions) *Service {
 	s.live = l
 	return s
+}
+
+// WithNodeLists tells the service where the node lists of swarm environments are, so an
+// enrolment checks the swarm node the agent reports against the list of a manager, and never
+// retires a node's earlier agent for a node no list has shown. Without one the node is not
+// checked and the retire behaves as it did before the check existed. Call it before the
+// service is used.
+func (s *Service) WithNodeLists(n NodeLists) *Service {
+	s.nodes = n
+	return s
+}
+
+// checkSwarmNode says what the node list makes of the swarm node f reports. A standalone
+// host, or a service with no NodeLists, is not checked. An agent that reports no node ID, and
+// a swarm with no fresh list (none held, the quorum lost, or older than nodeListMaxAge), is
+// unverified: accepted, but its earlier agents are left to the reaper. A fresh list that
+// holds the node is listed. A fresh list that lacks it is refused node_not_in_swarm: the node
+// the agent claims is not in the swarm, or joined since the list was read and enrols at a
+// retry. The check is on the node ID only; a hostname is as visible as a node ID, so
+// comparing it would prove nothing and would refuse a renamed host.
+func (s *Service) checkSwarmNode(envID string, f wire.Facts) (nodeVerdict, error) {
+	if f.Swarm == nil || s.nodes == nil {
+		return nodeNotChecked, nil
+	}
+	if f.Swarm.NodeID == "" {
+		return nodeUnverified, nil
+	}
+	ids, fetchedAt, ok := s.nodes.SwarmNodeIDs(envID)
+	if !ok || s.now().Sub(fetchedAt) > nodeListMaxAge {
+		return nodeUnverified, nil
+	}
+	if slices.Contains(ids, f.Swarm.NodeID) {
+		return nodeListed, nil
+	}
+	return nodeUnverified, &tunnel.RefuseError{
+		Code: wire.RefuseNodeNotInSwarm, AuditReason: wire.RefuseNodeNotInSwarm,
+		Detail: "this node is not in the swarm's node list as TierPlan last read it; a node that just joined enrols by itself once TierPlan reads the list again, within about a minute; " +
+			"a node removed from the swarm with docker node rm must join the swarm again",
+	}
 }
 
 var (
@@ -514,6 +581,13 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	if dec, err := CheckIdentity(ctx, s.st.RQ, envID, req.Facts); err != nil {
 		return tunnel.EnrolResult{}, s.identityRefused(ctx, envID, dec, err)
 	}
+	// The node an agent reports is a claim of a join-token holder. A fresh node list that lacks
+	// it refuses the enrolment before anything is written; with no fresh list the enrolment
+	// goes on, and retires no earlier agent (retireReplaced).
+	verdict, err := s.checkSwarmNode(envID, req.Facts)
+	if err != nil {
+		return tunnel.EnrolResult{}, err
+	}
 	if err := tunnel.CheckClock(req.ClockOffset); err != nil {
 		return tunnel.EnrolResult{}, err
 	}
@@ -577,15 +651,23 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	if err := dec.apply(ctx, q, envID, ts); err != nil {
 		return tunnel.EnrolResult{}, err
 	}
+	enrolled := map[string]string{"fingerprint": fingerprint, "node": host, "serial": leaf.Serial}
+	switch verdict {
+	case nodeListed:
+		enrolled["node_check"] = "listed"
+	case nodeUnverified:
+		enrolled["node_check"] = "unverified"
+	case nodeNotChecked:
+	}
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: rbac.System(enrolActor).AuditActor(), Action: audit.ActionAgentEnrolled,
 		TargetType: targetAgent, TargetID: agentID, EnvID: envID, Result: audit.ResultSuccess,
 		IP: req.IP, UserAgent: "tierplan-agent/" + req.AgentVersion,
-		Details: map[string]string{"fingerprint": fingerprint, "node": host, "serial": leaf.Serial},
+		Details: enrolled,
 	}); err != nil {
 		return tunnel.EnrolResult{}, fmt.Errorf("audit agent enrolled: %w", err)
 	}
-	replaced, err := s.retireReplaced(ctx, tx, q, envID, agentID, req, ts)
+	replaced, err := s.retireReplaced(ctx, tx, q, envID, agentID, req, ts, verdict != nodeUnverified)
 	if err != nil {
 		return tunnel.EnrolResult{}, err
 	}
@@ -619,7 +701,12 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 // claims a connected host's engine and node IDs to take over its routing. The
 // enrolment is refused host_already_connected instead, and the caller's rollback leaves
 // nothing of it.
-func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, envID, agentID string, req tunnel.EnrolRequest, ts int64) ([]string, error) {
+//
+// retire is false for a swarm enrolment whose node no fresh node list has shown
+// (checkSwarmNode: unverified). It still gets the live check above, but retires no earlier
+// row: the node ID is only the agent's own claim, and the reaper retires the older offline
+// rows once a list shows the node (retireListedDuplicates).
+func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, envID, agentID string, req tunnel.EnrolRequest, ts int64, retire bool) ([]string, error) {
 	var node string
 	if sw := req.Facts.Swarm; sw != nil {
 		node = sw.NodeID
@@ -639,12 +726,25 @@ func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Querie
 			}
 		}
 	}
-	actor := rbac.System(enrolActor).AuditActor()
+	if !retire {
+		return nil, nil
+	}
+	older := olds[:0:0]
+	for _, old := range olds {
+		if old.ID != agentID {
+			older = append(older, old)
+		}
+	}
+	return s.retireRows(ctx, tx, q, envID, rbac.System(enrolActor).AuditActor(), older, agentID, ts, req.IP, "tierplan-agent/"+req.AgentVersion, nil)
+}
+
+// retireRows revokes each of olds as replaced by replacedBy, in the caller's transaction, with
+// no block and one agent.revoked row each. extra adds details to every row. It returns the IDs
+// it revoked, for afterRevoke once the transaction has committed; a row that was revoked
+// already is skipped.
+func (s *Service) retireRows(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, envID string, actor audit.Actor, olds []sqlc.Agent, replacedBy string, ts int64, ip, ua string, extra map[string]string) ([]string, error) {
 	var ids []string
 	for _, old := range olds {
-		if old.ID == agentID {
-			continue
-		}
 		changed, err := q.RevokeAgent(ctx, sqlc.RevokeAgentParams{
 			RevokedAt: sql.NullInt64{Int64: ts, Valid: true}, RevokedBy: sql.NullString{String: actor.ID, Valid: true},
 			RevokeReason: sql.NullString{String: replacedReason, Valid: true}, ID: old.ID, EnvID: envID,
@@ -655,19 +755,109 @@ func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Querie
 		if changed == 0 {
 			continue
 		}
+		details := map[string]string{
+			"node": old.Name, "fingerprint": old.CertFingerprint, "reason": replacedReason,
+			"swarm_node": old.SwarmNodeID.String, "replaced_by": replacedBy,
+		}
+		maps.Copy(details, extra)
 		if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 			Actor: actor, Action: audit.ActionAgentRevoked, TargetType: targetAgent, TargetID: old.ID,
-			EnvID: envID, Result: audit.ResultSuccess, IP: req.IP, UserAgent: "tierplan-agent/" + req.AgentVersion,
-			Details: map[string]string{
-				"node": old.Name, "fingerprint": old.CertFingerprint, "reason": replacedReason,
-				"swarm_node": old.SwarmNodeID.String, "replaced_by": agentID,
-			},
+			EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua, Details: details,
 		}); err != nil {
 			return nil, fmt.Errorf("audit agent revoked: %w", err)
 		}
 		ids = append(ids, old.ID)
 	}
 	return ids, nil
+}
+
+// retireListedDuplicates is the retire an unverified swarm enrolment left for later (the
+// reaper calls it with each node list it believes). listed is the set of node IDs of that
+// list. Among the active agents of the environment that run on a listed swarm node, those of
+// one engine and node form a group; in a group of two or more the newest row stays and each
+// older row that is not connected now is revoked as replaced, with replaced_by the newest and
+// the detail source=node_list, under the reaper's actor. Without this an unverified
+// enrolment's older offline row would stay the oldest active row of the node, and
+// ActiveAgentOfSwarmNode would route node-local calls to a dead agent for good. A connected
+// older row is left, as at enrolment. A node the list does not show is not touched here.
+func (s *Service) retireListedDuplicates(ctx context.Context, envID string, listed map[string]struct{}) error {
+	// Most lists find nothing to retire; look before taking the writer.
+	rows, err := s.st.RQ.ListAgentsByEnv(ctx, envID)
+	if err != nil {
+		return fmt.Errorf("list the agents: %w", err)
+	}
+	if len(s.duplicatesToRetire(rows, listed)) == 0 {
+		return nil
+	}
+
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	// The writer is single, so this read sees every revoke committed before it.
+	rows, err = q.ListAgentsByEnv(ctx, envID)
+	if err != nil {
+		return fmt.Errorf("list the agents: %w", err)
+	}
+	actor := rbac.System(reaperActor).AuditActor()
+	ts := s.now().UTC().UnixNano()
+	var retired []string
+	for _, d := range s.duplicatesToRetire(rows, listed) {
+		ids, err := s.retireRows(ctx, tx, q, envID, actor, []sqlc.Agent{d.old}, d.newest, ts, "", "", map[string]string{"source": "node_list"})
+		if err != nil {
+			return err
+		}
+		retired = append(retired, ids...)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	s.afterRevoke(envID, retired...)
+	return nil
+}
+
+// duplicate is an older row of a swarm node that has a newer active row.
+type duplicate struct {
+	old    sqlc.Agent
+	newest string
+}
+
+// duplicatesToRetire is the older, not connected, active rows of the listed nodes that have a
+// newer active row of the same engine and node. rows are in created_at, id order.
+func (s *Service) duplicatesToRetire(rows []sqlc.Agent, listed map[string]struct{}) []duplicate {
+	type key struct{ engine, node string }
+	groups := map[key][]sqlc.Agent{}
+	var order []key
+	for _, a := range rows {
+		if a.Status != statusActive || !a.SwarmNodeID.Valid || a.SwarmNodeID.String == "" {
+			continue
+		}
+		if _, ok := listed[a.SwarmNodeID.String]; !ok {
+			continue
+		}
+		k := key{a.EngineID, a.SwarmNodeID.String}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], a)
+	}
+	var out []duplicate
+	for _, k := range order {
+		g := groups[k]
+		if len(g) < 2 {
+			continue
+		}
+		newest := g[len(g)-1].ID
+		for _, old := range g[:len(g)-1] {
+			if s.live != nil && s.live.Live(old.ID) {
+				continue
+			}
+			out = append(out, duplicate{old: old, newest: newest})
+		}
+	}
+	return out
 }
 
 // afterRevoke is what follows the commit of a revoke of agentIDs in envID that makes no
