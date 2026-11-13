@@ -606,9 +606,9 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 // row would otherwise stay active forever with no session, as an offline node whose
 // certificate never renews. Each is revoked with the reason replaced and no block (the host
 // is the one enrolling), under the enrolment's system actor, with one agent.revoked row
-// naming the agent that replaced it. A host that reports no engine ID cannot be matched and
-// retires nothing. It returns the IDs it revoked, for afterRevoke once the transaction has
-// committed.
+// naming the agent that replaced it. The engine ID is never empty here: CheckIdentity, in
+// the same transaction, refuses an enrolment that reports none. It returns the IDs it
+// revoked, for afterRevoke once the transaction has committed.
 //
 // An earlier agent that is connected now is never retired (review 17-2 WR-02, WR-03):
 // in every case the retire is for (the agent set its identity aside after a refused
@@ -620,9 +620,6 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 // enrolment is refused host_already_connected instead, and the caller's rollback leaves
 // nothing of it.
 func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, envID, agentID string, req tunnel.EnrolRequest, ts int64) ([]string, error) {
-	if req.Facts.EngineID == "" {
-		return nil, nil
-	}
 	var node string
 	if sw := req.Facts.Swarm; sw != nil {
 		node = sw.NodeID
