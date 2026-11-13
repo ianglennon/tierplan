@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -139,7 +140,9 @@ func hstsBody(v HSTSView) *HTTPSHSTSBody {
 
 // PutHTTPSHSTSInput is the body of the HSTS switch.
 type PutHTTPSHSTSInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Enabled bool `json:"enabled" doc:"True to send Strict-Transport-Security over a certificate that verifies for the public host; false to stop and tell browsers to forget it"`
 	}
 }
@@ -169,12 +172,31 @@ func registerHTTPSHSTS(r *httpx.Router, d HTTPSDeps) {
 		if d.HSTS == nil {
 			return nil, httpx.Problem(http.StatusServiceUnavailable, problemHTTPSUnavailable, "HSTS is not available on this server.")
 		}
+		// The stored choice is read first: the same value, or an echo of TIERPLAN_HSTS, is not a change and writes no row.
+		before, err := d.HSTS.HSTSView(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the HSTS state", err)
+		}
 		if err := d.HSTS.SetHSTSEnabled(ctx, in.Body.Enabled); err != nil {
 			var locked *ErrHSTSLocked
+			var problem error
 			if errors.As(err, &locked) {
-				return nil, httpx.Problem(http.StatusConflict, problemHSTSLocked, "Set by the "+locked.Var+" environment variable.")
+				problem = httpx.Problem(http.StatusConflict, problemHSTSLocked, "Set by the "+locked.Var+" environment variable.")
+			} else {
+				problem = acmeInternal(d.Log, "save the HSTS setting", err)
 			}
-			return nil, acmeInternal(d.Log, "save the HSTS setting", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		if before.Lock == nil && before.StoredEnabled != in.Body.Enabled {
+			details := map[string]string{
+				"section": sectionHSTS, "fields": "hsts", "hsts_from": onOff(before.StoredEnabled), "hsts_to": onOff(in.Body.Enabled),
+			}
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, nil, details); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
 		}
 		v, err := d.HSTS.HSTSView(ctx)
 		if err != nil {
@@ -182,4 +204,12 @@ func registerHTTPSHSTS(r *httpx.Router, d HTTPSDeps) {
 		}
 		return &HTTPSHSTSOutput{CacheControl: "no-store", Body: *hstsBody(v)}, nil
 	})
+}
+
+// onOff is the word an audit row uses for the HSTS switch.
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }

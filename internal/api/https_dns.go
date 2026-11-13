@@ -96,6 +96,37 @@ func validationDetails(c acme.ValidationChanges) map[string]string {
 	return details
 }
 
+// dnsTestedDetails are the facts of one Test token press: the provider, how many names were tested and passed, the
+// classes of any failures, and whose token it was (typed, saved or env). The token is not among them.
+func dnsTestedDetails(t acme.TokenTest, dnsView acme.DNSView, typed bool) map[string]string {
+	passed := 0
+	for _, n := range t.Names {
+		ok := true
+		for _, s := range n.Steps {
+			if s.State != acme.TestDone {
+				ok = false
+			}
+		}
+		if ok {
+			passed++
+		}
+	}
+	source := "saved"
+	switch {
+	case typed:
+		source = "typed"
+	case dnsView.TokenSource == acme.TokenSourceEnv:
+		source = "env"
+	}
+	details := map[string]string{
+		"provider": dnsView.Provider, "names": strconv.Itoa(len(t.Names)), "passed": strconv.Itoa(passed), "credential_source": source,
+	}
+	if classes := failedClasses(t); classes != "" {
+		details["failed_classes"] = classes
+	}
+	return details
+}
+
 // HTTPSACMEDNSErrorBody is the facts of one failed DNS step. It carries data only; the browser writes
 // the words.
 type HTTPSACMEDNSErrorBody struct {
@@ -196,10 +227,17 @@ type HTTPSACMEValidationOutput struct {
 
 // TestACMEDNSTokenInput is the body of the token test.
 type TestACMEDNSTokenInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Token     string   `json:"token,omitempty" doc:"The token to test, at most 256 printable characters with no space; anything else fails as dns_token_invalid with no request made. Leave out to test the saved token"`
 		Resolvers []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers to ask, as host or host:port. Leave out to use the saved list"`
 	}
+}
+
+// DeleteACMEDNSTokenInput is the token removal. It has no body; the hidden header is for the audit row.
+type DeleteACMEDNSTokenInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
 // HTTPSACMETokenTestOutput is the result of a token test.
@@ -309,7 +347,23 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 		}
 		res, err := d.ACME.TestToken(ctx, acme.TestRequest{Token: in.Body.Token, Resolvers: resolvers})
 		if err != nil {
-			return nil, acmeProblem(d.Log, "test the DNS token", err)
+			// A refused test (a lock, a bad resolver, a run in progress, a pause) records the problem type alone.
+			problem := acmeProblem(d.Log, "test the DNS token", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSDNSTested, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		st, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
+		var row error
+		if !res.Passed {
+			row = errTokenTestFailed
+		}
+		if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSDNSTested, row, dnsTestedDetails(res, st.DNS, strings.TrimSpace(in.Body.Token) != "")); aerr != nil {
+			return nil, auditFailed(d, aerr)
 		}
 		return &HTTPSACMETokenTestOutput{CacheControl: "no-store", Body: *tokenTestBody(res)}, nil
 	})
@@ -325,12 +379,27 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 			" while a run or a token test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " + problemACMECertFiles +
 			" while certificate files are set. Needs settings.write.",
 		Tags: []string{"https"},
-	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMENoContentOutput, error) {
+	}, write, func(ctx context.Context, in *DeleteACMEDNSTokenInput) (*HTTPSACMENoContentOutput, error) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
+		// Whether a token was saved is read first: removing none is not a change and writes no row.
+		before, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
 		if err := d.ACME.RemoveToken(ctx); err != nil {
-			return nil, acmeProblem(d.Log, "remove the DNS token", err)
+			problem := acmeProblem(d.Log, "remove the DNS token", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		if before.DNS.TokenSaved {
+			details := map[string]string{"section": sectionDNSCredential, "fields": "dns_credential", "dns_credential": "removed"}
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, nil, details); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
 		}
 		return &HTTPSACMENoContentOutput{CacheControl: "no-store"}, nil
 	})

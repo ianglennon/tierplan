@@ -384,7 +384,9 @@ type HTTPSACMEDirectoryOutput struct {
 
 // PutACMEProfileInput is the body of the profile save.
 type PutACMEProfileInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Profile string `json:"profile" maxLength:"64" pattern:"^[a-z0-9._-]*$" doc:"The profile to order with; empty is the CA's default"`
 	}
 }
@@ -493,8 +495,26 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
+		// The profile in use now is read first: a save of the same value, or an echo of TIERPLAN_ACME_PROFILE (which
+		// Status reports as the profile), is not a change and writes no row (D-14).
+		before, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
 		if err := d.ACME.SetProfile(ctx, in.Body.Profile); err != nil {
-			return nil, acmeProblem(d.Log, "save the Let's Encrypt profile", err)
+			problem := acmeProblem(d.Log, "save the Let's Encrypt profile", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		if before.Profile != in.Body.Profile {
+			details := map[string]string{
+				"section": sectionProfile, "fields": "profile", "profile_from": before.Profile, "profile_to": in.Body.Profile,
+			}
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, nil, details); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
 		}
 		out := &HTTPSACMEProfileOutput{CacheControl: "no-store"}
 		out.Body.Profile = in.Body.Profile
