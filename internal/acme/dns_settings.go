@@ -44,6 +44,36 @@ type ValidationInput struct {
 type SaveResult struct {
 	Saved bool
 	Test  *TokenTest
+	// Changes is what the save changed, decided under the same lock as the write and from the state it read
+	// there. It is the zero value when nothing was saved.
+	Changes ValidationChanges
+}
+
+// The credential changes a save can make (ValidationChanges.Credential).
+const (
+	// CredentialSet is a token saved where none was saved before.
+	CredentialSet = "set"
+	// CredentialReplaced is a token saved over one that was saved.
+	CredentialReplaced = "replaced"
+)
+
+// ValidationChanges is what one save of the validation settings changed, for the audit log. The from and to
+// of the challenge and of the resolvers are equal when that field did not change. The token is never in
+// it: Credential says only that one was set or replaced, "" when no token was typed.
+type ValidationChanges struct {
+	ChallengeFrom, ChallengeTo string
+	// ResolversFrom and ResolversTo are the normalised lists; empty means the zone's own name servers.
+	ResolversFrom, ResolversTo []string
+	// Credential is CredentialSet, CredentialReplaced or "".
+	Credential string
+}
+
+// ChallengeChanged is whether the validation method changed.
+func (c ValidationChanges) ChallengeChanged() bool { return c.ChallengeFrom != c.ChallengeTo }
+
+// ResolversChanged is whether the resolver list changed.
+func (c ValidationChanges) ResolversChanged() bool {
+	return !slices.Equal(c.ResolversFrom, c.ResolversTo)
 }
 
 // TestRequest is one Test token press.
@@ -162,7 +192,7 @@ func (m *Manager) runTokenTest(ctx context.Context, st State, provider, token st
 
 	t := TokenTest{Passed: true, Names: results}
 	for _, n := range results {
-		if !n.passed() {
+		if !n.Passed() {
 			t.Passed = false
 		}
 	}
@@ -271,6 +301,21 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 	}
 	methodChanged := challengeOf(st) != in.ChallengeType
 	changed := methodChanged || token != "" || !slices.Equal(st.DNSResolvers, resolvers)
+	changes := ValidationChanges{
+		ChallengeFrom: challengeOf(st), ChallengeTo: in.ChallengeType,
+		ResolversFrom: st.DNSResolvers, ResolversTo: resolvers,
+	}
+	if token != "" {
+		// The stored-only check: a token the environment gives is not one that is replaced.
+		wasSaved, err := m.d.Store.DNSTokenSaved(ctx, dnsProviderOf(st))
+		if err != nil {
+			return SaveResult{}, err
+		}
+		changes.Credential = CredentialSet
+		if wasSaved {
+			changes.Credential = CredentialReplaced
+		}
+	}
 	w := ValidationWrite{
 		ChallengeType: in.ChallengeType, Provider: dnsProviderOf(st), Resolvers: resolvers,
 		// Untested stays as it was unless this save changes something a run has not proved yet.
@@ -285,7 +330,7 @@ func (m *Manager) SaveValidation(ctx context.Context, in ValidationInput) (SaveR
 	if err := m.d.Store.SaveValidation(ctx, w); err != nil {
 		return SaveResult{}, err
 	}
-	return SaveResult{Saved: true, Test: test}, nil
+	return SaveResult{Saved: true, Test: test, Changes: changes}, nil
 }
 
 // TestToken tests a DNS token against the current certificate names without storing anything and

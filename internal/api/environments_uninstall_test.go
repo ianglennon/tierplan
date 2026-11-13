@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -266,7 +267,7 @@ func TestRemoveEnvironmentRejectsAQueryValueThatIsNotABoolean(t *testing.T) {
 	}
 }
 
-func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *testing.T) {
+func TestTheAgentListGivesTheManualCleanupCommandsThatReadTheSecretNamesFromTheService(t *testing.T) {
 	t.Parallel()
 	f := newAgentFix(t)
 	env := f.srv.NewEnvironment(t, "Production")
@@ -284,7 +285,11 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 		return body.ManualCleanup.Swarm, body.ManualCleanup.Standalone
 	}
 	swarm, standalone := read()
-	for _, want := range []string{"docker service rm tierplan-agent", "docker secret rm tierplan-agent-token-g1", "docker volume rm tierplan-agent"} {
+	for _, want := range []string{
+		"docker service ls -q --filter label=tierplan.agent=true",
+		`docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v"`,
+		`docker service rm "$v"`, `docker secret rm "$s"`, "docker volume rm tierplan-agent",
+	} {
 		if !strings.Contains(swarm, want) {
 			t.Errorf("the swarm cleanup lacks %q:\n%s", want, swarm)
 		}
@@ -296,13 +301,16 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 		t.Fatal("a cleanup command carries a join token")
 	}
 
-	// A rotation moves the secret name on.
+	// A rotation changes no cleanup text: the secret names are read from the service, so the same
+	// command removes whichever generation the swarm holds, and one installed with the old
+	// generation-only names.
 	f.inst.Apply("TierPlan", "https://tierplan.example")
 	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/token", ""); rec.code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", rec.code, rec.body)
 	}
-	if swarm, _ := read(); !strings.Contains(swarm, "docker secret rm tierplan-agent-token-g2") {
-		t.Fatalf("after a rotation the swarm cleanup still names the old secret:\n%s", swarm)
+	// The only secret text in it is the prefix every join token secret starts with.
+	if after, _ := read(); after != swarm || regexp.MustCompile(`tierplan-agent-token-g[0-9]`).MatchString(after) {
+		t.Fatalf("after a rotation the swarm cleanup changed or names a secret:\n%s", after)
 	}
 }
 

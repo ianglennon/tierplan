@@ -35,6 +35,15 @@ func enrolled(t *testing.T, srv *tunneltest.Server, env tunneltest.Environment) 
 	return c.Identity
 }
 
+// leave closes an agent's connection and waits until the hub has forgotten its
+// session, so the test's one host can enrol again: an enrolment of a host whose agent
+// is connected now is refused host_already_connected (review 17-2 WR-02).
+func leave(t *testing.T, srv *tunneltest.Server, c *tunneltest.Conn) {
+	t.Helper()
+	_ = c.WS.CloseNow()
+	awaitGone(t, srv.Hub, c.Identity.AgentID, "the hub to forget the session of the agent that left")
+}
+
 func TestHelloWithAValidCertificateAndSignatureRegistersASessionAndIsWelcomed(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{})
 	env := srv.NewEnvironment(t, "Production")
@@ -408,6 +417,8 @@ func TestCompatibleWindowIsEnforcedByTheHandshakeInBothModes(t *testing.T) {
 		if tc.ok {
 			if c.Welcome == nil {
 				t.Errorf("agent %s was refused: %+v", tc.agent, c.Refuse)
+			} else {
+				leave(t, srv, c)
 			}
 			continue
 		}
@@ -534,6 +545,7 @@ func TestClockSkewOfFortySecondsIsAcceptedWithAWarningAndTwentyWithout(t *testin
 		if d := st.ClockOffset - tc.skew; d < -time.Millisecond || d > time.Millisecond || st.ClockWarning != tc.warn {
 			t.Errorf("skew %v: session says offset %v warning %v, want about %v and %v", tc.skew, st.ClockOffset, st.ClockWarning, tc.skew, tc.warn)
 		}
+		leave(t, srv, c)
 	}
 }
 
@@ -563,9 +575,12 @@ func TestExporterBindingIsNotComparedBehindATrustedProxy(t *testing.T) {
 		"a different exporter":   {Token: env.Token, EKM: bytes.Repeat([]byte{7}, 32)},
 		"the exporter as it was": {Token: env.Token},
 	} {
-		if c := srv.Dial(t, a); c.Welcome == nil {
+		c := srv.Dial(t, a)
+		if c.Welcome == nil {
 			t.Errorf("%s: refused behind a trusted proxy: %+v", name, c.Refuse)
+			continue
 		}
+		leave(t, srv, c)
 	}
 }
 
@@ -583,6 +598,7 @@ func TestWelcomeCarriesTheServersCurrentPins(t *testing.T) {
 	if got := c.Welcome.Pins; len(got) != 1 || got[0] != "sha256/AAAA" {
 		t.Fatalf("welcome pins = %v, want [sha256/AAAA]", got)
 	}
+	leave(t, srv, c)
 
 	// The function is read on every handshake, so a change applies to the next one.
 	pins = []string{"sha256/BBBB", "sha256/AAAA"}

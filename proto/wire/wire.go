@@ -354,6 +354,20 @@ const (
 	RefuseTokenSuperseded   = "token_superseded"
 	RefuseInsecureTransport = "insecure_transport"
 	RefuseRateLimited       = "rate_limited"
+	// RefuseHostAlreadyConnected means the host that is enrolling already has an agent
+	// in this environment that is connected now: a second agent on one host, such as
+	// a leftover container next to a new one or a cloned VM. The enrolment is refused
+	// rather than retiring the connected agent, so two agents on one host do not
+	// replace each other forever (review 17-2 WR-02). It passes once the other agent
+	// is gone, so the agent waits the maximum backoff and tries again.
+	RefuseHostAlreadyConnected = "host_already_connected"
+	// RefuseNodeNotInSwarm means the swarm node an enrolling agent reports is not in the node
+	// list a manager of the environment last gave the server. It passes once the node is
+	// listed, so the agent retries with ordinary backoff: a node that just joined enrols at
+	// a retry after the next read of the list. The server sends it only to an agent of
+	// release 0.1.1 or later, which knows it; an older agent would exit on it at its first
+	// enrolment, so it is sent RefuseRateLimited with a wait instead.
+	RefuseNodeNotInSwarm = "node_not_in_swarm"
 	// RefuseInternal means the server failed while handling an otherwise valid
 	// handshake. The agent should retry with backoff.
 	RefuseInternal = "internal_error"

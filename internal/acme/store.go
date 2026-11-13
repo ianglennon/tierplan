@@ -232,6 +232,34 @@ func (s *Store) checkpoint(ctx context.Context, what string) error {
 	return nil
 }
 
+// metaFallbackNoted is the app_meta key that holds the lowercase hex serial of the expired Let's Encrypt certificate
+// whose fallback to self-signed is already in the audit log. It is what keeps a restart while the certificate is still
+// expired from writing a second https.fallback_started row. A backup does not carry it (app_meta is not restored), so
+// an install restored from a backup that resumes onto an expired certificate records that fallback once for itself.
+const metaFallbackNoted = "acme_fallback_noted"
+
+// FallbackNoted returns the serial of the expired certificate whose fallback is already in the audit log, "" when none
+// has been noted.
+func (s *Store) FallbackNoted(ctx context.Context) (string, error) {
+	v, err := s.st.RQ.GetMeta(ctx, metaFallbackNoted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the noted fallback: %w", err)
+	}
+	return v, nil
+}
+
+// NoteFallback records serial, the lowercase hex serial of an expired certificate, as the one whose fallback is in the
+// audit log, replacing any earlier one. now is the caller's clock.
+func (s *Store) NoteFallback(ctx context.Context, serial string, now time.Time) error {
+	if err := s.st.Q.UpsertMeta(ctx, sqlc.UpsertMetaParams{Key: metaFallbackNoted, Value: serial, UpdatedAt: now.UnixNano()}); err != nil {
+		return fmt.Errorf("note the fallback: %w", err)
+	}
+	return nil
+}
+
 // toNanos is the stored form of an instant: unix nanoseconds, with the zero time as 0.
 func toNanos(t time.Time) int64 {
 	if t.IsZero() {

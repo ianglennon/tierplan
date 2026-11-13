@@ -463,6 +463,79 @@ var phase12DetailKeys = map[string][]string{
 	audit.ActionImageBulkUpdated: {"bulk", "done", "total", "rolled_back", "skipped"},
 }
 
+// phase17DetailKeys maps every HTTPS action to the detail keys the plans that record it must use (Phase 17, SET-04).
+// A run's outcome names the certificate's facts and whether it is served, never an error's text. A key containing a
+// secret word would fail Record, so the whole table is recorded through the real Writer.
+var phase17DetailKeys = map[string][]string{
+	audit.ActionHTTPSAccountRegistered: {"contact", "terms_agreed", "directory", "trigger"},
+	audit.ActionHTTPSAccountForgotten:  {"directory", "job"},
+	audit.ActionHTTPSSettingsUpdated: {"section", "fields", "challenge_from", "challenge_to", "resolvers_from",
+		"resolvers_to", "dns_credential", "profile_from", "profile_to", "hsts_from", "hsts_to", "failed_classes"},
+	audit.ActionHTTPSIssueRequested: {"reused", "job", "valid_until", "refusals", "until"},
+	audit.ActionHTTPSRenewRequested: {"job", "refusals", "until"},
+	audit.ActionHTTPSIssued: {"trigger", "started_by", "job", "names", "issuer", "serial", "not_after", "profile",
+		"challenge", "served", "cancelled"},
+	audit.ActionHTTPSRenewed: {"trigger", "started_by", "job", "names", "issuer", "serial", "not_after", "profile",
+		"challenge", "served", "cancelled"},
+	audit.ActionHTTPSRunFailed:       {"trigger", "started_by", "job", "kind", "class", "host", "zone", "challenge"},
+	audit.ActionHTTPSResumed:         {},
+	audit.ActionHTTPSStopped:         {},
+	audit.ActionHTTPSDNSTested:       {"provider", "names", "passed", "failed_classes", "credential_source"},
+	audit.ActionHTTPSFallbackStarted: {"expired_at", "names"},
+	audit.ActionHTTPSFallbackEnded:   {"names", "not_after"},
+	audit.ActionHTTPSHSTSWithdrawn:   {"not_after", "source"},
+	audit.ActionHTTPSHSTSRestored:    {"not_after", "source"},
+}
+
+func TestEveryPhase17ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase17DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if len(phase17DetailKeys) != 15 {
+		t.Fatalf("phase17DetailKeys pins %d actions, want the 15 HTTPS actions", len(phase17DetailKeys))
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase17DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"https.account_registered": audit.ActionHTTPSAccountRegistered,
+		"https.account_forgotten":  audit.ActionHTTPSAccountForgotten,
+		"https.settings_updated":   audit.ActionHTTPSSettingsUpdated,
+		"https.issue_requested":    audit.ActionHTTPSIssueRequested,
+		"https.renew_requested":    audit.ActionHTTPSRenewRequested,
+		"https.issued":             audit.ActionHTTPSIssued,
+		"https.renewed":            audit.ActionHTTPSRenewed,
+		"https.run_failed":         audit.ActionHTTPSRunFailed,
+		"https.resumed":            audit.ActionHTTPSResumed,
+		"https.stopped":            audit.ActionHTTPSStopped,
+		"https.dns_tested":         audit.ActionHTTPSDNSTested,
+		"https.fallback_started":   audit.ActionHTTPSFallbackStarted,
+		"https.fallback_ended":     audit.ActionHTTPSFallbackEnded,
+		"https.hsts_withdrawn":     audit.ActionHTTPSHSTSWithdrawn,
+		"https.hsts_restored":      audit.ActionHTTPSHSTSRestored,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+	if audit.SystemACME.ID != "system:acme" || audit.SystemACME.Type != audit.ActorSystem {
+		t.Errorf("SystemACME = %+v", audit.SystemACME)
+	}
+}
+
 func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase12DetailKeys {

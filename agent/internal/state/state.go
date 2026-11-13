@@ -11,8 +11,10 @@ package state
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -38,8 +40,23 @@ const (
 	// EnvURLFile holds the TIERPLAN_AGENT_URL the agent last started with, so a
 	// different one on the next start is noticed (G-02-4b).
 	EnvURLFile = "env-url.json"
+	// EnrolTokenFile holds the SHA-256 of the join token the current identity was
+	// enrolled with, or last accepted with, never the token, so an agent started with
+	// a different token is noticed. An identity enrolled before the file existed has
+	// none.
+	EnrolTokenFile = "enrol-token.json" //nolint:gosec // G101: a file name, not a credential
+	// TriedTokenFile holds the SHA-256 of a join token the agent tried, with the
+	// current identity set aside, and that TierPlan refused auth_rejected, never the
+	// token, with the ID of that identity. The agent does not try that token again for
+	// that identity (review 17-2 WR-04). It is removed and set aside with the identity.
+	TriedTokenFile = "tried-token.json" //nolint:gosec // G101: a file name, not a credential
+	// StashDir is the subdirectory an identity is set aside in while the agent tries
+	// a join token after TierPlan rejected the identity (Stash). It is empty, or
+	// absent, at every other time.
+	StashDir = "previous"
 
 	fileMode  = 0o600
+	dirMode   = 0o700
 	tmpSuffix = ".tmp"
 )
 
@@ -154,7 +171,9 @@ func Save(dir string, s State) error {
 }
 
 // Discard removes the agent's identity from dir: identity.json, the key, the
-// certificate and the connected marker, and any temporary leftover of a save.
+// certificate, the record of the join token it was enrolled with, the record of a
+// token it tried and was refused, and the connected marker, and any temporary
+// leftover of a save.
 // Nothing else in the directory is touched, and no path is built from anything
 // but the constant names above, so a directory that holds other files (the pins,
 // an operator's own) keeps them.
@@ -171,8 +190,9 @@ func Discard(dir string) error {
 	}
 	var first error
 	for _, name := range []string{
-		CertFile, KeyFile, ConnectedFile,
-		IdentityFile + tmpSuffix, CertFile + tmpSuffix, KeyFile + tmpSuffix, ConnectedFile + tmpSuffix,
+		CertFile, KeyFile, EnrolTokenFile, TriedTokenFile, ConnectedFile,
+		IdentityFile + tmpSuffix, CertFile + tmpSuffix, KeyFile + tmpSuffix, EnrolTokenFile + tmpSuffix, TriedTokenFile + tmpSuffix,
+		ConnectedFile + tmpSuffix,
 	} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) && first == nil {
 			first = fmt.Errorf("discard %s: %w", name, err)
@@ -180,6 +200,125 @@ func Discard(dir string) error {
 	}
 	syncDir(dir) // best effort: the removals are as durable as the platform makes them
 	return first
+}
+
+// stashFiles are the files Stash moves, in the order it moves them: identity.json
+// first, so that from the first rename on the state directory reads as "not
+// enrolled" (a key or certificate without it is ignored), and the stash holds the
+// marker that says an identity is set aside. Restore moves them back in the reverse
+// order, so identity.json reappears in the state directory last, once the files it
+// needs are there.
+var stashFiles = []string{IdentityFile, CertFile, KeyFile, EnrolTokenFile, TriedTokenFile}
+
+// optionalStashFile reports whether name is a file of an identity that it may not have.
+func optionalStashFile(name string) bool { return name == EnrolTokenFile || name == TriedTokenFile }
+
+// Stash sets the identity in dir aside: identity.json, the key, the certificate, the
+// record of the join token it was enrolled with and the record of a token it tried
+// and was refused move into dir/previous by rename, so they keep their content and
+// their 0600 modes, and nothing is ever written in between. A crash at any point
+// leaves either the identity in dir or its marker in the stash, and ResolveStash at
+// the next start puts it back. On an error Stash tries to put back what it moved; the
+// identity is in dir again unless that failed too, which Load tells.
+//
+// The stash is for an attempt to enrol with a join token that may be refused: the
+// agent keeps the identity it set aside until the new one is accepted (then
+// DiscardStash), and takes it back if it is not (Restore).
+func Stash(dir string) error {
+	if _, ok, err := Load(dir); err != nil || !ok {
+		if err == nil {
+			err = errors.New("there is no identity to set aside")
+		}
+		return fmt.Errorf("set the agent identity aside: %w", err)
+	}
+	// What a stash left over holds is not trusted: ResolveStash dealt with it at the
+	// start, so anything here now is debris.
+	if err := DiscardStash(dir); err != nil {
+		return fmt.Errorf("set the agent identity aside: %w", err)
+	}
+	stash := filepath.Join(dir, StashDir)
+	if err := os.Mkdir(stash, dirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("set the agent identity aside: %w", err)
+	}
+	for _, name := range stashFiles {
+		err := os.Rename(filepath.Join(dir, name), filepath.Join(stash, name))
+		if err == nil || (errors.Is(err, fs.ErrNotExist) && optionalStashFile(name)) {
+			continue // an identity enrolled before the record existed has none, and most never tried a token
+		}
+		// Put back what moved; Restore moves only what the stash holds.
+		if _, rerr := Restore(dir); rerr != nil {
+			return fmt.Errorf("set the agent identity aside: %w (and putting it back failed: %v)", err, rerr)
+		}
+		return fmt.Errorf("set the agent identity aside: %w", err)
+	}
+	syncDir(stash)
+	syncDir(dir)
+	return nil
+}
+
+// Restore moves an identity Stash set aside back into dir, the files the stash holds
+// first and identity.json last, and removes the empty stash directory. It reports
+// whether there was one to move: a stash with no identity.json in it holds no
+// identity, and Restore leaves it alone. A file of the identity that the stash does
+// not hold is still in dir, where a Stash that was interrupted left it, and stays.
+func Restore(dir string) (bool, error) {
+	stash := filepath.Join(dir, StashDir)
+	if _, err := os.Stat(filepath.Join(stash, IdentityFile)); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("restore the agent identity: %w", err)
+	}
+	for i := len(stashFiles) - 1; i >= 0; i-- {
+		name := stashFiles[i]
+		if err := os.Rename(filepath.Join(stash, name), filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false, fmt.Errorf("restore the agent identity: %w", err)
+		}
+	}
+	syncDir(dir)
+	_ = os.Remove(stash) // only when empty; an operator's own file keeps it
+	return true, nil
+}
+
+// DiscardStash removes an identity Stash set aside, identity.json first so that a
+// crash part way leaves no marker, and then the stash directory if it is empty.
+// Nothing but the constant names of an identity is removed. A stash that does not
+// exist is no error.
+func DiscardStash(dir string) error {
+	stash := filepath.Join(dir, StashDir)
+	var first error
+	for _, name := range stashFiles {
+		if err := os.Remove(filepath.Join(stash, name)); err != nil && !errors.Is(err, fs.ErrNotExist) && first == nil {
+			first = fmt.Errorf("discard the identity set aside: %s: %w", name, err)
+		}
+	}
+	_ = os.Remove(stash) // only when empty; an operator's own file keeps it
+	syncDir(dir)
+	return first
+}
+
+// ResolveStash settles a stash an earlier run left behind, before the identity is
+// loaded. A stash is left only when the agent stopped while it was trying a join
+// token with its identity set aside, so:
+//
+//   - with no identity in dir, the attempt never finished: the identity is put back
+//     (restored is true) and the agent goes on with it;
+//   - with an identity in dir, the new enrolment was saved before the stop, and the
+//     stash is the old identity that it replaced: it is removed;
+//   - a stash without identity.json holds no identity and its leftovers are removed.
+func ResolveStash(dir string) (restored bool, err error) {
+	if _, err := os.Stat(filepath.Join(dir, StashDir)); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(dir, IdentityFile)); err == nil {
+		return false, DiscardStash(dir)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("read the agent identity: %w", err)
+	}
+	restored, err = Restore(dir)
+	if err != nil || restored {
+		return restored, err
+	}
+	return false, DiscardStash(dir)
 }
 
 // syncDir flushes the directory entry changes of dir to disk, ignoring failures.
@@ -556,6 +695,131 @@ func SaveEnvURL(dir, addr string) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("save %s: %w", EnvURLFile, err)
 	}
+	return nil
+}
+
+// enrolTokenRecord is the content of enrol-token.json.
+type enrolTokenRecord struct {
+	SHA256 string `json:"sha256"`
+}
+
+// TokenHash is the form in which enrol-token.json keeps a join token: the
+// lower-case hex SHA-256 of it. A join token carries 32 random bytes, so the hash
+// gives nothing away; it only tells two tokens apart.
+func TokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// validTokenHash reports whether s is what TokenHash returns.
+func validTokenHash(s string) bool {
+	if len(s) != 2*sha256.Size || strings.ToLower(s) != s {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// LoadEnrolToken reads the hash of the join token the identity in dir was enrolled
+// with. A directory with no enrol-token.json, or one holding something that is not
+// such a hash, has none: ok is false and the error nil. An identity enrolled
+// before the record existed has none. A file that cannot be read or parsed is an
+// error.
+func LoadEnrolToken(dir string) (hash string, ok bool, err error) {
+	raw, err := os.ReadFile(filepath.Join(dir, EnrolTokenFile)) //nolint:gosec // the name is a constant joined to the agent's own state directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", EnrolTokenFile, err)
+	}
+	var rec enrolTokenRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return "", false, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, EnrolTokenFile), err)
+	}
+	if !validTokenHash(rec.SHA256) {
+		return "", false, nil
+	}
+	return rec.SHA256, true, nil
+}
+
+// SaveEnrolToken records hash, a TokenHash of the join token the identity in dir
+// was just enrolled with, or that the agent held when TierPlan last accepted the
+// identity's hello, atomically and private to the agent. It is saved after the
+// identity, so a crash in between leaves a record that does not match, which costs
+// at most one attempt to enrol that the agent did not need (and it keeps its
+// identity through that, see Stash); never one that matches an identity it does not
+// belong to.
+func SaveEnrolToken(dir, hash string) error {
+	if !validTokenHash(hash) {
+		return errors.New("state: the join token record needs a SHA-256 in hex")
+	}
+	data, err := json.MarshalIndent(enrolTokenRecord{SHA256: hash}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal the join token record: %w", err)
+	}
+	tmp := filepath.Join(dir, EnrolTokenFile+tmpSuffix)
+	if err := writeFile(tmp, append(data, '\n')); err != nil {
+		return fmt.Errorf("save %s: %w", EnrolTokenFile, err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, EnrolTokenFile)); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("save %s: %w", EnrolTokenFile, err)
+	}
+	syncDir(dir)
+	return nil
+}
+
+// triedTokenRecord is the content of tried-token.json.
+type triedTokenRecord struct {
+	SHA256  string `json:"sha256"`
+	AgentID string `json:"agentId"`
+}
+
+// LoadTriedToken reads the hash of the join token the agent tried with the identity
+// agentID set aside, and that TierPlan refused. A directory with no tried-token.json,
+// one holding something that is not such a hash, or a record of another identity
+// (left by an identity that was replaced) has none: ok is false and the error nil. A
+// file that cannot be read or parsed is an error.
+func LoadTriedToken(dir, agentID string) (hash string, ok bool, err error) {
+	raw, err := os.ReadFile(filepath.Join(dir, TriedTokenFile)) //nolint:gosec // the name is a constant joined to the agent's own state directory
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", TriedTokenFile, err)
+	}
+	var rec triedTokenRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return "", false, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, TriedTokenFile), err)
+	}
+	if !validTokenHash(rec.SHA256) || rec.AgentID == "" || rec.AgentID != agentID {
+		return "", false, nil
+	}
+	return rec.SHA256, true, nil
+}
+
+// SaveTriedToken records hash, a TokenHash of the join token the agent just tried
+// with the identity agentID set aside and that TierPlan refused, atomically and
+// private to the agent, so the agent does not try it again for that identity, also
+// after a restart. It is saved after the identity was put back.
+func SaveTriedToken(dir, agentID, hash string) error {
+	if !validTokenHash(hash) || agentID == "" {
+		return errors.New("state: the tried token record needs a SHA-256 in hex and an agent ID")
+	}
+	data, err := json.MarshalIndent(triedTokenRecord{SHA256: hash, AgentID: agentID}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal the tried token record: %w", err)
+	}
+	tmp := filepath.Join(dir, TriedTokenFile+tmpSuffix)
+	if err := writeFile(tmp, append(data, '\n')); err != nil {
+		return fmt.Errorf("save %s: %w", TriedTokenFile, err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, TriedTokenFile)); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("save %s: %w", TriedTokenFile, err)
+	}
+	syncDir(dir)
 	return nil
 }
 

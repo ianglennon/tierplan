@@ -266,7 +266,7 @@ func TestRevokeRacingAHelloFiftyTimesNeverLeavesASessionForTheRevokedAgent(t *te
 func TestKickEnvClosesEverySessionOfOneEnvironmentAndNoOtherAndKickOfNobodyIsHarmless(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{})
 	one, two := srv.NewEnvironment(t, "One"), srv.NewEnvironment(t, "Two")
-	a, b := srv.Enrol(t, one), srv.Enrol(t, one)
+	a, b := enrolNode(t, srv, one, "node-a"), enrolNode(t, srv, one, "node-b")
 	other := srv.Enrol(t, two)
 	srv.Events.WaitLen(t, 3)
 

@@ -117,7 +117,8 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 			if h.notifier != nil {
 				h.notifier.AgentRefused(refusalEnv(a), re.Code, clip(a.Mode, 16), clip(a.Facts.Hostname, maxAuditNode), ip)
 			}
-			h.turnAway(ctx, c, ip, a.Mode, a.Facts.Hostname, re.Code, re.Detail, re.AuditReason)
+			h.recordRefusal(ctx, ip, re.Code, a.Mode, a.Facts.Hostname, re.AuditReason)
+			h.refuseAfter(ctx, c, re.Code, re.Detail, re.RetryAfter)
 		} else {
 			h.log.Error("agent handshake failed", "ip", ip, "mode", clip(a.Mode, 16), "error", err)
 			h.refuse(ctx, c, wire.RefuseInternal, "the server failed to verify this agent; it will retry")

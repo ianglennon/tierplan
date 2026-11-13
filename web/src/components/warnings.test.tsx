@@ -17,7 +17,7 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { ENV_WARNINGS_KEY } from "@/api/warnings";
 import { Toaster } from "@/components/ui/sonner";
-import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
+import { bellEntries, DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { meQueryOptions } from "@/hooks/use-me";
@@ -53,7 +53,7 @@ interface Sent {
 
 let sent: Sent[] = [];
 let me = ADMIN;
-let items: Array<Record<string, string | number>> = [];
+let items: Array<Record<string, unknown>> = [];
 let ackStatus = 204;
 // What GET /api/environments/warnings answers, how, and when (a gate holds the
 // answer back to show the first-load state).
@@ -134,6 +134,7 @@ function makeRouter() {
       page("/audit"),
       page("/registries"),
       page("/settings/backup"),
+      page("/settings/https"),
       page("/env/$envId"),
       page("/env/$envId/services"),
       page("/env/$envId/services/$serviceId"),
@@ -1689,5 +1690,455 @@ describe("HealthBell auto-deploy items", () => {
     expect(await screen.findByText("<b>web</b> was auto-deployed and reverted drift")).toBeTruthy();
     expect(document.querySelector("b")).toBeNull();
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+// The HTTPS items of the bell (plan 17-06, OBS-04, D-01 to D-05).
+const httpsWarning = (id: string, https: Record<string, unknown> = {}) => ({ id, https });
+
+// The words of an open bell, to check that no empty placeholder or dangling "until ." got in.
+const bellText = () => document.querySelector("[data-slot=popover-content]")?.textContent ?? "";
+
+describe("HealthBell HTTPS items", () => {
+  it("words a failed renewal with the HTTPS page's own copy and links to Settings > HTTPS", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "rate_limited",
+        host: "tierplan.example.org",
+        nextAttemptAt: "2026-11-13T14:05:00Z",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The certificate couldn't be renewed")).toBeTruthy();
+    const at = formatClock("2026-11-13T14:05:00Z");
+    expect(
+      screen.getByText(
+        `Let's Encrypt is limiting requests. TierPlan waits until ${at} before it tries again. There is nothing to do.`,
+      ),
+    ).toBeTruthy();
+    const links = within(screen.getByRole("list")).getAllByRole("link", {
+      name: "Open HTTPS settings",
+    });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/settings/https");
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("appends the next attempt when the class's fix does not name it", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "validation_unreachable",
+        host: "tierplan.example.org",
+        port: 7480,
+        nextAttemptAt: "2026-11-13T14:05:00Z",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    const at = formatClock("2026-11-13T14:05:00Z");
+    const text = bellText();
+    expect(text).toContain(
+      "couldn't reach http://tierplan.example.org/.well-known/acme-challenge/.",
+    );
+    expect(text).toContain("-p 80:7480");
+    expect(text).toContain(`Next attempt ${at}.`);
+    expect(text).not.toContain("{{");
+  });
+
+  it("adds no next-attempt sentence when none is known", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "validation_unreachable",
+        host: "tierplan.example.org",
+        port: 7480,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The certificate couldn't be renewed")).toBeTruthy();
+    expect(bellText()).not.toContain("Next attempt");
+    expect(bellText()).not.toContain("{{");
+  });
+
+  it("is titled issue, not renew, when no certificate exists yet", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "validation_unreachable",
+        host: "tierplan.example.org",
+        port: 7480,
+        noCertificate: true,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The certificate couldn't be issued")).toBeTruthy();
+    expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull();
+  });
+
+  it("falls back to the internal copy for a class it does not know, and to the public host for no host", async () => {
+    items = [httpsWarning("https_renewal_failed", { class: "from_the_future" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText(/Something went wrong inside TierPlan\./)).toBeTruthy();
+    expect(bellText()).not.toContain("{{");
+
+    cleanup();
+    queryClient.clear();
+    items = [httpsWarning("https_renewal_failed", { class: "validation_unreachable", port: 7480 })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText(/reach http:\/\/the public host\//)).toBeTruthy();
+    expect(bellText()).not.toContain("{{");
+  });
+
+  it("renders no HTTPS item when none is in the feed, and keeps the empty line", async () => {
+    items = [];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(document.querySelector('[data-warning^="https_"]')).toBeNull();
+  });
+
+  it("shows the skeleton and a zero count until the first answer, with no HTTPS item before it", async () => {
+    me = ADMIN_AND_READER;
+    items = [httpsWarning("https_renewal_failed", { class: "internal" })];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    envGate = gate;
+    renderWarnings();
+    await openBell();
+    await waitFor(() =>
+      expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThan(0),
+    );
+    expect(badge()).toBeNull();
+    expect(document.querySelector('[data-warning^="https_"]')).toBeNull();
+    release();
+    expect(await screen.findByText("The certificate couldn't be renewed")).toBeTruthy();
+    expect(badge()).toBe("1");
+  });
+
+  it("shows nothing to someone who is not an instance admin", async () => {
+    me = VIEWER;
+    items = [httpsWarning("https_renewal_failed", { class: "internal" })];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull();
+  });
+
+  it("follows the link to Settings > HTTPS and closes the list", async () => {
+    items = [httpsWarning("https_renewal_failed", { class: "internal" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "Open HTTPS settings" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/https"));
+    await waitFor(() =>
+      expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull(),
+    );
+  });
+
+  // The one link of an item, read inside the item so a missing or doubled link is caught per kind.
+  const itemLinks = (id: string) => {
+    const item = document.querySelector(`[data-warning="${id}"]`);
+    if (!item) throw new Error(`no ${id} item in the bell`);
+    return within(item as HTMLElement).queryAllByRole("link", { name: "Open HTTPS settings" });
+  };
+
+  it("lists the fallback as an error ahead of every warning, saying how long ago", async () => {
+    items = [
+      { id: "key_backup", keyPath: "/data/tierplan.key" },
+      httpsWarning("https_renewal_failed", { class: "internal" }),
+      httpsWarning("https_cert_fallback", {
+        notAfter: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 3 items");
+    expect(await screen.findByText("The HTTPS certificate expired")).toBeTruthy();
+    expect(listed().map(([id]) => id)).toEqual([
+      "https_cert_fallback",
+      "https_renewal_failed",
+      "key_backup",
+    ]);
+    expect(bellText()).toContain("The certificate expired 2 d ago. TierPlan is serving its");
+    expect(itemLinks("https_cert_fallback")).toHaveLength(1);
+    expect(itemLinks("https_cert_fallback")[0]?.getAttribute("href")).toBe("/settings/https");
+  });
+
+  describe.each([
+    ["restore", {}, /restored from a backup, so it won't issue or renew until you resume\./],
+    [
+      "told_to_wait",
+      { until: "2026-11-13T14:05:00Z" },
+      /asked TierPlan to wait until \d{1,2}:\d{2}.*\. Automatic attempts continue/,
+    ],
+    ["told_to_wait", {}, /asked TierPlan to wait\. Automatic attempts continue/],
+    [
+      "failure_guard",
+      { until: "2026-11-13T14:05:00Z" },
+      /holds back until \d{1,2}:\d{2}.*\. Fix the cause/,
+    ],
+    ["failure_guard", {}, /holds back for now\. Fix the cause/],
+  ])("the paused item, reason %s", (reason, extra, body) => {
+    it(`words it ${JSON.stringify(extra)} with no empty placeholder and one link`, async () => {
+      items = [httpsWarning("https_acme_paused", { reason, ...extra })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("Let's Encrypt is paused")).toBeTruthy();
+      expect(bellText()).toMatch(body);
+      expect(bellText()).not.toMatch(/until \./);
+      expect(bellText()).not.toContain("{{");
+      expect(itemLinks("https_acme_paused")).toHaveLength(1);
+      expect(itemLinks("https_acme_paused")[0]?.getAttribute("href")).toBe("/settings/https");
+    });
+  });
+
+  it.each([
+    [600, "10 minutes ahead of Let's Encrypt's"],
+    [-600, "10 minutes behind Let's Encrypt's"],
+    [-10_800, "3 hours behind Let's Encrypt's"],
+  ])("says by how much and which way the clock is off (%s s)", async (offsetSeconds, words) => {
+    items = [httpsWarning("https_clock_off", { offsetSeconds })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The server clock is off")).toBeTruthy();
+    expect(bellText()).toContain(`TierPlan's clock is ${words}`);
+    expect(bellText()).toContain("Fix NTP on the TierPlan host.");
+    expect(bellText()).not.toContain("{{");
+    expect(itemLinks("https_clock_off")).toHaveLength(1);
+    expect(itemLinks("https_clock_off")[0]?.getAttribute("href")).toBe("/settings/https");
+  });
+
+  describe("the expiring item", () => {
+    const inDays = (days: number) =>
+      new Date(Date.now() + days * 86_400_000 + 60_000).toISOString();
+
+    it("words a Let's Encrypt certificate that has not renewed with the time left", async () => {
+      items = [
+        httpsWarning("https_cert_expiring", { source: "lets_encrypt", notAfter: inDays(5) }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("The HTTPS certificate expires soon")).toBeTruthy();
+      expect(bellText()).toContain(
+        "The certificate expires in 5 days and hasn't renewed. Open the HTTPS page to see why.",
+      );
+      expect(itemLinks("https_cert_expiring")).toHaveLength(1);
+    });
+
+    it("tells certificate files to be replaced, and says so once they have expired", async () => {
+      items = [httpsWarning("https_cert_expiring", { source: "cert_files", notAfter: inDays(3) })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("The HTTPS certificate expires soon")).toBeTruthy();
+      expect(bellText()).toContain(
+        "The certificate files expire in 3 days. TierPlan never renews them. Replace the files and it picks the new ones up within a minute.",
+      );
+
+      cleanup();
+      queryClient.clear();
+      items = [httpsWarning("https_cert_expiring", { source: "cert_files", notAfter: inDays(-2) })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("The HTTPS certificate has expired")).toBeTruthy();
+      expect(bellText()).toContain("The certificate files expired 1 d ago.");
+      expect(bellText()).not.toContain("expires soon");
+      expect(itemLinks("https_cert_expiring")).toHaveLength(1);
+    });
+
+    // Review 17 IN-05: a served certificate that has already expired is an error, listed ahead of
+    // every warning like the fallback; one that only expires soon stays a warning.
+    it("lists an expired certificate as an error and one that expires soon as a warning", async () => {
+      items = [
+        { id: "key_backup", keyPath: "/data/tierplan.key" },
+        httpsWarning("https_renewal_failed", { class: "internal" }),
+        httpsWarning("https_cert_expiring", { source: "cert_files", notAfter: inDays(-2) }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 3 items");
+      expect(await screen.findByText("The HTTPS certificate has expired")).toBeTruthy();
+      expect(listed().map(([id]) => id)).toEqual([
+        "https_cert_expiring",
+        "https_renewal_failed",
+        "key_backup",
+      ]);
+
+      cleanup();
+      queryClient.clear();
+      items = [
+        { id: "key_backup", keyPath: "/data/tierplan.key" },
+        httpsWarning("https_renewal_failed", { class: "internal" }),
+        httpsWarning("https_cert_expiring", { source: "cert_files", notAfter: inDays(3) }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 3 items");
+      expect(await screen.findByText("The HTTPS certificate expires soon")).toBeTruthy();
+      expect(listed().map(([id]) => id)).toEqual([
+        "https_renewal_failed",
+        "https_cert_expiring",
+        "key_backup",
+      ]);
+    });
+
+    it("judges the expiry against the time it is given", () => {
+      const notAfter = "2026-11-13T12:00:00Z";
+      const w = {
+        id: "https_cert_expiring" as const,
+        https: { source: "cert_files" as const, notAfter },
+      };
+      const severity = (now: number) =>
+        bellEntries([], { keyBackup: false, proxy: [], https: [w] }, now)[0]?.severity;
+      expect(severity(Date.parse(notAfter) - 1)).toBe("warning");
+      expect(severity(Date.parse(notAfter))).toBe("error");
+      const noTime = {
+        id: "https_cert_expiring" as const,
+        https: { source: "cert_files" as const },
+      };
+      expect(
+        bellEntries([], { keyBackup: false, proxy: [], https: [noTime] }, Date.parse(notAfter))[0]
+          ?.severity,
+      ).toBe("warning");
+    });
+
+    it("words any other source, before and after the end, without a dangling future tense", async () => {
+      items = [httpsWarning("https_cert_expiring", { source: "self_signed", notAfter: inDays(4) })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText(/The certificate expires in 4 days\./)).toBeTruthy();
+      expect(bellText()).toContain("Open the HTTPS page to replace it.");
+
+      cleanup();
+      queryClient.clear();
+      items = [httpsWarning("https_cert_expiring", { source: "", notAfter: inDays(-3) })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("The HTTPS certificate has expired")).toBeTruthy();
+      expect(bellText()).toContain("The certificate expired 2 d ago.");
+      expect(bellText()).not.toContain("{{");
+    });
+  });
+
+  describe("the TXT-left item", () => {
+    it("names the record, with no tail for one", async () => {
+      items = [
+        httpsWarning("https_txt_left", { record: "_acme-challenge.tierplan.example.org", more: 0 }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("A DNS record was left behind")).toBeTruthy();
+      expect(bellText()).toContain(
+        "TierPlan couldn't delete _acme-challenge.tierplan.example.org from your Cloudflare zone. It keeps trying. If it stays, delete the record in Cloudflare.",
+      );
+      expect(bellText()).not.toContain("more record");
+      expect(itemLinks("https_txt_left")).toHaveLength(1);
+    });
+
+    it.each([
+      [1, "1 more record."],
+      [2, "2 more records."],
+    ])("appends the plural tail for %s more", async (more, tail) => {
+      items = [httpsWarning("https_txt_left", { record: "_acme-challenge.a.example.org", more })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("A DNS record was left behind")).toBeTruthy();
+      expect(bellText()).toContain(`delete the record in Cloudflare. ${tail}`);
+    });
+
+    it("says the retry waits for Let's Encrypt when retries are paused", async () => {
+      items = [
+        httpsWarning("https_txt_left", {
+          record: "_acme-challenge.a.example.org",
+          retryPaused: true,
+        }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("A DNS record was left behind")).toBeTruthy();
+      expect(bellText()).toContain("It tries again once Let's Encrypt is running.");
+      expect(bellText()).not.toContain("It keeps trying.");
+    });
+  });
+
+  describe("all six items together", () => {
+    const ALL = [
+      "https_txt_left",
+      "https_cert_expiring",
+      "https_clock_off",
+      "https_acme_paused",
+      "https_renewal_failed",
+      "https_cert_fallback",
+    ];
+    const everything = () =>
+      ALL.map((id) =>
+        httpsWarning(id, {
+          class: "internal",
+          reason: "restore",
+          offsetSeconds: 900,
+          source: "lets_encrypt",
+          notAfter: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+          record: "_acme-challenge.a.example.org",
+        }),
+      );
+
+    it("lists them once each in the D-04 order with the fallback first, and counts six", async () => {
+      items = [{ id: "key_backup", keyPath: "/data/tierplan.key" }, ...everything()];
+      renderWarnings();
+      await openBell("Warnings, 7 items");
+      expect(listed().map(([id]) => id)).toEqual([
+        "https_cert_fallback",
+        "https_renewal_failed",
+        "https_acme_paused",
+        "https_clock_off",
+        "https_cert_expiring",
+        "https_txt_left",
+        "key_backup",
+      ]);
+      expect(badge()).toBe("7");
+    });
+
+    it("gives every item exactly one link to Settings > HTTPS, and counts six for six", async () => {
+      items = everything();
+      renderWarnings();
+      await openBell("Warnings, 6 items");
+      expect(badge()).toBe("6");
+      const links = screen.getAllByRole("link", { name: "Open HTTPS settings" });
+      expect(links).toHaveLength(6);
+      for (const link of links) expect(link.getAttribute("href")).toBe("/settings/https");
+      for (const id of ALL) expect(itemLinks(id)).toHaveLength(1);
+      expect(bellText()).not.toContain("{{");
+    });
+
+    it("counts one for one item, and caps the badge at 9+ past nine", async () => {
+      items = [httpsWarning("https_clock_off", { offsetSeconds: -600 })];
+      renderWarnings();
+      await screen.findByRole("button", { name: "Warnings, 1 item" });
+      expect(badge()).toBe("1");
+
+      cleanup();
+      queryClient.clear();
+      me = ADMIN_AND_READER;
+      envItems = Array.from({ length: 4 }, (_, i) => offline(`e${i}`, `Edge ${i}`));
+      items = everything();
+      renderWarnings();
+      await screen.findByRole("button", { name: "Warnings, 10 items" });
+      expect(badge()).toBe("9+");
+    });
+
+    it("scrolls inside a 320px list so a long record cannot widen the popover", async () => {
+      items = [
+        httpsWarning("https_txt_left", { record: `_acme-challenge.${"a".repeat(80)}.example.org` }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      const area = document.querySelector("[data-slot=scroll-area]");
+      expect(area?.className).toContain("max-h-80");
+      const body = document.querySelector(
+        '[data-warning="https_txt_left"] [data-slot=item-description]',
+      );
+      expect(body?.className).toContain("wrap-anywhere");
+    });
   });
 });

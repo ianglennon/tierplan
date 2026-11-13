@@ -881,6 +881,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// verdict, and waits on a clock of its own.
 	hsts := newHSTSPolicy(trustNow, trust, rt, cfg.ACME.HSTS, bo.hstsClock, hstsDB{r: st.RQ, w: st.Q}, log)
 	hsts.publicURL = inst.PublicURL
+	hsts.SetAudit(aud.Record)
 	rt.SetOnInstall(hsts.Wake)
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
@@ -913,6 +914,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		WithRefusalAudit(agentAudit)
 	// A revoke commits first and then closes the agent's live session through the hub.
 	agentSvc.WithKicker(tunnelHub)
+	// An enrolment never retires a host's earlier agent while the hub has it connected.
+	agentSvc.WithLive(tunnelHub)
 	// A re-initialised swarm that is recorded, or adopted, reaches every open
 	// overview at once instead of at the next tick.
 	agentSvc.WithNotifier(broker)
@@ -936,6 +939,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Grace: cfg.FailingServiceGrace, Log: log,
 	})
 	envSvc.WithClusters(clusters)
+	// An enrolling swarm agent's node is checked against the node list a manager last gave. This
+	// is set here, before the agent endpoint is mounted and so before any enrolment can run.
+	agentSvc.WithNodeLists(clusters)
 	// After a server upgrade the updater brings agents of an older release up to date
 	// through the tunnel, one message per swarm through its leading manager, one per
 	// standalone host, unless the environment or the host switched it off (D-24, D-28).
@@ -1208,6 +1214,14 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Checker:  checker,
 			Refusals: refusals,
 			Unknown:  agentSvc.Unknown(),
+			HTTPS: func(ctx context.Context) ([]acme.Alert, error) {
+				var served acme.Served
+				if sc := rt.served(); sc.Leaf != nil {
+					served = acme.Served{Source: sc.Source, NotBefore: sc.Leaf.NotBefore, NotAfter: sc.Leaf.NotAfter}
+				}
+				return acmeWire.mgr.Alerts(ctx, served)
+			},
+			ListenPort: listenPort(cfg.Listen),
 			// Five password-change attempts per user at once, then one every 12
 			// seconds (T-01-60): ample for a person, slow for a guesser.
 			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
@@ -1256,7 +1270,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
 		HTTPS: api.HTTPSDeps{
 			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
-			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen)},
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen), Audit: aud},
 		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,

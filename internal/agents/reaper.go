@@ -21,6 +21,9 @@ const (
 	// removedNodeReason is the reason recorded for an agent whose node an administrator removed
 	// from its swarm.
 	removedNodeReason = "node_removed"
+	// replacedReason is the reason recorded for an agent whose host enrolled again into the
+	// same environment (Service.Enrol, review 17 CR-02).
+	replacedReason = "replaced"
 )
 
 // Reaper revokes the agents of nodes that have left their swarm (D-10). A node that
@@ -32,6 +35,12 @@ const (
 // a revoke. Nothing short of that is enough: a node that is only down, drained or
 // paused is still in the list, and a list that fails is never shown to it. It is
 // safe for concurrent use.
+//
+// It also finishes what an enrolment could not (Service.Enrol): a swarm agent whose node no
+// fresh list had shown enrols without retiring the earlier agent of its node, and at the first
+// list that shows the node, while that newest agent is connected, the older offline row is
+// retired as replaced, so the node does not keep a stale offline duplicate in its agent list
+// and health (Service.retireListedDuplicates).
 type Reaper struct {
 	svc *Service
 
@@ -59,15 +68,13 @@ func NewReaper(svc *Service) *Reaper {
 // hosts, so they enrol again, and every revoke is audited under
 // system:agent-reaper.
 func (r *Reaper) Observe(ctx context.Context, envID string, list dockerx.ClusterRead, answeringNodeID string) {
-	if answeringNodeID == "" {
+	// The same rule decides whether an enrolment is checked against a list (dockerx.ClusterRead.ListsAnswerer).
+	if !list.ListsAnswerer(answeringNodeID) {
 		return
 	}
 	listed := make(map[string]struct{}, len(list.Nodes))
 	for _, n := range list.Nodes {
 		listed[n.ID] = struct{}{}
-	}
-	if _, ok := listed[answeringNodeID]; !ok {
-		return
 	}
 
 	r.mu.Lock()
@@ -106,6 +113,9 @@ func (r *Reaper) Observe(ctx context.Context, envID string, list dockerx.Cluster
 			delete(misses, id)
 		}
 	}
+	// The older rows of a node this list shows, left by enrolments no list had confirmed yet.
+	// An error is ignored as AutoRevoke's is: the next list tries again.
+	_ = r.svc.retireListedDuplicates(ctx, envID, listed)
 }
 
 // Forget drops what is counted for a removed environment.

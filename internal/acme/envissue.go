@@ -6,8 +6,11 @@ package acme
 import (
 	"context"
 	"errors"
+	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/ianglennon/tierplan/internal/audit"
 )
 
 // errAutomaticWait means the ledger does not allow an automatic attempt yet: the CA told us to wait, or
@@ -22,11 +25,12 @@ type registerSpec struct {
 
 // issueLocked is Issue's guard order, shared with the start-time issue of TIERPLAN_ACME=on so the two
 // cannot drift apart. The caller holds opMu and has read st through mutable (or, for the scheduler, has
-// checked the same conditions). The guards run in this order, each before anything that could reach the
+// checked the same conditions). env marks the run as the one TIERPLAN_ACME=on starts, which only the audit rows of
+// the run show: the stored trigger stays schedule. The guards run in this order, each before anything that could reach the
 // CA: the account (unless the run registers one), a run in progress, every preflight refusal (ACME-10),
 // for an automatic start the ledger's backoff, the ledger's manual block (three failed runs in an hour),
 // and reuse of a stored certificate that already covers the names and is not yet due.
-func (m *Manager) issueLocked(ctx context.Context, st State, actor, trigger string, reg *registerSpec) (RunStart, error) {
+func (m *Manager) issueLocked(ctx context.Context, st State, actor, trigger string, reg *registerSpec, env bool) (RunStart, error) {
 	if reg == nil {
 		if err := m.needAccount(ctx); err != nil {
 			return RunStart{}, err
@@ -51,7 +55,7 @@ func (m *Manager) issueLocked(ctx context.Context, st State, actor, trigger stri
 	return m.startRun(runParams{
 		trigger: trigger, actor: actor, challenge: m.challenge(st),
 		req:      OrderRequest{Kind: KindIssue, Names: slices.Clone(ns.Names), Profile: m.profile(st)},
-		register: reg,
+		register: reg, env: env,
 	})
 }
 
@@ -119,7 +123,7 @@ func (m *Manager) envIssueRound(ctx context.Context, st State) bool {
 	} else if !ok {
 		reg = &registerSpec{email: m.d.Env.Email, tos: m.d.Env.AcceptTOS}
 	}
-	rs, err := m.issueLocked(ctx, st, "", TriggerSchedule, reg)
+	rs, err := m.issueLocked(ctx, st, "", TriggerSchedule, reg, true)
 	if err != nil {
 		var blocked *BlockedError
 		var refused *RefusedError
@@ -161,15 +165,39 @@ func (m *Manager) namesChanged(ctx context.Context, st State) bool {
 }
 
 // registerAccount registers the account a start-time issue needs, inside the run, as its first step. An
-// account that appeared meanwhile is as good as one registered here.
+// account that appeared meanwhile is as good as one registered here and writes no row. One this registers is
+// audited as system:acme with trigger env: TierPlan did it, because the environment asked for Let's Encrypt (D-28).
+// The values the variables fix are not audited as settings (D-14); the account they lead to is.
 func (m *Manager) registerAccount(ctx context.Context, steps *jobSteps, reg registerSpec) error {
 	steps.Running(StepAccount, "Registering an account with the certificate authority.")
-	if _, err := m.d.Client.Register(ctx, reg.email, reg.tos); err != nil && !errors.Is(err, ErrAccountExists) {
+	acct, err := m.d.Client.Register(ctx, reg.email, reg.tos)
+	if err != nil && !errors.Is(err, ErrAccountExists) {
 		steps.Failed(StepAccount, err)
 		return err
 	}
+	if err == nil {
+		d := map[string]string{"terms_agreed": "true", "trigger": triggerEnv}
+		if contact := strings.TrimPrefix(acct.Contact, "mailto:"); contact != "" {
+			d["contact"] = contact
+		}
+		if host := DirectoryHost(m.d.Client.Directory().URL); host != "" {
+			d["directory"] = host
+		}
+		// The account exists whatever happens to the run, so the row is written even when the run was cancelled.
+		m.record(context.WithoutCancel(ctx), audit.ActionHTTPSAccountRegistered, audit.ResultSuccess, "", d)
+	}
 	steps.Done(StepAccount)
 	return nil
+}
+
+// DirectoryHost is the host of a CA directory URL, the form audit rows name the CA in; the whole URL when it does
+// not parse.
+func DirectoryHost(dirURL string) string {
+	u, err := url.Parse(dirURL)
+	if err != nil || u.Host == "" {
+		return dirURL
+	}
+	return u.Host
 }
 
 // noteEnvIssue logs a refusal of the start-time issue once for each distinct message, so one that lasts

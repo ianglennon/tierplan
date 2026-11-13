@@ -9,7 +9,7 @@ import "@/i18n";
 
 afterEach(cleanup);
 
-// Every D-40 code, then the three enrolment-only refusals, then the one extra
+// Every D-40 code, then the enrolment-only refusals, then the extra
 // issue code the health rollup can report.
 const D40 = [
   "agent_offline",
@@ -28,7 +28,13 @@ const D40 = [
   "unsupported_engine",
   "agent_policy_denied",
 ];
-const ENROLMENT = ["duplicate_environment", "type_mismatch", "host_mismatch"];
+const ENROLMENT = [
+  "duplicate_environment",
+  "type_mismatch",
+  "host_mismatch",
+  "host_already_connected",
+  "node_not_in_swarm",
+];
 const EXTRA = ["cert_expiring", "address_space_full"];
 // Said when an agent holds a certificate the environment issued but is not in the
 // database, as after a restore (D-31).
@@ -184,6 +190,36 @@ describe("ReasonText", () => {
     expect(container.textContent).not.toContain("{{");
   });
 
+  it("says what node_not_in_swarm is, with or without the node", () => {
+    const { rerender, container } = render(
+      <ReasonText code="node_not_in_swarm" params={{ node: "wrk-2" }} />,
+    );
+    expect(container.textContent).toContain("wrk-2 isn't in the swarm's node list yet.");
+    expect(container.textContent).toContain("enrols by itself within a minute");
+    rerender(<ReasonText code="node_not_in_swarm" />);
+    expect(container.textContent).toContain("This node isn't in the swarm's node list yet.");
+    expect(container.textContent).not.toContain("{{");
+  });
+
+  it("names the cloned VM in the hint of host_already_connected", () => {
+    const { container } = render(
+      <ReasonText code="host_already_connected" params={{ node: "edge-1" }} />,
+    );
+    expect(container.textContent).toContain("edge-1 already has a connected agent");
+    expect(container.textContent).toContain(
+      "A VM cloned from this host shares its Docker engine ID",
+    );
+    // The copied agent goes first: it holds the original's identity and starts with Docker.
+    const text = container.textContent ?? "";
+    const removeAt = text.indexOf("first remove the copied agent and its volume");
+    const engineAt = text.indexOf("give Docker a new engine ID");
+    const installAt = text.indexOf("install the agent fresh");
+    expect(removeAt).toBeGreaterThanOrEqual(0);
+    expect(engineAt).toBeGreaterThan(removeAt);
+    expect(installAt).toBeGreaterThan(engineAt);
+    expect(text).toContain("as its own environment");
+  });
+
   it("words address_space_full for a pool, a network and neither, with the hint", () => {
     const { container, rerender } = render(
       <ReasonText code="address_space_full" params={{ subject: "10.0.0.0/8", percent: 93 }} />,
@@ -265,9 +301,15 @@ describe("ReasonText", () => {
       });
     }
 
-    it("covers 15 D-40 codes and the three enrolment refusals", () => {
+    it("covers 15 D-40 codes and the five enrolment refusals", () => {
       expect(D40).toHaveLength(15);
-      expect(ENROLMENT).toEqual(["duplicate_environment", "type_mismatch", "host_mismatch"]);
+      expect(ENROLMENT).toEqual([
+        "duplicate_environment",
+        "type_mismatch",
+        "host_mismatch",
+        "host_already_connected",
+        "node_not_in_swarm",
+      ]);
     });
   });
 

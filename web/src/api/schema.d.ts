@@ -5757,7 +5757,7 @@ export interface paths {
         };
         /**
          * List the instance warnings that need an admin's attention
-         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key TierPlan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while TierPlan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). unknown_agents is listed, for instance admins only, while agents that were installed after the backup this TierPlan was restored from keep trying; count is how many (D-31). The plain-HTTP warning is the browser's to compute and is not listed.
+         * @description Includes data_not_persisted while the data directory would be lost with the container, and key_backup while the encryption key TierPlan generated into the data directory has not been acknowledged (D-15, D-59). The reverse proxy warnings (the proxy_ ones) are listed while TierPlan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). unknown_agents is listed, for instance admins only, while agents that were installed after the backup this TierPlan was restored from keep trying; count is how many (D-31). The https_ items are listed for instance admins only, derived from the Let's Encrypt state, the served certificate and the clock on every read, and cannot be acknowledged. The plain-HTTP warning is the browser's to compute and is not listed.
          */
         get: operations["listWarnings"];
         put?: never;
@@ -6222,7 +6222,7 @@ export interface components {
         AgentListBody: {
             /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
             items: components["schemas"]["AgentBody"][] | null;
-            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
+            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command finds the agent service by its tierplan.agent=true label, whatever it is called, and reads the secret names from it, so it works for any generation and either naming; it removes only the tierplan-agent-token-g secrets. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AllStacksBody: {
@@ -8782,6 +8782,11 @@ export interface components {
             certificate?: components["schemas"]["HTTPSACMECertificateBody"];
             /** @description The challenge used to prove the names */
             challengeType: string;
+            /**
+             * Format: int64
+             * @description Present only while TierPlan's clock is more than five minutes from the CA's as last measured, in whole seconds and positive when TierPlan is ahead. It follows the latest CA response whatever the mode, and left out when there is no measurement or the clock is in step
+             */
+            clockOffsetSeconds?: number;
             /** @description True when the test-only directory override is set; its certificates are not trusted by browsers */
             directoryOverridden: boolean;
             /** @description The CA directory in use */
@@ -9624,7 +9629,7 @@ export interface components {
             manualCleanup: components["schemas"]["InstallCleanupBody"];
             /** @description The SPKI pin of the self-signed certificate TierPlan serves, which the agent trusts instead of system roots. Present only when TierPlan serves its own self-signed certificate */
             pin?: string;
-            /** @description The Docker secret the swarm install creates for this token, tierplan-agent-token-g followed by the generation */
+            /** @description The Docker secret the swarm install creates for this token, tierplan-agent-token-g, the generation, a dash and the last 12 letters and digits of the environment ID */
             secretName: string;
             /** @description The install for a standalone host */
             standalone: components["schemas"]["InstallStandaloneBody"];
@@ -16423,11 +16428,13 @@ export interface components {
             count?: number;
             /** @description For proxy_url_mismatch: the host the newest request was for */
             host?: string;
+            /** @description For the https_ warnings: the facts the bell turns into a headline and a fix */
+            https?: components["schemas"]["WarningHTTPSBody"];
             /**
              * @description Which warning this is
              * @enum {string}
              */
-            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents";
+            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents" | "https_cert_fallback" | "https_renewal_failed" | "https_acme_paused" | "https_clock_off" | "https_cert_expiring" | "https_txt_left";
             /** @description For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from */
             ip?: string;
             /** @description For key_backup: where the generated encryption key is stored */
@@ -16445,6 +16452,73 @@ export interface components {
             subject?: string;
             /** @description For proxy_url_mismatch: the public URL the request should have matched */
             url?: string;
+        };
+        WarningHTTPSBody: {
+            /** @description For https_renewal_failed: the error class of the last failed order */
+            class?: string;
+            /** @description For https_renewal_failed: the host the order was for */
+            host?: string;
+            /**
+             * Format: date-time
+             * @description For https_clock_off: when the difference was measured
+             */
+            measuredAt?: string;
+            /**
+             * Format: int64
+             * @description For https_txt_left: how many other records are left over
+             */
+            more?: number;
+            /**
+             * Format: date-time
+             * @description For https_renewal_failed: when the order is tried again
+             */
+            nextAttemptAt?: string;
+            /** @description For https_renewal_failed: true when the failing order is the first one and there is no Let's Encrypt certificate yet */
+            noCertificate?: boolean;
+            /**
+             * Format: date-time
+             * @description For https_cert_expiring and https_cert_fallback: when the certificate expires or expired
+             */
+            notAfter?: string;
+            /**
+             * Format: int64
+             * @description For https_clock_off: the clock difference to the CA in whole seconds, positive when TierPlan's clock is ahead
+             */
+            offsetSeconds?: number;
+            /**
+             * Format: int64
+             * @description For https_renewal_failed: the port TierPlan listens on, which validation_unreachable names
+             */
+            port?: number;
+            /** @description For https_renewal_failed: the certificate profile the order asked for */
+            profile?: string;
+            /**
+             * @description For https_acme_paused: why Let's Encrypt is paused
+             * @enum {string}
+             */
+            reason?: "" | "restore" | "told_to_wait" | "failure_guard";
+            /** @description For https_txt_left: the first left-over TXT record */
+            record?: string;
+            /** @description For https_renewal_failed: the resolvers a DNS-01 failure asked */
+            resolvers?: string[] | null;
+            /** @description For https_txt_left: true when the removal retry has stopped */
+            retryPaused?: boolean;
+            /**
+             * @description For https_cert_expiring: where the served certificate comes from
+             * @enum {string}
+             */
+            source?: "" | "lets_encrypt" | "cert_files" | "self_signed";
+            /** @description For https_renewal_failed: the delegation target of a DNS-01 failure */
+            target?: string;
+            /** @description For https_renewal_failed: where the terms of service the CA wants agreed are */
+            termsUrl?: string;
+            /**
+             * Format: date-time
+             * @description For https_acme_paused: when a Retry-After or the failure guard ends
+             */
+            until?: string;
+            /** @description For https_renewal_failed: the DNS zone a DNS-01 failure was about */
+            zone?: string;
         };
         WarningsBody: {
             /** @description Only the warnings that apply; empty when there are none */

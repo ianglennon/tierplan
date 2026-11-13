@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -788,6 +789,107 @@ func TestRunRefreshesEnvironmentsOnAnIntervalAndStopsWhenItsContextEnds(t *testi
 	case <-done:
 	case <-testsupport.Context(t).Done():
 		t.Fatal("Run did not return after its context ended")
+	}
+}
+
+func TestSwarmNodeIDsAreTheCachedNodeListAndAbsentWithoutOneOrWithoutAQuorum(t *testing.T) {
+	// No manager has answered yet: nothing is held.
+	bare := newSwarmRigBare(t, managerNodes(), nil)
+	if ids, at, ok := bare.c.SwarmNodeIDs(bare.env.ID); ok || ids != nil || !at.IsZero() {
+		t.Fatalf("before any read: %v %v %v, want no list", ids, at, ok)
+	}
+
+	s := newSwarmRig(t, managerNodes(), nil)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids, at, ok := s.c.SwarmNodeIDs(s.env.ID)
+	st, _ := s.c.Cached(s.env.ID)
+	slices.Sort(ids)
+	if !ok || !slices.Equal(ids, []string{"node-m1", "node-m2", "node-m3"}) || at.IsZero() || !at.Equal(st.FetchedAt) {
+		t.Fatalf("after a read: %v %v %v, want the three nodes and the time of the read (%v)", ids, at, ok, st.FetchedAt)
+	}
+	if _, _, ok := s.c.SwarmNodeIDs("no-such-environment"); ok {
+		t.Error("an unknown environment has a node list")
+	}
+
+	// A list that leaves out the manager that answered it is not believed, as the reaper
+	// does not believe it (T-02-68): it decides no enrolment, although the read succeeded.
+	answerless := []dockertest.FakeNode{{ID: "node-w1", Hostname: "wrk-1", Role: "worker", EngineVersion: "29.1.0", OS: "linux"}}
+	for i, a := range s.m {
+		a.fake.Reconfigure(managerConfig(i+1, answerless, nil))
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.c.Cached(s.env.ID); !st.Known() || len(st.Read.Nodes) != 1 || st.AnsweredBy == "" {
+		t.Fatalf("the read of a list without its answerer: %+v, want it held, with its answerer", st)
+	}
+	if ids, _, ok := s.c.SwarmNodeIDs(s.env.ID); ok || ids != nil {
+		t.Errorf("a list that leaves out its answerer: %v %v, want no list", ids, ok)
+	}
+	for i, a := range s.m {
+		a.fake.Reconfigure(managerConfig(i+1, s.nodes, nil))
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := s.c.SwarmNodeIDs(s.env.ID); !ok {
+		t.Fatal("the list names its answerer again, want it believed")
+	}
+
+	// A quorum that is lost makes the held list no basis for a refusal.
+	for i, a := range s.m {
+		cfg := managerConfig(i+1, s.nodes, nil)
+		cfg.QuorumLost = true
+		a.fake.Reconfigure(cfg)
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err == nil || ReasonFor(err) != ReasonNoQuorum {
+		t.Fatalf("Refresh = %v, want no_quorum", err)
+	}
+	if ids, _, ok := s.c.SwarmNodeIDs(s.env.ID); ok || ids != nil {
+		t.Errorf("while the quorum is lost: %v %v, want no list", ids, ok)
+	}
+}
+
+// An enrolment whose node the held list lacks has the cluster read again, at most once per
+// minAge and never while a read is running, so a node that just joined is found (review
+// 261113-ota IN-03).
+func TestRefreshSwarmNodeIDsReadsAgainOnlyWhenTheLastAttemptIsOldEnough(t *testing.T) {
+	if _, _, ok := newSwarmRigBare(t, managerNodes(), nil).c.RefreshSwarmNodeIDs(context.Background(), "no-such-environment", 5*time.Second); ok {
+		t.Fatal("an environment never read has a list")
+	}
+	s := newSwarmRig(t, managerNodes(), nil)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A node joins the swarm after the read.
+	joined := managerNodes(dockertest.FakeNode{ID: "node-w9", Hostname: "wrk-9", Role: "worker", EngineVersion: "29.1.0", OS: "linux"})
+	for i, a := range s.m {
+		a.fake.Reconfigure(managerConfig(i+1, joined, nil))
+	}
+
+	// The last attempt is newer than minAge: no read, the held list answers.
+	ids, _, ok := s.c.RefreshSwarmNodeIDs(ctx, s.env.ID, time.Hour)
+	if !ok || slices.Contains(ids, "node-w9") {
+		t.Fatalf("within minAge: %v %v, want the held list without the new node", ids, ok)
+	}
+	// A read is running: no second one, and no wait for it.
+	e, _ := s.c.lookup(s.env.ID)
+	e.refresh.Lock()
+	ids, _, _ = s.c.RefreshSwarmNodeIDs(ctx, s.env.ID, 0)
+	e.refresh.Unlock()
+	if slices.Contains(ids, "node-w9") {
+		t.Fatalf("while a read runs: %v, want the held list", ids)
+	}
+	// Old enough: one read, and the new node is in the list.
+	before, _ := s.c.Cached(s.env.ID)
+	s.clk.Advance(5 * time.Second)
+	ids, at, ok := s.c.RefreshSwarmNodeIDs(ctx, s.env.ID, 5*time.Second)
+	if !ok || !slices.Contains(ids, "node-w9") || !at.After(before.FetchedAt) {
+		t.Fatalf("after minAge: %v %v %v, want a new read that holds the new node", ids, at, ok)
 	}
 }
 

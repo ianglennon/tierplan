@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-acme/lego/v5/acme/api"
@@ -104,6 +105,11 @@ type Client struct {
 	// register serialises Register and Forget so two admins cannot create two accounts.
 	register sync.Mutex
 
+	// skew keeps the latest clock sample taken from the CA's responses; probed is set once a read of
+	// the directory by ProbeClock has succeeded.
+	skew   *skewRecorder
+	probed atomic.Bool
+
 	metaMu  sync.Mutex
 	meta    DirectoryMeta
 	metaErr error
@@ -112,7 +118,27 @@ type Client struct {
 
 // NewClient is a Client for dir, keeping its account in store and judging time by clock.
 func NewClient(dir Directory, store *Store, clock stackops.Clock, userAgent string) *Client {
-	return &Client{dir: dir, store: store, clock: clock, ua: userAgent}
+	return &Client{dir: dir, store: store, clock: clock, ua: userAgent, skew: newSkewRecorder(clock)}
+}
+
+// ClockSample is the latest measurement of the host clock against the CA's, taken from the Date header
+// of a response the client received; the zero sample when there is none yet. Only the status reads it.
+func (c *Client) ClockSample() ClockSample { return c.skew.sample() }
+
+// ProbeClock reads the directory until a read succeeds, once per process, so that the clock sample
+// exists soon after a restart instead of when the next renewal check talks to the CA (D-29). A read
+// that fails (the network not up yet after a reboot, a shutdown that cancelled ctx) leaves the probe
+// to the next round, so one bad start does not leave the bell blind to a wrong clock until the next
+// order. Meta caches the answer, and a failure for a minute, so the read that follows in the same
+// round is a cache hit and a failing directory is not asked every round. Otherwise the result is
+// ignored: a directory that cannot be read is the renewal's business, not the clock's.
+func (c *Client) ProbeClock(ctx context.Context) {
+	if c.probed.Load() {
+		return
+	}
+	if _, err := c.Meta(ctx); err == nil {
+		c.probed.Store(true)
+	}
 }
 
 // Directory is the directory this client talks to.
@@ -178,7 +204,11 @@ func (c *Client) newCore(ctx context.Context, kid string, key *ecdsa.PrivateKey)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return api.New(newHTTPClient(c.dir.Roots), c.ua, c.dir.URL, kid, key)
+	hc := newHTTPClient(c.dir.Roots)
+	// The recorder goes under lego's own HTTPS-only wrapper, which is put on top when api.New is
+	// called, so it sees every request lego sends, the directory fetch included.
+	hc.Transport = c.skew.wrap(hc.Transport)
+	return api.New(hc, c.ua, c.dir.URL, kid, key)
 }
 
 // core returns a lego Core signed as the stored account for this directory, or ErrNoAccount.

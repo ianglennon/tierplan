@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -159,6 +160,7 @@ type HTTPSACMEBody struct {
 	Renewal             *HTTPSACMERenewalBody     `json:"renewal,omitempty" doc:"The next renewal; left out unless Let's Encrypt is in use"`
 	Fallback            *HTTPSACMEFallbackBody    `json:"fallback,omitempty" doc:"Set when the certificate has expired and the self-signed one is served"`
 	LastError           *HTTPSACMEErrorBody       `json:"lastError,omitempty" doc:"The last failure, until a run succeeds"`
+	ClockOffsetSeconds  *int64                    `json:"clockOffsetSeconds,omitempty" doc:"Present only while TierPlan's clock is more than five minutes from the CA's as last measured, in whole seconds and positive when TierPlan is ahead. It follows the latest CA response whatever the mode, and left out when there is no measurement or the clock is in step"`
 	Failures            int                       `json:"failures" doc:"Consecutive failed runs"`
 	NextAttemptAt       *time.Time                `json:"nextAttemptAt,omitempty" doc:"When the next automatic attempt is due after a failure"`
 	Blocked             *HTTPSACMEBlockBody       `json:"blocked,omitempty" doc:"Set while a manual attempt is refused"`
@@ -290,6 +292,11 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 		t := st.NextAttemptAt.UTC()
 		b.NextAttemptAt = &t
 	}
+	// The one condition the bell uses too: Status.ClockOff and nothing else (D-07, D-29).
+	if cs := st.ClockOff; cs != nil {
+		secs := int64(cs.Offset / time.Second)
+		b.ClockOffsetSeconds = &secs
+	}
 	if bl := st.Block; bl != nil {
 		b.Blocked = &HTTPSACMEBlockBody{Until: bl.Until.UTC(), Reason: bl.Reason}
 	}
@@ -347,7 +354,9 @@ func acmeRunBody(r *acme.RunView) *HTTPSACMERunBody {
 
 // RegisterACMEAccountInput is the body of the registration.
 type RegisterACMEAccountInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Email    string `json:"email,omitempty" maxLength:"254" doc:"Where the CA may send expiry and account notices. Optional: without one no contact is sent"`
 		AgreeTOS bool   `json:"agreeTos,omitempty" doc:"Must be true: the person registering agrees to the CA's terms of service"`
 	}
@@ -381,7 +390,9 @@ type HTTPSACMEDirectoryOutput struct {
 
 // PutACMEProfileInput is the body of the profile save.
 type PutACMEProfileInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Profile string `json:"profile" maxLength:"64" pattern:"^[a-z0-9._-]*$" doc:"The profile to order with; empty is the CA's default"`
 	}
 }
@@ -420,8 +431,20 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 			return nil, acmeUnavailable()
 		}
 		acct, err := d.ACME.Register(ctx, strings.TrimSpace(in.Body.Email), in.Body.AgreeTOS)
+		var problem error
+		var details map[string]string
 		if err != nil {
-			return nil, acmeProblem(d.Log, "register the Let's Encrypt account", err)
+			// A refused registration records no details at all: the address typed, which the CA or TierPlan may
+			// have refused, is never stored (T-17-10).
+			problem = acmeProblem(d.Log, "register the Let's Encrypt account", err)
+		} else {
+			details = d.registeredDetails(ctx, strings.TrimPrefix(acct.Contact, "mailto:"))
+		}
+		if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSAccountRegistered, problem, details); aerr != nil {
+			return nil, auditFailed(d, aerr)
+		}
+		if problem != nil {
+			return nil, problem
 		}
 		return &RegisterACMEAccountOutput{CacheControl: "no-store", Body: HTTPSACMEAccountBody{
 			RegisteredAt: acct.CreatedAt.UTC(), Contact: strings.TrimPrefix(acct.Contact, "mailto:"), TermsOfServiceURL: acct.TermsOfService,
@@ -478,8 +501,26 @@ func registerHTTPSACME(r *httpx.Router, d HTTPSDeps) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
+		// The profile in use now is read first: a save of the same value, or an echo of TIERPLAN_ACME_PROFILE (which
+		// Status reports as the profile), is not a change and writes no row (D-14).
+		before, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
 		if err := d.ACME.SetProfile(ctx, in.Body.Profile); err != nil {
-			return nil, acmeProblem(d.Log, "save the Let's Encrypt profile", err)
+			problem := acmeProblem(d.Log, "save the Let's Encrypt profile", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		if before.Profile != in.Body.Profile {
+			details := map[string]string{
+				"section": sectionProfile, "fields": "profile", "profile_from": before.Profile, "profile_to": in.Body.Profile,
+			}
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, nil, details); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
 		}
 		out := &HTTPSACMEProfileOutput{CacheControl: "no-store"}
 		out.Body.Profile = in.Body.Profile

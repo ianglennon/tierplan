@@ -112,6 +112,10 @@ type Options struct {
 	// LeafOnly, with Intermediate, serves the leaf alone: the incomplete chain a misconfigured CA
 	// bundle gives, which a client holding only the root cannot build a path from.
 	LeafOnly bool
+	// DateOffset is added to the injected clock for the Date header of every response: negative makes
+	// the CA's clock behind the test's, so a client reads itself as ahead. SetDateOffset changes it
+	// while the fake runs.
+	DateOffset time.Duration
 }
 
 // OrderSeen is what the fake was asked for in one accepted newOrder request.
@@ -142,14 +146,15 @@ type Fake struct {
 	signCert *x509.Certificate
 	signKey  *ecdsa.PrivateKey
 
-	mu       sync.Mutex
-	seq      int
-	nonces   map[string]struct{}
-	accounts map[string]*account // by account URL (the kid)
-	orders   map[string]*order
-	authzs   map[string]*authz
-	certs    map[string]*issued // by certificate id (the /cert/<id> path)
-	byARI    map[string]*issued // by ARI certificate id
+	mu         sync.Mutex
+	dateOffset time.Duration // the Date header's offset from the clock (mu guards it)
+	seq        int
+	nonces     map[string]struct{}
+	accounts   map[string]*account // by account URL (the kid)
+	orders     map[string]*order
+	authzs     map[string]*authz
+	certs      map[string]*issued // by certificate id (the /cert/<id> path)
+	byARI      map[string]*issued // by ARI certificate id
 
 	// Scripting and observation (mu guards all of it).
 	scripted   map[string][]Problem     // per endpoint, answered in turn
@@ -226,7 +231,7 @@ func NewFake(t testing.TB, o Options) *Fake {
 		o.DefaultProfile = "classic"
 	}
 	f := &Fake{
-		tb: t, opts: o, clock: o.Clock,
+		tb: t, opts: o, clock: o.Clock, dateOffset: o.DateOffset,
 		http:     &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 30 * time.Second},
 		nonces:   map[string]struct{}{},
 		accounts: map[string]*account{},
@@ -267,6 +272,8 @@ func NewFake(t testing.TB, o Options) *Fake {
 	f.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every response carries a fresh nonce (RFC 8555 section 6.5).
 		w.Header().Set("Replay-Nonce", f.issueNonce())
+		// Go's server keeps a Date a handler has set, so every response follows the injected clock.
+		w.Header().Set("Date", f.date().Format(http.TimeFormat))
 		mux.ServeHTTP(w, r)
 	}))
 	// A client that does not trust the fake's root fails its handshake on purpose in some tests; the
@@ -278,6 +285,22 @@ func NewFake(t testing.TB, o Options) *Fake {
 		f.srv.Close()
 	})
 	return f
+}
+
+// date is the time the CA's Date header shows: the clock plus the scripted offset, in UTC.
+func (f *Fake) date() time.Time {
+	f.mu.Lock()
+	off := f.dateOffset
+	f.mu.Unlock()
+	return f.clock.Now().Add(off).UTC()
+}
+
+// SetDateOffset changes how far the Date header of every later response is from the clock (see
+// Options.DateOffset).
+func (f *Fake) SetDateOffset(d time.Duration) {
+	f.mu.Lock()
+	f.dateOffset = d
+	f.mu.Unlock()
 }
 
 // wallClock is the clock a Fake without an injected one uses.

@@ -220,6 +220,24 @@ type ClusterRead struct {
 	HistoryLimit int
 }
 
+// ListsAnswerer reports whether the node list of r names the manager that answered it, the
+// swarm node answeringNodeID. Only such a list is believed to describe the swarm it claims
+// (T-02-68): one that leaves out its own answerer, or has no answerer (a read of the local
+// socket), is not. The agent reaper counts nothing from a list that fails this, and an
+// enrolment is never checked against one (agents.Service via envs.Clusters.SwarmNodeIDs), so
+// both apply the same rule through this one function.
+func (r ClusterRead) ListsAnswerer(answeringNodeID string) bool {
+	if answeringNodeID == "" {
+		return false
+	}
+	for _, n := range r.Nodes {
+		if n.ID == answeringNodeID {
+			return true
+		}
+	}
+	return false
+}
+
 // Cluster reads the nodes, the services with their task counts and the tasks of
 // the agent service (found by its label, see isAgentService) from a swarm manager. It is read-only and has no
 // variant that changes anything. A worker, and a manager that has lost quorum,

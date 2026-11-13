@@ -80,11 +80,19 @@ Removing an environment can uninstall its agents when they are online. For a hos
 offline, or when you chose not to, run the commands from the environment's "Manual cleanup
 command" section on each host.
 
-On a swarm (the secret is named for the join token's current generation, which the section
-shows):
+On a swarm (the command finds the agent service by its `tierplan.agent=true` label, so it also
+removes a stack-deployed `<stack>_tierplan-agent`, and reads the secret names from the service, so
+it works for any generation of the join token and for installs made with either naming of the
+secret; like the agent's own uninstall it removes only the `tierplan-agent-token-g*` secrets, so
+another secret attached to the service is kept; it ends with a non-zero status when any removal
+failed):
 
 ```sh
-docker service rm tierplan-agent && docker secret rm <current secret>
+if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
+for v in $L; do
+  S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
+  for s in $S; do case $s in tierplan-agent-token-g*) docker secret rm "$s" || rc=1;; esac; done
+done; [ "$rc" = 0 ]
 docker volume rm tierplan-agent   # on every node that ran the agent
 ```
 
@@ -94,6 +102,6 @@ On a standalone host:
 docker rm -f tierplan-agent && docker volume rm tierplan-agent
 ```
 
-An agent installed from the stack file runs as `<stack>_tierplan-agent`. Remove it with
-`docker stack rm <stack>` and remove the stack's network and the `tierplan-agent` volume if
-they are left behind.
+An agent installed from the stack file runs as `<stack>_tierplan-agent`. The command above
+finds it by its label; `docker stack rm <stack>` also removes it. Remove the stack's network
+and the `tierplan-agent` volume if they are left behind.

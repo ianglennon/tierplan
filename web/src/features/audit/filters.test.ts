@@ -757,3 +757,106 @@ describe("the stack actions (07-01)", () => {
     expect(labels.stack?.value_revealed).toBe("Stack secret value revealed");
   });
 });
+
+describe("actionLabel (HTTPS)", () => {
+  const real = (key: string) => {
+    const parts = key.split(".");
+    let node: unknown = audit;
+    for (const part of parts) node = (node as Record<string, unknown>)?.[part];
+    return typeof node === "string" ? node : key;
+  };
+  const HTTPS_ACTIONS = [
+    "https.account_registered",
+    "https.account_forgotten",
+    "https.settings_updated",
+    "https.issue_requested",
+    "https.renew_requested",
+    "https.issued",
+    "https.renewed",
+    "https.run_failed",
+    "https.resumed",
+    "https.stopped",
+    "https.dns_tested",
+    "https.fallback_started",
+    "https.fallback_ended",
+    "https.hsts_withdrawn",
+    "https.hsts_restored",
+  ];
+
+  it("labels every HTTPS action and lists it in the Action filter", () => {
+    for (const key of HTTPS_ACTIONS) {
+      expect(KNOWN_ACTIONS, key).toContain(key);
+      expect(actionLabel(key, real), key).not.toBe(key);
+    }
+    expect(actionLabel("https.issued", real)).toBe("Issued Let's Encrypt certificate");
+    expect(actionLabel("https.run_failed", real)).toBe("Let's Encrypt run failed");
+  });
+
+  it("names the section a settings change was about", () => {
+    expect(
+      actionLabel("https.settings_updated", real, {
+        section: "dns_credential",
+        fields: "dns_credential",
+        dns_credential: "replaced",
+      }),
+    ).toBe("Changed the Cloudflare token");
+    expect(
+      actionLabel("https.settings_updated", real, {
+        section: "dns_credential",
+        fields: "dns_credential",
+        dns_credential: "removed",
+      }),
+    ).toBe("Changed the Cloudflare token");
+    expect(actionLabel("https.settings_updated", real, { section: "validation" })).toBe(
+      "Changed the validation method",
+    );
+    expect(actionLabel("https.settings_updated", real, { section: "profile" })).toBe(
+      "Changed the certificate profile",
+    );
+    expect(actionLabel("https.settings_updated", real, { section: "hsts" })).toBe("Changed HSTS");
+  });
+
+  // Review 17 IN-03: the row a save writes when the typed token failed its test is not a change.
+  it("does not call a failed token test a change of the token", () => {
+    expect(
+      actionLabel("https.settings_updated", real, {
+        section: "dns_credential",
+        failed_classes: "dns_auth",
+      }),
+    ).toBe("Cloudflare token failed its test, nothing saved");
+    expect(actionLabel("https.settings_updated", real, { section: "dns_credential" })).toBe(
+      "Cloudflare token failed its test, nothing saved",
+    );
+  });
+
+  it("reads the base label for an unknown or absent section", () => {
+    expect(actionLabel("https.settings_updated", real, { section: "mystery" })).toBe(
+      "Changed HTTPS settings",
+    );
+    expect(actionLabel("https.settings_updated", real)).toBe("Changed HTTPS settings");
+  });
+
+  it("is an instance event: no HTTPS action is environment-scoped", () => {
+    for (const key of HTTPS_ACTIONS) expect(ENV_SCOPED_ACTIONS, key).not.toContain(key);
+  });
+});
+
+describe("actionLabel (agent replaced)", () => {
+  const real = (key: string) => {
+    const parts = key.split(".");
+    let node: unknown = audit;
+    for (const part of parts) node = (node as Record<string, unknown>)?.[part];
+    return typeof node === "string" ? node : key;
+  };
+
+  it("says an agent retired by its host's new enrolment was replaced", () => {
+    expect(actionLabel("agent.revoked", real, { reason: "replaced", node: "edge-1" })).toBe(
+      "Agent replaced (the host enrolled again)",
+    );
+  });
+
+  it("keeps the plain label for every other revoke", () => {
+    expect(actionLabel("agent.revoked", real, { reason: "node_removed" })).toBe("Agent revoked");
+    expect(actionLabel("agent.revoked", real)).toBe("Agent revoked");
+  });
+});

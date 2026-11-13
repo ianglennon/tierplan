@@ -682,7 +682,7 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	in := got.Install
-	if !strings.HasPrefix(in.JoinToken, "tpjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "tierplan-agent-token-g1" {
+	if !strings.HasPrefix(in.JoinToken, "tpjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != secretNameOf(got.ID, 1) {
 		t.Errorf("token %q generation %d secret %q", in.JoinToken, in.Generation, in.SecretName)
 	}
 	if in.AgentURL != "wss://example.com/tierplan/agent/connect" || in.Pin != "sha256/PINPINPIN" {
@@ -696,7 +696,7 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 		"swarm stack file":   {in.Swarm.StackFile, "external: true"},
 		"standalone command": {in.Standalone.Command, "docker run -d --name tierplan-agent"},
 		"compose file":       {in.Standalone.ComposeFile, "restart: unless-stopped"},
-		"swarm cleanup":      {in.ManualCleanup.Swarm, "docker service rm tierplan-agent"},
+		"swarm cleanup":      {in.ManualCleanup.Swarm, `docker service rm "$v"`},
 		"standalone cleanup": {in.ManualCleanup.Standalone, "docker rm -f tierplan-agent"},
 	} {
 		if !strings.Contains(want.text, want.sub) {

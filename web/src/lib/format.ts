@@ -116,3 +116,26 @@ export function formatClockOffset(seconds: number): string {
 export function formatCount(n: number): string {
   return new Intl.NumberFormat().format(n);
 }
+
+// formatOffsetWords is how far apart two clocks are, in words and without a sign: whole minutes
+// below 120 minutes ("7 minutes"), whole hours below 48 hours ("3 hours"), days from there
+// ("5 days"). The sign is the caller's to word ("ahead" or "behind"). The unit name follows the
+// reader's locale through Intl. A value that is not a finite number reads as zero minutes.
+export function formatOffsetWords(seconds: number): string {
+  const abs = Number.isFinite(seconds) ? Math.abs(seconds) : 0;
+  let unit: "minute" | "hour" | "day";
+  let value: number;
+  if (abs < 7200) {
+    unit = "minute";
+    value = abs / 60;
+  } else if (abs < 172_800) {
+    unit = "hour";
+    value = abs / 3600;
+  } else {
+    unit = "day";
+    value = abs / 86_400;
+  }
+  return new Intl.NumberFormat(undefined, { style: "unit", unit, unitDisplay: "long" }).format(
+    Math.round(value),
+  );
+}

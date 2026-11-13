@@ -73,3 +73,24 @@ func TestTaskNetworkRefsNonTerminal(t *testing.T) {
 		t.Fatalf("a read wrote: %v", w)
 	}
 }
+
+// A node list is believed only when it names the manager that answered it (T-02-68): the reaper
+// and the enrolment check both ask this one function.
+func TestListsAnswererNeedsTheAnsweringNodeInTheList(t *testing.T) {
+	read := dockerx.ClusterRead{Nodes: []dockerx.NodeRow{{ID: "node-m1"}, {ID: "node-w1"}}}
+	for _, tc := range []struct {
+		name     string
+		read     dockerx.ClusterRead
+		answerer string
+		want     bool
+	}{
+		{"the answerer is listed", read, "node-m1", true},
+		{"the answerer is not listed", read, "node-m2", false},
+		{"no answerer", read, "", false},
+		{"a list without nodes", dockerx.ClusterRead{}, "node-m1", false},
+	} {
+		if got := tc.read.ListsAnswerer(tc.answerer); got != tc.want {
+			t.Errorf("%s: ListsAnswerer(%q) = %v, want %v", tc.name, tc.answerer, got, tc.want)
+		}
+	}
+}

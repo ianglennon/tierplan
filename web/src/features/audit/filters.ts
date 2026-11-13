@@ -190,6 +190,22 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "swarm.task_history_limit_changed",
   "updates.policy_changed",
   "updates.defaults_changed",
+  // The HTTPS and Let's Encrypt actions (Phase 17). Instance-level: none is in ENV_SCOPED_PREFIXES.
+  "https.account_registered",
+  "https.account_forgotten",
+  "https.settings_updated",
+  "https.issue_requested",
+  "https.renew_requested",
+  "https.issued",
+  "https.renewed",
+  "https.run_failed",
+  "https.resumed",
+  "https.stopped",
+  "https.dns_tested",
+  "https.fallback_started",
+  "https.fallback_ended",
+  "https.hsts_withdrawn",
+  "https.hsts_restored",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -363,6 +379,10 @@ export function rangeFor(
   return out;
 }
 
+// The sections of the HTTPS settings that have their own label (plan 17-02). A section outside this list reads the
+// base label.
+const HTTPS_SETTINGS_SECTIONS = ["validation", "profile", "hsts", "dns_credential"];
+
 // actionLabel is the human text of an action key. The raw key stays in the
 // expanded row and in exports. An unknown key shows as itself. A stack deploy that was a roll back reads
 // as one, with the revision it restored, from the entry's details (the stack's name, the mode and
@@ -455,6 +475,25 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   if (key === "image.updates_ignored" || key === "image.updates_unignored") {
     const scope = details?.scope === "image" ? details.image : details?.workload;
     if (scope) return t(`audit.actions.${key}_named`, { scope });
+  }
+  // An agent the server retired because its host enrolled again says so; any other revoke is plain.
+  if (key === "agent.revoked" && details?.reason === "replaced") {
+    return t("audit.actions.agent.revoked_replaced");
+  }
+  // A save refused because the typed Cloudflare token failed its test changed nothing. Its row has the
+  // section but no dns_credential value (set, replaced or removed), which every saved change has.
+  if (
+    key === "https.settings_updated" &&
+    details?.section === "dns_credential" &&
+    !details.dns_credential
+  ) {
+    return t("audit.actions.https.settings_updated_dns_credential_failed");
+  }
+  // A change of an HTTPS setting names the section it was about, when the build has a label for it.
+  if (key === "https.settings_updated" && details?.section) {
+    if (HTTPS_SETTINGS_SECTIONS.includes(details.section)) {
+      return t(`audit.actions.https.settings_updated_${details.section}`);
+    }
   }
   // An update names the workload and the version it now runs, or why it did not finish.
   if (key === "image.updated" && details?.workload && details.to_digest) {

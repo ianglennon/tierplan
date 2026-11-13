@@ -39,11 +39,14 @@ var ErrAgentGone = errors.New("tunnel: the agent connection is gone")
 
 // RefuseError is what a Verifier returns to turn a handshake away. Code and
 // Detail go to the agent in a refuse message; AuditReason stays on the server,
-// so a disabled token and a wrong token look alike from outside.
+// so a disabled token and a wrong token look alike from outside. RetryAfter, when
+// set, goes to the agent as the time to wait before it tries again (retryAfterMs),
+// for a refusal that passes.
 type RefuseError struct {
 	Code        string
 	Detail      string
 	AuditReason string
+	RetryAfter  time.Duration
 }
 
 func (e *RefuseError) Error() string {
@@ -510,6 +513,16 @@ func (h *Hub) Session(agentID string) *Session {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.sessions[agentID]
+}
+
+// Live reports whether agentID is connected now: it has a registered session that
+// has not started to close and has shown a sign of life within the offline window.
+// A session that went silent is not live even before the watchdog closes it. The
+// agents service asks it before it retires a host's earlier agent (review 17-2
+// WR-02): only an agent that is not connected may be replaced.
+func (h *Hub) Live(agentID string) bool {
+	s := h.Session(agentID)
+	return s != nil && !s.isGone() && h.now().Sub(s.lastSignOfLife()) <= h.offlineAfter
 }
 
 // notifyRegistryLocked wakes every AwaitSession waiter. h.mu must be held.

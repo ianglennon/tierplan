@@ -9,10 +9,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	legoacme "github.com/go-acme/lego/v5/acme"
 	"github.com/go-acme/lego/v5/acme/api"
+
+	"github.com/ianglennon/tierplan/internal/audit"
 )
 
 const (
@@ -92,6 +95,10 @@ func (m *Manager) round(ctx context.Context) {
 	if m.mode(st) != ModeActive {
 		return
 	}
+	// The first active round in the process reads the directory once, so the clock sample is back soon
+	// after a restart (D-29). Not paused, no certificate files and not off are all settled above: nothing
+	// else measures in the background.
+	m.d.Client.ProbeClock(ctx)
 	leaf, found, err := m.storedLeaf(ctx)
 	if err != nil {
 		m.log.Error("the scheduler could not read the stored Let's Encrypt certificate", "error", err)
@@ -175,8 +182,56 @@ func (m *Manager) syncServed(ctx context.Context) {
 			m.log.Error("the self-signed certificate could not be served after the Let's Encrypt one expired", "error", err)
 		} else {
 			m.noteLapsed(w.leaf.NotAfter)
+			m.fallbackStarted(ctx, w.leaf)
 		}
 	}
+	// A process that starts over an expired stored certificate never installs it, so self-signed is served from the
+	// start and the swap above never happens. That lapse is the same fallback, found here on the first round (D-10).
+	// Noting it first lets the return to Let's Encrypt be told from an ordinary install, and keeps later rounds out.
+	if w := m.onWire(); !w.acme && w.lapsed.IsZero() && !now.Before(leaf.NotAfter) {
+		m.log.Warn("the Let's Encrypt certificate has expired, so the self-signed certificate is served until it is renewed",
+			"expired_at", leaf.NotAfter)
+		m.noteLapsed(leaf.NotAfter)
+		m.fallbackStarted(ctx, leaf)
+	}
+}
+
+// fallbackStarted writes the audit row of a fallback to self-signed: the Let's Encrypt certificate leaf has expired and
+// the self-signed one is served in its place. It is system:acme's doing, never a person's. The lapse is identified by
+// the expired certificate's serial, kept in app_meta once its row is written, so a restart while the certificate is
+// still expired finds the lapse already in the log and writes nothing (T-17-32); a different certificate that lapses
+// later is a lapse of its own. A marker that cannot be read is logged and the row is written anyway, since a repeated
+// row is better than a fallback missing from the log; a marker that cannot be written is logged.
+func (m *Manager) fallbackStarted(ctx context.Context, leaf *x509.Certificate) {
+	if leaf == nil {
+		return
+	}
+	serial := leaf.SerialNumber.Text(16)
+	noted, err := m.d.Store.FallbackNoted(ctx)
+	if err != nil {
+		m.log.Error("read which expired certificate's fallback is already in the audit log", "error", err)
+	} else if noted == serial {
+		return
+	}
+	m.record(ctx, audit.ActionHTTPSFallbackStarted, audit.ResultSuccess, "", map[string]string{
+		"expired_at": leaf.NotAfter.UTC().Format(time.RFC3339),
+		"names":      strings.Join(leaf.DNSNames, ","),
+	})
+	if err := m.d.Store.NoteFallback(ctx, serial, m.clock.Now()); err != nil {
+		m.log.Error("note which expired certificate's fallback is in the audit log", "error", err)
+	}
+}
+
+// fallbackEnded writes the audit row of the return from a fallback: a Let's Encrypt certificate is served again.
+// The Installer interface carries no context, so the row is written under a background one.
+func (m *Manager) fallbackEnded(leaf *x509.Certificate) {
+	if leaf == nil {
+		return
+	}
+	m.record(context.Background(), audit.ActionHTTPSFallbackEnded, audit.ResultSuccess, "", map[string]string{
+		"names":     strings.Join(leaf.DNSNames, ","),
+		"not_after": leaf.NotAfter.UTC().Format(time.RFC3339),
+	})
 }
 
 // serveStored asks the Installer to serve the stored Let's Encrypt certificate.
@@ -282,12 +337,19 @@ type trackedInstaller struct {
 	m *Manager
 }
 
+// ServeACME is every route back to a Let's Encrypt certificate, so it is where the end of a fallback is seen: the wire
+// held self-signed in place of a lapsed certificate, whether the swap to it was this process's or it was served from
+// the start. A swap the Installer refused changes nothing and writes nothing.
 func (t trackedInstaller) ServeACME(chainPEM, keyPEM []byte) error {
+	prev := t.m.onWire()
 	if err := t.Installer.ServeACME(chainPEM, keyPEM); err != nil {
 		return err
 	}
 	leaf, _ := leafOfChain(chainPEM)
 	t.m.setWire(servedCert{acme: true, leaf: leaf})
+	if !prev.acme && !prev.lapsed.IsZero() {
+		t.m.fallbackEnded(leaf)
+	}
 	return nil
 }
 

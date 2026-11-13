@@ -103,6 +103,10 @@ type ClusterState struct {
 	LeaderNodeID, LeaderAgentID string
 	// InUse is the agent of the manager the last read was sent to.
 	InUse string
+	// AnsweredBy is the swarm node ID of the manager whose agent answered Read, as that agent
+	// reported it; empty for a read of the server's own socket. A node list that does not name
+	// its answerer is not believed (dockerx.ClusterRead.ListsAnswerer).
+	AnsweredBy string
 	// NoQuorum is true while the managers answer that the swarm has no leader;
 	// NoQuorumSince is when that began.
 	NoQuorum      bool
@@ -264,6 +268,47 @@ func (c *Clusters) Cached(envID string) (ClusterState, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.state, true
+}
+
+// SwarmNodeIDs is the IDs of the swarm nodes in the node list last read for envID, and when
+// that list was read. ok is false when no list is held (nothing was read yet, or the
+// environment is not a swarm) or the quorum is lost, and for a list that does not name the
+// manager that answered it, which includes a list without nodes and a read of the local
+// socket: the D-10 reaper ignores such a list (T-02-68, the same
+// dockerx.ClusterRead.ListsAnswerer), so it is no basis to say a node is or is not in the
+// swarm either. It does no I/O and takes no refresh lock, so the agents service can ask on
+// every enrolment. The agents service is its consumer: it believes a node an agent claims at
+// enrolment only when this list holds it, and it checks how old the list is itself.
+func (c *Clusters) SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time, ok bool) {
+	st, found := c.Cached(envID)
+	if !found || !st.Known() || !st.Read.ListsAnswerer(st.AnsweredBy) {
+		return nil, time.Time{}, false
+	}
+	ids = make([]string, 0, len(st.Read.Nodes))
+	for _, n := range st.Read.Nodes {
+		ids = append(ids, n.ID)
+	}
+	return ids, st.FetchedAt, true
+}
+
+// RefreshSwarmNodeIDs is SwarmNodeIDs after one more read of the environment's cluster, for an
+// enrolment whose node the held list lacks: a node that joined the swarm since the last read
+// (the cache reads every 15 seconds) is then usually found at the agent's first try instead of
+// a refusal. It is bounded so that enrolments cannot drive the managers: the read is made only
+// when the last attempt is at least minAge old, and only when no read of the environment is
+// running already (it never waits for one; that read's list answers). An environment never
+// read is not read here. ctx bounds the read.
+func (c *Clusters) RefreshSwarmNodeIDs(ctx context.Context, envID string, minAge time.Duration) (ids []string, fetchedAt time.Time, ok bool) {
+	if e, found := c.lookup(envID); found && e.refresh.TryLock() {
+		e.mu.Lock()
+		attempted := e.state.AttemptedAt
+		e.mu.Unlock()
+		if !attempted.IsZero() && c.now().Sub(attempted) >= minAge {
+			_ = c.refresh(ctx, envID, e) // a failed read leaves the state as it records it
+		}
+		e.refresh.Unlock()
+	}
+	return c.SwarmNodeIDs(envID)
 }
 
 // SetRestartLoopMute puts a mute or an unmute of a service into the cached state at once, so
@@ -732,7 +777,7 @@ func (c *Clusters) refreshSwarm(ctx context.Context, in RollupInput, e *clusterE
 		read = r
 		return err
 	})
-	c.apply(ctx, in, e, read, err)
+	c.apply(ctx, in, e, read, used.SwarmNodeID, err)
 	if err == nil && c.reaper != nil {
 		// Each successful node list is what an agent's node is missing from or not
 		// (D-10). The read's own deadline is nearly spent, and the writes that may
@@ -754,7 +799,8 @@ func (c *Clusters) refreshLocal(ctx context.Context, in RollupInput, e *clusterE
 			return err
 		}
 		read, err := cli.Cluster(ctx)
-		c.apply(ctx, in, e, read, err)
+		// The server's own socket has no agent to name as the answerer.
+		c.apply(ctx, in, e, read, "", err)
 		return err
 	case dockerx.TypeStandalone:
 		return c.refreshContainers(ctx, in, e)
@@ -762,8 +808,9 @@ func (c *Clusters) refreshLocal(ctx context.Context, in RollupInput, e *clusterE
 	return nil
 }
 
-// apply records the outcome of a read of the cluster.
-func (c *Clusters) apply(ctx context.Context, in RollupInput, e *clusterEntry, read dockerx.ClusterRead, err error) {
+// apply records the outcome of a read of the cluster. answeredBy is the swarm node ID of the
+// manager whose agent answered, empty for the local socket.
+func (c *Clusters) apply(ctx context.Context, in RollupInput, e *clusterEntry, read dockerx.ClusterRead, answeredBy string, err error) {
 	now := c.now()
 	// The mutes are read once per successful read, before the state is locked. The read's own
 	// deadline is nearly spent by now, so the store gets one of its own.
@@ -784,7 +831,7 @@ func (c *Clusters) apply(ctx context.Context, in RollupInput, e *clusterEntry, r
 	switch {
 	case err == nil:
 		changed = e.state.NoQuorum
-		e.state.Read, e.state.FetchedAt = read, now
+		e.state.Read, e.state.FetchedAt, e.state.AnsweredBy = read, now, answeredBy
 		e.state.ServiceRefs = read.ServiceRefs
 		e.state.NoQuorum, e.state.NoQuorumSince = false, time.Time{}
 		e.state.LeaderNodeID, e.state.LeaderAgentID = "", ""

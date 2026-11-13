@@ -556,8 +556,14 @@ func TestTwentyGoroutinesConnectingDisconnectingAndReadingStatusPassTheRaceDetec
 	env := r.srv.NewEnvironment(t, "Remote")
 	const agents = 10
 	conns := make([]*agentConn, agents)
+	// Ten hosts need a swarm: a standalone environment has one host only, and an enrolment
+	// from a host that already has an agent here retires that agent (review 17 CR-02).
 	for i := range conns {
-		conns[i] = r.connect(t, env, dockertest.FakeConfig{Hostname: "edge"}, nil)
+		name := fmt.Sprintf("edge-%d", i)
+		conns[i] = r.connect(t, env, dockertest.FakeConfig{Hostname: name}, &wire.Facts{
+			EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
+			Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name},
+		})
 	}
 	r.srv.Events.WaitLen(t, agents)
 

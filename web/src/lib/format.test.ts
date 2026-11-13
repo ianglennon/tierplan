@@ -9,6 +9,7 @@ import {
   formatBytes,
   formatClock,
   formatClockOffset,
+  formatOffsetWords,
   formatRelative,
 } from "@/lib/format";
 
@@ -137,5 +138,26 @@ describe("formatClockOffset", () => {
   it("is empty for a value that is not a number", () => {
     expect(formatClockOffset(Number.NaN)).toBe("");
     expect(formatClockOffset(Number.POSITIVE_INFINITY)).toBe("");
+  });
+});
+
+describe("formatOffsetWords", () => {
+  it("says minutes below two hours, hours below two days and days from there", () => {
+    expect(formatOffsetWords(301)).toBe("5 minutes");
+    expect(formatOffsetWords(7199)).toBe("120 minutes");
+    expect(formatOffsetWords(7200)).toBe("2 hours");
+    expect(formatOffsetWords(10_800)).toBe("3 hours");
+    expect(formatOffsetWords(172_799)).toBe("48 hours");
+    expect(formatOffsetWords(172_800)).toBe("2 days");
+  });
+
+  it("ignores the sign and reads a value that is not a number as no time", () => {
+    expect(formatOffsetWords(-600)).toBe("10 minutes");
+    expect(formatOffsetWords(-10_800)).toBe("3 hours");
+    expect(formatOffsetWords(Number.NaN)).toBe("0 minutes");
+  });
+
+  it("uses the singular for one", () => {
+    expect(formatOffsetWords(60)).toBe("1 minute");
   });
 });

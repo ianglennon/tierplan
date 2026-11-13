@@ -104,6 +104,9 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 		ReasonNoQuorum, ReasonClusterChanged, ReasonEngineUnreachable, ReasonUnsupportedEngine, ReasonAgentPolicyDenied,
 		ReasonUnknownAgent,
 	}
+	if RefuseNodeNotInSwarm != "node_not_in_swarm" {
+		t.Fatalf("RefuseNodeNotInSwarm = %q, the agents of other versions read this exact text", RefuseNodeNotInSwarm)
+	}
 	if len(codes) != 16 {
 		t.Fatalf("D-40 names 15 codes and D-31 adds one, the test lists %d", len(codes))
 	}
@@ -119,6 +122,7 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 	}
 	for _, c := range []string{
 		RefuseDuplicateEnvironment, RefuseTypeMismatch, RefuseHostMismatch, RefuseTokenDisabled, RefuseTokenSuperseded, RefuseInsecureTransport, RefuseRateLimited, RefuseInternal,
+		RefuseHostAlreadyConnected, RefuseNodeNotInSwarm,
 	} {
 		if c == "" || seen[c] {
 			t.Fatalf("enrolment refusal %q is empty or collides with a reason code", c)

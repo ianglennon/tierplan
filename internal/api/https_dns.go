@@ -6,13 +6,16 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/dnscheck"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -23,6 +26,100 @@ import (
 // The token field carries no maxLength in the schema on purpose: a schema violation is answered with the
 // offending value, which would echo a secret. The manager refuses a token over 256 bytes as
 // dns_token_invalid before any request is made, and the server's body limit bounds the request.
+
+// The sections of a https.settings_updated row (Phase 17, D-13).
+const (
+	sectionValidation    = "validation"
+	sectionDNSCredential = "dns_credential" //nolint:gosec // G101: the name of an audit section, not a credential
+	sectionProfile       = "profile"
+	sectionHSTS          = "hsts"
+)
+
+// reasonTokenTestFailed is the reason of a row whose token did not pass its test: not a problem type, because the
+// request itself was answered 200 with the per-name test.
+const reasonTokenTestFailed = "token_test_failed"
+
+// errTokenTestFailed is the refusal a row records for a token that failed its test.
+var errTokenTestFailed error = &huma.ErrorModel{Type: reasonTokenTestFailed, Status: http.StatusUnprocessableEntity}
+
+// failedClasses are the distinct classes of the names that did not pass, sorted and comma-joined. The classes are
+// the classifier's own closed vocabulary; nothing the provider said is in them.
+func failedClasses(t acme.TokenTest) string {
+	var classes []string
+	for _, n := range t.Names {
+		class := ""
+		switch {
+		case n.Failure != nil:
+			class = n.Failure.Class
+		default:
+			for _, s := range n.Steps {
+				if s.State == acme.TestFailed && s.Class != "" {
+					class = s.Class
+					break
+				}
+			}
+		}
+		if class != "" && !slices.Contains(classes, class) {
+			classes = append(classes, class)
+		}
+	}
+	slices.Sort(classes)
+	return strings.Join(classes, ",")
+}
+
+// validationDetails is the details of the one row a saved validation settings form writes, nil when the save
+// changed nothing. The fields are listed in the fixed order challenge, resolvers, dns_credential and only a field
+// that changed has its values; the token has none, only whether it was set or replaced.
+func validationDetails(c acme.ValidationChanges) map[string]string {
+	var fields []string
+	details := map[string]string{}
+	if c.ChallengeChanged() {
+		fields = append(fields, "challenge")
+		details["challenge_from"], details["challenge_to"] = c.ChallengeFrom, c.ChallengeTo
+	}
+	if c.ResolversChanged() {
+		fields = append(fields, "resolvers")
+		details["resolvers_from"], details["resolvers_to"] = strings.Join(c.ResolversFrom, ","), strings.Join(c.ResolversTo, ",")
+	}
+	if c.Credential != "" {
+		fields = append(fields, "dns_credential")
+		details["dns_credential"] = c.Credential
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	details["fields"] = strings.Join(fields, ",")
+	details["section"] = sectionValidation
+	if !c.ChallengeChanged() && !c.ResolversChanged() {
+		details["section"] = sectionDNSCredential
+	}
+	return details
+}
+
+// dnsTestedDetails are the facts of one Test token press: the provider, how many names were tested and passed, the
+// classes of any failures, and whose token it was (typed, saved or env). The token is not among them.
+func dnsTestedDetails(t acme.TokenTest, dnsView acme.DNSView, typed bool) map[string]string {
+	passed := 0
+	for _, n := range t.Names {
+		if n.Passed() {
+			passed++
+		}
+	}
+	source := "saved"
+	switch {
+	case typed:
+		source = "typed"
+	case dnsView.TokenSource == acme.TokenSourceEnv:
+		source = "env"
+	}
+	details := map[string]string{
+		"provider": dnsView.Provider, "names": strconv.Itoa(len(t.Names)), "passed": strconv.Itoa(passed), "credential_source": source,
+	}
+	if classes := failedClasses(t); classes != "" {
+		details["failed_classes"] = classes
+	}
+	return details
+}
 
 // HTTPSACMEDNSErrorBody is the facts of one failed DNS step. It carries data only; the browser writes
 // the words.
@@ -101,7 +198,9 @@ func resolverDetail(e *dnscheck.ResolverError) string {
 
 // PutACMEValidationInput is the body of the validation save.
 type PutACMEValidationInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		ChallengeType string   `json:"challengeType" enum:"http-01,dns-01" doc:"How Let's Encrypt is shown you control the names: http-01 over port 80, or dns-01 with a TXT record at your DNS provider"`
 		Token         string   `json:"token,omitempty" doc:"A new DNS API token, at most 256 printable characters with no space; anything else fails its test as dns_token_invalid with no request made. It is tested against the certificate names first and stored sealed only when every name passes. Leave out to keep the saved token"`
 		Resolvers     []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers the propagation check asks, as host or host:port; an empty list means the zone's own name servers. Leave out to keep the saved list"`
@@ -122,10 +221,17 @@ type HTTPSACMEValidationOutput struct {
 
 // TestACMEDNSTokenInput is the body of the token test.
 type TestACMEDNSTokenInput struct {
-	Body struct {
+	// UserAgent is the browser's, recorded in the audit row. The hidden header leaves the contract unchanged.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
 		Token     string   `json:"token,omitempty" doc:"The token to test, at most 256 printable characters with no space; anything else fails as dns_token_invalid with no request made. Leave out to test the saved token"`
 		Resolvers []string `json:"resolvers,omitempty" maxItems:"32" maxLength:"300" doc:"The resolvers to ask, as host or host:port. Leave out to use the saved list"`
 	}
+}
+
+// DeleteACMEDNSTokenInput is the token removal. It has no body; the hidden header is for the audit row.
+type DeleteACMEDNSTokenInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
 // HTTPSACMETokenTestOutput is the result of a token test.
@@ -170,7 +276,31 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 			ChallengeType: in.Body.ChallengeType, Token: in.Body.Token, Resolvers: resolvers,
 		})
 		if err != nil {
-			return nil, acmeProblem(d.Log, "save the validation settings", err)
+			// A refusal records the problem type and nothing else: a 422 can carry the typed resolver entry as its value.
+			problem := acmeProblem(d.Log, "save the validation settings", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		var row error
+		var details map[string]string
+		switch {
+		case !res.Saved && res.Test != nil:
+			row = errTokenTestFailed
+			// No dns_credential value: nothing was set, replaced or removed, and the audit list labels a
+			// dns_credential row without one as a failed test rather than a change (review 17 IN-03).
+			details = map[string]string{"section": sectionDNSCredential}
+			if classes := failedClasses(*res.Test); classes != "" {
+				details["failed_classes"] = classes
+			}
+		case res.Saved:
+			details = validationDetails(res.Changes)
+		}
+		if details != nil {
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, row, details); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
 		}
 		st, err := d.ACME.Status(ctx)
 		if err != nil {
@@ -213,7 +343,23 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 		}
 		res, err := d.ACME.TestToken(ctx, acme.TestRequest{Token: in.Body.Token, Resolvers: resolvers})
 		if err != nil {
-			return nil, acmeProblem(d.Log, "test the DNS token", err)
+			// A refused test (a lock, a bad resolver, a run in progress, a pause) records the problem type alone.
+			problem := acmeProblem(d.Log, "test the DNS token", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSDNSTested, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		st, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
+		var row error
+		if !res.Passed {
+			row = errTokenTestFailed
+		}
+		if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSDNSTested, row, dnsTestedDetails(res, st.DNS, strings.TrimSpace(in.Body.Token) != "")); aerr != nil {
+			return nil, auditFailed(d, aerr)
 		}
 		return &HTTPSACMETokenTestOutput{CacheControl: "no-store", Body: *tokenTestBody(res)}, nil
 	})
@@ -229,12 +375,27 @@ func registerHTTPSACMEDNS(r *httpx.Router, d HTTPSDeps) {
 			" while a run or a token test holds the DNS slot; 409 " + problemACMEPaused + " after a restore; 409 " + problemACMECertFiles +
 			" while certificate files are set. Needs settings.write.",
 		Tags: []string{"https"},
-	}, write, func(ctx context.Context, _ *struct{}) (*HTTPSACMENoContentOutput, error) {
+	}, write, func(ctx context.Context, in *DeleteACMEDNSTokenInput) (*HTTPSACMENoContentOutput, error) {
 		if d.ACME == nil {
 			return nil, acmeUnavailable()
 		}
+		// Whether a token was saved is read first: removing none is not a change and writes no row.
+		before, err := d.ACME.Status(ctx)
+		if err != nil {
+			return nil, acmeInternal(d.Log, "read the Let's Encrypt status", err)
+		}
 		if err := d.ACME.RemoveToken(ctx); err != nil {
-			return nil, acmeProblem(d.Log, "remove the DNS token", err)
+			problem := acmeProblem(d.Log, "remove the DNS token", err)
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, problem, nil); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
+			return nil, problem
+		}
+		if before.DNS.TokenSaved {
+			details := map[string]string{"section": sectionDNSCredential, "fields": "dns_credential", "dns_credential": "removed"}
+			if aerr := d.audit(ctx, in.UserAgent, audit.ActionHTTPSSettingsUpdated, nil, details); aerr != nil {
+				return nil, auditFailed(d, aerr)
+			}
 		}
 		return &HTTPSACMENoContentOutput{CacheControl: "no-store"}, nil
 	})

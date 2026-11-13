@@ -420,7 +420,7 @@
       },
       "ca_untrusted": {
         "headline": "TierPlan doesn't trust the certificate authority's certificate.",
-        "fix": "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE."
+        "fix": "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE. A server clock that is badly wrong can cause it too."
       },
       "internal": {
         "headline": "Something went wrong inside TierPlan.",
@@ -545,7 +545,9 @@
       "attempts_one": "{{count}} failed attempt in a row.",
       "attempts_other": "{{count}} failed attempts in a row.",
       "next": "Next automatic attempt {{time}}.",
-      "details": "Details"
+      "details": "Details",
+      "clockHint": "TierPlan's clock is {{offset}} ahead of Let's Encrypt's. Fix NTP on this host so expiry and renewal times are right.",
+      "clockHintBehind": "TierPlan's clock is {{offset}} behind Let's Encrypt's. Fix NTP on this host so expiry and renewal times are right."
     },
     "alerts": {
       "certFilesOnly": "Remove TIERPLAN_TLS_CERT_FILE and TIERPLAN_TLS_KEY_FILE to use Let's Encrypt.",

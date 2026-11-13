@@ -120,6 +120,16 @@
         "hint": "Add {{host}} as its own environment.",
         "hintGeneric": "Add this host as its own environment."
       },
+      "host_already_connected": {
+        "text": "{{node}} already has a connected agent in this environment.",
+        "textGeneric": "This host already has a connected agent in this environment.",
+        "hint": "Remove the duplicate agent container or service from the host, or stop the other agent. The new one enrols by itself about a minute later. A VM cloned from this host shares its Docker engine ID. On the clone, first remove the copied agent and its volume, then give Docker a new engine ID, then install the agent fresh (a standalone clone as its own environment)."
+      },
+      "node_not_in_swarm": {
+        "text": "{{node}} isn't in the swarm's node list yet.",
+        "textGeneric": "This node isn't in the swarm's node list yet.",
+        "hint": "A node that just joined the swarm enrols by itself within a minute. A node that was removed from the swarm must join it again."
+      },
       "unreachable": {
         "text": "Docker isn't answering on the local socket.",
         "hint": "Check that `/var/run/docker.sock` is mounted into TierPlan and that the Docker daemon is running."

@@ -1387,3 +1387,96 @@ func TestEnvDNSLocksRemoveTokenIsRefusedWhileAVariableRules(t *testing.T) {
 		t.Errorf("saved token = %q, want it still there", got)
 	}
 }
+
+// ValidationChanges is what a save changed, decided from the state the save wrote over, and it never holds the
+// token (Phase 17, SET-04, D-13).
+func TestValidationChanges(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("method, resolvers and a first token", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeHTTP01)
+		e.forgetToken()
+		// The typed token is tested through this list, so it names the local responder.
+		resolvers := []string{e.dns.Addr()}
+		two := resolvers
+
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken, Resolvers: &resolvers})
+		if err != nil || !res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v", res, err)
+		}
+		c := res.Changes
+		if c.ChallengeFrom != ChallengeHTTP01 || c.ChallengeTo != ChallengeDNS01 || !c.ChallengeChanged() {
+			t.Errorf("challenge %q to %q, want http-01 to dns-01", c.ChallengeFrom, c.ChallengeTo)
+		}
+		if len(c.ResolversFrom) != 0 || !slices.Equal(c.ResolversTo, two) || !c.ResolversChanged() {
+			t.Errorf("resolvers %v to %v, want none to %v", c.ResolversFrom, c.ResolversTo, two)
+		}
+		if c.Credential != CredentialSet {
+			t.Errorf("credential = %q, want set (no token was saved before)", c.Credential)
+		}
+	})
+
+	t.Run("a different token replaces", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeDNS01)
+		// The fake provider accepts dnsToken only, so a replacement is the same text typed again.
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken})
+		if err != nil || !res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v", res, err)
+		}
+		c := res.Changes
+		if c.Credential != CredentialReplaced || c.ChallengeChanged() || c.ResolversChanged() {
+			t.Errorf("changes = %+v, want the credential replaced and nothing else", c)
+		}
+	})
+
+	t.Run("an empty token field leaves the stored token and records nothing", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeHTTP01)
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeHTTP01})
+		if err != nil || !res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v", res, err)
+		}
+		c := res.Changes
+		if c.Credential != "" || c.ChallengeChanged() || c.ResolversChanged() {
+			t.Errorf("changes = %+v, want none", c)
+		}
+		if e.savedToken() != dnsToken {
+			t.Error("the stored token changed")
+		}
+	})
+
+	t.Run("a failed token test saves nothing and reports no changes", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeHTTP01)
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: refusedToken})
+		if err != nil || res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v, want not saved", res, err)
+		}
+		if c := res.Changes; c.ChallengeFrom != "" || c.ChallengeTo != "" || c.Credential != "" || c.ResolversChanged() {
+			t.Errorf("changes = %+v, want the zero value", c)
+		}
+	})
+
+	t.Run("an echo of the variable is not a change", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeHTTP01)
+		e.env.Challenge = ChallengeDNS01
+		e.mgr = e.build(false)
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01})
+		if err != nil || !res.Saved {
+			t.Fatalf("SaveValidation = %+v, %v", res, err)
+		}
+		if c := res.Changes; c.ChallengeChanged() || c.ChallengeTo != ChallengeHTTP01 {
+			t.Errorf("changes = %+v, want the stored method kept and no change", c)
+		}
+	})
+
+	t.Run("no field of the changes holds the token", func(t *testing.T) {
+		e := newDNSEnv(t, ChallengeHTTP01)
+		e.forgetToken()
+		res, err := e.mgr.SaveValidation(ctx, ValidationInput{ChallengeType: ChallengeDNS01, Token: dnsToken})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%+v", res.Changes); strings.Contains(got, dnsToken) {
+			t.Errorf("changes = %s, want no token in them", got)
+		}
+	})
+}

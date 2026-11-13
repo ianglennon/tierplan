@@ -174,12 +174,14 @@ Add the host in TierPlan with **Environments, Add environment**. The dialog show
 
 ## Install on a swarm
 
-Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service:
+Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service. It first checks that the swarm has no agent service, found by the `tierplan.agent=true` label every install puts on it (so a stack-deployed `<stack>_tierplan-agent` counts) or by the name `tierplan-agent`: if one exists, it creates nothing, says so, and stops with an error (see [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one)):
 
 ```sh
- printf %s '<join token>' | docker secret create tierplan-agent-token-g1 - && docker service create --name tierplan-agent \
+ if [ -n "$(docker service ls -q --filter label=tierplan.agent=true)" ] || docker service inspect tierplan-agent >/dev/null 2>&1; then \
+   echo '…an agent service … exists already on this swarm, so nothing was created…' >&2; false; else \
+ printf %s '<join token>' | docker secret create tierplan-agent-token-g1-<env> - && docker service create --name tierplan-agent \
    --mode global --constraint node.platform.os==linux \
-   --secret source=tierplan-agent-token-g1,target=tierplan-agent-token,mode=0400 \
+   --secret source=tierplan-agent-token-g1-<env>,target=tierplan-agent-token,mode=0400 \
    --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
    --mount type=volume,src=tierplan-agent,dst=/var/lib/tierplan-agent \
    --mount type=bind,src=/proc/1/net/route,dst=/host/route,ro \
@@ -189,14 +191,15 @@ Run the command on **any manager** node. It creates the join token as a Docker s
    --env 'TIERPLAN_AGENT_URL=wss://tierplan.example.com/agent/connect' \
    [--env 'TIERPLAN_AGENT_PIN=sha256/...'] \
    --env 'TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token' \
-   ghcr.io/ianglennon/tierplan-agent:<version>
+   ghcr.io/ianglennon/tierplan-agent:<version>; fi
 ```
 
 (The dialog gives it as one line. The line breaks above are only for reading.)
 
 | Part | What it does |
 |------|--------------|
-| `docker secret create tierplan-agent-token-g1` | Keeps the join token in a Docker secret instead of in the service definition. `g1` is the token's generation; every rotation creates the next name. |
+| `if [ -n "$(docker service ls -q --filter label=tierplan.agent=true)" ] …` | Creates nothing while an agent service exists on the swarm, whatever it is called, so a host is never left half installed and never gets a second agent on the same `tierplan-agent` volume. |
+| `docker secret create tierplan-agent-token-g1-<env>` | Keeps the join token in a Docker secret instead of in the service definition. `g1` is the token's generation; every rotation creates the next name. `<env>` is the last 12 letters and digits of the environment's ID, so each environment has its own secret name and a secret left on the swarm by an earlier TierPlan does not stop a new install. The dialog shows the real name. |
 | `--mode global`, `--constraint node.platform.os==linux` | One agent on every Linux node. A node you add to the swarm later enrols by itself: the service starts an agent there and the secret is already in place. |
 | `--secret source=…,target=tierplan-agent-token,mode=0400` | Mounts the token at `/run/secrets/tierplan-agent-token`, readable by root only. |
 | `--mount …docker.sock` | Gives the agent the Docker socket. This is root-equivalent on the host, which is why the agent is small, read-only and drops its privileges. |
@@ -209,7 +212,7 @@ Run the command on **any manager** node. It creates the join token as a Docker s
 | `TIERPLAN_AGENT_PIN` | Present only when TierPlan serves its own self-signed certificate: the pin that certificate is checked against. |
 | `TIERPLAN_AGENT_JOIN_TOKEN_FILE` | The secret file the token is read from. |
 
-**As a stack file.** The dialog's **Compose file** view gives the same service as a stack file. A stack file cannot create a secret from text, so its first line is the one-line command that creates the secret; run it first, then `docker stack deploy -c tierplan-agent.yml <stack>`. The service is then called `<stack>_tierplan-agent`, not `tierplan-agent`: the rotate, update and cleanup commands on this page name `tierplan-agent`, so change the name in them to match.
+**As a stack file.** The dialog's **Compose file** view gives the same service as a stack file. A stack file cannot create a secret from text, so its first line is the one-line command that creates the secret; run it first, then `docker stack deploy -c tierplan-agent.yml <stack>`. The service is then called `<stack>_tierplan-agent`, not `tierplan-agent`. The install command's check and the cleanup command find the agent service by its `tierplan.agent=true` label, so they work for it as they are. The rotate and update commands on this page name `tierplan-agent`, so change the name in them to match.
 
 To see the agents on every node:
 
@@ -260,12 +263,12 @@ For a swarm that already has agents, **Show install command** gives one command 
 
 ```sh
  OLD=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' tierplan-agent) \
-   && printf %s '<new token>' | docker secret create tierplan-agent-token-g2 - \
-   && docker service update --secret-rm "$OLD" --secret-add source=tierplan-agent-token-g2,target=tierplan-agent-token,mode=0400 tierplan-agent \
+   && printf %s '<new token>' | docker secret create tierplan-agent-token-g2-<env> - \
+   && docker service update --secret-rm "$OLD" --secret-add source=tierplan-agent-token-g2-<env>,target=tierplan-agent-token,mode=0400 tierplan-agent \
    && docker secret rm "$OLD"
 ```
 
-The swarm agents restart one at a time and reconnect.
+The old secret's name is read from the service, so this works on a swarm installed before secret names carried `<env>` (`tierplan-agent-token-g1`) too. The swarm agents restart one at a time and reconnect.
 
 A standalone agent keeps the token in its container's environment. To remove it from `docker inspect`, rotate the token in TierPlan and recreate the container with the new command (the `tierplan-agent` volume keeps the agent's identity, so the environment keeps its history).
 
@@ -273,11 +276,12 @@ A standalone agent keeps the token in its container's environment. To remove it 
 
 Once the agents have enrolled (the node list shows them connected) the join token can come off the host. An enrolled agent proves who it is with its own key, so it keeps running, restarting and updating as the same agent without it.
 
-On a swarm, on a manager, take the secret and the variable that points to it off the service, then delete the secret. `<N>` is the generation in the secret's name; `docker service inspect tierplan-agent` shows it:
+On a swarm, on a manager, take the secret and the variable that points to it off the service, then delete the secret. The secret's name is read from the service, so this works for either naming of the secret:
 
 ```sh
- docker service update --secret-rm tierplan-agent-token-g<N> --env-rm TIERPLAN_AGENT_JOIN_TOKEN_FILE tierplan-agent
- docker secret rm tierplan-agent-token-g<N>
+ S=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' tierplan-agent) \
+   && docker service update --secret-rm "$S" --env-rm TIERPLAN_AGENT_JOIN_TOKEN_FILE tierplan-agent \
+   && docker secret rm "$S"
 ```
 
 On a standalone host, recreate the container with the same flags and the same `tierplan-agent` volume, but without the `TIERPLAN_AGENT_JOIN_TOKEN` line. The manual update command the node list shows is exactly that: see [Updating and removing agents by hand](agent-updates.md).
@@ -287,11 +291,11 @@ What an agent without the token cannot do:
 - A node that joins the swarm later cannot enrol. Its agent stops with "no join token".
 - An agent that was revoked and then unblocked, or whose certificate expired, cannot enrol again by itself.
 
-To put the token back on a swarm, take a new token from **Show install command** and add it to the service. Do not use the rotate command for this: it reads the current secret from the service and fails when there is none.
+To put the token back on a swarm, take a new token from **Show install command** and add it to the service. Do not use the rotate command for this: it reads the current secret from the service and fails when there is none. Use the secret name in the install command it shows (`tierplan-agent-token-g<N>-<env>`) for `<secret name>`:
 
 ```sh
- printf %s '<join token>' | docker secret create tierplan-agent-token-g<N> - \
-   && docker service update --secret-add source=tierplan-agent-token-g<N>,target=tierplan-agent-token,mode=0400 --env-add TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token tierplan-agent
+ printf %s '<join token>' | docker secret create <secret name> - \
+   && docker service update --secret-add source=<secret name>,target=tierplan-agent-token,mode=0400 --env-add TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token tierplan-agent
 ```
 
 ## Host routes
@@ -416,7 +420,7 @@ TierPlan shows the same reason on the environment, in the overview's tooltip, in
 |------|---------------|------------|
 | `agent_offline` | The agent on a node is not connected. | Check that it is running (`docker ps` on a standalone host, `docker service ps tierplan-agent` on a swarm) and look at its log. It reconnects by itself when it can reach TierPlan. |
 | `tls_untrusted` | The agent does not trust TierPlan's certificate. | Use a certificate from a public CA, or give the agent the pin: see [TIERPLAN_AGENT_PIN](#a-proxy-with-its-own-certificate-tierplan_agent_pin). With TierPlan's own certificate, reinstall with the command from Show install command, which carries the pin. |
-| `auth_rejected` | TierPlan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. It is also what an agent gets when it dials an address that is no longer TierPlan's agent URL, because it was offline when the address changed. | For a token problem, generate a new join token and reinstall the agent with the new command. The audit log entry's reason tells which it was: `audience` means the address, and [Change TierPlan's agent address](#change-tierplans-agent-address) says how to get the agent back. |
+| `auth_rejected` | TierPlan rejected the agent's credentials: a wrong, replaced or disabled join token, or an unknown agent. Every token problem looks like this to the agent, on purpose. It is also what an agent gets when it dials an address that is no longer TierPlan's agent URL, because it was offline when the address changed. | For a token problem, generate a new join token and reinstall the agent with the new command. The audit log entry's reason tells which it was: `audience` means the address, and [Change TierPlan's agent address](#change-tierplans-agent-address) says how to get the agent back. An enrolled agent that has a join token it has no record of being accepted with (you reinstalled it with the new install command, for example after TierPlan was reinstalled or restored to an empty data directory, or its identity was enrolled by an older agent, which kept no such record) sets its identity aside and enrols with that token. If TierPlan accepts the enrolment the agent is back within about a minute and drops the old identity; if TierPlan refuses it too, as it does for an address or proxy fault, the agent takes its identity back, so this refusal never costs it the identity. A token TierPlan refused that way is not tried again with the same identity, also after a restart (the agent keeps a hash of it, `tried-token.json`, next to its identity); start the agent with another join token, for example a newly generated one, to have it try that. An enrolment that failed for another reason (a blocked host, a busy server) is tried again a minute later. With the token on record it keeps its identity and keeps waiting. |
 | `cert_expired` | The agent's certificate expired before it could renew (the host was off or cut off for a month). | Reinstall the agent with a fresh join token. It enrols again with a new certificate. While it can reach TierPlan an agent renews by itself, two thirds of the way through the certificate's life. |
 | `revoked` | An admin revoked the node. | Remove the agent from the host. To let it back in, see [Revoke, unblock and enrol again](#revoke-unblock-and-enrol-again). |
 | `blocked` | The node is blocked from enrolling. | Unblock it in Settings, Environments, in the nodes list. |
@@ -438,6 +442,8 @@ An agent that is refused when it first connects also gets one of these. They app
 | `duplicate_environment` | The host already belongs to another environment. | Open that environment, or remove it first, then enrol again. |
 | `type_mismatch` | A swarm manager used a standalone environment's command, or the other way round. | Add the host as its own environment. |
 | `host_mismatch` | A standalone environment already manages a different host. | Add this host as its own environment. |
+| `host_already_connected` | The host already has an agent in this environment that is connected now: a second agent container or service on the host (for example a leftover `docker run` agent next to the global service, or an install command run again with another container name or volume), or a **VM cloned from the host**, which shares its Docker engine ID. TierPlan refuses the new agent rather than replacing the connected one, so two agents on one host never replace each other. | Remove the duplicate agent from the host. For a cloned VM, on the clone first remove the copied agent and its `tierplan-agent` volume (a swarm node leaves the swarm first), then give Docker a new engine ID, then install the agent fresh: see [Cloned machines and the engine ID](#cloned-machines-and-the-engine-id). The refused agent does not stop: it tries again once a minute and enrols by itself once the other agent is gone. An agent that was only stopping (its connection had not ended yet) is gone within about a minute, and no action is needed. |
+| `node_not_in_swarm` | The swarm node the agent reports is not in the node list that TierPlan read from a manager in the last two minutes. Before it refuses, TierPlan reads the list again once when it is at least 5 seconds old, so a node that just joined the swarm is usually accepted at its first try; otherwise it is not in the list until the next read (about every 15 seconds while a manager is connected). Or the node was removed from the swarm with `docker node rm`. | Nothing for a node that just joined: the agent backs off, tries again and enrols by itself within about a minute. An agent from TierPlan 0.1.1 on never stops for this refusal, not even at its first enrolment. An older agent does not know this code, so TierPlan tells it `rate_limited` with a wait of 15 seconds instead, which it also retries without stopping; the waiting panel then shows `rate_limited`, and the audit log keeps the reason `node_not_in_swarm`. A node that was removed from the swarm must join it again, or its agent must be removed from the host. |
 | `insecure_transport` (agent log: HTTP 403 "did not arrive over TLS") | The agent's connection reached TierPlan without TLS. This is almost always a reverse proxy that talks plain HTTP to TierPlan, because TierPlan serves HTTPS only and does not take `X-Forwarded-Proto` as proof of TLS. | Point the proxy at TierPlan's `https://` port (HTTPS upstream) as described in [Running TierPlan behind a reverse proxy](reverse-proxy.md). |
 | `rate_limited` | Too many connection attempts from one address, too many handshakes at once, or more than 16 handshakes at once from one address (an IPv6 /64 counts as one address). | The agent waits as long as TierPlan asks and tries again. |
 | `internal_error` | TierPlan failed while handling a valid request. | The agent retries. Look at TierPlan's log. |
@@ -453,17 +459,47 @@ A few things that are not codes:
 
 ## Cloned machines and the engine ID
 
-TierPlan recognises a host by its Docker **engine ID**, which Docker stores in `/var/lib/docker`. A virtual machine cloned from another one **shares that ID**, so TierPlan sees the clone as the same host and refuses it as `duplicate_environment` (or, in a swarm, as a node it already has).
+TierPlan recognises a host by its Docker **engine ID**, which Docker keeps in the file `engine-id` in its data root (by default `/var/lib/docker/engine-id`; Engine 24 to 29 all store it there, and its content is the ID `docker info` prints). A virtual machine cloned from another one **shares that ID**, so TierPlan sees the clone as the same host. It refuses the clone as `duplicate_environment` (the host already belongs to an environment), as `host_mismatch` (a standalone environment manages one host), or as `host_already_connected` while the original's agent is connected. In a swarm the clone also shares the node ID.
 
-On the clone, give the Docker engine a new identity before you install the agent:
+TierPlan cannot tell a clone from a second agent container on the same host, because both report the same engine ID, so the refusal names both causes.
+
+Work on the clone in this order: first take away the agent it copied from the original, then give its Docker engine a new ID, then install the agent fresh. The order matters. The copied `tierplan-agent` volume holds the original's key and certificate, so the copied agent connects as the original, from the wrong host, whenever it runs; a standalone agent starts with Docker (`--restart unless-stopped`), so it would be back the moment Docker starts again. If you can, keep the clone off the network until the copied agent is gone.
+
+The engine ID is changed by deleting only the `engine-id` file, with Docker stopped; Docker makes a new one when it starts, and nothing else in the data root is touched. The data root is where `docker info --format '{{.DockerRootDir}}'` points.
+
+**A standalone host:**
 
 ```sh
-sudo systemctl stop docker
-sudo rm -rf /var/lib/docker      # this removes every image, container and volume on the host
+# 1. With Docker running: remove the copied agent and its volume
+docker rm -f tierplan-agent && docker volume rm tierplan-agent
+# 2. Give the engine a new ID
+ROOT=$(docker info --format '{{.DockerRootDir}}')   # by default /var/lib/docker
+sudo systemctl stop docker.socket docker
+sudo rm "$ROOT/engine-id"
 sudo systemctl start docker
+docker info --format '{{.ID}}'                       # a new ID, not the original's
 ```
 
-If you cannot wipe `/var/lib/docker`, give the clone a clean Docker data directory. Swarm nodes cloned from one another also share a node ID and need `docker swarm leave --force` and a fresh join after the engine has its new ID.
+3. **Add the clone as its own environment** and install the agent with that environment's command. One standalone environment manages one host, so the clone cannot enrol into the original's environment (`host_mismatch`).
+
+**A swarm node.** The clone also shares the original's swarm node ID and swarm state, and its agent is a task of the global agent service, which the swarm would start again on the clone. Do not remove the agent service: it runs the agent of every node. Take the clone out of the swarm first:
+
+```sh
+# 1. With Docker running: leave the swarm, then remove any agent container left and the copied volume
+docker swarm leave --force
+for c in $(docker ps -aq --filter label=tierplan.agent=true); do docker rm -f "$c"; done
+docker volume rm tierplan-agent
+# 2. Give the engine a new ID, as for a standalone host
+ROOT=$(docker info --format '{{.DockerRootDir}}')
+sudo systemctl stop docker.socket docker
+sudo rm "$ROOT/engine-id"
+sudo systemctl start docker
+docker info --format '{{.ID}}'
+# 3. Join the swarm again, with the command `docker swarm join-token worker` (or manager) prints on a manager
+docker swarm join --token <token> <manager address>:2377
+```
+
+The global agent service then starts a fresh agent on the clone, with a new volume, and it enrols with the join token secret of the service as a node of the swarm's environment. A swarm whose agents run without the join token (see [Run enrolled agents without the join token](#run-enrolled-agents-without-the-join-token)) needs the token put back first. The agent containers are found by the `tierplan.agent=true` label, because a swarm task's container is not called `tierplan-agent`.
 
 ## Who can manage an environment's agents
 
@@ -478,6 +514,38 @@ Settings, Environments, the environment, the nodes list, **Actions, Revoke node*
 - The node is disconnected at once and its certificate is rejected for good. An admin revoke also **blocks** the node: it cannot enrol again until you unblock it. It is a good time to rotate the join token if the host may be compromised.
 - **Unblock node** lets the host enrol again. The agent that was revoked is not revived. If it still has its join token (a standalone agent keeps it in its environment, a swarm agent in its secret), it discards its old identity and enrols again by itself, within about a minute, as a **new** entry. If it does not have the token, install the agent on the host again.
 - A node that leaves a swarm (`docker node rm`) is revoked automatically after two checks, without a block, so it can enrol again if it comes back.
+- After TierPlan is reinstalled, or restored to an empty data directory, it no longer knows the agents' identities and refuses them `auth_rejected`. Remove the old agent from each host, keeping its volume, as in [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one), then run the new install command. Each agent then starts with the new join token on its old `tierplan-agent` volume, sets aside the identity TierPlan no longer accepts and enrols with the new token by itself within about a minute; once TierPlan accepts the enrolment the old identity is deleted. If the enrolment is refused the agent takes its old identity back; it tries the same token again a minute later only when the refusal was not `auth_rejected`, and a token refused `auth_rejected` is not tried again with that identity until the agent is started with another one. An agent started with the join token it has on record keeps its identity and keeps waiting, because that token cannot fix it. When an agent enrols again into the same environment from the same host, TierPlan retires the host's earlier agent entry (revoked with the reason `replaced`, without a block), so the node list does not show the host twice. It does that only while the earlier agent is not connected; while it is, the new enrolment is refused `host_already_connected` and the earlier agent is left alone.
+- On a swarm, TierPlan also checks the node the enrolling agent reports against the node list of a manager (the one it already reads every 15 seconds), because the node ID is only the agent's own claim:
+  - A list read in the last two minutes that holds the node: the agent enrols and the node's earlier offline entry is retired as above.
+  - A list read in the last two minutes that does not hold the node: TierPlan reads the list again once if it is at least 5 seconds old, and when the node is still missing the enrolment is refused `node_not_in_swarm`, and nothing is written. That refusal passes by itself, so the agent backs off and tries again, and never stops for it; a node that just joined the swarm enrols at a retry after the next read of the list. An agent older than 0.1.1 is refused `rate_limited` instead (see the table above), because it would stop at its first enrolment on a code it does not know.
+  - No list that fresh (the first agent of a swarm, or no manager has answered for two minutes), or a list that does not name the manager that answered it (TierPlan believes such a list for nothing, as the reaper does not): the agent is accepted and the audit row says `node_check=unverified`, but no earlier entry is retired at that moment. TierPlan retires the node's older offline entry (reason `replaced`, audit detail `source=node_list`) at the first node list that shows the node while the new agent is connected. If the new agent is gone by then (for example a stray duplicate that enrolled and was removed), nothing is retired, so the agent that is really on the node keeps its entry. A connected agent is never retired.
+  - A standalone host is checked by its engine ID only.
+
+### Reinstall an agent on a host that ran one
+
+An install command creates the agent under fixed service and container names, so it cannot run on a host that still runs an agent. On a swarm the install command checks for an existing agent service first (by its `tierplan.agent=true` label, so a stack-deployed one counts, or by the name `tierplan-agent`), creates nothing when there is one, and prints that the old agent has to go first. On a standalone host `docker run --name tierplan-agent` refuses an existing container. Nothing is half installed, but nothing runs. The join token secret no longer gets in the way: its name carries a slice of the environment's ID, so a secret left over from an earlier install, or from another environment, has a different name. Before you run a new install command on such a host, after TierPlan was reinstalled, after the environment was removed without **Also uninstall the agent from the hosts**, or to move the host to another environment, remove the old agent first and **keep its `tierplan-agent` volume**:
+
+```sh
+# swarm, on a manager: the agent service is found by its label, whatever it is called (tierplan-agent, or
+# <stack>_tierplan-agent from the stack file), and its secret names are read from it, so any generation and either naming works;
+# only its tierplan-agent-token-g* secrets are removed, and the status is not zero when a removal failed
+if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
+for v in $L; do
+  S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
+  for s in $S; do case $s in tierplan-agent-token-g*) docker secret rm "$s" || rc=1;; esac; done
+done; [ "$rc" = 0 ]
+
+# standalone host
+docker rm -f tierplan-agent
+```
+
+Then run the new install command. The agent starts on its old volume with the new join token and enrols again by itself, as described above; if TierPlan refuses the token it still has its old identity. Do not run `docker volume rm tierplan-agent` for this: the volume is what lets the agent come back by itself and keep its address list and pins. A join token secret that an earlier install left behind after its service was removed does no harm to the new install, but it still holds that install's join token, and the cleanup command cannot find it, because it reads the names from a service. Rotation does not leave one behind: the rotate command removes the secret it replaces. To remove every join token secret that no service uses any more, run on a manager:
+
+```sh
+for s in $(docker secret ls --format '{{.Name}}'); do case $s in tierplan-agent-token-g*) docker secret rm "$s";; esac; done
+```
+
+Docker refuses to remove a secret a service still uses and prints an error for it, so the running agent service keeps its secret.
 
 ## Updates
 
@@ -500,10 +568,14 @@ Containers, images, volumes and networks of your own are never touched.
 
 For an agent that was offline, or when you did not tick the box, run on each host:
 
-Swarm, on a manager (the secret is named for the join token's current generation, which the environment's **Manual cleanup command** shows), then on every node that ran the agent:
+Swarm, on a manager (the environment's **Manual cleanup command** shows it; it finds the agent service by its `tierplan.agent=true` label, so it also removes a stack-deployed `<stack>_tierplan-agent`, and it reads the secret names from the service, so it works for any generation and for installs made with either naming of the secret; like the agent's own uninstall it removes only the `tierplan-agent-token-g*` secrets, so another secret you attached to the service is kept; it ends with a non-zero status when any removal failed), then on every node that ran the agent:
 
 ```sh
-docker service rm tierplan-agent && docker secret rm tierplan-agent-token-g1
+if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
+for v in $L; do
+  S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
+  for s in $S; do case $s in tierplan-agent-token-g*) docker secret rm "$s" || rc=1;; esac; done
+done; [ "$rc" = 0 ]
 docker volume rm tierplan-agent
 ```
 
@@ -513,4 +585,4 @@ Standalone host:
 docker rm -f tierplan-agent && docker volume rm tierplan-agent
 ```
 
-A stack-file install: `docker stack rm <stack>`, then remove the stack's network and the `tierplan-agent` volume if they are left behind.
+A stack-file install can also be removed with `docker stack rm <stack>`; then remove the stack's network and the `tierplan-agent` volume if they are left behind.
