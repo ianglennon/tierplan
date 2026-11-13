@@ -539,7 +539,13 @@ done; [ "$rc" = 0 ]
 docker rm -f tierplan-agent
 ```
 
-Then run the new install command. The agent starts on its old volume with the new join token and enrols again by itself, as described above; if TierPlan refuses the token it still has its old identity. Do not run `docker volume rm tierplan-agent` for this: the volume is what lets the agent come back by itself and keep its address list and pins. A secret that an earlier install left behind after its service was removed does no harm, but you can delete it with `docker secret ls --filter name=tierplan-agent-token` and `docker secret rm`.
+Then run the new install command. The agent starts on its old volume with the new join token and enrols again by itself, as described above; if TierPlan refuses the token it still has its old identity. Do not run `docker volume rm tierplan-agent` for this: the volume is what lets the agent come back by itself and keep its address list and pins. A join token secret that an earlier install left behind after its service was removed does no harm to the new install, but it still holds that install's join token, and the cleanup command cannot find it, because it reads the names from a service. Rotation does not leave one behind: the rotate command removes the secret it replaces. To remove every join token secret that no service uses any more, run on a manager:
+
+```sh
+for s in $(docker secret ls --format '{{.Name}}'); do case $s in tierplan-agent-token-g*) docker secret rm "$s";; esac; done
+```
+
+Docker refuses to remove a secret a service still uses and prints an error for it, so the running agent service keeps its secret.
 
 ## Updates
 
