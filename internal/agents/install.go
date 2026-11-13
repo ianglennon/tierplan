@@ -231,12 +231,14 @@ const agentServicesList = "docker service ls -q --filter label=" + labelPair
 // stack-deployed <stack>_tierplan-agent as well as tierplan-agent, and says so when there is
 // none. It reads each service's secret names before it removes the service, so it works for
 // an install with either naming of the secret (g<N> or g<N>-<tag>) and whichever generation
-// the swarm holds. Its status is not zero when the list or a service removal failed. It is
-// POSIX sh. They carry no join token.
+// the swarm holds. Like the agent's own uninstall (agent/internal/selfmaint) it removes only
+// the secrets whose names start with SecretPrefix: another secret an operator attached to the
+// service, such as a CA bundle, is left alone. Its status is not zero when the list, a service
+// removal or a secret removal failed. It is POSIX sh. They carry no join token.
 func CleanupCommands() (swarm, standalone string) {
 	swarm = " if L=$(" + agentServicesList + "); then rc=0; [ -n \"$L\" ] || echo 'no agent service (label " + labelPair + ") on this swarm' >&2; else rc=1; fi;" +
 		` for v in $L; do S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; };` +
-		` for s in $S; do docker secret rm "$s"; done; done; [ "$rc" = 0 ]` +
+		` for s in $S; do case $s in ` + SecretPrefix + `*) docker secret rm "$s" || rc=1;; esac; done; done; [ "$rc" = 0 ]` +
 		"\n docker volume rm " + VolumeName + "   # on every node that ran the agent"
 	standalone = " docker rm -f " + ServiceName + " && docker volume rm " + VolumeName
 	return swarm, standalone

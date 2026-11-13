@@ -6222,7 +6222,7 @@ export interface components {
         AgentListBody: {
             /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
             items: components["schemas"]["AgentBody"][] | null;
-            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command finds the agent service by its tierplan.agent=true label, whatever it is called, and reads the secret names from it, so it works for any generation and either naming. They carry no token */
+            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command finds the agent service by its tierplan.agent=true label, whatever it is called, and reads the secret names from it, so it works for any generation and either naming; it removes only the tierplan-agent-token-g secrets. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AllStacksBody: {

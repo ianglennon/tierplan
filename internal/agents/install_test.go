@@ -555,8 +555,12 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndReadTheSecretNamesFromTheSer
 	if swarm != in.SwarmCleanup || standalone != in.StandaloneCleanup {
 		t.Fatalf("CleanupCommands differ from the install's: %q %q", swarm, standalone)
 	}
-	if strings.Contains(swarm+standalone, "tpjt_") || strings.Contains(swarm+standalone, agents.SecretPrefix) {
+	// It names no secret, only the prefix every join token secret starts with, and no token.
+	if strings.Contains(swarm+standalone, "tpjt_") || regexp.MustCompile(regexp.QuoteMeta(agents.SecretPrefix)+`[0-9]`).MatchString(swarm+standalone) {
 		t.Fatalf("the cleanup names no secret and carries no token: %q %q", swarm, standalone)
+	}
+	if !strings.Contains(swarm, "case $s in "+agents.SecretPrefix+"*)") {
+		t.Errorf("the cleanup removes only the join token secrets, by their prefix: %q", swarm)
 	}
 	// The names are read from the service before the service is removed, so a swarm with
 	// the old generation-only names, or with the names of several generations, is cleaned too.
@@ -727,8 +731,8 @@ func TestInstallCommandGuardRunsInAShell(t *testing.T) {
 }
 
 // The cleanup is real shell: it finds the agent service by its label, so a stack-deployed
-// <stack>_tierplan-agent is removed too, reads its secrets before it removes it, and its status
-// says whether the list and the removal worked.
+// <stack>_tierplan-agent is removed too, reads its secrets before it removes it, removes only
+// the join token secrets among them, and its status says whether every step worked.
 func TestSwarmCleanupRunsInAShell(t *testing.T) {
 	swarm, _ := agents.CleanupCommands()
 	line, _, _ := strings.Cut(swarm, "\n")
@@ -744,6 +748,17 @@ func TestSwarmCleanupRunsInAShell(t *testing.T) {
 		{
 			"a stack-deployed service", []string{"STUB_LS=st4ckagent01", "STUB_SECRETS=tierplan-agent-token-g2-4b1e6f0a8c37"}, false, "",
 			[]string{ls, inspect + "st4ckagent01", "service rm st4ckagent01", "secret rm tierplan-agent-token-g2-4b1e6f0a8c37"},
+		},
+		{
+			// Like the agent's own uninstall, only the join token secrets go: another secret
+			// the operator attached to the service is kept.
+			"a service with another secret", []string{"STUB_LS=agent0000001", "STUB_SECRETS=ca-bundle tierplan-agent-token-g3-4b1e6f0a8c37 proxy-creds"}, false, "",
+			[]string{ls, inspect + "agent0000001", "service rm agent0000001", "secret rm tierplan-agent-token-g3-4b1e6f0a8c37"},
+		},
+		{
+			// A failed removal is not hidden by a later one that worked.
+			"a secret removal fails", []string{"STUB_LS=agent0000001", "STUB_SECRETS=tierplan-agent-token-g2 tierplan-agent-token-g3-4b1e6f0a8c37", "STUB_SECRET_RM_FAIL=tierplan-agent-token-g2"}, true, "",
+			[]string{ls, inspect + "agent0000001", "service rm agent0000001", "secret rm tierplan-agent-token-g2", "secret rm tierplan-agent-token-g3-4b1e6f0a8c37"},
 		},
 		{
 			"an old-name service", []string{"STUB_LS=0ldagent0001", "STUB_SECRETS=tierplan-agent-token-g1"}, false, "",

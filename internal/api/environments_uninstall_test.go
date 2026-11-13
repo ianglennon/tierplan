@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -307,7 +308,8 @@ func TestTheAgentListGivesTheManualCleanupCommandsThatReadTheSecretNamesFromTheS
 	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/token", ""); rec.code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", rec.code, rec.body)
 	}
-	if after, _ := read(); after != swarm || strings.Contains(after, "tierplan-agent-token-g") {
+	// The only secret text in it is the prefix every join token secret starts with.
+	if after, _ := read(); after != swarm || regexp.MustCompile(`tierplan-agent-token-g[0-9]`).MatchString(after) {
 		t.Fatalf("after a rotation the swarm cleanup changed or names a secret:\n%s", after)
 	}
 }

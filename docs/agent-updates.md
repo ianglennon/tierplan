@@ -83,13 +83,15 @@ command" section on each host.
 On a swarm (the command finds the agent service by its `tierplan.agent=true` label, so it also
 removes a stack-deployed `<stack>_tierplan-agent`, and reads the secret names from the service, so
 it works for any generation of the join token and for installs made with either naming of the
-secret; it ends with a non-zero status when a step failed):
+secret; like the agent's own uninstall it removes only the `tierplan-agent-token-g*` secrets, so
+another secret attached to the service is kept; it ends with a non-zero status when any removal
+failed):
 
 ```sh
 if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
 for v in $L; do
   S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
-  for s in $S; do docker secret rm "$s"; done
+  for s in $S; do case $s in tierplan-agent-token-g*) docker secret rm "$s" || rc=1;; esac; done
 done; [ "$rc" = 0 ]
 docker volume rm tierplan-agent   # on every node that ran the agent
 ```

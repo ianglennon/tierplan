@@ -505,11 +505,12 @@ An install command creates the agent under fixed service and container names, so
 
 ```sh
 # swarm, on a manager: the agent service is found by its label, whatever it is called (tierplan-agent, or
-# <stack>_tierplan-agent from the stack file), and its secret names are read from it, so any generation and either naming works
+# <stack>_tierplan-agent from the stack file), and its secret names are read from it, so any generation and either naming works;
+# only its tierplan-agent-token-g* secrets are removed, and the status is not zero when a removal failed
 if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
 for v in $L; do
   S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
-  for s in $S; do docker secret rm "$s"; done
+  for s in $S; do case $s in tierplan-agent-token-g*) docker secret rm "$s" || rc=1;; esac; done
 done; [ "$rc" = 0 ]
 
 # standalone host
@@ -539,13 +540,13 @@ Containers, images, volumes and networks of your own are never touched.
 
 For an agent that was offline, or when you did not tick the box, run on each host:
 
-Swarm, on a manager (the environment's **Manual cleanup command** shows it; it finds the agent service by its `tierplan.agent=true` label, so it also removes a stack-deployed `<stack>_tierplan-agent`, and it reads the secret names from the service, so it works for any generation and for installs made with either naming of the secret; it ends with a non-zero status when a step failed), then on every node that ran the agent:
+Swarm, on a manager (the environment's **Manual cleanup command** shows it; it finds the agent service by its `tierplan.agent=true` label, so it also removes a stack-deployed `<stack>_tierplan-agent`, and it reads the secret names from the service, so it works for any generation and for installs made with either naming of the secret; like the agent's own uninstall it removes only the `tierplan-agent-token-g*` secrets, so another secret you attached to the service is kept; it ends with a non-zero status when any removal failed), then on every node that ran the agent:
 
 ```sh
 if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
 for v in $L; do
   S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
-  for s in $S; do docker secret rm "$s"; done
+  for s in $S; do case $s in tierplan-agent-token-g*) docker secret rm "$s" || rc=1;; esac; done
 done; [ "$rc" = 0 ]
 docker volume rm tierplan-agent
 ```
