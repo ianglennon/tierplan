@@ -196,8 +196,10 @@ const (
 	// the swarm is then found at its first try, and enrolments cannot make the managers read
 	// their cluster more than once per this time.
 	nodeListRefreshAfter = 5 * time.Second
-	// nodeListRefreshTimeout bounds that read inside the handshake.
-	nodeListRefreshTimeout = 5 * time.Second
+	// nodeListRefreshTimeout bounds that read inside the handshake, which has
+	// wire.HandshakeTimeout (10 seconds) in all, so the refusal or the welcome still has time
+	// to reach the agent.
+	nodeListRefreshTimeout = 3 * time.Second
 	// nodeNotInSwarmRetryAfter is how long an agent that does not know node_not_in_swarm is
 	// told to wait, with the rate_limited code it already retries (nodeNotInSwarmRefusal).
 	nodeNotInSwarmRetryAfter = 15 * time.Second
