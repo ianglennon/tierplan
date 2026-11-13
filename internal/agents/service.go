@@ -179,6 +179,9 @@ type NodeLists interface {
 	// does not name the manager that answered it: the rule the reaper applies to a list
 	// (dockerx.ClusterRead.ListsAnswerer), so a list the reaper ignores decides no enrolment.
 	SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time, ok bool)
+	// RefreshSwarmNodeIDs is SwarmNodeIDs after one more read of the swarm's cluster, made
+	// only when the last attempt is at least minAge old and no read is running; ctx bounds it.
+	RefreshSwarmNodeIDs(ctx context.Context, envID string, minAge time.Duration) (ids []string, fetchedAt time.Time, ok bool)
 }
 
 // nodeListMaxAge is how old a node list may be and still decide an enrolment. The cluster
@@ -186,6 +189,23 @@ type NodeLists interface {
 // for a while (the quorum is lost, the only manager is the one enrolling, or none is
 // connected), and a list that stale is no basis for a refusal.
 const nodeListMaxAge = 2 * time.Minute
+
+const (
+	// nodeListRefreshAfter is how old a fresh list that lacks an enrolling agent's node must be
+	// before the enrolment has it read again, once, before it refuses: a node that just joined
+	// the swarm is then found at its first try, and enrolments cannot make the managers read
+	// their cluster more than once per this time.
+	nodeListRefreshAfter = 5 * time.Second
+	// nodeListRefreshTimeout bounds that read inside the handshake.
+	nodeListRefreshTimeout = 5 * time.Second
+	// nodeNotInSwarmRetryAfter is how long an agent that does not know node_not_in_swarm is
+	// told to wait, with the rate_limited code it already retries (nodeNotInSwarmRefusal).
+	nodeNotInSwarmRetryAfter = 15 * time.Second
+)
+
+// nodeNotInSwarmSince is the first agent release that knows node_not_in_swarm and retries on
+// it. An agent before it does not, and would exit at its first enrolment on that code.
+var nodeNotInSwarmSince = [3]int{0, 1, 1}
 
 // nodeVerdict is what the node list says about the swarm node an enrolling agent reports.
 type nodeVerdict int
@@ -272,11 +292,16 @@ func (s *Service) WithNodeLists(n NodeLists) *Service {
 // host, or a service with no NodeLists, is not checked. An agent that reports no node ID, and
 // a swarm with no fresh list (none held, the quorum lost, or older than nodeListMaxAge), is
 // unverified: accepted, but its earlier agents are left to the reaper. A fresh list that
-// holds the node is listed. A fresh list that lacks it is refused node_not_in_swarm: the node
+// holds the node is listed. A fresh list that lacks it is refused node_not_in_swarm, or
+// rate_limited for an agent that does not know that code (nodeNotInSwarmRefusal): the node
 // the agent claims is not in the swarm, or joined since the list was read and enrols at a
 // retry. The check is on the node ID only; a hostname is as visible as a node ID, so
 // comparing it would prove nothing and would refuse a renamed host.
-func (s *Service) checkSwarmNode(envID string, f wire.Facts) (nodeVerdict, error) {
+//
+// A fresh list that lacks the node and is at least nodeListRefreshAfter old is read again
+// once before the refusal, so a node that joined since the last read is usually accepted at
+// the agent's first try.
+func (s *Service) checkSwarmNode(ctx context.Context, envID string, f wire.Facts, agentVersion string) (nodeVerdict, error) {
 	if f.Swarm == nil || s.nodes == nil {
 		return nodeNotChecked, nil
 	}
@@ -284,17 +309,43 @@ func (s *Service) checkSwarmNode(envID string, f wire.Facts) (nodeVerdict, error
 		return nodeUnverified, nil
 	}
 	ids, fetchedAt, ok := s.nodes.SwarmNodeIDs(envID)
-	if !ok || s.now().Sub(fetchedAt) > nodeListMaxAge {
+	fresh := func() bool { return ok && s.now().Sub(fetchedAt) <= nodeListMaxAge }
+	if !fresh() {
 		return nodeUnverified, nil
 	}
 	if slices.Contains(ids, f.Swarm.NodeID) {
 		return nodeListed, nil
 	}
-	return nodeUnverified, &tunnel.RefuseError{
+	if s.now().Sub(fetchedAt) >= nodeListRefreshAfter {
+		rctx, cancel := context.WithTimeout(ctx, nodeListRefreshTimeout)
+		ids, fetchedAt, ok = s.nodes.RefreshSwarmNodeIDs(rctx, envID, nodeListRefreshAfter)
+		cancel()
+		if !fresh() {
+			return nodeUnverified, nil
+		}
+		if slices.Contains(ids, f.Swarm.NodeID) {
+			return nodeListed, nil
+		}
+	}
+	return nodeUnverified, nodeNotInSwarmRefusal(agentVersion)
+}
+
+// nodeNotInSwarmRefusal is the refusal of an enrolment whose node a fresh list lacks. An agent
+// from nodeNotInSwarmSince on gets node_not_in_swarm, which it retries with its backoff. An
+// older agent, or one whose version is not a release, would take that unknown code for a
+// refusal that does not pass and exit at its first enrolment, so it gets rate_limited, which
+// every agent retries without exiting, with the time to wait. The audit reason is
+// node_not_in_swarm for both.
+func nodeNotInSwarmRefusal(agentVersion string) *tunnel.RefuseError {
+	re := &tunnel.RefuseError{
 		Code: wire.RefuseNodeNotInSwarm, AuditReason: wire.RefuseNodeNotInSwarm,
 		Detail: "this node is not in the swarm's node list as TierPlan last read it; a node that just joined enrols by itself once TierPlan reads the list again, within about a minute; " +
 			"a node removed from the swarm with docker node rm must join the swarm again",
 	}
+	if v, ok := tunnel.ParseVersion(agentVersion); !ok || slices.Compare(v[:], nodeNotInSwarmSince[:]) < 0 {
+		re.Code, re.RetryAfter = wire.RefuseRateLimited, nodeNotInSwarmRetryAfter
+	}
+	return re
 }
 
 var (
@@ -586,7 +637,7 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 	// The node an agent reports is a claim of a join-token holder. A fresh node list that lacks
 	// it refuses the enrolment before anything is written; with no fresh list the enrolment
 	// goes on, and retires no earlier agent (retireReplaced).
-	verdict, err := s.checkSwarmNode(envID, req.Facts)
+	verdict, err := s.checkSwarmNode(ctx, envID, req.Facts, req.AgentVersion)
 	if err != nil {
 		return tunnel.EnrolResult{}, err
 	}

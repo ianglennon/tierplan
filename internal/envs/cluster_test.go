@@ -853,6 +853,46 @@ func TestSwarmNodeIDsAreTheCachedNodeListAndAbsentWithoutOneOrWithoutAQuorum(t *
 	}
 }
 
+// An enrolment whose node the held list lacks has the cluster read again, at most once per
+// minAge and never while a read is running, so a node that just joined is found (review
+// 261113-ota IN-03).
+func TestRefreshSwarmNodeIDsReadsAgainOnlyWhenTheLastAttemptIsOldEnough(t *testing.T) {
+	if _, _, ok := newSwarmRigBare(t, managerNodes(), nil).c.RefreshSwarmNodeIDs(context.Background(), "no-such-environment", 5*time.Second); ok {
+		t.Fatal("an environment never read has a list")
+	}
+	s := newSwarmRig(t, managerNodes(), nil)
+	ctx := context.Background()
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A node joins the swarm after the read.
+	joined := managerNodes(dockertest.FakeNode{ID: "node-w9", Hostname: "wrk-9", Role: "worker", EngineVersion: "29.1.0", OS: "linux"})
+	for i, a := range s.m {
+		a.fake.Reconfigure(managerConfig(i+1, joined, nil))
+	}
+
+	// The last attempt is newer than minAge: no read, the held list answers.
+	ids, _, ok := s.c.RefreshSwarmNodeIDs(ctx, s.env.ID, time.Hour)
+	if !ok || slices.Contains(ids, "node-w9") {
+		t.Fatalf("within minAge: %v %v, want the held list without the new node", ids, ok)
+	}
+	// A read is running: no second one, and no wait for it.
+	e, _ := s.c.lookup(s.env.ID)
+	e.refresh.Lock()
+	ids, _, _ = s.c.RefreshSwarmNodeIDs(ctx, s.env.ID, 0)
+	e.refresh.Unlock()
+	if slices.Contains(ids, "node-w9") {
+		t.Fatalf("while a read runs: %v, want the held list", ids)
+	}
+	// Old enough: one read, and the new node is in the list.
+	before, _ := s.c.Cached(s.env.ID)
+	s.clk.Advance(5 * time.Second)
+	ids, at, ok := s.c.RefreshSwarmNodeIDs(ctx, s.env.ID, 5*time.Second)
+	if !ok || !slices.Contains(ids, "node-w9") || !at.After(before.FetchedAt) {
+		t.Fatalf("after minAge: %v %v %v, want a new read that holds the new node", ids, at, ok)
+	}
+}
+
 func TestForgetDropsTheStateOfARemovedEnvironment(t *testing.T) {
 	s := newSwarmRig(t, managerNodes(), nil)
 	if err := s.c.Refresh(context.Background(), s.env.ID); err != nil {

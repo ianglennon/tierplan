@@ -4,11 +4,13 @@
 package agents_test
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
@@ -25,11 +27,35 @@ type nodeList struct {
 	ok  bool
 }
 
-// fakeNodeLists is a NodeLists with lists a test sets, and a count of the questions asked.
+// fakeNodeLists is a NodeLists with lists a test sets, and a count of the questions asked. A
+// refresh counts itself and, when next holds a list for the environment, makes it the held one.
 type fakeNodeLists struct {
-	mu    sync.Mutex
-	lists map[string]nodeList
-	asked int
+	mu        sync.Mutex
+	lists     map[string]nodeList
+	next      map[string]nodeList
+	asked     int
+	refreshes int
+	minAge    time.Duration
+}
+
+func (f *fakeNodeLists) RefreshSwarmNodeIDs(ctx context.Context, envID string, minAge time.Duration) ([]string, time.Time, bool) {
+	f.mu.Lock()
+	f.refreshes++
+	f.minAge = minAge
+	if l, ok := f.next[envID]; ok {
+		f.lists[envID] = l
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		f.minAge = -1 // a refresh without a deadline is a test failure, seen through minAge
+	}
+	f.mu.Unlock()
+	return f.SwarmNodeIDs(envID)
+}
+
+func (f *fakeNodeLists) refreshed() (int, time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.refreshes, f.minAge
 }
 
 func (f *fakeNodeLists) set(envID string, l nodeList) {
@@ -270,5 +296,115 @@ func TestNodeCheckWithoutAProviderASwarmNodeIsNotCheckedAndRetiresAsBefore(t *te
 	}
 	if d := enrolledDetail(t, r, again.id); strings.Contains(d, "node_check") {
 		t.Errorf("agent.enrolled detail = %s, want no node_check without a provider", d)
+	}
+}
+
+// enrolVersion enrols an agent of agentVersion that reports facts.
+func (r *rig) enrolVersion(t *testing.T, token, agentVersion string, facts wire.Facts) (tunnel.EnrolResult, error) {
+	t.Helper()
+	req := newProof(t, "h").request(token)
+	req.Facts, req.AgentVersion = facts, agentVersion
+	return r.svc.Enrol(r.ctx, req)
+}
+
+// An agent from before node_not_in_swarm would take that code for a refusal that does not pass
+// and exit at its first enrolment (review 261113-ota WR-04). It is sent rate_limited, which
+// every agent retries without exiting, with a time to wait; the audit reason stays the same.
+func TestNodeCheckAnAgentThatDoesNotKnowTheCodeIsRefusedRateLimited(t *testing.T) {
+	for version, wantCode := range map[string]string{
+		"0.1.0":          wire.RefuseRateLimited,
+		"v0.1.0":         wire.RefuseRateLimited,
+		"0.0.9":          wire.RefuseRateLimited,
+		"dev (abc1234)":  wire.RefuseRateLimited, // not a release: cannot be told apart
+		"":               wire.RefuseRateLimited,
+		"0.1.1":          wire.RefuseNodeNotInSwarm,
+		"v0.1.1-rc.1":    wire.RefuseNodeNotInSwarm,
+		"0.2.0":          wire.RefuseNodeNotInSwarm,
+		"v1.0.0+build.7": wire.RefuseNodeNotInSwarm,
+	} {
+		t.Run(version, func(t *testing.T) {
+			r, s, _ := swarmWithProvider(t, func(r *rig) nodeList { return freshList(r, "prod") })
+			_, err := r.enrolVersion(t, s.c.JoinToken, version, worker("ENG:W9-prod", "node-w9-prod", "wrk-9"))
+			ref := refusal(t, err)
+			if ref.Code != wantCode || ref.AuditReason != wire.RefuseNodeNotInSwarm {
+				t.Fatalf("refusal = %+v, want code %s with the audit reason node_not_in_swarm", ref, wantCode)
+			}
+			wantWait := time.Duration(0)
+			if wantCode == wire.RefuseRateLimited {
+				wantWait = 15 * time.Second
+			}
+			if ref.RetryAfter != wantWait {
+				t.Errorf("retry after = %v, want %v", ref.RetryAfter, wantWait)
+			}
+		})
+	}
+}
+
+// A list that lacks the node and is a few seconds old is read again once before a refusal, so a
+// node that joined since is enrolled at its first try (review 261113-ota IN-03).
+func TestNodeCheckAMissOnAListSecondsOldReadsItAgainOnce(t *testing.T) {
+	r, s, p := swarmWithProvider(t, func(r *rig) nodeList {
+		x := freshList(r, "prod")
+		x.at = r.clock.Add(-10 * time.Second)
+		return x
+	})
+	p.mu.Lock()
+	p.next = map[string]nodeList{s.c.EnvID: freshList(r, "prod", "node-w9-prod")}
+	p.mu.Unlock()
+
+	m := r.enrolFacts(t, s.c, worker("ENG:W9-prod", "node-w9-prod", "wrk-9"))
+	if d := enrolledDetail(t, r, m.id); !strings.Contains(d, `"node_check":"listed"`) {
+		t.Errorf("agent.enrolled detail = %s, want node_check=listed from the list read again", d)
+	}
+	if n, minAge := p.refreshed(); n != 1 || minAge != 5*time.Second {
+		t.Errorf("refreshes = %d with a minimum age of %v, want one of 5s with a deadline", n, minAge)
+	}
+}
+
+// A list read again that still lacks the node refuses, and one read in the last seconds is not
+// read again: enrolments cannot make the managers read their cluster more often than that.
+func TestNodeCheckAMissIsReadAgainOnlyWhenTheListIsSecondsOld(t *testing.T) {
+	for name, tc := range map[string]struct {
+		age           time.Duration
+		wantRefreshes int
+	}{
+		"a list read just now":      {0, 0},
+		"a list read 4 seconds ago": {4 * time.Second, 0},
+		"a list read 5 seconds ago": {5 * time.Second, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, s, p := swarmWithProvider(t, func(r *rig) nodeList {
+				x := freshList(r, "prod")
+				x.at = r.clock.Add(-tc.age)
+				return x
+			})
+			_, err := r.enrolWith(t, s.c.JoinToken, worker("ENG:W9-prod", "node-w9-prod", "wrk-9"))
+			if ref := refusal(t, err); ref.Code != wire.RefuseNodeNotInSwarm {
+				t.Fatalf("refusal = %+v, want node_not_in_swarm", ref)
+			}
+			if n, _ := p.refreshed(); n != tc.wantRefreshes {
+				t.Errorf("refreshes = %d, want %d", n, tc.wantRefreshes)
+			}
+		})
+	}
+}
+
+// Through the hub an older agent gets rate_limited with the time to wait in the refuse message,
+// and the audit row keeps the reason node_not_in_swarm.
+func TestNodeCheckTheHubTellsAnOlderAgentRateLimitedWithTheWait(t *testing.T) {
+	srv := tunneltest.Start(t, tunneltest.Options{AuditRefusals: true})
+	env := srv.NewEnvironment(t, "prod")
+	p := &fakeNodeLists{}
+	p.set(env.ID, nodeList{ids: []string{"node-m1"}, at: srv.Clock.Now(), ok: true})
+	srv.Svc.WithNodeLists(p)
+
+	f := worker("ENG:W9", "node-w9", "wrk-9")
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: &f, Version: "0.1.0"})
+	if c.Refuse == nil || c.Refuse.Code != wire.RefuseRateLimited || c.Refuse.RetryAfterMs != 15000 {
+		t.Fatalf("refuse = %+v (err %v), want rate_limited with a wait of 15000 ms", c.Refuse, c.Err)
+	}
+	var reason string
+	if err := srv.Store.Read.QueryRow(`SELECT reason FROM audit_log WHERE action = 'agent.enrol_refused' ORDER BY seq DESC LIMIT 1`).Scan(&reason); err != nil || reason != wire.RefuseNodeNotInSwarm {
+		t.Fatalf("audit reason = %q, %v, want node_not_in_swarm", reason, err)
 	}
 }

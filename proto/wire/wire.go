@@ -364,7 +364,9 @@ const (
 	// RefuseNodeNotInSwarm means the swarm node an enrolling agent reports is not in the node
 	// list a manager of the environment last gave the server. It passes once the node is
 	// listed, so the agent retries with ordinary backoff: a node that just joined enrols at
-	// a retry after the next read of the list.
+	// a retry after the next read of the list. The server sends it only to an agent of
+	// release 0.1.1 or later, which knows it; an older agent would exit on it at its first
+	// enrolment, so it is sent RefuseRateLimited with a wait instead.
 	RefuseNodeNotInSwarm = "node_not_in_swarm"
 	// RefuseInternal means the server failed while handling an otherwise valid
 	// handshake. The agent should retry with backoff.

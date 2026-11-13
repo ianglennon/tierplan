@@ -291,6 +291,26 @@ func (c *Clusters) SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time
 	return ids, st.FetchedAt, true
 }
 
+// RefreshSwarmNodeIDs is SwarmNodeIDs after one more read of the environment's cluster, for an
+// enrolment whose node the held list lacks: a node that joined the swarm since the last read
+// (the cache reads every 15 seconds) is then usually found at the agent's first try instead of
+// a refusal. It is bounded so that enrolments cannot drive the managers: the read is made only
+// when the last attempt is at least minAge old, and only when no read of the environment is
+// running already (it never waits for one; that read's list answers). An environment never
+// read is not read here. ctx bounds the read.
+func (c *Clusters) RefreshSwarmNodeIDs(ctx context.Context, envID string, minAge time.Duration) (ids []string, fetchedAt time.Time, ok bool) {
+	if e, found := c.lookup(envID); found && e.refresh.TryLock() {
+		e.mu.Lock()
+		attempted := e.state.AttemptedAt
+		e.mu.Unlock()
+		if !attempted.IsZero() && c.now().Sub(attempted) >= minAge {
+			_ = c.refresh(ctx, envID, e) // a failed read leaves the state as it records it
+		}
+		e.refresh.Unlock()
+	}
+	return c.SwarmNodeIDs(envID)
+}
+
 // SetRestartLoopMute puts a mute or an unmute of a service into the cached state at once, so
 // the page that asked sees it without waiting for the next read (the mute itself is in the
 // store already). The maps of a state are shared with whoever holds a copy, so they are

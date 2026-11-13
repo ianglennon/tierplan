@@ -39,11 +39,14 @@ var ErrAgentGone = errors.New("tunnel: the agent connection is gone")
 
 // RefuseError is what a Verifier returns to turn a handshake away. Code and
 // Detail go to the agent in a refuse message; AuditReason stays on the server,
-// so a disabled token and a wrong token look alike from outside.
+// so a disabled token and a wrong token look alike from outside. RetryAfter, when
+// set, goes to the agent as the time to wait before it tries again (retryAfterMs),
+// for a refusal that passes.
 type RefuseError struct {
 	Code        string
 	Detail      string
 	AuditReason string
+	RetryAfter  time.Duration
 }
 
 func (e *RefuseError) Error() string {
