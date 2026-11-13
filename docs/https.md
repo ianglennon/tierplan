@@ -73,7 +73,7 @@ Before it orders anything, TierPlan checks the names and refuses to start an ord
 | `names_wildcard` | A name is a wildcard. | Use a plain host name. Wildcard certificates are not supported. |
 | `names_not_public` | A name is not a public DNS name: it has no dot, or ends in a private suffix such as `.lan` or `.home.arpa`. | Use a name under a domain you own, such as `tierplan.example.com`. |
 | `base_path` | The public URL has a path. HTTP-01 needs TierPlan at the root of its host. | Remove the path from the public URL, or give TierPlan its own host name. |
-| `agent_dial_host` | A connected agent reaches TierPlan at a host that is not on the certificate. | Reinstall those agents with a new install command, or set `TIERPLAN_AGENT_URL` to a host the certificate covers. Only agents that are connected now are checked. |
+| `agent_dial_host` | A connected agent reaches TierPlan at a host that is not on the certificate. | Reinstall those agents with a new install command, removing each old agent first and keeping its volume (see [Reinstall an agent on a host that ran one](agent.md#reinstall-an-agent-on-a-host-that-ran-one)), or set `TIERPLAN_AGENT_URL` to a host the certificate covers. Only agents that are connected now are checked. |
 
 The certificate covers the host of the public URL, plus the host of the agent URL when it differs. IP addresses and wildcards cannot be used. Connected agents must reach TierPlan at a host the certificate covers (see `agent_dial_host` above), so set `TIERPLAN_AGENT_URL` to a covered host if they use another.
 

@@ -478,7 +478,21 @@ Settings, Environments, the environment, the nodes list, **Actions, Revoke node*
 - The node is disconnected at once and its certificate is rejected for good. An admin revoke also **blocks** the node: it cannot enrol again until you unblock it. It is a good time to rotate the join token if the host may be compromised.
 - **Unblock node** lets the host enrol again. The agent that was revoked is not revived. If it still has its join token (a standalone agent keeps it in its environment, a swarm agent in its secret), it discards its old identity and enrols again by itself, within about a minute, as a **new** entry. If it does not have the token, install the agent on the host again.
 - A node that leaves a swarm (`docker node rm`) is revoked automatically after two checks, without a block, so it can enrol again if it comes back.
-- After TierPlan is reinstalled, or restored to an empty data directory, it no longer knows the agents' identities and refuses them `auth_rejected`. Run the new install command on the hosts. Each agent then starts with the new join token on its old `tierplan-agent` volume, sets aside the identity TierPlan no longer accepts and enrols with the new token by itself within about a minute; once TierPlan accepts the enrolment the old identity is deleted. If the enrolment is refused the agent takes its old identity back and tries again a minute later. An agent started with the join token it has on record keeps its identity and keeps waiting, because that token cannot fix it. When an agent enrols again into the same environment from the same host, TierPlan retires the host's earlier agent entry (revoked with the reason `replaced`, without a block), so the node list does not show the host twice.
+- After TierPlan is reinstalled, or restored to an empty data directory, it no longer knows the agents' identities and refuses them `auth_rejected`. Remove the old agent from each host, keeping its volume, as in [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one), then run the new install command. Each agent then starts with the new join token on its old `tierplan-agent` volume, sets aside the identity TierPlan no longer accepts and enrols with the new token by itself within about a minute; once TierPlan accepts the enrolment the old identity is deleted. If the enrolment is refused the agent takes its old identity back and tries again a minute later. An agent started with the join token it has on record keeps its identity and keeps waiting, because that token cannot fix it. When an agent enrols again into the same environment from the same host, TierPlan retires the host's earlier agent entry (revoked with the reason `replaced`, without a block), so the node list does not show the host twice.
+
+### Reinstall an agent on a host that ran one
+
+An install command creates the agent under fixed names, so it fails on a host that still runs an agent: on a swarm `docker secret create tierplan-agent-token-g<N>` refuses a secret that exists (every new environment starts at `g1`), and because the command chains with `&&` the service is not created either; `docker service create --name tierplan-agent` refuses an existing service, and on a standalone host `docker run --name tierplan-agent` refuses an existing container. Nothing is half installed, but nothing runs. Before you run a new install command on such a host, after TierPlan was reinstalled, after the environment was removed without **Also uninstall the agent from the hosts**, or to move the host to another environment, remove the old agent first and **keep its `tierplan-agent` volume**:
+
+```sh
+# swarm, on a manager: <N> is the generation in the old secret's name (docker secret ls --filter name=tierplan-agent-token lists it)
+docker service rm tierplan-agent && docker secret rm tierplan-agent-token-g<N>
+
+# standalone host
+docker rm -f tierplan-agent
+```
+
+Then run the new install command. The agent starts on its old volume with the new join token and enrols again by itself, as described above; if TierPlan refuses the token it still has its old identity. Do not run `docker volume rm tierplan-agent` for this: the volume is what lets the agent come back by itself and keep its address list and pins. The secret names are the same for every environment, which is why the old secret has to go first.
 
 ## Updates
 

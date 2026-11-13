@@ -105,7 +105,10 @@ to the database you had before it.
    [reverse-proxy.md](reverse-proxy.md).
 5. Reinstall every agent that was installed with a plain `ws://` command. In **Add environment**
    copy the command it shows now (it uses `wss://` and carries TierPlan's pin) and run it on the
-   host, as in [agent.md](agent.md). Agents installed with a `wss://` command keep working.
+   host, as in [agent.md](agent.md). Remove the old agent first and keep its volume, as in
+   [Reinstall an agent on a host that ran one](agent.md#reinstall-an-agent-on-a-host-that-ran-one),
+   or the command stops at the existing secret, service or container. Agents installed with a
+   `wss://` command keep working.
 
 Everyone is signed out once, because the session cookie is always `Secure` now and so has a
 different name.
