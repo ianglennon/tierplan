@@ -67,15 +67,13 @@ func NewReaper(svc *Service) *Reaper {
 // hosts, so they enrol again, and every revoke is audited under
 // system:agent-reaper.
 func (r *Reaper) Observe(ctx context.Context, envID string, list dockerx.ClusterRead, answeringNodeID string) {
-	if answeringNodeID == "" {
+	// The same rule decides whether an enrolment is checked against a list (dockerx.ClusterRead.ListsAnswerer).
+	if !list.ListsAnswerer(answeringNodeID) {
 		return
 	}
 	listed := make(map[string]struct{}, len(list.Nodes))
 	for _, n := range list.Nodes {
 		listed[n.ID] = struct{}{}
-	}
-	if _, ok := listed[answeringNodeID]; !ok {
-		return
 	}
 
 	r.mu.Lock()

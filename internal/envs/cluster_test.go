@@ -814,6 +814,31 @@ func TestSwarmNodeIDsAreTheCachedNodeListAndAbsentWithoutOneOrWithoutAQuorum(t *
 		t.Error("an unknown environment has a node list")
 	}
 
+	// A list that leaves out the manager that answered it is not believed, as the reaper
+	// does not believe it (T-02-68): it decides no enrolment, although the read succeeded.
+	answerless := []dockertest.FakeNode{{ID: "node-w1", Hostname: "wrk-1", Role: "worker", EngineVersion: "29.1.0", OS: "linux"}}
+	for i, a := range s.m {
+		a.fake.Reconfigure(managerConfig(i+1, answerless, nil))
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.c.Cached(s.env.ID); !st.Known() || len(st.Read.Nodes) != 1 || st.AnsweredBy == "" {
+		t.Fatalf("the read of a list without its answerer: %+v, want it held, with its answerer", st)
+	}
+	if ids, _, ok := s.c.SwarmNodeIDs(s.env.ID); ok || ids != nil {
+		t.Errorf("a list that leaves out its answerer: %v %v, want no list", ids, ok)
+	}
+	for i, a := range s.m {
+		a.fake.Reconfigure(managerConfig(i+1, s.nodes, nil))
+	}
+	if err := s.c.Refresh(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := s.c.SwarmNodeIDs(s.env.ID); !ok {
+		t.Fatal("the list names its answerer again, want it believed")
+	}
+
 	// A quorum that is lost makes the held list no basis for a refusal.
 	for i, a := range s.m {
 		cfg := managerConfig(i+1, s.nodes, nil)

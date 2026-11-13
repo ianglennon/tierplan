@@ -175,7 +175,9 @@ type LiveSessions interface {
 // NodeLists says which nodes a swarm environment's managers last listed. envs.Clusters is one.
 type NodeLists interface {
 	// SwarmNodeIDs is the node IDs of the swarm of envID in the node list last read, and
-	// when it was read. ok is false when no list is held or the quorum is lost.
+	// when it was read. ok is false when no list is held, the quorum is lost, or the list
+	// does not name the manager that answered it: the rule the reaper applies to a list
+	// (dockerx.ClusterRead.ListsAnswerer), so a list the reaper ignores decides no enrolment.
 	SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time, ok bool)
 }
 
