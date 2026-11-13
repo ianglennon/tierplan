@@ -1155,6 +1155,11 @@ func (m *Manager) failed(ctx, bg context.Context, x *run, steps *jobSteps, runEr
 	if f.Class == ClassAccountGone {
 		if err := m.d.Client.Forget(bg); err != nil {
 			m.log.Error("forget the account the CA no longer knows", "error", err)
+		} else {
+			// TierPlan dropped the account by itself, so the log says so, before the run is told to have ended.
+			m.record(bg, audit.ActionHTTPSAccountForgotten, audit.ResultSuccess, "", map[string]string{
+				"directory": directoryHost(m.d.Client.Directory().URL), "job": x.id,
+			})
 		}
 	}
 	m.log.Warn("a certificate run failed", "kind", p.req.Kind, "class", f.Class, "host", f.Host)

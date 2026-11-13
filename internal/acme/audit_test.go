@@ -5,6 +5,7 @@ package acme
 
 import (
 	"context"
+	"crypto/x509"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -174,6 +175,41 @@ func TestRunAudit(t *testing.T) {
 		}
 		if e.Details["issuer"] == "" || e.Details["serial"] == "" {
 			t.Errorf("issuer %q and serial %q should be filled", e.Details["issuer"], e.Details["serial"])
+		}
+	})
+
+	t.Run("an account the CA no longer knows is one https.account_forgotten row beside the failure row, both before RunEnded", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.fake.ForgetAccounts()
+		rs, err := a.mgr.Issue(ctx, "user:1")
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		a.wait(rs)
+		if got := a.awaitRun(); got != OutcomeFailed {
+			t.Fatalf("the run ended %q, want failed", got)
+		}
+		e := a.onlyOutcome()
+		if e.Action != audit.ActionHTTPSRunFailed || e.Details["class"] != ClassAccountGone {
+			t.Fatalf("row = %+v, want https.run_failed with class %s", e, ClassAccountGone)
+		}
+		gone := a.sink.byAction(audit.ActionHTTPSAccountForgotten)
+		if len(gone) != 1 {
+			t.Fatalf("%d https.account_forgotten rows, want 1: %+v", len(gone), a.sink.all())
+		}
+		dir, err := url.Parse(a.client.Directory().URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := gone[0]
+		if f.Actor != audit.SystemACME || f.Result != audit.ResultSuccess || f.TargetType != "https" || f.TargetID != "https" {
+			t.Errorf("row = %+v, want a success by system:acme about https", f)
+		}
+		if len(f.Details) != 2 || f.Details["directory"] != dir.Host || f.Details["job"] != rs.JobID {
+			t.Errorf("details = %+v, want only the directory host %q and the job %q", f.Details, dir.Host, rs.JobID)
+		}
+		if n, ok := a.rowsAtEnd(rs.JobID); !ok || n != 2 {
+			t.Errorf("the sink held %d rows when RunEnded fired (told: %v), want the failure and the forgotten account", n, ok)
 		}
 	})
 
@@ -559,4 +595,248 @@ func TestEnvRunAudit(t *testing.T) {
 			t.Errorf("%d account rows for a registration that was refused: %+v", len(rows), rows)
 		}
 	})
+}
+
+// fallbackRows are the two kinds of row the fallback to self-signed writes, in order.
+func (k *auditSink) fallbackRows() []audit.Entry {
+	return k.byAction(audit.ActionHTTPSFallbackStarted, audit.ActionHTTPSFallbackEnded)
+}
+
+// requireFallbackRows fails the test unless the sink holds exactly the wanted fallback actions, in order.
+func requireFallbackRows(t *testing.T, what string, a *auditEnv, want ...string) {
+	t.Helper()
+	var got []string
+	for _, e := range a.sink.fallbackRows() {
+		got = append(got, e.Action)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("%s: fallback rows = %v, want %v", what, got, want)
+	}
+}
+
+// lapse issues the first certificate and moves the clock to the end of it, so the certificate is expired.
+func (a *auditEnv) lapse() *x509.Certificate {
+	a.t.Helper()
+	a.issueFirst()
+	first := leafOf(a.t, a.inst.chains[0])
+	a.advanceTo(first.NotAfter)
+	return first
+}
+
+// requireStarted checks the one https.fallback_started row about leaf: written by the system, with the instant the
+// certificate expired and its names.
+func requireStarted(t *testing.T, e audit.Entry, leaf *x509.Certificate) {
+	t.Helper()
+	if e.Action != audit.ActionHTTPSFallbackStarted || e.Actor != audit.SystemACME || e.Result != audit.ResultSuccess ||
+		e.TargetType != "https" || e.TargetID != "https" {
+		t.Errorf("row = %+v, want https.fallback_started, a success by system:acme about https", e)
+	}
+	want := map[string]string{"expired_at": leaf.NotAfter.UTC().Format(time.RFC3339), "names": strings.Join(leaf.DNSNames, ",")}
+	if len(e.Details) != len(want) {
+		t.Errorf("details = %+v, want only %v", e.Details, want)
+	}
+	for k, v := range want {
+		if e.Details[k] != v {
+			t.Errorf("details[%q] = %q, want %q", k, e.Details[k], v)
+		}
+	}
+}
+
+// The fallback to self-signed at expiry, and the return from it, are the system's doing and are written once for each
+// lapse, however many scheduler rounds and restarts it spans (SET-04, D-09, D-10, T-17-32, T-17-35).
+func TestFallbackAudit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the swap at expiry writes one row and the renewal after it writes the end", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.issueFirst()
+		first := leafOf(t, a.inst.chains[0])
+		a.failOrders(2, refusal)
+		a.schedule(a.mgr)
+
+		a.stepTo(a.state().RenewAt)
+		if got := a.awaitRun(); got != OutcomeFailed {
+			t.Fatalf("the first renewal ended %q, want failed", got)
+		}
+		requireFallbackRows(t, "before expiry", a)
+
+		a.stepTo(first.NotAfter)
+		if got := a.awaitRun(); got != OutcomeFailed {
+			t.Fatalf("the renewal at expiry ended %q, want failed", got)
+		}
+		requireFallbackRows(t, "at expiry", a, audit.ActionHTTPSFallbackStarted)
+		requireStarted(t, a.sink.fallbackRows()[0], first)
+		if got, err := a.store.FallbackNoted(ctx); err != nil || got != first.SerialNumber.Text(16) {
+			t.Errorf("FallbackNoted = %q (%v), want the expired certificate's serial %q", got, err, first.SerialNumber.Text(16))
+		}
+
+		// More rounds of the lapse write nothing; the renewal that works writes the end.
+		a.step(Tick)
+		a.step(Tick)
+		requireFallbackRows(t, "two rounds into the lapse", a, audit.ActionHTTPSFallbackStarted)
+		a.step(25 * time.Hour)
+		if got := a.awaitRun(); got != OutcomeSucceeded {
+			t.Fatalf("the renewal after expiry ended %q, want succeeded", got)
+		}
+		requireFallbackRows(t, "after the renewal", a, audit.ActionHTTPSFallbackStarted, audit.ActionHTTPSFallbackEnded)
+		renewed := leafOf(t, a.inst.chains[len(a.inst.chains)-1])
+		end := a.sink.fallbackRows()[1]
+		if end.Actor != audit.SystemACME || end.Result != audit.ResultSuccess || end.TargetType != "https" {
+			t.Errorf("row = %+v, want https.fallback_ended, a success by system:acme about https", end)
+		}
+		if end.Details["names"] != strings.Join(renewed.DNSNames, ",") || end.Details["not_after"] != renewed.NotAfter.UTC().Format(time.RFC3339) || len(end.Details) != 2 {
+			t.Errorf("details = %+v, want the new certificate's names and not_after", end.Details)
+		}
+		// The end row comes before the renewal's own row and before the run is told to have ended.
+		if a.sink.indexOf(audit.ActionHTTPSFallbackEnded) > a.sink.indexOf(audit.ActionHTTPSRenewed) {
+			t.Error("the end of the fallback comes after the renewal's row, want it first")
+		}
+		a.step(Tick)
+		requireFallbackRows(t, "a round after the return", a, audit.ActionHTTPSFallbackStarted, audit.ActionHTTPSFallbackEnded)
+	})
+
+	t.Run("a process started over an expired certificate writes the lapse once", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		first := a.lapse()
+
+		inst := &recInstaller{}
+		m := a.build(inst)
+		if err := m.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		requireFallbackRows(t, "at start", a)
+		m.syncServed(ctx)
+		requireFallbackRows(t, "first round", a, audit.ActionHTTPSFallbackStarted)
+		requireStarted(t, a.sink.fallbackRows()[0], first)
+		if got, err := a.store.FallbackNoted(ctx); err != nil || got != first.SerialNumber.Text(16) {
+			t.Errorf("FallbackNoted = %q (%v), want %q", got, err, first.SerialNumber.Text(16))
+		}
+		m.syncServed(ctx)
+		m.syncServed(ctx)
+		requireFallbackRows(t, "later rounds", a, audit.ActionHTTPSFallbackStarted)
+		if inst.selfSignedCount() != 0 || inst.served() != 0 {
+			t.Errorf("the start-up round swapped the certificate (self-signed %d, Let's Encrypt %d); self-signed was served already",
+				inst.selfSignedCount(), inst.served())
+		}
+		if on, at := a.fallbackOf(m); !on || !at.Equal(first.NotAfter) {
+			t.Errorf("Status.Fallback = %v at %v, want true at %v", on, at, first.NotAfter)
+		}
+	})
+
+	t.Run("a restart while still lapsed writes no second row", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.lapse()
+		for i := range 3 {
+			m := a.build(&recInstaller{})
+			if err := m.Start(ctx); err != nil {
+				t.Fatalf("Start %d: %v", i, err)
+			}
+			m.syncServed(ctx)
+			m.syncServed(ctx)
+		}
+		requireFallbackRows(t, "three process starts over one lapse", a, audit.ActionHTTPSFallbackStarted)
+	})
+
+	t.Run("a swap in process and then a restart writes the lapse once", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		first := a.lapse()
+		a.mgr.syncServed(ctx)
+		a.mgr.syncServed(ctx)
+		requireFallbackRows(t, "the swap and a second round", a, audit.ActionHTTPSFallbackStarted)
+		requireStarted(t, a.sink.fallbackRows()[0], first)
+		if n := a.inst.selfSignedCount(); n != 1 {
+			t.Errorf("self-signed was served %d times, want once", n)
+		}
+
+		m := a.build(&recInstaller{})
+		if err := m.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		m.syncServed(ctx)
+		requireFallbackRows(t, "the restart", a, audit.ActionHTTPSFallbackStarted)
+	})
+
+	t.Run("the return after a start-up lapse writes its one end row, and a later lapse has its own row", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		first := a.lapse()
+		a.mgr.syncServed(ctx) // the lapse is in the log, written by the process that is replaced below
+
+		inst := &recInstaller{}
+		m := a.build(inst)
+		if err := m.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		m.round(ctx) // notes the lapse without a second row, then renews: the clock is past renew_at
+		if got := a.awaitRun(); got != OutcomeSucceeded {
+			t.Fatalf("the renewal ended %q, want succeeded", got)
+		}
+		requireFallbackRows(t, "after the return", a, audit.ActionHTTPSFallbackStarted, audit.ActionHTTPSFallbackEnded)
+		renewed := leafOf(t, inst.chains[0])
+		if renewed.SerialNumber.Cmp(first.SerialNumber) == 0 {
+			t.Fatal("the renewal served the expired certificate again")
+		}
+		if end := a.sink.fallbackRows()[1]; end.Details["not_after"] != renewed.NotAfter.UTC().Format(time.RFC3339) {
+			t.Errorf("details = %+v, want the renewed certificate's not_after", end.Details)
+		}
+		m.syncServed(ctx)
+		requireFallbackRows(t, "a round after the return", a, audit.ActionHTTPSFallbackStarted, audit.ActionHTTPSFallbackEnded)
+
+		// The renewed certificate lapses in its turn: a different serial is a lapse of its own.
+		a.advanceTo(renewed.NotAfter)
+		m.syncServed(ctx)
+		requireFallbackRows(t, "the second lapse", a, audit.ActionHTTPSFallbackStarted, audit.ActionHTTPSFallbackEnded, audit.ActionHTTPSFallbackStarted)
+		requireStarted(t, a.sink.fallbackRows()[2], renewed)
+		if got, err := a.store.FallbackNoted(ctx); err != nil || got != renewed.SerialNumber.Text(16) {
+			t.Errorf("FallbackNoted = %q (%v), want the second certificate's serial %q", got, err, renewed.SerialNumber.Text(16))
+		}
+	})
+
+	t.Run("a valid certificate the Installer refused is no fallback", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.issueFirst()
+		m := a.build(&recInstaller{serveErr: errTestInstall})
+		if err := m.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		m.syncServed(ctx)
+		requireFallbackRows(t, "a refused install of a valid certificate", a)
+		if got, err := a.store.FallbackNoted(ctx); err != nil || got != "" {
+			t.Errorf("FallbackNoted = %q (%v), want nothing noted", got, err)
+		}
+	})
+
+	t.Run("a fallback is written as the system whoever started the process", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.lapse()
+		m := a.buildWithEnv(&recInstaller{}, onEnv())
+		if err := m.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		m.syncServed(ctx)
+		rows := a.sink.fallbackRows()
+		if len(rows) != 1 || rows[0].Actor != audit.SystemACME {
+			t.Fatalf("rows = %+v, want one by system:acme", rows)
+		}
+	})
+}
+
+func TestFallbackNoted(t *testing.T) {
+	ctx := context.Background()
+	s := newSchedEnv(t, acmetest.Options{})
+
+	if got, err := s.store.FallbackNoted(ctx); err != nil || got != "" {
+		t.Fatalf("FallbackNoted on a new store = %q (%v), want empty", got, err)
+	}
+	if err := s.store.NoteFallback(ctx, "0a1b", s.clock.Now()); err != nil {
+		t.Fatalf("NoteFallback: %v", err)
+	}
+	if got, err := s.store.FallbackNoted(ctx); err != nil || got != "0a1b" {
+		t.Errorf("FallbackNoted = %q (%v), want 0a1b", got, err)
+	}
+	if err := s.store.NoteFallback(ctx, "ff02", s.clock.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("NoteFallback again: %v", err)
+	}
+	if got, err := s.store.FallbackNoted(ctx); err != nil || got != "ff02" {
+		t.Errorf("FallbackNoted after a second note = %q (%v), want ff02", got, err)
+	}
 }
