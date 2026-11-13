@@ -4,8 +4,10 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -143,17 +145,39 @@ func TestHTTPSDocsHSTSNumbers(t *testing.T) {
 	guidePhrasesBite(t, guide, rows)
 }
 
-// TestHTTPSDocsServerDefaults: the self-signed certificate's lifetime and the interval at which
-// supplied certificate files are read again, as the guide quotes them.
+// TestHTTPSDocsServerDefaults: the self-signed certificate's lifetime, the interval at which supplied
+// certificate files are read again, and the TLS floor and HTTP/2 the listener offers, as the guide quotes
+// them.
 func TestHTTPSDocsServerDefaults(t *testing.T) {
 	guide := guideText(t)
 	const (
 		secDefault = "How TierPlan serves HTTPS by default"
 		secMode    = "Choosing a mode"
 	)
+	cfg := newHTTPSRuntime().cfg
 	rows := []guidePhrase{
 		{secDefault, "valid for " + guideWords(selfSignedValidity)},
 		{secMode, "within " + guideWords(suppliedRecheck)},
+		{secDefault, tls.VersionName(cfg.MinVersion) + " or newer"},
+	}
+	// The one path the plain listener answers.
+	rows = append(rows, guidePhrase{"Let's Encrypt with HTTP-01", "`" + acmeChallengePrefix + "`"})
+	for _, proto := range cfg.NextProtos {
+		if proto == "h2" {
+			rows = append(rows, guidePhrase{secDefault, "HTTP/2"})
+		}
+	}
+	// The key the guide calls ECDSA P-256 and the copy of the certificate it points at.
+	key, err := newKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = append(rows,
+		guidePhrase{secDefault, "ECDSA " + key.Curve.Params().Name},
+		guidePhrase{secDefault, "`" + filepath.Join("/data", selfSignedDir, mirrorCertFile) + "`"},
+	)
+	if len(rows) != 7 {
+		t.Fatalf("the listener no longer offers h2, so the guide's HTTP/2 claim has nothing to be checked against: %v", cfg.NextProtos)
 	}
 	t.Run("real", func(t *testing.T) {
 		for _, p := range checkGuidePhrases(guide, rows) {

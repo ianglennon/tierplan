@@ -5,7 +5,7 @@
 
 TierPlan always serves HTTPS. This page says what it serves by default, how to choose another certificate (your own files, or a free one from Let's Encrypt), how to set that up with HTTP-01 or with DNS-01 through Cloudflare, how to configure all of it from environment variables, what the warnings in the bell mean, and what to do when an order fails.
 
-If a reverse proxy already ends TLS for you, you may not need any of this. See [reverse-proxy.md](reverse-proxy.md).
+If a reverse proxy already ends TLS for you, you may not need any of this. See [Proxy or TierPlan's own HTTPS?](reverse-proxy.md#proxy-or-tierplans-own-https).
 
 ## How TierPlan serves HTTPS by default
 

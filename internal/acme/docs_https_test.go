@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/acme/dns"
+	"github.com/ianglennon/tierplan/internal/acme/resolvers"
 )
 
 // These tests keep docs/https.md true. Each check is a pure function over strings. A subtest feeds it a
@@ -23,7 +26,7 @@ import (
 // package run in internal/acme, so the root is two levels up.
 func repoText(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile("../../" + rel)
+	b, err := os.ReadFile("../../" + rel) //nolint:gosec // G304: a repository path chosen by this test
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
@@ -136,7 +139,7 @@ func checkLinksResolve(doc, dir string) []string {
 		name := "the document itself"
 		if l.file != "" {
 			rel := path.Join(dir, l.file)
-			b, err := os.ReadFile("../../" + rel)
+			b, err := os.ReadFile("../../" + rel) //nolint:gosec // G304: a repository path chosen by this test
 			if err != nil {
 				bad = append(bad, fmt.Sprintf("link to %s: file not found", rel))
 				continue
@@ -494,6 +497,117 @@ func checkRefusals(section string, codes []string) []string {
 	return bad
 }
 
+// checkProxyPage reports a reverse-proxy page without the "Proxy or TierPlan's own HTTPS?" section above
+// "The short version", or one that does not link the guide.
+func checkProxyPage(proxy string) []string {
+	var bad []string
+	text := "\n" + proxy
+	at := strings.Index(text, "\n## Proxy or TierPlan's own HTTPS?\n")
+	short := strings.Index(text, "\n## The short version\n")
+	if at < 0 {
+		bad = append(bad, `docs/reverse-proxy.md has no "## Proxy or TierPlan's own HTTPS?" section`)
+	} else if short >= 0 && at > short {
+		bad = append(bad, `the "Proxy or TierPlan's own HTTPS?" section is below "The short version"`)
+	}
+	sec := mdSection(proxy, "Proxy or TierPlan's own HTTPS?")
+	if sec != "" && !strings.Contains(sec, "](https.md") {
+		bad = append(bad, "the proxy section does not link https.md")
+	}
+	return bad
+}
+
+// checkGuideLinksProxy reports a guide that does not link the proxy page.
+func checkGuideLinksProxy(guide string) []string {
+	if !strings.Contains(guide, "](reverse-proxy.md") {
+		return []string{"docs/https.md does not link reverse-proxy.md"}
+	}
+	return nil
+}
+
+// checkReadmeTruth reports the stale sentence about the challenge path and a missing row for
+// TIERPLAN_REGISTRY_BLOCK_CIDRS.
+func checkReadmeTruth(readme string) []string {
+	var bad []string
+	if strings.Contains(readme, "until Let's Encrypt support lands") {
+		bad = append(bad, "README.md still says the challenge path answers 404 until Let's Encrypt support lands")
+	}
+	if !strings.Contains(readme, "| `TIERPLAN_REGISTRY_BLOCK_CIDRS` |") {
+		bad = append(bad, "README.md has no row for TIERPLAN_REGISTRY_BLOCK_CIDRS")
+	}
+	return bad
+}
+
+// stringValues collects every string value of a decoded JSON document.
+func stringValues(v any, into map[string]bool) {
+	switch x := v.(type) {
+	case string:
+		into[x] = true
+	case map[string]any:
+		for _, e := range x {
+			stringValues(e, into)
+		}
+	}
+}
+
+var boldRe = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+
+// checkBoldLabels reports a bold span of the guide that is not a string of the UI. A span with " > " is a
+// navigation path, and each of its segments must be one.
+func checkBoldLabels(doc string, ui map[string]bool) []string {
+	var bad []string
+	for _, line := range mdProse(doc) {
+		for _, m := range boldRe.FindAllStringSubmatch(line, -1) {
+			span := m[1]
+			if strings.Contains(span, " > ") {
+				for _, seg := range strings.Split(span, " > ") {
+					if !ui[strings.TrimSpace(seg)] {
+						bad = append(bad, fmt.Sprintf("**%s**: %q is not a label in the UI strings", span, strings.TrimSpace(seg)))
+					}
+				}
+				continue
+			}
+			if !ui[span] {
+				bad = append(bad, fmt.Sprintf("**%s** is not a label in the UI strings", span))
+			}
+		}
+	}
+	return bad
+}
+
+// checkRequiredLabels reports a label the guide must show in bold and does not.
+func checkRequiredLabels(doc string, labels []string) []string {
+	var bad []string
+	for _, l := range labels {
+		if !strings.Contains(doc, "**"+l+"**") {
+			bad = append(bad, fmt.Sprintf("the guide does not show **%s** in bold", l))
+		}
+	}
+	return bad
+}
+
+var (
+	listenDefaultRe = regexp.MustCompile(`env: "TIERPLAN_LISTEN"[^\n]*def: ":(\d+)"`)
+	dashPortRe      = regexp.MustCompile(`-p (\d+):(\d+)`)
+	quotedPortRe    = regexp.MustCompile(`"(\d+):(\d+)"`)
+)
+
+// checkPorts reports a port mapping whose container port is not the listen port, and an env section that
+// does not name it.
+func checkPorts(doc, envSection, listen string) []string {
+	var bad []string
+	for _, re := range []*regexp.Regexp{dashPortRe, quotedPortRe} {
+		for _, m := range re.FindAllStringSubmatch(doc, -1) {
+			if m[2] != listen {
+				bad = append(bad, fmt.Sprintf("the port mapping %s:%s does not end at TierPlan's port %s", m[1], m[2], listen))
+			}
+		}
+	}
+	if !strings.Contains(envSection, listen) {
+		bad = append(bad, "the environment section does not name port "+listen)
+	}
+	return bad
+}
+
 func TestHTTPSDocs(t *testing.T) {
 	guide := repoText(t, "docs/https.md")
 	readme := repoText(t, "README.md")
@@ -622,6 +736,86 @@ func TestHTTPSDocs(t *testing.T) {
 	expectBad(t, "numbers/missing section", numberCheck, "# nothing here")
 	expectClean(t, "numbers", numberCheck, guide)
 	checkNumbersBite(t, "numbers", guide, rows)
+
+	// The proxy page and the README.
+	proxyBelow := "## The short version\n\n## Proxy or TierPlan's own HTTPS?\n\nSee [x](https.md).\n"
+	expectBad(t, "proxy section/missing", checkProxyPage, "## The short version\n")
+	expectBad(t, "proxy section/below", checkProxyPage, proxyBelow)
+	expectBad(t, "proxy section/no link", checkProxyPage, "## Proxy or TierPlan's own HTTPS?\n\nUse a proxy.\n\n## The short version\n")
+	expectClean(t, "proxy section", checkProxyPage, proxy)
+	expectBad(t, "guide links proxy", checkGuideLinksProxy, "No link here.")
+	expectClean(t, "guide links proxy", checkGuideLinksProxy, guide)
+	expectBad(t, "readme truth/stale", checkReadmeTruth, "answers 404 until Let's Encrypt support lands | `TIERPLAN_REGISTRY_BLOCK_CIDRS` |")
+	expectBad(t, "readme truth/no row", checkReadmeTruth, "nothing")
+	expectClean(t, "readme truth", checkReadmeTruth, readme)
+
+	// Every bold span is a UI label, and the labels the guide depends on are there.
+	ui := map[string]bool{}
+	for _, f := range []string{"https", "settings", "bell"} {
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(repoText(t, "web/src/i18n/en/"+f+".json")), &doc); err != nil {
+			t.Fatal(err)
+		}
+		stringValues(doc, ui)
+	}
+	boldCheck := func(s string) []string { return checkBoldLabels(s, ui) }
+	expectBad(t, "bold labels/short form", boldCheck, "Press **Resume** to go on.")
+	expectBad(t, "bold labels/invented", boldCheck, "Press **Test the token** to go on.")
+	expectBad(t, "bold labels/path segment", boldCheck, "Open **Settings > TLS**.")
+	expectBad(t, "bold labels/emphasis", boldCheck, "This is **important**.")
+	expectClean(t, "bold labels", boldCheck, guide)
+	var settingsJSON map[string]any
+	if err := json.Unmarshal([]byte(repoText(t, "web/src/i18n/en/settings.json")), &settingsJSON); err != nil {
+		t.Fatal(err)
+	}
+	str := func(doc map[string]any, keys ...string) string {
+		v, ok := jsonAt(t, doc, keys...).(string)
+		if !ok {
+			t.Fatalf("%v is not a string", keys)
+		}
+		return v
+	}
+	// The labels the guide depends on, by their key in the UI strings (never as literals).
+	var required []string
+	for _, path := range []string{
+		"https.dns.test.action", "https.issue.issue", "https.issue.renew", "https.alerts.restore.resume", "https.stop.action",
+	} {
+		required = append(required, str(httpsJSON, strings.Split(path, ".")...))
+	}
+	required = append(required, str(settingsJSON, "settings", "title")+" > "+str(settingsJSON, "settings", "tabs", "https"))
+	requiredCheck := func(s string) []string { return checkRequiredLabels(s, required) }
+	expectBad(t, "required labels/not bold", requiredCheck, strings.ReplaceAll(guide, "**"+required[3]+"**", required[3]))
+	expectBad(t, "required labels/changed", requiredCheck, strings.ReplaceAll(guide, "**"+required[0]+"**", "**Check token**"))
+	expectBad(t, "required labels/path", requiredCheck, strings.ReplaceAll(guide, "**"+required[5]+"**", "**Settings > TLS**"))
+	expectClean(t, "required labels", requiredCheck, guide)
+
+	// The listen port and the resolver limit.
+	lm := listenDefaultRe.FindStringSubmatch(configSrc)
+	if lm == nil {
+		t.Fatal("the TIERPLAN_LISTEN default was not found in config.go")
+	}
+	listen := lm[1]
+	portCheck := func(s string) []string {
+		return checkPorts(s, mdSection(s, "Configuring everything with environment variables"), listen)
+	}
+	expectBad(t, "ports/other container port", func(s string) []string { return checkPorts(s, "7480", listen) }, "-p 80:8080")
+	expectBad(t, "ports/compose entry", func(s string) []string { return checkPorts(s, "7480", listen) }, `    - "8080:8080"`)
+	expectBad(t, "ports/not named", func(s string) []string { return checkPorts(s, "no port here", listen) }, "")
+	expectClean(t, "ports", portCheck, guide)
+	const secDNS01 = "Let's Encrypt with DNS-01 through Cloudflare"
+	// The record name and the comment prefix the guide quotes come from the DNS package.
+	commentPrefix, _, _ := strings.Cut(dns.RecordComment("x", "y"), "x")
+	resolverRows := []docNumber{
+		{secDNS01, fmt.Sprintf("at most %d", resolvers.MaxResolvers)},
+		{secDNS01, "`" + dns.ChallengeFQDN("<your host>") + "`"},
+		{secDNS01, "starts with `" + commentPrefix + "`"},
+		// The two Cloudflare permissions, as the HTTPS page names them.
+		{secDNS01, str(httpsJSON, "https", "dns", "setup", "permEdit")},
+		{secDNS01, str(httpsJSON, "https", "dns", "setup", "permRead")},
+	}
+	resolverCheck := func(s string) []string { return checkNumbers(s, resolverRows) }
+	expectClean(t, "dns-01 numbers", resolverCheck, guide)
+	checkNumbersBite(t, "dns-01 numbers", guide, resolverRows)
 }
 
 func TestDocWords(t *testing.T) {

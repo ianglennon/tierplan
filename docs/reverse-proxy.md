@@ -4,6 +4,19 @@ TierPlan serves HTTPS only: it listens on port 7480 and answers with its own cer
 
 The configurations on this page are the files in [`docs/proxy/`](proxy/). `make proxy-smoke` runs the built image behind all three, at both places, and checks what is listed under [Checking a setup](#checking-a-setup).
 
+## Proxy or TierPlan's own HTTPS?
+
+You do not always need a proxy. TierPlan can get a free certificate that browsers trust from Let's Encrypt and serve it itself, over HTTP-01 or, with Cloudflare DNS, DNS-01. [HTTPS and Let's Encrypt](https.md) says how.
+
+Use a proxy when:
+
+- one already ends TLS for other sites on this host;
+- TierPlan must live under a subpath of a shared host name;
+- you need a wildcard certificate, or a certificate from another CA;
+- your DNS is not on Cloudflare and port 80 cannot reach TierPlan.
+
+Otherwise TierPlan's own Let's Encrypt support is simpler: there is no second program to run and no second certificate to keep. If you do use a proxy, the rest of this page applies, and the proxy still talks HTTPS to TierPlan.
+
 ## The short version
 
 1. Point the proxy at `https://tierplan:7480` (HTTPS upstream), not at `http://`. TierPlan does not answer plain HTTP. See [HTTPS to TierPlan](#https-to-tierplan).
