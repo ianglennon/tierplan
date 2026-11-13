@@ -20,7 +20,7 @@ Until you give it something better, TierPlan serves a certificate it made for th
 
 A browser warns about this certificate because no public authority vouches for it. That is expected. It is safe to continue once the fingerprints match, and the warning goes away when you use a certificate a browser trusts.
 
-Agents do not need a trusted certificate. The install command you copy from Add environment carries the pin of the certificate the agent will see, and the agent connects only if the certificate matches. Every agent also keeps the self-signed pin it receives when it connects. That is why TierPlan can fall back to its own certificate without cutting agents off (see the renewal section below).
+Agents do not need a trusted certificate. The install command you copy from Add environment carries the pin of the certificate the agent will see, and the agent connects only if the certificate matches. Every agent also keeps the self-signed pin it receives when it connects. That is why TierPlan can fall back to its own certificate without cutting agents off (see [Renewal, backoff, the restore pause and the fallback](#renewal-backoff-the-restore-pause-and-the-fallback)).
 
 ### Coming from a plain-HTTP v0.1.0 install
 
@@ -39,7 +39,7 @@ Your stored public URL is an `http://` address, which TierPlan will not start wi
 
 Mount the files and set `TIERPLAN_TLS_CERT_FILE` and `TIERPLAN_TLS_KEY_FILE`. Set both or neither. When you replace the files, TierPlan picks up the new pair within 1 minute, with no restart. A replacement it cannot load is logged and the working pair stays in use. If the certificate chain needs intermediate certificates, put them after the certificate in the same file.
 
-Certificate files win over Let's Encrypt. While they are set, Let's Encrypt is paused: TierPlan keeps its Let's Encrypt certificate, order and account, and makes no request to the CA. Remove both variables and restart to use Let's Encrypt again. TierPlan never renews certificate files. It tells you in the bell when they are close to expiring (see the bell section below).
+Certificate files win over Let's Encrypt. While they are set, Let's Encrypt is paused: TierPlan keeps its Let's Encrypt certificate, order and account, and makes no request to the CA. Remove both variables and restart to use Let's Encrypt again. TierPlan never renews certificate files. It tells you in the bell when they are close to expiring (see [What each bell warning means](#what-each-bell-warning-means)).
 
 ### Let's Encrypt
 
@@ -99,7 +99,7 @@ While it waits for the record to appear, TierPlan asks the zone's own nameserver
 
 ### Clean-up
 
-TierPlan deletes only the records it created, by the record ID it stored when it made them, never by searching for a name. If a delete fails, the record is left and retried on a backoff, and the bell tells you (see the bell section below). The retries pause while Let's Encrypt is paused after a restore, or while certificate files are set. You can always delete a record yourself in the Cloudflare dashboard.
+TierPlan deletes only the records it created, by the record ID it stored when it made them, never by searching for a name. If a delete fails, the record is left and retried on a backoff, and the bell tells you (see [What each bell warning means](#what-each-bell-warning-means)). The retries pause while Let's Encrypt is paused after a restore, or while certificate files are set. You can always delete a record yourself in the Cloudflare dashboard.
 
 ## Configuring everything with environment variables
 
@@ -115,7 +115,7 @@ Every HTTPS setting can come from the environment, so a compose file can bring u
 | `TIERPLAN_DNS_PROVIDER` | `cloudflare`, for `dns-01`. |
 | `TIERPLAN_DNS_RESOLVERS` | The resolvers the DNS-01 check asks, at most 5. |
 | `TIERPLAN_ACME_PROFILE` | The CA's certificate profile name, such as `shortlived`. Unset means the CA's default. |
-| `TIERPLAN_HSTS` | `on` or `off`. See the HSTS section below. |
+| `TIERPLAN_HSTS` | `on` or `off`. See [HSTS](#hsts). |
 
 Also relevant: `TIERPLAN_PUBLIC_URL` (the address the certificate must cover), `TIERPLAN_AGENT_URL`, `TIERPLAN_TLS_CERT_FILE` and `TIERPLAN_TLS_KEY_FILE`. The README lists every variable with its default.
 
@@ -161,3 +161,93 @@ volumes:
 ```
 
 For HTTP-01, set `TIERPLAN_ACME_CHALLENGE` to `http-01`, leave out `TIERPLAN_DNS_PROVIDER`, the token and the `secrets` entries, and publish port 80 as shown in the comment.
+
+## HSTS
+
+HSTS (the `Strict-Transport-Security` header) tells a browser to use only HTTPS for a host name. It is off by default, because a browser that holds a policy for a name cannot be talked out of it if the certificate later goes wrong.
+
+Turn it on with the **Send HSTS** switch in **Settings > HTTPS**, or with `TIERPLAN_HSTS=on`. A variable locks the switch. TierPlan then follows these rules:
+
+- It sends HSTS only on a response over a certificate that verifies for your public host. It never sends a positive lifetime with its own self-signed certificate, and it never adds `includeSubDomains` or `preload`.
+- The lifetime grows in steps: 5 minutes, then 1 week, then 30 days, then 1 year. It moves up a step only after the current one has been sent for a while: 24 hours at 5 minutes, 1 week at 1 week, and 30 days at 30 days. A withdrawal, a certificate that stops being trusted, a new public host and a restore each start again at 5 minutes.
+- For a certificate that lives less than 10 days, such as a short-lived Let's Encrypt certificate, the lifetime stops at 1 week.
+- It withdraws HSTS ahead of the certificate's end. TierPlan then sends `max-age=0`, which makes a browser forget the policy, because a browser that kept it would refuse the self-signed certificate that takes over, with no way to click past the warning. The withdrawal starts 1 week before a 90-day certificate ends. For a short certificate the window is a third of its lifetime: 2 days before a 6-day certificate ends. When a renewal works, or the certificate files hold a new certificate, HSTS comes back and starts again at 5 minutes.
+- **Stop using Let's Encrypt** is refused while HSTS is on. Turn HSTS off first, and wait for browsers to forget the policy before you stop. `TIERPLAN_ACME=off` is refused at start for the same reason.
+- HSTS applies to the whole host name on every port. A browser that has seen it also refuses plain HTTP for any other service on that name, such as a site on port 80.
+
+## Renewal, backoff, the restore pause and the fallback
+
+### When TierPlan renews
+
+TierPlan renews on its own, with nothing for you to press. It renews inside the window the CA names when the CA offers one. Otherwise it renews two thirds of the way through the certificate's life, or half way for a certificate that lives less than 10 days. **Renew now** does it at once and replaces the certificate in use without a restart.
+
+### Backoff
+
+When a run fails, TierPlan waits before it tries again: 1 minute, 10 minutes, 100 minutes, then 24 hours for every later failure. For a certificate that lives less than 10 days a wait is never longer than 6 hours, so it does not outlast the certificate. When the CA sends a Retry-After, TierPlan waits at least that long, up to 1 week, and a longer value is cut to that. After 3 failed runs in 1 hour, **Issue certificate** and **Renew now** are refused until the hour is up, so a mistake does not use up Let's Encrypt's limits.
+
+### The pause after a restore
+
+An instance restored from a backup makes no Let's Encrypt request until you press **Resume Let's Encrypt**. The restored copy may not be the install your host name points at, and two installs on one account would use up each other's limits. Check that your public URL points at this install, then resume. With `TIERPLAN_ACME=on`, TierPlan orders again as soon as you resume.
+
+### The fallback
+
+If renewals keep failing and the Let's Encrypt certificate expires, TierPlan serves its own self-signed certificate instead and keeps trying. Browsers warn about it. Agents stay connected, because each holds the self-signed pin. When a renewal works, the Let's Encrypt certificate comes back by itself.
+
+### The host clock
+
+TierPlan judges expiry, renewal and the fallback by its own clock. A clock that is wrong makes it renew late or early, so keep NTP running on the host. TierPlan reads the difference from Let's Encrypt's own responses whenever it talks to it: in every run, whatever the mode, and once after a start while Let's Encrypt is active. With no such response nothing is shown. TierPlan never queries an NTP server.
+
+## What each bell warning means
+
+The bell at the top of the page lists these for instance admins only. None can be dismissed: each goes by itself when its cause is gone.
+
+| ID | Title | What it means | What to do |
+|----|-------|---------------|------------|
+| `https_cert_fallback` | The HTTPS certificate expired | The Let's Encrypt certificate expired because renewal kept failing. TierPlan serves its self-signed certificate, so browsers warn. Agents stay connected. | Fix the cause shown on the HTTPS page, then press **Renew now**. It goes when a renewal works. |
+| `https_renewal_failed` | The certificate couldn't be renewed, or The certificate couldn't be issued | The last order failed. The warning names the error class and when the next attempt is. "Issued" means there is no Let's Encrypt certificate yet and `TIERPLAN_ACME=on` keeps trying. | Look the class up in [Troubleshooting by error class](#troubleshooting-by-error-class). It goes after the next run that works. |
+| `https_acme_paused` | Let's Encrypt is paused | TierPlan makes no request. The reason is one of three: a restore, a Retry-After from the CA, or 3 failed runs in 1 hour. | After a restore, press **Resume Let's Encrypt**. For the other two there is nothing to do: it goes when the time shown has passed. |
+| `https_clock_off` | The server clock is off | TierPlan's clock differs from Let's Encrypt's by more than 5 minutes. The warning says by how much and which way. A measurement older than 2 days is dropped. | Fix NTP on the TierPlan host. It goes with the first response that shows the clocks in step. |
+| `https_cert_expiring` | The HTTPS certificate expires soon, or The HTTPS certificate has expired | The certificate in use, from Let's Encrypt or from certificate files, has less than 14 days left, or less than a third of its lifetime for a short-lived certificate. | For Let's Encrypt, open the HTTPS page to see why it has not renewed. For certificate files, replace them: TierPlan picks the new ones up within 1 minute. |
+| `https_txt_left` | A DNS record was left behind | TierPlan could not delete a TXT record it created in your Cloudflare zone. It names the oldest and counts the rest. | Wait: TierPlan keeps retrying. If it stays, delete the record in Cloudflare. |
+
+The clock warning does not stop anything: preflight, **Issue certificate**, the renewal time, the backoff and the fallback never read it. TierPlan never renews certificate files, so the expiring warning is how you find out that they need replacing. Let's Encrypt being paused because certificate files are set gives no warning, since you set it up that way.
+
+## Troubleshooting by error class
+
+When an order fails, the HTTPS page shows a headline and a fix. Both are copied here, with the names the page fills in written as words.
+
+| Class | What the page says | What to do |
+|-------|--------------------|------------|
+| `rate_limited` | Let's Encrypt is limiting requests. | TierPlan waits until the time the page shows before it tries again. There is nothing to do. |
+| `validation_unreachable` | Let's Encrypt couldn't reach http://your host/.well-known/acme-challenge/. | Port 80 on your host must reach TierPlan, for example with -p 80:7480. Check your firewall and router, then try again. |
+| `validation_dns` | The DNS records for your host don't point at this host. | Make the A and AAAA records for your host point at this host. Remove an old AAAA record if you have no IPv6. Then try again. |
+| `caa_forbids` | A CAA record forbids Let's Encrypt for your host. | Add a CAA record that allows letsencrypt.org, or remove the one that blocks it. |
+| `identifier_rejected` | Let's Encrypt won't issue for your host. | Use a public DNS name under a domain you own as the public URL. |
+| `contact_invalid` | Let's Encrypt rejected the contact email. | Register again with a valid address, or leave it empty. |
+| `tos_action_required` | Let's Encrypt changed its terms. | Read the current terms at the address the page shows, then try again. |
+| `account_gone` | Let's Encrypt doesn't know this account. | Register the account again in the Account section. |
+| `profile_invalid` | Let's Encrypt doesn't offer the profile the profile. | Choose another profile under Advanced, or go back to the CA default. |
+| `ca_unavailable` | Let's Encrypt couldn't be reached. | TierPlan tries again on its own schedule, next at the time the page shows. If it keeps failing, check this host's internet access. |
+| `ca_untrusted` | TierPlan doesn't trust the certificate authority's certificate. | This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE. A server clock that is badly wrong can cause it too. |
+| `internal` | Something went wrong inside TierPlan. | Open Details and check the server log. TierPlan tries again at the time the page shows. |
+| `dns_token_invalid` | Cloudflare didn't accept the API token. | The token is wrong, expired or revoked. Create a new token and enter it again under Validation method. |
+| `dns_token_scope` | The Cloudflare token can't manage DNS records for your host. | The token needs both Zone:DNS:Edit and Zone:Zone:Read, and it must include the zone for your host. Fix it in Cloudflare, or enter a new token. |
+| `dns_zone_not_found` | Cloudflare has no zone for your host. | Add the zone to the Cloudflare account the token belongs to, and check that the token includes it. Or make _acme-challenge.your host a CNAME to a record in a Cloudflare zone you can edit. |
+| `dns_delegation_target` | _acme-challenge.your host is delegated to the target, which TierPlan can't edit. | The target must be in a Cloudflare zone this token can edit. Add that zone to the token, or change the CNAME. |
+| `dns_not_visible` | The TXT record for your host didn't appear on the resolvers. | Check that this host can reach the resolvers on port 53. If you set resolvers under Advanced DNS, they must answer for public records. Clear them to ask the zone's own nameservers. |
+| `dns_rate_limited` | Cloudflare is limiting requests. | TierPlan waits until the time the page shows before it tries again. There is nothing to do. |
+| `dns_unavailable` | Cloudflare couldn't be reached. | TierPlan tries again on its own schedule, next at the time the page shows. If it keeps failing, check this host's internet access. |
+| `validation_txt` | Let's Encrypt didn't find the right TXT record for _acme-challenge.your host. | TierPlan saw the record, but Let's Encrypt didn't. Check that the zone's nameservers at your registrar are Cloudflare's, and that nothing else at _acme-challenge.your host gets in the way, such as a conflicting CNAME. Then try again. |
+
+## Let's Encrypt rate limits
+
+Let's Encrypt limits how often an account can ask. These are its published limits for the production service, as of 2026-11-12. They can change, so check [Let's Encrypt's rate limits page](https://letsencrypt.org/docs/rate-limits/).
+
+- 5 certificates for the same exact set of names per 7 days.
+- 300 new orders per account per 3 hours.
+- 5 failed validations per name per account per hour.
+- 50 certificates per registered domain per 7 days.
+
+A renewal that Let's Encrypt itself coordinates, which is how TierPlan renews when the CA offers renewal information, is exempt from all of them.
+
+TierPlan keeps well inside the limits. Saving a setting never orders a certificate. A first order starts when you press **Issue certificate**, or by itself when `TIERPLAN_ACME=on`. **Renew now** names the certificate it replaces when the CA offers renewal information, so it counts as a coordinated renewal. Failed runs back off as described in [Renewal, backoff, the restore pause and the fallback](#renewal-backoff-the-restore-pause-and-the-fallback), and after 3 failed runs in 1 hour TierPlan refuses manual attempts. **Test token** places no order.
