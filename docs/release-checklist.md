@@ -45,7 +45,7 @@ Work through this in order for every release. No release has been cut yet; the f
   - **Steps**, in this order:
     1. Run `make dev` with `DEV_LISTEN=0.0.0.0:7480`, `DEV_SWARM_GATEWAY`, `DEV_PUBLIC_URL` and `DEV_WEB_HOST=0.0.0.0` set for this host. Do the setup, add the swarm environment and install its agent with the command the UI shows. `openssl s_client -connect dev.homelab.org.uk:7480 -servername dev.homelab.org.uk` shows the self-signed issuer, and the environment is online.
     2. In **Settings > HTTPS**: register the account, pick DNS-01, enter the token, press **Test token**, save the validation settings, then press **Issue certificate** once.
-    3. The run panel's steps all end Done. `openssl s_client` now shows a Let's Encrypt issuer and `Verify return code: 0`, and the page was not reloaded.
+    3. The run panel's steps all end Done, except Account, which ends Skipped ("Account already registered.") because step 2 registered it. `openssl s_client` now shows a Let's Encrypt issuer and `Verify return code: 0`, and the page was not reloaded.
     4. The environment never left online while the certificate was swapped. After you restart the server it is online again and the Let's Encrypt certificate is still served.
     5. The audit page filtered to `https.` shows `https.account_registered`, `https.settings_updated`, `https.dns_tested`, `https.issue_requested` and `https.issued`, and an export of those rows holds no token.
     6. A read-only Cloudflare listing of the TXT records at `_acme-challenge.dev.homelab.org.uk` shows none, and none with a comment that starts with `tierplan:`.
