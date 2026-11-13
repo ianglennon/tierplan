@@ -124,16 +124,15 @@ const secretTagLen = 12
 // that is the random tail: the leading bits are a timestamp, which two environments created
 // close together share. It is made of [0-9a-z] only, so it needs no quoting in a shell.
 func secretTag(envID string) string {
-	var b []byte
+	var b strings.Builder
 	for _, r := range strings.ToLower(envID) {
 		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') {
-			b = append(b, byte(r))
+			b.WriteRune(r)
 		}
 	}
-	if len(b) > secretTagLen {
-		b = b[len(b)-secretTagLen:]
-	}
-	return string(b)
+	// Every kept rune is one ASCII byte, so cutting by bytes cuts by characters.
+	tag := b.String()
+	return tag[max(0, len(tag)-secretTagLen):]
 }
 
 // SecretName is the Docker secret that holds generation g of the join token of environment
