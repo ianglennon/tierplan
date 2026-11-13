@@ -474,35 +474,101 @@ func TestAnAgentThatStoppedWithItsIdentitySetAsideTakesItBackAtStart(t *testing.
 	}
 }
 
-// A hello TierPlan accepts while the agent holds a token other than the one on
-// record (a token rotation) records that token, so a later auth_rejected with it is
-// no reason to try it. An identity with no record keeps none: which token enrolled
-// it is unknown.
+// rotatedFrom and rotatedTo are two join tokens of the environment enrolledState's
+// identity is in (env-7): the one it enrolled with and the one a rotation replaced it
+// with. A rotation keeps the environment in the token; newToken names another one.
+const (
+	rotatedFrom = "tpjt_env-7_Uk9UQVRFRC1mcm9tLXRva2VuLWZyb20tdG9rZW4tZnJvbQ" //nolint:gosec // G101: a made-up token for the test
+	rotatedTo   = "tpjt_env-7_Uk9UQVRFRC10by10b2tlbi10by10b2tlbi10by10b2tlbg" //nolint:gosec // G101: a made-up token for the test
+)
+
+// A hello TierPlan accepts while the agent holds a token of the identity's own
+// environment other than the one on record (a token rotation) records that token, so
+// a later auth_rejected with it is no reason to try it. An identity with no record
+// keeps none: which token enrolled it is unknown.
 func TestAnAcceptedHelloRecordsTheTokenOnlyOverAnExistingRecord(t *testing.T) {
 	for name, record := range map[string]bool{"with a record of another token": true, "without a record": false} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			if record {
-				enrolledWith(t, dir, oldToken)
+				enrolledWith(t, dir, rotatedFrom)
 			} else {
 				enrolledState(t, dir)
 			}
 			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
 			startAgent(t, Config{
-				URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+				URL: srv.url(), JoinToken: rotatedTo, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
 			}, fastEnv())
 			if a, _ := srv.authN(t, 1); a.Mode != wire.ModeHello {
 				t.Fatalf("mode %q, want hello", a.Mode)
 			}
 			srv.heartbeatsAfterWelcome(t, 1) // the record is written before the first heartbeat
 			hash, known, err := state.LoadEnrolToken(dir)
-			if record && (err != nil || !known || hash != state.TokenHash(newToken)) {
+			if record && (err != nil || !known || hash != state.TokenHash(rotatedTo)) {
 				t.Errorf("the record = %q %v %v; want the token TierPlan accepted the hello with", hash, known, err)
 			}
 			if !record && known {
 				t.Errorf("the record = %q; an identity with none keeps none", hash)
 			}
 		})
+	}
+}
+
+// Review 17-2 WR-01: an operator who runs another environment's install command on a
+// host keeps the volume, so the agent says hello with the identity of the first
+// environment while it holds the second one's token. That hello is accepted while
+// the first environment exists, and must not record the token as a rotation: once
+// the first environment is removed the hello is refused auth_rejected, and the agent
+// has to try the token it holds, or it is stuck with a dead identity for good.
+func TestAnAcceptedHelloDoesNotRecordAJoinTokenOfAnotherEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledWith(t, dir, rotatedFrom)
+	srv := newFakeServer(t, func(n int, a wire.Auth) reply {
+		switch {
+		case n == 1:
+			return reply{drop: true} // the first environment still exists
+		case a.Mode == wire.ModeHello:
+			return reply{refuse: wire.ReasonAuthRejected} // it was removed
+		}
+		return reply{cert: []byte("second-env-cert-der")}
+	})
+	var logs lockedBuffer
+	startAgent(t, Config{
+		URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		Log: slog.New(slog.NewTextHandler(&logs, nil)),
+	}, fastEnv())
+	for n, want := range []string{wire.ModeHello, wire.ModeHello, wire.ModeEnrol} {
+		a, _ := srv.authN(t, n+1)
+		if a.Mode != want {
+			t.Fatalf("attempt %d used mode %q, want %q: the accepted hello must not have recorded the other environment's token", n+1, a.Mode, want)
+		}
+		if want == wire.ModeEnrol && (a.Token != newToken || bytes.Equal(a.Pub, publicOf(saved.Key))) {
+			t.Errorf("the enrolment did not present the token the agent holds and a fresh key")
+		}
+	}
+	srv.heartbeatsAfterWelcome(t, 1)
+	if hash, known, err := state.LoadEnrolToken(dir); err != nil || !known || hash != state.TokenHash(newToken) {
+		t.Errorf("the record = %q %v %v; want the token of the accepted enrolment", hash, known, err)
+	}
+	noSecretsIn(t, logs.String(), rotatedFrom, newToken)
+}
+
+// tokenEnv reads the environment out of a join token, and nothing out of a string
+// that is not shaped like one.
+func TestTokenEnvReadsTheEnvironmentOfAJoinToken(t *testing.T) {
+	for tok, want := range map[string]string{
+		newToken:     "0190d2a4-7a3b-7c3d-8e4f-ba9876543210",
+		rotatedTo:    "env-7",
+		"tpjt_e_a_b": "e", // a secret may hold an underscore
+		"tpjt_e_":    "",
+		"tpjt_e":     "",
+		"tpjt_":      "",
+		"xxxx_e_s":   "",
+		"":           "",
+	} {
+		if got := tokenEnv(tok); got != want {
+			t.Errorf("tokenEnv(%q) = %q, want %q", tok, got, want)
+		}
 	}
 }
 

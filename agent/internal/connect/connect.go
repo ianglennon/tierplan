@@ -992,10 +992,15 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target
 // recordAcceptedToken updates the record of the join token after TierPlan accepted
 // the identity's hello while the agent held a token other than the one on record
 // (known): the identity is alive with that token, as after a token rotation, so a
-// later auth_rejected with it is no reason to try it (newToken). An identity with no
-// record keeps none: the agent cannot tell which token enrolled it, and an agent
-// whose operator reinstalled TierPlan must still come back by itself, so nothing is
-// written for it. Nothing is written without a token either.
+// later auth_rejected with it is no reason to try it (newToken). Only a token of the
+// identity's own environment is such a rotation (RotateToken keeps the environment
+// in the token): a token of another environment, as an operator who ran another
+// environment's install command on this host holds, says nothing about the identity,
+// and recording it would stop the agent from ever trying it once its own environment
+// is gone (review 17-2 WR-01). An identity with no record keeps none: the agent
+// cannot tell which token enrolled it, and an agent whose operator reinstalled
+// TierPlan must still come back by itself, so nothing is written for it. Nothing is
+// written without a token either.
 func (r *runner) recordAcceptedToken(known string) {
 	if r.cfg.JoinToken == "" || known == "" {
 		return
@@ -1005,14 +1010,36 @@ func (r *runner) recordAcceptedToken(known string) {
 		return
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if tokenEnv(r.cfg.JoinToken) != r.cur.EnvID {
+		return
+	}
 	r.enrolHash = hash
-	r.mu.Unlock()
 	if r.cfg.StateDir == "" {
 		return
 	}
 	if err := state.SaveEnrolToken(r.cfg.StateDir, hash); err != nil {
 		r.log.Warn("the agent could not record the join token TierPlan accepted it with", "dir", r.cfg.StateDir, "error", err)
 	}
+}
+
+// joinTokenPrefix starts every join token: tpjt_<environment ID>_<secret>.
+const joinTokenPrefix = "tpjt_"
+
+// tokenEnv is the environment ID a join token names, or "" for a string that is not
+// shaped like a join token. The server's agents.ParseToken is the authority on what
+// a valid token is; the agent only needs the environment to tell a rotation of its
+// own environment's token from a token of another environment.
+func tokenEnv(token string) string {
+	rest, ok := strings.CutPrefix(token, joinTokenPrefix)
+	if !ok {
+		return ""
+	}
+	env, secret, ok := strings.Cut(rest, "_")
+	if !ok || secret == "" {
+		return ""
+	}
+	return env
 }
 
 // mergePins keeps the pins a welcome lists, and for 30 days the ones it no longer
