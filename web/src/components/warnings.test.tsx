@@ -1839,4 +1839,76 @@ describe("HealthBell HTTPS items", () => {
       expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull(),
     );
   });
+
+  // The one link of an item, read inside the item so a missing or doubled link is caught per kind.
+  const itemLinks = (id: string) => {
+    const item = document.querySelector(`[data-warning="${id}"]`);
+    if (!item) throw new Error(`no ${id} item in the bell`);
+    return within(item as HTMLElement).queryAllByRole("link", { name: "Open HTTPS settings" });
+  };
+
+  it("lists the fallback as an error ahead of every warning, saying how long ago", async () => {
+    items = [
+      { id: "key_backup", keyPath: "/data/tierplan.key" },
+      httpsWarning("https_renewal_failed", { class: "internal" }),
+      httpsWarning("https_cert_fallback", {
+        notAfter: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 3 items");
+    expect(await screen.findByText("The HTTPS certificate expired")).toBeTruthy();
+    expect(listed().map(([id]) => id)).toEqual([
+      "https_cert_fallback",
+      "https_renewal_failed",
+      "key_backup",
+    ]);
+    expect(bellText()).toContain("The certificate expired 2 d ago. TierPlan is serving its");
+    expect(itemLinks("https_cert_fallback")).toHaveLength(1);
+    expect(itemLinks("https_cert_fallback")[0]?.getAttribute("href")).toBe("/settings/https");
+  });
+
+  describe.each([
+    ["restore", {}, /restored from a backup, so it won't issue or renew until you resume\./],
+    [
+      "told_to_wait",
+      { until: "2026-11-13T14:05:00Z" },
+      /asked TierPlan to wait until \d{1,2}:\d{2}.*\. Automatic attempts continue/,
+    ],
+    ["told_to_wait", {}, /asked TierPlan to wait\. Automatic attempts continue/],
+    [
+      "failure_guard",
+      { until: "2026-11-13T14:05:00Z" },
+      /holds back until \d{1,2}:\d{2}.*\. Fix the cause/,
+    ],
+    ["failure_guard", {}, /holds back for now\. Fix the cause/],
+  ])("the paused item, reason %s", (reason, extra, body) => {
+    it(`words it ${JSON.stringify(extra)} with no empty placeholder and one link`, async () => {
+      items = [httpsWarning("https_acme_paused", { reason, ...extra })];
+      renderWarnings();
+      await openBell("Warnings, 1 item");
+      expect(await screen.findByText("Let's Encrypt is paused")).toBeTruthy();
+      expect(bellText()).toMatch(body);
+      expect(bellText()).not.toMatch(/until \./);
+      expect(bellText()).not.toContain("{{");
+      expect(itemLinks("https_acme_paused")).toHaveLength(1);
+      expect(itemLinks("https_acme_paused")[0]?.getAttribute("href")).toBe("/settings/https");
+    });
+  });
+
+  it.each([
+    [600, "10 minutes ahead of Let's Encrypt's"],
+    [-600, "10 minutes behind Let's Encrypt's"],
+    [-10_800, "3 hours behind Let's Encrypt's"],
+  ])("says by how much and which way the clock is off (%s s)", async (offsetSeconds, words) => {
+    items = [httpsWarning("https_clock_off", { offsetSeconds })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The server clock is off")).toBeTruthy();
+    expect(bellText()).toContain(`TierPlan's clock is ${words}`);
+    expect(bellText()).toContain("Fix NTP on the TierPlan host.");
+    expect(bellText()).not.toContain("{{");
+    expect(itemLinks("https_clock_off")).toHaveLength(1);
+    expect(itemLinks("https_clock_off")[0]?.getAttribute("href")).toBe("/settings/https");
+  });
 });

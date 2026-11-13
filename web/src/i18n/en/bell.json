@@ -168,6 +168,23 @@
     },
     "https": {
       "link": "Open HTTPS settings",
+      "fallback": {
+        "title": "The HTTPS certificate expired",
+        "body": "The certificate expired {{when}}. TierPlan is serving its self-signed certificate instead, so browsers show a warning. Agents stay connected. Fix the cause on the HTTPS page and renew."
+      },
+      "paused": {
+        "title": "Let's Encrypt is paused",
+        "restore": "This TierPlan was restored from a backup, so it won't issue or renew until you resume. Check that your public URL points at this install, then resume on the HTTPS page.",
+        "toldToWait": "Let's Encrypt asked TierPlan to wait until {{time}}. Automatic attempts continue after that. There is nothing to do.",
+        "toldToWaitNoTime": "Let's Encrypt asked TierPlan to wait. Automatic attempts continue after that. There is nothing to do.",
+        "failureGuard": "Three runs failed within an hour, so TierPlan holds back until {{time}}. Fix the cause shown on the HTTPS page, then try again.",
+        "failureGuardNoTime": "Three runs failed within an hour, so TierPlan holds back for now. Fix the cause shown on the HTTPS page, then try again."
+      },
+      "clock": {
+        "title": "The server clock is off",
+        "bodyAhead": "TierPlan's clock is {{offset}} ahead of Let's Encrypt's. Expiry and renewal times follow it. Fix NTP on the TierPlan host.",
+        "bodyBehind": "TierPlan's clock is {{offset}} behind Let's Encrypt's. Expiry and renewal times follow it. Fix NTP on the TierPlan host."
+      },
       "renewalFailed": {
         "title": "The certificate couldn't be renewed",
         "titleIssue": "The certificate couldn't be issued",

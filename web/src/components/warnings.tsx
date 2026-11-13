@@ -30,7 +30,7 @@ import { errorClassOf, errorCopy } from "@/features/https/copy";
 import { reasonSentence } from "@/features/stack-git/sync-status";
 import { hasPermission, useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
-import { formatClock, formatRelative } from "@/lib/format";
+import { formatClock, formatOffsetWords, formatRelative } from "@/lib/format";
 import { toastError } from "@/lib/toast";
 
 // Build-time source URL (Vite define). The proxy warning's docs link points at the
@@ -477,7 +477,11 @@ type Translate = ReturnType<typeof useT>;
 // The title and body of one HTTPS item (D-03), or null for an id this build has no words for. The
 // server sends facts, never sentences: a failed renewal is worded with the HTTPS page's own copy
 // (errorCopy), so the bell never invents a second wording for a class. Every value is plain text.
-function httpsItemCopy(w: Warning, t: Translate): { title: string; body: string } | null {
+function httpsItemCopy(
+  w: Warning,
+  t: Translate,
+  now: number,
+): { title: string; body: string } | null {
   const h = w.https;
   switch (w.id) {
     case "https_renewal_failed": {
@@ -515,6 +519,39 @@ function httpsItemCopy(w: Warning, t: Translate): { title: string; body: string 
         body: parts.join(" "),
       };
     }
+    case "https_cert_fallback":
+      return {
+        title: t("bell.https.fallback.title"),
+        body: t("bell.https.fallback.body", {
+          when: formatRelative(h?.notAfter ?? "", new Date(now), t),
+        }),
+      };
+    case "https_acme_paused": {
+      const time = formatClock(h?.until);
+      let body: string;
+      if (h?.reason === "restore") body = t("bell.https.paused.restore");
+      else if (h?.reason === "failure_guard") {
+        body =
+          time === undefined
+            ? t("bell.https.paused.failureGuardNoTime")
+            : t("bell.https.paused.failureGuard", { time });
+      } else {
+        body =
+          time === undefined
+            ? t("bell.https.paused.toldToWaitNoTime")
+            : t("bell.https.paused.toldToWait", { time });
+      }
+      return { title: t("bell.https.paused.title"), body };
+    }
+    case "https_clock_off": {
+      const seconds = h?.offsetSeconds ?? 0;
+      return {
+        title: t("bell.https.clock.title"),
+        body: t(seconds > 0 ? "bell.https.clock.bodyAhead" : "bell.https.clock.bodyBehind", {
+          offset: formatOffsetWords(seconds),
+        }),
+      };
+    }
     default:
       return null;
   }
@@ -525,7 +562,8 @@ function httpsItemCopy(w: Warning, t: Translate): { title: string; body: string 
 // from live state and ends when its cause does, so there is nothing to dismiss.
 function HttpsEntry({ w, close }: { w: Warning; close: () => void }) {
   const t = useT();
-  const copy = httpsItemCopy(w, t);
+  const now = useNow();
+  const copy = httpsItemCopy(w, t, now);
   if (!copy) return null;
   return (
     <BellItem id={w.id} title={copy.title}>
