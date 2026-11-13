@@ -805,6 +805,10 @@ func TestStashMovesTheIdentityAsideKeepingItsContentAndModesAndRestorePutsItBack
 	if err := SaveEnrolToken(dir, hash); err != nil {
 		t.Fatal(err)
 	}
+	tried := TokenHash("tpjt_another-token")
+	if err := SaveTriedToken(dir, want.AgentID, tried); err != nil {
+		t.Fatal(err)
+	}
 	if err := SavePins(dir, []PinEntry{{Pin: "sha256/" + strings.Repeat("A", 43) + "="}}); err != nil {
 		t.Fatal(err)
 	}
@@ -840,6 +844,9 @@ func TestStashMovesTheIdentityAsideKeepingItsContentAndModesAndRestorePutsItBack
 	}
 	if h, known, err := LoadEnrolToken(dir); err != nil || !known || h != hash {
 		t.Errorf("the record after Restore = %q %v %v", h, known, err)
+	}
+	if h, known, err := LoadTriedToken(dir, want.AgentID); err != nil || !known || h != tried {
+		t.Errorf("the tried token record after Restore = %q %v %v", h, known, err)
 	}
 	for _, name := range stashFiles {
 		fi, err := os.Stat(filepath.Join(dir, name))
@@ -916,6 +923,9 @@ func TestResolveStashSettlesWhatAnInterruptedRunLeft(t *testing.T) {
 		if err := SaveEnrolToken(dir, TokenHash("tpjt_old")); err != nil {
 			t.Fatal(err)
 		}
+		if err := SaveTriedToken(dir, s.AgentID, TokenHash("tpjt_tried")); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Mkdir(filepath.Join(dir, StashDir), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -989,4 +999,95 @@ func TestResolveStashSettlesWhatAnInterruptedRunLeft(t *testing.T) {
 			t.Fatalf("ResolveStash = %v %v", restored, err)
 		}
 	})
+}
+
+// Review 17-2 WR-04: the record of a join token the agent tried with its identity set
+// aside, and that TierPlan refused, holds the hash and the identity it is for, never
+// the token, and reads as none for any other identity.
+func TestTheTriedTokenRecordRoundTripsForItsIdentityOnlyAndNeverHoldsTheToken(t *testing.T) {
+	dir := t.TempDir()
+	const token = "tpjt_0190d2a4-7a3b-7c3d-8e4f-123456789abc_dHJpZWQtYW5kLXJlZnVzZWQtdG9rZW4" //nolint:gosec // G101: a made-up token for the test
+	if _, ok, err := LoadTriedToken(dir, "agent-1"); ok || err != nil {
+		t.Fatalf("LoadTriedToken of an empty directory = %v %v; want none", ok, err)
+	}
+	if err := SaveTriedToken(dir, "agent-1", TokenHash(token)); err != nil {
+		t.Fatalf("SaveTriedToken: %v", err)
+	}
+	if got, ok, err := LoadTriedToken(dir, "agent-1"); err != nil || !ok || got != TokenHash(token) {
+		t.Fatalf("LoadTriedToken = %q %v %v; want the hash", got, ok, err)
+	}
+	if _, ok, err := LoadTriedToken(dir, "agent-2"); ok || err != nil {
+		t.Errorf("LoadTriedToken for another identity = %v %v; want none", ok, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, TriedTokenFile)) //nolint:gosec // a test reads the file it just wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), token) || strings.Contains(string(raw), "dHJpZWQ") {
+		t.Errorf("%s holds the token itself: %s", TriedTokenFile, raw)
+	}
+	fi, err := os.Stat(filepath.Join(dir, TriedTokenFile))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("%s mode = %v, %v; want 0600", TriedTokenFile, fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, TriedTokenFile+tmpSuffix)); !os.IsNotExist(err) {
+		t.Errorf("the temporary file was left behind: %v", err)
+	}
+	for _, bad := range []struct{ agent, hash string }{{"agent-1", ""}, {"agent-1", token}, {"", TokenHash(token)}} {
+		if err := SaveTriedToken(t.TempDir(), bad.agent, bad.hash); err == nil {
+			t.Errorf("SaveTriedToken(%q, %q) succeeded; only a TokenHash for an identity may be recorded", bad.agent, bad.hash)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, TriedTokenFile), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := LoadTriedToken(dir, "agent-1"); err == nil || ok {
+		t.Errorf("LoadTriedToken of a damaged file = %v, %v; want an error", ok, err)
+	}
+}
+
+// The record goes with the identity: Discard removes it, Stash sets it aside with the
+// identity and DiscardStash removes it there.
+func TestTheTriedTokenRecordIsRemovedAndSetAsideWithTheIdentity(t *testing.T) {
+	dir := t.TempDir()
+	s := sample(t)
+	if err := Save(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTriedToken(dir, s.AgentID, TokenHash("tpjt_tok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Stash(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := LoadTriedToken(dir, s.AgentID); ok {
+		t.Error("the record stayed in place when the identity was set aside")
+	}
+	if got := stashed(t, dir); !slices.Contains(got, TriedTokenFile) {
+		t.Errorf("the stash holds %v, want the record with the identity", got)
+	}
+	if err := DiscardStash(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := stashed(t, dir); len(got) != 0 {
+		t.Errorf("the stash still holds %v", got)
+	}
+
+	if err := Save(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveTriedToken(dir, s.AgentID, TokenHash("tpjt_tok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, TriedTokenFile+tmpSuffix), []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Discard(dir); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	for _, name := range []string{TriedTokenFile, TriedTokenFile + tmpSuffix} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still there after Discard: %v", name, err)
+		}
+	}
 }

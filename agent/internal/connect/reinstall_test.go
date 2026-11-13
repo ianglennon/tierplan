@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -316,12 +317,50 @@ func TestAnAgentRevokedRightAfterEnrollingWithANewTokenWaitsTheMaximum(t *testin
 	}
 }
 
+// runUntilSleepsClocked is runUntilSleeps with a clock that each fake sleep moves
+// on, so the agent sees the time pass that it would in production: a test of what it
+// does a minute later is not answered by a rate limit on a clock that stood still
+// (review 17-2 IN-01).
+func runUntilSleepsClocked(t *testing.T, cfg Config, stopAt int) (*sleeps, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), testsupport.Deadline)
+	defer cancel()
+	sl := &sleeps{stopAt: stopAt}
+	ctx, sl.cancel = context.WithCancel(ctx)
+	if cfg.Log == nil {
+		cfg.Log = slog.New(slog.DiscardHandler)
+	}
+	var mu sync.Mutex
+	clock := time.Now()
+	err := runWith(ctx, cfg, runEnv{
+		sleep: func(ctx context.Context, d time.Duration) error {
+			mu.Lock()
+			clock = clock.Add(d)
+			mu.Unlock()
+			return sl.sleep(ctx, d)
+		},
+		now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return clock
+		},
+		rnd: func() float64 { return 0.5 }, roots: httptestRoots(),
+	})
+	return sl, err
+}
+
 // The identity is only set aside for the enrolment. When TierPlan refuses that
 // enrolment too, which is what happens when the hello was refused for a cause the
 // token cannot fix (an audience after an address change, a channel binding behind a
 // proxy: both auth_rejected), the agent takes the identity back, keeps running and
 // waits the maximum. Before this the identity was deleted first and the refusal
 // ended the agent, so a reinstall was the only way back.
+//
+// The refused token is then not tried again for that identity (review 17-2 WR-04):
+// the agent says hello with its identity and backs off as it does with the token on
+// record, and never sets the identity aside again for that token, however much time
+// passes. The clock moves with the waits, so the hellos after the first minute are
+// there because the token was tried, not because of the rate limit.
 func TestARefusedEnrolmentAfterSettingTheIdentityAsideGivesItBackAndKeepsTheAgentRunning(t *testing.T) {
 	for name, record := range map[string]bool{"no record of the token (an older agent)": false, "a record of another token": true} {
 		t.Run(name, func(t *testing.T) {
@@ -343,27 +382,42 @@ func TestARefusedEnrolmentAfterSettingTheIdentityAsideGivesItBackAndKeepsTheAgen
 				return reply{refuse: wire.ReasonAuthRejected} // as for audience or channel_binding
 			})
 			var logs lockedBuffer
-			sl, err := runUntilSleeps(t, Config{
+			sl, err := runUntilSleepsClocked(t, Config{
 				URL: srv.url(), JoinToken: newToken, StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
 				SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
-			}, 3)
+			}, 6)
 			if err != nil {
 				t.Fatalf("Run = %v; an agent with an identity set aside never ends for the refusal of its enrolment", err)
 			}
-			if waits := sl.all(); len(waits) != 3 || waits[0] != 0 || waits[1] != 60*time.Second || waits[2] != 60*time.Second {
-				t.Errorf("waits = %v; want none before the enrolment, then the 60s maximum after it was refused, and the maximum again (one try a minute)", waits)
+			half := func() float64 { return 0.5 }
+			want := []time.Duration{0, 60 * time.Second}
+			for n := 1; len(want) < 6; n++ {
+				want = append(want, backoff(n, time.Second, 60*time.Second, half))
 			}
-			modes := []string{wire.ModeHello, wire.ModeEnrol, wire.ModeHello}
-			for n, want := range modes {
-				a, _ := srv.authN(t, n+1)
-				if a.Mode != want {
-					t.Fatalf("attempt %d used mode %q, want %q", n+1, a.Mode, want)
+			if waits := sl.all(); !slices.Equal(waits, want) {
+				t.Errorf("waits = %v; want none before the enrolment, the 60s maximum after it was refused, then the ordinary backoff of hellos %v", waits, want[2:])
+			}
+			var total time.Duration
+			for _, d := range sl.all()[:5] {
+				total += d
+			}
+			if total <= 60*time.Second {
+				t.Fatalf("only %v passed on the agent's clock; the test must pass the minute of the rate limit", total)
+			}
+			for n := 1; n <= srv.attempts(); n++ {
+				a, _ := srv.authN(t, n)
+				wantMode := wire.ModeHello
+				if n == 2 {
+					wantMode = wire.ModeEnrol
 				}
-				if want == wire.ModeEnrol && (a.Token != newToken || bytes.Equal(a.Pub, publicOf(saved.Key))) {
+				if a.Mode != wantMode {
+					t.Fatalf("attempt %d used mode %q, want %q: one enrolment with the token, then hellos only", n, a.Mode, wantMode)
+				}
+				if wantMode == wire.ModeEnrol && (a.Token != newToken || bytes.Equal(a.Pub, publicOf(saved.Key))) {
 					t.Errorf("the enrolment did not present the token and a fresh key")
 				}
-				if n == 2 && (a.AgentID != saved.AgentID || string(a.Cert) != "saved-cert-der") {
-					t.Errorf("the hello after the refusal presented %q %q, want the identity that was set aside", a.AgentID, a.Cert)
+				if wantMode == wire.ModeHello && (a.AgentID != saved.AgentID || string(a.Cert) != "saved-cert-der") {
+					t.Errorf("hello %d presented %q %q, want the identity that was set aside", n, a.AgentID, a.Cert)
 				}
 			}
 			mu.Lock()
@@ -382,15 +436,84 @@ func TestARefusedEnrolmentAfterSettingTheIdentityAsideGivesItBackAndKeepsTheAgen
 			if !record && known {
 				t.Errorf("a record appeared (%q); an identity with none keeps none", hash)
 			}
+			if tried, known, err := state.LoadTriedToken(dir, saved.AgentID); err != nil || !known || tried != state.TokenHash(newToken) {
+				t.Errorf("the tried token record = %q %v %v; want the refused token's hash for this identity", tried, known, err)
+			}
 			if _, err := os.Stat(filepath.Join(dir, state.StashDir)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("the stash is still there after the identity was taken back: %v", err)
 			}
 			out := logs.String()
-			if n := strings.Count(out, takenBackLog); n != 1 {
-				t.Errorf("taking the identity back was logged %d times, want once:\n%s", n, out)
+			for _, line := range []string{takenBackLog, triedLog, setAsideLog} {
+				if n := strings.Count(out, line); n != 1 {
+					t.Errorf("%q was logged %d times, want once:\n%s", line, n, out)
+				}
 			}
 			noSecretsIn(t, out, oldToken, newToken)
 		})
+	}
+}
+
+// A token the agent tried and was refused stays tried after a restart, since the
+// record is next to the identity. A different token is tried: the operator who starts
+// the agent with a new install command gets an enrolment within a minute.
+func TestARefusedTokenStaysTriedAcrossARestartAndADifferentTokenIsTried(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledState(t, dir)
+	refuseAll := func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} }
+	run := func(t *testing.T, token string, script func(int, wire.Auth) reply, stopAt int) (*fakeServer, string) {
+		t.Helper()
+		srv := newFakeServer(t, script)
+		var logs lockedBuffer
+		if _, err := runUntilSleepsClocked(t, Config{
+			URL: srv.url(), JoinToken: token, StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+			SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+		}, stopAt); err != nil {
+			t.Fatal(err)
+		}
+		return srv, logs.String()
+	}
+	enrols := func(t *testing.T, srv *fakeServer) int {
+		t.Helper()
+		n := 0
+		for i := 1; i <= srv.attempts(); i++ {
+			if a, _ := srv.authN(t, i); a.Mode == wire.ModeEnrol {
+				n++
+			}
+		}
+		return n
+	}
+
+	if srv, _ := run(t, newToken, refuseAll, 3); enrols(t, srv) != 1 {
+		t.Fatalf("the first run enrolled %d times, want once", enrols(t, srv))
+	}
+	// Restarted with the same token: hellos only, and the reason is said once.
+	srv, out := run(t, newToken, refuseAll, 4)
+	if n := enrols(t, srv); n != 0 {
+		t.Errorf("after a restart with the refused token the agent enrolled %d times, want none", n)
+	}
+	if n := strings.Count(out, triedLog); n != 1 {
+		t.Errorf("the agent said %d times that it does not try the token, want once:\n%s", n, out)
+	}
+	// Restarted with another token: it is tried, and accepted.
+	srv, _ = run(t, rotatedTo, func(_ int, a wire.Auth) reply {
+		if a.Mode == wire.ModeHello {
+			return reply{refuse: wire.ReasonAuthRejected}
+		}
+		return reply{cert: []byte("accepted-cert-der"), drop: true}
+	}, 2)
+	if a, _ := srv.authN(t, 2); a.Mode != wire.ModeEnrol || a.Token != rotatedTo {
+		t.Fatalf("attempt 2 with another token = %q, want an enrolment with that token", a.Mode)
+	}
+	got, ok, err := state.Load(dir)
+	if err != nil || !ok || got.Key.Equal(saved.Key) || string(got.Cert) != "accepted-cert-der" {
+		t.Fatalf("the identity on disk = %+v %v %v; want the accepted enrolment's", got, ok, err)
+	}
+	// The new identity has tried nothing: the record of the old one went with it.
+	if _, known, _ := state.LoadTriedToken(dir, got.AgentID); known {
+		t.Error("the new identity carries a tried token record")
+	}
+	if _, err := os.Stat(filepath.Join(dir, state.TriedTokenFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the old identity's tried token record is still in the state directory: %v", err)
 	}
 }
 

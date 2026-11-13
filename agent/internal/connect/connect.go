@@ -180,6 +180,16 @@ type runner struct {
 	// not known (an identity enrolled before the agent kept the record). mu guards it
 	// with cur.
 	enrolHash string
+	// triedHash is the state.TokenHash of a join token the agent tried with cur set
+	// aside and that TierPlan refused auth_rejected, or empty. newToken does not try
+	// that token again for cur, so an agent whose hello keeps being refused for a cause
+	// a fresh enrolment cannot fix does not set its identity aside every minute,
+	// forever (review 17-2 WR-04). It is kept next to the identity (tried-token.json)
+	// and goes with it. mu guards it with cur.
+	triedHash string
+	// triedSaid keeps the agent from saying more than once that it will not try its
+	// join token again.
+	triedSaid bool
 	// forceEnrol makes the next attempt enrol although an identity exists: the
 	// certificate expired and a join token is at hand.
 	forceEnrol bool
@@ -286,6 +296,14 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 				log.Warn("the agent could not read which join token it enrolled with; it treats it as unknown", "error", err)
 			} else if known {
 				r.enrolHash = hash
+			}
+			// A record that cannot be read reads as none: the agent then tries its token
+			// once more, which costs one refused enrolment.
+			tried, known, err := state.LoadTriedToken(cfg.StateDir, cur.AgentID)
+			if err != nil {
+				log.Warn("the agent could not read which join token TierPlan refused for its identity; it treats it as not tried", "error", err)
+			} else if known {
+				r.triedHash = tried
 			}
 		}
 		// A pins file that cannot be read leaves the agent with fewer pins, which
@@ -433,6 +451,7 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 		if r.newToken() {
 			return r.rejoin(re.Code)
 		}
+		r.sayTried()
 	case wire.ReasonBlocked, wire.RefuseHostAlreadyConnected:
 		return r.cfg.BackoffMax
 	case wire.ReasonCertExpired:
@@ -465,15 +484,40 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 // proxy, a clock) also arrives here. That is why the attempt is non-destructive
 // (setAside): it costs one refused enrolment and the identity is taken back, at most
 // once per BackoffMax.
+//
+// A token the agent already tried that way, and that TierPlan refused auth_rejected,
+// is not tried again for the same identity (triedHash): the refusal says the token,
+// or the way it reaches TierPlan, is no good, and trying it every minute would only
+// set the identity aside and back every minute, forever (review 17-2 WR-04). A
+// different token, or a new identity, is tried as before.
 func (r *runner) newToken() bool {
 	if r.cfg.JoinToken == "" || r.forceEnrol {
 		return false
 	}
+	tok := state.TokenHash(r.cfg.JoinToken)
 	r.mu.Lock()
-	have, hash := r.have, r.enrolHash
+	have, hash, tried := r.have, r.enrolHash, r.triedHash
 	r.mu.Unlock()
-	return have && hash != state.TokenHash(r.cfg.JoinToken)
+	return have && hash != tok && tried != tok
 }
+
+// sayTried says, once, that the agent does not try its join token because TierPlan
+// refused it for this identity before.
+func (r *runner) sayTried() {
+	if r.triedSaid || r.cfg.JoinToken == "" {
+		return
+	}
+	r.mu.Lock()
+	tried := r.triedHash != "" && r.triedHash == state.TokenHash(r.cfg.JoinToken)
+	r.mu.Unlock()
+	if tried {
+		r.triedSaid = true
+		r.log.Warn(triedLog)
+	}
+}
+
+// triedLog is what the agent says when it will not try its join token again.
+const triedLog = "TierPlan refused an enrolment with this join token while the agent's identity was set aside, so the agent does not try the token again with this identity; it keeps its identity and retries hello. Start it with another join token to try that one"
 
 // rejoin handles a hello that was refused revoked (D-10) or unknown_agent (D-31),
 // or auth_rejected by an agent started with a join token it has no record of
@@ -543,14 +587,15 @@ func (r *runner) discard() bool {
 			r.log.Warn("the agent removed its old identity but could not remove every file of it", "dir", r.cfg.StateDir, "error", err)
 		}
 	}
-	r.cur, r.have, r.enrolHash, r.forceEnrol = state.State{}, false, "", false
+	r.cur, r.have, r.enrolHash, r.triedHash, r.forceEnrol = state.State{}, false, "", "", false
 	return true
 }
 
-// stashedIdentity is an identity set aside, with the record of its token.
+// stashedIdentity is an identity set aside, with the record of its token and of a
+// token it tried and was refused.
 type stashedIdentity struct {
-	cur  state.State
-	hash string
+	cur         state.State
+	hash, tried string
 }
 
 // setAside moves the identity out of the way of an enrolment, on disk into the
@@ -573,8 +618,8 @@ func (r *runner) setAside() bool {
 			r.log.Warn("the agent set its identity aside but could not move every file of it", "dir", r.cfg.StateDir, "error", err)
 		}
 	}
-	r.stashed = &stashedIdentity{cur: r.cur, hash: r.enrolHash}
-	r.cur, r.have, r.enrolHash, r.forceEnrol = state.State{}, false, "", false
+	r.stashed = &stashedIdentity{cur: r.cur, hash: r.enrolHash, tried: r.triedHash}
+	r.cur, r.have, r.enrolHash, r.triedHash, r.forceEnrol = state.State{}, false, "", "", false
 	return true
 }
 
@@ -583,18 +628,35 @@ func (r *runner) setAside() bool {
 // attempt: the maximum, as for every rejoin. On disk the files move back
 // (state.Restore); if that fails the identity is written again from memory. Either
 // way the agent goes on with its identity in memory, and the next hello presents it.
+//
+// An enrolment refused auth_rejected was refused for the token, or for the way it
+// reaches TierPlan, not for anything the host can change by itself: the token is
+// recorded as tried for the identity, and newToken does not try it again (review
+// 17-2 WR-04). Any other outcome (a blocked host, a busy server, a host whose other
+// agent is connected, a connection that failed) leaves the token to be tried again a
+// minute later.
 func (r *runner) takeBack(err error) time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.stashed
 	r.stashed = nil
+	tried := s.tried
+	var refused *RefusedError
+	refusedToken := errors.As(err, &refused) && refused.Code == wire.ReasonAuthRejected && r.cfg.JoinToken != ""
+	if refusedToken {
+		tried = state.TokenHash(r.cfg.JoinToken)
+	}
 	if dir := r.cfg.StateDir; dir != "" {
+		placed, wrote := true, false
 		_, rerr := state.Restore(dir)
 		if got, ok, lerr := state.Load(dir); rerr != nil || lerr != nil || !ok || !got.Key.Equal(s.cur.Key) {
 			if serr := state.Save(dir, s.cur); serr != nil {
 				// The stash is still there for the next start (state.ResolveStash).
+				placed = false
 				r.log.Error("the agent could not put back the identity it had set aside; it keeps it in memory, and a restart puts it back", "dir", dir, "error", errors.Join(rerr, serr))
 			} else {
+				// Written from memory: so are its records.
+				wrote = true
 				if s.hash != "" {
 					if herr := state.SaveEnrolToken(dir, s.hash); herr != nil {
 						r.log.Warn("the agent could not record which join token its identity was accepted with", "dir", dir, "error", herr)
@@ -606,19 +668,28 @@ func (r *runner) takeBack(err error) time.Duration {
 				}
 			}
 		}
+		if placed && tried != "" && (refusedToken || wrote) {
+			if terr := state.SaveTriedToken(dir, s.cur.AgentID, tried); terr != nil {
+				// Kept in memory: only a restart tries the token once more.
+				r.log.Warn("the agent could not record that TierPlan refused its join token", "dir", dir, "error", terr)
+			}
+		}
 	}
-	r.cur, r.have, r.enrolHash = s.cur, true, s.hash
+	r.cur, r.have, r.enrolHash, r.triedHash = s.cur, true, s.hash, tried
 	if !r.quietStash {
 		r.quietStash = true
 		attrs := []any{"retry_in", r.cfg.BackoffMax.String()}
-		var refused *RefusedError
 		switch {
-		case errors.As(err, &refused):
+		case refused != nil:
 			attrs = append(attrs, "code", refused.Code)
 		case err != nil:
 			attrs = append(attrs, "error", err)
 		}
 		r.log.Warn(takenBackLog, attrs...)
+	}
+	if refusedToken && !r.triedSaid {
+		r.triedSaid = true
+		r.log.Warn(triedLog)
 	}
 	return r.cfg.BackoffMax
 }
@@ -666,7 +737,7 @@ func (r *runner) hint(code string) string {
 	case wire.ReasonCertExpired:
 		return "the agent's certificate expired; start the agent with a join token (TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN) to enrol again"
 	case wire.ReasonAuthRejected:
-		return "TierPlan did not accept the agent's credentials; check the join token and TIERPLAN_AGENT_URL. If TierPlan's agent address changed while this agent was offline, start it again with the new address in TIERPLAN_AGENT_URL on the same volume. An enrolled agent that has a join token it has no record of being accepted with (a new install command, for example after TierPlan was reinstalled, or an identity enrolled by an older agent) sets its identity aside and enrols with the token, at most once a minute; if TierPlan refuses that too it takes the identity back, so this refusal never costs it the identity. With the token on record it keeps its identity and retries"
+		return "TierPlan did not accept the agent's credentials; check the join token and TIERPLAN_AGENT_URL. If TierPlan's agent address changed while this agent was offline, start it again with the new address in TIERPLAN_AGENT_URL on the same volume. An enrolled agent that has a join token it has no record of being accepted with (a new install command, for example after TierPlan was reinstalled, or an identity enrolled by an older agent) sets its identity aside and enrols with the token, at most once a minute; if TierPlan refuses that too it takes the identity back, so this refusal never costs it the identity, and a token refused auth_rejected that way is not tried again with the same identity. With the token on record, or one already tried, it keeps its identity and retries"
 	case wire.ReasonVersionIncompatible:
 		return "upgrade the agent to the version TierPlan runs"
 	case wire.ReasonClockSkew:
@@ -951,8 +1022,10 @@ func (r *runner) accept(cr credentials, w wire.Welcome, verified bool, tg target
 			hash = state.TokenHash(cr.token)
 		}
 		r.mu.Lock()
-		r.cur, r.have, r.enrolHash = cur, true, hash
+		// A new identity has tried no token.
+		r.cur, r.have, r.enrolHash, r.triedHash = cur, true, hash, ""
 		r.mu.Unlock()
+		r.triedSaid = false
 		r.log.Info("enrolled with TierPlan", "agent_id", w.AgentID, "environment_id", w.EnvID, "server", tg.aud)
 		if r.cfg.StateDir != "" {
 			if err := state.Save(r.cfg.StateDir, cur); err != nil {
