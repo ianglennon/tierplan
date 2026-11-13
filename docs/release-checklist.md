@@ -35,6 +35,24 @@ Work through this in order for every release. No release has been cut yet; the f
   - **The `stacks` project of `make e2e` ran** (look for `stacks.spec.ts` in `.devdata/test/e2e.json`): a stack is created, checked, reviewed, deployed, edited and removed on the managed host, and a stack with a secret file is deployed through a real agent and the secret is read inside the container.
   - **The agent image was rebuilt and published with this release, and the agents on your own hosts are updated.** A standalone stack needs the agent's container create, archive, rename and image inspect routes, which an agent from before Phase 7 does not have: a deploy to such a host is refused by the agent until it is updated (Settings > Environments, or [agent-updates.md](agent-updates.md)).
   - **`stacks.md` still says what the code does.** Its "Behaviour that is still open" and "What Phase 7 does not do" lists are true as written: an item that was decided or built since is removed there, and nothing deferred is described as shipped.
+- [ ] **A real Let's Encrypt certificate replaces the self-signed one with an agent connected (DNS-01 on the dev swarm).** Pebble proves the code; only a real order proves the account, the zone and the chain a browser and an agent trust. The setup is the one in [https.md](https.md#lets-encrypt-with-dns-01-through-cloudflare).
+  - **Preconditions.**
+    - You are on the commit being released, the tree is clean and you have noted `git rev-parse HEAD`.
+    - `env | grep TIERPLAN_ACME_` prints neither `TIERPLAN_ACME_DIRECTORY_URL` nor `TIERPLAN_ACME_CA_FILE`, so nothing points at a test CA.
+    - A Cloudflare API token with Zone:DNS:Edit and Zone:Zone:Read for the zone is in a file only you can read.
+    - The data directory is fresh: move the instance files (`tierplan.db` and its `-wal` and `-shm` files, `tierplan.key`, `tls/`, `backups/`, `git/`, `compose-config/`) aside, never delete them, and re-enrol the swarm's agents afterwards. A stored certificate that is not yet due makes Issue a no-op, and an account from an earlier run means no account row.
+    - One order only. If it fails, report it and stop: never retry against production, because the duplicate-certificate limit is 5 per exact name set per 7 days.
+  - **Steps**, in this order:
+    1. Run `make dev` with `DEV_LISTEN=0.0.0.0:7480`, `DEV_SWARM_GATEWAY`, `DEV_PUBLIC_URL` and `DEV_WEB_HOST=0.0.0.0` set for this host. Do the setup, add the swarm environment and install its agent with the command the UI shows. `openssl s_client -connect dev.homelab.org.uk:7480 -servername dev.homelab.org.uk` shows the self-signed issuer, and the environment is online.
+    2. In **Settings > HTTPS**: register the account, pick DNS-01, enter the token, press **Test token**, save the validation settings, then press **Issue certificate** once.
+    3. The run panel's steps all end Done. `openssl s_client` now shows a Let's Encrypt issuer and `Verify return code: 0`, and the page was not reloaded.
+    4. The environment never left online while the certificate was swapped. After you restart the server it is online again and the Let's Encrypt certificate is still served.
+    5. The audit page filtered to `https.` shows `https.account_registered`, `https.settings_updated`, `https.dns_tested`, `https.issue_requested` and `https.issued`, and an export of those rows holds no token.
+    6. A read-only Cloudflare listing of the TXT records at `_acme-challenge.dev.homelab.org.uk` shows none, and none with a comment that starts with `tierplan:`.
+    7. The bell has no HTTPS item.
+    8. Optional: with HSTS off, **Stop using Let's Encrypt**. The agent stays connected over its pin.
+
+  Last run: none yet (record: date | build <commit> | result)
 - [ ] Tag `vX.Y.Z` (for example `v0.1.0`) on the release commit and push the tag. Only a `v*` tag runs the release workflow.
 - [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the image, and the signatures and SBOMs below.
 - [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect:
