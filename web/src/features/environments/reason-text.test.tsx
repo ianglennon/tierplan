@@ -209,7 +209,15 @@ describe("ReasonText", () => {
     expect(container.textContent).toContain(
       "A VM cloned from this host shares its Docker engine ID",
     );
-    expect(container.textContent).toContain("add it as its own environment");
+    // The copied agent goes first: it holds the original's identity and starts with Docker.
+    const text = container.textContent ?? "";
+    const removeAt = text.indexOf("first remove the copied agent and its volume");
+    const engineAt = text.indexOf("give Docker a new engine ID");
+    const installAt = text.indexOf("install the agent fresh");
+    expect(removeAt).toBeGreaterThanOrEqual(0);
+    expect(engineAt).toBeGreaterThan(removeAt);
+    expect(installAt).toBeGreaterThan(engineAt);
+    expect(text).toContain("as its own environment");
   });
 
   it("words address_space_full for a pool, a network and neither, with the hint", () => {

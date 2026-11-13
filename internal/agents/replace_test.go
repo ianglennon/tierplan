@@ -183,6 +183,11 @@ func TestAnEnrolmentOfAHostWhoseEarlierAgentIsConnectedIsRefusedAndRetiresNothin
 					t.Errorf("the detail %q lacks %q, the cloned-VM case and its fix", ref.Detail, want)
 				}
 			}
+			// The copied agent goes first: it holds the original's identity and would start with Docker.
+			d := ref.Detail
+			if rm, stop, inst := strings.Index(d, "first remove the copied agent"), strings.Index(d, "stop Docker"), strings.Index(d, "install the agent fresh"); rm < 0 || stop < rm || inst < stop {
+				t.Errorf("the detail %q does not give the clone steps in order", d)
+			}
 			if got := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID); got != agentsBefore {
 				t.Errorf("agent rows = %d, want %d: a refused enrolment writes no row", got, agentsBefore)
 			}

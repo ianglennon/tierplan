@@ -1047,10 +1047,15 @@ func TestTheDuplicateHostHintNamesAClonedVMAndTheEngineIDFix(t *testing.T) {
 		t.Fatalf("Run = %v", err)
 	}
 	out := logs.String()
-	for _, want := range []string{"cloned", "engine ID", "engine-id", "container and volume", "own environment"} {
+	for _, want := range []string{"cloned", "engine ID", "engine-id", "tierplan-agent volume", "own environment", "joining the swarm again"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the hint lacks %q:\n%s", want, out)
 		}
+	}
+	// The copied agent goes first: it holds the original's identity and would start with Docker.
+	removeAt, stopAt, installAt := strings.Index(out, "first remove the copied agent"), strings.Index(out, "stop Docker"), strings.Index(out, "install the agent fresh")
+	if removeAt < 0 || stopAt < removeAt || installAt < stopAt {
+		t.Errorf("the clone steps are not in the order remove the copied agent, restart Docker without engine-id, install fresh:\n%s", out)
 	}
 	if !strings.Contains(out, "remove the duplicate") {
 		t.Errorf("the hint no longer tells the operator to remove the duplicate:\n%s", out)

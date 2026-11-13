@@ -774,7 +774,8 @@ func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Querie
 				return nil, &tunnel.RefuseError{
 					Code: wire.RefuseHostAlreadyConnected,
 					Detail: "another agent of this host is connected to this environment now; remove the duplicate agent container or service from the host, or stop the other agent, and this one enrols on its next try. " +
-						"A VM cloned from this host shares its Docker engine ID: give the clone a new one (stop Docker, delete engine-id in Docker's data root, start Docker, remove the clone's tierplan-agent container and volume) and add it as its own environment",
+						"A VM cloned from this host shares its Docker engine ID. On the clone, first remove the copied agent and its tierplan-agent volume (a swarm node leaves the swarm first), " +
+						"then stop Docker, delete engine-id in Docker's data root and start Docker, then install the agent fresh: a standalone clone as its own environment, a swarm node by joining the swarm again",
 					AuditReason: wire.RefuseHostAlreadyConnected,
 				}
 			}

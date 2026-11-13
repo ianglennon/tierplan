@@ -123,7 +123,7 @@
       "host_already_connected": {
         "text": "{{node}} already has a connected agent in this environment.",
         "textGeneric": "This host already has a connected agent in this environment.",
-        "hint": "Remove the duplicate agent container or service from the host, or stop the other agent. The new one enrols by itself about a minute later. A VM cloned from this host shares its Docker engine ID: give the clone a new one and add it as its own environment."
+        "hint": "Remove the duplicate agent container or service from the host, or stop the other agent. The new one enrols by itself about a minute later. A VM cloned from this host shares its Docker engine ID. On the clone, first remove the copied agent and its volume, then give Docker a new engine ID, then install the agent fresh (a standalone clone as its own environment)."
       },
       "node_not_in_swarm": {
         "text": "{{node}} isn't in the swarm's node list yet.",

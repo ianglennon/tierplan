@@ -748,9 +748,10 @@ func (r *runner) hint(code string) string {
 		return "this host is on TierPlan's block list; an administrator can unblock it in the environment's settings"
 	case wire.RefuseHostAlreadyConnected:
 		return "another agent of this host is connected to this TierPlan environment now, such as a second agent container or service on the host; remove the duplicate. " +
-			"A VM cloned from this host shares its Docker engine ID and is refused this way: on the clone, stop Docker, delete the engine-id file in Docker's data root " +
-			"(by default /var/lib/docker/engine-id), start Docker, remove the clone's tierplan-agent container and volume (they hold the original's identity), " +
-			"and add the clone as its own environment, because a standalone environment manages one host. " +
+			"A VM cloned from this host shares its Docker engine ID and is refused this way. On the clone, in this order: first remove the copied agent and its " +
+			"tierplan-agent volume, which hold the original's identity (a swarm node leaves the swarm first, then removes them); then stop Docker, delete the " +
+			"engine-id file in Docker's data root (by default /var/lib/docker/engine-id) and start Docker; then install the agent fresh, a standalone clone " +
+			"as its own environment (a standalone environment manages one host), a swarm node by joining the swarm again. " +
 			"This agent tries again once a minute and enrols by itself once the other one is gone"
 	case wire.RefuseNodeNotInSwarm:
 		return "this node is not in the swarm's node list as TierPlan last read it; a node that just joined enrols by itself within about a minute; " +
