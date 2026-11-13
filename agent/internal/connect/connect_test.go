@@ -925,6 +925,61 @@ func TestABlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity(t *testi
 	}
 }
 
+// Review 17-2 WR-02: TierPlan refuses the enrolment of a host whose other agent is
+// connected now (host_already_connected). That passes once the other agent is gone,
+// so the agent waits the maximum between tries and never ends for it: not at its
+// first enrolment, where exiting would make a restart policy retry faster than the
+// backoff, and not after it dropped a revoked identity.
+func TestAHostWhoseOtherAgentIsConnectedWaitsTheMaximumAndNeverEnds(t *testing.T) {
+	for name, enrolled := range map[string]bool{"a first enrolment": false, "an enrolment after a revoke": true} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if enrolled {
+				enrolledState(t, dir)
+			}
+			srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+				if a.Mode == wire.ModeHello {
+					return reply{refuse: wire.ReasonRevoked}
+				}
+				return reply{refuse: wire.RefuseHostAlreadyConnected}
+			})
+			var logs lockedBuffer
+			sl, err := runUntilSleeps(t, Config{
+				URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+				SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+			}, 3)
+			if err != nil {
+				t.Fatalf("Run = %v; host_already_connected must make the agent wait, not end", err)
+			}
+			waits := sl.all()
+			first := 0
+			if enrolled {
+				first = 1 // the wait after the revoked hello is whatever the rejoin needs
+			}
+			for i, d := range waits[first:] {
+				if d != 60*time.Second {
+					t.Errorf("wait %d = %v, want the 60s maximum after host_already_connected", i+first+1, d)
+				}
+			}
+			if n := srv.attempts(); n != len(waits) {
+				t.Errorf("the agent made %d attempts for %d waits; it must try once per wait, never faster", n, len(waits))
+			}
+			for n := first + 1; n <= srv.attempts(); n++ {
+				if a, _ := srv.authN(t, n); a.Mode != wire.ModeEnrol {
+					t.Errorf("attempt %d used mode %q, want enrol", n, a.Mode)
+				}
+			}
+			out := logs.String()
+			if n := strings.Count(out, "code="+wire.RefuseHostAlreadyConnected); n != 1 {
+				t.Errorf("the code was logged %d times, want once:\n%s", n, out)
+			}
+			if !strings.Contains(out, "remove the duplicate") {
+				t.Errorf("the hint does not tell the operator to remove the duplicate agent:\n%s", out)
+			}
+		})
+	}
+}
+
 // A manually revoked host is also blocked. The agent drops the revoked identity
 // and enrols once; the block refuses it, and from there it waits the maximum
 // between tries: no loop of enrolments faster than the backoff, and no exit that

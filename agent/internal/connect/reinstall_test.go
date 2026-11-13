@@ -394,11 +394,11 @@ func TestARefusedEnrolmentAfterSettingTheIdentityAsideGivesItBackAndKeepsTheAgen
 	}
 }
 
-// A blocked host, a busy server or a connection that fails during the enrolment is
-// treated the same: any enrolment that does not end in a welcome gives the identity
+// A blocked host, a busy server, a host whose other agent is connected or a
+// connection that fails during the enrolment is treated the same: any enrolment that does not end in a welcome gives the identity
 // back.
 func TestAnEnrolmentThatDoesNotEndInAWelcomeGivesTheIdentityBack(t *testing.T) {
-	for _, code := range []string{wire.ReasonBlocked, wire.RefuseRateLimited, ""} {
+	for _, code := range []string{wire.ReasonBlocked, wire.RefuseRateLimited, wire.RefuseHostAlreadyConnected, ""} {
 		t.Run(cmp.Or(code, "welcomed without a certificate"), func(t *testing.T) {
 			dir := t.TempDir()
 			saved := enrolledWith(t, dir, oldToken)

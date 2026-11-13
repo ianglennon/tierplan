@@ -150,8 +150,10 @@ func muxConfig() *yamux.Config {
 // is not. A blocked host waits at the maximum backoff until an administrator
 // unblocks it. It returns an error for a configuration the agent cannot work with,
 // and for a refusal of the very first enrolment (a *RefusedError) other than
-// blocked, because a wrong token does not fix itself. An enrolment made with an
-// identity set aside is not a first one: its refusal gives the identity back.
+// blocked or host_already_connected, because a wrong token does not fix itself. An
+// enrolment made with an identity set aside is not a first one: its refusal gives the
+// identity back. A host whose other agent is connected waits at the maximum backoff
+// too, at its first enrolment as at any other.
 func Run(ctx context.Context, cfg Config) error {
 	return runWith(ctx, cfg, runEnv{})
 }
@@ -363,7 +365,7 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			// the refusal is not of a first enrolment, the agent has an identity.
 			wait = r.takeBack(err)
 		} else if errors.As(err, &refused) {
-			if !r.have && !transient(refused.Code) && refused.Code != wire.ReasonBlocked {
+			if !r.have && !transient(refused.Code) && !waitsAtMax(refused.Code) {
 				// The very first enrolment was refused for a reason that will not
 				// pass by itself, most often a wrong or disabled join token. Say so
 				// and stop, so the operator sees the failure where they installed
@@ -371,6 +373,9 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 				// a blocked host, which is also what a revoked agent meets when it
 				// enrols again: an administrator can lift the block, and exiting
 				// would only make the restart policy retry faster than the backoff.
+				// Nor does a host whose other agent is connected now: that one may
+				// be a container that is stopping, or a duplicate the operator
+				// removes, and either way this one enrols once it is gone.
 				return refused
 			}
 			wait = r.refused(refused, &failures)
@@ -428,7 +433,7 @@ func (r *runner) refused(re *RefusedError, failures *int) time.Duration {
 		if r.newToken() {
 			return r.rejoin(re.Code)
 		}
-	case wire.ReasonBlocked:
+	case wire.ReasonBlocked, wire.RefuseHostAlreadyConnected:
 		return r.cfg.BackoffMax
 	case wire.ReasonCertExpired:
 		if r.cfg.JoinToken == "" {
@@ -627,6 +632,15 @@ func transient(code string) bool {
 	return code == wire.RefuseRateLimited || code == wire.RefuseInternal
 }
 
+// waitsAtMax reports whether a refusal is one the agent can do nothing about but
+// that can pass without a change on the host: an administrator unblocks a blocked
+// host, and a host whose other agent is connected now (host_already_connected,
+// review 17-2 WR-02) can enrol once that agent is gone. The agent waits the maximum
+// backoff between tries and never ends for one, not even at its first enrolment.
+func waitsAtMax(code string) bool {
+	return code == wire.ReasonBlocked || code == wire.RefuseHostAlreadyConnected
+}
+
 // routeFile is the host route file the agent reads.
 func (r *runner) routeFile() string {
 	if r.cfg.HostRouteFile != "" {
@@ -647,6 +661,8 @@ func (r *runner) hint(code string) string {
 		return "this agent was enrolled after the backup this TierPlan was restored from; reinstall it with the environment's install command"
 	case wire.ReasonBlocked:
 		return "this host is on TierPlan's block list; an administrator can unblock it in the environment's settings"
+	case wire.RefuseHostAlreadyConnected:
+		return "another agent of this host is connected to this TierPlan environment now, such as a second agent container or service on the host or a cloned VM; remove the duplicate. This agent tries again once a minute and enrols by itself once the other one is gone"
 	case wire.ReasonCertExpired:
 		return "the agent's certificate expired; start the agent with a join token (TIERPLAN_AGENT_JOIN_TOKEN_FILE or TIERPLAN_AGENT_JOIN_TOKEN) to enrol again"
 	case wire.ReasonAuthRejected:
