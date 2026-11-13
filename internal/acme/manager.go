@@ -471,7 +471,7 @@ func (m *Manager) Issue(ctx context.Context, actor string) (RunStart, error) {
 	if err != nil {
 		return RunStart{}, err
 	}
-	rs, err := m.issueLocked(ctx, st, actor, TriggerAdmin, nil)
+	rs, err := m.issueLocked(ctx, st, actor, TriggerAdmin, nil, false)
 	// The caller's hook runs while the new run waits, so a row it writes comes before the run's outcome row.
 	announceStarted(runStartedFrom(ctx), rs)
 	return rs, err
@@ -994,6 +994,9 @@ type runParams struct {
 	// TIERPLAN_ACME=on has none yet, and registering inside the run charges a failure to the persisted
 	// backoff like any other (envissue.go).
 	register *registerSpec
+	// env marks the run TIERPLAN_ACME=on started. It is not stored: the run's trigger stays schedule, and only the
+	// audit rows of the run say env (audit.go).
+	env bool
 }
 
 // startRun starts the one background run. The caller has checked that none is active; the check is

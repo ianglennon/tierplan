@@ -17,6 +17,10 @@ import (
 // The audit target of every HTTPS row (Phase 17, SET-04): the instance's HTTPS setup, not a resource.
 const auditTarget = "https"
 
+// triggerEnv is what the audit rows of the run TIERPLAN_ACME=on starts say started it. It is not a stored trigger: the
+// run is stored as a scheduled one (the API enum is admin, schedule, resume).
+const triggerEnv = "env"
+
 // record writes one audit row as the system principal that runs certificate work. A nil Deps.Audit writes nothing.
 // A failed write is logged at error level and never fails the run: the certificate change has happened either way,
 // and a run that failed because its log row could not be written would hide the real outcome.
@@ -40,6 +44,9 @@ func (m *Manager) record(ctx context.Context, action string, result audit.Result
 // an admin started names that admin only here, as started_by; the row's actor stays the system principal (T-17-05).
 func runDetails(x *run, p runParams) map[string]string {
 	d := map[string]string{"trigger": p.trigger, "job": x.id}
+	if p.env {
+		d["trigger"] = triggerEnv
+	}
 	if p.actor != "" {
 		d["started_by"] = p.actor
 	}

@@ -6,6 +6,7 @@ package acme
 import (
 	"context"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -81,11 +83,14 @@ func newAuditEnv(t *testing.T, opts acmetest.Options) *auditEnv {
 }
 
 // build is a Manager over the environment's stored state that writes its audit rows to the sink.
-func (a *auditEnv) build(inst Installer) *Manager {
+func (a *auditEnv) build(inst Installer) *Manager { return a.buildWithEnv(inst, config.ACMEEnv{}) }
+
+// buildWithEnv is build with the environment's TIERPLAN_ACME* values, the way a process start builds one.
+func (a *auditEnv) buildWithEnv(inst Installer, env config.ACMEEnv) *Manager {
 	return NewManager(Deps{
 		Store: a.store, Client: a.client, Challenges: a.tokens, Jobs: a.hub, Installer: inst, Clock: a.clock,
 		PublicURL: a.urls.getPublic, AgentURL: a.urls.getAgent, BasePath: a.urls.getBase,
-		Log:    slog.New(slog.DiscardHandler),
+		Env: env, Log: slog.New(slog.DiscardHandler),
 		Jitter: func() float64 { return 0 },
 		Rand:   func(n int64) int64 { return n / 2 },
 		Audit:  a.sink.record,
@@ -438,5 +443,120 @@ func TestRunAudit(t *testing.T) {
 func (a *auditEnv) hookCtx(ctx context.Context) context.Context {
 	return WithRunStarted(ctx, func(rs RunStart) {
 		_ = a.sink.record(ctx, audit.Entry{Action: audit.ActionHTTPSIssueRequested, Details: map[string]string{"job": rs.JobID}})
+	})
+}
+
+// onEnv is TIERPLAN_ACME=on with the terms accepted and an address, which is all a start-time registration needs.
+func onEnv() config.ACMEEnv {
+	env := envSwitch(true)
+	env.AcceptTOS = true
+	env.Email = "ops@example.com"
+	return env
+}
+
+// The run TIERPLAN_ACME=on starts and the account it registers are the system's own doing, and the log says so (SET-04,
+// D-10, D-14, D-28). The stored run stays a scheduled one: env is a word of the audit rows only.
+func TestEnvRunAudit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the account a start-time issue registers is one row and the run's row says env", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.noAccount()
+		a.buildWithEnv(a.inst, onEnv()).round(ctx)
+		if got := a.awaitRun(); got != OutcomeSucceeded {
+			t.Fatalf("the start-time run ended %q, want succeeded", got)
+		}
+
+		regs := a.sink.byAction(audit.ActionHTTPSAccountRegistered)
+		if len(regs) != 1 {
+			t.Fatalf("%d https.account_registered rows, want 1: %+v", len(regs), a.sink.all())
+		}
+		reg := regs[0]
+		dir, err := url.Parse(a.client.Directory().URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reg.Actor != audit.SystemACME || reg.Result != audit.ResultSuccess || reg.TargetType != "https" || reg.TargetID != "https" {
+			t.Errorf("row = %+v, want a success by system:acme about https", reg)
+		}
+		want := map[string]string{"contact": "ops@example.com", "terms_agreed": "true", "directory": dir.Host, "trigger": "env"}
+		if len(reg.Details) != len(want) {
+			t.Errorf("details = %+v, want only %v", reg.Details, want)
+		}
+		for k, v := range want {
+			if reg.Details[k] != v {
+				t.Errorf("details[%q] = %q, want %q", k, reg.Details[k], v)
+			}
+		}
+
+		e := a.onlyOutcome()
+		if e.Action != audit.ActionHTTPSIssued || e.Actor != audit.SystemACME || e.Details["trigger"] != "env" || e.Details["started_by"] != "" {
+			t.Errorf("row = %+v, want https.issued by system:acme with trigger env and nobody who started it", e)
+		}
+		if a.sink.indexOf(audit.ActionHTTPSAccountRegistered) > a.sink.indexOf(audit.ActionHTTPSIssued) {
+			t.Error("the account row comes after the run's row, want the registration first")
+		}
+		if runs := a.runs(); len(runs) != 1 || runs[0].Trigger != TriggerSchedule {
+			t.Errorf("runs = %+v, want one run stored with the schedule trigger", runs)
+		}
+		if n := len(a.sink.all()); n != 2 {
+			t.Errorf("the sink holds %d rows, want the account and the certificate: %+v", n, a.sink.all())
+		}
+	})
+
+	t.Run("a start with an account registered writes no account row and the run still says env", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.buildWithEnv(a.inst, onEnv()).round(ctx)
+		if got := a.awaitRun(); got != OutcomeSucceeded {
+			t.Fatalf("the start-time run ended %q, want succeeded", got)
+		}
+		if rows := a.sink.byAction(audit.ActionHTTPSAccountRegistered); len(rows) != 0 {
+			t.Errorf("%d account rows for an account that was already registered: %+v", len(rows), rows)
+		}
+		if e := a.onlyOutcome(); e.Details["trigger"] != "env" {
+			t.Errorf("trigger = %q, want env", e.Details["trigger"])
+		}
+	})
+
+	t.Run("a start-time run that fails says env in its failure row too", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.failOrders(1, refusal)
+		a.buildWithEnv(a.inst, onEnv()).round(ctx)
+		if got := a.awaitRun(); got != OutcomeFailed {
+			t.Fatalf("the start-time run ended %q, want failed", got)
+		}
+		e := a.onlyOutcome()
+		if e.Action != audit.ActionHTTPSRunFailed || e.Actor != audit.SystemACME || e.Details["trigger"] != "env" {
+			t.Errorf("row = %+v, want https.run_failed by system:acme with trigger env", e)
+		}
+	})
+
+	t.Run("an admin issue on a process that has the variable set still says admin", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		m := a.buildWithEnv(a.inst, onEnv())
+		rs, err := m.Issue(ctx, "user:1")
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		a.wait(rs)
+		a.awaitRun()
+		e := a.onlyOutcome()
+		if e.Details["trigger"] != TriggerAdmin || e.Details["started_by"] != "user:1" {
+			t.Errorf("details = %+v, want trigger admin started by user:1", e.Details)
+		}
+	})
+
+	t.Run("a failed registration writes no account row", func(t *testing.T) {
+		a := newAuditEnv(t, acmetest.Options{})
+		a.noAccount()
+		env := onEnv()
+		env.AcceptTOS = false // the CA's terms are not accepted, so no account can be registered
+		a.buildWithEnv(a.inst, env).round(ctx)
+		if got := a.awaitRun(); got != OutcomeFailed {
+			t.Fatalf("the start-time run ended %q, want failed at the account step", got)
+		}
+		if rows := a.sink.byAction(audit.ActionHTTPSAccountRegistered); len(rows) != 0 {
+			t.Errorf("%d account rows for a registration that was refused: %+v", len(rows), rows)
+		}
 	})
 }
