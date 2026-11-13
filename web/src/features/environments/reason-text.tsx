@@ -77,6 +77,7 @@ const TEXT_NEEDS: Record<string, string[]> = {
   duplicate_environment: ["host", "environment"],
   type_mismatch: ["host", "hostType", "environment", "envType"],
   host_mismatch: ["environment"],
+  host_already_connected: ["node"],
 };
 const HINT_NEEDS: Record<string, string[]> = {
   duplicate_environment: ["environment"],

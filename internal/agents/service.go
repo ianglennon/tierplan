@@ -164,16 +164,23 @@ type EnvNotifier interface {
 	Notify(envID string)
 }
 
+// LiveSessions says whether an agent is connected now. The tunnel hub is one.
+type LiveSessions interface {
+	// Live reports whether agentID has a live session now.
+	Live(agentID string) bool
+}
+
 // Service creates agent environments and enrols agents.
 type Service struct {
 	st  *store.Store
 	v   *vault.Vault
 	aud *audit.Writer
 	now func() time.Time
-	// kicker and notifier are set before the service is used (WithKicker,
-	// WithNotifier).
+	// kicker, notifier and live are set before the service is used (WithKicker,
+	// WithNotifier, WithLive).
 	kicker   SessionKicker
 	notifier EnvNotifier
+	live     LiveSessions
 
 	// seen is when last_seen_at was last written for each agent, so TouchLastSeen
 	// can skip all but one write a minute.
@@ -209,6 +216,15 @@ func (s *Service) WithKicker(k SessionKicker) *Service {
 // tick. Call it before the service is used.
 func (s *Service) WithNotifier(n EnvNotifier) *Service {
 	s.notifier = n
+	return s
+}
+
+// WithLive tells the service who knows which agents are connected now, so an
+// enrolment never retires a host's earlier agent while that agent is connected
+// (review 17-2 WR-02). Without one every earlier agent of the host counts as not
+// connected. Call it before the service is used.
+func (s *Service) WithLive(l LiveSessions) *Service {
+	s.live = l
 	return s
 }
 
@@ -593,6 +609,16 @@ func (s *Service) Enrol(ctx context.Context, req tunnel.EnrolRequest) (tunnel.En
 // naming the agent that replaced it. A host that reports no engine ID cannot be matched and
 // retires nothing. It returns the IDs it revoked, for afterRevoke once the transaction has
 // committed.
+//
+// An earlier agent that is connected now is never retired (review 17-2 WR-02, WR-03):
+// in every case the retire is for (the agent set its identity aside after a refused
+// hello, a reinstall stopped the old container, an expired certificate) the earlier
+// agent is not connected. One that is connected is a second agent on the host (a
+// leftover container next to a new one, a cloned VM), and retiring it would make the
+// two replace each other every minute, forever; or it is a spoofed enrolment that
+// claims a connected host's engine and node IDs to take over its routing. The
+// enrolment is refused host_already_connected instead, and the caller's rollback leaves
+// nothing of it.
 func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, envID, agentID string, req tunnel.EnrolRequest, ts int64) ([]string, error) {
 	if req.Facts.EngineID == "" {
 		return nil, nil
@@ -604,6 +630,17 @@ func (s *Service) retireReplaced(ctx context.Context, tx *sql.Tx, q *sqlc.Querie
 	olds, err := q.ActiveAgentsOfHost(ctx, sqlc.ActiveAgentsOfHostParams{EnvID: envID, EngineID: req.Facts.EngineID, SwarmNodeID: node})
 	if err != nil {
 		return nil, fmt.Errorf("look up the host's earlier agents: %w", err)
+	}
+	if s.live != nil {
+		for _, old := range olds {
+			if old.ID != agentID && s.live.Live(old.ID) {
+				return nil, &tunnel.RefuseError{
+					Code:        wire.RefuseHostAlreadyConnected,
+					Detail:      "another agent of this host is connected to this environment now; remove the duplicate agent container or service from the host, or stop the other agent, and this one enrols on its next try",
+					AuditReason: wire.RefuseHostAlreadyConnected,
+				}
+			}
+		}
 	}
 	actor := rbac.System(enrolActor).AuditActor()
 	var ids []string

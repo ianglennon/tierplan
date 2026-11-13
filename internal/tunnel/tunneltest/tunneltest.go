@@ -285,6 +285,9 @@ func Start(t *testing.T, opts Options) *Server {
 	}
 	// A revoke closes the agent's live session through the hub, as in production.
 	svc.WithKicker(hub)
+	// An enrolment never retires a host's earlier agent while it is connected, as in
+	// production.
+	svc.WithLive(hub)
 	h := hub.Handler()
 	if opts.Wrap != nil {
 		h = opts.Wrap(h)

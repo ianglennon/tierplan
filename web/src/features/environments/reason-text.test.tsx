@@ -9,7 +9,7 @@ import "@/i18n";
 
 afterEach(cleanup);
 
-// Every D-40 code, then the three enrolment-only refusals, then the one extra
+// Every D-40 code, then the enrolment-only refusals, then the extra
 // issue code the health rollup can report.
 const D40 = [
   "agent_offline",
@@ -28,7 +28,12 @@ const D40 = [
   "unsupported_engine",
   "agent_policy_denied",
 ];
-const ENROLMENT = ["duplicate_environment", "type_mismatch", "host_mismatch"];
+const ENROLMENT = [
+  "duplicate_environment",
+  "type_mismatch",
+  "host_mismatch",
+  "host_already_connected",
+];
 const EXTRA = ["cert_expiring", "address_space_full"];
 // Said when an agent holds a certificate the environment issued but is not in the
 // database, as after a restore (D-31).
@@ -265,9 +270,14 @@ describe("ReasonText", () => {
       });
     }
 
-    it("covers 15 D-40 codes and the three enrolment refusals", () => {
+    it("covers 15 D-40 codes and the four enrolment refusals", () => {
       expect(D40).toHaveLength(15);
-      expect(ENROLMENT).toEqual(["duplicate_environment", "type_mismatch", "host_mismatch"]);
+      expect(ENROLMENT).toEqual([
+        "duplicate_environment",
+        "type_mismatch",
+        "host_mismatch",
+        "host_already_connected",
+      ]);
     });
   });
 

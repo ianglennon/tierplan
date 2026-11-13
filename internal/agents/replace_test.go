@@ -143,3 +143,88 @@ func TestTheSameEngineOnAnotherSwarmNodeIsLeftToTheReaper(t *testing.T) {
 		t.Errorf("agent.revoked rows = %v, want none", rows)
 	}
 }
+
+// liveSet is a LiveSessions that says the agents in it are connected.
+type liveSet map[string]bool
+
+func (l liveSet) Live(agentID string) bool { return l[agentID] }
+
+// Review 17-2 WR-02 and WR-03: an earlier agent of the host that is connected now is
+// never retired. A second agent on one host (a leftover container, a cloned VM) is
+// refused host_already_connected, and nothing of its enrolment is written, so the two
+// do not replace each other every minute; a spoofed enrolment that claims a connected
+// host's engine and node cannot take its place either.
+func TestAnEnrolmentOfAHostWhoseEarlierAgentIsConnectedIsRefusedAndRetiresNothing(t *testing.T) {
+	for name, f := range map[string]wire.Facts{
+		"standalone": standalone("ENG:EDGE-1", "edge-1"),
+		"swarm node": worker("ENG:W2-prod", "node-w2-prod", "wrk-2"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			k := &kicks{st: r.st}
+			n := &notices{}
+			live := liveSet{}
+			r.svc.WithKicker(k).WithNotifier(n).WithLive(live)
+			c := r.create(t, "edge")
+			first := r.enrolFacts(t, c, f)
+			live[first.id] = true
+			agentsBefore := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID)
+			enrolledBefore := len(auditRows(t, r.st, "agent.enrolled"))
+
+			_, err := r.enrolWith(t, c.JoinToken, f)
+			ref := refusal(t, err)
+			if ref.Code != wire.RefuseHostAlreadyConnected || ref.AuditReason != wire.RefuseHostAlreadyConnected ||
+				!strings.Contains(ref.Detail, "connected") || !strings.Contains(ref.Detail, "remove the duplicate") {
+				t.Fatalf("refusal = %+v, want host_already_connected telling the operator to remove the duplicate agent", ref)
+			}
+			if got := count(t, r.st, `SELECT COUNT(*) FROM agents WHERE env_id = ?`, c.EnvID); got != agentsBefore {
+				t.Errorf("agent rows = %d, want %d: a refused enrolment writes no row", got, agentsBefore)
+			}
+			if a := r.agentRow(t, first.id); a.status != "active" || a.reason != "" || a.revokedBy != "" {
+				t.Errorf("the connected agent is %+v, want it untouched", a)
+			}
+			if rows := auditRows(t, r.st, "agent.revoked"); len(rows) != 0 {
+				t.Errorf("agent.revoked rows = %v, want none", rows)
+			}
+			if got := len(auditRows(t, r.st, "agent.enrolled")); got != enrolledBefore {
+				t.Errorf("agent.enrolled rows = %d, want %d", got, enrolledBefore)
+			}
+			if len(k.agents) != 0 || len(n.list()) != 0 {
+				t.Errorf("kicked %v and notified %v, want neither", k.agents, n.list())
+			}
+			if _, err := r.svc.Hello(r.ctx, first.hello(first.cert, first.priv)); err != nil {
+				t.Errorf("hello of the connected agent: %v", err)
+			}
+
+			// Once the earlier agent is gone, the host's next enrolment retires it as before.
+			live[first.id] = false
+			second := r.enrolFacts(t, c, f)
+			if a := r.agentRow(t, first.id); a.status != "revoked" || a.reason != "replaced" {
+				t.Errorf("the earlier agent after it went offline is %+v, want revoked as replaced", a)
+			}
+			if a := r.agentRow(t, second.id); a.status != "active" {
+				t.Errorf("the new agent is %+v, want active", a)
+			}
+		})
+	}
+}
+
+// An earlier agent of the host that is not connected is retired as before, also with
+// a live-session check in place; another host's connected agent changes nothing.
+func TestAnOfflineEarlierAgentIsStillRetiredWhenOtherAgentsAreConnected(t *testing.T) {
+	r := newRig(t)
+	s := newSwarmEnv(t, r, "prod")
+	r.svc.WithLive(liveSet{s.m.id: true, s.w1.id: true}) // w2 is offline
+	again := r.enrolFacts(t, s.c, worker("ENG:W2-prod", "node-w2-prod", "wrk-2"))
+	if a := r.agentRow(t, s.w2.id); a.status != "revoked" || a.reason != "replaced" {
+		t.Fatalf("the node's offline agent is %+v, want revoked as replaced", a)
+	}
+	for name, id := range map[string]string{"manager": s.m.id, "first worker": s.w1.id, "new agent": again.id} {
+		if a := r.agentRow(t, id); a.status != "active" {
+			t.Errorf("the %s is %+v, want active", name, a)
+		}
+	}
+	if len(s.kicked.agents) != 1 || s.kicked.agents[0] != s.w2.id {
+		t.Errorf("kicked %v, want only the retired agent", s.kicked.agents)
+	}
+}

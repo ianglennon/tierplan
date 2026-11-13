@@ -914,6 +914,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		WithRefusalAudit(agentAudit)
 	// A revoke commits first and then closes the agent's live session through the hub.
 	agentSvc.WithKicker(tunnelHub)
+	// An enrolment never retires a host's earlier agent while the hub has it connected.
+	agentSvc.WithLive(tunnelHub)
 	// A re-initialised swarm that is recorded, or adopted, reaches every open
 	// overview at once instead of at the next tick.
 	agentSvc.WithNotifier(broker)

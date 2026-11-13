@@ -120,6 +120,11 @@
         "hint": "Add {{host}} as its own environment.",
         "hintGeneric": "Add this host as its own environment."
       },
+      "host_already_connected": {
+        "text": "{{node}} already has a connected agent in this environment.",
+        "textGeneric": "This host already has a connected agent in this environment.",
+        "hint": "Remove the duplicate agent container or service from the host, or stop the other agent. The new one enrols by itself about a minute later."
+      },
       "unreachable": {
         "text": "Docker isn't answering on the local socket.",
         "hint": "Check that `/var/run/docker.sock` is mounted into TierPlan and that the Docker daemon is running."

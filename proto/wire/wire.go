@@ -354,6 +354,13 @@ const (
 	RefuseTokenSuperseded   = "token_superseded"
 	RefuseInsecureTransport = "insecure_transport"
 	RefuseRateLimited       = "rate_limited"
+	// RefuseHostAlreadyConnected means the host that is enrolling already has an agent
+	// in this environment that is connected now: a second agent on one host, such as
+	// a leftover container next to a new one or a cloned VM. The enrolment is refused
+	// rather than retiring the connected agent, so two agents on one host do not
+	// replace each other forever (review 17-2 WR-02). It passes once the other agent
+	// is gone, so the agent waits the maximum backoff and tries again.
+	RefuseHostAlreadyConnected = "host_already_connected"
 	// RefuseInternal means the server failed while handling an otherwise valid
 	// handshake. The agent should retry with backoff.
 	RefuseInternal = "internal_error"

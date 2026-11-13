@@ -512,6 +512,16 @@ func (h *Hub) Session(agentID string) *Session {
 	return h.sessions[agentID]
 }
 
+// Live reports whether agentID is connected now: it has a registered session that
+// has not started to close and has shown a sign of life within the offline window.
+// A session that went silent is not live even before the watchdog closes it. The
+// agents service asks it before it retires a host's earlier agent (review 17-2
+// WR-02): only an agent that is not connected may be replaced.
+func (h *Hub) Live(agentID string) bool {
+	s := h.Session(agentID)
+	return s != nil && !s.isGone() && h.now().Sub(s.lastSignOfLife()) <= h.offlineAfter
+}
+
 // notifyRegistryLocked wakes every AwaitSession waiter. h.mu must be held.
 func (h *Hub) notifyRegistryLocked() {
 	if h.regChanged != nil {
