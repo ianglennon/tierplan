@@ -4,12 +4,14 @@
 package tunnel_test
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // What the hub remembers about each agent for the health rollup (plan 02-11,
@@ -132,8 +134,10 @@ func TestViewsAreScopedToTheEnvironmentOrderedByAgentAndForgottenOnRequest(t *te
 	srv := timed(t, nil)
 	one, two := srv.NewEnvironment(t, "One"), srv.NewEnvironment(t, "Two")
 	var ids []string
+	// Three hosts of one swarm: a standalone environment has one host only, and an enrolment
+	// from a host that already has an agent here retires that agent (review 17 CR-02).
 	for i := range 3 {
-		c := srv.Enrol(t, one)
+		c := enrolNode(t, srv, one, fmt.Sprintf("node-%d", i))
 		ids = append(ids, c.Identity.AgentID)
 		srv.Events.WaitLen(t, i+1)
 	}
@@ -186,4 +190,20 @@ func TestViewsRememberTheVersionTheAgentReportedAfterItLeaves(t *testing.T) {
 	if v := viewOf(t, srv, env.ID, c.Identity.AgentID); v.Version != "0.2.7" || v.Connected {
 		t.Fatalf("view = %+v after the agent left, want it disconnected and still 0.2.7", v)
 	}
+}
+
+// enrolNode enrols an agent in env that reports itself as the swarm node name, so several
+// agents of one environment are several hosts. tunneltest.Enrol reports the same host each
+// time, and an enrolment from a host that already has an agent in the environment retires
+// that agent (review 17 CR-02).
+func enrolNode(t *testing.T, srv *tunneltest.Server, env tunneltest.Environment, name string) *tunneltest.Conn {
+	t.Helper()
+	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: &wire.Facts{
+		EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: name},
+	}})
+	if c.Welcome == nil {
+		t.Fatalf("enrol of %s was refused: %+v (err %v)", name, c.Refuse, c.Err)
+	}
+	return c
 }
