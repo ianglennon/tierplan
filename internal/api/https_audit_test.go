@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -243,6 +244,48 @@ func TestHTTPSAuditRunActions(t *testing.T) {
 			t.Errorf("reason %q details %+v, want acme_blocked with until %s", last.Reason, last.Details, until)
 		}
 	})
+
+	t.Run("renew now accepted precedes its outcome row", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.issued(t)
+		id := startRun(t, f.send(t, http.MethodPost, "/api/https/acme/renew", ""))
+		f.awaitRun(t, id)
+
+		rows := f.httpsRows(t)
+		req, done := rowsOfJob(rows, audit.ActionHTTPSRenewRequested, id), rowsOfJob(rows, audit.ActionHTTPSRenewed, id)
+		if len(req) != 1 || len(done) != 1 {
+			t.Fatalf("%d request rows and %d renewed rows for job %s, want 1 and 1: %+v", len(req), len(done), id, rows)
+		}
+		requireAdminRow(t, req[0], audit.ActionHTTPSRenewRequested, "success")
+		if req[0].Seq >= done[0].Seq {
+			t.Errorf("request row seq %d, renewed seq %d: the request must come first", req[0].Seq, done[0].Seq)
+		}
+	})
+
+	t.Run("renew now blocked by the CA's wait", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.issued(t)
+		f.fake.FailNext(acmetest.EndpointNewOrder, acmetest.Problem{Status: 429, Type: "rateLimited", Detail: "too many orders", RetryAfterSeconds: 3600})
+		f.awaitRun(t, startRun(t, f.send(t, http.MethodPost, "/api/https/acme/renew", "")))
+
+		rec := f.send(t, http.MethodPost, "/api/https/acme/renew", "")
+		acmeProblemOf(t, rec, http.StatusTooManyRequests, "acme_blocked")
+		_, errs := acmeProblemErrors(t, rec)
+		var until string
+		if len(errs) != 1 || json.Unmarshal(errs[0].Value, &until) != nil {
+			t.Fatalf("errors = %+v, want one reason with the instant", errs)
+		}
+		reqs := rowsOf(f.httpsRows(t), audit.ActionHTTPSRenewRequested)
+		if len(reqs) != 2 {
+			t.Fatalf("%d https.renew_requested rows, want 2 (the run and the refusal)", len(reqs))
+		}
+		requireAdminRow(t, reqs[1], audit.ActionHTTPSRenewRequested, "failure")
+		if reqs[1].Reason != "acme_blocked" || reqs[1].Details["until"] != until {
+			t.Errorf("reason %q details %+v, want acme_blocked with until %s", reqs[1].Reason, reqs[1].Details, until)
+		}
+	})
 }
 
 // A run cancelled through the jobs API while it waits at validation, before its certificate was obtained, keeps the
@@ -298,4 +341,301 @@ func TestHTTPSAuditCancelledRunKeepsTheRequestRow(t *testing.T) {
 		f.register(t, "")
 		cancelled(t, f, "/api/https/acme/issue", audit.ActionHTTPSIssueRequested)
 	})
+
+	t.Run("renew-now", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.issued(t)
+		cancelled(t, f, "/api/https/acme/renew", audit.ActionHTTPSRenewRequested)
+	})
+}
+
+func TestHTTPSAuditRegister(t *testing.T) {
+	t.Parallel()
+
+	t.Run("registered", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.register(t, "ops@example.com")
+
+		rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSAccountRegistered)
+		if len(rows) != 1 {
+			t.Fatalf("%d https.account_registered rows, want 1: %+v", len(rows), rows)
+		}
+		requireAdminRow(t, rows[0], audit.ActionHTTPSAccountRegistered, "success")
+		d := rows[0].Details
+		if d["contact"] != "ops@example.com" || d["terms_agreed"] != "true" || d["trigger"] != "admin" {
+			t.Errorf("details = %+v, want contact ops@example.com, terms_agreed true, trigger admin", d)
+		}
+	})
+
+	t.Run("registered without an email", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.register(t, "")
+
+		rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSAccountRegistered)
+		if len(rows) != 1 {
+			t.Fatalf("%d rows, want 1", len(rows))
+		}
+		if _, ok := rows[0].Details["contact"]; ok || rows[0].Details["terms_agreed"] != "true" {
+			t.Errorf("details = %+v, want terms_agreed and no contact", rows[0].Details)
+		}
+	})
+
+	refusals := []struct {
+		name, body, reason string
+		status             int
+	}{
+		{name: "terms not agreed", body: `{"agreeTos":false,"email":"not-an-email-4417"}`, reason: "acme_tos_required", status: http.StatusUnprocessableEntity},
+		{name: "invalid email", body: `{"agreeTos":true,"email":"not-an-email-4417"}`, reason: "acme_contact_invalid", status: http.StatusUnprocessableEntity},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newACMEFix(t, acmeOpts{})
+			acmeProblemOf(t, f.send(t, http.MethodPost, "/api/https/acme/account", tc.body), tc.status, tc.reason)
+
+			rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSAccountRegistered)
+			if len(rows) != 1 {
+				t.Fatalf("%d https.account_registered rows, want 1: %+v", len(rows), rows)
+			}
+			requireAdminRow(t, rows[0], audit.ActionHTTPSAccountRegistered, "failure")
+			if rows[0].Reason != tc.reason || len(rows[0].Details) != 0 {
+				t.Errorf("reason %q details %+v, want %s and no details", rows[0].Reason, rows[0].Details, tc.reason)
+			}
+			if raw, _ := json.Marshal(rows[0]); strings.Contains(string(raw), "not-an-email-4417") {
+				t.Errorf("the row carries the typed email: %s", raw)
+			}
+		})
+	}
+
+	t.Run("account exists", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.register(t, "")
+		acmeProblemOf(t, f.send(t, http.MethodPost, "/api/https/acme/account", `{"agreeTos":true,"email":"other@example.org"}`), http.StatusConflict, "acme_account_exists")
+
+		rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSAccountRegistered)
+		if len(rows) != 2 || rows[1].Result != "failure" || rows[1].Reason != "acme_account_exists" || len(rows[1].Details) != 0 {
+			t.Fatalf("rows = %+v, want the success and a failure row with reason acme_account_exists", rows)
+		}
+		if raw, _ := json.Marshal(rows[1]); strings.Contains(string(raw), "other@example.org") {
+			t.Errorf("the refusal carries the typed email: %s", raw)
+		}
+	})
+
+	t.Run("the CA is unreachable", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		for range 4 {
+			f.fake.FailNext(acmetest.EndpointDirectory, acmetest.Problem{Status: 503, Type: "serverInternal", Detail: "maintenance window secret-4418"})
+		}
+		acmeProblemOf(t, f.send(t, http.MethodPost, "/api/https/acme/account", `{"agreeTos":true}`), http.StatusBadGateway, "acme_ca_error")
+
+		rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSAccountRegistered)
+		if len(rows) != 1 || rows[0].Result != "failure" || rows[0].Reason != acme.ClassCAUnavailable {
+			t.Fatalf("rows = %+v, want one failure row whose reason is the class %s", rows, acme.ClassCAUnavailable)
+		}
+		if raw, _ := json.Marshal(rows[0]); strings.Contains(string(raw), "secret-4418") {
+			t.Errorf("the row carries the CA's text: %s", raw)
+		}
+	})
+}
+
+func TestHTTPSAuditRefusals(t *testing.T) {
+	t.Parallel()
+	off, on := false, true
+
+	// refused runs one request that the manager refuses and requires its row: a failure of the action with the reason.
+	refused := func(t *testing.T, f *acmeFix, path, action string, status int, reason string) httpsRow {
+		t.Helper()
+		before := len(rowsOf(f.httpsRows(t), action))
+		acmeProblemOf(t, f.send(t, http.MethodPost, path, ""), status, reason)
+		rows := rowsOf(f.httpsRows(t), action)
+		if len(rows) != before+1 {
+			t.Fatalf("%d %s rows after the refusal, want %d", len(rows), action, before+1)
+		}
+		last := rows[len(rows)-1]
+		requireAdminRow(t, last, action, "failure")
+		if last.Reason != reason {
+			t.Errorf("%s reason = %q, want %q", action, last.Reason, reason)
+		}
+		return last
+	}
+
+	t.Run("resume when not paused", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		refused(t, f, "/api/https/acme/resume", audit.ActionHTTPSResumed, http.StatusConflict, "acme_not_paused")
+	})
+	t.Run("resume after a restore pause", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.pause(t)
+		if rec := f.send(t, http.MethodPost, "/api/https/acme/resume", ""); rec.Code != http.StatusNoContent {
+			t.Fatalf("resume: %d %s, want 204", rec.Code, rec.Body)
+		}
+		rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSResumed)
+		if len(rows) != 1 {
+			t.Fatalf("%d https.resumed rows, want 1", len(rows))
+		}
+		requireAdminRow(t, rows[0], audit.ActionHTTPSResumed, "success")
+		if len(rows[0].Details) != 0 {
+			t.Errorf("details = %+v, want none", rows[0].Details)
+		}
+	})
+	t.Run("stop while active", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.issued(t)
+		if rec := f.send(t, http.MethodPost, "/api/https/acme/stop", ""); rec.Code != http.StatusNoContent {
+			t.Fatalf("stop: %d %s, want 204", rec.Code, rec.Body)
+		}
+		rows := rowsOf(f.httpsRows(t), audit.ActionHTTPSStopped)
+		if len(rows) != 1 {
+			t.Fatalf("%d https.stopped rows, want 1", len(rows))
+		}
+		requireAdminRow(t, rows[0], audit.ActionHTTPSStopped, "success")
+	})
+	t.Run("stop while HSTS is on", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{hstsOn: func() bool { return true }})
+		refused(t, f, "/api/https/acme/stop", audit.ActionHTTPSStopped, http.StatusConflict, "hsts_on")
+	})
+	t.Run("stop while TIERPLAN_ACME is set", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &on}})
+		f.register(t, "")
+		refused(t, f, "/api/https/acme/stop", audit.ActionHTTPSStopped, http.StatusConflict, "acme_locked")
+	})
+	t.Run("stop when not in use", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		refused(t, f, "/api/https/acme/stop", audit.ActionHTTPSStopped, http.StatusConflict, "acme_not_active")
+	})
+	t.Run("issue and renew locked off", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{env: config.ACMEEnv{Enabled: &off}})
+		f.register(t, "")
+		refused(t, f, "/api/https/acme/issue", audit.ActionHTTPSIssueRequested, http.StatusConflict, "acme_locked")
+		refused(t, f, "/api/https/acme/renew", audit.ActionHTTPSRenewRequested, http.StatusConflict, "acme_locked")
+	})
+	t.Run("issue while paused", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.register(t, "")
+		f.pause(t)
+		refused(t, f, "/api/https/acme/issue", audit.ActionHTTPSIssueRequested, http.StatusConflict, "acme_paused")
+	})
+	t.Run("issue while certificate files are set", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{certFiles: true})
+		refused(t, f, "/api/https/acme/issue", audit.ActionHTTPSIssueRequested, http.StatusConflict, "acme_cert_files")
+	})
+	t.Run("renew when not in use", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.register(t, "")
+		refused(t, f, "/api/https/acme/renew", audit.ActionHTTPSRenewRequested, http.StatusConflict, "acme_not_active")
+	})
+	t.Run("issue while a run is in progress", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.register(t, "")
+		release := f.fake.HoldValidation()
+		defer release()
+		id := startRun(t, f.issue(t))
+		f.clock.WaitArmed(t)
+		refused(t, f, "/api/https/acme/issue", audit.ActionHTTPSIssueRequested, http.StatusConflict, "acme_run_active")
+		if err := f.hub.Cancel(id); err != nil {
+			t.Fatal(err)
+		}
+		f.awaitRun(t, id)
+		release()
+	})
+	t.Run("stop while a renewal is in progress", func(t *testing.T) {
+		t.Parallel()
+		f := newACMEFix(t, acmeOpts{})
+		f.issued(t)
+		release := f.fake.HoldValidation()
+		defer release()
+		id := startRun(t, f.send(t, http.MethodPost, "/api/https/acme/renew", ""))
+		f.clock.WaitArmed(t)
+		refused(t, f, "/api/https/acme/stop", audit.ActionHTTPSStopped, http.StatusConflict, "acme_run_active")
+		if err := f.hub.Cancel(id); err != nil {
+			t.Fatal(err)
+		}
+		f.awaitRun(t, id)
+		release()
+	})
+}
+
+// A user without settings.write is refused by the permission check before any handler runs: the only row is the
+// permission.denied one, and no https.* row is written for the attempt.
+func TestHTTPSAuditPermissionDeniedWritesNoHTTPSRow(t *testing.T) {
+	t.Parallel()
+	f := newACMEFix(t, acmeOpts{})
+	f.register(t, "")
+	f.addUser(t, "viewer", false) // no role, so no settings.write
+	f.h = f.build(t)
+	cookie, csrf := f.signIn(t, "viewer", false)
+
+	before := len(f.httpsRows(t))
+	denied := len(f.audits(t, audit.ActionPermissionDenied))
+	paths := []string{"/api/https/acme/issue", "/api/https/acme/renew", "/api/https/acme/resume", "/api/https/acme/stop", "/api/https/acme/account"}
+	for _, path := range paths {
+		body := ""
+		if strings.HasSuffix(path, "/account") {
+			body = `{"agreeTos":true,"email":"not-an-email-4417"}`
+		}
+		rec := f.call(t, authReq{method: http.MethodPost, path: path, body: body, cookie: cookie, csrf: csrf})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("POST %s without settings.write: %d %s, want 403", path, rec.Code, rec.Body)
+		}
+	}
+	if after := len(f.httpsRows(t)); after != before {
+		t.Errorf("%d https.* rows after the refused requests, want %d", after, before)
+	}
+	if got := len(f.audits(t, audit.ActionPermissionDenied)); got != denied+len(paths) {
+		t.Errorf("%d permission.denied rows, want %d: each refusal keeps its own row", got, denied+len(paths))
+	}
+}
+
+// A request whose audit row cannot be written is not reported as a clean success: it answers 500 and the failure is
+// logged (D-11). The refusals and the account route are used because they start no run.
+func TestHTTPSAuditWriteFailureAnswers500(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, action, path, body string
+		setup                    func(t *testing.T, f *acmeFix)
+	}{
+		{name: "resume", action: audit.ActionHTTPSResumed, path: "/api/https/acme/resume", setup: func(t *testing.T, f *acmeFix) { f.pause(t) }},
+		{name: "a refused issue", action: audit.ActionHTTPSIssueRequested, path: "/api/https/acme/issue"},
+		{name: "register", action: audit.ActionHTTPSAccountRegistered, path: "/api/https/acme/account", body: `{"agreeTos":true}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newACMEFix(t, acmeOpts{})
+			var logs strings.Builder
+			f.https.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+			f.h = f.build(t)
+			if tc.setup != nil {
+				tc.setup(t, f)
+			}
+			//nolint:gosec // the action is one of the constants in this table, in a throwaway test database
+			if _, err := f.st.Write.Exec(`CREATE TRIGGER refuse_https_audit BEFORE INSERT ON audit_log WHEN NEW.action = '` + tc.action + `'
+				BEGIN SELECT RAISE(ABORT, 'audit log unavailable'); END`); err != nil {
+				t.Fatal(err)
+			}
+			rec := f.send(t, http.MethodPost, tc.path, tc.body)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("POST %s with a failing audit log: %d %s, want 500", tc.path, rec.Code, rec.Body)
+			}
+			if !strings.Contains(logs.String(), "audit the Let's Encrypt request") {
+				t.Errorf("the failure is not logged: %s", logs.String())
+			}
+		})
+	}
 }

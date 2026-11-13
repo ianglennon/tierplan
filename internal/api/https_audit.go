@@ -87,7 +87,7 @@ func refusalDetails(err error) map[string]string {
 	return nil
 }
 
-// runAuditor writes the row of an Issue or a Renew now press. The Manager calls the hook it installs on the context
+// runAuditor writes the row of an Issue or a Renew now press. The Manager calls its started hook (acme.WithRunStarted)
 // once, synchronously, when the run is accepted and before its body does anything, so the request row precedes the
 // run's outcome row even for a run that fails at its first CA call. Whatever the hook did is kept for the handler.
 type runAuditor struct {
@@ -99,12 +99,13 @@ type runAuditor struct {
 	err    error
 }
 
-// context returns ctx with the run-started hook installed.
-func (a *runAuditor) context(ctx context.Context) context.Context {
-	return acme.WithRunStarted(ctx, func(rs acme.RunStart) {
+// started is the hook for acme.WithRunStarted: it writes the success row of the run the Manager has just accepted.
+// ctx is the request's, whose principal, address and cancellation the row takes.
+func (a *runAuditor) started(ctx context.Context) func(acme.RunStart) {
+	return func(rs acme.RunStart) {
 		a.hooked = true
 		a.err = a.d.audit(ctx, a.ua, a.action, nil, map[string]string{"job": rs.JobID, "reused": "false"})
-	})
+	}
 }
 
 // after writes the one row the hook did not: a reused certificate, or a refusal (err is the manager's error, problem

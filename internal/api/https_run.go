@@ -103,7 +103,7 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 			return nil, acmeUnavailable()
 		}
 		ra := &runAuditor{d: d, ua: in.UserAgent, action: audit.ActionHTTPSIssueRequested}
-		rs, err := d.ACME.Issue(ra.context(ctx), actorOf(ctx))
+		rs, err := d.ACME.Issue(acme.WithRunStarted(ctx, ra.started(ctx)), actorOf(ctx))
 		var problem error
 		if err != nil {
 			problem = acmeProblem(d.Log, "start the Let's Encrypt issue", err)
@@ -130,7 +130,7 @@ func registerHTTPSACMERuns(r *httpx.Router, d HTTPSDeps) {
 			return nil, acmeUnavailable()
 		}
 		ra := &runAuditor{d: d, ua: in.UserAgent, action: audit.ActionHTTPSRenewRequested}
-		rs, err := d.ACME.RenewNow(ra.context(ctx), actorOf(ctx))
+		rs, err := d.ACME.RenewNow(acme.WithRunStarted(ctx, ra.started(ctx)), actorOf(ctx))
 		var problem error
 		if err != nil {
 			problem = acmeProblem(d.Log, "start the Let's Encrypt renewal", err)
