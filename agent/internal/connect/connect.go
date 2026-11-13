@@ -359,7 +359,7 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			// Stopping in the middle of an enrolment with the identity set aside puts
 			// it back, so the next start finds it where it belongs.
 			if r.stashed != nil {
-				r.takeBack(err)
+				r.takeBack(err, true)
 			}
 			return nil
 		}
@@ -381,7 +381,7 @@ func runWith(ctx context.Context, cfg Config, env runEnv) error {
 			// or not answered at all. The agent takes its identity back and keeps it,
 			// and waits the maximum before it tries again. It never stops for this:
 			// the refusal is not of a first enrolment, the agent has an identity.
-			wait = r.takeBack(err)
+			wait = r.takeBack(err, false)
 		} else if errors.As(err, &refused) {
 			if !r.have && !transient(refused.Code) && !waitsAtMax(refused.Code) {
 				// The very first enrolment was refused for a reason that will not
@@ -635,14 +635,18 @@ func (r *runner) setAside() bool {
 // 17-2 WR-04). Any other outcome (a blocked host, a busy server, a host whose other
 // agent is connected, a connection that failed) leaves the token to be tried again a
 // minute later.
-func (r *runner) takeBack(err error) time.Duration {
+//
+// stopping says the agent is stopping (its context ended) in the middle of that
+// enrolment: nothing was refused, and the server may even have accepted it, so the
+// token is not recorded and the agent says only that it put the identity back.
+func (r *runner) takeBack(err error, stopping bool) time.Duration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.stashed
 	r.stashed = nil
 	tried := s.tried
 	var refused *RefusedError
-	refusedToken := errors.As(err, &refused) && refused.Code == wire.ReasonAuthRejected && r.cfg.JoinToken != ""
+	refusedToken := !stopping && errors.As(err, &refused) && refused.Code == wire.ReasonAuthRejected && r.cfg.JoinToken != ""
 	if refusedToken {
 		tried = state.TokenHash(r.cfg.JoinToken)
 	}
@@ -676,6 +680,10 @@ func (r *runner) takeBack(err error) time.Duration {
 		}
 	}
 	r.cur, r.have, r.enrolHash, r.triedHash = s.cur, true, s.hash, tried
+	if stopping {
+		r.log.Info(stoppingLog)
+		return r.cfg.BackoffMax
+	}
 	if !r.quietStash {
 		r.quietStash = true
 		attrs := []any{"retry_in", r.cfg.BackoffMax.String()}
@@ -693,6 +701,9 @@ func (r *runner) takeBack(err error) time.Duration {
 	}
 	return r.cfg.BackoffMax
 }
+
+// stoppingLog is what the agent says when it stops while its identity is set aside.
+const stoppingLog = "the agent is stopping while it was trying its join token; it took back the identity it had set aside"
 
 // takenBackLog is what the agent says when it takes back an identity it set aside.
 const takenBackLog = "TierPlan did not accept the enrolment with the join token either; the agent took back the identity it had set aside and keeps it"

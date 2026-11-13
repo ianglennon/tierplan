@@ -766,3 +766,60 @@ func TestAnInMemoryIdentityKnowsTheTokenItEnrolledWith(t *testing.T) {
 		}
 	}
 }
+
+// Review 17-2 IN-03: an agent that stops while its enrolment with the identity set
+// aside is under way puts the identity back and says only that. Nothing was refused,
+// so it does not say TierPlan refused the token, and does not record the token as
+// tried.
+func TestAnAgentThatStopsDuringTheEnrolmentPutsTheIdentityBackWithoutCallingItARefusal(t *testing.T) {
+	dir := t.TempDir()
+	saved := enrolledWith(t, dir, oldToken)
+	var mu sync.Mutex
+	var stop context.CancelFunc
+	srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+		if a.Mode == wire.ModeHello {
+			return reply{refuse: wire.ReasonAuthRejected}
+		}
+		mu.Lock()
+		stop() // the container is stopped while the enrolment is under way
+		mu.Unlock()
+		return reply{refuse: wire.ReasonAuthRejected}
+	})
+	var logs lockedBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mu.Lock()
+	stop = cancel
+	mu.Unlock()
+	env := fastEnv()
+	env.roots = httptestRoots()
+	done := make(chan error, 1)
+	go func() {
+		done <- runWith(ctx, Config{
+			URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+			Log: slog.New(slog.NewTextHandler(&logs, nil)),
+		}, env)
+	}()
+	if err := testsupport.Await(t, "the agent to stop", done); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if a, _ := srv.authN(t, 2); a.Mode != wire.ModeEnrol {
+		t.Fatalf("attempt 2 used mode %q, want the enrolment the agent stopped in", a.Mode)
+	}
+	got, ok, err := state.Load(dir)
+	if err != nil || !ok || !got.Key.Equal(saved.Key) {
+		t.Fatalf("the identity on disk = %+v %v %v; want the one that was set aside, back in place", got, ok, err)
+	}
+	if _, known, _ := state.LoadTriedToken(dir, saved.AgentID); known {
+		t.Error("the token was recorded as tried; the agent stopped, nothing refused it")
+	}
+	out := logs.String()
+	if !strings.Contains(out, stoppingLog) {
+		t.Errorf("the agent did not say it took the identity back as it stopped:\n%s", out)
+	}
+	for _, line := range []string{takenBackLog, triedLog} {
+		if strings.Contains(out, line) {
+			t.Errorf("the agent said %q as it stopped:\n%s", line, out)
+		}
+	}
+}
