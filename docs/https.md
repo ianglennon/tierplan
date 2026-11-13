@@ -195,7 +195,7 @@ If renewals keep failing and the Let's Encrypt certificate expires, TierPlan ser
 
 ### The host clock
 
-TierPlan judges expiry, renewal and the fallback by its own clock. A clock that is wrong makes it renew late or early, so keep NTP running on the host. TierPlan reads the difference from Let's Encrypt's own responses whenever it talks to it: in every run, whatever the mode, and once after a start while Let's Encrypt is active. With no such response nothing is shown. TierPlan never queries an NTP server.
+TierPlan judges expiry, renewal and the fallback by its own clock. A clock that is wrong makes it renew late or early, so keep NTP running on the host. TierPlan reads the difference from Let's Encrypt's own responses whenever it talks to it: in every run, whatever the mode, and once after a start while Let's Encrypt is active (if that read fails, for example because the network is not up yet, it is tried again on the next check until one succeeds). With no such response nothing is shown. TierPlan never queries an NTP server.
 
 ## What each bell warning means
 

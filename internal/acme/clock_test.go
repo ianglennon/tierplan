@@ -454,3 +454,46 @@ func TestPreflightIgnoresClock(t *testing.T) {
 		}
 	})
 }
+
+// Review 17 WR-03: a probe whose read of the directory fails is not done. The next round reads again,
+// so a host that came up before its network still gets its clock sample without waiting for an order.
+func TestClockProbeIsRetriedAfterAFailedRead(t *testing.T) {
+	t.Parallel()
+	e := newClockEnv(t, acmetest.Options{DateOffset: -10 * time.Minute})
+	_, _ = e.restarted(config.ACMEEnv{}, false)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.client.ProbeClock(cancelled)
+	if e.client.probed.Load() {
+		t.Fatal("a probe whose read was cancelled counts as done")
+	}
+	if (e.client.ClockSample() != ClockSample{}) {
+		t.Fatalf("ClockSample = %+v, want none after a failed read", e.client.ClockSample())
+	}
+
+	e.client.ProbeClock(context.Background())
+	if !e.client.probed.Load() {
+		t.Fatal("a probe whose read succeeded is not done")
+	}
+	if got := e.client.ClockSample().Offset; got != 10*time.Minute {
+		t.Fatalf("ClockSample().Offset = %v, want +10m from the retried probe", got)
+	}
+	before := e.fake.Count(acmetest.EndpointDirectory)
+	e.client.ProbeClock(context.Background())
+	if n := e.fake.Count(acmetest.EndpointDirectory) - before; n != 0 {
+		t.Errorf("a probe after a successful one read the directory %d times, want none", n)
+	}
+}
+
+// A directory that cannot be reached leaves the probe undone too; Meta keeps that failure for a minute,
+// so the rounds in between do not ask again.
+func TestClockProbeOfAnUnreachableDirectoryIsNotDone(t *testing.T) {
+	t.Parallel()
+	e := newClockEnv(t, acmetest.Options{})
+	c := NewClient(Directory{URL: "https://127.0.0.1:1/directory"}, e.store, e.clock, "tierplan-test/0")
+	c.ProbeClock(context.Background())
+	if c.probed.Load() {
+		t.Fatal("a probe of an unreachable directory counts as done")
+	}
+}
