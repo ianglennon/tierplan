@@ -138,11 +138,14 @@ func TestNoPlaintextSecrets(t *testing.T) {
 		env := srv.NewEnvironment(t, "Production")
 		// A real handshake: the token is presented over the wire and the agent's
 		// certificate is signed by the sealed CA key.
-		srv.Enrol(t, env)
+		first := srv.Enrol(t, env)
 		rot, err := srv.Svc.RotateToken(context.Background(), audit.SystemCLI, env.ID, "203.0.113.9", "test")
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The test agent reports the same host, so the first one leaves before the
+		// host enrols again (an enrolment of a host whose agent is connected is refused).
+		leaveHub(t, srv, first)
 		if c := srv.Dial(t, tunneltest.Agent{Token: rot.JoinToken}); c.Welcome == nil {
 			t.Fatalf("enrol with the rotated token was refused: %+v (err %v)", c.Refuse, c.Err)
 		}
