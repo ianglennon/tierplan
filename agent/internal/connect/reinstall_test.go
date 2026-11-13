@@ -679,7 +679,7 @@ func TestAnAcceptedHelloDoesNotRecordAJoinTokenOfAnotherEnvironment(t *testing.T
 // tokenEnv reads the environment out of a join token, and nothing out of a string
 // that is not shaped like one.
 func TestTokenEnvReadsTheEnvironmentOfAJoinToken(t *testing.T) {
-	for tok, want := range map[string]string{
+	for tok, want := range map[string]string{ //nolint:gosec // G101: made-up tokens for the test
 		newToken:     "0190d2a4-7a3b-7c3d-8e4f-ba9876543210",
 		rotatedTo:    "env-7",
 		"tpjt_e_a_b": "e", // a secret may hold an underscore
