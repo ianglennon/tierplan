@@ -17,7 +17,7 @@ import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { ENV_WARNINGS_KEY } from "@/api/warnings";
 import { Toaster } from "@/components/ui/sonner";
-import { DataNotPersistedBanner, HealthBell } from "@/components/warnings";
+import { bellEntries, DataNotPersistedBanner, HealthBell } from "@/components/warnings";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { meQueryOptions } from "@/hooks/use-me";
@@ -1947,6 +1947,54 @@ describe("HealthBell HTTPS items", () => {
       expect(bellText()).toContain("The certificate files expired 1 d ago.");
       expect(bellText()).not.toContain("expires soon");
       expect(itemLinks("https_cert_expiring")).toHaveLength(1);
+    });
+
+    // Review 17 IN-05: a served certificate that has already expired is an error, listed ahead of
+    // every warning like the fallback; one that only expires soon stays a warning.
+    it("lists an expired certificate as an error and one that expires soon as a warning", async () => {
+      items = [
+        { id: "key_backup", keyPath: "/data/tierplan.key" },
+        httpsWarning("https_renewal_failed", { class: "internal" }),
+        httpsWarning("https_cert_expiring", { source: "cert_files", notAfter: inDays(-2) }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 3 items");
+      expect(await screen.findByText("The HTTPS certificate has expired")).toBeTruthy();
+      expect(listed().map(([id]) => id)).toEqual([
+        "https_cert_expiring",
+        "https_renewal_failed",
+        "key_backup",
+      ]);
+
+      cleanup();
+      queryClient.clear();
+      items = [
+        { id: "key_backup", keyPath: "/data/tierplan.key" },
+        httpsWarning("https_renewal_failed", { class: "internal" }),
+        httpsWarning("https_cert_expiring", { source: "cert_files", notAfter: inDays(3) }),
+      ];
+      renderWarnings();
+      await openBell("Warnings, 3 items");
+      expect(await screen.findByText("The HTTPS certificate expires soon")).toBeTruthy();
+      expect(listed().map(([id]) => id)).toEqual([
+        "https_renewal_failed",
+        "https_cert_expiring",
+        "key_backup",
+      ]);
+    });
+
+    it("judges the expiry against the time it is given", () => {
+      const notAfter = "2026-11-13T12:00:00Z";
+      const w = httpsWarning("https_cert_expiring", { source: "cert_files", notAfter });
+      const severity = (now: number) =>
+        bellEntries([], { keyBackup: false, proxy: [], https: [w] }, now)[0]?.severity;
+      expect(severity(Date.parse(notAfter) - 1)).toBe("warning");
+      expect(severity(Date.parse(notAfter))).toBe("error");
+      const noTime = httpsWarning("https_cert_expiring", { source: "cert_files" });
+      expect(
+        bellEntries([], { keyBackup: false, proxy: [], https: [noTime] }, Date.parse(notAfter))[0]
+          ?.severity,
+      ).toBe("warning");
     });
 
     it("words any other source, before and after the end, without a dangling future tense", async () => {

@@ -202,7 +202,8 @@ const entryKey = (w: EnvWarning) =>
 
 // bellEntries is what the bell lists, in order: errors before warnings, then newest
 // first, and what has no time after what has, in the order it came. More than five
-// offline environments are one item.
+// offline environments are one item. now (milliseconds) decides whether a served
+// certificate has already expired.
 export function bellEntries(
   env: EnvWarning[],
   instance: {
@@ -214,6 +215,7 @@ export function bellEntries(
     registry?: CredentialAlert[];
     https?: Warning[];
   },
+  now: number = Date.now(),
 ): Entry[] {
   const offline = env.filter((w) => w.id === "env_offline");
   const collapse = offline.length > COLLAPSE_OFFLINE_ABOVE;
@@ -357,13 +359,18 @@ export function bellEntries(
     });
   }
   // One item per kind, in the D-04 order. They carry no since, so they keep that order among the
-  // undated items; only the fallback is an error, which lists it before every warning.
+  // undated items. The fallback is an error, and so is a served certificate that has already expired
+  // (certificate files that were not replaced: browsers refuse the site), which lists them before every
+  // warning; a certificate that only expires soon is a warning.
   const httpsRank = (w: Warning) => HTTPS_ORDER.findIndex((id) => id === w.id);
+  const httpsError = (w: Warning) =>
+    w.id === "https_cert_fallback" ||
+    (w.id === "https_cert_expiring" && Date.parse(w.https?.notAfter ?? "") <= now);
   for (const w of [...(instance.https ?? [])].sort((a, b) => httpsRank(a) - httpsRank(b))) {
     entries.push({
       kind: "https",
       key: w.id,
-      severity: w.id === "https_cert_fallback" ? "error" : "warning",
+      severity: httpsError(w) ? "error" : "warning",
       w,
     });
   }
@@ -1096,15 +1103,20 @@ export function HealthBell() {
   const backupFailed = items.filter((w) => w.id === "backup_failed");
   const unknownAgents = items.filter((w) => w.id === "unknown_agents");
   const httpsItems = items.filter((w) => HTTPS_ORDER.some((id) => id === w.id));
-  const entries = bellEntries(envItems, {
-    keyBackup,
-    proxy: proxyItems,
-    bursts,
-    backupFailed,
-    unknownAgents,
-    registry: registryItems,
-    https: httpsItems,
-  });
+  const now = useNow();
+  const entries = bellEntries(
+    envItems,
+    {
+      keyBackup,
+      proxy: proxyItems,
+      bursts,
+      backupFailed,
+      unknownAgents,
+      registry: registryItems,
+      https: httpsItems,
+    },
+    now,
+  );
   const loading = instanceLoading || envLoading || registryLoading;
   const count = loading ? 0 : entries.length;
 
