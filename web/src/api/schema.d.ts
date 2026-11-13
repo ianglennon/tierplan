@@ -6222,7 +6222,7 @@ export interface components {
         AgentListBody: {
             /** @description One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent */
             items: components["schemas"]["AgentBody"][] | null;
-            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token */
+            /** @description The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command reads the secret names from the agent service, so it works for any generation and either naming. They carry no token */
             manualCleanup: components["schemas"]["InstallCleanupBody"];
         };
         AllStacksBody: {
@@ -9629,7 +9629,7 @@ export interface components {
             manualCleanup: components["schemas"]["InstallCleanupBody"];
             /** @description The SPKI pin of the self-signed certificate TierPlan serves, which the agent trusts instead of system roots. Present only when TierPlan serves its own self-signed certificate */
             pin?: string;
-            /** @description The Docker secret the swarm install creates for this token, tierplan-agent-token-g followed by the generation */
+            /** @description The Docker secret the swarm install creates for this token, tierplan-agent-token-g, the generation, a dash and the last 12 letters and digits of the environment ID */
             secretName: string;
             /** @description The install for a standalone host */
             standalone: components["schemas"]["InstallStandaloneBody"];

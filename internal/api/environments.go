@@ -202,7 +202,7 @@ type InstallBody struct {
 	Image         string                `json:"image" doc:"The agent image. Its tag is this server's exact version, or edge for a development or edge server"`
 	Pin           string                `json:"pin,omitempty" doc:"The SPKI pin of the self-signed certificate TierPlan serves, which the agent trusts instead of system roots. Present only when TierPlan serves its own self-signed certificate"`
 	Trust         string                `json:"trust" enum:"pin,public,unverified" doc:"Why the pin is present or absent. pin: the self-signed certificate is served and the commands carry its pin. public: the certificate verifies against the public CAs and the agent needs no pin. unverified: the certificate does not verify for the public URL's host, so no pin is carried; an agent installed without a pin keeps the self-signed pin it receives on connecting"`
-	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, tierplan-agent-token-g followed by the generation"`
+	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, tierplan-agent-token-g, the generation, a dash and the last 12 letters and digits of the environment ID"`
 	Generation    int                   `json:"generation" doc:"Which token this is for the environment, from 1; each rotation adds one"`
 	Swarm         InstallSwarmBody      `json:"swarm" doc:"The install for a swarm"`
 	Standalone    InstallStandaloneBody `json:"standalone" doc:"The install for a standalone host"`
@@ -590,7 +590,7 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 		pin = d.TLSPin()
 	}
 	install, err := agents.BuildInstall(agents.InstallParams{
-		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation,
+		Token: created.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: created.Generation, EnvID: created.EnvID,
 	})
 	trust := installTrust(pin, d.TLSTrust)
 	if err != nil {

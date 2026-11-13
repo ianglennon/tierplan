@@ -682,7 +682,7 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	in := got.Install
-	if !strings.HasPrefix(in.JoinToken, "tpjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "tierplan-agent-token-g1" {
+	if !strings.HasPrefix(in.JoinToken, "tpjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != secretNameOf(got.ID, 1) {
 		t.Errorf("token %q generation %d secret %q", in.JoinToken, in.Generation, in.SecretName)
 	}
 	if in.AgentURL != "wss://example.com/tierplan/agent/connect" || in.Pin != "sha256/PINPINPIN" {

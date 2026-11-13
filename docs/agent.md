@@ -174,12 +174,13 @@ Add the host in TierPlan with **Environments, Add environment**. The dialog show
 
 ## Install on a swarm
 
-Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service:
+Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service. It first checks that no `tierplan-agent` service exists: if one does, it creates nothing, says so, and stops with an error (see [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one)):
 
 ```sh
- printf %s '<join token>' | docker secret create tierplan-agent-token-g1 - && docker service create --name tierplan-agent \
+ if docker service inspect tierplan-agent >/dev/null 2>&1; then echo '…a tierplan-agent service exists already…' >&2; false; else \
+ printf %s '<join token>' | docker secret create tierplan-agent-token-g1-<env> - && docker service create --name tierplan-agent \
    --mode global --constraint node.platform.os==linux \
-   --secret source=tierplan-agent-token-g1,target=tierplan-agent-token,mode=0400 \
+   --secret source=tierplan-agent-token-g1-<env>,target=tierplan-agent-token,mode=0400 \
    --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
    --mount type=volume,src=tierplan-agent,dst=/var/lib/tierplan-agent \
    --mount type=bind,src=/proc/1/net/route,dst=/host/route,ro \
@@ -189,14 +190,15 @@ Run the command on **any manager** node. It creates the join token as a Docker s
    --env 'TIERPLAN_AGENT_URL=wss://tierplan.example.com/agent/connect' \
    [--env 'TIERPLAN_AGENT_PIN=sha256/...'] \
    --env 'TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token' \
-   ghcr.io/ianglennon/tierplan-agent:<version>
+   ghcr.io/ianglennon/tierplan-agent:<version>; fi
 ```
 
 (The dialog gives it as one line. The line breaks above are only for reading.)
 
 | Part | What it does |
 |------|--------------|
-| `docker secret create tierplan-agent-token-g1` | Keeps the join token in a Docker secret instead of in the service definition. `g1` is the token's generation; every rotation creates the next name. |
+| `if docker service inspect tierplan-agent …` | Creates nothing while a `tierplan-agent` service exists, so a host is never left half installed. |
+| `docker secret create tierplan-agent-token-g1-<env>` | Keeps the join token in a Docker secret instead of in the service definition. `g1` is the token's generation; every rotation creates the next name. `<env>` is the last 12 letters and digits of the environment's ID, so each environment has its own secret name and a secret left on the swarm by an earlier TierPlan does not stop a new install. The dialog shows the real name. |
 | `--mode global`, `--constraint node.platform.os==linux` | One agent on every Linux node. A node you add to the swarm later enrols by itself: the service starts an agent there and the secret is already in place. |
 | `--secret source=…,target=tierplan-agent-token,mode=0400` | Mounts the token at `/run/secrets/tierplan-agent-token`, readable by root only. |
 | `--mount …docker.sock` | Gives the agent the Docker socket. This is root-equivalent on the host, which is why the agent is small, read-only and drops its privileges. |
@@ -260,12 +262,12 @@ For a swarm that already has agents, **Show install command** gives one command 
 
 ```sh
  OLD=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' tierplan-agent) \
-   && printf %s '<new token>' | docker secret create tierplan-agent-token-g2 - \
-   && docker service update --secret-rm "$OLD" --secret-add source=tierplan-agent-token-g2,target=tierplan-agent-token,mode=0400 tierplan-agent \
+   && printf %s '<new token>' | docker secret create tierplan-agent-token-g2-<env> - \
+   && docker service update --secret-rm "$OLD" --secret-add source=tierplan-agent-token-g2-<env>,target=tierplan-agent-token,mode=0400 tierplan-agent \
    && docker secret rm "$OLD"
 ```
 
-The swarm agents restart one at a time and reconnect.
+The old secret's name is read from the service, so this works on a swarm installed before secret names carried `<env>` (`tierplan-agent-token-g1`) too. The swarm agents restart one at a time and reconnect.
 
 A standalone agent keeps the token in its container's environment. To remove it from `docker inspect`, rotate the token in TierPlan and recreate the container with the new command (the `tierplan-agent` volume keeps the agent's identity, so the environment keeps its history).
 
@@ -273,11 +275,12 @@ A standalone agent keeps the token in its container's environment. To remove it 
 
 Once the agents have enrolled (the node list shows them connected) the join token can come off the host. An enrolled agent proves who it is with its own key, so it keeps running, restarting and updating as the same agent without it.
 
-On a swarm, on a manager, take the secret and the variable that points to it off the service, then delete the secret. `<N>` is the generation in the secret's name; `docker service inspect tierplan-agent` shows it:
+On a swarm, on a manager, take the secret and the variable that points to it off the service, then delete the secret. The secret's name is read from the service, so this works for either naming of the secret:
 
 ```sh
- docker service update --secret-rm tierplan-agent-token-g<N> --env-rm TIERPLAN_AGENT_JOIN_TOKEN_FILE tierplan-agent
- docker secret rm tierplan-agent-token-g<N>
+ S=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' tierplan-agent) \
+   && docker service update --secret-rm "$S" --env-rm TIERPLAN_AGENT_JOIN_TOKEN_FILE tierplan-agent \
+   && docker secret rm "$S"
 ```
 
 On a standalone host, recreate the container with the same flags and the same `tierplan-agent` volume, but without the `TIERPLAN_AGENT_JOIN_TOKEN` line. The manual update command the node list shows is exactly that: see [Updating and removing agents by hand](agent-updates.md).
@@ -287,11 +290,11 @@ What an agent without the token cannot do:
 - A node that joins the swarm later cannot enrol. Its agent stops with "no join token".
 - An agent that was revoked and then unblocked, or whose certificate expired, cannot enrol again by itself.
 
-To put the token back on a swarm, take a new token from **Show install command** and add it to the service. Do not use the rotate command for this: it reads the current secret from the service and fails when there is none.
+To put the token back on a swarm, take a new token from **Show install command** and add it to the service. Do not use the rotate command for this: it reads the current secret from the service and fails when there is none. Use the secret name in the install command it shows (`tierplan-agent-token-g<N>-<env>`) for `<secret name>`:
 
 ```sh
- printf %s '<join token>' | docker secret create tierplan-agent-token-g<N> - \
-   && docker service update --secret-add source=tierplan-agent-token-g<N>,target=tierplan-agent-token,mode=0400 --env-add TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token tierplan-agent
+ printf %s '<join token>' | docker secret create <secret name> - \
+   && docker service update --secret-add source=<secret name>,target=tierplan-agent-token,mode=0400 --env-add TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token tierplan-agent
 ```
 
 ## Host routes
@@ -483,17 +486,18 @@ Settings, Environments, the environment, the nodes list, **Actions, Revoke node*
 
 ### Reinstall an agent on a host that ran one
 
-An install command creates the agent under fixed names, so it fails on a host that still runs an agent: on a swarm `docker secret create tierplan-agent-token-g<N>` refuses a secret that exists (every new environment starts at `g1`), and because the command chains with `&&` the service is not created either; `docker service create --name tierplan-agent` refuses an existing service, and on a standalone host `docker run --name tierplan-agent` refuses an existing container. Nothing is half installed, but nothing runs. Before you run a new install command on such a host, after TierPlan was reinstalled, after the environment was removed without **Also uninstall the agent from the hosts**, or to move the host to another environment, remove the old agent first and **keep its `tierplan-agent` volume**:
+An install command creates the agent under fixed service and container names, so it cannot run on a host that still runs an agent. On a swarm the install command checks for an existing `tierplan-agent` service first, creates nothing when there is one, and prints that the old agent has to go first. On a standalone host `docker run --name tierplan-agent` refuses an existing container. Nothing is half installed, but nothing runs. The join token secret no longer gets in the way: its name carries a slice of the environment's ID, so a secret left over from an earlier install, or from another environment, has a different name. Before you run a new install command on such a host, after TierPlan was reinstalled, after the environment was removed without **Also uninstall the agent from the hosts**, or to move the host to another environment, remove the old agent first and **keep its `tierplan-agent` volume**:
 
 ```sh
-# swarm, on a manager: <N> is the generation in the old secret's name (docker secret ls --filter name=tierplan-agent-token lists it)
-docker service rm tierplan-agent && docker secret rm tierplan-agent-token-g<N>
+# swarm, on a manager: the secret names are read from the service, so any generation and either naming works
+S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) \
+  && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
 
 # standalone host
 docker rm -f tierplan-agent
 ```
 
-Then run the new install command. The agent starts on its old volume with the new join token and enrols again by itself, as described above; if TierPlan refuses the token it still has its old identity. Do not run `docker volume rm tierplan-agent` for this: the volume is what lets the agent come back by itself and keep its address list and pins. The secret names are the same for every environment, which is why the old secret has to go first.
+Then run the new install command. The agent starts on its old volume with the new join token and enrols again by itself, as described above; if TierPlan refuses the token it still has its old identity. Do not run `docker volume rm tierplan-agent` for this: the volume is what lets the agent come back by itself and keep its address list and pins. A secret that an earlier install left behind after its service was removed does no harm, but you can delete it with `docker secret ls --filter name=tierplan-agent-token` and `docker secret rm`.
 
 ## Updates
 
@@ -516,10 +520,11 @@ Containers, images, volumes and networks of your own are never touched.
 
 For an agent that was offline, or when you did not tick the box, run on each host:
 
-Swarm, on a manager (the secret is named for the join token's current generation, which the environment's **Manual cleanup command** shows), then on every node that ran the agent:
+Swarm, on a manager (the environment's **Manual cleanup command** shows it; it reads the secret names from the service, so it works for any generation and for installs made with either naming of the secret), then on every node that ran the agent:
 
 ```sh
-docker service rm tierplan-agent && docker secret rm tierplan-agent-token-g1
+S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) \
+  && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
 docker volume rm tierplan-agent
 ```
 

@@ -208,7 +208,7 @@ type AgentBody struct {
 // AgentListBody is every agent of an environment.
 type AgentListBody struct {
 	Items         []AgentBody        `json:"items" doc:"One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent"`
-	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token"`
+	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command reads the secret names from the agent service, so it works for any generation and either naming. They carry no token"`
 }
 
 // AgentListOutput wraps AgentListBody for huma.
@@ -447,7 +447,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 			pin = d.TLSPin()
 		}
 		install, err := agents.BuildInstall(agents.InstallParams{
-			Token: rot.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: rot.Generation,
+			Token: rot.JoinToken, Endpoint: endpoint, Pin: pin, ServerVersion: buildinfo.Get().Version, Generation: rot.Generation, EnvID: in.EnvID,
 		})
 		if err != nil {
 			// The token is retired and cannot be shown again. A value that breaks the
@@ -531,9 +531,11 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		}
 		// A local-socket environment has no agents and no token, and so no cleanup.
 		var swarm, standalone string
-		switch st, err := d.Agents.TokenStatus(ctx, in.EnvID); {
+		// The token status is only the test for "has a token". The commands name no
+		// secret: the swarm one reads the names from the service.
+		switch _, err := d.Agents.TokenStatus(ctx, in.EnvID); {
 		case err == nil:
-			swarm, standalone = agents.CleanupCommands(st.Generation)
+			swarm, standalone = agents.CleanupCommands()
 		case !errors.Is(err, agents.ErrEnvironmentNotFound):
 			return nil, fail("token status", err)
 		}

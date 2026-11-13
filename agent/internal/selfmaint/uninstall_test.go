@@ -352,3 +352,20 @@ func TestAStandaloneUninstallWithAnAgentWithoutTheSocketMountFails(t *testing.T)
 		t.Fatalf("wrote to Docker: %v", w)
 	}
 }
+
+// The install names its token secret tierplan-agent-token-g<N>-<env tag> since the name
+// carries an environment tag; an agent of the older naming (g<N> alone) is found too, and a
+// secret that only looks similar is not.
+func TestTokenSecretsFindsBothNamingsOfTheJoinTokenSecret(t *testing.T) {
+	spec := func(names ...string) []byte {
+		var secrets []string
+		for i, n := range names {
+			secrets = append(secrets, `{"SecretID":"sec`+string(rune('0'+i))+`","SecretName":"`+n+`"}`)
+		}
+		return []byte(`{"Spec":{"TaskTemplate":{"ContainerSpec":{"Secrets":[` + strings.Join(secrets, ",") + `]}}}}`)
+	}
+	got := tokenSecrets(spec("tierplan-agent-token-g3-0123456789ab", "tierplan-agent-token-g2", "tierplan-agent-token", "somebody-elses-secret"))
+	if len(got) != 2 || got[0] != "sec0" || got[1] != "sec1" {
+		t.Errorf("tokenSecrets = %v, want the IDs of the g3-<tag> and g2 secrets only", got)
+	}
+}

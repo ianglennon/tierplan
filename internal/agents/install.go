@@ -22,7 +22,10 @@ const (
 	ServiceName = "tierplan-agent"
 	// VolumeName is the named volume that keeps the agent's key, certificate and pins.
 	VolumeName = "tierplan-agent"
-	// SecretPrefix starts the name of every generation of the join token secret.
+	// SecretPrefix starts the name of every join token secret, old and new: g<N> for an
+	// install made before the name carried an environment tag, g<N>-<tag> since (SecretName).
+	// Agents already in the field find their token secret by this prefix when they uninstall
+	// themselves (agent/internal/selfmaint), so it never changes.
 	SecretPrefix = "tierplan-agent-token-g" //nolint:gosec // G101: a secret name, not a credential
 
 	stateDir      = "/var/lib/tierplan-agent"
@@ -57,6 +60,10 @@ type InstallParams struct {
 	// Generation numbers the token (env_join_tokens.generation, from 1). It is in
 	// the name of the swarm secret so every rotation creates a fresh name.
 	Generation int
+	// EnvID is the environment whose agents the install is for. A slice of it is in the
+	// name of the swarm secret, so a secret left behind by an earlier TierPlan's
+	// install does not collide with this one's.
+	EnvID string
 }
 
 // Install is everything an admin copies to connect hosts to an agent environment.
@@ -110,8 +117,32 @@ func AgentImage(serverVersion string) string {
 	return ImageRepository + ":edge"
 }
 
-// SecretName is the Docker secret that holds generation g of the join token.
-func SecretName(g int) string { return SecretPrefix + strconv.Itoa(g) }
+// secretTagLen is how many trailing letters and digits of the environment ID go in a secret name.
+const secretTagLen = 12
+
+// secretTag is the last secretTagLen of the lowercase letters and digits of envID. For a UUIDv7
+// that is the random tail: the leading bits are a timestamp, which two environments created
+// close together share. It is made of [0-9a-z] only, so it needs no quoting in a shell.
+func secretTag(envID string) string {
+	var b []byte
+	for _, r := range strings.ToLower(envID) {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') {
+			b = append(b, byte(r))
+		}
+	}
+	if len(b) > secretTagLen {
+		b = b[len(b)-secretTagLen:]
+	}
+	return string(b)
+}
+
+// SecretName is the Docker secret that holds generation g of the join token of environment
+// envID: tierplan-agent-token-g<N>-<tag>. Every environment has its own name, so the install
+// of a TierPlan that was reinstalled does not stop at a secret an earlier install left on the
+// swarm. The name is at most 22 + digits + 1 + 12 characters, well under Docker's 64.
+func SecretName(envID string, g int) string {
+	return SecretPrefix + strconv.Itoa(g) + "-" + secretTag(envID)
+}
 
 // BuildInstall builds every install text for one join token. It refuses a token,
 // endpoint or pin that holds a quote, a control character or a space: they are
@@ -124,6 +155,9 @@ func BuildInstall(p InstallParams) (Install, error) {
 	if p.Token == "" || p.Endpoint == "" {
 		return Install{}, fmt.Errorf("%w: a join token and an endpoint are required", ErrInstallValue)
 	}
+	if secretTag(p.EnvID) == "" {
+		return Install{}, fmt.Errorf("%w: an environment ID is required", ErrInstallValue)
+	}
 	for name, v := range map[string]string{"token": p.Token, "endpoint": p.Endpoint, "pin": p.Pin} {
 		if !safeValue(v) {
 			return Install{}, fmt.Errorf("%w: the %s", ErrInstallValue, name)
@@ -131,7 +165,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 	}
 
 	image := AgentImage(p.ServerVersion)
-	secret := SecretName(p.Generation)
+	secret := SecretName(p.EnvID, p.Generation)
 	in := Install{
 		JoinToken: p.Token, AgentURL: p.Endpoint, Image: image, Pin: p.Pin, SecretName: secret, Generation: p.Generation,
 	}
@@ -139,7 +173,14 @@ func BuildInstall(p InstallParams) (Install, error) {
 	create := " printf %s " + sq(p.Token) + " | docker secret create " + secret + " -"
 	secretFlag := "source=" + secret + ",target=" + secretTarget + ",mode=0400"
 
-	in.SwarmCommand = create + " && docker service create --name " + ServiceName +
+	// Nothing is created while a tierplan-agent service exists: the service create would fail
+	// after the secret was made, and a re-run would then stop at that secret. The message has
+	// no apostrophe, so it sits inside single quotes.
+	guard := " if docker service inspect " + ServiceName + " >/dev/null 2>&1; then" +
+		" echo 'a " + ServiceName + " service exists already on this swarm, so nothing was created." +
+		" Remove the old agent first, as in the docs section Reinstall an agent on a host that ran one' >&2; false;" +
+		" else "
+	in.SwarmCommand = guard + strings.TrimPrefix(create, " ") + " && docker service create --name " + ServiceName +
 		" --mode global --constraint node.platform.os==linux" +
 		" --secret " + secretFlag +
 		" --mount type=bind,src=" + dockerSock + ",dst=" + dockerSock +
@@ -151,7 +192,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 		envFlag("--env", "TIERPLAN_AGENT_URL", p.Endpoint) +
 		optionalEnvFlag("--env", "TIERPLAN_AGENT_PIN", p.Pin) +
 		envFlag("--env", "TIERPLAN_AGENT_JOIN_TOKEN_FILE", tokenFilePath) +
-		" " + image
+		" " + image + "; fi"
 
 	in.StandaloneCommand = " docker run -d --name " + ServiceName + " --restart unless-stopped" +
 		hardening() +
@@ -173,16 +214,19 @@ func BuildInstall(p InstallParams) (Install, error) {
 	in.SwarmStackFile = swarmStack(p, image, secret)
 	in.StandaloneComposeFile = standaloneCompose(p, image)
 
-	in.SwarmCleanup, in.StandaloneCleanup = CleanupCommands(p.Generation)
+	in.SwarmCleanup, in.StandaloneCleanup = CleanupCommands()
 	return in, nil
 }
 
 // CleanupCommands are the commands that take the agent off a host by hand, for hosts
 // whose agent TierPlan could not uninstall: offline, refusing self-update, or no answer
-// (D-30). generation is the join token's current generation, which names the swarm
-// secret. They carry no join token.
-func CleanupCommands(generation int) (swarm, standalone string) {
-	swarm = " docker service rm " + ServiceName + " && docker secret rm " + SecretName(generation) +
+// (D-30). The swarm command reads the secret names from the service before it removes it,
+// so it works for an install with either naming of the secret (g<N> or g<N>-<tag>) and
+// whichever generation the swarm holds. They carry no join token.
+func CleanupCommands() (swarm, standalone string) {
+	swarm = " S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' " + ServiceName + ")" +
+		" && docker service rm " + ServiceName +
+		` && for s in $S; do docker secret rm "$s"; done` +
 		"\n docker volume rm " + VolumeName + "   # on every node that ran the agent"
 	standalone = " docker rm -f " + ServiceName + " && docker volume rm " + VolumeName
 	return swarm, standalone

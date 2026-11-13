@@ -20,9 +20,11 @@ import (
 	"github.com/ianglennon/tierplan/proto/wire"
 )
 
-// tokenSecretPrefix starts the name of every generation of the join token secret the
-// install creates (tierplan-agent-token-g1, g2, ...). Only a secret with this name, in
-// the agent's own service, is removed with it.
+// tokenSecretPrefix starts the name of every join token secret an install creates:
+// tierplan-agent-token-g<N> for an install made before the name carried an environment
+// tag, tierplan-agent-token-g<N>-<env tag> since. Both start with this prefix, so one
+// match covers an agent of either age. Only a secret with this name, in the agent's own
+// service, is removed with it.
 const tokenSecretPrefix = "tierplan-agent-token-g" //nolint:gosec // G101: a secret name, not a credential
 
 // Uninstall removes the agent from its host (D-30). Like an update it only ever acts

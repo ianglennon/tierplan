@@ -80,11 +80,12 @@ Removing an environment can uninstall its agents when they are online. For a hos
 offline, or when you chose not to, run the commands from the environment's "Manual cleanup
 command" section on each host.
 
-On a swarm (the secret is named for the join token's current generation, which the section
-shows):
+On a swarm (the command reads the secret names from the service, so it works for any
+generation of the join token and for installs made with either naming of the secret):
 
 ```sh
-docker service rm tierplan-agent && docker secret rm <current secret>
+S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) \
+  && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
 docker volume rm tierplan-agent   # on every node that ran the agent
 ```
 

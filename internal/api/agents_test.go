@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,13 @@ func (f *envFix) rotate(t *testing.T, envID string) (rotatedBody, *envRec) {
 	return got, rec
 }
 
+// secretNameOf is the swarm secret an environment's generation g token is stored under, spelled
+// out here on purpose: tierplan-agent-token-g<N>-<last 12 letters and digits of the ID>.
+func secretNameOf(envID string, g int) string {
+	tag := strings.ReplaceAll(strings.ToLower(envID), "-", "")
+	return "tierplan-agent-token-g" + strconv.Itoa(g) + "-" + tag[len(tag)-12:]
+}
+
 func TestTokenRotateAnswersTheInstallObjectOnceWithTheNextGenerationAndNoStore(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
@@ -101,13 +109,13 @@ func TestTokenRotateAnswersTheInstallObjectOnceWithTheNextGenerationAndNoStore(t
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Install == nil {
 		t.Fatalf("decode %s: %v", rec.Body, err)
 	}
-	if got.Install.Generation != 2 || got.Install.SecretName != "tierplan-agent-token-g2" {
-		t.Errorf("generation %d secret %q, want 2 and tierplan-agent-token-g2", got.Install.Generation, got.Install.SecretName)
+	if got.Install.Generation != 2 || got.Install.SecretName != secretNameOf(id, 2) {
+		t.Errorf("generation %d secret %q, want 2 and %s", got.Install.Generation, got.Install.SecretName, secretNameOf(id, 2))
 	}
 	if !strings.HasPrefix(got.Install.JoinToken, "tpjt_"+id+"_") || got.Install.JoinToken == first {
 		t.Errorf("the new token %q is not a fresh token of the environment", got.Install.JoinToken)
 	}
-	if !strings.Contains(got.Install.Swarm.Command, got.Install.JoinToken) || !strings.Contains(got.Install.Swarm.Command, "tierplan-agent-token-g2") {
+	if !strings.Contains(got.Install.Swarm.Command, got.Install.JoinToken) || !strings.Contains(got.Install.Swarm.Command, secretNameOf(id, 2)) {
 		t.Errorf("the swarm command does not carry the new token and secret name:\n%s", got.Install.Swarm.Command)
 	}
 	if got.HasAgents || got.EnvType != "" || got.Install.Swarm.RotateCommand != "" {
@@ -137,7 +145,7 @@ func TestTokenRotateOfASwarmWithAgentsCarriesTheRotateCommand(t *testing.T) {
 	if got.EnvType != "swarm" || !got.HasAgents {
 		t.Errorf("envType %q hasAgents %v, want swarm and true", got.EnvType, got.HasAgents)
 	}
-	if !strings.Contains(got.Install.Swarm.RotateCommand, "tierplan-agent-token-g2") {
+	if !strings.Contains(got.Install.Swarm.RotateCommand, secretNameOf(id, 2)) {
 		t.Errorf("rotate command lacks the new secret name:\n%s", got.Install.Swarm.RotateCommand)
 	}
 	if !strings.Contains(got.Install.Swarm.RotateCommand, got.Install.JoinToken) {

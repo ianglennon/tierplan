@@ -1,5 +1,5 @@
 Swarm
- docker service rm tierplan-agent && docker secret rm tierplan-agent-token-g1
+ S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
  docker volume rm tierplan-agent   # on every node that ran the agent
 
 Standalone

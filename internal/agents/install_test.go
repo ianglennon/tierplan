@@ -6,6 +6,7 @@ package agents_test
 import (
 	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -27,11 +28,14 @@ const (
 	goldenToken    = "tpjt_E_S" //nolint:gosec // a made-up token for the golden files
 	goldenEndpoint = "wss://example.com/tierplan/agent/connect"
 	goldenPin      = "sha256/P"
+	// goldenEnvID is a UUIDv7; its secret tag is the random tail, 4b1e6f0a8c37.
+	goldenEnvID = "018f3c2e-7a41-7c3b-9d52-4b1e6f0a8c37"
+	goldenTag   = "4b1e6f0a8c37"
 )
 
 func goldenParams() agents.InstallParams {
 	return agents.InstallParams{
-		Token: goldenToken, Endpoint: goldenEndpoint, Pin: goldenPin, ServerVersion: "v0.2.0", Generation: 1,
+		Token: goldenToken, Endpoint: goldenEndpoint, Pin: goldenPin, ServerVersion: "v0.2.0", Generation: 1, EnvID: goldenEnvID,
 	}
 }
 
@@ -86,8 +90,8 @@ func TestInstallCommandCarriesTheNamesTheAgentIdentifiesItselfBy(t *testing.T) {
 	if in.JoinToken != goldenToken || in.AgentURL != goldenEndpoint || in.Pin != goldenPin || in.Generation != 1 {
 		t.Fatalf("install = %+v, want the parameters echoed", in)
 	}
-	if in.SecretName != "tierplan-agent-token-g1" {
-		t.Errorf("SecretName = %q, want tierplan-agent-token-g1", in.SecretName)
+	if in.SecretName != "tierplan-agent-token-g1-"+goldenTag {
+		t.Errorf("SecretName = %q, want tierplan-agent-token-g1-%s", in.SecretName, goldenTag)
 	}
 	if in.Image != "ghcr.io/ianglennon/tierplan-agent:0.2.0" {
 		t.Errorf("Image = %q, want the exact server version, never latest", in.Image)
@@ -95,14 +99,14 @@ func TestInstallCommandCarriesTheNamesTheAgentIdentifiesItselfBy(t *testing.T) {
 
 	for _, want := range []string{
 		"docker service create", "--name tierplan-agent", "--mode global", "--constraint node.platform.os==linux",
-		"--secret source=tierplan-agent-token-g1,target=tierplan-agent-token,mode=0400",
+		"--secret source=tierplan-agent-token-g1-" + goldenTag + ",target=tierplan-agent-token,mode=0400",
 		"--mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
 		"--mount type=volume,src=tierplan-agent,dst=/var/lib/tierplan-agent",
 		"--read-only", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID",
 		"--label tierplan.agent=true", "--container-label tierplan.agent=true",
 		"TIERPLAN_AGENT_URL=" + goldenEndpoint, "TIERPLAN_AGENT_PIN=" + goldenPin,
 		"TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/tierplan-agent-token",
-		"docker secret create tierplan-agent-token-g1 -",
+		"docker secret create tierplan-agent-token-g1-" + goldenTag + " -",
 	} {
 		if !strings.Contains(in.SwarmCommand, want) {
 			t.Errorf("swarm command lacks %q:\n%s", want, in.SwarmCommand)
@@ -270,7 +274,7 @@ func TestInstallCommandAgentImageTagFollowsTheServer(t *testing.T) {
 			t.Errorf("AgentImage(%q) = %q, want %q", server, got, want)
 		}
 	}
-	if got := mustBuild(t, agents.InstallParams{Token: goldenToken, Endpoint: goldenEndpoint, ServerVersion: "dev (abc123)", Generation: 1}).Image; !strings.HasSuffix(got, ":edge") {
+	if got := mustBuild(t, agents.InstallParams{Token: goldenToken, Endpoint: goldenEndpoint, ServerVersion: "dev (abc123)", Generation: 1, EnvID: goldenEnvID}).Image; !strings.HasSuffix(got, ":edge") {
 		t.Errorf("a dev server's install image = %q, want the edge tag", got)
 	}
 }
@@ -363,15 +367,15 @@ func TestInstallCommandStackFileKeepsTheTokenOutOfTheYAMLBody(t *testing.T) {
 	in := mustBuild(t, goldenParams())
 
 	first, rest, _ := strings.Cut(in.SwarmStackFile, "\n")
-	want := "# Create the secret first:  printf %s '" + goldenToken + "' | docker secret create tierplan-agent-token-g1 -"
+	want := "# Create the secret first:  printf %s '" + goldenToken + "' | docker secret create tierplan-agent-token-g1-" + goldenTag + " -"
 	if first != want {
 		t.Errorf("first line = %q, want the one-line docker secret create command %q", first, want)
 	}
 	if strings.Contains(rest, goldenToken) {
 		t.Errorf("the stack file has the token below its first comment line:\n%s", rest)
 	}
-	if strings.Count(in.SwarmStackFile, "external: true") != 1 || !strings.Contains(in.SwarmStackFile, "tierplan-agent-token-g1:") {
-		t.Errorf("the stack file must declare tierplan-agent-token-g1 as external exactly once:\n%s", in.SwarmStackFile)
+	if strings.Count(in.SwarmStackFile, "external: true") != 1 || !strings.Contains(in.SwarmStackFile, "tierplan-agent-token-g1-"+goldenTag+":") {
+		t.Errorf("the stack file must declare the g1 secret as external exactly once:\n%s", in.SwarmStackFile)
 	}
 	for _, want := range []string{
 		"mode: global", "node.platform.os == linux", "read_only: true", "- ALL", "- SETUID", "- SETGID",
@@ -410,13 +414,13 @@ func TestInstallCommandRotationSwapsTheSecretInPlace(t *testing.T) {
 	p := goldenParams()
 	p.Generation = 2
 	in := mustBuild(t, p)
-	if in.SecretName != "tierplan-agent-token-g2" {
-		t.Fatalf("SecretName = %q, want tierplan-agent-token-g2", in.SecretName)
+	if in.SecretName != "tierplan-agent-token-g2-"+goldenTag {
+		t.Fatalf("SecretName = %q, want tierplan-agent-token-g2-%s", in.SecretName, goldenTag)
 	}
 	for _, want := range []string{
 		`OLD=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' tierplan-agent)`,
-		"docker secret create tierplan-agent-token-g2 -",
-		`docker service update --secret-rm "$OLD" --secret-add source=tierplan-agent-token-g2,target=tierplan-agent-token,mode=0400 tierplan-agent`,
+		"docker secret create tierplan-agent-token-g2-" + goldenTag + " -",
+		`docker service update --secret-rm "$OLD" --secret-add source=tierplan-agent-token-g2-` + goldenTag + `,target=tierplan-agent-token,mode=0400 tierplan-agent`,
 		`docker secret rm "$OLD"`,
 	} {
 		if !strings.Contains(in.SwarmRotateCommand, want) {
@@ -434,7 +438,10 @@ func TestInstallCommandRotationSwapsTheSecretInPlace(t *testing.T) {
 
 func TestInstallCommandCleanupNamesWhatTheInstallCreated(t *testing.T) {
 	in := mustBuild(t, goldenParams())
-	for _, want := range []string{"docker service rm tierplan-agent", "docker secret rm tierplan-agent-token-g1", "docker volume rm tierplan-agent"} {
+	for _, want := range []string{
+		"docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent",
+		"docker service rm tierplan-agent", `for s in $S; do docker secret rm "$s"; done`, "docker volume rm tierplan-agent",
+	} {
 		if !strings.Contains(in.SwarmCleanup, want) {
 			t.Errorf("the swarm cleanup lacks %q:\n%s", want, in.SwarmCleanup)
 		}
@@ -448,14 +455,16 @@ func TestInstallCommandCleanupNamesWhatTheInstallCreated(t *testing.T) {
 
 func TestInstallCommandRefusesValuesThatCouldBreakOutOfTheQuotes(t *testing.T) {
 	for name, mutate := range map[string]func(*agents.InstallParams){
-		"token with a quote":    func(p *agents.InstallParams) { p.Token = "tp'; touch /tmp/x; '" },
-		"endpoint with a quote": func(p *agents.InstallParams) { p.Endpoint = "wss://x'y/agent/connect" },
-		"pin with a quote":      func(p *agents.InstallParams) { p.Pin = "sha256/a'b" },
-		"token with a newline":  func(p *agents.InstallParams) { p.Token = "tp\nrm" },
-		"endpoint with newline": func(p *agents.InstallParams) { p.Endpoint = "wss://x/agent/connect\n" },
-		"empty token":           func(p *agents.InstallParams) { p.Token = "" },
-		"empty endpoint":        func(p *agents.InstallParams) { p.Endpoint = "" },
-		"generation zero":       func(p *agents.InstallParams) { p.Generation = 0 },
+		"token with a quote":                       func(p *agents.InstallParams) { p.Token = "tp'; touch /tmp/x; '" },
+		"endpoint with a quote":                    func(p *agents.InstallParams) { p.Endpoint = "wss://x'y/agent/connect" },
+		"pin with a quote":                         func(p *agents.InstallParams) { p.Pin = "sha256/a'b" },
+		"token with a newline":                     func(p *agents.InstallParams) { p.Token = "tp\nrm" },
+		"endpoint with newline":                    func(p *agents.InstallParams) { p.Endpoint = "wss://x/agent/connect\n" },
+		"empty token":                              func(p *agents.InstallParams) { p.Token = "" },
+		"empty endpoint":                           func(p *agents.InstallParams) { p.Endpoint = "" },
+		"generation zero":                          func(p *agents.InstallParams) { p.Generation = 0 },
+		"empty environment ID":                     func(p *agents.InstallParams) { p.EnvID = "" },
+		"environment ID with no letters or digits": func(p *agents.InstallParams) { p.EnvID = "-_- ." },
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := goldenParams()
@@ -536,20 +545,123 @@ func TestManualUpdateCommandUpdateHintCarriesTheCommandForTheEnvironmentType(t *
 	}
 }
 
-func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration(t *testing.T) {
-	in, err := agents.BuildInstall(agents.InstallParams{Token: "tpjt_x", Endpoint: "wss://tierplan.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3})
+func TestCleanupCommandsAreTheOnesTheInstallGivesAndReadTheSecretNamesFromTheService(t *testing.T) {
+	in, err := agents.BuildInstall(agents.InstallParams{Token: "tpjt_x", Endpoint: "wss://tierplan.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3, EnvID: goldenEnvID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	swarm, standalone := agents.CleanupCommands(3)
+	swarm, standalone := agents.CleanupCommands()
 	if swarm != in.SwarmCleanup || standalone != in.StandaloneCleanup {
 		t.Fatalf("CleanupCommands differ from the install's: %q %q", swarm, standalone)
 	}
-	if !strings.Contains(swarm, "docker secret rm "+agents.SecretName(3)) || strings.Contains(swarm+standalone, "tpjt_") {
-		t.Fatalf("the swarm cleanup must name generation 3's secret and carry no token: %q", swarm)
+	if strings.Contains(swarm+standalone, "tpjt_") || strings.Contains(swarm+standalone, agents.SecretPrefix) {
+		t.Fatalf("the cleanup names no secret and carries no token: %q %q", swarm, standalone)
 	}
-	if other, _ := agents.CleanupCommands(4); !strings.Contains(other, agents.SecretName(4)) {
-		t.Fatalf("generation 4: %q", other)
+	// The names are read from the service before the service is removed, so a swarm with
+	// the old generation-only names, or with the names of several generations, is cleaned too.
+	line, _, _ := strings.Cut(swarm, "\n")
+	read, rm, rmSecrets := strings.Index(line, "S=$(docker service inspect"), strings.Index(line, "docker service rm"), strings.Index(line, "docker secret rm")
+	if read < 0 || rm < read || rmSecrets < rm {
+		t.Errorf("the secret names must be read before the service goes, and removed after it: %q", line)
+	}
+}
+
+func TestSecretNameCarriesAGenerationAndTheTailOfTheEnvironmentID(t *testing.T) {
+	name := agents.SecretName(goldenEnvID, 3)
+	if name != "tierplan-agent-token-g3-"+goldenTag {
+		t.Errorf("SecretName = %q, want tierplan-agent-token-g3-%s", name, goldenTag)
+	}
+	if !strings.HasPrefix(name, agents.SecretPrefix) {
+		t.Errorf("%q does not start with %q, which agents in the field match on", name, agents.SecretPrefix)
+	}
+	// Docker's rule for a secret name.
+	if len(name) > 64 || !regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_.-]{0,62}[A-Za-z0-9])?$`).MatchString(name) {
+		t.Errorf("%q is not a valid Docker secret name", name)
+	}
+	if long := agents.SecretName(goldenEnvID, 1_000_000); len(long) > 64 {
+		t.Errorf("%q is %d characters, over Docker's 64", long, len(long))
+	}
+	// Two environments created in the same UUIDv7 millisecond share their first 18 characters.
+	a, b := "018f3c2e-7a41-7c3b-9d52-4b1e6f0a8c37", "018f3c2e-7a41-7c3b-8e10-aa77c0de1234"
+	if agents.SecretName(a, 1) == agents.SecretName(b, 1) {
+		t.Errorf("environments %s and %s share a secret name", a, b)
+	}
+	if got := agents.SecretName("ABC-12", 2); got != "tierplan-agent-token-g2-abc12" {
+		t.Errorf("a short mixed-case ID gave %q, want the lowercase letters and digits it has", got)
+	}
+}
+
+func TestInstallCommandCreatesNothingWhileAnAgentServiceExists(t *testing.T) {
+	in := mustBuild(t, goldenParams())
+	cmd := in.SwarmCommand
+	guard := "if docker service inspect tierplan-agent >/dev/null 2>&1; then"
+	if !strings.HasPrefix(cmd, " "+guard) {
+		t.Fatalf("the swarm command must start with the service guard:\n%s", cmd)
+	}
+	thenPart, elsePart, ok := strings.Cut(cmd, "; else ")
+	if !ok || !strings.HasSuffix(cmd, "; fi") {
+		t.Fatalf("the swarm command is not an if/else:\n%s", cmd)
+	}
+	for _, want := range []string{"Reinstall an agent on a host that ran one", ">&2", "; false"} {
+		if !strings.Contains(thenPart, want) {
+			t.Errorf("the then-branch lacks %q:\n%s", want, thenPart)
+		}
+	}
+	if strings.Contains(thenPart, "docker secret create") || strings.Contains(thenPart, "docker service create") {
+		t.Errorf("the guarded branch creates something:\n%s", thenPart)
+	}
+	if strings.Count(thenPart, "'") != 2 {
+		t.Errorf("the message must sit in one pair of single quotes (it holds no apostrophe):\n%s", thenPart)
+	}
+	if !strings.HasPrefix(elsePart, "printf %s '"+goldenToken+"' | docker secret create ") || !strings.Contains(elsePart, "&& docker service create --name tierplan-agent") {
+		t.Errorf("the else-branch is not the secret create and the service create:\n%s", elsePart)
+	}
+}
+
+// The guard is real shell: with a docker that finds the service, nothing is created and the
+// status is not zero; with one that does not, the secret and the service are created.
+func TestInstallCommandGuardRunsInAShell(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	for _, tc := range []struct {
+		name       string
+		hasService bool
+		wantFail   bool
+		wantCalls  []string
+	}{
+		{"service exists", true, true, []string{"service inspect tierplan-agent"}},
+		{"no service", false, false, []string{"service inspect tierplan-agent", "secret create tierplan-agent-token-g1-" + goldenTag + " -", "service create --name tierplan-agent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "calls")
+			script := "#!/bin/sh\necho \"$*\" >> " + log + "\n" +
+				`case "$1 $2" in "service inspect") ` + map[bool]string{true: "exit 0", false: "exit 1"}[tc.hasService] + ` ;; esac` + "\ncat >/dev/null; exit 0\n"
+			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700); err != nil { //nolint:gosec // a test stub in a temp dir
+				t.Fatal(err)
+			}
+			cmd := exec.Command(sh, "-c", mustBuild(t, goldenParams()).SwarmCommand) //nolint:gosec // the builder's own output
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin"}
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantFail {
+				t.Fatalf("err = %v, want failure %v; output:\n%s", err, tc.wantFail, out)
+			}
+			got, _ := os.ReadFile(log) //nolint:gosec // a temp file
+			calls := strings.Split(strings.TrimSpace(string(got)), "\n")
+			if len(calls) != len(tc.wantCalls) {
+				t.Fatalf("docker was called %d times, want %d:\n%s", len(calls), len(tc.wantCalls), got)
+			}
+			for i, want := range tc.wantCalls {
+				if !strings.HasPrefix(calls[i], want) {
+					t.Errorf("call %d = %q, want it to start with %q", i, calls[i], want)
+				}
+			}
+			if tc.wantFail && !strings.Contains(string(out), "Reinstall an agent on a host that ran one") {
+				t.Errorf("the refusal prints %q, want it to name the docs section", out)
+			}
+		})
 	}
 }
 
