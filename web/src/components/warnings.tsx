@@ -26,6 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { ReasonText } from "@/features/environments/reason-text";
+import { errorClassOf, errorCopy } from "@/features/https/copy";
 import { reasonSentence } from "@/features/stack-git/sync-status";
 import { hasPermission, useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -130,6 +131,7 @@ type Entry =
   | { kind: "refusalBurst"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "backupFailed"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "unknownAgents"; key: string; severity: "warning"; since?: string; w: Warning }
+  | { kind: "https"; key: string; severity: "error" | "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
   | {
       kind: "registry";
@@ -181,6 +183,17 @@ type AutoDeployKind = (typeof AUTO_DEPLOY_KINDS)[number];
 const isAutoDeployKind = (id: string): id is AutoDeployKind =>
   (AUTO_DEPLOY_KINDS as readonly string[]).includes(id);
 
+// The HTTPS items, in the order the bell lists them (D-04): the fallback first, then the failed
+// renewal, the pause, the clock, the certificate that runs short and the TXT record left behind.
+const HTTPS_ORDER = [
+  "https_cert_fallback",
+  "https_renewal_failed",
+  "https_acme_paused",
+  "https_clock_off",
+  "https_cert_expiring",
+  "https_txt_left",
+] as const;
+
 // The registry credential items, most severe first (D-07).
 const REGISTRY_KINDS = ["expired", "auth_failed", "expiring"] as const;
 
@@ -199,6 +212,7 @@ export function bellEntries(
     backupFailed?: Warning[];
     unknownAgents?: Warning[];
     registry?: CredentialAlert[];
+    https?: Warning[];
   },
 ): Entry[] {
   const offline = env.filter((w) => w.id === "env_offline");
@@ -342,6 +356,17 @@ export function bellEntries(
       count: ws.length,
     });
   }
+  // One item per kind, in the D-04 order. They carry no since, so they keep that order among the
+  // undated items; only the fallback is an error, which lists it before every warning.
+  const httpsRank = (w: Warning) => HTTPS_ORDER.findIndex((id) => id === w.id);
+  for (const w of [...(instance.https ?? [])].sort((a, b) => httpsRank(a) - httpsRank(b))) {
+    entries.push({
+      kind: "https",
+      key: w.id,
+      severity: w.id === "https_cert_fallback" ? "error" : "warning",
+      w,
+    });
+  }
   for (const w of instance.proxy) {
     entries.push({ kind: "proxy", key: w.id, severity: "warning", w });
   }
@@ -442,6 +467,71 @@ function BackupFailedEntry({ w, close }: { w: Warning; close: () => void }) {
       </ItemDescription>
       <Link to="/settings/backup" className={`${linkClass} text-sm ${touchLink}`} onClick={close}>
         {t("bell.backupFailed.link")}
+      </Link>
+    </BellItem>
+  );
+}
+
+type Translate = ReturnType<typeof useT>;
+
+// The title and body of one HTTPS item (D-03), or null for an id this build has no words for. The
+// server sends facts, never sentences: a failed renewal is worded with the HTTPS page's own copy
+// (errorCopy), so the bell never invents a second wording for a class. Every value is plain text.
+function httpsItemCopy(w: Warning, t: Translate): { title: string; body: string } | null {
+  const h = w.https;
+  switch (w.id) {
+    case "https_renewal_failed": {
+      const time = formatClock(h?.nextAttemptAt);
+      const { headline, fix } = errorCopy(t, h?.class, {
+        host: h?.host || t("https.acme.publicHostFallback"),
+        port: h?.port ?? "",
+        profile: h?.profile ?? "",
+        url: h?.termsUrl ?? "",
+        zone: h?.zone ?? "",
+        target: h?.target ?? "",
+        resolvers: h?.resolvers?.length
+          ? h.resolvers.join(", ")
+          : t("https.error.resolversDefault"),
+        time,
+      });
+      // These classes' fix already names the time of the next attempt.
+      const namesTime = [
+        "rate_limited",
+        "dns_rate_limited",
+        "ca_unavailable",
+        "dns_unavailable",
+        "internal",
+      ];
+      const parts = [headline, fix];
+      if (time !== undefined && !namesTime.includes(errorClassOf(h?.class))) {
+        parts.push(t("bell.https.renewalFailed.next", { time }));
+      }
+      return {
+        title: t(
+          h?.noCertificate
+            ? "bell.https.renewalFailed.titleIssue"
+            : "bell.https.renewalFailed.title",
+        ),
+        body: parts.join(" "),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+// One HTTPS item: the title and body the kind words, then the one link to Settings > HTTPS. The link
+// is here, not in each kind's copy, so no kind can leave it off (D-03, UI-SPEC J3). The item derives
+// from live state and ends when its cause does, so there is nothing to dismiss.
+function HttpsEntry({ w, close }: { w: Warning; close: () => void }) {
+  const t = useT();
+  const copy = httpsItemCopy(w, t);
+  if (!copy) return null;
+  return (
+    <BellItem id={w.id} title={copy.title}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">{copy.body}</ItemDescription>
+      <Link to="/settings/https" className={`${linkClass} text-sm ${touchLink}`} onClick={close}>
+        {t("bell.https.link")}
       </Link>
     </BellItem>
   );
@@ -937,6 +1027,7 @@ export function HealthBell() {
   const bursts = items.filter((w) => w.id === "refusal_burst");
   const backupFailed = items.filter((w) => w.id === "backup_failed");
   const unknownAgents = items.filter((w) => w.id === "unknown_agents");
+  const httpsItems = items.filter((w) => HTTPS_ORDER.some((id) => id === w.id));
   const entries = bellEntries(envItems, {
     keyBackup,
     proxy: proxyItems,
@@ -944,6 +1035,7 @@ export function HealthBell() {
     backupFailed,
     unknownAgents,
     registry: registryItems,
+    https: httpsItems,
   });
   const loading = instanceLoading || envLoading || registryLoading;
   const count = loading ? 0 : entries.length;
@@ -1219,6 +1311,8 @@ export function HealthBell() {
                       return (
                         <UnknownAgentsEntry key={entry.key} w={entry.w} close={actions.close} />
                       );
+                    case "https":
+                      return <HttpsEntry key={entry.key} w={entry.w} close={actions.close} />;
                     case "keyBackup":
                       return (
                         <Item

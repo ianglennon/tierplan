@@ -166,6 +166,14 @@
         "descriptionMany": "Their last use failed. Check their tokens or test them."
       }
     },
+    "https": {
+      "link": "Open HTTPS settings",
+      "renewalFailed": {
+        "title": "The certificate couldn't be renewed",
+        "titleIssue": "The certificate couldn't be issued",
+        "next": "Next attempt {{time}}."
+      }
+    },
     "unknownAgents": {
       "title_one": "{{count}} agent isn't known to this TierPlan",
       "title_other": "{{count}} agents aren't known to this TierPlan",

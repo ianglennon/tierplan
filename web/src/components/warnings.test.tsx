@@ -53,7 +53,7 @@ interface Sent {
 
 let sent: Sent[] = [];
 let me = ADMIN;
-let items: Array<Record<string, string | number>> = [];
+let items: Array<Record<string, unknown>> = [];
 let ackStatus = 204;
 // What GET /api/environments/warnings answers, how, and when (a gate holds the
 // answer back to show the first-load state).
@@ -134,6 +134,7 @@ function makeRouter() {
       page("/audit"),
       page("/registries"),
       page("/settings/backup"),
+      page("/settings/https"),
       page("/env/$envId"),
       page("/env/$envId/services"),
       page("/env/$envId/services/$serviceId"),
@@ -1689,5 +1690,153 @@ describe("HealthBell auto-deploy items", () => {
     expect(await screen.findByText("<b>web</b> was auto-deployed and reverted drift")).toBeTruthy();
     expect(document.querySelector("b")).toBeNull();
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+// The HTTPS items of the bell (plan 17-06, OBS-04, D-01 to D-05).
+const httpsWarning = (id: string, https: Record<string, unknown> = {}) => ({ id, https });
+
+// The words of an open bell, to check that no empty placeholder or dangling "until ." got in.
+const bellText = () => document.querySelector("[data-slot=popover-content]")?.textContent ?? "";
+
+describe("HealthBell HTTPS items", () => {
+  it("words a failed renewal with the HTTPS page's own copy and links to Settings > HTTPS", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "rate_limited",
+        host: "tierplan.example.org",
+        nextAttemptAt: "2026-11-13T14:05:00Z",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The certificate couldn't be renewed")).toBeTruthy();
+    const at = formatClock("2026-11-13T14:05:00Z");
+    expect(
+      screen.getByText(
+        `Let's Encrypt is limiting requests. TierPlan waits until ${at} before it tries again. There is nothing to do.`,
+      ),
+    ).toBeTruthy();
+    const links = within(screen.getByRole("list")).getAllByRole("link", {
+      name: "Open HTTPS settings",
+    });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/settings/https");
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("appends the next attempt when the class's fix does not name it", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "validation_unreachable",
+        host: "tierplan.example.org",
+        port: 7480,
+        nextAttemptAt: "2026-11-13T14:05:00Z",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    const at = formatClock("2026-11-13T14:05:00Z");
+    const text = bellText();
+    expect(text).toContain(
+      "couldn't reach http://tierplan.example.org/.well-known/acme-challenge/.",
+    );
+    expect(text).toContain("-p 80:7480");
+    expect(text).toContain(`Next attempt ${at}.`);
+    expect(text).not.toContain("{{");
+  });
+
+  it("adds no next-attempt sentence when none is known", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "validation_unreachable",
+        host: "tierplan.example.org",
+        port: 7480,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The certificate couldn't be renewed")).toBeTruthy();
+    expect(bellText()).not.toContain("Next attempt");
+    expect(bellText()).not.toContain("{{");
+  });
+
+  it("is titled issue, not renew, when no certificate exists yet", async () => {
+    items = [
+      httpsWarning("https_renewal_failed", {
+        class: "validation_unreachable",
+        host: "tierplan.example.org",
+        port: 7480,
+        noCertificate: true,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The certificate couldn't be issued")).toBeTruthy();
+    expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull();
+  });
+
+  it("falls back to the internal copy for a class it does not know, and to the public host for no host", async () => {
+    items = [httpsWarning("https_renewal_failed", { class: "from_the_future" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText(/Something went wrong inside TierPlan\./)).toBeTruthy();
+    expect(bellText()).not.toContain("{{");
+
+    cleanup();
+    queryClient.clear();
+    items = [httpsWarning("https_renewal_failed", { class: "validation_unreachable", port: 7480 })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText(/reach http:\/\/the public host\//)).toBeTruthy();
+    expect(bellText()).not.toContain("{{");
+  });
+
+  it("renders no HTTPS item when none is in the feed, and keeps the empty line", async () => {
+    items = [];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(document.querySelector('[data-warning^="https_"]')).toBeNull();
+  });
+
+  it("shows the skeleton and a zero count until the first answer, with no HTTPS item before it", async () => {
+    me = ADMIN_AND_READER;
+    items = [httpsWarning("https_renewal_failed", { class: "internal" })];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    envGate = gate;
+    renderWarnings();
+    await openBell();
+    await waitFor(() =>
+      expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThan(0),
+    );
+    expect(badge()).toBeNull();
+    expect(document.querySelector('[data-warning^="https_"]')).toBeNull();
+    release();
+    expect(await screen.findByText("The certificate couldn't be renewed")).toBeTruthy();
+    expect(badge()).toBe("1");
+  });
+
+  it("shows nothing to someone who is not an instance admin", async () => {
+    me = VIEWER;
+    items = [httpsWarning("https_renewal_failed", { class: "internal" })];
+    renderWarnings();
+    await openBell();
+    expect(await screen.findByText("No warnings")).toBeTruthy();
+    expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull();
+  });
+
+  it("follows the link to Settings > HTTPS and closes the list", async () => {
+    items = [httpsWarning("https_renewal_failed", { class: "internal" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "Open HTTPS settings" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/https"));
+    await waitFor(() =>
+      expect(screen.queryByText("The certificate couldn't be renewed")).toBeNull(),
+    );
   });
 });
