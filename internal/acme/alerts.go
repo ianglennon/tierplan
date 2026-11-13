@@ -109,6 +109,9 @@ func DeriveAlerts(now time.Time, st Status, sv Served) []Alert {
 	if a, ok := paused(st); ok {
 		out = append(out, a)
 	}
+	if st.ClockOff != nil {
+		out = append(out, Alert{Kind: AlertClockOff, Offset: st.ClockOff.Offset, MeasuredAt: st.ClockOff.At})
+	}
 	if a, ok := txtLeft(st); ok {
 		out = append(out, a)
 	}

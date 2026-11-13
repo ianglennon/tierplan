@@ -66,6 +66,13 @@ type Status struct {
 	ValidationUntested bool
 	// SuggestDNS01 is set when HTTP-01 is saved and the public host resolves to a private address.
 	SuggestDNS01 *Suggestion
+	// ClockOff is set exactly when the latest measurement of the host clock against the CA's shows it
+	// more than five minutes out and is no older than 48 hours (D-29). It follows that sample whatever
+	// the mode, the pause or the certificate files, so a failed first Issue while Let's Encrypt is off
+	// still carries it beside LastError. Samples come only from CA responses: every run makes them, and
+	// the active-mode start-up probe does (Client.ProbeClock); nothing measures in the background
+	// otherwise. It is nil with no sample, and it changes no decision (D-07).
+	ClockOff *ClockSample
 }
 
 // AccountView is the registered account, without its key.
@@ -218,6 +225,9 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 		}
 	}
 	out.ActiveRun = active
+	if cs := m.d.Client.ClockSample(); cs.Off(now) {
+		out.ClockOff = &cs
+	}
 	out.ValidationUntested = st.ValidationUntested && active == nil
 	out.SuggestDNS01 = m.suggestDNS01(ctx, st, canonicalHost(hostOf(m.publicURL())), dir.Overridden)
 

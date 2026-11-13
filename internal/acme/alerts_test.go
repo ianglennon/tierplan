@@ -300,23 +300,47 @@ func TestDeriveAlerts(t *testing.T) {
 		}
 	})
 
-	t.Run("the causes of the five kinds derived so far come out in the bell's order", func(t *testing.T) {
+	clock := &ClockSample{Offset: 10 * time.Minute, At: alertsNow.Add(-time.Hour)}
+
+	t.Run("a clock sample that is off gives one clock_off alert with its offset and time", func(t *testing.T) {
 		t.Parallel()
-		// Everything but the clock, in a state where each rule holds at once: the fallback hides the
-		// expiring item, so the expiring cause is a separate row below.
+		got := DeriveAlerts(alertsNow, Status{ClockOff: clock}, Served{})
+		want := []Alert{{Kind: AlertClockOff, Offset: 10 * time.Minute, MeasuredAt: clock.At}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+		behind := &ClockSample{Offset: -7 * time.Minute, At: clock.At}
+		got = DeriveAlerts(alertsNow, Status{ClockOff: behind}, Served{})
+		if len(got) != 1 || got[0].Offset != -7*time.Minute {
+			t.Fatalf("got %+v, want the negative offset kept", got)
+		}
+	})
+
+	t.Run("no clock sample gives no clock_off alert", func(t *testing.T) {
+		t.Parallel()
+		if got := DeriveAlerts(alertsNow, Status{Mode: ModeActive, Certificate: cert}, Served{}); len(got) != 0 {
+			t.Fatalf("got %+v, want none", got)
+		}
+	})
+
+	t.Run("the causes of all six kinds come out in the bell's order", func(t *testing.T) {
+		t.Parallel()
+		// Everything in a state where each rule holds at once: the fallback hides the expiring item, so the
+		// expiring cause is a separate row below.
 		all := Status{
 			Mode: ModeActive, Certificate: cert, Fallback: true, ExpiredAt: alertsNow, LastError: failing, Failures: 1,
-			Block: &BlockView{Until: until, Reason: BlockFailureGuard},
-			DNS:   DNSView{LeftOver: []LeftOverView{left("_acme-challenge.a.example.com", "unavailable", false)}},
+			Block:    &BlockView{Until: until, Reason: BlockFailureGuard},
+			ClockOff: clock,
+			DNS:      DNSView{LeftOver: []LeftOverView{left("_acme-challenge.a.example.com", "unavailable", false)}},
 		}
 		got := DeriveAlerts(alertsNow, all, Served{})
-		want := []AlertKind{AlertFallback, AlertRenewalFailed, AlertPaused, AlertTXTLeft}
+		want := []AlertKind{AlertFallback, AlertRenewalFailed, AlertPaused, AlertClockOff, AlertTXTLeft}
 		if !slices.Equal(kindsOf(got), want) {
 			t.Fatalf("with the fallback: kinds = %v, want %v", kindsOf(got), want)
 		}
 		all.Fallback, all.ExpiredAt = false, time.Time{}
 		got = DeriveAlerts(alertsNow, all, served("lets_encrypt", lifetime90, 3*24*time.Hour))
-		want = []AlertKind{AlertRenewalFailed, AlertPaused, AlertExpiring, AlertTXTLeft}
+		want = []AlertKind{AlertRenewalFailed, AlertPaused, AlertClockOff, AlertExpiring, AlertTXTLeft}
 		if !slices.Equal(kindsOf(got), want) {
 			t.Fatalf("with an expiring certificate: kinds = %v, want %v", kindsOf(got), want)
 		}

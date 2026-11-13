@@ -104,6 +104,9 @@ type Client struct {
 	// register serialises Register and Forget so two admins cannot create two accounts.
 	register sync.Mutex
 
+	// skew keeps the latest clock sample taken from the CA's responses.
+	skew *skewRecorder
+
 	metaMu  sync.Mutex
 	meta    DirectoryMeta
 	metaErr error
@@ -112,8 +115,12 @@ type Client struct {
 
 // NewClient is a Client for dir, keeping its account in store and judging time by clock.
 func NewClient(dir Directory, store *Store, clock stackops.Clock, userAgent string) *Client {
-	return &Client{dir: dir, store: store, clock: clock, ua: userAgent}
+	return &Client{dir: dir, store: store, clock: clock, ua: userAgent, skew: newSkewRecorder(clock)}
 }
+
+// ClockSample is the latest measurement of the host clock against the CA's, taken from the Date header
+// of a response the client received; the zero sample when there is none yet. Only the status reads it.
+func (c *Client) ClockSample() ClockSample { return c.skew.sample() }
 
 // Directory is the directory this client talks to.
 func (c *Client) Directory() Directory { return c.dir }
@@ -178,7 +185,11 @@ func (c *Client) newCore(ctx context.Context, kid string, key *ecdsa.PrivateKey)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return api.New(newHTTPClient(c.dir.Roots), c.ua, c.dir.URL, kid, key)
+	hc := newHTTPClient(c.dir.Roots)
+	// The recorder goes under lego's own HTTPS-only wrapper, which is put on top when api.New is
+	// called, so it sees every request lego sends, the directory fetch included.
+	hc.Transport = c.skew.wrap(hc.Transport)
+	return api.New(hc, c.ua, c.dir.URL, kid, key)
 }
 
 // core returns a lego Core signed as the stored account for this directory, or ErrNoAccount.
