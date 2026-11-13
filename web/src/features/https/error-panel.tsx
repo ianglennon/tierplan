@@ -12,6 +12,7 @@ import { type ACMELastError, errorCopy } from "@/features/https/copy";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { Rich } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
+import { formatOffsetWords } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // The anchor the status card's "Details below" link points at.
@@ -31,6 +32,9 @@ interface ErrorPanelProps {
   // True while TIERPLAN_ACME is on and the card is not paused: TierPlan keeps trying by itself, and a
   // restart does not hurry it, because the backoff is stored (D-07).
   keepsTrying?: boolean;
+  // How far TierPlan's clock is from the CA's, set only while the status carries it: positive when
+  // TierPlan is ahead. It adds one line after the fix and changes nothing else (D-07, D-29).
+  clock?: { offsetSeconds: number };
 }
 
 // ErrorPanel is the last-run error panel (D-11, ACME-07): the classified headline and what to do, how
@@ -43,6 +47,7 @@ export function ErrorPanel({
   quiet,
   fresh,
   keepsTrying = false,
+  clock,
 }: ErrorPanelProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -54,7 +59,19 @@ export function ErrorPanel({
     <Alert variant="destructive" id={LAST_RUN_ID} role={fresh ? "alert" : "note"}>
       <CircleX aria-hidden="true" />
       <AlertTitle className="min-w-0 break-words">{headline}</AlertTitle>
-      <AlertDescription className="min-w-0 break-words">{fix}</AlertDescription>
+      <AlertDescription className="min-w-0 break-words">
+        <p>{fix}</p>
+        {clock ? (
+          <p data-testid="clock-hint">
+            {t(
+              clock.offsetSeconds >= 0
+                ? "https.lastRun.clockHint"
+                : "https.lastRun.clockHintBehind",
+              { offset: formatOffsetWords(clock.offsetSeconds) },
+            )}
+          </p>
+        ) : null}
+      </AlertDescription>
       <div className="col-start-2 mt-2 flex min-w-0 flex-col gap-3">
         <p className="text-xs text-muted-foreground">
           <Sentence

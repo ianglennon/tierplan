@@ -139,6 +139,11 @@ function AcmeBody({ status, canWrite }: { status: HTTPSStatus; canWrite: boolean
           quiet={paused || acme.blocked !== undefined || acme.mode !== "active"}
           fresh={freshFailure}
           keepsTrying={deriveEnvOverlay(status).env === "on" && !paused}
+          clock={
+            acme.clockOffsetSeconds === undefined
+              ? undefined
+              : { offsetSeconds: acme.clockOffsetSeconds }
+          }
         />
       ) : null}
 

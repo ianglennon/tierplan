@@ -7553,6 +7553,11 @@
             "description": "The challenge used to prove the names",
             "type": "string"
           },
+          "clockOffsetSeconds": {
+            "description": "Present only while TierPlan's clock is more than five minutes from the CA's as last measured, in whole seconds and positive when TierPlan is ahead. It follows the latest CA response whatever the mode, and left out when there is no measurement or the clock is in step",
+            "format": "int64",
+            "type": "integer"
+          },
           "directoryOverridden": {
             "description": "True when the test-only directory override is set; its certificates are not trusted by browsers",
             "type": "boolean"

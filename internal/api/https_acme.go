@@ -160,6 +160,7 @@ type HTTPSACMEBody struct {
 	Renewal             *HTTPSACMERenewalBody     `json:"renewal,omitempty" doc:"The next renewal; left out unless Let's Encrypt is in use"`
 	Fallback            *HTTPSACMEFallbackBody    `json:"fallback,omitempty" doc:"Set when the certificate has expired and the self-signed one is served"`
 	LastError           *HTTPSACMEErrorBody       `json:"lastError,omitempty" doc:"The last failure, until a run succeeds"`
+	ClockOffsetSeconds  *int64                    `json:"clockOffsetSeconds,omitempty" doc:"Present only while TierPlan's clock is more than five minutes from the CA's as last measured, in whole seconds and positive when TierPlan is ahead. It follows the latest CA response whatever the mode, and left out when there is no measurement or the clock is in step"`
 	Failures            int                       `json:"failures" doc:"Consecutive failed runs"`
 	NextAttemptAt       *time.Time                `json:"nextAttemptAt,omitempty" doc:"When the next automatic attempt is due after a failure"`
 	Blocked             *HTTPSACMEBlockBody       `json:"blocked,omitempty" doc:"Set while a manual attempt is refused"`
@@ -290,6 +291,11 @@ func acmeStatusBody(st acme.Status, listenPort int) *HTTPSACMEBody {
 	if !st.NextAttemptAt.IsZero() {
 		t := st.NextAttemptAt.UTC()
 		b.NextAttemptAt = &t
+	}
+	// The one condition the bell uses too: Status.ClockOff and nothing else (D-07, D-29).
+	if cs := st.ClockOff; cs != nil {
+		secs := int64(cs.Offset / time.Second)
+		b.ClockOffsetSeconds = &secs
 	}
 	if bl := st.Block; bl != nil {
 		b.Blocked = &HTTPSACMEBlockBody{Until: bl.Until.UTC(), Reason: bl.Reason}

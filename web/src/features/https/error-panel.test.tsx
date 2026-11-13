@@ -194,7 +194,7 @@ const CLASSES: {
     code: "ca_untrusted",
     error: {},
     headline: "TierPlan doesn't trust the certificate authority's certificate.",
-    fix: "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE.",
+    fix: "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE. A server clock that is badly wrong can cause it too.",
   },
   {
     code: "internal",
@@ -545,4 +545,115 @@ describe("Last-run error panel: TIERPLAN_ACME=on (D-07)", () => {
     await renderPage();
     expect((panel() as HTMLElement).textContent).not.toContain("keeps trying");
   });
+});
+
+// The clock hint: one line after the fix while the status carries a clock offset (D-07, D-29, UI-SPEC J5).
+describe("Last-run error panel: the clock hint", () => {
+  const hint = () => panel()?.querySelector('[data-testid="clock-hint"]') as HTMLElement | null;
+  const FIX =
+    "Port 80 on tp.example.org must reach TierPlan, for example with -p 80:7480. Check your firewall and router, then try again.";
+
+  it("says how far ahead the clock is, after the fix, and changes neither the headline nor the fix", async () => {
+    status = () =>
+      Response.json(failing({ code: "validation_unreachable", host: "tp.example.org" }));
+    await renderPage();
+    const baseline = {
+      title: panel()?.querySelector('[data-slot="alert-title"]')?.textContent,
+      fix: panel()?.querySelector('[data-slot="alert-description"] > p')?.textContent,
+    };
+    expect(hint()).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    status = () =>
+      Response.json(
+        failing(
+          { code: "validation_unreachable", host: "tp.example.org" },
+          { clockOffsetSeconds: 600 },
+        ),
+      );
+    await renderPage();
+    const el = hint() as HTMLElement;
+    expect(el.textContent).toBe(
+      "TierPlan's clock is 10 minutes ahead of Let's Encrypt's. Fix NTP on this host so expiry and renewal times are right.",
+    );
+    const desc = panel()?.querySelector('[data-slot="alert-description"]') as HTMLElement;
+    expect(el.previousElementSibling?.textContent).toBe(baseline.fix);
+    expect(desc.children).toHaveLength(2);
+    expect(panel()?.querySelector('[data-slot="alert-title"]')?.textContent).toBe(baseline.title);
+    expect(baseline.fix).toBe(FIX);
+  });
+
+  it("says how far behind the clock is", async () => {
+    status = () => Response.json(failing({ code: "internal" }, { clockOffsetSeconds: -10800 }));
+    await renderPage();
+    expect(hint()?.textContent).toBe(
+      "TierPlan's clock is 3 hours behind Let's Encrypt's. Fix NTP on this host so expiry and renewal times are right.",
+    );
+  });
+
+  it("is absent without an offset", async () => {
+    status = () => Response.json(failing({ code: "internal" }));
+    await renderPage();
+    expect(hint()).toBeNull();
+  });
+
+  it.each(["validation_unreachable", "rate_limited", "internal"] as const)(
+    "shows for the class %s",
+    async (code) => {
+      status = () =>
+        Response.json(failing({ code, host: "tp.example.org" }, { clockOffsetSeconds: 600 }));
+      await renderPage();
+      expect(hint()?.textContent).toContain("10 minutes ahead");
+    },
+  );
+
+  it("shows beside a failed first Issue while Let's Encrypt is off", async () => {
+    status = () =>
+      Response.json(
+        failing(
+          { code: "validation_unreachable", host: "tp.example.org" },
+          { mode: "off", certificate: undefined, clockOffsetSeconds: 600 },
+        ),
+      );
+    await renderPage("Last error");
+    expect(hint()?.textContent).toContain("10 minutes ahead");
+  });
+
+  it("keeps the fixed clock sentence on ca_untrusted with or without a clock", async () => {
+    const SENTENCE =
+      "This only happens with a test directory. Check TIERPLAN_ACME_CA_FILE. A server clock that is badly wrong can cause it too.";
+    status = () => Response.json(failing({ code: "ca_untrusted" }));
+    await renderPage();
+    expect(panel()?.querySelector('[data-slot="alert-description"]')?.textContent).toBe(SENTENCE);
+    expect(hint()).toBeNull();
+    cleanup();
+    queryClient.clear();
+
+    status = () => Response.json(failing({ code: "ca_untrusted" }, { clockOffsetSeconds: 600 }));
+    await renderPage();
+    expect(
+      panel()?.querySelector('[data-slot="alert-description"] > p:first-child')?.textContent,
+    ).toBe(SENTENCE);
+    expect(hint()?.textContent).toContain("10 minutes ahead");
+  });
+
+  it.each([
+    [301, "5 minutes ahead"],
+    [7199, "120 minutes ahead"],
+    [7200, "2 hours ahead"],
+    [172_799, "48 hours ahead"],
+    [200_000, "2 days ahead"],
+    [-200_000, "2 days behind"],
+  ])(
+    "words an offset of %i seconds as %s, with no raw seconds and no empty placeholder",
+    async (secs, words) => {
+      status = () => Response.json(failing({ code: "internal" }, { clockOffsetSeconds: secs }));
+      await renderPage();
+      const text = hint()?.textContent ?? "";
+      expect(text).toContain(`clock is ${words} `.trimEnd());
+      expect(text).not.toMatch(/second/);
+      expect(text).not.toContain("{{");
+    },
+  );
 });

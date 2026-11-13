@@ -8782,6 +8782,11 @@ export interface components {
             certificate?: components["schemas"]["HTTPSACMECertificateBody"];
             /** @description The challenge used to prove the names */
             challengeType: string;
+            /**
+             * Format: int64
+             * @description Present only while TierPlan's clock is more than five minutes from the CA's as last measured, in whole seconds and positive when TierPlan is ahead. It follows the latest CA response whatever the mode, and left out when there is no measurement or the clock is in step
+             */
+            clockOffsetSeconds?: number;
             /** @description True when the test-only directory override is set; its certificates are not trusted by browsers */
             directoryOverridden: boolean;
             /** @description The CA directory in use */
