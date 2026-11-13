@@ -782,3 +782,211 @@ func TestDiscardRemovesTheEnrolTokenRecordAndItsLeftover(t *testing.T) {
 		t.Errorf("LoadEnrolToken after Discard = %v, %v; want not known", ok, err)
 	}
 }
+
+// stashed lists the identity files in dir/previous.
+func stashed(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	for _, name := range stashFiles {
+		if _, err := os.Stat(filepath.Join(dir, StashDir, name)); err == nil {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func TestStashMovesTheIdentityAsideKeepingItsContentAndModesAndRestorePutsItBack(t *testing.T) {
+	dir := t.TempDir()
+	want := sample(t)
+	if err := Save(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	hash := TokenHash("tpjt_some-token")
+	if err := SaveEnrolToken(dir, hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := SavePins(dir, []PinEntry{{Pin: "sha256/" + strings.Repeat("A", 43) + "="}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Stash(dir); err != nil {
+		t.Fatalf("Stash: %v", err)
+	}
+	if _, ok, err := Load(dir); ok || err != nil {
+		t.Fatalf("Load after Stash = %v %v; the directory must read as not enrolled", ok, err)
+	}
+	if got := stashed(t, dir); !slices.Equal(got, stashFiles) {
+		t.Fatalf("the stash holds %v, want %v", got, stashFiles)
+	}
+	fi, err := os.Stat(filepath.Join(dir, StashDir))
+	if err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("the stash directory: %v %v, want mode 0700", fi, err)
+	}
+	for _, name := range stashFiles {
+		fi, err := os.Stat(filepath.Join(dir, StashDir, name))
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s in the stash: %v, want mode 0600", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, PinsFile)); err != nil {
+		t.Errorf("the pins must stay where they are: %v", err)
+	}
+	restored, err := Restore(dir)
+	if err != nil || !restored {
+		t.Fatalf("Restore = %v %v", restored, err)
+	}
+	got, ok, err := Load(dir)
+	if err != nil || !ok || got.AgentID != want.AgentID || !got.Key.Equal(want.Key) || !bytes.Equal(got.Cert, want.Cert) {
+		t.Fatalf("Load after Restore = %+v %v %v", got, ok, err)
+	}
+	if h, known, err := LoadEnrolToken(dir); err != nil || !known || h != hash {
+		t.Errorf("the record after Restore = %q %v %v", h, known, err)
+	}
+	for _, name := range stashFiles {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s after Restore: %v, want mode 0600", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, StashDir)); !os.IsNotExist(err) {
+		t.Errorf("the empty stash directory is still there: %v", err)
+	}
+}
+
+func TestStashOfAnIdentityWithNoRecordOfItsTokenAndStashWithNoIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := Stash(dir); err == nil {
+		t.Fatal("Stash of an empty directory succeeded; there is nothing to set aside")
+	}
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Stash(dir); err != nil {
+		t.Fatalf("Stash of an identity with no record: %v", err)
+	}
+	if got := stashed(t, dir); !slices.Equal(got, []string{IdentityFile, CertFile, KeyFile}) {
+		t.Fatalf("the stash holds %v", got)
+	}
+	if restored, err := Restore(dir); err != nil || !restored {
+		t.Fatalf("Restore = %v %v", restored, err)
+	}
+	if _, known, _ := LoadEnrolToken(dir); known {
+		t.Error("a record appeared from nowhere")
+	}
+}
+
+func TestDiscardStashRemovesOnlyTheIdentitySetAside(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, sample(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Stash(dir); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(dir, StashDir, "operator-notes.txt")
+	if err := os.WriteFile(own, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := DiscardStash(dir); err != nil {
+		t.Fatalf("DiscardStash: %v", err)
+	}
+	if got := stashed(t, dir); len(got) != 0 {
+		t.Errorf("the stash still holds %v", got)
+	}
+	if _, err := os.Stat(own); err != nil {
+		t.Errorf("an operator's own file went away: %v", err)
+	}
+	if restored, err := Restore(dir); err != nil || restored {
+		t.Errorf("Restore after DiscardStash = %v %v; nothing is left to restore", restored, err)
+	}
+	if err := DiscardStash(t.TempDir()); err != nil {
+		t.Errorf("DiscardStash with no stash = %v", err)
+	}
+}
+
+// A crash can stop the agent at any point of a Stash, or after the new identity was
+// saved and before the stash was removed. ResolveStash at the next start always ends
+// with exactly one identity in the state directory, and the right one.
+func TestResolveStashSettlesWhatAnInterruptedRunLeft(t *testing.T) {
+	setUp := func(t *testing.T) (string, State) {
+		dir := t.TempDir()
+		s := sample(t)
+		if err := Save(dir, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := SaveEnrolToken(dir, TokenHash("tpjt_old")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(dir, StashDir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return dir, s
+	}
+	move := func(t *testing.T, dir string, names ...string) {
+		for _, n := range names {
+			if err := os.Rename(filepath.Join(dir, n), filepath.Join(dir, StashDir, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for n := 1; n <= len(stashFiles); n++ {
+		t.Run("stopped after moving "+strings.Join(stashFiles[:n], ","), func(t *testing.T) {
+			dir, s := setUp(t)
+			move(t, dir, stashFiles[:n]...)
+			restored, err := ResolveStash(dir)
+			if err != nil || !restored {
+				t.Fatalf("ResolveStash = %v %v; want the identity put back", restored, err)
+			}
+			got, ok, err := Load(dir)
+			if err != nil || !ok || !got.Key.Equal(s.Key) {
+				t.Fatalf("Load = %+v %v %v; want the identity that was set aside", got, ok, err)
+			}
+			if h, known, _ := LoadEnrolToken(dir); !known || h != TokenHash("tpjt_old") {
+				t.Errorf("the record = %q %v", h, known)
+			}
+			if _, err := os.Stat(filepath.Join(dir, StashDir)); !os.IsNotExist(err) {
+				t.Errorf("the stash is still there: %v", err)
+			}
+		})
+	}
+	t.Run("stopped after the new identity was saved", func(t *testing.T) {
+		dir, _ := setUp(t)
+		move(t, dir, stashFiles...)
+		fresh := sample(t)
+		if err := Save(dir, fresh); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := ResolveStash(dir)
+		if err != nil || restored {
+			t.Fatalf("ResolveStash = %v %v; the new identity stays and nothing is put back", restored, err)
+		}
+		got, ok, err := Load(dir)
+		if err != nil || !ok || !got.Key.Equal(fresh.Key) {
+			t.Fatalf("Load = %+v %v %v; want the new identity", got, ok, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, StashDir)); !os.IsNotExist(err) {
+			t.Errorf("the old identity is still set aside: %v", err)
+		}
+	})
+	t.Run("a stash with no identity in it", func(t *testing.T) {
+		dir, s := setUp(t)
+		if err := os.WriteFile(filepath.Join(dir, StashDir, KeyFile), []byte("debris"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := ResolveStash(dir)
+		if err != nil || restored {
+			t.Fatalf("ResolveStash = %v %v", restored, err)
+		}
+		if got, ok, err := Load(dir); err != nil || !ok || !got.Key.Equal(s.Key) {
+			t.Fatalf("Load = %v %v; the identity in place must be untouched", ok, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, StashDir)); !os.IsNotExist(err) {
+			t.Errorf("the debris is still there: %v", err)
+		}
+	})
+	t.Run("no stash", func(t *testing.T) {
+		dir := t.TempDir()
+		if restored, err := ResolveStash(dir); err != nil || restored {
+			t.Fatalf("ResolveStash = %v %v", restored, err)
+		}
+	})
+}

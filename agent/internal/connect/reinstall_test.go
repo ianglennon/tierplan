@@ -5,11 +5,13 @@ package connect
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,7 +39,9 @@ const (
 	newToken = "tpjt_0190d2a4-7a3b-7c3d-8e4f-ba9876543210_TkVXLXRva2VuLW5ldy10b2tlbi1uZXctdG9rZW4" //nolint:gosec // G101: a made-up token for the test
 )
 
-const reinstallLog = "it dropped the old identity and will enrol again with the new token"
+// reinstallLog is what the agent says when it sets its identity aside to try its
+// join token (it used to drop the identity at this point; it no longer does).
+const reinstallLog = setAsideLog
 
 // enrolledWith is enrolledState with the record of the join token it was enrolled
 // with, as an agent of this version leaves it.
@@ -104,9 +108,12 @@ func assertReEnrolled(t *testing.T, srv *fakeServer, dir string, saved state.Sta
 		t.Error("the re-enrolment presented the old key; it must be a fresh one")
 	}
 	if got := onDisk(); len(got) == 0 || got[0] {
-		t.Errorf("identity files still on disk when the agent enrolled again (%v); the old identity must be gone first", got)
+		t.Errorf("identity files still in the state directory when the agent enrolled again (%v); the old identity must be set aside first", got)
 	}
-	srv.heartbeatsAfterWelcome(t, 1) // the identity and the record are written before the first heartbeat
+	srv.heartbeatsAfterWelcome(t, 1) // the identity, the record and the removal of the stash happen before the first heartbeat
+	if _, err := os.Stat(filepath.Join(dir, state.StashDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the identity set aside is still there after the enrolment was accepted: %v", err)
+	}
 	got, ok, err := state.Load(dir)
 	if err != nil || !ok || string(got.Cert) != "reinstalled-cert-der" || got.Key.Equal(saved.Key) {
 		t.Fatalf("the identity on disk = %+v %v %v; want the new enrolment's", got, ok, err)
@@ -309,27 +316,193 @@ func TestAnAgentRevokedRightAfterEnrollingWithANewTokenWaitsTheMaximum(t *testin
 	}
 }
 
-// After the agent dropped its identity it is enrolling, and a refusal of that
-// enrolment is the same as a refusal of a first one: a wrong token does not fix
-// itself, so the agent ends and says so.
-func TestARejectedEnrolmentAfterDroppingTheIdentityEndsTheAgent(t *testing.T) {
-	dir := t.TempDir()
-	enrolledWith(t, dir, oldToken)
-	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
-	env := fastEnv()
-	env.roots = httptestRoots()
-	err := runWith(testsupport.Context(t), Config{
-		URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"), Log: slog.New(slog.DiscardHandler),
-	}, env)
-	var refused *RefusedError
-	if !errors.As(err, &refused) || refused.Code != wire.ReasonAuthRejected {
-		t.Fatalf("Run = %v; want the refusal of the enrolment", err)
+// The identity is only set aside for the enrolment. When TierPlan refuses that
+// enrolment too, which is what happens when the hello was refused for a cause the
+// token cannot fix (an audience after an address change, a channel binding behind a
+// proxy: both auth_rejected), the agent takes the identity back, keeps running and
+// waits the maximum. Before this the identity was deleted first and the refusal
+// ended the agent, so a reinstall was the only way back.
+func TestARefusedEnrolmentAfterSettingTheIdentityAsideGivesItBackAndKeepsTheAgentRunning(t *testing.T) {
+	for name, record := range map[string]bool{"no record of the token (an older agent)": false, "a record of another token": true} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			var saved state.State
+			if record {
+				saved = enrolledWith(t, dir, oldToken)
+			} else {
+				saved = enrolledState(t, dir)
+			}
+			var mu sync.Mutex
+			var onDiskAtEnrol []bool
+			srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+				if a.Mode == wire.ModeEnrol {
+					mu.Lock()
+					onDiskAtEnrol = append(onDiskAtEnrol, !noIdentityOnDisk(dir))
+					mu.Unlock()
+				}
+				return reply{refuse: wire.ReasonAuthRejected} // as for audience or channel_binding
+			})
+			var logs lockedBuffer
+			sl, err := runUntilSleeps(t, Config{
+				URL: srv.url(), JoinToken: newToken, StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+				SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+			}, 3)
+			if err != nil {
+				t.Fatalf("Run = %v; an agent with an identity set aside never ends for the refusal of its enrolment", err)
+			}
+			if waits := sl.all(); len(waits) != 3 || waits[0] != 0 || waits[1] != 60*time.Second || waits[2] != 60*time.Second {
+				t.Errorf("waits = %v; want none before the enrolment, then the 60s maximum after it was refused, and the maximum again (one try a minute)", waits)
+			}
+			modes := []string{wire.ModeHello, wire.ModeEnrol, wire.ModeHello}
+			for n, want := range modes {
+				a, _ := srv.authN(t, n+1)
+				if a.Mode != want {
+					t.Fatalf("attempt %d used mode %q, want %q", n+1, a.Mode, want)
+				}
+				if want == wire.ModeEnrol && (a.Token != newToken || bytes.Equal(a.Pub, publicOf(saved.Key))) {
+					t.Errorf("the enrolment did not present the token and a fresh key")
+				}
+				if n == 2 && (a.AgentID != saved.AgentID || string(a.Cert) != "saved-cert-der") {
+					t.Errorf("the hello after the refusal presented %q %q, want the identity that was set aside", a.AgentID, a.Cert)
+				}
+			}
+			mu.Lock()
+			if len(onDiskAtEnrol) != 1 || onDiskAtEnrol[0] {
+				t.Errorf("identity in the state directory at the enrolment = %v; it must be set aside", onDiskAtEnrol)
+			}
+			mu.Unlock()
+			got, ok, err := state.Load(dir)
+			if err != nil || !ok || !got.Key.Equal(saved.Key) || got.AgentID != saved.AgentID || string(got.Cert) != "saved-cert-der" {
+				t.Fatalf("the identity on disk = %+v %v %v; want the one that was set aside, back in place", got, ok, err)
+			}
+			hash, known, err := state.LoadEnrolToken(dir)
+			if record && (err != nil || !known || hash != state.TokenHash(oldToken)) {
+				t.Errorf("the record = %q %v %v; want the old one back", hash, known, err)
+			}
+			if !record && known {
+				t.Errorf("a record appeared (%q); an identity with none keeps none", hash)
+			}
+			if _, err := os.Stat(filepath.Join(dir, state.StashDir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the stash is still there after the identity was taken back: %v", err)
+			}
+			out := logs.String()
+			if n := strings.Count(out, takenBackLog); n != 1 {
+				t.Errorf("taking the identity back was logged %d times, want once:\n%s", n, out)
+			}
+			noSecretsIn(t, out, oldToken, newToken)
+		})
 	}
-	if a, _ := srv.authN(t, 2); a.Mode != wire.ModeEnrol || a.Token != newToken {
-		t.Errorf("attempt 2 used mode %q, want an enrolment with the new token", a.Mode)
+}
+
+// A blocked host, a busy server or a connection that fails during the enrolment is
+// treated the same: any enrolment that does not end in a welcome gives the identity
+// back.
+func TestAnEnrolmentThatDoesNotEndInAWelcomeGivesTheIdentityBack(t *testing.T) {
+	for _, code := range []string{wire.ReasonBlocked, wire.RefuseRateLimited, ""} {
+		t.Run(cmp.Or(code, "welcomed without a certificate"), func(t *testing.T) {
+			dir := t.TempDir()
+			saved := enrolledWith(t, dir, oldToken)
+			srv := newFakeServer(t, func(_ int, a wire.Auth) reply {
+				switch {
+				case a.Mode == wire.ModeHello:
+					return reply{refuse: wire.ReasonAuthRejected}
+				case code != "":
+					return reply{refuse: code}
+				}
+				// A welcome without a certificate is not an enrolment the agent can take.
+				return reply{cert: []byte{}}
+			})
+			sl, err := runUntilSleeps(t, Config{
+				URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+				BackoffMin: time.Second, BackoffMax: 60 * time.Second,
+			}, 2)
+			if err != nil {
+				t.Fatalf("Run = %v", err)
+			}
+			if waits := sl.all(); len(waits) != 2 || waits[1] != 60*time.Second {
+				t.Errorf("waits = %v; want the 60s maximum after the enrolment", waits)
+			}
+			if got, ok, err := state.Load(dir); err != nil || !ok || !got.Key.Equal(saved.Key) {
+				t.Fatalf("the identity on disk = %+v %v %v; want the one that was set aside", got, ok, err)
+			}
+		})
 	}
-	if n := srv.attempts(); n != 2 {
-		t.Errorf("the agent made %d attempts, want 2", n)
+}
+
+// An agent that stopped while its identity was set aside (a crash, a restart of
+// the container during the enrolment) takes it back when it starts, and says hello
+// with it.
+func TestAnAgentThatStoppedWithItsIdentitySetAsideTakesItBackAtStart(t *testing.T) {
+	for name, partial := range map[string]bool{"the whole identity set aside": false, "only identity.json moved": true} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			saved := enrolledWith(t, dir, oldToken)
+			if partial {
+				if err := os.Mkdir(filepath.Join(dir, state.StashDir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(filepath.Join(dir, state.IdentityFile), filepath.Join(dir, state.StashDir, state.IdentityFile)); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := state.Stash(dir); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok, _ := state.Load(dir); ok {
+				t.Fatal("the set-up left an identity in place")
+			}
+			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+			var logs lockedBuffer
+			startAgent(t, Config{
+				URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+				Log: slog.New(slog.NewTextHandler(&logs, nil)),
+			}, fastEnv())
+			a, _ := srv.authN(t, 1)
+			if a.Mode != wire.ModeHello || a.AgentID != saved.AgentID || string(a.Cert) != "saved-cert-der" {
+				t.Fatalf("the first handshake = %q %q; want a hello with the identity that was set aside", a.Mode, a.AgentID)
+			}
+			srv.heartbeatsAfterWelcome(t, 1)
+			if got, ok, err := state.Load(dir); err != nil || !ok || !got.Key.Equal(saved.Key) {
+				t.Fatalf("the identity on disk = %+v %v %v", got, ok, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, state.StashDir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the stash is still there: %v", err)
+			}
+			if !strings.Contains(logs.String(), "it took the identity back") {
+				t.Errorf("the agent did not say it took its identity back:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// A hello TierPlan accepts while the agent holds a token other than the one on
+// record (a token rotation) records that token, so a later auth_rejected with it is
+// no reason to try it. An identity with no record keeps none: which token enrolled
+// it is unknown.
+func TestAnAcceptedHelloRecordsTheTokenOnlyOverAnExistingRecord(t *testing.T) {
+	for name, record := range map[string]bool{"with a record of another token": true, "without a record": false} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if record {
+				enrolledWith(t, dir, oldToken)
+			} else {
+				enrolledState(t, dir)
+			}
+			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+			startAgent(t, Config{
+				URL: srv.url(), JoinToken: newToken, StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+			}, fastEnv())
+			if a, _ := srv.authN(t, 1); a.Mode != wire.ModeHello {
+				t.Fatalf("mode %q, want hello", a.Mode)
+			}
+			srv.heartbeatsAfterWelcome(t, 1) // the record is written before the first heartbeat
+			hash, known, err := state.LoadEnrolToken(dir)
+			if record && (err != nil || !known || hash != state.TokenHash(newToken)) {
+				t.Errorf("the record = %q %v %v; want the token TierPlan accepted the hello with", hash, known, err)
+			}
+			if !record && known {
+				t.Errorf("the record = %q; an identity with none keeps none", hash)
+			}
+		})
 	}
 }
 
