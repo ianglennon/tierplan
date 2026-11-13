@@ -1,5 +1,5 @@
 Swarm
- S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
+ if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi; for v in $L; do S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }; for s in $S; do docker secret rm "$s"; done; done; [ "$rc" = 0 ]
  docker volume rm tierplan-agent   # on every node that ran the agent
 
 Standalone

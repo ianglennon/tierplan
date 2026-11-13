@@ -174,10 +174,11 @@ Add the host in TierPlan with **Environments, Add environment**. The dialog show
 
 ## Install on a swarm
 
-Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service. It first checks that no `tierplan-agent` service exists: if one does, it creates nothing, says so, and stops with an error (see [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one)):
+Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service. It first checks that the swarm has no agent service, found by the `tierplan.agent=true` label every install puts on it (so a stack-deployed `<stack>_tierplan-agent` counts) or by the name `tierplan-agent`: if one exists, it creates nothing, says so, and stops with an error (see [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one)):
 
 ```sh
- if docker service inspect tierplan-agent >/dev/null 2>&1; then echo '…a tierplan-agent service exists already…' >&2; false; else \
+ if [ -n "$(docker service ls -q --filter label=tierplan.agent=true)" ] || docker service inspect tierplan-agent >/dev/null 2>&1; then \
+   echo '…an agent service … exists already on this swarm, so nothing was created…' >&2; false; else \
  printf %s '<join token>' | docker secret create tierplan-agent-token-g1-<env> - && docker service create --name tierplan-agent \
    --mode global --constraint node.platform.os==linux \
    --secret source=tierplan-agent-token-g1-<env>,target=tierplan-agent-token,mode=0400 \
@@ -197,7 +198,7 @@ Run the command on **any manager** node. It creates the join token as a Docker s
 
 | Part | What it does |
 |------|--------------|
-| `if docker service inspect tierplan-agent …` | Creates nothing while a `tierplan-agent` service exists, so a host is never left half installed. |
+| `if [ -n "$(docker service ls -q --filter label=tierplan.agent=true)" ] …` | Creates nothing while an agent service exists on the swarm, whatever it is called, so a host is never left half installed and never gets a second agent on the same `tierplan-agent` volume. |
 | `docker secret create tierplan-agent-token-g1-<env>` | Keeps the join token in a Docker secret instead of in the service definition. `g1` is the token's generation; every rotation creates the next name. `<env>` is the last 12 letters and digits of the environment's ID, so each environment has its own secret name and a secret left on the swarm by an earlier TierPlan does not stop a new install. The dialog shows the real name. |
 | `--mode global`, `--constraint node.platform.os==linux` | One agent on every Linux node. A node you add to the swarm later enrols by itself: the service starts an agent there and the secret is already in place. |
 | `--secret source=…,target=tierplan-agent-token,mode=0400` | Mounts the token at `/run/secrets/tierplan-agent-token`, readable by root only. |
@@ -211,7 +212,7 @@ Run the command on **any manager** node. It creates the join token as a Docker s
 | `TIERPLAN_AGENT_PIN` | Present only when TierPlan serves its own self-signed certificate: the pin that certificate is checked against. |
 | `TIERPLAN_AGENT_JOIN_TOKEN_FILE` | The secret file the token is read from. |
 
-**As a stack file.** The dialog's **Compose file** view gives the same service as a stack file. A stack file cannot create a secret from text, so its first line is the one-line command that creates the secret; run it first, then `docker stack deploy -c tierplan-agent.yml <stack>`. The service is then called `<stack>_tierplan-agent`, not `tierplan-agent`: the rotate, update and cleanup commands on this page name `tierplan-agent`, so change the name in them to match.
+**As a stack file.** The dialog's **Compose file** view gives the same service as a stack file. A stack file cannot create a secret from text, so its first line is the one-line command that creates the secret; run it first, then `docker stack deploy -c tierplan-agent.yml <stack>`. The service is then called `<stack>_tierplan-agent`, not `tierplan-agent`. The install command's check and the cleanup command find the agent service by its `tierplan.agent=true` label, so they work for it as they are. The rotate and update commands on this page name `tierplan-agent`, so change the name in them to match.
 
 To see the agents on every node:
 
@@ -500,12 +501,16 @@ Settings, Environments, the environment, the nodes list, **Actions, Revoke node*
 
 ### Reinstall an agent on a host that ran one
 
-An install command creates the agent under fixed service and container names, so it cannot run on a host that still runs an agent. On a swarm the install command checks for an existing `tierplan-agent` service first, creates nothing when there is one, and prints that the old agent has to go first. On a standalone host `docker run --name tierplan-agent` refuses an existing container. Nothing is half installed, but nothing runs. The join token secret no longer gets in the way: its name carries a slice of the environment's ID, so a secret left over from an earlier install, or from another environment, has a different name. Before you run a new install command on such a host, after TierPlan was reinstalled, after the environment was removed without **Also uninstall the agent from the hosts**, or to move the host to another environment, remove the old agent first and **keep its `tierplan-agent` volume**:
+An install command creates the agent under fixed service and container names, so it cannot run on a host that still runs an agent. On a swarm the install command checks for an existing agent service first (by its `tierplan.agent=true` label, so a stack-deployed one counts, or by the name `tierplan-agent`), creates nothing when there is one, and prints that the old agent has to go first. On a standalone host `docker run --name tierplan-agent` refuses an existing container. Nothing is half installed, but nothing runs. The join token secret no longer gets in the way: its name carries a slice of the environment's ID, so a secret left over from an earlier install, or from another environment, has a different name. Before you run a new install command on such a host, after TierPlan was reinstalled, after the environment was removed without **Also uninstall the agent from the hosts**, or to move the host to another environment, remove the old agent first and **keep its `tierplan-agent` volume**:
 
 ```sh
-# swarm, on a manager: the secret names are read from the service, so any generation and either naming works
-S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) \
-  && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
+# swarm, on a manager: the agent service is found by its label, whatever it is called (tierplan-agent, or
+# <stack>_tierplan-agent from the stack file), and its secret names are read from it, so any generation and either naming works
+if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
+for v in $L; do
+  S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
+  for s in $S; do docker secret rm "$s"; done
+done; [ "$rc" = 0 ]
 
 # standalone host
 docker rm -f tierplan-agent
@@ -534,11 +539,14 @@ Containers, images, volumes and networks of your own are never touched.
 
 For an agent that was offline, or when you did not tick the box, run on each host:
 
-Swarm, on a manager (the environment's **Manual cleanup command** shows it; it reads the secret names from the service, so it works for any generation and for installs made with either naming of the secret), then on every node that ran the agent:
+Swarm, on a manager (the environment's **Manual cleanup command** shows it; it finds the agent service by its `tierplan.agent=true` label, so it also removes a stack-deployed `<stack>_tierplan-agent`, and it reads the secret names from the service, so it works for any generation and for installs made with either naming of the secret; it ends with a non-zero status when a step failed), then on every node that ran the agent:
 
 ```sh
-S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent) \
-  && docker service rm tierplan-agent && for s in $S; do docker secret rm "$s"; done
+if L=$(docker service ls -q --filter label=tierplan.agent=true); then rc=0; [ -n "$L" ] || echo 'no agent service (label tierplan.agent=true) on this swarm' >&2; else rc=1; fi
+for v in $L; do
+  S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; }
+  for s in $S; do docker secret rm "$s"; done
+done; [ "$rc" = 0 ]
 docker volume rm tierplan-agent
 ```
 
@@ -548,4 +556,4 @@ Standalone host:
 docker rm -f tierplan-agent && docker volume rm tierplan-agent
 ```
 
-A stack-file install: `docker stack rm <stack>`, then remove the stack's network and the `tierplan-agent` volume if they are left behind.
+A stack-file install can also be removed with `docker stack rm <stack>`; then remove the stack's network and the `tierplan-agent` volume if they are left behind.

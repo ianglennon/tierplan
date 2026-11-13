@@ -208,7 +208,7 @@ type AgentBody struct {
 // AgentListBody is every agent of an environment.
 type AgentListBody struct {
 	Items         []AgentBody        `json:"items" doc:"One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent"`
-	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command reads the secret names from the agent service, so it works for any generation and either naming. They carry no token"`
+	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts TierPlan cannot uninstall when the environment is removed. The swarm command finds the agent service by its tierplan.agent=true label, whatever it is called, and reads the secret names from it, so it works for any generation and either naming. They carry no token"`
 }
 
 // AgentListOutput wraps AgentListBody for huma.

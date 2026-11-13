@@ -439,8 +439,9 @@ func TestInstallCommandRotationSwapsTheSecretInPlace(t *testing.T) {
 func TestInstallCommandCleanupNamesWhatTheInstallCreated(t *testing.T) {
 	in := mustBuild(t, goldenParams())
 	for _, want := range []string{
-		"docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent",
-		"docker service rm tierplan-agent", `for s in $S; do docker secret rm "$s"; done`, "docker volume rm tierplan-agent",
+		"docker service ls -q --filter label=tierplan.agent=true",
+		`docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v"`,
+		`docker service rm "$v"`, `docker secret rm "$s"`, "docker volume rm tierplan-agent",
 	} {
 		if !strings.Contains(in.SwarmCleanup, want) {
 			t.Errorf("the swarm cleanup lacks %q:\n%s", want, in.SwarmCleanup)
@@ -560,8 +561,8 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndReadTheSecretNamesFromTheSer
 	// The names are read from the service before the service is removed, so a swarm with
 	// the old generation-only names, or with the names of several generations, is cleaned too.
 	line, _, _ := strings.Cut(swarm, "\n")
-	read, rm, rmSecrets := strings.Index(line, "S=$(docker service inspect"), strings.Index(line, "docker service rm"), strings.Index(line, "docker secret rm")
-	if read < 0 || rm < read || rmSecrets < rm {
+	find, read, rm, rmSecrets := strings.Index(line, "docker service ls"), strings.Index(line, "S=$(docker service inspect"), strings.Index(line, "docker service rm"), strings.Index(line, "docker secret rm")
+	if find < 0 || read < find || rm < read || rmSecrets < rm {
 		t.Errorf("the secret names must be read before the service goes, and removed after it: %q", line)
 	}
 }
@@ -594,7 +595,9 @@ func TestSecretNameCarriesAGenerationAndTheTailOfTheEnvironmentID(t *testing.T) 
 func TestInstallCommandCreatesNothingWhileAnAgentServiceExists(t *testing.T) {
 	in := mustBuild(t, goldenParams())
 	cmd := in.SwarmCommand
-	guard := "if docker service inspect tierplan-agent >/dev/null 2>&1; then"
+	// The agent service is found by its label, whatever it is called (a stack names it
+	// <stack>_tierplan-agent), and by the name for one made by hand without the label.
+	guard := `if [ -n "$(docker service ls -q --filter label=tierplan.agent=true)" ] || docker service inspect tierplan-agent >/dev/null 2>&1; then`
 	if !strings.HasPrefix(cmd, " "+guard) {
 		t.Fatalf("the swarm command must start with the service guard:\n%s", cmd)
 	}
@@ -618,50 +621,153 @@ func TestInstallCommandCreatesNothingWhileAnAgentServiceExists(t *testing.T) {
 	}
 }
 
-// The guard is real shell: with a docker that finds the service, nothing is created and the
-// status is not zero; with one that does not, the secret and the service are created.
-func TestInstallCommandGuardRunsInAShell(t *testing.T) {
-	sh, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skip("no sh")
+// stubDocker is a POSIX sh docker for the generated commands. It logs each call, one line of
+// its arguments, to STUB_LOG, and answers from the environment: service ls prints STUB_LS
+// (fails with STUB_LS_FAIL set), service inspect -f prints STUB_SECRETS, service inspect by
+// name succeeds only with STUB_NAMED set, service rm of STUB_RM_FAIL fails, and secret rm of
+// STUB_SECRET_RM_FAIL fails. Anything else reads its input and succeeds.
+const stubDocker = `#!/bin/sh
+echo "$*" >> "$STUB_LOG"
+case "$1 $2" in
+"service ls") [ -n "$STUB_LS_FAIL" ] && exit 1; for id in $STUB_LS; do echo "$id"; done; exit 0 ;;
+"service inspect") if [ "$3" = "-f" ]; then for n in $STUB_SECRETS; do printf '%s ' "$n"; done; echo; exit 0; fi; [ -n "$STUB_NAMED" ] && exit 0; exit 1 ;;
+"service rm") [ "$3" = "$STUB_RM_FAIL" ] && exit 1; echo "$3"; exit 0 ;;
+"secret rm") [ "$3" = "$STUB_SECRET_RM_FAIL" ] && exit 1; echo "$3"; exit 0 ;;
+esac
+cat >/dev/null; exit 0
+`
+
+// shells are the shells a generated command is run under: sh, dash and bash, each when it is
+// installed and is not one of the others already. An admin pastes the command into whichever
+// they have, and the command is POSIX sh.
+func shells(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range []string{"sh", "dash", "bash"} {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			real = p
+		}
+		if !seen[real] {
+			seen[real] = true
+			out = append(out, p)
+		}
 	}
+	if len(out) == 0 {
+		t.Skip("no POSIX shell")
+	}
+	return out
+}
+
+// runWithStub runs script under shell with the stub docker first on the PATH and env added,
+// and returns the output, whether it failed and the docker calls made.
+func runWithStub(t *testing.T, shell, script string, env ...string) (out string, failed bool, calls []string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stubDocker), 0o700); err != nil { //nolint:gosec // a test stub in a temp dir
+		t.Fatal(err)
+	}
+	cmd := exec.Command(shell, "-c", script) //nolint:gosec // the builder's own output
+	cmd.Env = append([]string{"PATH=" + dir + ":/usr/bin:/bin", "STUB_LOG=" + log}, env...)
+	b, err := cmd.CombinedOutput()
+	got, _ := os.ReadFile(log) //nolint:gosec // a temp file
+	if s := strings.TrimSpace(string(got)); s != "" {
+		calls = strings.Split(s, "\n")
+	}
+	return string(b), err != nil, calls
+}
+
+func checkCalls(t *testing.T, calls, want []string) {
+	t.Helper()
+	if len(calls) != len(want) {
+		t.Fatalf("docker was called %d times, want %d:\n%s", len(calls), len(want), strings.Join(calls, "\n"))
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(calls[i], w) {
+			t.Errorf("call %d = %q, want it to start with %q", i, calls[i], w)
+		}
+	}
+}
+
+// The guard is real shell: with a docker that finds an agent service, by its label (as a stack
+// deploy makes it) or by its name, nothing is created and the status is not zero; with one that
+// finds neither, the secret and the service are created.
+func TestInstallCommandGuardRunsInAShell(t *testing.T) {
+	const ls = "service ls -q --filter label=tierplan.agent=true"
+	const inspect = "service inspect tierplan-agent"
 	for _, tc := range []struct {
-		name       string
-		hasService bool
-		wantFail   bool
-		wantCalls  []string
+		name      string
+		env       []string
+		wantFail  bool
+		wantCalls []string
 	}{
-		{"service exists", true, true, []string{"service inspect tierplan-agent"}},
-		{"no service", false, false, []string{"service inspect tierplan-agent", "secret create tierplan-agent-token-g1-" + goldenTag + " -", "service create --name tierplan-agent"}},
+		{"a stack-deployed service with the label", []string{"STUB_LS=st4ckagent01"}, true, []string{ls}},
+		{"a service named tierplan-agent without the label", []string{"STUB_NAMED=1"}, true, []string{ls, inspect}},
+		{"no service", nil, false, []string{ls, inspect, "secret create tierplan-agent-token-g1-" + goldenTag + " -", "service create --name tierplan-agent"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			log := filepath.Join(dir, "calls")
-			script := "#!/bin/sh\necho \"$*\" >> " + log + "\n" +
-				`case "$1 $2" in "service inspect") ` + map[bool]string{true: "exit 0", false: "exit 1"}[tc.hasService] + ` ;; esac` + "\ncat >/dev/null; exit 0\n"
-			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700); err != nil { //nolint:gosec // a test stub in a temp dir
-				t.Fatal(err)
-			}
-			cmd := exec.Command(sh, "-c", mustBuild(t, goldenParams()).SwarmCommand) //nolint:gosec // the builder's own output
-			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin"}
-			out, err := cmd.CombinedOutput()
-			if (err != nil) != tc.wantFail {
-				t.Fatalf("err = %v, want failure %v; output:\n%s", err, tc.wantFail, out)
-			}
-			got, _ := os.ReadFile(log) //nolint:gosec // a temp file
-			calls := strings.Split(strings.TrimSpace(string(got)), "\n")
-			if len(calls) != len(tc.wantCalls) {
-				t.Fatalf("docker was called %d times, want %d:\n%s", len(calls), len(tc.wantCalls), got)
-			}
-			for i, want := range tc.wantCalls {
-				if !strings.HasPrefix(calls[i], want) {
-					t.Errorf("call %d = %q, want it to start with %q", i, calls[i], want)
+		for _, shell := range shells(t) {
+			t.Run(tc.name+"/"+filepath.Base(shell), func(t *testing.T) {
+				out, failed, calls := runWithStub(t, shell, mustBuild(t, goldenParams()).SwarmCommand, tc.env...)
+				if failed != tc.wantFail {
+					t.Fatalf("failed = %v, want %v; output:\n%s", failed, tc.wantFail, out)
 				}
-			}
-			if tc.wantFail && !strings.Contains(string(out), "Reinstall an agent on a host that ran one") {
-				t.Errorf("the refusal prints %q, want it to name the docs section", out)
-			}
-		})
+				checkCalls(t, calls, tc.wantCalls)
+				if tc.wantFail && !strings.Contains(out, "Reinstall an agent on a host that ran one") {
+					t.Errorf("the refusal prints %q, want it to name the docs section", out)
+				}
+			})
+		}
+	}
+}
+
+// The cleanup is real shell: it finds the agent service by its label, so a stack-deployed
+// <stack>_tierplan-agent is removed too, reads its secrets before it removes it, and its status
+// says whether the list and the removal worked.
+func TestSwarmCleanupRunsInAShell(t *testing.T) {
+	swarm, _ := agents.CleanupCommands()
+	line, _, _ := strings.Cut(swarm, "\n")
+	const ls = "service ls -q --filter label=tierplan.agent=true"
+	const inspect = "service inspect -f {{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}} "
+	for _, tc := range []struct {
+		name      string
+		env       []string
+		wantFail  bool
+		wantOut   string
+		wantCalls []string
+	}{
+		{
+			"a stack-deployed service", []string{"STUB_LS=st4ckagent01", "STUB_SECRETS=tierplan-agent-token-g2-4b1e6f0a8c37"}, false, "",
+			[]string{ls, inspect + "st4ckagent01", "service rm st4ckagent01", "secret rm tierplan-agent-token-g2-4b1e6f0a8c37"},
+		},
+		{
+			"an old-name service", []string{"STUB_LS=0ldagent0001", "STUB_SECRETS=tierplan-agent-token-g1"}, false, "",
+			[]string{ls, inspect + "0ldagent0001", "service rm 0ldagent0001", "secret rm tierplan-agent-token-g1"},
+		},
+		{"no agent service", nil, false, "no agent service", []string{ls}},
+		{"the list fails", []string{"STUB_LS_FAIL=1"}, true, "", []string{ls}},
+		{
+			"a service removal fails", []string{"STUB_LS=st4ckagent01", "STUB_SECRETS=tierplan-agent-token-g2-x", "STUB_RM_FAIL=st4ckagent01"}, true, "",
+			[]string{ls, inspect + "st4ckagent01", "service rm st4ckagent01"},
+		},
+	} {
+		for _, shell := range shells(t) {
+			t.Run(tc.name+"/"+filepath.Base(shell), func(t *testing.T) {
+				out, failed, calls := runWithStub(t, shell, line, tc.env...)
+				if failed != tc.wantFail {
+					t.Fatalf("failed = %v, want %v; output:\n%s", failed, tc.wantFail, out)
+				}
+				if !strings.Contains(out, tc.wantOut) {
+					t.Errorf("output %q, want it to hold %q", out, tc.wantOut)
+				}
+				checkCalls(t, calls, tc.wantCalls)
+			})
+		}
 	}
 }
 

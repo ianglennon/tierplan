@@ -172,11 +172,15 @@ func BuildInstall(p InstallParams) (Install, error) {
 	create := " printf %s " + sq(p.Token) + " | docker secret create " + secret + " -"
 	secretFlag := "source=" + secret + ",target=" + secretTarget + ",mode=0400"
 
-	// Nothing is created while a tierplan-agent service exists: the service create would fail
-	// after the secret was made, and a re-run would then stop at that secret. The message has
-	// no apostrophe, so it sits inside single quotes.
-	guard := " if docker service inspect " + ServiceName + " >/dev/null 2>&1; then" +
-		" echo 'a " + ServiceName + " service exists already on this swarm, so nothing was created." +
+	// Nothing is created while an agent service exists on the swarm. It is found by the label
+	// every install puts on it (the command and the stack file alike), so a stack-deployed
+	// <stack>_tierplan-agent counts as well as one named tierplan-agent: a second global service
+	// would run a second agent on every node on the same tierplan-agent volume. The name is
+	// checked too, for a service someone made by hand without the label. Without the guard
+	// the service create would also fail after the secret was made. The message has no
+	// apostrophe, so it sits inside single quotes.
+	guard := " if [ -n \"$(" + agentServicesList + ")\" ] || docker service inspect " + ServiceName + " >/dev/null 2>&1; then" +
+		" echo 'an agent service (label " + labelPair + ", or the name " + ServiceName + ") exists already on this swarm, so nothing was created." +
 		" Remove the old agent first, as in the docs section Reinstall an agent on a host that ran one' >&2; false;" +
 		" else "
 	in.SwarmCommand = guard + strings.TrimPrefix(create, " ") + " && docker service create --name " + ServiceName +
@@ -217,15 +221,22 @@ func BuildInstall(p InstallParams) (Install, error) {
 	return in, nil
 }
 
+// agentServicesList lists the IDs of the swarm's agent services, by the label every install
+// puts on the service, whatever the service is called.
+const agentServicesList = "docker service ls -q --filter label=" + labelPair
+
 // CleanupCommands are the commands that take the agent off a host by hand, for hosts
 // whose agent TierPlan could not uninstall: offline, refusing self-update, or no answer
-// (D-30). The swarm command reads the secret names from the service before it removes it,
-// so it works for an install with either naming of the secret (g<N> or g<N>-<tag>) and
-// whichever generation the swarm holds. They carry no join token.
+// (D-30). The swarm command finds the agent service by its label, so it removes a
+// stack-deployed <stack>_tierplan-agent as well as tierplan-agent, and says so when there is
+// none. It reads each service's secret names before it removes the service, so it works for
+// an install with either naming of the secret (g<N> or g<N>-<tag>) and whichever generation
+// the swarm holds. Its status is not zero when the list or a service removal failed. It is
+// POSIX sh. They carry no join token.
 func CleanupCommands() (swarm, standalone string) {
-	swarm = " S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' " + ServiceName + ")" +
-		" && docker service rm " + ServiceName +
-		` && for s in $S; do docker secret rm "$s"; done` +
+	swarm = " if L=$(" + agentServicesList + "); then rc=0; [ -n \"$L\" ] || echo 'no agent service (label " + labelPair + ") on this swarm' >&2; else rc=1; fi;" +
+		` for v in $L; do S=$(docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v") && docker service rm "$v" || { rc=1; continue; };` +
+		` for s in $S; do docker secret rm "$s"; done; done; [ "$rc" = 0 ]` +
 		"\n docker volume rm " + VolumeName + "   # on every node that ran the agent"
 	standalone = " docker rm -f " + ServiceName + " && docker volume rm " + VolumeName
 	return swarm, standalone

@@ -285,8 +285,9 @@ func TestTheAgentListGivesTheManualCleanupCommandsThatReadTheSecretNamesFromTheS
 	}
 	swarm, standalone := read()
 	for _, want := range []string{
-		"docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' tierplan-agent",
-		"docker service rm tierplan-agent", `docker secret rm "$s"`, "docker volume rm tierplan-agent",
+		"docker service ls -q --filter label=tierplan.agent=true",
+		`docker service inspect -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' "$v"`,
+		`docker service rm "$v"`, `docker secret rm "$s"`, "docker volume rm tierplan-agent",
 	} {
 		if !strings.Contains(swarm, want) {
 			t.Errorf("the swarm cleanup lacks %q:\n%s", want, swarm)
