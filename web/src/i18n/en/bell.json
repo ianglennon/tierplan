@@ -185,6 +185,23 @@
         "bodyAhead": "TierPlan's clock is {{offset}} ahead of Let's Encrypt's. Expiry and renewal times follow it. Fix NTP on the TierPlan host.",
         "bodyBehind": "TierPlan's clock is {{offset}} behind Let's Encrypt's. Expiry and renewal times follow it. Fix NTP on the TierPlan host."
       },
+      "expiring": {
+        "title": "The HTTPS certificate expires soon",
+        "titleExpired": "The HTTPS certificate has expired",
+        "letsEncrypt": "The certificate expires {{when}} and hasn't renewed. Open the HTTPS page to see why.",
+        "letsEncryptExpired": "The certificate expired {{when}} and hasn't renewed. Open the HTTPS page to see why.",
+        "certFiles": "The certificate files expire {{when}}. TierPlan never renews them. Replace the files and it picks the new ones up within a minute.",
+        "certFilesExpired": "The certificate files expired {{when}}. TierPlan never renews them. Replace the files and it picks the new ones up within a minute.",
+        "other": "The certificate expires {{when}}. Open the HTTPS page to replace it.",
+        "otherExpired": "The certificate expired {{when}}. Open the HTTPS page to replace it."
+      },
+      "txtLeft": {
+        "title": "A DNS record was left behind",
+        "body": "TierPlan couldn't delete {{record}} from your Cloudflare zone. It keeps trying. If it stays, delete the record in Cloudflare.",
+        "bodyPaused": "TierPlan couldn't delete {{record}} from your Cloudflare zone. It tries again once Let's Encrypt is running. If it stays, delete the record in Cloudflare.",
+        "bodyMore_one": "{{count}} more record.",
+        "bodyMore_other": "{{count}} more records."
+      },
       "renewalFailed": {
         "title": "The certificate couldn't be renewed",
         "titleIssue": "The certificate couldn't be issued",

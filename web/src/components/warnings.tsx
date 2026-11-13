@@ -552,6 +552,36 @@ function httpsItemCopy(
         }),
       };
     }
+    case "https_cert_expiring": {
+      // Before the end the certificate "expires in 6 days"; after it, "expired 2 d ago", with a
+      // title and a body that say so.
+      const expired = Date.parse(h?.notAfter ?? "") <= now;
+      const when = expired
+        ? formatRelative(h?.notAfter ?? "", new Date(now), t)
+        : untilText(h?.notAfter ?? "", now);
+      const source =
+        h?.source === "lets_encrypt" || h?.source === "cert_files" ? h.source : "other";
+      const key = {
+        lets_encrypt: "letsEncrypt",
+        cert_files: "certFiles",
+        other: "other",
+      }[source];
+      return {
+        title: t(expired ? "bell.https.expiring.titleExpired" : "bell.https.expiring.title"),
+        body: t(`bell.https.expiring.${key}${expired ? "Expired" : ""}`, { when }),
+      };
+    }
+    case "https_txt_left": {
+      const more = h?.more ?? 0;
+      const record = h?.record ?? "";
+      const body = t(h?.retryPaused ? "bell.https.txtLeft.bodyPaused" : "bell.https.txtLeft.body", {
+        record,
+      });
+      return {
+        title: t("bell.https.txtLeft.title"),
+        body: more > 0 ? `${body} ${t("bell.https.txtLeft.bodyMore", { count: more })}` : body,
+      };
+    }
     default:
       return null;
   }
