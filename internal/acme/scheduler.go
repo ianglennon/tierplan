@@ -95,6 +95,10 @@ func (m *Manager) round(ctx context.Context) {
 	if m.mode(st) != ModeActive {
 		return
 	}
+	// The first active round in the process reads the directory once, so the clock sample is back soon
+	// after a restart (D-29). Not paused, no certificate files and not off are all settled above: nothing
+	// else measures in the background.
+	m.d.Client.ProbeClock(ctx)
 	leaf, found, err := m.storedLeaf(ctx)
 	if err != nil {
 		m.log.Error("the scheduler could not read the stored Let's Encrypt certificate", "error", err)

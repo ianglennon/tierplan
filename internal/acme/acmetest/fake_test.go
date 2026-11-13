@@ -782,3 +782,41 @@ func TestFakeDNS01ScriptedFailureWinsAndLooksNothingUp(t *testing.T) {
 		t.Errorf("a scripted failure still looked the record up %d times", n)
 	}
 }
+
+func TestFakeDateOffset(t *testing.T) {
+	t.Parallel()
+	f := newFix(t, Options{DateOffset: -90 * time.Second})
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: f.fake.RootPool(), MinVersion: tls.VersionTLS12}}}
+	t.Cleanup(hc.CloseIdleConnections)
+	dateOf := func() string {
+		t.Helper()
+		req, err := http.NewRequestWithContext(f.ctx, http.MethodGet, f.fake.DirectoryURL(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := hc.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.Header.Get("Date")
+	}
+	want := func(at time.Time) string { return at.UTC().Format(http.TimeFormat) }
+
+	if got, w := dateOf(), want(epoch.Add(-90*time.Second)); got != w {
+		t.Fatalf("Date = %q, want %q (the clock minus 90 s)", got, w)
+	}
+	// The header follows the injected clock and is cut to the second.
+	f.clk.Advance(1500 * time.Millisecond)
+	if got, w := dateOf(), want(epoch.Add(time.Second-90*time.Second)); got != w {
+		t.Fatalf("Date = %q, want %q after 1.5 s (cut to the second)", got, w)
+	}
+	f.fake.SetDateOffset(5 * time.Minute)
+	if got, w := dateOf(), want(epoch.Add(time.Second+5*time.Minute)); got != w {
+		t.Fatalf("Date = %q, want %q with the CA 5 minutes ahead", got, w)
+	}
+	f.fake.SetDateOffset(0)
+	if got, w := dateOf(), want(epoch.Add(time.Second)); got != w {
+		t.Fatalf("Date = %q, want %q with the CA in step", got, w)
+	}
+}

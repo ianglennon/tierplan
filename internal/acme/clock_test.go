@@ -315,3 +315,142 @@ func TestClockOffThroughTheFakeCA(t *testing.T) {
 		}
 	})
 }
+
+// managerWith is a Manager over the environment's stored state and a new Client, the way a restarted
+// process builds one, for the scheduler tests: it has no clock sample yet.
+func (s *schedEnv) managerWith(env config.ACMEEnv, certFiles bool) *Manager {
+	s.t.Helper()
+	s.client = NewClient(s.client.Directory(), s.store, s.clock, "tierplan-test/0")
+	return NewManager(Deps{
+		Store: s.store, Client: s.client, Challenges: s.tokens, Jobs: s.hub, Installer: s.inst, Clock: s.clock,
+		PublicURL: s.urls.getPublic, AgentURL: s.urls.getAgent, BasePath: s.urls.getBase,
+		CertFiles: certFiles, Env: env, Log: slog.New(slog.DiscardHandler),
+		Jitter:   func() float64 { return 0 },
+		Rand:     func(n int64) int64 { return n / 2 },
+		RunEnded: func(_, outcome string) { s.ended <- outcome },
+	})
+}
+
+// notDue leaves a stored certificate whose renewal and renewal-information check are both far off, so
+// a scheduler round has no business with the CA.
+func (s *schedEnv) notDue() {
+	s.t.Helper()
+	st := s.state()
+	st.RenewAt, st.AriNextCheckAt = testNow.Add(60*24*time.Hour), testNow.Add(24*time.Hour)
+	if err := s.store.SaveState(context.Background(), st); err != nil {
+		s.t.Fatalf("SaveState: %v", err)
+	}
+}
+
+func TestClockProbeAtStart(t *testing.T) {
+	ctx := context.Background()
+	off := false
+
+	t.Run("active: the first round reads the directory once, the second adds nothing", func(t *testing.T) {
+		s := newSchedEnv(t, acmetest.Options{DateOffset: -10 * time.Minute})
+		s.issueFirst()
+		s.notDue()
+		m := s.managerWith(config.ACMEEnv{}, false)
+		before := s.fake.Count(acmetest.EndpointDirectory)
+		if (s.client.ClockSample() != ClockSample{}) {
+			t.Fatal("the new client already holds a sample")
+		}
+
+		s.schedule(m)
+		if n := s.fake.Count(acmetest.EndpointDirectory) - before; n != 1 {
+			t.Fatalf("the first round read the directory %d times, want once", n)
+		}
+		if got := s.client.ClockSample().Offset; got != 10*time.Minute {
+			t.Fatalf("ClockSample().Offset = %v, want +10m", got)
+		}
+		st, err := m.Status(ctx)
+		if err != nil || st.Mode != ModeActive || st.ClockOff == nil || st.ClockOff.Offset != 10*time.Minute {
+			t.Fatalf("Status = mode %q, ClockOff %+v (%v); want active and +10m", st.Mode, st.ClockOff, err)
+		}
+
+		s.step(Tick)
+		s.quiet(1)
+		if n := s.fake.Count(acmetest.EndpointDirectory) - before; n != 1 {
+			t.Fatalf("the directory was read %d times after two rounds, want the probe's one", n)
+		}
+	})
+
+	// Nothing measures in the background in any other state: a round makes no request and no sample exists.
+	for name, setup := range map[string]func(s *schedEnv) *Manager{
+		"paused after a restore": func(s *schedEnv) *Manager {
+			st := s.state()
+			st.PausedReason = PausedRestore
+			if err := s.store.SaveState(ctx, st); err != nil {
+				t.Fatalf("SaveState: %v", err)
+			}
+			return s.managerWith(config.ACMEEnv{}, false)
+		},
+		"certificate files": func(s *schedEnv) *Manager { return s.managerWith(config.ACMEEnv{}, true) },
+		"TIERPLAN_ACME=off": func(s *schedEnv) *Manager { return s.managerWith(config.ACMEEnv{Enabled: &off}, false) },
+	} {
+		t.Run(name+": no request and no sample", func(t *testing.T) {
+			s := newSchedEnv(t, acmetest.Options{DateOffset: -10 * time.Minute})
+			s.issueFirst()
+			s.notDue()
+			m := setup(s)
+			before := counts(s.mgrEnv)
+
+			s.schedule(m)
+			s.step(Tick)
+			s.quiet(1)
+			s.noCARequests(before)
+			if (s.client.ClockSample() != ClockSample{}) {
+				t.Fatalf("ClockSample = %+v, want none", s.client.ClockSample())
+			}
+			if st, err := m.Status(ctx); err != nil || st.ClockOff != nil {
+				t.Fatalf("Status.ClockOff = %+v (%v), want nil", st.ClockOff, err)
+			}
+		})
+	}
+}
+
+// TestPreflightIgnoresClock is the prohibition of D-07: the measured offset drives the bell and the
+// page hint and nothing else. A CA two hours out refuses nothing and moves no time TierPlan stores.
+func TestPreflightIgnoresClock(t *testing.T) {
+	type outcome struct {
+		Mode                       string
+		RenewAt                    time.Time
+		RenewBasis                 string
+		AriNextCheckAt             time.Time
+		Failures                   int
+		NextAttemptAt              time.Time
+		Refusals, Runs, Orders     int
+		LastSuccessKind, LastError string
+	}
+	run := func(t *testing.T, dateOffset time.Duration) (outcome, ClockSample) {
+		t.Helper()
+		s := newSchedEnv(t, acmetest.Options{DateOffset: dateOffset})
+		s.issueFirst() // an Issue the offset must not refuse: issue() fails the test on a refusal
+		s.schedule(s.mgr)
+		s.idle(2*Tick, 1)
+		st := s.state()
+		status, err := s.mgr.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		return outcome{
+			Mode: st.Mode, RenewAt: st.RenewAt, RenewBasis: st.RenewBasis, AriNextCheckAt: st.AriNextCheckAt,
+			Failures: st.ConsecutiveFailures, NextAttemptAt: st.NextAttemptAt, Refusals: len(status.Refusals),
+			Runs: len(s.runs()), Orders: len(s.fake.Orders()), LastSuccessKind: st.LastSuccessKind, LastError: st.LastErrorClass,
+		}, s.client.ClockSample()
+	}
+
+	t.Run("a CA two hours out changes no decision", func(t *testing.T) {
+		inStep, sampleA := run(t, 0)
+		out, sampleB := run(t, -2*time.Hour)
+		if sampleA.Offset != 0 || sampleB.Offset != 2*time.Hour {
+			t.Fatalf("samples = %v and %v, want 0 and +2h: the offset was not measured", sampleA.Offset, sampleB.Offset)
+		}
+		if inStep != out {
+			t.Fatalf("with the CA two hours out: %+v\nwith the CA in step:            %+v", out, inStep)
+		}
+		if out.Runs != 1 || out.Orders != 1 || out.Mode != ModeActive || out.Failures != 0 || out.Refusals != 0 {
+			t.Fatalf("outcome = %+v, want one successful run on an active install", out)
+		}
+	})
+}

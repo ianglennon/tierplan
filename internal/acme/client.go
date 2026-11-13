@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-acme/lego/v5/acme/api"
@@ -104,8 +105,10 @@ type Client struct {
 	// register serialises Register and Forget so two admins cannot create two accounts.
 	register sync.Mutex
 
-	// skew keeps the latest clock sample taken from the CA's responses.
-	skew *skewRecorder
+	// skew keeps the latest clock sample taken from the CA's responses; probed is set once ProbeClock
+	// has read the directory.
+	skew   *skewRecorder
+	probed atomic.Bool
 
 	metaMu  sync.Mutex
 	meta    DirectoryMeta
@@ -121,6 +124,16 @@ func NewClient(dir Directory, store *Store, clock stackops.Clock, userAgent stri
 // ClockSample is the latest measurement of the host clock against the CA's, taken from the Date header
 // of a response the client received; the zero sample when there is none yet. Only the status reads it.
 func (c *Client) ClockSample() ClockSample { return c.skew.sample() }
+
+// ProbeClock reads the directory the first time it is called in the process, so that the clock sample
+// exists soon after a restart instead of when the next renewal check talks to the CA (D-29). Meta
+// caches the answer, so the read that follows in the same round is a cache hit. The result is ignored:
+// a directory that cannot be read is the renewal's business, not the clock's.
+func (c *Client) ProbeClock(ctx context.Context) {
+	if c.probed.CompareAndSwap(false, true) {
+		_, _ = c.Meta(ctx)
+	}
+}
 
 // Directory is the directory this client talks to.
 func (c *Client) Directory() Directory { return c.dir }
