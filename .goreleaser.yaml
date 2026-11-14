@@ -140,19 +140,33 @@ docker_signs:
 snapshot:
   version_template: "{{ .Version }}-snapshot-{{ .ShortCommit }}"
 
-# Release notes grouped by Conventional Commit type (D-73).
+# Release notes grouped by Conventional Commit type (D-73). goreleaser matches
+# each group's regexp against the commit subject alone, never "sha subject", and
+# takes a commit into the first group that matches, in the order listed here.
 changelog:
   use: git
   sort: asc
+  filters:
+    exclude:
+      - '^Merge (pull request|branch|remote-tracking branch) '
   groups:
-    - title: Features
-      regexp: '^[a-f0-9]+\s+feat(\([^)]*\))?!?:'
+    - title: Breaking changes
+      regexp: '^[a-z]+(\([^)]*\))?!:'
       order: 0
-    - title: Fixes
-      regexp: '^[a-f0-9]+\s+fix(\([^)]*\))?!?:'
+    - title: Features
+      regexp: '^feat(\([^)]*\))?:'
       order: 1
-    - title: Everything else
+    - title: Fixes
+      regexp: '^fix(\([^)]*\))?:'
       order: 2
+    - title: Documentation
+      regexp: '^docs(\([^)]*\))?:'
+      order: 3
+    - title: Build and dependencies
+      regexp: '^(build|ci|chore)(\([^)]*\))?:'
+      order: 4
+    - title: Everything else
+      order: 5
 
 release:
   prerelease: auto
