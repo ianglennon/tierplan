@@ -119,6 +119,11 @@ Every HTTPS setting can come from the environment, so a compose file can bring u
 
 Also relevant: `TIERPLAN_PUBLIC_URL` (the address the certificate must cover), `TIERPLAN_AGENT_URL`, `TIERPLAN_TLS_CERT_FILE` and `TIERPLAN_TLS_KEY_FILE`. The README lists every variable with its default.
 
+Two more exist but are not for production:
+
+- `TIERPLAN_ACME_DIRECTORY_URL` and `TIERPLAN_ACME_CA_FILE` point TierPlan at a test certificate authority, such as Pebble, instead of Let's Encrypt. They are for testing only and unsupported. Leave both unset on a real install.
+- `TIERPLAN_TLS_SELF_SIGNED` is deprecated and has no effect, because TierPlan always serves HTTPS with its own certificate unless you supply one. Setting it only logs a warning. Remove it.
+
 How they behave:
 
 - A variable overrides its setting and locks the field in **Settings > HTTPS**, which names the variable. The value stored earlier is kept underneath and used again if you remove the variable. Nothing from the environment is written to the database.
