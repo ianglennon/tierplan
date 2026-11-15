@@ -63,6 +63,11 @@ func newRotateFixture(t *testing.T) *rotateFixture {
 	}
 	f.exec(t, `INSERT INTO registry_credentials (id, env_id, name, type, host, prefix, username, secret_sealed, secret_last4, hub_fallback, created_at, updated_at, created_by)
 		VALUES ('cred-1', NULL, 'ghcr-acme', 'ghcr', 'ghcr.io', 'acme', 'bot', ?, '', 0, 1, 1, 'u')`, cred)
+	tok, err := old.Seal(vault.ContextIngressDNSToken+"dom-1", []byte("dns api token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `INSERT INTO ingress_domains (id, env_id, suffix, token_sealed, created_by, created_at, updated_at) VALUES ('dom-1', 'env-1', 'example.org', ?, 'u', 1, 1)`, tok)
 	w := audit.NewWriter(st, old, slog.New(slog.DiscardHandler), time.Now)
 	for range 20 {
 		if err := w.Record(ctx, audit.Entry{
@@ -103,8 +108,8 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 	if res.OldKID != f.old.KeyID() || res.NewKID == "" || res.NewKID == res.OldKID {
 		t.Fatalf("result = %+v, want the old ID and a different new one", res)
 	}
-	if res.Rewrapped != 3 || res.Entries != 20 {
-		t.Fatalf("rewrapped %d values and %d entries, want 3 and 20", res.Rewrapped, res.Entries)
+	if res.Rewrapped != 4 || res.Entries != 20 {
+		t.Fatalf("rewrapped %d values and %d entries, want 4 and 20", res.Rewrapped, res.Entries)
 	}
 	if res.KeyFileSwapped != true {
 		t.Fatalf("a file-sourced key must be swapped into place: %+v", res)
@@ -136,6 +141,7 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 		{`SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`, vault.ContextAgentCA + "env-1", "ca private key"},
 		{`SELECT passphrase_sealed FROM backup_schedule WHERE id = 1`, vault.ContextBackupSchedule, "schedule passphrase"},
 		{`SELECT secret_sealed FROM registry_credentials WHERE id = 'cred-1'`, vault.ContextRegistryCred + "cred-1", "registry token value"},
+		{`SELECT token_sealed FROM ingress_domains WHERE id = 'dom-1'`, vault.ContextIngressDNSToken + "dom-1", "dns api token"},
 	} {
 		plain, err := cur.Open(c.ctx, f.scalar(t, c.q))
 		if err != nil || string(plain) != c.want {
@@ -144,6 +150,9 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 	}
 	if _, err := prev.Open(vault.ContextAgentCA+"env-1", f.scalar(t, `SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`)); err == nil {
 		t.Error("the CA key still opens under the old key alone")
+	}
+	if _, err := prev.Open(vault.ContextIngressDNSToken+"dom-1", f.scalar(t, `SELECT token_sealed FROM ingress_domains WHERE id = 'dom-1'`)); err == nil {
+		t.Error("the ingress DNS token still opens under the old key alone")
 	}
 	if f.scalar(t, `SELECT key_sealed FROM env_cas WHERE env_id = 'env-1'`) == oldCA {
 		t.Error("the CA key ciphertext did not change")

@@ -352,8 +352,18 @@ func TestExportSecureDeleteLeavesNoResidueOfExcludedRows(t *testing.T) {
 	}
 }
 
+// addIngressDomain registers a domain in env-1 whose DNS token is sealed under the live key, as the
+// application does, and returns that ciphertext.
+func (f *exportFixture) addIngressDomain(t *testing.T) string {
+	t.Helper()
+	sealed := f.sealedFor(t, vault.ContextIngressDNSToken+"dom-1", "dns api token")
+	f.exec(t, `INSERT INTO ingress_domains (id, env_id, suffix, token_sealed, created_by, created_at, updated_at) VALUES ('dom-1', 'env-1', 'example.org', ?, 'u1', 1, 1)`, sealed)
+	return sealed
+}
+
 func TestExportKeyOpensEverySealedValueAndTheLiveKeyOpensNone(t *testing.T) {
 	f := newExportFixture(t)
+	f.addIngressDomain(t)
 	f.exec(t, `INSERT INTO backup_schedule (id, passphrase_sealed) VALUES (1, ?)`, f.sealedFor(t, vault.ContextBackupSchedule, "scheduled passphrase"))
 	_, file, err := f.export(t, exportPass, testOptions)
 	if err != nil {
@@ -387,6 +397,16 @@ func TestExportKeyOpensEverySealedValueAndTheLiveKeyOpensNone(t *testing.T) {
 	}
 	if plain, err := export.Open(vault.ContextRegistryCred+"cred-1", cred); err != nil || string(plain) != "registry token value" {
 		t.Fatalf("registry credential secret under the export key = %q, %v", plain, err)
+	}
+	var dns string
+	if err := o.db.QueryRow(`SELECT token_sealed FROM ingress_domains WHERE id = 'dom-1'`).Scan(&dns); err != nil {
+		t.Fatalf("the ingress domain is missing from the backup: %v", err)
+	}
+	if plain, err := export.Open(vault.ContextIngressDNSToken+"dom-1", dns); err != nil || string(plain) != "dns api token" {
+		t.Fatalf("ingress DNS token under the export key = %q, %v", plain, err)
+	}
+	if _, err := f.live.Open(vault.ContextIngressDNSToken+"dom-1", dns); !errors.Is(err, vault.ErrUnknownKey) {
+		t.Fatalf("the live key opens the backup's ingress DNS token: %v", err)
 	}
 	if _, err := f.live.Open(vault.ContextRegistryCred+"cred-1", cred); !errors.Is(err, vault.ErrUnknownKey) {
 		t.Fatalf("the live key opens the backup's registry credential secret: %v", err)
