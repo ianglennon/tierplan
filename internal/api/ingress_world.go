@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -42,4 +43,27 @@ func ingressPolicyFor(ctx context.Context, d StacksDeps, p *rbac.Principal, envI
 		return nil, err
 	}
 	return &stacks.IngressPolicy{StackID: stackID, World: world}, nil
+}
+
+// ingressGatePolicy is the policy a deploy gate (a deploy, a roll back, a restore, an update) judges a working copy
+// against (D-18). The world is read for every copy, not only for one whose text names an ingress label: a label key
+// can be assembled by interpolation (a list-form "${P}.host=..." with P set to the prefix) so that no file or value
+// contains the prefix, and the gate must judge it all the same. A read that fails refuses the copy only when its text
+// names an ingress label (declaresIngress); otherwise the copy is judged without the policy, so a stack with no ingress
+// label is never refused because the ingress store cannot be read. The parser still runs in either case.
+func ingressGatePolicy(ctx context.Context, d StacksDeps, p *rbac.Principal, c stacks.WorkingCopy, envID, stackID string) (*stacks.IngressPolicy, error) {
+	pol, err := ingressPolicyFor(ctx, d, p, envID, stackID)
+	if err != nil {
+		if declaresIngress(c) {
+			return nil, err
+		}
+		lg := d.Log
+		if lg == nil {
+			lg = slog.Default()
+		}
+		lg.WarnContext(ctx, "the ingress names could not be read; a stack that names no ingress label is judged without them",
+			"env", envID, "stack", stackID, "error", err)
+		return nil, nil
+	}
+	return pol, nil
 }

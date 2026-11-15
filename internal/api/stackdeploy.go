@@ -464,19 +464,17 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	// The stack's masker is built once for the request: the refusals below and the stored rendering use it.
 	masker := stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)
 	// A hostname the environment's ingress world refuses (outside every domain, reserved, held) is refused here as
-	// every other problem of the check is, before anything is stored (D-18). The world is read once, and only for a
-	// draft that declares an ingress label. An automatic deploy names no person, so its refusal, which is recorded
+	// every other problem of the check is, before anything is stored (D-18). The world is read once for every draft
+	// (ingressGatePolicy). An automatic deploy names no person, so its refusal, which is recorded
 	// where every viewer of the environment reads it, names a holder only in the stack's own environment (D-20).
 	// The read changes nothing: no claim is written (D-21), and a read that fails refuses the deploy.
-	var pol *stacks.IngressPolicy
-	if declaresIngress(draft.Copy) {
-		viewer := p
-		if o.Trigger != "" {
-			viewer = nil
-		}
-		if pol, err = ingressPolicyFor(ctx, d, viewer, env.ID, st.ID); err != nil {
-			return nil, stackInternal(d, "read the ingress names", env.ID, err)
-		}
+	viewer := p
+	if o.Trigger != "" {
+		viewer = nil
+	}
+	pol, err := ingressGatePolicy(ctx, d, viewer, draft.Copy, env.ID, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
 	}
 	if st.Target == stacks.TargetStandalone {
 		return deployStandaloneStack(ctx, d, p, env, st, draft, body, userAgent, o, mode, update, masker, pol)
@@ -597,10 +595,10 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 }
 
 // declaresIngress reports whether the working copy mentions an ingress label (ingress.LabelPrefix) in any file or
-// variable value. A deploy gate reads the ingress world only for a copy that does, so a stack with no ingress label
-// is never refused because that read failed. The match is on the text, so it errs toward reading: a copy that
-// only quotes the prefix reads the world and then passes. A key assembled from separate variables would not match;
-// the claim write of a later phase judges the parsed labels again before any route is served (D-21).
+// variable value. A deploy gate reads the ingress world for every copy (ingressGatePolicy); this decides only whether a
+// read that fails refuses the copy, so a stack with no ingress label is never refused because that read failed. The
+// match is on the text, so a key assembled from separate variables does not match: such a copy is judged against the
+// policy whenever the world can be read, and the claim write of a later phase judges the parsed labels again (D-21).
 func declaresIngress(c stacks.WorkingCopy) bool {
 	for _, f := range c.Files {
 		if bytes.Contains(f.Content, []byte(ingress.LabelPrefix)) {
@@ -792,13 +790,11 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	masker := stacks.NewMasker(target.Copy.Vars, target.Copy.Files)
 	// The revision's hostnames are judged against the environment's ingress world as a deploy's are (D-18): one that was
 	// reserved, or taken by another stack, since the revision ran is refused here, with nothing stored. A roll back is a
-	// person's request, so a holder may be named in an environment the person can view (D-20). The world is read once, only
-	// for a revision that names an ingress label, and a read that fails refuses the roll back. Nothing is claimed (D-21).
-	var pol *stacks.IngressPolicy
-	if declaresIngress(target.Copy) {
-		if pol, err = ingressPolicyFor(ctx, d, p, env.ID, st.ID); err != nil {
-			return nil, stackInternal(d, "read the ingress names", env.ID, err)
-		}
+	// person's request, so a holder may be named in an environment the person can view (D-20). The world is read once for every revision
+	// (ingressGatePolicy), and a read that fails refuses a revision that names an ingress label. Nothing is claimed (D-21).
+	pol, err := ingressGatePolicy(ctx, d, p, target.Copy, env.ID, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
 	}
 	var prep stackops.RollbackPlan
 	node := ""

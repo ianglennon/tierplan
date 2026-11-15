@@ -219,6 +219,21 @@ func TestIngressGateDeployReadsTheWorldForALabelDeclaredThroughAVariable(t *test
 	}
 }
 
+// A label key assembled by interpolation, so that no file or value contains the prefix, is judged all the same: the
+// gate reads the world for every copy, and a reserved host declared that way is refused (review WR-01, D-18).
+func TestIngressGateDeployRefusesAReservedHostWhoseKeyIsAssembledFromAVariable(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "gate-assembled")
+	v := saveCompose(t, admin, st.ID,
+		"services:\n  web:\n    image: nginx:1.27\n    deploy:\n      labels:\n        - \"${P}.ingress.host="+seed.reservedHost+"\"\n        - \"${P}.ingress.port=80\"\n",
+		`[{"name":"P","value":"tierplan","secret":false}]`)
+
+	deployRefusedAs(t, f, admin, st.ID, v, seed.reservedHost)
+}
+
 // A stack that holds a hostname may deploy it again: the policy is judged for the stack itself, so its own claim is not
 // "taken".
 func TestIngressGateDeployDoesNotRefuseAStackItsOwnHostname(t *testing.T) {

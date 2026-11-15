@@ -159,9 +159,6 @@ type acmeWiring struct {
 	challenges *acme.Challenges
 }
 
-// wireACME builds the ACME manager over the server's parts. It does not start it: Build calls Start
-// before the server listens and runs the scheduler in the background. A bad directory setting is an
-// error that stops start-up.
 // defaultDNSProviders is the one place the real DNS provider factories are built. The Let's Encrypt manager and the
 // ingress domain routes share the map Build makes from it, so WithACMEDNS redirects the token of both to a fake.
 func defaultDNSProviders() map[string]dns.Factory {
@@ -170,6 +167,9 @@ func defaultDNSProviders() map[string]dns.Factory {
 	}
 }
 
+// wireACME builds the ACME manager over the server's parts. It does not start it: Build calls Start
+// before the server listens and runs the scheduler in the background. A bad directory setting is an
+// error that stops start-up.
 func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.Vault, inst *instance.Instance,
 	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps,
 	hsts *hstsPolicy, listening <-chan struct{}) (acmeWiring, error) {

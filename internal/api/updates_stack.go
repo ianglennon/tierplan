@@ -258,20 +258,18 @@ func judgeStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, p 
 	}
 	// The revision's hostnames are judged against the environment's ingress world, as a deploy's are, before anything is stored
 	// (D-18, D-21): a name that was reserved, or taken by another stack, since the revision ran stops the update. The world is read
-	// once, and only for a revision that names an ingress label. A person's own update is answered to them, so it may name a holder
+	// once for every revision (ingressGatePolicy). A person's own update is answered to them, so it may name a holder
 	// in an environment they can view; a bulk update (lockHeld) records its refusal in its run, where every viewer of the
 	// environment reads it, so it names a holder only in the stack's own environment (D-20). A read that fails refuses the update.
-	var pol *stacks.IngressPolicy
-	if declaresIngress(good.Copy) {
-		viewer := p
-		if lockHeld {
-			viewer = nil
-		}
-		if pol, err = ingressPolicyFor(ctx, d, viewer, env.ID, st.ID); err != nil {
-			return nil, stackInternal(d, "read the ingress names", env.ID, err)
-		}
-		su.ingress = pol
+	viewer := p
+	if lockHeld {
+		viewer = nil
 	}
+	pol, err := ingressGatePolicy(ctx, d, viewer, good.Copy, env.ID, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
+	su.ingress = pol
 	if su.standalone {
 		if su.prep, err = d.ops().PrepareRollbackStandaloneWith(ctx, st, good, goodPins, pol); err != nil {
 			return nil, rollbackPrepareProblem(err, su.masker)
