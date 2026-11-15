@@ -363,3 +363,34 @@ func TestRebuildSwarmKeepsKeepLabel(t *testing.T) {
 		}
 	}
 }
+
+// TestRebuildSwarmKeepsIngressLabels: adopting a service that carries tierplan.ingress.* labels writes them into the
+// rebuilt file exactly as written, on the service and on its containers, because they are the user's routes (LBL-05,
+// D-22). TierPlan's own labels are still left out.
+func TestRebuildSwarmKeepsIngressLabels(t *testing.T) {
+	t.Parallel()
+	const host, port = "tierplan.ingress.host", "tierplan.ingress.api.port"
+	svc := coreService()
+	for _, labels := range []map[string]string{svc.Spec.Labels, svc.Spec.TaskTemplate.ContainerSpec.Labels} {
+		labels[host] = "App.Example.org"
+		labels[port] = "8080"
+	}
+
+	res, err := rebuild.Swarm(rebuild.SwarmInput{Namespace: "shop", Services: []rebuild.SwarmService{svc}})
+	if err != nil {
+		t.Fatalf("Swarm: %v", err)
+	}
+
+	got := res.Project.Services["web"]
+	if got.Deploy == nil {
+		t.Fatalf("deploy = nil, want the service's own labels kept in deploy.labels")
+	}
+	for name, labels := range map[string]types.Labels{"labels": got.Labels, "deploy.labels": got.Deploy.Labels} {
+		if labels[host] != "App.Example.org" || labels[port] != "8080" {
+			t.Errorf("%s = %v, want %s and %s kept as written", name, labels, host, port)
+		}
+		if _, ok := labels[stacks.LabelStackID]; ok {
+			t.Errorf("%s = %v, want tierplan.stack.id dropped", name, labels)
+		}
+	}
+}

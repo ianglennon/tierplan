@@ -119,3 +119,39 @@ func TestStripOwnershipKeepsKeepLabel(t *testing.T) {
 		t.Errorf("a service that lost tierplan.keep reads the same as one that has it: drift would never show the removal")
 	}
 }
+
+// TestStripOwnershipKeepsIngressLabels: tierplan.ingress.* labels are the user's (LBL-05, D-22), so drift keeps them on
+// both sides of the comparison: a live service that carries the same ingress labels as its file reads the same, and one
+// that lost a label reads differently, like any user label. TierPlan's own labels are still dropped.
+func TestStripOwnershipKeepsIngressLabels(t *testing.T) {
+	t.Parallel()
+	const host, port = "tierplan.ingress.host", "tierplan.ingress.port"
+	labels := func() map[string]string {
+		return map[string]string{stacks.LabelStackID: "stack-1", host: "app.example.org", port: "8080", "team": "a"}
+	}
+	spec := swarm.ServiceSpec{
+		Annotations:  swarm.Annotations{Name: "web_app", Labels: labels()},
+		TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "nginx", Labels: labels()}},
+	}
+	want := map[string]string{host: "app.example.org", port: "8080", "team": "a"}
+
+	got := stacks.StripOwnership(spec)
+	if !maps.Equal(got.Labels, want) || !maps.Equal(got.TaskTemplate.ContainerSpec.Labels, want) {
+		t.Errorf("service labels = %v, container labels = %v, want %v on both", got.Labels, got.TaskTemplate.ContainerSpec.Labels, want)
+	}
+
+	// The file's side of the comparison carries the same ingress labels and no bookkeeping, so the live
+	// service reads the same as the file and there is no drift to report.
+	file := swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "web_app", Labels: maps.Clone(want)}}
+	if !maps.Equal(got.Labels, stacks.StripOwnership(file).Labels) {
+		t.Errorf("live labels = %v, file labels = %v, want no drift", got.Labels, stacks.StripOwnership(file).Labels)
+	}
+
+	// A live service that lost one ingress label differs from the file, so the removal shows as drift.
+	lost := spec
+	lost.Labels = labels()
+	delete(lost.Labels, port)
+	if maps.Equal(stacks.StripOwnership(lost).Labels, got.Labels) {
+		t.Errorf("a service that lost %s reads the same as one that has it: drift would never show the removal", port)
+	}
+}
