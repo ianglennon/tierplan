@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/auth"
@@ -87,7 +88,7 @@ func TestIssueACMEThroughTheAPIStreamsTheSteps(t *testing.T) {
 		t.Errorf("snapshot challenge = %q, want http-01", first.Challenge)
 	}
 
-	release()
+	f.releaseFinalize(t, release)
 	var done api.HTTPSACMERunFrameBody
 	for {
 		fr := nextFrame(t, c)
@@ -165,6 +166,18 @@ func (f *acmeFix) awaitRun(t *testing.T, jobID string) {
 		}
 	}()
 	testsupport.Await(t, "the certificate run to end", done)
+}
+
+// releaseFinalize lets a finalize held by HoldFinalize through. The run sends its certificate request, the fake CA
+// answers that the order is processing, and the run waits acme.PollInterval on the fixture's clock before it reads the
+// order again; nothing else moves that clock. So the hold is released only once the run is parked on that wait, and the
+// clock is then moved on by one poll, after which the run reads the issued order. Releasing at an arbitrary moment raced
+// the run: when it was already parked, it waited for ever.
+func (f *acmeFix) releaseFinalize(t *testing.T, release func()) {
+	t.Helper()
+	f.clock.AwaitTimer(t, acme.PollInterval)
+	release()
+	f.clock.Advance(acme.PollInterval)
 }
 
 // issued registers an account, issues and waits for the run: a stored certificate.
@@ -338,7 +351,7 @@ func TestACMERunActiveIs409(t *testing.T) {
 	for _, path := range []string{"/api/https/acme/issue", "/api/https/acme/renew", "/api/https/acme/stop"} {
 		acmeProblemOf(t, f.send(t, http.MethodPost, path, ""), http.StatusConflict, "acme_run_active")
 	}
-	release()
+	f.releaseFinalize(t, release)
 	f.awaitRun(t, id)
 	if n := f.ordersSeen(); n != 1 {
 		t.Errorf("the CA saw %d orders, want only the first run's", n)
