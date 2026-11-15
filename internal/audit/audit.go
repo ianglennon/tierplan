@@ -336,6 +336,36 @@ const (
 	ActionHTTPSHSTSRestored  = "https.hsts_restored"
 )
 
+// The ingress actions (Phase 18, D-26). Every key has exactly one dot, so the audit page finds its label under
+// audit.actions.ingress, and every row is environment-scoped on that page. Phase 18 records the domain and host
+// families (domain_created, domain_credential_replaced, domain_deleted, host_reserved, host_unreserved) inside the
+// write transaction of the domain and reservation endpoints. enabled, disabled, claim_*, cert_*, node_* and vip_changed
+// are defined here so the audit page labels them from the start, and are recorded from Phases 20 to 26. The entries
+// never carry a DNS token: the state of the credential is recorded under the key "credential" ("set" or "replaced"),
+// which is why the replacement action is named after the credential and not the token.
+const (
+	// An admin registered an ingress domain, replaced the credential of its DNS provider, or deleted it.
+	ActionIngressDomainCreated            = "ingress.domain_created"
+	ActionIngressDomainCredentialReplaced = "ingress.domain_credential_replaced"
+	ActionIngressDomainDeleted            = "ingress.domain_deleted"
+	// An environment reserved a hostname under a domain, or released the reservation.
+	ActionIngressHostReserved   = "ingress.host_reserved"
+	ActionIngressHostUnreserved = "ingress.host_unreserved"
+	// Ingress was switched on or off for an environment (Phase 20 onwards).
+	ActionIngressEnabled  = "ingress.enabled"
+	ActionIngressDisabled = "ingress.disabled"
+	// A stack's claim on its hostnames was replaced or released (Phase 20 onwards).
+	ActionIngressClaimReplaced = "ingress.claim_replaced"
+	ActionIngressClaimReleased = "ingress.claim_released"
+	// A certificate for a hostname was issued, or its issue failed (Phase 22 onwards).
+	ActionIngressCertIssued = "ingress.cert_issued"
+	ActionIngressCertFailed = "ingress.cert_failed"
+	// A node joined or left the ingress, and the virtual address changed (Phase 24 to 26).
+	ActionIngressNodeEnrolled = "ingress.node_enrolled"
+	ActionIngressNodeRemoved  = "ingress.node_removed"
+	ActionIngressVIPChanged   = "ingress.vip_changed"
+)
+
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
 // reset link: an unusable link or the per-address limit. It never carries the
 // link.

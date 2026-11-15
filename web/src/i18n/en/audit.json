@@ -394,6 +394,22 @@
         "fallback_ended": "Returned to the Let's Encrypt certificate",
         "hsts_withdrawn": "Withdrew HSTS",
         "hsts_restored": "Restored HSTS"
+      },
+      "ingress": {
+        "domain_created": "Registered ingress domain",
+        "domain_credential_replaced": "Replaced ingress domain DNS token",
+        "domain_deleted": "Deleted ingress domain",
+        "host_reserved": "Reserved ingress hostname",
+        "host_unreserved": "Released ingress hostname reservation",
+        "enabled": "Turned on ingress",
+        "disabled": "Turned off ingress",
+        "claim_replaced": "Replaced a stack's ingress hostnames",
+        "claim_released": "Released a stack's ingress hostnames",
+        "cert_issued": "Issued ingress certificate",
+        "cert_failed": "Ingress certificate failed",
+        "node_enrolled": "Enrolled ingress node",
+        "node_removed": "Removed ingress node",
+        "vip_changed": "Changed ingress virtual address"
       }
     },
     "coalesced": {
