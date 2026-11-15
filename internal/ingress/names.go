@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"golang.org/x/net/idna"
+	"golang.org/x/net/publicsuffix"
 )
 
 // The limits of a DNS name (RFC 1035).
@@ -23,11 +26,15 @@ func NormalizeHost(s string) string {
 
 // ValidateHost checks a normalized hostname. It accepts what a certificate for one exact name can
 // carry and nothing else: at least two labels of letters, digits and hyphens. A wildcard, an
-// underscore, a non-ASCII name (write it in its xn-- form) and an IP address are all refused; a
-// name whose last label is all digits is refused because it would read as an address.
+// underscore, a non-ASCII name (write it in its xn-- form, which is named in the refusal) and an
+// IP address are all refused; a name whose last label is all digits is refused because it would
+// read as an address. Lengths are counted in bytes: 253 for the name, 63 for a label.
 func ValidateHost(host string) error {
 	if host == "" {
 		return errors.New("the hostname is empty")
+	}
+	if !isASCII(host) {
+		return nonASCIIError(host)
 	}
 	if len(host) > maxHostLen {
 		return fmt.Errorf("the hostname is longer than %d characters", maxHostLen)
@@ -45,6 +52,27 @@ func ValidateHost(host string) error {
 		return errors.New("the hostname must be a name, not an IP address")
 	}
 	return nil
+}
+
+// isASCII reports whether s holds no byte above 0x7f.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// nonASCIIError refuses a name with a non-ASCII character and says what to write instead: the
+// punycode form, which a certificate and a proxy rule carry. xn-- labels are accepted as written;
+// the name is never converted on the user's behalf, because a look-alike name must be a choice.
+func nonASCIIError(host string) error {
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil || ascii == "" {
+		return errors.New("the hostname is not a valid international name; write it with letters, digits and hyphens, or in its xn-- form")
+	}
+	return fmt.Errorf("the hostname has a character that is not a letter, a digit or a hyphen; write it in its xn-- form, %s", ascii)
 }
 
 // validateLabel checks one label of a normalized hostname.
@@ -78,20 +106,35 @@ func allDigits(s string) bool {
 	return s != ""
 }
 
-// ValidateSuffix checks a domain suffix. It normalizes the suffix, then refuses an empty one, then
-// refuses any suffix that is not a valid hostname. Both refusals are a *NameError with
-// CodeDomainInvalid. The two steps are separate on purpose: the public-suffix refusal sits between
-// them, because ValidateHost refuses every single-label name and would otherwise answer a bare top
-// level such as com with the invalid code instead of the public-suffix one.
+// ValidateSuffix checks a domain suffix. It normalizes the suffix (so Apps.Example.COM. is
+// apps.example.com), then refuses an empty one, then one that is itself a public suffix (co.uk,
+// com, github.io), then any that is not a valid hostname. The first and third are a *NameError with
+// CodeDomainInvalid, the second with CodeDomainPublicSuffix. The order is the point: ValidateHost
+// refuses every single-label name, so running it first would answer a bare top level such as com
+// with the invalid code instead of the public-suffix one.
 func ValidateSuffix(suffix string) error {
 	suffix = NormalizeHost(suffix)
 	if suffix == "" {
 		return &NameError{Code: CodeDomainInvalid, Message: "The domain is empty. Enter a suffix such as “apps.example.com”."}
 	}
+	if isPublicSuffix(suffix) {
+		return &NameError{Code: CodeDomainPublicSuffix, Message: "“" + suffix + "” is a public suffix, shared by many owners, so no one can serve names under it. Register a domain you control below it, such as “apps." + suffix + "”."}
+	}
 	if err := ValidateHost(suffix); err != nil {
 		return &NameError{Code: CodeDomainInvalid, Message: "“" + suffix + "” is not a valid domain: " + err.Error() + "."}
 	}
 	return nil
+}
+
+// isPublicSuffix reports whether s is, in whole, a public suffix. A name with a wildcard or a
+// non-ASCII character is left to ValidateHost, which says what is wrong with it; the public-suffix
+// list holds neither.
+func isPublicSuffix(s string) bool {
+	if strings.Contains(s, "*") || !isASCII(s) {
+		return false
+	}
+	suffix, _ := publicsuffix.PublicSuffix(s)
+	return suffix == s
 }
 
 // Under reports whether host is a name strictly below suffix: app.apps.example.com is under
