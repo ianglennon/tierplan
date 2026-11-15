@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,11 +31,15 @@ import (
 // value, which would echo a secret. The handler bounds it at maxIngressTokenBytes instead and never puts it in a detail.
 
 const (
-	problemIngressUnavailable    = "ingress_unavailable"
-	problemIngressDomainNotFound = "ingress_domain_not_found"
-	problemIngressDomainExists   = "ingress_domain_exists"
-	problemIngressTokenMissing   = "ingress_token_missing"  //nolint:gosec // G101: a problem type, not a credential
-	problemIngressTokenTooLong   = "ingress_token_too_long" //nolint:gosec // G101: a problem type, not a credential
+	problemIngressUnavailable      = "ingress_unavailable"
+	problemIngressDomainNotFound   = "ingress_domain_not_found"
+	problemIngressDomainExists     = "ingress_domain_exists"
+	problemIngressDomainInUse      = "ingress_domain_in_use"
+	problemIngressTokenMissing     = "ingress_token_missing"  //nolint:gosec // G101: a problem type, not a credential
+	problemIngressTokenTooLong     = "ingress_token_too_long" //nolint:gosec // G101: a problem type, not a credential
+	problemIngressHostnameInvalid  = "ingress_hostname_invalid"
+	problemIngressHostnameNotUnder = "ingress_hostname_not_under_domain"
+	problemIngressHostnameClaimed  = "ingress_hostname_claimed"
 
 	// ingressDomainTarget is the target type of every audit row of these routes.
 	ingressDomainTarget = "ingress_domain"
@@ -97,6 +102,21 @@ type IngressNoContentOutput struct {
 	CacheControl string `header:"Cache-Control"`
 }
 
+// IngressReservationBody is a reserved hostname.
+type IngressReservationBody struct {
+	DomainID  string    `json:"domainId" doc:"The domain the name is reserved under"`
+	Suffix    string    `json:"suffix" doc:"The domain's suffix"`
+	Hostname  string    `json:"hostname" doc:"The reserved hostname, lower-case with no trailing dot"`
+	CreatedBy string    `json:"createdBy" doc:"The ID of the user who reserved it"`
+	CreatedAt time.Time `json:"createdAt" doc:"When it was reserved"`
+}
+
+// IngressReservationOutput is one reservation, never cached.
+type IngressReservationOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressReservationBody
+}
+
 // ListIngressDomainsInput is the path of the list route.
 type ListIngressDomainsInput struct {
 	EnvironmentPathInput
@@ -123,6 +143,34 @@ type ReplaceIngressDomainTokenInput struct {
 	Body      struct {
 		Token string `json:"token,omitempty" doc:"The new DNS provider API token, at most 4096 bytes. It is tested first and replaces the saved one only when the test passes; it is never returned"`
 	}
+}
+
+// DeleteIngressDomainInput is the path of the delete route.
+type DeleteIngressDomainInput struct {
+	EnvironmentPathInput
+	DomainID string `path:"domainId" doc:"The domain's ID"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// ReserveIngressHostnameInput is the path and body of a reservation.
+type ReserveIngressHostnameInput struct {
+	EnvironmentPathInput
+	DomainID string `path:"domainId" doc:"The domain's ID"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		Hostname string `json:"hostname" maxLength:"254" doc:"The exact hostname to hold back, strictly below the domain. It is lower-cased and a trailing dot is dropped. 422 ingress_hostname_not_under_domain for the domain itself or a name outside it, ingress_hostname_invalid for a wildcard or anything that is not a hostname"`
+	}
+}
+
+// UnreserveIngressHostnameInput is the path of a release.
+type UnreserveIngressHostnameInput struct {
+	EnvironmentPathInput
+	DomainID string `path:"domainId" doc:"The domain's ID"`
+	Hostname string `path:"hostname" doc:"The reserved hostname"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
 // ingressDomainBody maps a domain onto the contract. reserved may be nil.
@@ -231,6 +279,34 @@ func ingressInternal(log *slog.Logger, what string, err error) error {
 	return huma.Error500InternalServerError("internal error")
 }
 
+// holdersProblem is the 409 for a domain that stacks still serve names under. The sentence and the errors list name every
+// holder: a domain is registered in one environment and its holders are stacks of that environment, which the Admin
+// manages.
+func holdersProblem(suffix string, holders []ingressstore.Holder) error {
+	m := &huma.ErrorModel{Type: problemIngressDomainInUse, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict}
+	var seen []string
+	for i, h := range holders {
+		name := h.StackName
+		if name == "" {
+			name = "TierPlan itself"
+		}
+		label := name + " in " + h.EnvName
+		m.Errors = append(m.Errors, &huma.ErrorDetail{Location: "holders[" + strconv.Itoa(i) + "]", Message: label})
+		dup := false
+		for _, s := range seen {
+			if s == label {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			seen = append(seen, label)
+		}
+	}
+	m.Detail = "“" + suffix + "” cannot be deleted while hostnames under it are claimed by: " + strings.Join(seen, ", ") + ". Remove those hostnames from the stacks first."
+	return m
+}
+
 // RegisterIngress registers the ingress domain routes: list, register, replace the token, delete, reserve and release.
 // Every one needs ingress.manage on the environment (its Admin) and every id is looked up inside that environment, so a
 // domain id of another environment is a 404, exactly like one that does not exist. The routes are always registered;
@@ -266,7 +342,10 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 	}
 	// failed maps a refusal of the store onto its problem.
 	failed := func(what string, err error) error {
-		var ne *ingress.NameError
+		var (
+			ne  *ingress.NameError
+			clm *ingressstore.ReservedClaimedError
+		)
 		switch {
 		case errors.As(err, &ne):
 			return httpx.Problem(http.StatusUnprocessableEntity, ne.Code, ne.Message)
@@ -276,6 +355,10 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 			return httpx.Problem(http.StatusConflict, problemIngressDomainExists, "This environment already has that domain registered.")
 		case errors.Is(err, ingressstore.ErrTokenEmpty):
 			return httpx.Problem(http.StatusUnprocessableEntity, problemIngressTokenMissing, "Enter the DNS provider API token for this domain.")
+		case errors.Is(err, ingressstore.ErrNotUnderDomain):
+			return httpx.Problem(http.StatusUnprocessableEntity, problemIngressHostnameNotUnder, "A reserved name must be strictly below the domain: not the domain itself and not a name outside it.")
+		case errors.As(err, &clm):
+			return httpx.Problem(http.StatusConflict, problemIngressHostnameClaimed, clm.Message)
 		}
 		return ingressInternal(d.Log, what, err)
 	}
@@ -410,5 +493,114 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 			return nil, failed("replace the token", err)
 		}
 		return &IngressDomainOutput{CacheControl: "no-store", Body: ingressDomainBody(dom, cur.Reserved)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteIngressDomain",
+		Method:        http.MethodDelete,
+		Path:          "/api/env/{envId}/ingress/domains/{domainId}",
+		DefaultStatus: http.StatusNoContent,
+		Summary:       "Delete a domain",
+		Description: "Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 " + problemIngressDomainInUse + " names every holding " +
+			"stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. 404 " + problemIngressDomainNotFound +
+			" for a domain that is gone or belongs to another environment, with no audit row. Audited as ingress.domain_deleted. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *DeleteIngressDomainInput) (*IngressNoContentOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		err := d.Store.DeleteDomain(ctx, in.EnvID, in.DomainID, func(ctx context.Context, tx *sql.Tx, dom ingress.Domain) error {
+			details := map[string]string{"suffix": dom.Suffix, "issuer": string(dom.Issuer)}
+			return d.Audit.RecordTx(ctx, tx, audited(ctx, p, in.UserAgent, audit.ActionIngressDomainDeleted, in.EnvID, dom.ID, details))
+		})
+		var use *ingressstore.DomainInUseError
+		if errors.As(err, &use) {
+			suffix := ""
+			if cur, derr := domainOf(ctx, in.EnvID, in.DomainID); derr == nil {
+				suffix = cur.Suffix
+			}
+			return nil, holdersProblem(suffix, use.Holders)
+		}
+		if err != nil {
+			return nil, failed("delete the domain", err)
+		}
+		return &IngressNoContentOutput{CacheControl: "no-store"}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "reserveIngressHostname",
+		Method:        http.MethodPost,
+		Path:          "/api/env/{envId}/ingress/domains/{domainId}/reserved",
+		DefaultStatus: http.StatusCreated,
+		Summary:       "Reserve a hostname under a domain",
+		Description: "Holds back one exact hostname strictly below the domain, so no stack in any environment can claim it. The name is lower-cased and a trailing dot is dropped. " +
+			"422 " + problemIngressHostnameNotUnder + " for the domain itself or a name outside it, 422 " + problemIngressHostnameInvalid + " for a wildcard or anything that is not a hostname. " +
+			"409 " + problemIngressHostnameClaimed + " when a stack already holds the name: the detail names the stack and its environment only when the caller may see that environment, " +
+			"and says only that another environment holds it otherwise. Reserving a name that is reserved already is a no-op that writes no audit row. 404 " + problemIngressDomainNotFound +
+			" for a domain of another environment. Audited as ingress.host_reserved. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ReserveIngressHostnameInput) (*IngressReservationOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		var canView func(string) bool
+		if d.Checker != nil {
+			acc, err := d.Checker.Access(ctx, p)
+			if err != nil {
+				return nil, ingressInternal(d.Log, "read the caller's access", err)
+			}
+			canView = func(envID string) bool { return acc.For(envID).Role != rbac.RoleNone }
+		}
+		res, _, err := d.Store.Reserve(ctx, ingressstore.ReserveInput{
+			EnvID: in.EnvID, DomainID: in.DomainID, Hostname: in.Body.Hostname, Actor: p.ID, CanView: canView,
+		}, func(ctx context.Context, tx *sql.Tx, r ingressstore.Reservation) error {
+			details := map[string]string{"suffix": r.Suffix, "hostname": r.Hostname}
+			return d.Audit.RecordTx(ctx, tx, audited(ctx, p, in.UserAgent, audit.ActionIngressHostReserved, in.EnvID, r.DomainID, details))
+		})
+		var ne *ingress.NameError
+		if errors.As(err, &ne) {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemIngressHostnameInvalid, ne.Message)
+		}
+		if err != nil {
+			return nil, failed("reserve the hostname", err)
+		}
+		return &IngressReservationOutput{CacheControl: "no-store", Body: IngressReservationBody{
+			DomainID: res.DomainID, Suffix: res.Suffix, Hostname: res.Hostname, CreatedBy: res.CreatedBy, CreatedAt: res.CreatedAt,
+		}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "unreserveIngressHostname",
+		Method:        http.MethodDelete,
+		Path:          "/api/env/{envId}/ingress/domains/{domainId}/reserved/{hostname}",
+		DefaultStatus: http.StatusNoContent,
+		Summary:       "Release a reserved hostname",
+		Description: "Lets a reserved name go. Releasing a name that is not reserved is a success that writes no audit row. 404 " + problemIngressDomainNotFound +
+			" for a domain of another environment. Audited as ingress.host_unreserved. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *UnreserveIngressHostnameInput) (*IngressNoContentOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Store == nil {
+			return nil, unavailable()
+		}
+		_, err := d.Store.Unreserve(ctx, in.EnvID, in.DomainID, in.Hostname, func(ctx context.Context, tx *sql.Tx, r ingressstore.Reservation) error {
+			details := map[string]string{"suffix": r.Suffix, "hostname": r.Hostname}
+			return d.Audit.RecordTx(ctx, tx, audited(ctx, p, in.UserAgent, audit.ActionIngressHostUnreserved, in.EnvID, r.DomainID, details))
+		})
+		if err != nil {
+			return nil, failed("release the hostname", err)
+		}
+		return &IngressNoContentOutput{CacheControl: "no-store"}, nil
 	})
 }

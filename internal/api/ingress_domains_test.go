@@ -507,3 +507,288 @@ func TestIngressDomainTokenOfAnotherEnvironmentsDomainIsNotFound(t *testing.T) {
 		t.Errorf("audit rows = %+v, want none", rows)
 	}
 }
+
+// claim makes a stack of an environment and has it claim one hostname through the store.
+func (f *ingressFix) claim(t *testing.T, env, stackID, stackName, host string) {
+	t.Helper()
+	if _, err := f.st.Write.Exec(`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES (?, ?, ?, 'swarm', 'tester', 1)`, stackID, env, stackName); err != nil {
+		t.Fatal(err)
+	}
+	decl := ingress.Declaration{Service: "web", Host: host, Label: "tierplan.ingress.host", Port: 80}
+	if _, err := f.ingressStore.ReplaceStackRoutes(context.Background(), ingressstore.ReplaceInput{EnvID: env, StackID: stackID, Actor: "tester", Decls: []ingress.Declaration{decl}}); err != nil {
+		t.Fatalf("claim %s for %s: %v", host, stackName, err)
+	}
+}
+
+// envNameOf is the name of an environment as the database holds it.
+func (f *ingressFix) envNameOf(t *testing.T, id string) string {
+	t.Helper()
+	var name string
+	if err := f.st.Read.QueryRow(`SELECT name FROM environments WHERE id = ?`, id).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// ingressProblem is the parts of a problem the holders and claimed-name tests read.
+type ingressProblem struct {
+	Type   string `json:"type"`
+	Detail string `json:"detail"`
+	Errors []struct {
+		Location string `json:"location"`
+		Message  string `json:"message"`
+	} `json:"errors"`
+}
+
+func decodeIngressProblem(t *testing.T, rec *httptest.ResponseRecorder) ingressProblem {
+	t.Helper()
+	var p ingressProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	return p
+}
+
+func TestIngressDomainDeleteIsRefusedWhileAHostnameClaimsItAndNamesEveryHolder(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.claim(t, f.envA, "stack-web", "web", "web.apps.example.com")
+	f.claim(t, f.envA, "stack-api", "api", "api.apps.example.com")
+	envName := f.envNameOf(t, f.envA)
+
+	rec := f.credCall(t, f.adminA, http.MethodDelete, ingressPath(f.envA, "/", d.ID), "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete while claimed: %d %s, want 409", rec.Code, rec.Body)
+	}
+	p := decodeIngressProblem(t, rec)
+	if p.Type != "ingress_domain_in_use" {
+		t.Errorf("type = %q, want ingress_domain_in_use", p.Type)
+	}
+	for _, want := range []string{"web in " + envName, "api in " + envName, "apps.example.com"} {
+		if !strings.Contains(p.Detail, want) {
+			t.Errorf("detail %q lacks %q", p.Detail, want)
+		}
+	}
+	if len(p.Errors) != 2 || p.Errors[0].Location != "holders[0]" || p.Errors[0].Message != "api in "+envName ||
+		p.Errors[1].Location != "holders[1]" || p.Errors[1].Message != "web in "+envName {
+		t.Errorf("errors = %+v, want one entry per holder in the store's order (api, web)", p.Errors)
+	}
+	if views, err := f.ingressStore.Domains(context.Background(), f.envA); err != nil || len(views) != 1 {
+		t.Errorf("domains = %+v, %v, want the domain kept", views, err)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressDomainDeleted); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none for a refused delete", rows)
+	}
+}
+
+func TestIngressDomainDeleteRemovesAnUnclaimedDomainWithItsReservedNamesAndIsNotRepeatable(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.claim(t, f.envA, "stack-web", "web", "web.apps.example.com")
+	if rec := f.credCall(t, f.adminA, http.MethodPost, ingressPath(f.envA, "/", d.ID, "/reserved"), `{"hostname":"admin.apps.example.com"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("reserve: %d %s", rec.Code, rec.Body)
+	}
+	if err := f.ingressStore.ReleaseStack(context.Background(), f.envA, "stack-web", "tester", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := f.credCall(t, f.adminA, http.MethodDelete, ingressPath(f.envA, "/", d.ID), "")
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("delete: %d %s, want 204 with no body", rec.Code, rec.Body)
+	}
+	views, err := f.ingressStore.Domains(context.Background(), f.envA)
+	if err != nil || len(views) != 0 {
+		t.Errorf("domains = %+v, %v, want none", views, err)
+	}
+	var reserved int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM ingress_reserved`).Scan(&reserved); err != nil || reserved != 0 {
+		t.Errorf("reserved rows = %d, %v, want the names gone with the domain", reserved, err)
+	}
+	rows := f.ingressAudit(t, audit.ActionIngressDomainDeleted)
+	if len(rows) != 1 || rows[0].Result != "success" || rows[0].TargetID != d.ID || rows[0].EnvID != f.envA ||
+		rows[0].Details["suffix"] != "apps.example.com" || rows[0].Details["issuer"] != "production" {
+		t.Fatalf("audit rows = %+v, want one ingress.domain_deleted row", rows)
+	}
+
+	rec = f.credCall(t, f.adminA, http.MethodDelete, ingressPath(f.envA, "/", d.ID), "")
+	if rec.Code != http.StatusNotFound || problemType(t, rec) != "ingress_domain_not_found" {
+		t.Errorf("second delete: %d %s, want 404 ingress_domain_not_found", rec.Code, rec.Body)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressDomainDeleted); len(rows) != 1 {
+		t.Errorf("audit rows after the second delete = %d, want still one", len(rows))
+	}
+}
+
+func TestIngressReserveHoldsBackANormalisedNameAndAnAgainWritesNoSecondRow(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+	path := ingressPath(f.envA, "/", d.ID, "/reserved")
+
+	rec := f.credCall(t, f.adminA, http.MethodPost, path, `{"hostname":"Admin.apps.example.com."}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("reserve: %d %s, want 201", rec.Code, rec.Body)
+	}
+	var got struct {
+		DomainID, Suffix, Hostname, CreatedBy string
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Hostname != "admin.apps.example.com" || got.DomainID != d.ID || got.Suffix != "apps.example.com" || got.CreatedBy != "id-ing-admin-a" ||
+		rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("answer = %+v (%s)", got, rec.Body)
+	}
+	rows := f.ingressAudit(t, audit.ActionIngressHostReserved)
+	if len(rows) != 1 || rows[0].Result != "success" || rows[0].TargetID != d.ID || rows[0].Details["hostname"] != "admin.apps.example.com" || rows[0].Details["suffix"] != "apps.example.com" {
+		t.Fatalf("audit rows = %+v, want one ingress.host_reserved row", rows)
+	}
+
+	if rec := f.credCall(t, f.adminA, http.MethodPost, path, `{"hostname":"admin.apps.example.com"}`); rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Errorf("reserve again: %d %s, want 200 or 201", rec.Code, rec.Body)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressHostReserved); len(rows) != 1 {
+		t.Errorf("audit rows after reserving again = %d, want still one", len(rows))
+	}
+}
+
+func TestIngressReserveRefusesTheApexAnOutsideNameAndAnInvalidOne(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+	path := ingressPath(f.envA, "/", d.ID, "/reserved")
+
+	for _, c := range []struct{ host, problem string }{
+		{"apps.example.com", "ingress_hostname_not_under_domain"},
+		{"x.other.com", "ingress_hostname_not_under_domain"},
+		{"badapps.example.com", "ingress_hostname_not_under_domain"},
+		{"*.apps.example.com", "ingress_hostname_invalid"},
+		{"under_score.apps.example.com", "ingress_hostname_invalid"},
+	} {
+		rec := f.credCall(t, f.adminA, http.MethodPost, path, `{"hostname":"`+c.host+`"}`)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != c.problem {
+			t.Errorf("reserve %q: %d %s, want 422 %s", c.host, rec.Code, rec.Body, c.problem)
+		}
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressHostReserved); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none for refused names", rows)
+	}
+}
+
+func TestIngressReserveOfAClaimedNameNamesTheHolderOnlyToACallerWhoMaySeeItsEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	inA := f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.register(t, f.adminB, f.envB, "apps.example.com")
+	f.claim(t, f.envB, "stack-in-b", "secret-stack-b", "taken.apps.example.com")
+	envBName := f.envNameOf(t, f.envB)
+	path := ingressPath(f.envA, "/", inA.ID, "/reserved")
+
+	rec := f.credCall(t, f.adminA, http.MethodPost, path, `{"hostname":"taken.apps.example.com"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_hostname_claimed" {
+		t.Fatalf("reserve as an admin of env A only: %d %s, want 409 ingress_hostname_claimed", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "secret-stack-b") || strings.Contains(body, envBName) || strings.Contains(body, f.envB) {
+		t.Errorf("the refusal names a stack or an environment the caller cannot see: %s", body)
+	}
+
+	rec = f.credCall(t, f.admin, http.MethodPost, path, `{"hostname":"taken.apps.example.com"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_hostname_claimed" {
+		t.Fatalf("reserve as the instance admin: %d %s, want 409 ingress_hostname_claimed", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "secret-stack-b") || !strings.Contains(body, envBName) {
+		t.Errorf("the instance admin's refusal does not name the stack and its environment: %s", body)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressHostReserved); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none", rows)
+	}
+}
+
+func TestIngressUnreserveIsIdempotentAndWritesARowOnlyWhenAReservationGoes(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+	if rec := f.credCall(t, f.adminA, http.MethodPost, ingressPath(f.envA, "/", d.ID, "/reserved"), `{"hostname":"admin.apps.example.com"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("reserve: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := f.credCall(t, f.adminA, http.MethodDelete, ingressPath(f.envA, "/", d.ID, "/reserved/nothing.apps.example.com"), "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("release an absent name: %d %s, want 204", rec.Code, rec.Body)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressHostUnreserved); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v, want none for an absent name", rows)
+	}
+
+	rec = f.credCall(t, f.adminA, http.MethodDelete, ingressPath(f.envA, "/", d.ID, "/reserved/Admin.apps.example.com"), "")
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("release a reserved name: %d %s, want 204", rec.Code, rec.Body)
+	}
+	rows := f.ingressAudit(t, audit.ActionIngressHostUnreserved)
+	if len(rows) != 1 || rows[0].Result != "success" || rows[0].TargetID != d.ID || rows[0].Details["hostname"] != "admin.apps.example.com" {
+		t.Fatalf("audit rows = %+v, want one ingress.host_unreserved row", rows)
+	}
+	if rec := f.credCall(t, f.adminA, http.MethodDelete, ingressPath(f.envA, "/", d.ID, "/reserved/admin.apps.example.com"), ""); rec.Code != http.StatusNoContent {
+		t.Errorf("release again: %d, want 204", rec.Code)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressHostUnreserved); len(rows) != 1 {
+		t.Errorf("audit rows after releasing again = %d, want still one", len(rows))
+	}
+	views, err := f.ingressStore.Domains(context.Background(), f.envA)
+	if err != nil || len(views) != 1 || len(views[0].Reserved) != 0 {
+		t.Errorf("domains = %+v, %v, want the name released", views, err)
+	}
+}
+
+func TestIngressDomainDeleteReserveAndUnreserveRefuseAnotherEnvironmentsDomainId(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	inB := f.register(t, f.adminB, f.envB, "apps.example.com")
+	if _, _, err := f.ingressStore.Reserve(context.Background(), ingressstore.ReserveInput{EnvID: f.envB, DomainID: inB.ID, Hostname: "kept.apps.example.com", Actor: "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct{ name, method, path, body string }{
+		{"delete", http.MethodDelete, ingressPath(f.envA, "/", inB.ID), ""},
+		{"reserve", http.MethodPost, ingressPath(f.envA, "/", inB.ID, "/reserved"), `{"hostname":"new.apps.example.com"}`},
+		{"unreserve", http.MethodDelete, ingressPath(f.envA, "/", inB.ID, "/reserved/kept.apps.example.com"), ""},
+	} {
+		rec := f.credCall(t, f.adminA, c.method, c.path, c.body)
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "ingress_domain_not_found" {
+			t.Errorf("%s under env A with env B's domain id: %d %s, want 404 ingress_domain_not_found", c.name, rec.Code, rec.Body)
+		}
+	}
+	views, err := f.ingressStore.Domains(context.Background(), f.envB)
+	if err != nil || len(views) != 1 || len(views[0].Reserved) != 1 || views[0].Reserved[0] != "kept.apps.example.com" {
+		t.Errorf("env B's domain = %+v, %v, want it untouched", views, err)
+	}
+	for _, action := range []string{audit.ActionIngressDomainDeleted, audit.ActionIngressHostReserved, audit.ActionIngressHostUnreserved} {
+		if rows := f.ingressAudit(t, action); len(rows) != 0 {
+			t.Errorf("%s rows = %+v, want none", action, rows)
+		}
+	}
+}
+
+func TestIngressDomainDeleteReserveAndUnreserveNeedTheAdminOfTheEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+
+	for _, c := range []struct{ name, method, path, body string }{
+		{"delete", http.MethodDelete, ingressPath(f.envA, "/", d.ID), ""},
+		{"reserve", http.MethodPost, ingressPath(f.envA, "/", d.ID, "/reserved"), `{"hostname":"new.apps.example.com"}`},
+		{"unreserve", http.MethodDelete, ingressPath(f.envA, "/", d.ID, "/reserved/new.apps.example.com"), ""},
+	} {
+		if rec := f.credCall(t, f.operatorA, c.method, c.path, c.body); rec.Code != http.StatusForbidden {
+			t.Errorf("%s as an operator: %d %s, want 403", c.name, rec.Code, rec.Body)
+		}
+		if rec := f.credCall(t, f.adminB, c.method, c.path, c.body); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+			t.Errorf("%s as an admin of another environment: %d %s, want 403 or 404", c.name, rec.Code, rec.Body)
+		}
+	}
+	if views, err := f.ingressStore.Domains(context.Background(), f.envA); err != nil || len(views) != 1 || len(views[0].Reserved) != 0 {
+		t.Errorf("domains = %+v, %v, want the domain untouched", views, err)
+	}
+}
