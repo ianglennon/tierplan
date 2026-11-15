@@ -183,10 +183,10 @@ func TestCheckRules(t *testing.T) {
 				tt.setup(w)
 			}
 			plan, problems := Check("s1", tt.decls, w)
-			if got := policyCodes(problems); !reflect.DeepEqual(got, tt.want) && !(len(got) == 0 && len(tt.want) == 0) {
+			if got := policyCodes(problems); !reflect.DeepEqual(got, tt.want) && (len(got) != 0 || len(tt.want) != 0) {
 				t.Fatalf("codes = %v, want %v (problems %+v)", got, tt.want, problems)
 			}
-			if got := plan.Hostnames(); !reflect.DeepEqual(got, tt.wantHost) && !(len(got) == 0 && len(tt.wantHost) == 0) {
+			if got := plan.Hostnames(); !reflect.DeepEqual(got, tt.wantHost) && (len(got) != 0 || len(tt.wantHost) != 0) {
 				t.Fatalf("planned hosts = %v, want %v", got, tt.wantHost)
 			}
 			for _, p := range problems {

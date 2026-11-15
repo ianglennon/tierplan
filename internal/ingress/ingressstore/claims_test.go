@@ -27,7 +27,7 @@ func TestTracerOneOwnerPerHostnameAcrossEnvironments(t *testing.T) {
 	seedStack(t, st, "stack-b", "env-b", "web-b")
 
 	// D-04: the same suffix registers in both environments.
-	const token = "cf-token-plaintext-1234"
+	const token = "cf-token-plaintext-1234" //nolint:gosec // G101: a fixed test fixture, not a credential
 	domA, err := s.CreateDomain(ctx, CreateDomainInput{EnvID: "env-a", Suffix: "Apps.Example.com.", Issuer: ingress.IssuerStaging, Token: []byte(token), Actor: "admin"}, nil)
 	if err != nil {
 		t.Fatalf("register the domain in env A: %v", err)

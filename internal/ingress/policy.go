@@ -128,7 +128,7 @@ func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, b
 		p.Message = "“" + d.Host + "” is reserved by an Admin and cannot be used by a stack. Choose another name."
 		return dom, p, true
 	}
-	if c, held := w.Claims[d.Host]; held && !(c.OwnerKind == OwnerStack && c.StackID == stackID) {
+	if c, held := w.Claims[d.Host]; held && (c.OwnerKind != OwnerStack || c.StackID != stackID) {
 		p.Code = CodeHostTaken
 		c.Hostname = d.Host
 		p.Message = DescribeHolder(c, w.CanView)
