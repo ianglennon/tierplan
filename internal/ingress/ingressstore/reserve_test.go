@@ -235,3 +235,39 @@ func TestReserveInOneEnvironmentRefusesAStackOfAnotherEnvironment(t *testing.T) 
 		t.Errorf("env B config_version moved %d -> %d on a refusal", before, after)
 	}
 }
+
+func TestReserveNotifiesOnlyOnACommittedChange(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	dom := registerDomain(t, s, "env-a", "apps.example.com")
+	sub := listen(s)
+	defer sub.Close()
+	in := ReserveInput{EnvID: "env-a", DomainID: dom.ID, Hostname: "admin.apps.example.com", Actor: "admin"}
+
+	if _, _, err := s.Reserve(ctx, in, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !woken(sub) || len(sub.Pending()) != 1 {
+		t.Fatal("a new reservation did not notify its environment")
+	}
+	if _, _, err := s.Reserve(ctx, in, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Unreserve(ctx, "env-a", dom.ID, "absent.apps.example.com", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := s.Reserve(ctx, ReserveInput{EnvID: "env-a", DomainID: dom.ID, Hostname: "apps.example.com", Actor: "admin"}, nil)
+	if !errors.Is(err, ErrNotUnderDomain) {
+		t.Fatal(err)
+	}
+	if woken(sub) {
+		t.Error("a no-op or a refused write woke the notifier")
+	}
+	if _, err := s.Unreserve(ctx, "env-a", dom.ID, in.Hostname, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !woken(sub) {
+		t.Error("releasing a reserved name did not notify")
+	}
+}

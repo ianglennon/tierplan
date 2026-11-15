@@ -5,9 +5,12 @@ package ingressstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/vault"
@@ -136,5 +139,339 @@ func TestTracerOneOwnerPerHostnameAcrossEnvironments(t *testing.T) {
 	// A stack that is not in the environment is not found.
 	if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-b", StackID: "stack-a", Actor: "x"}); !errors.Is(err, ErrStackNotFound) {
 		t.Errorf("a stack of another environment = %v, want ErrStackNotFound", err)
+	}
+}
+
+// hostIn is a hostname under apps.example.com.
+func hostIn(label string) string { return label + ".apps.example.com" }
+
+// declFor is a route declaration of host to the service web on port.
+func declFor(host string, port int) ingress.Declaration {
+	return ingress.Declaration{Service: "web", Host: host, Label: "tierplan.ingress.host", Port: port}
+}
+
+// listen subscribes to a notifier wired into the store and returns the subscription.
+func listen(s *Store) *ingress.Subscription {
+	s.notifier = ingress.NewNotifier()
+	return s.notifier.Subscribe()
+}
+
+// woken reports whether a wake-up is waiting. Notify sends before it returns, so this is exact.
+func woken(sub *ingress.Subscription) bool {
+	select {
+	case <-sub.C():
+		return true
+	default:
+		return false
+	}
+}
+
+func TestReplaceStackRoutesIdenticalPlanWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "apps.example.com")
+	decls := []ingress.Declaration{declFor(hostIn("app"), 8080), {Service: "api", Host: hostIn("app"), Label: "tierplan.ingress.host", PathPrefix: "/api", Port: 9000, Strip: true}}
+	if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "alice", Decls: decls}); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, st, "env-a")
+	sub := listen(s)
+	defer sub.Close()
+
+	hooked := 0
+	later := fixedNow.Add(time.Hour)
+	s.now = func() time.Time { return later }
+	plan, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "bob", Decls: decls,
+		Hook: func(context.Context, *sql.Tx, ingress.Plan) error { hooked++; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Hostnames(); len(got) != 1 || got[0] != hostIn("app") {
+		t.Errorf("plan hostnames = %v, want the stored plan returned", got)
+	}
+	if hooked != 0 {
+		t.Errorf("hook ran %d times for an identical plan", hooked)
+	}
+	if after := configVersion(t, st, "env-a"); after != before {
+		t.Errorf("config_version moved %d -> %d for an identical plan", before, after)
+	}
+	if woken(sub) {
+		t.Error("a no-op write woke the notifier")
+	}
+	var by string
+	var at int64
+	if err := st.Read.QueryRow(`SELECT claimed_by, claimed_at FROM ingress_hostnames WHERE hostname = ?`, hostIn("app")).Scan(&by, &at); err != nil {
+		t.Fatal(err)
+	}
+	if by != "alice" || at != fixedNow.UnixNano() {
+		t.Errorf("claim = %q at %d, want it untouched (alice, %d)", by, at, fixedNow.UnixNano())
+	}
+}
+
+func TestReplaceStackRoutesChangedPlanKeepsTheClaimOfAKeptHostname(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "apps.example.com")
+	if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "alice", Decls: []ingress.Declaration{declFor(hostIn("keep"), 8080), declFor(hostIn("drop"), 8080)}}); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, st, "env-a")
+	sub := listen(s)
+	defer sub.Close()
+
+	later := fixedNow.Add(time.Hour)
+	s.now = func() time.Time { return later }
+	hooked := 0
+	_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "bob",
+		Decls: []ingress.Declaration{declFor(hostIn("keep"), 9090), declFor(hostIn("new"), 8080)},
+		Hook:  func(context.Context, *sql.Tx, ingress.Plan) error { hooked++; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hooked != 1 {
+		t.Errorf("hook ran %d times, want once", hooked)
+	}
+	if after := configVersion(t, st, "env-a"); after != before+1 {
+		t.Errorf("config_version = %d, want %d", after, before+1)
+	}
+	if !woken(sub) {
+		t.Fatal("a committed change did not wake the notifier")
+	}
+	if got := sub.Pending(); len(got) != 1 || got[0] != "env-a" {
+		t.Errorf("pending = %v, want [env-a]", got)
+	}
+	if woken(sub) {
+		t.Error("one change woke the notifier twice")
+	}
+
+	claims := map[string][2]any{}
+	rows, err := st.Read.Query(`SELECT hostname, claimed_by, claimed_at FROM ingress_hostnames WHERE stack_id = 'stack-a'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h, by string
+		var at int64
+		if err := rows.Scan(&h, &by, &at); err != nil {
+			t.Fatal(err)
+		}
+		claims[h] = [2]any{by, at}
+	}
+	if len(claims) != 2 {
+		t.Fatalf("claims = %v, want keep and new", claims)
+	}
+	if got := claims[hostIn("keep")]; got != [2]any{"alice", fixedNow.UnixNano()} {
+		t.Errorf("kept hostname claim = %v, want its original claimed_by and claimed_at", got)
+	}
+	if got := claims[hostIn("new")]; got != [2]any{"bob", later.UnixNano()} {
+		t.Errorf("new hostname claim = %v, want bob at the new time", got)
+	}
+	if _, gone := claims[hostIn("drop")]; gone {
+		t.Error("the removed declaration's hostname is still claimed")
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes WHERE hostname = ?`, hostIn("drop")); n != 0 {
+		t.Errorf("%d routes of the released hostname remain", n)
+	}
+	var port int
+	if err := st.Read.QueryRow(`SELECT port FROM ingress_routes WHERE hostname = ?`, hostIn("keep")).Scan(&port); err != nil || port != 9090 {
+		t.Errorf("kept hostname route port = %d, %v; want the changed 9090", port, err)
+	}
+}
+
+func TestReplaceStackRoutesPathAndSchemeDefaultsCountAsTheSamePlan(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "apps.example.com")
+	explicit := declFor(hostIn("app"), 80)
+	explicit.PathPrefix, explicit.Scheme = "/", ingress.SchemeHTTP
+	if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "a", Decls: []ingress.Declaration{declFor(hostIn("app"), 80)}}); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, st, "env-a")
+	if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "a", Decls: []ingress.Declaration{explicit}}); err != nil {
+		t.Fatal(err)
+	}
+	if after := configVersion(t, st, "env-a"); after != before {
+		t.Errorf("an explicit default moved config_version %d -> %d", before, after)
+	}
+}
+
+func TestReplaceStackRoutesRefusalChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-b", "Beta")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	seedStack(t, st, "stack-b", "env-b", "web-b")
+	domA := registerDomain(t, s, "env-a", "apps.example.com")
+	registerDomain(t, s, "env-b", "apps.example.com")
+	claim(t, s, "env-a", "stack-a", hostIn("taken"))
+	if _, _, err := s.Reserve(ctx, ReserveInput{EnvID: "env-a", DomainID: domA.ID, Hostname: hostIn("held-back"), Actor: "admin"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, st, "env-b")
+	sub := listen(s)
+	defer sub.Close()
+
+	for want, host := range map[string]string{
+		ingress.CodeHostTaken:        hostIn("taken"),
+		ingress.CodeHostReserved:     hostIn("held-back"),
+		ingress.CodeDomainNotAllowed: "app.other.example.org",
+	} {
+		_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-b", StackID: "stack-b", Actor: "bob", Decls: []ingress.Declaration{declFor(host, 80)}})
+		var refused *RefusedError
+		if !errors.As(err, &refused) || refused.Problems[0].Code != want {
+			t.Errorf("%s = %v, want a refusal %s", host, err, want)
+		}
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE env_id = 'env-b'`); n != 0 {
+		t.Errorf("%d claims of env B after refusals", n)
+	}
+	if after := configVersion(t, st, "env-b"); after != before {
+		t.Errorf("env B config_version moved %d -> %d on refusals", before, after)
+	}
+	if woken(sub) {
+		t.Error("a refused write woke the notifier")
+	}
+}
+
+func TestReleaseStackReleasesEverythingAndNotifiesOnce(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "apps.example.com")
+	if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "alice", Decls: []ingress.Declaration{declFor(hostIn("one"), 80), declFor(hostIn("two"), 80)}}); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, st, "env-a")
+	sub := listen(s)
+	defer sub.Close()
+
+	hooked := 0
+	hook := func(_ context.Context, _ *sql.Tx, p ingress.Plan) error {
+		hooked++
+		if len(p.Claims) != 0 {
+			t.Errorf("release hook plan = %+v, want empty", p)
+		}
+		return nil
+	}
+	if err := s.ReleaseStack(ctx, "env-a", "stack-a", "carol", hook); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE stack_id = 'stack-a'`); n != 0 {
+		t.Errorf("%d claims remain", n)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes WHERE env_id = 'env-a'`); n != 0 {
+		t.Errorf("%d routes remain", n)
+	}
+	if hooked != 1 {
+		t.Errorf("hook ran %d times, want once", hooked)
+	}
+	if after := configVersion(t, st, "env-a"); after != before+1 {
+		t.Errorf("config_version = %d, want %d", after, before+1)
+	}
+	if !woken(sub) || len(sub.Pending()) != 1 || woken(sub) {
+		t.Error("release did not wake the notifier exactly once for one environment")
+	}
+
+	// A stack with nothing left is a no-op.
+	if err := s.ReleaseStack(ctx, "env-a", "stack-a", "carol", hook); err != nil {
+		t.Fatal(err)
+	}
+	if hooked != 1 || configVersion(t, st, "env-a") != before+1 || woken(sub) {
+		t.Error("releasing a stack that holds nothing ran the hook, moved the version or woke the notifier")
+	}
+	if err := s.ReleaseStack(ctx, "env-b", "stack-a", "carol", nil); !errors.Is(err, ErrStackNotFound) {
+		t.Errorf("ReleaseStack of another environment's stack = %v, want ErrStackNotFound", err)
+	}
+}
+
+func TestCascadeDeleteStackBumpsConfigVersion(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "apps.example.com")
+	claim(t, s, "env-a", "stack-a", hostIn("app"))
+	before := configVersion(t, st, "env-a")
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes WHERE hostname = ?`, hostIn("app")); n != 1 {
+		t.Fatalf("%d routes before the delete, want 1", n)
+	}
+
+	// The path every stack deletion takes: the sqlc statement, with no ingress code involved.
+	if n, err := st.Q.DeleteStack(ctx, "stack-a"); err != nil || n != 1 {
+		t.Fatalf("DeleteStack = %d, %v", n, err)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE stack_id = 'stack-a'`); n != 0 {
+		t.Errorf("%d claims remain after the stack row went", n)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes WHERE hostname = ?`, hostIn("app")); n != 0 {
+		t.Errorf("%d routes remain after the stack row went", n)
+	}
+	if after := configVersion(t, st, "env-a"); after <= before {
+		t.Errorf("config_version = %d after the cascade, want more than %d", after, before)
+	}
+}
+
+func TestReplaceStackRoutesTwoWritersOneWinner(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-b", "Beta")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	seedStack(t, st, "stack-b", "env-b", "web-b")
+	registerDomain(t, s, "env-a", "apps.example.com")
+	registerDomain(t, s, "env-b", "apps.example.com")
+	contested := hostIn("contested")
+
+	type writer struct{ env, stack string }
+	writers := []writer{{"env-a", "stack-a"}, {"env-b", "stack-b"}}
+	errs := make([]error, len(writers))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: w.env, StackID: w.stack, Actor: w.stack, Decls: []ingress.Declaration{declFor(contested, 80)}})
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	winners := 0
+	for i, err := range errs {
+		if err == nil {
+			winners++
+			continue
+		}
+		var refused *RefusedError
+		if !errors.As(err, &refused) || len(refused.Problems) != 1 || refused.Problems[0].Code != ingress.CodeHostTaken {
+			t.Errorf("writer %d lost with %v, want a refusal %s", i, err, ingress.CodeHostTaken)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("%d writers won, want exactly 1 (errors: %v)", winners, errs)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE hostname = ?`, contested); n != 1 {
+		t.Errorf("%d claim rows for the contested hostname, want 1", n)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes WHERE hostname = ?`, contested); n != 1 {
+		t.Errorf("%d routes for the contested hostname, want 1", n)
+	}
+	// The loser wrote nothing: exactly one environment has a claim and a version.
+	loserClaims := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE hostname = ? AND env_id = 'env-a'`, contested) +
+		count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE hostname = ? AND env_id = 'env-b'`, contested)
+	if loserClaims != 1 {
+		t.Errorf("the contested hostname is held %d times", loserClaims)
 	}
 }

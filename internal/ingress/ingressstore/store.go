@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,14 +63,17 @@ type Deps struct {
 	Vault *vault.Vault
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// Notifier is told the environment's id after every committed change; nil means nobody is told.
+	Notifier *ingress.Notifier
 }
 
 // Store is the ingress model in the database. DNS tokens are sealed by the vault under the domain's
 // own id, so a sealed token copied into another domain's row does not open.
 type Store struct {
-	st  *store.Store
-	v   *vault.Vault
-	now func() time.Time
+	st       *store.Store
+	v        *vault.Vault
+	now      func() time.Time
+	notifier *ingress.Notifier
 }
 
 // New returns a Store.
@@ -78,7 +82,7 @@ func New(d Deps) *Store {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{st: d.St, v: d.Vault, now: now}
+	return &Store{st: d.St, v: d.Vault, now: now, notifier: d.Notifier}
 }
 
 // toNanos is the stored form of a time: Unix nanoseconds, 0 for the zero time.
@@ -99,7 +103,8 @@ func fromNanos(n int64) time.Time {
 
 // write runs fn in one write transaction. When fn reports a change, the environment's
 // ingress_env.config_version is raised in the same transaction; a write that changes nothing leaves
-// the version where it was. fn's error rolls everything back.
+// the version where it was and nobody is notified. fn's error rolls everything back. After the commit
+// of a change the notifier, if there is one, is told the environment's id; Notify never blocks.
 func (s *Store) write(ctx context.Context, envID, actor string, now time.Time, fn func(tx *sql.Tx, q *sqlc.Queries) (changed bool, err error)) error {
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
@@ -120,6 +125,9 @@ func (s *Store) write(ctx context.Context, envID, actor string, now time.Time, f
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("ingressstore: commit: %w", err)
+	}
+	if changed {
+		s.notifier.Notify(envID)
 	}
 	return nil
 }
@@ -614,8 +622,11 @@ type ReplaceInput struct {
 // reads the world again through its own write transaction and runs ingress.Check on it, so a change
 // that landed since the caller last looked is judged here; a refusal is a *RefusedError and nothing
 // is written. The database's one-owner key is the backstop if the policy ever lets a clash through.
-// A stack with no declarations that holds no claim commits nothing and leaves the environment's
-// config_version where it was. It returns the plan that was stored.
+// A plan identical to what the stack already holds (hostnames, domains and every route's name, path,
+// service, port, scheme and strip) writes nothing, runs no hook, leaves the environment's
+// config_version where it was and notifies nobody; so does a stack with no declarations that holds
+// no claim. A hostname the stack keeps keeps its claimed_by and claimed_at. It returns the plan that
+// was stored.
 //
 // Only tests call it in this phase: no deploy, rollback, git or update path stores claims yet.
 func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingress.Plan, error) {
@@ -643,8 +654,17 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 		if err != nil {
 			return false, fmt.Errorf("ingressstore: list the claims of stack %q: %w", in.StackID, err)
 		}
-		if len(p.Claims) == 0 && len(held) == 0 {
+		routes, err := q.ListIngressRoutesByStack(ctx, stack)
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: list the routes of stack %q: %w", in.StackID, err)
+		}
+		if samePlan(p, held, routes) {
+			plan = p // what the stack holds is what its labels say: nothing to write, nothing to tell
 			return false, nil
+		}
+		kept := make(map[string]sqlc.IngressHostname, len(held))
+		for _, h := range held {
+			kept[h.Hostname] = h
 		}
 		// The routes go with their claims (ON DELETE CASCADE).
 		if _, err := q.DeleteIngressHostnamesByStack(ctx, stack); err != nil {
@@ -652,9 +672,13 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 		}
 		ts := toNanos(now)
 		for _, c := range p.Claims {
+			by, at := in.Actor, ts
+			if prior, ok := kept[c.Hostname]; ok {
+				by, at = prior.ClaimedBy, prior.ClaimedAt // a hostname the stack keeps keeps its history
+			}
 			if err := q.InsertIngressHostname(ctx, sqlc.InsertIngressHostnameParams{
 				Hostname: c.Hostname, EnvID: in.EnvID, DomainID: c.DomainID, OwnerKind: string(ingress.OwnerStack),
-				StackID: stack, ClaimedBy: in.Actor, ClaimedAt: ts,
+				StackID: stack, ClaimedBy: by, ClaimedAt: at,
 			}); err != nil {
 				return false, fmt.Errorf("ingressstore: claim %q: %w", c.Hostname, err)
 			}
@@ -676,6 +700,56 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 		return ingress.Plan{}, err
 	}
 	return plan, nil
+}
+
+// ReleaseStack lets go of every hostname a stack holds, the same way a replacement with no
+// declarations does: the claims and routes go, hook (which may be nil) runs with the empty plan in
+// the same transaction, and the environment's version is raised and its notifier told once. A stack
+// that holds nothing is a no-op.
+//
+// Only tests call it in this phase. The stack delete path does not call it: the claims go with the
+// stack row and the database trigger counts that change.
+func (s *Store) ReleaseStack(ctx context.Context, envID, stackID, actor string, hook ClaimHook) error {
+	_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: envID, StackID: stackID, Actor: actor, Hook: hook})
+	return err
+}
+
+// samePlan reports whether what a stack holds is exactly what the plan would store: the same
+// hostnames under the same domains, and the same routes. A route's empty path and scheme mean "/"
+// and http, as they do when stored.
+func samePlan(p ingress.Plan, held []sqlc.IngressHostname, routes []sqlc.IngressRoute) bool {
+	var wantHosts, wantRoutes []string
+	for _, c := range p.Claims {
+		wantHosts = append(wantHosts, c.Hostname+"\x00"+c.DomainID)
+		for _, r := range c.Routes {
+			path := r.PathPrefix
+			if path == "" {
+				path = "/"
+			}
+			scheme := r.Scheme
+			if scheme == "" {
+				scheme = ingress.SchemeHTTP
+			}
+			wantRoutes = append(wantRoutes, routeSig(c.Hostname, r.Name, path, r.Service, int64(r.Port), string(scheme), r.Strip))
+		}
+	}
+	var haveHosts, haveRoutes []string
+	for _, h := range held {
+		haveHosts = append(haveHosts, h.Hostname+"\x00"+h.DomainID)
+	}
+	for _, r := range routes {
+		haveRoutes = append(haveRoutes, routeSig(r.Hostname, r.Name, r.PathPrefix, r.Service, r.Port, r.Scheme, r.Strip != 0))
+	}
+	slices.Sort(wantHosts)
+	slices.Sort(haveHosts)
+	slices.Sort(wantRoutes)
+	slices.Sort(haveRoutes)
+	return slices.Equal(wantHosts, haveHosts) && slices.Equal(wantRoutes, haveRoutes)
+}
+
+// routeSig is a route's identity for comparison.
+func routeSig(host, name, path, service string, port int64, scheme string, strip bool) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%t", host, name, path, service, port, scheme, strip)
 }
 
 // insertRoute stores one route of a claimed hostname. The environment id is the claim's own.
