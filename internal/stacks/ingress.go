@@ -46,7 +46,11 @@ func serviceLabels(project *types.Project) []ingress.ServiceLabels {
 // dropped without an error.
 func ingressProblems(project *types.Project, idx *PositionIndex, in CheckInput) Problems {
 	target := ingress.Target(in.Target)
-	_, found := ingress.ParseStack(serviceLabels(project), target)
+	decls, found := ingress.ParseStack(serviceLabels(project), target)
+	if in.IngressPolicy != nil {
+		_, policy := ingress.Check(in.IngressPolicy.StackID, decls, in.IngressPolicy.World)
+		found = append(found, policy...)
+	}
 	out := make(Problems, 0, len(found))
 	for _, p := range found {
 		out = append(out, ingressProblemAt(p, idx, in.Target))

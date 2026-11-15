@@ -264,3 +264,124 @@ func TestCheckIngressNoLabelsChangesNothing(t *testing.T) {
 		t.Errorf("ingress problems for a stack with none: %+v", ps)
 	}
 }
+
+const policyCompose = `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.host: %s
+        tierplan.ingress.port: "80"
+`
+
+func policyComposeFor(host string) string {
+	return strings.Replace(policyCompose, "%s", host, 1)
+}
+
+func policyWorld() ingress.World {
+	return ingress.World{Domains: []ingress.Domain{{ID: "d1", EnvID: "e1", Suffix: "apps.example.com"}}}
+}
+
+func TestCheckIngressPolicyDomainNotAllowed(t *testing.T) {
+	t.Parallel()
+	res := ingressCheck(t, policyComposeFor("app.other.com"), stacks.TargetSwarm, &stacks.IngressPolicy{StackID: "s1", World: policyWorld()})
+	p := oneIngress(t, res)
+	if p.Code != ingress.CodeDomainNotAllowed || p.Severity != stacks.SeverityError {
+		t.Fatalf("problem = %+v, want an error ingress_domain_not_allowed", p)
+	}
+	if p.Line != 6 || p.Col != 9 {
+		t.Errorf("position = %d:%d, want the host label at 6:9", p.Line, p.Col)
+	}
+	if res.Problems.Errors() == 0 {
+		t.Error("a hostname outside the domains must block")
+	}
+}
+
+func TestCheckIngressPolicyAllowedHostIsSilent(t *testing.T) {
+	t.Parallel()
+	res := ingressCheck(t, policyComposeFor("app.apps.example.com"), stacks.TargetSwarm, &stacks.IngressPolicy{StackID: "s1", World: policyWorld()})
+	if ps := ingressProblems(res); len(ps) != 0 {
+		t.Errorf("an allowed host reported %+v", ps)
+	}
+}
+
+func TestCheckIngressPolicyReserved(t *testing.T) {
+	t.Parallel()
+	w := policyWorld()
+	w.Reserved = map[string]bool{"app.apps.example.com": true}
+	p := oneIngress(t, ingressCheck(t, policyComposeFor("app.apps.example.com"), stacks.TargetSwarm, &stacks.IngressPolicy{StackID: "s1", World: w}))
+	if p.Code != ingress.CodeHostReserved || p.Severity != stacks.SeverityError || p.Line != 6 || p.Col != 9 {
+		t.Errorf("problem = %+v, want an error ingress_host_reserved at 6:9", p)
+	}
+}
+
+func TestCheckIngressPolicyHostTakenRedactsUnlessTheCallerCanView(t *testing.T) {
+	t.Parallel()
+	claim := ingress.ClaimInfo{
+		Claim:   ingress.Claim{EnvID: "e2", Hostname: "app.apps.example.com", OwnerKind: ingress.OwnerStack, StackID: "other"},
+		EnvName: "prod-secret-env", StackName: "billing-secret-stack",
+	}
+	world := func(canView func(string) bool) *stacks.IngressPolicy {
+		w := policyWorld()
+		w.Claims = map[string]ingress.ClaimInfo{"app.apps.example.com": claim}
+		w.CanView = canView
+		return &stacks.IngressPolicy{StackID: "s1", World: w}
+	}
+	compose := policyComposeFor("app.apps.example.com")
+
+	hidden := oneIngress(t, ingressCheck(t, compose, stacks.TargetSwarm, world(func(string) bool { return false })))
+	if hidden.Code != ingress.CodeHostTaken || hidden.Severity != stacks.SeverityError {
+		t.Fatalf("problem = %+v, want an error ingress_host_taken", hidden)
+	}
+	if strings.Contains(hidden.Message, "billing-secret-stack") || strings.Contains(hidden.Message, "prod-secret-env") {
+		t.Errorf("a caller who cannot view the environment was told who holds the name: %q", hidden.Message)
+	}
+
+	nilView := oneIngress(t, ingressCheck(t, compose, stacks.TargetSwarm, world(nil)))
+	if strings.Contains(nilView.Message, "billing-secret-stack") || strings.Contains(nilView.Message, "prod-secret-env") {
+		t.Errorf("a nil CanView named the holder: %q", nilView.Message)
+	}
+
+	named := oneIngress(t, ingressCheck(t, compose, stacks.TargetSwarm, world(func(string) bool { return true })))
+	if !strings.Contains(named.Message, "billing-secret-stack") || !strings.Contains(named.Message, "prod-secret-env") {
+		t.Errorf("a caller who can view the environment was not told who holds the name: %q", named.Message)
+	}
+}
+
+func TestCheckIngressPolicyHostHeldByTheSameStackIsSilent(t *testing.T) {
+	t.Parallel()
+	w := policyWorld()
+	w.Claims = map[string]ingress.ClaimInfo{"app.apps.example.com": {
+		Claim: ingress.Claim{EnvID: "e1", Hostname: "app.apps.example.com", OwnerKind: ingress.OwnerStack, StackID: "s1"}, StackName: "probe", EnvName: "e",
+	}}
+	res := ingressCheck(t, policyComposeFor("app.apps.example.com"), stacks.TargetSwarm, &stacks.IngressPolicy{StackID: "s1", World: w})
+	if ps := ingressProblems(res); len(ps) != 0 {
+		t.Errorf("a stack's own hostname reported %+v", ps)
+	}
+}
+
+func TestCheckIngressNilPolicyNeverReportsPolicyCodes(t *testing.T) {
+	t.Parallel()
+	res := ingressCheck(t, policyComposeFor("anything.example.org"), stacks.TargetSwarm, nil)
+	for _, p := range res.Problems {
+		switch p.Code {
+		case ingress.CodeDomainNotAllowed, ingress.CodeHostReserved, ingress.CodeHostTaken:
+			t.Errorf("policy code %s without a policy: %+v", p.Code, p)
+		}
+	}
+}
+
+func TestCheckIngressPolicyOnAStandaloneStackIsPositionedOnLabels(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    labels:
+      tierplan.ingress.host: app.other.com
+      tierplan.ingress.port: "80"
+`
+	p := oneIngress(t, ingressCheck(t, compose, stacks.TargetStandalone, &stacks.IngressPolicy{StackID: "s1", World: policyWorld()}))
+	if p.Code != ingress.CodeDomainNotAllowed || p.Line != 5 || p.Col != 7 {
+		t.Errorf("problem = %+v, want ingress_domain_not_allowed at 5:7", p)
+	}
+}
