@@ -418,3 +418,74 @@ func TestCheckNeverReadsAnIngressSwitch(t *testing.T) {
 		t.Fatalf("plan = %+v, problems = %+v, want the host planned", plan, problems)
 	}
 }
+
+func TestDescribeHolder(t *testing.T) {
+	const h = "app.apps.example.com"
+	system := ClaimInfo{Claim: Claim{EnvID: "env-z", Hostname: h, OwnerKind: OwnerSystem}, EnvName: "Zed-Env"}
+	stack := ClaimInfo{
+		Claim:     Claim{EnvID: "env-b", Hostname: h, OwnerKind: OwnerStack, StackID: "stack-id-9"},
+		EnvName:   "Beta-Env",
+		StackName: "billing-stack",
+	}
+	yes := func(string) bool { return true }
+	no := func(string) bool { return false }
+
+	t.Run("system names TierPlan and no stack or environment", func(t *testing.T) {
+		for name, cv := range map[string]func(string) bool{"nil": nil, "yes": yes, "no": no} {
+			got := DescribeHolder(system, cv)
+			if !strings.Contains(got, h) || !strings.Contains(got, "TierPlan itself is served on") {
+				t.Errorf("%s: DescribeHolder(system) = %q, want the host and TierPlan's own address", name, got)
+			}
+			for _, leak := range []string{"Zed-Env", "env-z"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("%s: DescribeHolder(system) = %q must not contain %q", name, got, leak)
+				}
+			}
+		}
+	})
+
+	t.Run("a visible stack is named with its environment", func(t *testing.T) {
+		got := DescribeHolder(stack, func(envID string) bool { return envID == "env-b" })
+		for _, want := range []string{h, "“billing-stack”", "“Beta-Env”"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("DescribeHolder(visible) = %q, want %q in it", got, want)
+			}
+		}
+		if strings.Contains(got, "stack-id-9") || strings.Contains(got, "env-b") {
+			t.Errorf("DescribeHolder(visible) = %q must not carry ids", got)
+		}
+	})
+
+	for name, cv := range map[string]func(string) bool{"nil canView": nil, "canView false": no} {
+		t.Run("an invisible stack is not named: "+name, func(t *testing.T) {
+			got := DescribeHolder(stack, cv)
+			for _, leak := range []string{"billing-stack", "Beta-Env", "stack-id-9", "env-b"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("DescribeHolder(invisible) = %q must not contain %q", got, leak)
+				}
+			}
+			for _, want := range []string{h, "an environment you can't see"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("DescribeHolder(invisible) = %q, want %q in it", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckClashMessageStartsWithDescribeHolder(t *testing.T) {
+	// One redaction rule: the problem Check reports is the holder sentence plus its guidance.
+	const h = "app.apps.example.com"
+	for name, cv := range map[string]func(string) bool{"visible": func(string) bool { return true }, "hidden": nil} {
+		w := policyWorld(policyDomain("d1", "apps.example.com"))
+		policyHold(w, h, "s2", "other-stack", "env-b", "Beta")
+		w.CanView = cv
+		_, problems := Check("s1", []Declaration{policyDecl("web", "", h, "/")}, w)
+		if len(problems) != 1 {
+			t.Fatalf("%s: problems = %+v, want one", name, problems)
+		}
+		if want := DescribeHolder(w.Claims[h], cv); !strings.HasPrefix(problems[0].Message, want) {
+			t.Errorf("%s: message %q does not start with DescribeHolder's %q", name, problems[0].Message, want)
+		}
+	}
+}

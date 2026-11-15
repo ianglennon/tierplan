@@ -130,15 +130,31 @@ func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, b
 	}
 	if c, held := w.Claims[d.Host]; held && !(c.OwnerKind == OwnerStack && c.StackID == stackID) {
 		p.Code = CodeHostTaken
-		switch {
-		case c.OwnerKind == OwnerSystem:
-			p.Message = "“" + d.Host + "” is the name TierPlan itself is served on. Choose another name."
-		case w.CanView != nil && w.CanView(c.EnvID):
-			p.Message = "“" + d.Host + "” is already held by the stack “" + c.StackName + "” in the environment “" + c.EnvName + "”. A name has one owner across TierPlan. Choose another name."
-		default:
-			p.Message = "“" + d.Host + "” is already claimed in an environment you can't see. A name has one owner across TierPlan. Choose another name."
+		c.Hostname = d.Host
+		p.Message = DescribeHolder(c, w.CanView)
+		if c.OwnerKind == OwnerStack {
+			p.Message += " A name has one owner across TierPlan."
 		}
+		p.Message += " Choose another name."
 		return dom, p, true
 	}
 	return dom, Problem{}, false
+}
+
+// DescribeHolder says in one sentence who holds a claimed hostname. It is the one place that
+// decides what a person may be told about another environment's claim: a system claim names
+// TierPlan's own address and no stack; a stack's claim names the stack and its environment only
+// when canView says the caller may see that environment, and a nil canView means none may be seen.
+// Otherwise the sentence says the name is claimed in an environment the caller can't see and
+// carries no name and no id. The Check problem, the store's refusal to reserve a held name and the
+// API all use it, so they redact alike.
+func DescribeHolder(c ClaimInfo, canView func(envID string) bool) string {
+	switch {
+	case c.OwnerKind == OwnerSystem:
+		return "“" + c.Hostname + "” is the name TierPlan itself is served on."
+	case canView != nil && canView(c.EnvID):
+		return "“" + c.Hostname + "” is already held by the stack “" + c.StackName + "” in the environment “" + c.EnvName + "”."
+	default:
+		return "“" + c.Hostname + "” is already claimed in an environment you can't see."
+	}
 }
