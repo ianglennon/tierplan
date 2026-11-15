@@ -231,24 +231,34 @@ func vacuumInto(ctx context.Context, st *store.Store, path string) error {
 	return nil
 }
 
+// openScrubDB opens the database copy at path with foreign keys on, so the cascades that strip the
+// excluded tables behave as the schema says, and with a single connection.
+func openScrubDB(path string) (*sql.DB, error) {
+	// path is inside the work directory, which is the data directory as
+	// configured and so may be relative; FileURI makes it absolute (G-03-4).
+	dsn, err := store.FileURI(path, "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	if err != nil {
+		return nil, fmt.Errorf("open the database copy: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open the database copy: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
 // scrub turns the copy at path into what a backup carries and returns its
 // headline counts. Everything runs on one connection with secure_delete on, in
 // one transaction, and ends with VACUUM so no stripped row survives in a free
 // page; the journal is returned to DELETE so the file is a single self-contained
 // database.
 func scrub(ctx context.Context, path string, live, export *vault.Vault) (Counts, error) {
-	// path is inside the work directory, which is the data directory as
-	// configured and so may be relative; FileURI makes it absolute (G-03-4).
-	dsn, err := store.FileURI(path, "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	db, err := openScrubDB(path)
 	if err != nil {
-		return Counts{}, fmt.Errorf("open the database copy: %w", err)
-	}
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return Counts{}, fmt.Errorf("open the database copy: %w", err)
+		return Counts{}, err
 	}
 	defer func() { _ = db.Close() }()
-	db.SetMaxOpenConns(1)
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return Counts{}, fmt.Errorf("open the database copy: %w", err)
