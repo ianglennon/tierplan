@@ -12,6 +12,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
@@ -37,8 +38,9 @@ const noteRevision = "revision"
 // no tag up and runs no lint: a roll back restores exactly what the revision ran (STK-07, T-08-12). It never
 // writes: not to an engine, and not to the store.
 //
-// A revision that cannot be prepared is one blocking problem (revision_not_deployable) and nothing else. The
-// rest follows Review: the name clash, the host-access policy judged on the revision's own copy (T-08-09), the
+// A revision that cannot be prepared is one blocking problem (revision_not_deployable) and nothing else, except
+// that a revision the ingress policy refuses (the review carried one) also lists each policy problem with its
+// stable code after it. The rest follows Review: the name clash, the host-access policy judged on the revision's own copy (T-08-09), the
 // network, secret and config changes, and the service diff.
 func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (err error) {
 	if in.Target == nil {
@@ -58,7 +60,7 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 		return d.reviewRollbackStandalone(ctx, in, rv)
 	}
 
-	prep, err := d.PrepareRollback(ctx, in.Stack, target, in.TargetPins)
+	prep, err := d.PrepareRollbackWith(ctx, in.Stack, target, in.TargetPins, in.IngressPolicy)
 	if err != nil {
 		return notDeployable(rv, target.Seq, err)
 	}
@@ -173,7 +175,26 @@ func notDeployable(rv *Review, seq int64, err error) error {
 		Severity: stacks.SeverityError, Code: CodeRevisionNotDeployable, Message: notDeployableMessage(seq, pe),
 		File: stacks.ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 	})
+	// A refusal by the ingress policy is told with its own stable code after the line above, so the person sees
+	// which hostname and why. The codes appear only when the review carried a policy.
+	var nd *stacks.NotDeployableError
+	if pe.Stage == PrepareLoad && errors.As(pe.Err, &nd) {
+		for _, p := range nd.Problems {
+			if isIngressPolicyCode(p.Code) {
+				rv.Problems = append(rv.Problems, p)
+			}
+		}
+	}
 	return nil
+}
+
+// isIngressPolicyCode reports whether code is one of the three codes the ingress policy refuses a hostname with.
+func isIngressPolicyCode(code string) bool {
+	switch code {
+	case ingress.CodeDomainNotAllowed, ingress.CodeHostReserved, ingress.CodeHostTaken:
+		return true
+	}
+	return false
 }
 
 // reviewRollbackStandalone is reviewRollback for a standalone host (STK-08): the revision is prepared with its
@@ -183,7 +204,7 @@ func notDeployable(rv *Review, seq int64, err error) error {
 // is not listed: a standalone deploy leaves them on the host (D-52).
 func (d Deps) reviewRollbackStandalone(ctx context.Context, in ReviewInput, rv *Review) error {
 	target := *in.Target
-	prep, err := d.PrepareRollbackStandalone(ctx, in.Stack, target, in.TargetPins)
+	prep, err := d.PrepareRollbackStandaloneWith(ctx, in.Stack, target, in.TargetPins, in.IngressPolicy)
 	if err != nil {
 		return notDeployable(rv, target.Seq, err)
 	}
