@@ -82,6 +82,17 @@ var Tables = map[string]Class{
 	// certificate history.
 	"https_state": Included, // the toggle travels; the ramp restarts on restore (16-12)
 
+	// The ingress model (Phase 18): the switch and its version, the domains, the reserved names, and the
+	// claims and routes a stack's labels turned into. The domain's DNS token is sealed under the domain's
+	// ID and registered in vault.SealedColumns, so RewrapAll moves it. The claims and routes are what a
+	// restore must bring back, and nothing in them names a source-install resource the way
+	// acme_dns_records does.
+	"ingress_env":       Included,
+	"ingress_domains":   Included, // token_sealed is re-wrapped by RewrapAll
+	"ingress_reserved":  Included,
+	"ingress_hostnames": Included,
+	"ingress_routes":    Included,
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key
