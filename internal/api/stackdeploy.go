@@ -790,30 +790,40 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	// cannot be redeployed as it stands is refused here, with the reason, and leaves no revision behind. The
 	// project it returns is the one that is rendered and deployed.
 	masker := stacks.NewMasker(target.Copy.Vars, target.Copy.Files)
+	// The revision's hostnames are judged against the environment's ingress world as a deploy's are (D-18): one that was
+	// reserved, or taken by another stack, since the revision ran is refused here, with nothing stored. A roll back is a
+	// person's request, so a holder may be named in an environment the person can view (D-20). The world is read once, only
+	// for a revision that names an ingress label, and a read that fails refuses the roll back. Nothing is claimed (D-21).
+	var pol *stacks.IngressPolicy
+	if declaresIngress(target.Copy) {
+		if pol, err = ingressPolicyFor(ctx, d, p, env.ID, st.ID); err != nil {
+			return nil, stackInternal(d, "read the ingress names", env.ID, err)
+		}
+	}
 	var prep stackops.RollbackPlan
 	node := ""
 	if standalone {
 		// A standalone host runs the Compose SDK: the revision is prepared with its stored images and no swarm
 		// conversion, and the node it runs on is the environment's one engine.
-		if prep, err = d.ops().PrepareRollbackStandalone(ctx, st, target, pins); err != nil {
+		if prep, err = d.ops().PrepareRollbackStandaloneWith(ctx, st, target, pins, pol); err != nil {
 			return nil, rollbackPrepareProblem(err, masker)
 		}
 		if node, err = d.ops().StandaloneNode(ctx, env.ID); err != nil {
 			return nil, snapshotProblem(d.Log, env.ID, err)
 		}
-	} else if prep, err = d.ops().PrepareRollback(ctx, st, target, pins); err != nil {
+	} else if prep, err = d.ops().PrepareRollbackWith(ctx, st, target, pins, pol); err != nil {
 		return nil, rollbackPrepareProblem(err, masker)
 	}
 	// What a deploy of this revision would need is judged for the caller, as a deploy is: an Operator
 	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again. A standalone
 	// stack has no converted plan, so its compose file alone is judged, as a standalone deploy's is.
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
-	pol, err := d.ops().Policy(ctx, caller, env.ID, target.Copy, prep.Plan)
+	hostPol, err := d.ops().Policy(ctx, caller, env.ID, target.Copy, prep.Plan)
 	if err != nil {
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
-	if pol.Refused {
-		return nil, policyProblem(pol)
+	if hostPol.Refused {
+		return nil, policyProblem(hostPol)
 	}
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
@@ -876,6 +886,8 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 			// The revision's own record of the subnets its networks were given, which a network the roll back
 			// has to create again takes while it is free, and which a network that exists keeps.
 			Subnets: repo, RestoredSubnets: target.Subnets,
+			// The job's own check refuses what this request refused (D-18).
+			IngressPolicy: pol,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {

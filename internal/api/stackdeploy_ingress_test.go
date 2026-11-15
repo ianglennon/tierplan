@@ -4,7 +4,9 @@
 package api_test
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -232,4 +235,231 @@ func TestIngressGateDeployDoesNotRefuseAStackItsOwnHostname(t *testing.T) {
 	}
 
 	f.deployGood(t, admin, st.ID, ingressCompose("own.apps.example.com"))
+}
+
+// gateHost is a free name under the domain the seeded environment registers: a revision may name it when it deploys.
+const gateHost = "gate.apps.example.com"
+
+// reserveHost reserves host under the seeded domain after a revision that names it has deployed, as an Admin does when a
+// name that was free becomes reserved.
+func reserveHost(t *testing.T, f *envFix, e envBody, seed ingressWorldSeed, host string) {
+	t.Helper()
+	if _, _, err := f.stackDeps.Ingress.Reserve(testsupport.Context(t), ingressstore.ReserveInput{EnvID: e.ID, DomainID: seed.domainID, Hostname: host, Actor: "admin"}, nil); err != nil {
+		t.Fatalf("reserve %s: %v", host, err)
+	}
+}
+
+// unreserveHost lets the name go again, so the same request can be made with nothing refused.
+func unreserveHost(t *testing.T, f *envFix, e envBody, seed ingressWorldSeed, host string) {
+	t.Helper()
+	if _, err := f.stackDeps.Ingress.Unreserve(testsupport.Context(t), e.ID, seed.domainID, host, nil); err != nil {
+		t.Fatalf("unreserve %s: %v", host, err)
+	}
+}
+
+// refusedAndStoredNothing fails unless rec is a 422 stack_invalid that names want, and the stack still has revisions revisions.
+func refusedAndStoredNothing(t *testing.T, f *envFix, rec *httptest.ResponseRecorder, stackID, want string, revisions int) {
+	t.Helper()
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
+		t.Fatalf("answer: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("answer = %.600s, want a problem that names %q", rec.Body, want)
+	}
+	if n := len(f.revisions(t, stackID)); n != revisions {
+		t.Errorf("revisions = %d, want %d: a refusal stores none", n, revisions)
+	}
+}
+
+func TestIngressGateRollbackRefusesAHostReservedSinceTheRevisionRanOnASwarmStack(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "gate-rb")
+	f.deployGood(t, operator, st.ID, ingressCompose(gateHost))
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	reserveHost(t, f, e, seed, gateHost)
+	writes := len(f.fake.Writes())
+
+	refusedAndStoredNothing(t, f, operator.do(http.MethodPost, rollbackPath(st.ID), ""), st.ID, gateHost, 2)
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a refused roll back writes nothing", writes, n)
+	}
+
+	// With the name free again the same roll back starts.
+	unreserveHost(t, f, e, seed, gateHost)
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back with nothing reserved: %d %.300s, want 202", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Errorf("job = %+v, want it done", job)
+	}
+}
+
+func TestIngressGateRollbackRefusesARestoreOfAHostReservedSinceItRan(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "gate-restore")
+	f.deployGood(t, operator, st.ID, ingressCompose(gateHost))
+	reserveHost(t, f, e, seed, gateHost)
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":1}`)
+
+	refusedAndStoredNothing(t, f, rec, st.ID, gateHost, 1)
+}
+
+func TestIngressGateRollbackRefusesAHostReservedSinceTheRevisionRanOnAStandaloneStack(t *testing.T) {
+	t.Parallel()
+	f, e, up := standaloneEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "gate-rb-sa")
+	f.deployGood(t, operator, st.ID, ingressStandaloneCompose(gateHost))
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	reserveHost(t, f, e, seed, gateHost)
+	_, calls := up.lastProject()
+
+	refusedAndStoredNothing(t, f, operator.do(http.MethodPost, rollbackPath(st.ID), ""), st.ID, gateHost, 2)
+	if _, after := up.lastProject(); after != calls {
+		t.Errorf("the Compose stand-in ran %d times, want %d: a refused roll back runs nothing", after, calls)
+	}
+
+	unreserveHost(t, f, e, seed, gateHost)
+	if rec := operator.do(http.MethodPost, rollbackPath(st.ID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back with nothing reserved: %d %.300s, want 202", rec.Code, rec.Body)
+	}
+}
+
+// A person's roll back names a holder in another environment only when that person may view it (D-20).
+func TestIngressGateRollbackNamesAHolderOnlyToACallerWhoCanViewIt(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	instanceAdmin := &roleCaller{f: f, t: t, e: e, cookie: f.cookie, csrf: f.csrf}
+	st := newStack(t, admin, "gate-holder")
+	f.deployGood(t, admin, st.ID, ingressCompose(gateHost))
+	f.deployGood(t, admin, st.ID, composeWeb128)
+	// Another stack, in an environment the Admin has no role on, takes the name since the revision ran.
+	if _, err := f.stackDeps.Ingress.ReplaceStackRoutes(testsupport.Context(t), ingressstore.ReplaceInput{
+		EnvID: seed.otherEnvID, StackID: seed.otherStackID, Actor: "bob",
+		Decls: []ingress.Declaration{{Service: "web", Host: gateHost, Label: "tierplan.ingress.host", Port: 80}},
+	}); err != nil {
+		t.Fatalf("claim %s in the other environment: %v", gateHost, err)
+	}
+
+	hidden := admin.do(http.MethodPost, rollbackPath(st.ID), "")
+	refusedAndStoredNothing(t, f, hidden, st.ID, "an environment you can't see", 2)
+	for _, leak := range []string{seed.otherStack, seed.otherEnvName, seed.otherEnvID, seed.otherStackID} {
+		if strings.Contains(hidden.Body.String(), leak) {
+			t.Errorf("answer = %.600s, must not name %q to an Admin of one environment", hidden.Body, leak)
+		}
+	}
+
+	seen := instanceAdmin.do(http.MethodPost, rollbackPath(st.ID), "")
+	refusedAndStoredNothing(t, f, seen, st.ID, seed.otherStack, 2)
+	if !strings.Contains(seen.Body.String(), seed.otherEnvName) {
+		t.Errorf("answer = %.600s, want the environment %q named for an instance admin", seen.Body, seed.otherEnvName)
+	}
+}
+
+// labelledShopCompose is the compose file of a shop whose web service names gateHost, on the swarm's deploy labels.
+const labelledShopCompose = "services:\n  web:\n    image: registry.test/team/web:1\n    deploy:\n      labels:\n        tierplan.ingress.host: " + gateHost + "\n        tierplan.ingress.port: \"80\"\n"
+
+// labelledStandaloneShopCompose is the same for a standalone host, whose labels are the service's own.
+const labelledStandaloneShopCompose = "services:\n  web:\n    image: registry.test/team/web:1\n    labels:\n      tierplan.ingress.host: " + gateHost + "\n      tierplan.ingress.port: \"80\"\n  db:\n    image: registry.test/team/db:1\n"
+
+func TestIngressGateUpdateRefusesAHostReservedSinceTheRevisionRanOnASwarmStack(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web")
+	seed := seedIngressWorld(t, s.f, s.e)
+	s.f.deployGood(t, s.operator, s.st.ID, labelledShopCompose)
+	s.move(t, "web", 'b')
+	reserveHost(t, s.f, s.e, seed, gateHost)
+	writtenBefore := len(s.f.fake.ServiceUpdates())
+
+	rec := s.operator.do(http.MethodPost, "updates/run", stackRunBody("service", "shop_web", map[string]string{"shop_web": updDigest('b')}))
+
+	refusedAndStoredNothing(t, s.f, rec, s.st.ID, gateHost, 2)
+	s.noNewRevision(t, 2)
+	if n := len(s.f.fake.ServiceUpdates()); n != writtenBefore {
+		t.Errorf("service updates went from %d to %d, a refused update writes nothing", writtenBefore, n)
+	}
+
+	// With the name free again the update goes through.
+	unreserveHost(t, s.f, s.e, seed, gateHost)
+	s.updateStack(t, s.operator, "service", "shop_web", map[string]string{"shop_web": updDigest('b')})
+}
+
+func TestIngressGateUpdateRefusesAHostReservedSinceTheRevisionRanOnAStandaloneStack(t *testing.T) {
+	t.Parallel()
+	s, up := newStandaloneShop(t, "web", "db")
+	seed := seedIngressWorld(t, s.f, s.e)
+	s.f.deployGood(t, s.operator, s.st.ID, labelledStandaloneShopCompose)
+	s.move(t, "web", 'b')
+	reserveHost(t, s.f, s.e, seed, gateHost)
+	_, calls := up.lastProject()
+
+	rec := s.operator.do(http.MethodPost, "updates/run", stackRunBody("stack", "solo", map[string]string{"web": updDigest('b')}))
+
+	refusedAndStoredNothing(t, s.f, rec, s.st.ID, gateHost, 2)
+	s.noNewRevision(t, 2)
+	if _, after := up.lastProject(); after != calls {
+		t.Errorf("the Compose stand-in ran %d times, want %d: a refused update runs nothing", after, calls)
+	}
+
+	unreserveHost(t, s.f, s.e, seed, gateHost)
+	s.updateStack(t, s.operator, "stack", "solo", map[string]string{"web": updDigest('b')})
+}
+
+// A bulk update is refused by the same gate, and the item is skipped with the stack as it was. The gate passes no person
+// to the policy (D-20), so a message it builds never names a holder outside the stack's own environment; the run records
+// only the code, so the check below can only see that nothing of the other environment reaches the run or the job.
+func TestIngressGateUpdateBulkRefusesAndNamesNoOtherEnvironment(t *testing.T) {
+	t.Parallel()
+	s := newShop(t, "web")
+	seed := seedIngressWorld(t, s.f, s.e)
+	s.f.deployGood(t, s.operator, s.st.ID, labelledShopCompose)
+	s.move(t, "web", 'b')
+	if _, err := s.f.stackDeps.Ingress.ReplaceStackRoutes(testsupport.Context(t), ingressstore.ReplaceInput{
+		EnvID: seed.otherEnvID, StackID: seed.otherStackID, Actor: "bob",
+		Decls: []ingress.Declaration{{Service: "web", Host: gateHost, Label: "tierplan.ingress.host", Port: 80}},
+	}); err != nil {
+		t.Fatalf("claim %s in the other environment: %v", gateHost, err)
+	}
+	instanceAdmin := &roleCaller{f: s.f, t: t, e: s.e, cookie: s.f.cookie, csrf: s.f.csrf}
+
+	rec := s.f.call(t, authReq{
+		method: http.MethodPost, path: "/api/fleet/updates/run", body: bulkBody(bulkItem(s.e.ID, "service", "shop_web", map[string]string{"shop_web": updDigest('b')})),
+		cookie: instanceAdmin.cookie, csrf: instanceAdmin.csrf,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk update: %d %s", rec.Code, rec.Body)
+	}
+	ans := answerOf[bulkAnswer](t, rec)
+	job := s.f.awaitUpdate(t, ans.jobOf(t, s.e.ID))
+
+	if st := bulkItemStates(job); st["i0"] != "skipped" {
+		t.Errorf("items = %v, want the stack's item skipped", st)
+	}
+	if revs := s.f.revisions(t, s.st.ID); len(revs) != 2 {
+		t.Errorf("revisions = %+v, want the two the stack had: a refused update stores none", revs)
+	}
+	runs := s.f.runsOfBulk(t, ans.BulkID)
+	if len(runs) != 1 || runs[0].State != updates.RunRefused || runs[0].Reason != "stack_invalid" {
+		t.Fatalf("runs = %+v, want the one run refused as stack_invalid", runs)
+	}
+	recorded := fmt.Sprintf("%+v %+v", runs[0], job.Items)
+	for _, leak := range []string{seed.otherStack, seed.otherEnvName, seed.otherEnvID, seed.otherStackID} {
+		if strings.Contains(recorded, leak) {
+			t.Errorf("run = %s, must not name %q", recorded, leak)
+		}
+	}
 }
