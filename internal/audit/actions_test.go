@@ -536,6 +536,74 @@ func TestEveryPhase17ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 	}
 }
 
+// phase18DetailKeys maps every ingress action to the detail keys the plans that record it must use (Phase 18, D-26).
+// The DNS token is never recorded: the state of the credential is the detail "credential" ("set" or "replaced"). A key
+// containing a secret word would fail Record, so the whole table is recorded through the real Writer.
+var phase18DetailKeys = map[string][]string{
+	audit.ActionIngressDomainCreated:            {"suffix", "issuer", "provider", "credential", "reason"},
+	audit.ActionIngressDomainCredentialReplaced: {"suffix", "credential", "reason"},
+	audit.ActionIngressDomainDeleted:            {"suffix", "issuer"},
+	audit.ActionIngressHostReserved:             {"suffix", "hostname"},
+	audit.ActionIngressHostUnreserved:           {"suffix", "hostname"},
+	audit.ActionIngressEnabled:                  {},
+	audit.ActionIngressDisabled:                 {},
+	audit.ActionIngressClaimReplaced:            {"stack", "hostnames", "count"},
+	audit.ActionIngressClaimReleased:            {"stack", "count"},
+	audit.ActionIngressCertIssued:               {"hostname", "issuer"},
+	audit.ActionIngressCertFailed:               {"hostname", "issuer", "reason"},
+	audit.ActionIngressNodeEnrolled:             {"node"},
+	audit.ActionIngressNodeRemoved:              {"node"},
+	audit.ActionIngressVIPChanged:               {"address"},
+}
+
+func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase18DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if len(phase18DetailKeys) != 14 {
+		t.Fatalf("phase18DetailKeys pins %d actions, want the 14 ingress actions", len(phase18DetailKeys))
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase18DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"ingress.domain_created":             audit.ActionIngressDomainCreated,
+		"ingress.domain_credential_replaced": audit.ActionIngressDomainCredentialReplaced,
+		"ingress.domain_deleted":             audit.ActionIngressDomainDeleted,
+		"ingress.host_reserved":              audit.ActionIngressHostReserved,
+		"ingress.host_unreserved":            audit.ActionIngressHostUnreserved,
+		"ingress.enabled":                    audit.ActionIngressEnabled,
+		"ingress.disabled":                   audit.ActionIngressDisabled,
+		"ingress.claim_replaced":             audit.ActionIngressClaimReplaced,
+		"ingress.claim_released":             audit.ActionIngressClaimReleased,
+		"ingress.cert_issued":                audit.ActionIngressCertIssued,
+		"ingress.cert_failed":                audit.ActionIngressCertFailed,
+		"ingress.node_enrolled":              audit.ActionIngressNodeEnrolled,
+		"ingress.node_removed":               audit.ActionIngressNodeRemoved,
+		"ingress.vip_changed":                audit.ActionIngressVIPChanged,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+		if strings.Count(constant, ".") != 1 {
+			t.Errorf("%q must have exactly one dot so the audit page finds its label", constant)
+		}
+	}
+}
+
 func TestEveryPhase12ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase12DetailKeys {
