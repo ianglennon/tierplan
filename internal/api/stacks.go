@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitconn"
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -116,6 +117,10 @@ type StacksDeps struct {
 	// Store and Vault hold the stored stacks and seal their secret values.
 	Store *store.Store
 	Vault *vault.Vault
+	// Ingress reads the environment's ingress world (its domains, the reserved names and the claims every stack
+	// holds), which the editor check and the review judge a stack's ingress labels against, and which every deploy
+	// gate does too (D-18, D-19). Nil leaves the policy out everywhere; the label parser still runs.
+	Ingress *ingressstore.Store
 	// Clock and ConvergeTimeout are what a swarm deploy waits on and for: the clock its polls and
 	// its timeout run on (nil is the wall clock), and how long each service gets to settle (zero is
 	// ten minutes; TIERPLAN_STACK_CONVERGE_TIMEOUT).

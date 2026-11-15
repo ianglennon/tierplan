@@ -158,6 +158,13 @@ func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackI
 	if withNetworks {
 		in.Env = networkEnv(ctx, d, env.ID, st.Name)
 	}
+	// The environment's ingress world judges the stack's hostnames. A read that fails is advisory here: the
+	// parser's problems are still reported and the check never fails because of it (a deploy gate refuses instead).
+	if policy, perr := ingressPolicyFor(ctx, d, p, env.ID, st.ID); perr != nil {
+		d.Log.Debug("the ingress world of an environment could not be read for a stack check", "environment", env.ID, "error", perr)
+	} else {
+		in.IngressPolicy = policy
+	}
 	res := stacks.Check(ctx, in)
 	return checkedCopy{stack: st, copy: wc, res: res}, release, nil
 }

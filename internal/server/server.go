@@ -39,6 +39,8 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -1058,6 +1060,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	gitConns := gitconn.NewStore(st, vlt, nil)
+	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
+	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
+	ingressNotifier := ingress.NewNotifier()
+	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier})
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
 	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
 	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
@@ -1180,7 +1186,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			return audit.Actor{Type: audit.ActorUser, ID: key, Name: name}
 		},
 	}
-	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{

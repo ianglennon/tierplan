@@ -34,6 +34,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -547,6 +548,8 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Platforms: stackops.NewPlatformMemo(),
 			Updates:   updateSvc,
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
+			// The ingress store of a real server: the editor check and the review judge a stack's hostnames through it, and the tests seed it.
+			Ingress: ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now}),
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,
 			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
