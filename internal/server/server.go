@@ -232,6 +232,9 @@ type RouterDeps struct {
 	HTTPS         api.HTTPSDeps
 	Backup        api.BackupDeps
 	Restore       api.RestoreDeps
+	// Ingress serves the domain and reservation routes under /api/env/{envId}/ingress/. The zero value registers every
+	// route answering 503 ingress_unavailable.
+	Ingress api.IngressDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -289,6 +292,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterPulls(r, d.Pulls)
 	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
+	api.RegisterIngress(r, d.Ingress)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -1020,7 +1024,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// listening is closed once the server accepts connections; the start-time issue of TIERPLAN_ACME=on
 	// waits for it.
 	listening := make(chan struct{})
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS, hsts, listening)
+	// One DNS provider map for the whole server: the manager issues certificates through it and the ingress domain routes
+	// test a domain's token through it, so the one WithACMEDNS option redirects the token of both (and only a Go option can).
+	var acmeDNS acme.DNSDeps
+	if bo.acmeDNS != nil {
+		acmeDNS = *bo.acmeDNS
+	}
+	if acmeDNS.Providers == nil {
+		acmeDNS.Providers = defaultDNSProviders()
+	}
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, &acmeDNS, hsts, listening)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()
@@ -1269,6 +1282,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Stacks:        stacksDeps,
+		Ingress:       api.IngressDeps{Store: ingressStore, DNSProviders: acmeDNS.Providers, Audit: aud, Checker: checker, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Git:           gitDeps,
 		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},
