@@ -68,7 +68,8 @@ type acmeOpts struct {
 	cfg       config.Config
 	fake      acmetest.Options
 	certFiles bool
-	// realDirectory keeps the production directory URL instead of the fake's.
+	// realDirectory makes the manager judge its directory as Let's Encrypt's own (not overridden), so the screens
+	// that apply only to the real CA run. The fake still serves it: no test reaches a real CA.
 	realDirectory bool
 	// served is what the listener serves; nil leaves a self-signed certificate.
 	served func(t *testing.T) api.ServedCertificate
@@ -115,12 +116,14 @@ func newACMEFix(t *testing.T, o acmeOpts) *acmeFix {
 
 	f := &acmeFix{authFixture: newAuthFixture(t, o.cfg), fake: fake, clock: clock}
 	dirCfg := config.Config{ACMEDirectoryURL: fake.DirectoryURL(), ACMECAFile: fake.CAFile(t)}
-	if o.realDirectory {
-		dirCfg = config.Config{}
-	}
 	dir, err := acme.NewDirectory(dirCfg)
 	if err != nil {
 		t.Fatalf("NewDirectory: %v", err)
+	}
+	if o.realDirectory {
+		// Judged as Let's Encrypt's own directory, still served by the fake: no test may register accounts with or
+		// send requests to a real CA, which rate-limits new accounts per address and is not there offline.
+		dir.Overridden = false
 	}
 	f.dir = dir
 	f.hub = jobs.New(jobs.Options{Now: clock.Now})
