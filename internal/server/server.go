@@ -238,6 +238,10 @@ type RouterDeps struct {
 	// answers 404: the route exists in every router, so its exemption is always
 	// checked.
 	AgentConnect http.Handler
+	// IngressConnect serves the ingress proxy WebSocket at /ingress/connect (Phase 22). Like AgentConnect it is outside
+	// the policy, because the handshake inside it is its own authentication. Nil mounts a handler that answers 404, so
+	// nothing is served before Phase 22 and the exemption is always checked.
+	IngressConnect http.Handler
 }
 
 // NewRouter wires every operation.
@@ -248,6 +252,11 @@ func NewRouter(d RouterDeps) *httpx.Router {
 		agentConnect = http.NotFoundHandler()
 	}
 	r.AgentConnect(agentConnect)
+	ingressConnect := d.IngressConnect
+	if ingressConnect == nil {
+		ingressConnect = http.NotFoundHandler()
+	}
+	r.IngressConnect(ingressConnect)
 	api.RegisterSystem(r, d.System)
 	api.RegisterSetup(r, d.Setup)
 	api.RegisterAuth(r, d.Auth)

@@ -167,6 +167,16 @@ func (r *Router) AgentConnect(h http.Handler) {
 	r.Exempt(http.MethodGet, AgentConnectPath, h.ServeHTTP)
 }
 
+// IngressConnectPath is the WebSocket endpoint the TierPlan ingress proxy dials (Phase 22). The path is stored in
+// every enrolled proxy, so it never changes.
+const IngressConnectPath = "/ingress/connect"
+
+// IngressConnect mounts the ingress proxy endpoint. Like /agent/connect it is outside the policy seam: the handshake
+// inside it is its own authentication, and a proxy has no session or CSRF token.
+func (r *Router) IngressConnect(h http.Handler) {
+	r.Exempt(http.MethodGet, IngressConnectPath, h.ServeHTTP)
+}
+
 func (r *Router) record(rec RouteRecord) {
 	r.mu.Lock()
 	r.routes = append(r.routes, rec)
