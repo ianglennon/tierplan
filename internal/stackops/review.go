@@ -151,6 +151,12 @@ type ReviewInput struct {
 	// not record about a running container. Nil means none.
 	Revisions RevisionStore
 	Caller    Caller
+	// IngressPolicy is the environment's ingress world, which the draft's ingress labels are judged against so the
+	// review lists a hostname outside the environment's domains or held by another stack (D-27). Nil means parser
+	// problems only: the history comparison and the git auto-deploy's drift lines leave it nil because they deploy
+	// nothing new. The review route sets it in every mode; the rollback and restore modes pass it on to the revision
+	// they restore (plan 18-13).
+	IngressPolicy *stacks.IngressPolicy
 	// Audit is the store whose audit log names the causes of the drift a deploy reverts (D-24). Nil leaves them out.
 	Audit *store.Store
 	// SkipReverts leaves the Reverts drift part out and its extra read of the engine: the History tab asks for the
@@ -300,7 +306,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		err = d.reviewRollback(ctx, in, &rv)
 		return rv, err
 	}
-	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy})
+	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
 	rv.Problems = res.Problems
 	// The two text views are made from what is known when the review ends, whichever way it ends
 	// without an error: a stack that has problems still shows its rendering, and a deployment

@@ -174,3 +174,31 @@ func TestStackCheckIngressRedactsAnotherEnvironmentByAccess(t *testing.T) {
 		t.Errorf("message after a viewer role on the other environment = %q, want the stack and the environment named", granted.Message)
 	}
 }
+
+// The review a person reads before deploying carries the same policy (D-27): a draft that names a reserved
+// host lists ingress_host_reserved among its problems, which block the deploy.
+func TestStackReviewIngress(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "ingress-review")
+	saveCompose(t, admin, st.ID, ingressCompose(seed.reservedHost), "[]")
+
+	rv, code, raw := admin.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s, want 200", code, raw)
+	}
+	found := false
+	for _, p := range rv.Problems {
+		if p.Code == ingress.CodeHostReserved {
+			found = true
+			if p.Severity != "error" || p.File != "compose.yaml" {
+				t.Errorf("problem = %+v, want an error in compose.yaml", p)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("review problems = %+v, want %s", rv.Problems, ingress.CodeHostReserved)
+	}
+}
