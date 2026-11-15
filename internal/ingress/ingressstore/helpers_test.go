@@ -4,10 +4,12 @@
 package ingressstore
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
 	"github.com/ianglennon/tierplan/internal/vault"
@@ -67,4 +69,23 @@ func count(t *testing.T, st *store.Store, query string, args ...any) int {
 		t.Fatalf("%s: %v", query, err)
 	}
 	return n
+}
+
+// registerDomain registers a domain with no token and fails the test when it cannot.
+func registerDomain(t *testing.T, s *Store, envID, suffix string) ingress.Domain {
+	t.Helper()
+	d, err := s.CreateDomain(context.Background(), CreateDomainInput{EnvID: envID, Suffix: suffix, Issuer: ingress.IssuerStaging, Actor: "admin"}, nil)
+	if err != nil {
+		t.Fatalf("register %s in %s: %v", suffix, envID, err)
+	}
+	return d
+}
+
+// claim stores one hostname for a stack through the policy and fails the test when it is refused.
+func claim(t *testing.T, s *Store, envID, stackID, hostname string) {
+	t.Helper()
+	decl := ingress.Declaration{Service: "web", Host: hostname, Label: "tierplan.ingress.host", Port: 8080}
+	if _, err := s.ReplaceStackRoutes(context.Background(), ReplaceInput{EnvID: envID, StackID: stackID, Actor: "alice", Decls: []ingress.Declaration{decl}}); err != nil {
+		t.Fatalf("claim %s for %s: %v", hostname, stackID, err)
+	}
 }

@@ -202,6 +202,355 @@ func (s *Store) CreateDomain(ctx context.Context, in CreateDomainInput, hook Dom
 	return out, nil
 }
 
+// ErrNoToken is a domain that has no DNS token saved.
+var ErrNoToken = errors.New("ingressstore: the domain has no DNS token saved")
+
+// ErrTokenEmpty is an attempt to replace a DNS token with nothing.
+var ErrTokenEmpty = errors.New("ingressstore: the DNS token is empty")
+
+// ErrNotUnderDomain is a hostname that is the domain's own suffix or is not below it.
+var ErrNotUnderDomain = errors.New("ingressstore: the hostname is not below the domain")
+
+// domainInEnv reads a domain by id within one environment. A domain of another environment is
+// ErrDomainNotFound, exactly like a missing id, so an id never confirms that another environment
+// has it.
+func domainInEnv(ctx context.Context, q *sqlc.Queries, envID, domainID string) (sqlc.IngressDomain, error) {
+	row, err := q.GetIngressDomainInEnv(ctx, sqlc.GetIngressDomainInEnvParams{ID: domainID, EnvID: envID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return sqlc.IngressDomain{}, ErrDomainNotFound
+	}
+	if err != nil {
+		return sqlc.IngressDomain{}, fmt.Errorf("ingressstore: read the domain %q: %w", domainID, err)
+	}
+	return row, nil
+}
+
+// DomainView is a domain with the hostnames reserved under it, sorted.
+type DomainView struct {
+	ingress.Domain
+	Reserved []string
+}
+
+// Domains lists the domains of an environment by suffix, each with its reserved names.
+func (s *Store) Domains(ctx context.Context, envID string) ([]DomainView, error) {
+	rows, err := s.st.RQ.ListIngressDomainsByEnv(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("ingressstore: list the domains of environment %q: %w", envID, err)
+	}
+	out := make([]DomainView, 0, len(rows))
+	for _, row := range rows {
+		reserved, err := s.st.RQ.ListIngressReservedByDomain(ctx, row.ID)
+		if err != nil {
+			return nil, fmt.Errorf("ingressstore: list the reserved names of %q: %w", row.Suffix, err)
+		}
+		v := DomainView{Domain: domainOf(row), Reserved: make([]string, 0, len(reserved))}
+		for _, r := range reserved {
+			v.Reserved = append(v.Reserved, r.Hostname)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// DomainToken opens the domain's DNS token. It is the only way the token leaves the store, and no
+// Domain value carries it. ErrNoToken when none is saved; a sealed value that does not open under
+// this domain's id (a copy from another row, a damaged value) is an error that names no content.
+func (s *Store) DomainToken(ctx context.Context, envID, domainID string) ([]byte, error) {
+	row, err := domainInEnv(ctx, s.st.RQ, envID, domainID)
+	if err != nil {
+		return nil, err
+	}
+	if row.TokenSealed == "" {
+		return nil, ErrNoToken
+	}
+	token, err := s.v.Open(vault.ContextIngressDNSToken+row.ID, row.TokenSealed)
+	if err != nil {
+		return nil, fmt.Errorf("ingressstore: open the DNS token of domain %q: %w", row.Suffix, err)
+	}
+	return token, nil
+}
+
+// SetDomainToken replaces the domain's DNS token. It is the only writer of token_sealed after the
+// domain is registered. The token is sealed under the domain's own id; the domain, its issuer and
+// every claim under it stay. hook, which may be nil, runs in the same transaction after the update.
+// The token is never logged and never put in an error.
+func (s *Store) SetDomainToken(ctx context.Context, envID, domainID string, token []byte, actor string, hook DomainHook) (ingress.Domain, error) {
+	if len(token) == 0 {
+		return ingress.Domain{}, ErrTokenEmpty
+	}
+	now := s.now().UTC()
+	var out ingress.Domain
+	err := s.write(ctx, envID, actor, now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		row, err := domainInEnv(ctx, q, envID, domainID)
+		if err != nil {
+			return false, err
+		}
+		sealed, err := s.v.Seal(vault.ContextIngressDNSToken+row.ID, token)
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: seal the DNS token: %w", err)
+		}
+		ts := toNanos(now)
+		if _, err := q.SetIngressDomainToken(ctx, sqlc.SetIngressDomainTokenParams{
+			TokenSealed: sealed, TokenUpdatedAt: ts, UpdatedAt: ts, ID: row.ID, EnvID: envID,
+		}); err != nil {
+			return false, fmt.Errorf("ingressstore: save the DNS token of domain %q: %w", row.Suffix, err)
+		}
+		row.TokenSealed, row.TokenUpdatedAt, row.UpdatedAt = sealed, ts, ts
+		out = domainOf(row)
+		if hook != nil {
+			if err := hook(ctx, tx, out); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return ingress.Domain{}, err
+	}
+	return out, nil
+}
+
+// Holder is a claim that keeps a domain from being deleted.
+type Holder struct {
+	Hostname string
+	// StackID and StackName are empty for a system claim.
+	StackID   string
+	StackName string
+	EnvID     string
+	EnvName   string
+}
+
+// DomainInUseError is a domain that cannot be deleted because claims sit under it. Holders are
+// sorted by environment name, stack name and hostname.
+type DomainInUseError struct {
+	Holders []Holder
+}
+
+// Error implements error.
+func (e *DomainInUseError) Error() string {
+	return fmt.Sprintf("ingressstore: the domain is in use by %d hostname(s)", len(e.Holders))
+}
+
+// holdersOf lists the claims whose domain is domainID.
+func holdersOf(ctx context.Context, q *sqlc.Queries, domainID string) ([]Holder, error) {
+	rows, err := q.ListIngressHolders(ctx, domainID)
+	if err != nil {
+		return nil, fmt.Errorf("ingressstore: list the holders of domain %q: %w", domainID, err)
+	}
+	out := make([]Holder, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Holder{Hostname: r.Hostname, StackID: r.StackID.String, StackName: r.StackName.String, EnvID: r.EnvID, EnvName: r.EnvName})
+	}
+	return out, nil
+}
+
+// DeleteDomain removes a domain, with the names reserved under it. A domain that claims sit under
+// is refused with *DomainInUseError and nothing changes; only claims that reference this domain row
+// count, so a claim under apps.example.com does not block example.com. hook, which may be nil, runs
+// in the same transaction after the delete, with the domain as it was.
+func (s *Store) DeleteDomain(ctx context.Context, envID, domainID string, hook DomainHook) error {
+	now := s.now().UTC()
+	return s.write(ctx, envID, "", now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		row, err := domainInEnv(ctx, q, envID, domainID)
+		if err != nil {
+			return false, err
+		}
+		holders, err := holdersOf(ctx, q, row.ID)
+		if err != nil {
+			return false, err
+		}
+		if len(holders) > 0 {
+			return false, &DomainInUseError{Holders: holders}
+		}
+		if _, err := q.DeleteIngressDomain(ctx, sqlc.DeleteIngressDomainParams{ID: row.ID, EnvID: envID}); err != nil {
+			if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+				// A claim landed between the read and the delete; say who holds the domain now.
+				if holders, herr := holdersOf(ctx, q, row.ID); herr == nil && len(holders) > 0 {
+					return false, &DomainInUseError{Holders: holders}
+				}
+			}
+			return false, fmt.Errorf("ingressstore: delete the domain %q: %w", row.Suffix, err)
+		}
+		if hook != nil {
+			if err := hook(ctx, tx, domainOf(row)); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+}
+
+// Reservation is a hostname an admin holds back under a domain.
+type Reservation struct {
+	DomainID  string
+	Suffix    string
+	Hostname  string
+	CreatedBy string
+	CreatedAt time.Time
+}
+
+// ReservedHook runs inside the transaction that reserves or releases a name, after the change and
+// only when something changed. An error rolls the change back.
+type ReservedHook func(ctx context.Context, tx *sql.Tx, r Reservation) error
+
+// ReserveInput is a hostname to reserve.
+type ReserveInput struct {
+	EnvID    string
+	DomainID string
+	Hostname string
+	Actor    string
+	// CanView says which environments the caller may see, for the refusal of a claimed name; nil
+	// names none.
+	CanView func(envID string) bool
+}
+
+// ReservedClaimedError is a name that cannot be reserved because a stack or the system holds it.
+// Message is the sentence for the caller, redacted by ingress.DescribeHolder with the caller's
+// CanView; Holder carries names only when the caller may see them.
+type ReservedClaimedError struct {
+	Holder  ingress.ClaimInfo
+	Message string
+}
+
+// Error implements error.
+func (e *ReservedClaimedError) Error() string { return e.Message }
+
+// Reserve holds back an exact hostname strictly below the domain, so no stack in any environment
+// can claim it (D-11). The name is normalised like a claim's. The apex and names outside the domain
+// are ErrNotUnderDomain; a name that is not a valid hostname is a *ingress.NameError; a name that is
+// already claimed is a *ReservedClaimedError. The bool is true when the name was newly reserved;
+// reserving a name that is reserved already changes nothing, runs no hook and returns the existing
+// reservation.
+func (s *Store) Reserve(ctx context.Context, in ReserveInput, hook ReservedHook) (Reservation, bool, error) {
+	now := s.now().UTC()
+	var out Reservation
+	created := false
+	err := s.write(ctx, in.EnvID, in.Actor, now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		dom, err := domainInEnv(ctx, q, in.EnvID, in.DomainID)
+		if err != nil {
+			return false, err
+		}
+		host := ingress.NormalizeHost(in.Hostname)
+		if err := ingress.ValidateHost(host); err != nil {
+			msg := "The hostname is empty."
+			if host != "" {
+				msg = "“" + host + "” is not a valid hostname: " + err.Error() + "."
+			}
+			return false, &ingress.NameError{Code: ingress.CodeHostInvalid, Message: msg}
+		}
+		if !ingress.Under(host, dom.Suffix) {
+			return false, ErrNotUnderDomain
+		}
+		c, err := q.GetIngressClaim(ctx, host)
+		switch {
+		case err == nil:
+			return false, reservedClaimed(c, in.CanView)
+		case !errors.Is(err, sql.ErrNoRows):
+			return false, fmt.Errorf("ingressstore: read the claim of %q: %w", host, err)
+		}
+		ts := toNanos(now)
+		n, err := q.InsertIngressReserved(ctx, sqlc.InsertIngressReservedParams{DomainID: dom.ID, Hostname: host, CreatedBy: in.Actor, CreatedAt: ts})
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: reserve %q: %w", host, err)
+		}
+		if n == 0 {
+			existing, err := reservationOf(ctx, q, dom, host)
+			if err != nil {
+				return false, err
+			}
+			out = existing
+			return false, nil
+		}
+		out = Reservation{DomainID: dom.ID, Suffix: dom.Suffix, Hostname: host, CreatedBy: in.Actor, CreatedAt: fromNanos(ts)}
+		created = true
+		if hook != nil {
+			if err := hook(ctx, tx, out); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return Reservation{}, false, err
+	}
+	return out, created, nil
+}
+
+// reservedClaimed builds the refusal of a claimed name. The sentence is DescribeHolder's, so it
+// redacts exactly as the policy does; the Holder keeps names only for a caller who may see them.
+func reservedClaimed(c sqlc.GetIngressClaimRow, canView func(string) bool) *ReservedClaimedError {
+	info := ingress.ClaimInfo{
+		Claim: ingress.Claim{
+			EnvID: c.EnvID, Hostname: c.Hostname, DomainID: c.DomainID, OwnerKind: ingress.OwnerKind(c.OwnerKind),
+			StackID: c.StackID.String, ClaimedBy: c.ClaimedBy, ClaimedAt: fromNanos(c.ClaimedAt),
+		},
+		EnvName: c.EnvName, StackName: c.StackName.String,
+	}
+	e := &ReservedClaimedError{Holder: info, Message: ingress.DescribeHolder(info, canView)}
+	if info.OwnerKind == ingress.OwnerStack && (canView == nil || !canView(info.EnvID)) {
+		e.Holder = ingress.ClaimInfo{Claim: ingress.Claim{Hostname: c.Hostname, OwnerKind: ingress.OwnerStack}}
+	}
+	return e
+}
+
+// reservationOf reads one reservation of a domain.
+func reservationOf(ctx context.Context, q *sqlc.Queries, dom sqlc.IngressDomain, host string) (Reservation, error) {
+	rows, err := q.ListIngressReservedByDomain(ctx, dom.ID)
+	if err != nil {
+		return Reservation{}, fmt.Errorf("ingressstore: list the reserved names of %q: %w", dom.Suffix, err)
+	}
+	for _, r := range rows {
+		if r.Hostname == host {
+			return Reservation{DomainID: dom.ID, Suffix: dom.Suffix, Hostname: r.Hostname, CreatedBy: r.CreatedBy, CreatedAt: fromNanos(r.CreatedAt)}, nil
+		}
+	}
+	return Reservation{}, fmt.Errorf("ingressstore: the reservation of %q vanished inside its own transaction", host)
+}
+
+// Unreserve lets a reserved name go. It reports whether a reservation was removed; a name that was
+// not reserved is a successful no-op that runs no hook and leaves config_version where it was.
+func (s *Store) Unreserve(ctx context.Context, envID, domainID, hostname string, hook ReservedHook) (bool, error) {
+	now := s.now().UTC()
+	removed := false
+	err := s.write(ctx, envID, "", now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		dom, err := domainInEnv(ctx, q, envID, domainID)
+		if err != nil {
+			return false, err
+		}
+		host := ingress.NormalizeHost(hostname)
+		rows, err := q.ListIngressReservedByDomain(ctx, dom.ID)
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: list the reserved names of %q: %w", dom.Suffix, err)
+		}
+		var r Reservation
+		found := false
+		for _, row := range rows {
+			if row.Hostname == host {
+				r = Reservation{DomainID: dom.ID, Suffix: dom.Suffix, Hostname: host, CreatedBy: row.CreatedBy, CreatedAt: fromNanos(row.CreatedAt)}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false, nil
+		}
+		if _, err := q.DeleteIngressReserved(ctx, sqlc.DeleteIngressReservedParams{DomainID: dom.ID, Hostname: host}); err != nil {
+			return false, fmt.Errorf("ingressstore: release the reserved name %q: %w", host, err)
+		}
+		removed = true
+		if hook != nil {
+			if err := hook(ctx, tx, r); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return removed, nil
+}
+
 // World reads what the install holds that a stack of envID is judged against: the environment's
 // domains, every reserved name and every claim, with the names a message about them uses. canView
 // is carried into the World for the clash message and may be nil.
