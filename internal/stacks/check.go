@@ -34,6 +34,13 @@ type CheckInput struct {
 	// check route sets it; nil, which is every other caller, leaves those hints out so a review or a deploy
 	// decides exactly what it did before.
 	Env *lint.NetEnv
+	// IngressPolicy is the environment's ingress world: its domains, the reserved names and the claims
+	// every stack holds. Nil runs only the label parser, so adopt, rebuild, start, drift, the history
+	// comparison and the git import check still report bad ingress labels; the editor check, the review
+	// and every deploy gate set it, so a hostname outside the environment's domains or held by another
+	// stack is refused where the person sees it (LBL-02, LBL-04). The name Ingress is reserved for
+	// Phase 24's network attachment.
+	IngressPolicy *IngressPolicy
 }
 
 // CheckResult is what a check found. Loaded is set when the compose file loaded, and is what the
@@ -194,6 +201,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	if in.Target == TargetSwarm {
 		res.Problems = append(res.Problems, swarmNameProblems(loaded.Project, idx, in.Name)...)
 	}
+	res.Problems = append(res.Problems, ingressProblems(loaded.Project, idx, in)...)
 	res.Problems = res.Problems.Sorted()
 	return res
 }
