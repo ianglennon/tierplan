@@ -52,11 +52,16 @@ func (p Plan) Hostnames() []string {
 // transaction before it stores anything. It reads no ingress switch.
 //
 // The rules, each an error:
-//   - the hostname is under a domain registered for the stack's environment;
+//   - no two declarations of the stack serve the same host and path;
+//   - the hostname is under a domain registered for the stack's environment, and is not the
+//     domain's own suffix; the longest matching suffix is the domain the claim is made under;
+//   - the hostname is not reserved, under any environment's domain;
 //   - the hostname is not held by another stack or by the system, in any environment.
 //
 // A stack with no declarations always passes, with an empty plan: that is how a stack lets go of
-// its hostnames. A declaration with a problem is left out of the plan.
+// its hostnames. A declaration with a problem is left out of the plan, and a hostname refused once
+// is not judged again. The plan's claims are sorted by hostname and each claim's routes by path,
+// then service, then name; problems are in declaration order.
 func Check(stackID string, decls []Declaration, w World) (Plan, []Problem) {
 	if len(decls) == 0 {
 		return Plan{}, nil
@@ -64,7 +69,17 @@ func Check(stackID string, decls []Declaration, w World) (Plan, []Problem) {
 	var problems []Problem
 	byHost := map[string]*PlannedClaim{}
 	refused := map[string]bool{}
+	served := map[string]bool{}
 	for _, d := range decls {
+		key := d.Host + "\x00" + d.PathPrefix
+		if served[key] {
+			problems = append(problems, Problem{
+				Severity: SeverityError, Code: CodeRouteDuplicate, Service: d.Service, Label: d.Label,
+				Message: "More than one route serves “" + d.Host + d.PathPrefix + "”. Give each route its own host or path.",
+			})
+			continue
+		}
+		served[key] = true
 		if refused[d.Host] {
 			continue
 		}
@@ -72,30 +87,46 @@ func Check(stackID string, decls []Declaration, w World) (Plan, []Problem) {
 			c.Routes = append(c.Routes, d)
 			continue
 		}
-		if p, bad := judgeHost(stackID, d, w); bad {
+		dom, p, bad := judgeHost(stackID, d, w)
+		if bad {
 			problems = append(problems, p)
 			refused[d.Host] = true
 			continue
 		}
-		dom, _ := MatchDomain(d.Host, w.Domains)
 		byHost[d.Host] = &PlannedClaim{Hostname: d.Host, DomainID: dom.ID, Routes: []Declaration{d}}
 	}
 	plan := Plan{Claims: make([]PlannedClaim, 0, len(byHost))}
 	for _, c := range byHost {
+		sort.Slice(c.Routes, func(i, j int) bool {
+			a, b := c.Routes[i], c.Routes[j]
+			if a.PathPrefix != b.PathPrefix {
+				return a.PathPrefix < b.PathPrefix
+			}
+			if a.Service != b.Service {
+				return a.Service < b.Service
+			}
+			return a.Name < b.Name
+		})
 		plan.Claims = append(plan.Claims, *c)
 	}
 	sort.Slice(plan.Claims, func(i, j int) bool { return plan.Claims[i].Hostname < plan.Claims[j].Hostname })
 	return plan, problems
 }
 
-// judgeHost applies the hostname rules to one declaration. bad is false when the stack may have the
-// hostname.
-func judgeHost(stackID string, d Declaration, w World) (p Problem, bad bool) {
+// judgeHost applies the hostname rules to one declaration and returns the domain the hostname is
+// under. bad is false when the stack may have the hostname.
+func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, bad bool) {
 	p = Problem{Severity: SeverityError, Service: d.Service, Label: d.Label}
-	if _, ok := MatchDomain(d.Host, w.Domains); !ok {
+	dom, ok := MatchDomain(d.Host, w.Domains)
+	if !ok {
 		p.Code = CodeDomainNotAllowed
 		p.Message = "“" + d.Host + "” is not under a domain registered for this environment. Ask an Admin to register the domain, or choose a name under one that is."
-		return p, true
+		return dom, p, true
+	}
+	if w.Reserved[d.Host] {
+		p.Code = CodeHostReserved
+		p.Message = "“" + d.Host + "” is reserved by an Admin and cannot be used by a stack. Choose another name."
+		return dom, p, true
 	}
 	if c, held := w.Claims[d.Host]; held && !(c.OwnerKind == OwnerStack && c.StackID == stackID) {
 		p.Code = CodeHostTaken
@@ -107,7 +138,7 @@ func judgeHost(stackID string, d Declaration, w World) (p Problem, bad bool) {
 		default:
 			p.Message = "“" + d.Host + "” is already claimed in an environment you can't see. A name has one owner across TierPlan. Choose another name."
 		}
-		return p, true
+		return dom, p, true
 	}
-	return Problem{}, false
+	return dom, Problem{}, false
 }
