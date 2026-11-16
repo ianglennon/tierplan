@@ -72,7 +72,7 @@ The container starts as root, and only for a moment. TierPlan fixes the ownershi
    ```
 
 3. Choose the first admin's user name and a password (12 characters or more; common passwords and passwords that contain the user name are refused), then an instance name and the public URL. The wizard fills in the `https://` address you are using; if `TIERPLAN_PUBLIC_URL` is set, that value is shown read-only.
-4. After setup, TierPlan asks whether to manage the Docker host it runs on. Nothing is managed until an admin says yes. Choosing yes is the step that gives TierPlan control of the host.
+4. After setup, on a standalone host TierPlan asks whether to manage the Docker host it runs on. Nothing is managed until an admin says yes. Choosing yes is the step that gives TierPlan control of the host. On a swarm node it offers to add the swarm through the agent instead, and then to fold the host into it, so the node is not listed twice ([docs/install-in-swarm.md](docs/install-in-swarm.md)).
 5. Later, sign in at the same address with the account you created. After five failed attempts an account locks for 30 minutes (see [Operations](#operations) to clear a lock).
 
 Once you are in, [docs/access.md](docs/access.md) explains how to invite teammates, put them in teams and give them the Viewer, Operator or Admin role on each environment.
@@ -84,19 +84,7 @@ Anyone who can read the container log or `/data` can read the setup token until 
 - Docker Engine **24 to 29**, rootful, on Linux (`amd64` or `arm64`). TierPlan checks the API version and tells you when an engine is older than Docker 24 (API 1.43).
 - **Not supported:** rootless Docker, Docker Desktop and Podman. TierPlan detects each of them and says why it cannot manage the host.
 - `DOCKER_HOST` is honoured for `unix://` paths only. `tcp://` and `ssh://` addresses are refused at startup.
-- On a **Docker Swarm**, run TierPlan on a manager node and as exactly one replica (the database is SQLite, a single writer). A service example, not exercised in Phase 1:
-
-  ```sh
-  docker service create --name tierplan --replicas 1 \
-    --constraint 'node.role==manager' \
-    --constraint 'node.hostname==MANAGER-HOSTNAME' \
-    --publish 7480:7480 \
-    --mount type=volume,source=tierplan-data,target=/data \
-    --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
-    ghcr.io/ianglennon/tierplan:0.1
-  ```
-
-  A named volume lives on one node, so pin the service to that node as well as to the managers.
+- On a **Docker Swarm**, TierPlan can run on any node, manager or worker, as exactly one replica pinned to one node (the database is SQLite, a single writer). [docs/install-in-swarm.md](docs/install-in-swarm.md) has the stack file, adding the swarm and folding the node into it.
 
 ## Configuration
 
@@ -237,6 +225,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.
 - [docs/backup.md](docs/backup.md): backups, the three ways to restore, agents after a restore and rotating the master key.
 - [docs/upgrade.md](docs/upgrade.md): moving to a newer version and going back.
+- [docs/install-in-swarm.md](docs/install-in-swarm.md): running TierPlan itself inside a swarm: the stack file, adding the swarm, folding the node it runs on, and what not to do.
 - [docs/agent.md](docs/agent.md): installing, securing, troubleshooting and removing the agent on a remote host or swarm.
 - [docs/agent-updates.md](docs/agent-updates.md): updating and removing agents by hand.
 - [docs/threat-model.md](docs/threat-model.md): what TierPlan protects, what it does not, and the risks that remain.

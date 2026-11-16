@@ -174,6 +174,8 @@ Add the host in TierPlan with **Environments, Add environment**. The dialog show
 
 ## Install on a swarm
 
+To run TierPlan itself inside the swarm, see [Running TierPlan inside a swarm](install-in-swarm.md).
+
 Run the command on **any manager** node. It creates the join token as a Docker secret and starts the agent as a global service. It first checks that the swarm has no agent service, found by the `tierplan.agent=true` label every install puts on it (so a stack-deployed `<stack>_tierplan-agent` counts) or by the name `tierplan-agent`: if one exists, it creates nothing, says so, and stops with an error (see [Reinstall an agent on a host that ran one](#reinstall-an-agent-on-a-host-that-ran-one)):
 
 ```sh

@@ -129,3 +129,54 @@ func TestInstallInSwarmDocsStackFile(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallInSwarmDocsSectionsAndLinks(t *testing.T) {
+	doc := swarmGuideText(t)
+	for _, h := range []string{
+		"Before you start",
+		"Deploy",
+		"Add the swarm",
+		"Fold this host into the swarm",
+		"Fold a host that has ingress set up", // plan 19-10 links this anchor
+		"What each node role gives",
+		"What not to do",
+	} {
+		if guideSection(doc, h) == "" {
+			t.Errorf("docs/install-in-swarm.md has no %q section", h)
+		}
+	}
+	if !strings.Contains(doc, "(#fold-a-host-that-has-ingress-set-up)") {
+		t.Error("the contents list does not link #fold-a-host-that-has-ingress-set-up")
+	}
+	for _, c := range []struct{ section, phrase string }{
+		{"What not to do", "never drain"},
+		{"What not to do", "ingress hostname"},
+		{"Before you start", "docker stack deploy"},
+		{"Fold this host into the swarm", "standby"},
+		{"Fold this host into the swarm", "Git repositories"},
+		{"Fold this host into the swarm", "counts"},
+	} {
+		if !strings.Contains(strings.ToLower(guideSection(doc, c.section)), strings.ToLower(c.phrase)) {
+			t.Errorf("section %q does not mention %q", c.section, c.phrase)
+		}
+	}
+
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(readme), "docs/install-in-swarm.md"); n < 2 {
+		t.Errorf("README.md links docs/install-in-swarm.md %d times, want at least 2", n)
+	}
+	// The old advice pinned TierPlan to a manager. A worker is supported now.
+	if strings.Contains(string(readme), "node.role==manager") {
+		t.Error("README.md still tells operators to pin TierPlan to a manager node")
+	}
+	agent, err := os.ReadFile("../../docs/agent.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agent), "install-in-swarm.md") {
+		t.Error("docs/agent.md does not link install-in-swarm.md")
+	}
+}
