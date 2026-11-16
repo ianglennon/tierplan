@@ -44,7 +44,7 @@ func newFoldRig(t *testing.T, cfg func(*dockertest.FakeConfig)) *foldRig {
 // newWorkerFoldRig is the rig with a TierPlan host that is a swarm worker: it has no cluster ID
 // and no control, reports the one manager it knows, and its node row is a worker's. Only its
 // node ID, listed by the swarm's manager, proves it belongs (D-06).
-func newWorkerFoldRig(t *testing.T) *foldRig {
+func newWorkerFoldRig(t *testing.T, more ...func(*dockertest.FakeConfig)) *foldRig {
 	t.Helper()
 	return buildFoldRig(t, func(nodes []dockertest.FakeNode) {
 		nodes[1].Role = "worker"
@@ -53,6 +53,9 @@ func newWorkerFoldRig(t *testing.T) *foldRig {
 		c.SwarmControl = false
 		c.SwarmClusterID = ""
 		c.SwarmRemoteManagers = []string{"node-m1"}
+		for _, m := range more {
+			m(c)
+		}
 	})
 }
 
@@ -434,4 +437,98 @@ func TestTracerALocalWorkerFoldsIntoItsSwarmByNodeID(t *testing.T) {
 			t.Errorf("audit details %q lack %q", rows[0].Details, want)
 		}
 	}
+}
+
+func TestFoldByNodeIDIsRefusedForAnUnlistedOrForeignWorker(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  func(*dockertest.FakeConfig)
+		want error
+	}{
+		{"a worker the managers do not list", func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" }, ErrFoldNodeNotListed},
+		{"a worker whose managers share none with the list", func(c *dockertest.FakeConfig) {
+			c.SwarmRemoteManagers = []string{"node-elsewhere"}
+		}, ErrFoldNodeNotListed},
+		{"a worker of no swarm at all", func(c *dockertest.FakeConfig) { c.SwarmState = "inactive" }, ErrFoldNotOffered},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newWorkerFoldRig(t, c.cfg)
+			ctx := context.Background()
+			if offered, _, _ := f.svc.FoldOffer(ctx, f.localEnv.ID); offered {
+				t.Error("FoldOffer(local) offered a fold")
+			}
+			if f.offered(t, f.localEnv.ID) || f.offered(t, f.env.ID) {
+				t.Error("an environment reports foldOffered")
+			}
+			if err := f.svc.FoldLocal(ctx, admin, f.env.ID, "", ""); !errors.Is(err, c.want) {
+				t.Errorf("FoldLocal = %v, want %v", err, c.want)
+			}
+			f.assertNothingFolded(t)
+		})
+	}
+}
+
+// assertNothingFolded is what every refused fold leaves: the Local environment and no audit row.
+func (f *foldRig) assertNothingFolded(t *testing.T) {
+	t.Helper()
+	if _, err := f.svc.Get(context.Background(), f.localEnv.ID); err != nil {
+		t.Errorf("the local environment was touched by a refused fold: %v", err)
+	}
+	var node string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(local_node_id, '') FROM environments WHERE id = ?`, f.env.ID).Scan(&node); err != nil || node != "" {
+		t.Errorf("local_node_id = %q, %v after a refused fold, want none", node, err)
+	}
+	if n := len(f.audits(t, "environment.local_folded")); n != 0 {
+		t.Errorf("%d audit rows for a refused fold", n)
+	}
+}
+
+func TestAManagerOfTheBoundClusterWhoseNodeTheListLacksIsRefused(t *testing.T) {
+	f := newFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" })
+	if f.offered(t, f.localEnv.ID) || f.offered(t, f.env.ID) {
+		t.Error("an environment reports foldOffered for a manager the list lacks")
+	}
+	if err := f.svc.FoldLocal(context.Background(), admin, f.env.ID, "", ""); !errors.Is(err, ErrFoldNodeNotListed) {
+		t.Errorf("FoldLocal = %v, want ErrFoldNodeNotListed", err)
+	}
+	f.assertNothingFolded(t)
+}
+
+func TestFoldLocalReadsAColdNodeListOnceBeforeRefusing(t *testing.T) {
+	ctx := context.Background()
+	f := newWorkerFoldRig(t)
+	f.c.Forget(f.env.ID)
+	if f.offered(t, f.env.ID) {
+		t.Fatal("a fold is offered from an empty cache: nothing proves the node")
+	}
+	before := 0
+	for _, p := range f.m.fake.Requests() {
+		if strings.HasSuffix(p, "/nodes") {
+			before++
+		}
+	}
+	if err := f.svc.FoldLocal(ctx, admin, f.env.ID, "10.0.0.9", "test"); err != nil {
+		t.Fatalf("FoldLocal from a cold cache: %v", err)
+	}
+	after := 0
+	for _, p := range f.m.fake.Requests() {
+		if strings.HasSuffix(p, "/nodes") {
+			after++
+		}
+	}
+	if after-before != 1 {
+		t.Errorf("the fold read the node list %d times, want once", after-before)
+	}
+	if n := len(f.audits(t, "environment.local_folded")); n != 1 {
+		t.Errorf("%d audit rows, want 1", n)
+	}
+
+	// A cold cache and an unlisted node: the one read happens, and then the fold is refused.
+	g := newWorkerFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" })
+	g.c.Forget(g.env.ID)
+	if err := g.svc.FoldLocal(ctx, admin, g.env.ID, "", ""); !errors.Is(err, ErrFoldNodeNotListed) {
+		t.Errorf("FoldLocal of an unlisted node from a cold cache = %v, want ErrFoldNodeNotListed", err)
+	}
+	g.assertNothingFolded(t)
 }
