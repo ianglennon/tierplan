@@ -43,6 +43,7 @@ const (
 	problemUpdateInProgress       = "update_in_progress"
 	problemNothingToChange        = "nothing_to_change"
 	problemFoldNotOffered         = "fold_not_offered"
+	problemFoldNodeNotListed      = "fold_node_not_listed"
 	problemLocalIsSwarmNode       = "local_is_swarm_node"
 )
 
@@ -373,7 +374,9 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		case errors.Is(err, envs.ErrLocalIsSwarmNode):
 			return httpx.Problem(http.StatusConflict, problemLocalIsSwarmNode, "This host is a node of a swarm. Add the swarm through its agents, then fold this host into it, so every stack is listed once. Nothing was added.")
 		case errors.Is(err, envs.ErrFoldNotOffered):
-			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This TierPlan host is not a manager of that swarm, or it was folded into it a moment ago.")
+			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This TierPlan host is not a node of that swarm, or it was folded into it a moment ago.")
+		case errors.Is(err, envs.ErrFoldNodeNotListed):
+			return httpx.Problem(http.StatusConflict, problemFoldNodeNotListed, "That swarm's managers don't list this host as one of its nodes, or they don't match the managers this host reports. Check that the swarm's agents are connected, then try again. Nothing was changed.")
 		}
 		d.Log.Error("environment request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
