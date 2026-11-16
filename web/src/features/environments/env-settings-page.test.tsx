@@ -93,6 +93,9 @@ const NODE = {
 let current: Record<string, unknown>;
 let items: Record<string, unknown>[];
 let seen: string[];
+// What GET fold-offer answers for the swarm; unset, the list's foldOffered decides, as it
+// does on an install with a Local environment.
+let foldOffer: Record<string, unknown> | undefined;
 // The environment's address-space settings as the server keeps them: one version for both cards,
 // checked and bumped by each save.
 let addressSettings: {
@@ -112,6 +115,7 @@ beforeEach(() => {
   current = me(ALL);
   items = [AGENT_ENV, LOCAL];
   seen = [];
+  foldOffer = undefined;
   setCsrfToken(null);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -195,6 +199,12 @@ beforeEach(() => {
         return Response.json({ clusterId: "x3k2m9t0q4w5e6r7t8y9u0i1o" });
       }
       if (path === "/api/env/e2/agents/a1/revoke") return new Response(null, { status: 204 });
+      if (path === "/api/environments/e2/fold-offer") {
+        const listed = items.find((e) => e.id === "e2")?.foldOffered === true;
+        return Response.json(
+          foldOffer ?? (listed ? { offered: true, source: "local_environment" } : { offered: false }),
+        );
+      }
       if (path === "/api/environments/e2/fold-local" && req.method === "POST") {
         // The local environment is retired and nothing offers a fold any more.
         items = [{ ...AGENT_ENV, foldOffered: undefined }];
@@ -668,6 +678,14 @@ describe("/settings/environments/$envId", () => {
     renderAt("/settings/environments/e2");
     await screen.findByRole("heading", { level: 3, name: "Remove environment" });
     expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull();
+  });
+
+  it("offers the fold of a socket-only install from the card's own read, though the list carries no offer", async () => {
+    items = [AGENT_ENV];
+    foldOffer = { offered: true, source: "socket", role: "worker" };
+    renderAt("/settings/environments/e2");
+    expect(await screen.findByRole("button", { name: "Fold into edge" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "Local host" })).toBeTruthy();
   });
 
   it("hides the Local host card from someone without environments.manage, even with environments.configure", async () => {

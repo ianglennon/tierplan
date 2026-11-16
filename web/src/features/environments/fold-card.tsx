@@ -9,6 +9,7 @@ import {
   environmentsQuery,
   FoldLocalError,
   foldLocal,
+  foldOfferQuery,
   refreshAfterFold,
 } from "@/api/environments";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -68,6 +69,11 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
       ? env
       : environments.data?.items?.find((e) => e.kind === "agent" && e.foldOffered);
 
+  // The offer comes from the card's own read (D-15): the list carries it only for installs
+  // with a Local environment. Nothing renders while it is pending or has failed (U-03).
+  const offerRead = useQuery({ ...foldOfferQuery(swarm?.id ?? ""), enabled: !!swarm });
+  const offer = offerRead.data;
+
   const fold = useMutation({
     mutationFn: (swarmId: string) => foldLocal(swarmId),
     onSuccess: async (_data, swarmId) => {
@@ -90,7 +96,7 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
     },
   });
 
-  if (!env.foldOffered || !swarm) return null;
+  if (!swarm || !offer || !offer.offered) return null;
 
   function change(next: boolean) {
     if (next) {
@@ -133,6 +139,13 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
             <DialogTitle>{t("envsettings.fold.dialogTitle", { swarm: name })}</DialogTitle>
             <DialogDescription>{t("envsettings.fold.body")}</DialogDescription>
           </DialogHeader>
+          <ul className="flex list-disc flex-col gap-2 pl-4 text-sm">
+            <li>{t("envsettings.fold.standby")}</li>
+            {offer.source === "local_environment" ? (
+              <li>{t("envsettings.fold.removesLocal")}</li>
+            ) : null}
+            <li>{t("envsettings.fold.audited")}</li>
+          </ul>
           {failure ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>{t(`envsettings.fold.${failure}`)}</AlertDescription>

@@ -197,15 +197,18 @@
     },
     "fold": {
       "title": "Local host",
-      "alert": "This TierPlan host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
+      "alert": "This TierPlan host is a node in {{swarm}}. TierPlan can reach it through the Docker socket, so it needs no separate environment.",
       "button": "Fold into {{swarm}}",
       "dialogTitle": "Fold this host into {{swarm}}?",
-      "body": "TierPlan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
-      "cancel": "Cancel",
+      "body": "TierPlan will reach this node through the Docker socket from now on.",
+      "standby": "The agent on this node keeps running, but TierPlan won't use it. It stays as a standby.",
+      "removesLocal": "The separate Local environment is removed.",
+      "audited": "Nothing changes on the host. This is recorded in the audit log.",
+      "cancel": "Keep this host as it is",
       "confirm": "Fold into {{swarm}}",
       "pending": "Folding…",
       "done": "{{swarm}} now reaches this host through the Docker socket.",
-      "notOffered": "This host is no longer a manager of that swarm, or it was folded a moment ago. Nothing was changed.",
+      "notOffered": "This host is no longer a node of that swarm, or it was folded a moment ago. Nothing was changed.",
       "failed": "Couldn't fold this host. Try again."
     },
     "updates": {
