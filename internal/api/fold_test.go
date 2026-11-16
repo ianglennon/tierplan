@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -274,5 +275,70 @@ func TestFoldLocalOfAnUnlistedNodeAnswers409FoldNodeNotListed(t *testing.T) {
 	}
 	if _, ok := f.list(t)[f.local.ID]; !ok {
 		t.Error("a refused fold retired the local environment")
+	}
+}
+
+func TestFoldLocalWithIngressStateAnswers409FoldIngressActive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		seed    []string
+		want    []string
+		notWant []string
+	}{
+		{
+			"domains and a reserved name",
+			[]string{
+				`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-1', ?, 'one.example.org', 'u1', 1, 1)`,
+				`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-2', ?, 'two.example.org', 'u1', 1, 1)`,
+				`INSERT INTO ingress_reserved (domain_id, hostname, created_by, created_at) VALUES ('dom-1', 'vault.one.example.org', 'u1', 1)`,
+			},
+			[]string{"2 domains", "1 reserved name", "Nothing was changed", "remove that environment's domains and reserved names", "Then fold, and register them on the swarm environment"},
+			[]string{"turn ingress off"},
+		},
+		{
+			"ingress turned on as well",
+			[]string{
+				`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-1', ?, 'one.example.org', 'u1', 1, 1)`,
+				`INSERT INTO ingress_env (env_id, enabled, config_version, updated_at, updated_by) VALUES (?, 1, 4, 1, 'u1')`,
+			},
+			[]string{"1 domain", "ingress turned on", "and turn ingress off"},
+			[]string{"version", "domains,"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFoldFix(t, nil)
+			for _, q := range c.seed {
+				args := []any{}
+				if strings.Contains(q, "?") {
+					args = append(args, f.local.ID)
+				}
+				if _, err := f.st.Write.Exec(q, args...); err != nil {
+					t.Fatalf("%s: %v", q, err)
+				}
+			}
+			rec := f.req(t, http.MethodPost, f.foldPath(), "")
+			if rec.code != http.StatusConflict || rec.ptyp != "fold_ingress_active" {
+				t.Fatalf("fold: %d type %q %s, want 409 fold_ingress_active", rec.code, rec.ptyp, rec.body)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(string(rec.body), w) {
+					t.Errorf("detail lacks %q: %s", w, rec.body)
+				}
+			}
+			for _, w := range c.notWant {
+				if strings.Contains(string(rec.body), w) {
+					t.Errorf("detail should not contain %q: %s", w, rec.body)
+				}
+			}
+			if n := len(f.audits(t, audit.ActionEnvironmentLocalFolded)); n != 0 {
+				t.Errorf("%d audit rows for a refused fold", n)
+			}
+			if _, ok := f.list(t)[f.local.ID]; !ok {
+				t.Error("a refused fold retired the local environment")
+			}
+		})
 	}
 }

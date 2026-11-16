@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -45,7 +47,37 @@ const (
 	problemFoldNotOffered         = "fold_not_offered"
 	problemFoldNodeNotListed      = "fold_node_not_listed"
 	problemLocalIsSwarmNode       = "local_is_swarm_node"
+	problemFoldIngressActive      = "fold_ingress_active"
 )
+
+// ingressRefusalText is what a fold refused for ingress state tells the Admin: what exists on the
+// Local environment, that nothing was changed, and the order to follow (D-12, D-17). Only kinds that
+// exist are named, and a version counter alone never is.
+func ingressRefusalText(e *envs.IngressActiveError) string {
+	var parts []string
+	add := func(n int64, one, many string) {
+		switch {
+		case n == 1:
+			parts = append(parts, "1 "+one)
+		case n > 1:
+			parts = append(parts, strconv.FormatInt(n, 10)+" "+many)
+		}
+	}
+	add(e.Domains, "domain", "domains")
+	add(e.Reserved, "reserved name", "reserved names")
+	add(e.Hostnames, "hostname", "hostnames")
+	add(e.Routes, "route", "routes")
+	if e.Enabled {
+		parts = append(parts, "ingress turned on")
+	}
+	off := ""
+	if e.Enabled {
+		off = ", and turn ingress off"
+	}
+	return "Ingress is set up on the Local environment (" + strings.Join(parts, ", ") + "), and folding would delete it. " +
+		"Nothing was changed. To fold this host, first remove that environment's domains and reserved names" + off +
+		". Then fold, and register them on the swarm environment afterwards."
+}
 
 // EnvironmentsDeps are the dependencies of the environment routes.
 type EnvironmentsDeps struct {
@@ -358,7 +390,10 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		d.Log = slog.Default()
 	}
 	fail := func(what string, err error) error {
+		var ingress *envs.IngressActiveError
 		switch {
+		case errors.As(err, &ingress):
+			return httpx.Problem(http.StatusConflict, problemFoldIngressActive, ingressRefusalText(ingress))
 		case errors.Is(err, envs.ErrLocalExists):
 			return httpx.Problem(http.StatusConflict, problemLocalEnvironmentExists, "The local Docker host is already an environment.")
 		case errors.Is(err, envs.ErrSocketNotFound):
