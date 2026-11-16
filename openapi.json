@@ -6147,6 +6147,123 @@
         ],
         "type": "object"
       },
+      "FoldIngressBody": {
+        "additionalProperties": false,
+        "properties": {
+          "domains": {
+            "description": "Ingress domains on the Local environment",
+            "format": "int64",
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "Whether ingress is turned on for the Local environment",
+            "type": "boolean"
+          },
+          "hostnames": {
+            "description": "Ingress hostnames",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reserved": {
+            "description": "Reserved hostnames on those domains",
+            "format": "int64",
+            "type": "integer"
+          },
+          "routes": {
+            "description": "Ingress routes",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "domains",
+          "reserved",
+          "hostnames",
+          "routes",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "FoldOfferBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ingress": {
+            "$ref": "#/components/schemas/FoldIngressBody",
+            "description": "The ingress state that blocks the fold; present only with refusal fold_ingress_active"
+          },
+          "localEnvironmentId": {
+            "description": "The Local environment a fold would retire; present only when source is local_environment",
+            "type": "string"
+          },
+          "offered": {
+            "description": "True when POST /api/environments/{envId}/fold-local would go ahead now, as far as can be told without trying it",
+            "type": "boolean"
+          },
+          "refusal": {
+            "description": "Why the fold is refused, in the same terms as the 409 that POST fold-local answers",
+            "enum": [
+              "fold_node_not_listed",
+              "fold_ingress_active"
+            ],
+            "type": "string"
+          },
+          "removes": {
+            "$ref": "#/components/schemas/FoldRemovesBody",
+            "description": "What the fold removes with the Local environment; present only when source is local_environment"
+          },
+          "role": {
+            "description": "The host's role in the swarm",
+            "enum": [
+              "manager",
+              "worker"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the fold takes the host from: the Local environment (which the fold retires) or, when there is none, the Docker socket TierPlan detected (attached directly). Absent when there is no source",
+            "enum": [
+              "local_environment",
+              "socket"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "offered"
+        ],
+        "type": "object"
+      },
+      "FoldRemovesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "gitRepos": {
+            "description": "Git repositories stored under the Local environment",
+            "format": "int64",
+            "type": "integer"
+          },
+          "janitor": {
+            "description": "Whether the Local environment has janitor settings of its own",
+            "type": "boolean"
+          },
+          "registries": {
+            "description": "Registry logins stored under the Local environment",
+            "format": "int64",
+            "type": "integer"
+          },
+          "stacks": {
+            "description": "Stacks stored under the Local environment",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stacks",
+          "gitRepos",
+          "registries",
+          "janitor"
+        ],
+        "type": "object"
+      },
       "GeneratedComposeBody": {
         "additionalProperties": false,
         "properties": {
@@ -40969,6 +41086,57 @@
           }
         },
         "summary": "Fold this TierPlan host into a swarm environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{envId}/fold-offer": {
+      "get": {
+        "description": "Says whether the Docker host TierPlan runs on could be folded into this swarm environment now, from where, as which role and what the fold would remove, or why it is refused. The source is the Local environment when there is one; with none, this server's own Docker socket is probed on demand, once per request and never cached (D-15: the environments list, the bell and the overview never probe it, so a socket-only install shows its offer through this read alone). Read-only: it changes nothing and audits nothing. offered false with no refusal means there is nothing to offer. 404 environment_not_found. Needs environments.manage.",
+        "operationId": "getFoldOffer",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FoldOfferBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read whether this TierPlan host can be folded into a swarm environment",
         "tags": [
           "environments"
         ]

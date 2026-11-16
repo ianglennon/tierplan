@@ -3928,6 +3928,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/environments/{envId}/fold-offer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read whether this TierPlan host can be folded into a swarm environment
+         * @description Says whether the Docker host TierPlan runs on could be folded into this swarm environment now, from where, as which role and what the fold would remove, or why it is refused. The source is the Local environment when there is one; with none, this server's own Docker socket is probed on demand, once per request and never cached (D-15: the environments list, the bell and the overview never probe it, so a socket-only install shows its offer through this read alone). Read-only: it changes nothing and audits nothing. offered false with no refusal means there is nothing to offer. 404 environment_not_found. Needs environments.manage.
+         */
+        get: operations["getFoldOffer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/environments/{envId}/token": {
         parameters: {
             query?: never;
@@ -8377,6 +8397,74 @@ export interface components {
              * @description The newest time any workload was checked, whatever came of it; empty when none was
              */
             lastCheckedAt: string;
+        };
+        FoldIngressBody: {
+            /**
+             * Format: int64
+             * @description Ingress domains on the Local environment
+             */
+            domains: number;
+            /** @description Whether ingress is turned on for the Local environment */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description Ingress hostnames
+             */
+            hostnames: number;
+            /**
+             * Format: int64
+             * @description Reserved hostnames on those domains
+             */
+            reserved: number;
+            /**
+             * Format: int64
+             * @description Ingress routes
+             */
+            routes: number;
+        };
+        FoldOfferBody: {
+            /** @description The ingress state that blocks the fold; present only with refusal fold_ingress_active */
+            ingress?: components["schemas"]["FoldIngressBody"];
+            /** @description The Local environment a fold would retire; present only when source is local_environment */
+            localEnvironmentId?: string;
+            /** @description True when POST /api/environments/{envId}/fold-local would go ahead now, as far as can be told without trying it */
+            offered: boolean;
+            /**
+             * @description Why the fold is refused, in the same terms as the 409 that POST fold-local answers
+             * @enum {string}
+             */
+            refusal?: "fold_node_not_listed" | "fold_ingress_active";
+            /** @description What the fold removes with the Local environment; present only when source is local_environment */
+            removes?: components["schemas"]["FoldRemovesBody"];
+            /**
+             * @description The host's role in the swarm
+             * @enum {string}
+             */
+            role?: "manager" | "worker";
+            /**
+             * @description Where the fold takes the host from: the Local environment (which the fold retires) or, when there is none, the Docker socket TierPlan detected (attached directly). Absent when there is no source
+             * @enum {string}
+             */
+            source?: "local_environment" | "socket";
+        };
+        FoldRemovesBody: {
+            /**
+             * Format: int64
+             * @description Git repositories stored under the Local environment
+             */
+            gitRepos: number;
+            /** @description Whether the Local environment has janitor settings of its own */
+            janitor: boolean;
+            /**
+             * Format: int64
+             * @description Registry logins stored under the Local environment
+             */
+            registries: number;
+            /**
+             * Format: int64
+             * @description Stacks stored under the Local environment
+             */
+            stacks: number;
         };
         GeneratedComposeBody: {
             /**
@@ -24945,6 +25033,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getFoldOffer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FoldOfferBody"];
                 };
             };
             /** @description Error */

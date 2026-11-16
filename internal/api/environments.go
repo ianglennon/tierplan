@@ -316,6 +316,40 @@ type FoldLocalInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
+// FoldIngressBody counts the ingress state of the Local environment that blocks a fold (D-17).
+type FoldIngressBody struct {
+	Domains   int  `json:"domains" doc:"Ingress domains on the Local environment"`
+	Reserved  int  `json:"reserved" doc:"Reserved hostnames on those domains"`
+	Hostnames int  `json:"hostnames" doc:"Ingress hostnames"`
+	Routes    int  `json:"routes" doc:"Ingress routes"`
+	Enabled   bool `json:"enabled" doc:"Whether ingress is turned on for the Local environment"`
+}
+
+// FoldRemovesBody counts what retiring a Local environment in a fold removes with it (D-16).
+type FoldRemovesBody struct {
+	Stacks     int  `json:"stacks" doc:"Stacks stored under the Local environment"`
+	GitRepos   int  `json:"gitRepos" doc:"Git repositories stored under the Local environment"`
+	Registries int  `json:"registries" doc:"Registry logins stored under the Local environment"`
+	Janitor    bool `json:"janitor" doc:"Whether the Local environment has janitor settings of its own"`
+}
+
+// FoldOfferBody is what the fold card of a swarm environment shows (D-04, D-16, D-17).
+type FoldOfferBody struct {
+	Offered            bool             `json:"offered" doc:"True when POST /api/environments/{envId}/fold-local would go ahead now, as far as can be told without trying it"`
+	Source             string           `json:"source,omitempty" enum:"local_environment,socket" doc:"Where the fold takes the host from: the Local environment (which the fold retires) or, when there is none, the Docker socket TierPlan detected (attached directly). Absent when there is no source"`
+	Role               string           `json:"role,omitempty" enum:"manager,worker" doc:"The host's role in the swarm"`
+	LocalEnvironmentID string           `json:"localEnvironmentId,omitempty" doc:"The Local environment a fold would retire; present only when source is local_environment"`
+	Refusal            string           `json:"refusal,omitempty" enum:"fold_node_not_listed,fold_ingress_active" doc:"Why the fold is refused, in the same terms as the 409 that POST fold-local answers"`
+	Ingress            *FoldIngressBody `json:"ingress,omitempty" doc:"The ingress state that blocks the fold; present only with refusal fold_ingress_active"`
+	Removes            *FoldRemovesBody `json:"removes,omitempty" doc:"What the fold removes with the Local environment; present only when source is local_environment"`
+}
+
+// FoldOfferOutput wraps FoldOfferBody for huma.
+type FoldOfferOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         FoldOfferBody
+}
+
 func rfc3339(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -584,6 +618,39 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return nil, fail("read the environment", err)
 		}
 		return one(e), nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getFoldOffer",
+		Method:      http.MethodGet,
+		Path:        "/api/environments/{envId}/fold-offer",
+		Summary:     "Read whether this TierPlan host can be folded into a swarm environment",
+		Description: "Says whether the Docker host TierPlan runs on could be folded into this swarm environment now, from where, as which role " +
+			"and what the fold would remove, or why it is refused. The source is the Local environment when there is one; with none, this " +
+			"server's own Docker socket is probed on demand, once per request and never cached (D-15: the environments list, the bell and the " +
+			"overview never probe it, so a socket-only install shows its offer through this read alone). Read-only: it changes nothing and " +
+			"audits nothing. offered false with no refusal means there is nothing to offer. 404 environment_not_found. Needs environments.manage.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *EnvironmentPathInput) (*FoldOfferOutput, error) {
+		det, err := d.Envs.FoldOfferDetail(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail("read the fold offer", err)
+		}
+		body := FoldOfferBody{Offered: det.Offered, Source: det.Source, Role: det.Role, LocalEnvironmentID: det.LocalEnvID}
+		var ingress *envs.IngressActiveError
+		switch {
+		case errors.As(det.Refusal, &ingress):
+			body.Refusal = problemFoldIngressActive
+			body.Ingress = &FoldIngressBody{Domains: int(ingress.Domains), Reserved: int(ingress.Reserved), Hostnames: int(ingress.Hostnames),
+				Routes: int(ingress.Routes), Enabled: ingress.Enabled}
+		case errors.Is(det.Refusal, envs.ErrFoldNodeNotListed):
+			body.Refusal = problemFoldNodeNotListed
+		}
+		if det.Removes != nil {
+			body.Removes = &FoldRemovesBody{Stacks: int(det.Removes.Stacks), GitRepos: int(det.Removes.GitRepos),
+				Registries: int(det.Removes.Registries), Janitor: det.Removes.Janitor}
+		}
+		return &FoldOfferOutput{CacheControl: "no-store", Body: body}, nil
 	})
 
 	// Reconnect is deliberately not audited: it changes no TierPlan or Docker

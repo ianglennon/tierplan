@@ -55,6 +55,29 @@ func newWorkerFoldFix(t *testing.T, more func(*dockertest.FakeConfig)) *foldFix 
 
 func buildFoldFix(t *testing.T, rows func([]dockertest.FakeNode), cfg func(*dockertest.FakeConfig)) *foldFix {
 	t.Helper()
+	return buildFoldFixWith(t, rows, cfg, true)
+}
+
+// newSocketOnlyWorkerFoldFix is newWorkerFoldFix for an install with no Local environment: the
+// worker's socket is configured, nothing is added for it, and only the swarm's agent is enrolled.
+func newSocketOnlyWorkerFoldFix(t *testing.T, more func(*dockertest.FakeConfig)) *foldFix {
+	t.Helper()
+	return buildFoldFixWith(t, func(nodes []dockertest.FakeNode) {
+		nodes[1].Role = "worker"
+		nodes[1].Leader = false
+	}, func(c *dockertest.FakeConfig) {
+		c.SwarmControl = false
+		c.SwarmClusterID = ""
+		c.SwarmRemoteManagers = []string{"node-mgr-1"}
+		if more != nil {
+			more(c)
+		}
+	}, false)
+}
+
+// buildFoldFixWith builds the fold fixture; withLocal says whether the host is also added as a Local environment.
+func buildFoldFixWith(t *testing.T, rows func([]dockertest.FakeNode), cfg func(*dockertest.FakeConfig), withLocal bool) *foldFix {
+	t.Helper()
 	nodes := []dockertest.FakeNode{
 		{ID: "node-mgr-1", Hostname: "mgr-1", Role: "manager", EngineVersion: "29.1.0", OS: "linux"},
 		{ID: "node-local", Hostname: "local-1", Role: "manager", EngineVersion: "29.1.0", OS: "linux", Leader: true},
@@ -72,8 +95,11 @@ func buildFoldFix(t *testing.T, rows func([]dockertest.FakeNode), cfg func(*dock
 	}
 	fake := dockertest.NewFake(t, lc)
 	f := newAgentFixHost(t, "unix://"+fake.SocketPath())
-	local := f.add(t)
-	f.awaitFirstProbe(t, local.ID)
+	var local envBody
+	if withLocal {
+		local = f.add(t)
+		f.awaitFirstProbe(t, local.ID)
+	}
 	env := f.srv.NewEnvironment(t, "Swarm")
 	f.connect(t, env, dockertest.FakeConfig{
 		Hostname: "mgr-1", SwarmState: "active", SwarmControl: true, SwarmNodeID: "node-mgr-1", SwarmClusterID: "cluster-1",
