@@ -1075,11 +1075,34 @@ func (c *Clusters) view(in RollupInput) *ClusterView {
 	v.NoQuorum, v.NoQuorumSince = st.NoQuorum, st.NoQuorumSince
 	if v.Known {
 		fillFromNodes(v, st)
+		v.FoldedNodeGone = foldedNodeGone(in, st)
 	}
 	v.NotAManager = notAManager(in)
 	sort.Slice(away, func(i, j int) bool { return away[i].Node < away[j].Node })
 	v.ManagersUnreachable = append(away, v.ManagersUnreachable...)
 	return v
+}
+
+// foldedNodeGone is the folded host as a node the swarm no longer lists (D-09), or nil. It
+// needs a node list with nodes in it and a socket whose engine is answering, so that an
+// unreachable engine is reported as that and not as a node that left. A read is only ever
+// answered by a manager, so the list is the swarm's.
+func foldedNodeGone(in RollupInput, st ClusterState) *NodeSince {
+	if len(st.Read.Nodes) == 0 {
+		return nil
+	}
+	for _, a := range in.Agents {
+		if !a.Socket || a.SwarmNodeID == "" || a.Target.State != StateOnline {
+			continue
+		}
+		for _, n := range st.Read.Nodes {
+			if n.ID == a.SwarmNodeID {
+				return nil
+			}
+		}
+		return &NodeSince{Node: nodeName(a), Since: st.FetchedAt}
+	}
+	return nil
 }
 
 // fillFromNodes fills the counts and per-node problems from the node list.

@@ -42,6 +42,12 @@ const (
 	// an overlay to 90% (and not yet fallen below 85%). Like IssueCertExpiring it is not a
 	// connection failure: it is not a wire.Reason and an agent never refuses with it.
 	IssueAddressSpaceFull = "address_space_full"
+	// IssueFoldedNodeGone is the issue code of a swarm environment whose folded TierPlan host
+	// is no longer one of the swarm's nodes: the swarm's own node list lacks it, or its socket
+	// reports another node ID or no swarm at all (D-09). Like IssueAddressSpaceFull it is not
+	// a wire.Reason and an agent never refuses with it. Nothing is unfolded: the fold stays and
+	// an admin decides what to do.
+	IssueFoldedNodeGone = "folded_node_gone"
 
 	envTypeSwarm = "swarm"
 	maxNodeLen   = 64
@@ -155,6 +161,10 @@ type ClusterView struct {
 	// AddressSpace is the summary of the environment's address space from its last read, nil
 	// before any. Rollup only reads it: the hysteresis is the reader's (AddressSpaces).
 	AddressSpace *AddressSummary
+	// FoldedNodeGone names the folded TierPlan host when the swarm's node list is known and
+	// does not list it (D-09); nil when it is listed, when nothing is known yet, when its
+	// socket's engine is not answering, and for an environment with no folded node.
+	FoldedNodeGone *NodeSince
 }
 
 // RollupInput is everything Rollup decides from. All times are passed in, so the
@@ -324,10 +334,12 @@ func absent(in RollupInput, active []AgentView) Health {
 // (certificate, clock), the order of the overview's severity list.
 var issueRank = map[string]int{
 	// The cluster cannot answer at all, then nothing could be asked of it.
-	ReasonNoQuorum:          0,
-	ReasonNotAManager:       1,
-	ReasonAgentOffline:      2,
-	ReasonTimeout:           2,
+	ReasonNoQuorum:     0,
+	ReasonNotAManager:  1,
+	ReasonAgentOffline: 2,
+	ReasonTimeout:      2,
+	// A node that left the swarm is gone like one whose agent is offline.
+	IssueFoldedNodeGone:     2,
 	ReasonEngineUnreachable: 3,
 	ReasonUnsupportedEngine: 4,
 	IssueCertExpiring:       5,
@@ -351,6 +363,9 @@ func nodeIssues(in RollupInput, active, present []AgentView) []Issue {
 		issues = append(issues, Issue{Code: ReasonAgentOffline, Since: in.ServerStart})
 	}
 	for _, a := range present {
+		if a.socketLeftTheSwarm() {
+			issues = append(issues, Issue{Code: IssueFoldedNodeGone, Node: nodeName(a), Since: a.Target.Since})
+		}
 		switch {
 		case a.Target.State == StateUnsupported:
 			issues = append(issues, Issue{Code: ReasonUnsupportedEngine, Node: nodeName(a), Since: firstSet(a.Target.Since, a.ConnectedAt)})
@@ -414,6 +429,9 @@ func clusterIssues(c *ClusterView, have []Issue) []Issue {
 	for _, n := range c.UnsupportedNodes {
 		add(ReasonUnsupportedEngine, cleanText(n.Node, maxNodeLen), n.Since)
 	}
+	if g := c.FoldedNodeGone; g != nil {
+		add(IssueFoldedNodeGone, cleanText(g.Node, maxNodeLen), g.Since)
+	}
 	if is, ok := addressSpaceIssue(c); ok {
 		out = append(out, is)
 	}
@@ -436,6 +454,15 @@ func localSwarm(in RollupInput) bool {
 	}
 	t := in.Local.Probe.Type
 	return t == dockerx.TypeSwarmManager || t == dockerx.TypeSwarmWorker
+}
+
+// socketLeftTheSwarm is whether this view is the folded host's socket and its engine, once
+// probed and answering, is no longer the swarm node the environment folded in: it reports no
+// swarm (an empty node ID) or another node's ID (it left and rejoined). Before the first
+// probe, and while the engine does not answer, it is false: nothing is known (D-09).
+func (a AgentView) socketLeftTheSwarm() bool {
+	return a.Socket && a.Target.State == StateOnline && a.Target.Probe.Type != "" &&
+		a.Target.Probe.SwarmNodeID != a.SwarmNodeID
 }
 
 // presentAt reports whether the agent counts as present at now: connected, or
