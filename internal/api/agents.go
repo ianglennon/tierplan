@@ -184,7 +184,9 @@ type UpdateAgentsInput struct {
 type AgentBody struct {
 	ID                  string          `json:"id" doc:"The agent ID"`
 	Node                string          `json:"node" doc:"The hostname the agent reported when it enrolled"`
-	Role                string          `json:"role" enum:"leader,manager,worker,standalone,local" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it"`
+	Role                string          `json:"role" enum:"leader,manager,worker,standalone,local" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it. The local row's nodeRole says whether that node is a manager or a worker"`
+	NodeRole            string          `json:"nodeRole,omitempty" enum:"manager,worker" doc:"For the role local row only: whether the folded node is a swarm manager or a worker, from its socket's last probe, or before that from the swarm's node list (D-08)"`
+	Standby             bool            `json:"standby" doc:"True for an agent that runs on the node of this TierPlan host after the host was folded into the swarm: TierPlan reaches that node through the Docker socket and does not use this agent, which keeps running as a standby (D-10)"`
 	Status              string          `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
 	Blocked             bool            `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
 	Connected           bool            `json:"connected" doc:"Whether the agent has a live connection now"`
@@ -302,8 +304,28 @@ func sortAgentBodies(items []AgentBody) {
 // has no certificate, no clock offset, no version to update and no actions.
 func localBody(n envs.FoldedNode) AgentBody {
 	return AgentBody{
-		ID: n.ID, Node: n.Node, Role: "local", Status: "active", Connected: n.Online, EngineVersion: n.EngineVersion,
+		ID: n.ID, Node: n.Node, Role: "local", NodeRole: n.Role, Status: "active", Connected: n.Online, EngineVersion: n.EngineVersion,
 		UpdateState: UpdateStateBody{State: agents.UpdateIdle},
+	}
+}
+
+// markStandby sets Standby on the item of every agent that runs on the folded node
+// (D-10): the swarm node ID it reported is the folded host's. Nothing is changed on
+// the agent, and an empty folded node ID marks none.
+func markStandby(items []AgentBody, nodes []agents.Node, foldedNodeID string) {
+	if foldedNodeID == "" {
+		return
+	}
+	onFolded := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		if n.SwarmNodeID == foldedNodeID {
+			onFolded[n.ID] = true
+		}
+	}
+	for i := range items {
+		if onFolded[items[i].ID] {
+			items[i].Standby = true
+		}
 	}
 }
 
@@ -542,6 +564,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		items := agentBodies(nodes, d.Live, in.EnvID, leaderAgent(d, in.EnvID), time.Now(), d.updates())
 		if d.Local != nil {
 			if n, ok := d.Local.FoldedNode(ctx, in.EnvID); ok {
+				markStandby(items, nodes, n.NodeID)
 				items = append(items, localBody(n))
 				sortAgentBodies(items)
 			}

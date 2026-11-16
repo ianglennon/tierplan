@@ -1258,6 +1258,9 @@ type Node struct {
 	Name string
 	// Role is manager, worker or standalone.
 	Role string
+	// SwarmNodeID is the swarm node the agent reported when it enrolled, and empty for
+	// a standalone host.
+	SwarmNodeID string
 	// Status is active or revoked.
 	Status string
 	// Blocked is true while the host's identity is on the block list because of
@@ -1296,7 +1299,7 @@ func (s *Service) ListNodes(ctx context.Context, envID string) ([]Node, error) {
 	out := make([]Node, 0, len(rows))
 	for _, a := range rows {
 		n := Node{
-			ID: a.ID, Name: a.Name, Role: a.Role, Status: a.Status, Blocked: blocked[a.ID],
+			ID: a.ID, Name: a.Name, Role: a.Role, SwarmNodeID: a.SwarmNodeID.String, Status: a.Status, Blocked: blocked[a.ID],
 			AgentVersion: a.AgentVersion, CertFingerprint: a.CertFingerprint, CertNotAfter: time.Unix(0, a.CertNotAfter).UTC(),
 			RevokeReason: a.RevokeReason.String,
 		}

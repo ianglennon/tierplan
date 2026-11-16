@@ -6295,6 +6295,11 @@ export interface components {
             manualUpdateCommand?: string;
             /** @description The hostname the agent reported when it enrolled */
             node: string;
+            /**
+             * @description For the role local row only: whether the folded node is a swarm manager or a worker, from its socket's last probe, or before that from the swarm's node list (D-08)
+             * @enum {string}
+             */
+            nodeRole?: "manager" | "worker";
             /** @description The host owner set the agent to read-only. Reported only while it is connected */
             readOnly: boolean;
             /** @description True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent */
@@ -6307,12 +6312,14 @@ export interface components {
              */
             revokedAt?: string;
             /**
-             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it
+             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it. The local row's nodeRole says whether that node is a manager or a worker
              * @enum {string}
              */
             role: "leader" | "manager" | "worker" | "standalone" | "local";
             /** @description The host owner allowed the agent to update itself. Reported only while it is connected */
             selfUpdate: boolean;
+            /** @description True for an agent that runs on the node of this TierPlan host after the host was folded into the swarm: TierPlan reaches that node through the Docker socket and does not use this agent, which keeps running as a standby (D-10) */
+            standby: boolean;
             /**
              * @description revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back
              * @enum {string}
