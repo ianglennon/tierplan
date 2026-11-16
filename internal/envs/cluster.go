@@ -640,6 +640,14 @@ func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*docker
 	if err == nil {
 		return first, nil
 	}
+	if first.Socket && ReasonFor(err) == ReasonNotAManager {
+		// The folded host's engine refused as a worker: it was demoted since it was last
+		// probed. The probe interval bounds how long its role would stay wrong, and this
+		// refusal is the earlier signal, so probe it now. The read is not repeated here: the
+		// next one chooses again from the role the probe finds.
+		c.svc.mon.Kick(SocketTarget(in.EnvID))
+		return first, err
+	}
 	if !errors.Is(err, tunnel.ErrAgentGone) {
 		return first, err
 	}

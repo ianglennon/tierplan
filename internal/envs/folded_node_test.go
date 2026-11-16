@@ -282,3 +282,46 @@ func TestSocketViewRoleFollowsTheProbeAfterPromotionAndDemotion(t *testing.T) {
 		t.Errorf("local_node_id = %q, want node-local: no re-fold happened and none is needed", got)
 	}
 }
+
+func TestAClusterReadRefusedAsNotAManagerKicksTheSocketProbe(t *testing.T) {
+	f := newFoldRig(t, nil)
+	f.fold(t)
+	ctx := context.Background()
+	key := SocketTarget(f.env.ID)
+	read := func(cli *dockerx.Client) error {
+		_, err := cli.Cluster(ctx)
+		return err
+	}
+	if st := f.mon.Status(key); st.Probe.Type != dockerx.TypeSwarmManager {
+		t.Fatalf("the socket probes as %q after the fold, want a swarm manager", st.Probe.Type)
+	}
+
+	// The host is demoted on the engine; nothing has probed it since. A read goes to the
+	// socket (it is the leader), is refused as a worker's, and must not wait out the interval.
+	f.local.Reconfigure(localConfig(false, f.nodes))
+	err := f.c.ClusterRead(ctx, f.env.ID, read)
+	if got := ReasonFor(err); got != ReasonNotAManager {
+		t.Fatalf("a cluster read through a demoted socket = %v (reason %q), want not_a_manager", err, got)
+	}
+	// The regular probe is 30 s away (defaultInterval): a probe that comes sooner is the kick's.
+	wait, cancel := context.WithTimeout(testsupport.Context(t), defaultInterval/2)
+	defer cancel()
+	if st, err := f.mon.AwaitStatus(wait, key, func(s Status) bool { return s.Probe.Type == dockerx.TypeSwarmWorker }); err != nil {
+		t.Fatalf("the refused read did not bring a probe that finds the demotion: last status %+v: %v", st, err)
+	}
+	if got := f.foldedRole(t); got != roleWorker {
+		t.Errorf("role after the kicked probe = %q, want worker", got)
+	}
+	// Chosen again from the new role, the read goes to the swarm's own manager.
+	var host string
+	if err := f.c.ClusterRead(ctx, f.env.ID, func(cli *dockerx.Client) error {
+		res, err := cli.Probe(ctx)
+		host = res.Hostname
+		return err
+	}); err != nil {
+		t.Fatalf("ClusterRead after the probe: %v", err)
+	}
+	if host != "mgr-1" {
+		t.Errorf("the read went to %q, want mgr-1", host)
+	}
+}
