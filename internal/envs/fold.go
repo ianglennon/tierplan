@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -26,6 +27,59 @@ var ErrFoldNotOffered = errors.New("envs: folding the local host into that envir
 // environment's managers do not list it as one of their nodes, or none of the managers it
 // reports is among theirs (D-06). Nothing was changed.
 var ErrFoldNodeNotListed = errors.New("envs: that environment's managers do not list the local host as one of its nodes")
+
+// ErrFoldIngressActive means the Local environment holds ingress state that folding would
+// delete through the cascade, so the fold is refused and nothing is changed (D-12, D-17).
+var ErrFoldIngressActive = errors.New("envs: the local environment holds ingress state a fold would delete")
+
+// IngressActiveError says what ingress state the Local environment holds. Each field is how
+// many of that kind exist; Enabled is whether ingress is turned on. A bare version counter
+// (an ingress_env row with ingress off) is not state (D-17) and is not counted.
+type IngressActiveError struct {
+	Domains, Reserved, Hostnames, Routes int64
+	Enabled                              bool
+}
+
+// Any is true when something blocks the fold.
+func (e *IngressActiveError) Any() bool {
+	return e.Domains > 0 || e.Reserved > 0 || e.Hostnames > 0 || e.Routes > 0 || e.Enabled
+}
+
+// Error names the kinds that exist and nothing else.
+func (e *IngressActiveError) Error() string {
+	var parts []string
+	add := func(n int64, one, many string) {
+		switch {
+		case n == 1:
+			parts = append(parts, "1 "+one)
+		case n > 1:
+			parts = append(parts, strconv.FormatInt(n, 10)+" "+many)
+		}
+	}
+	add(e.Domains, "domain", "domains")
+	add(e.Reserved, "reserved name", "reserved names")
+	add(e.Hostnames, "hostname", "hostnames")
+	add(e.Routes, "route", "routes")
+	if e.Enabled {
+		parts = append(parts, "ingress turned on")
+	}
+	return "envs: the local environment holds ingress state a fold would delete (" + strings.Join(parts, ", ") + ")"
+}
+
+// Is makes errors.Is(err, ErrFoldIngressActive) true for this error.
+func (e *IngressActiveError) Is(target error) bool { return target == ErrFoldIngressActive }
+
+// ingressActive is the refusal for a count, or nil when nothing blocks the fold.
+func ingressActive(row sqlc.CountIngressStateByEnvRow) *IngressActiveError {
+	e := &IngressActiveError{
+		Domains: row.Domains, Reserved: row.Reserved, Hostnames: row.Hostnames, Routes: row.Routes,
+		Enabled: row.Enabled > 0,
+	}
+	if !e.Any() {
+		return nil
+	}
+	return e
+}
 
 const (
 	// foldSourceLocal and foldSourceSocket say where a fold's host came from, in the audit
@@ -194,7 +248,9 @@ func (s *Service) foldOfferedFor(ctx context.Context, row sqlc.Environment) bool
 //
 // ErrNotFound means there is no such environment; ErrFoldNotOffered that the local host is
 // not a node of that environment's swarm, or that it was folded already; ErrFoldNodeNotListed
-// that the host calls itself a node of it but its managers do not list it (D-06).
+// that the host calls itself a node of it but its managers do not list it (D-06);
+// *IngressActiveError (errors.Is ErrFoldIngressActive) that the local environment holds ingress
+// state the fold would delete (D-12).
 func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, ip, ua string) error {
 	if !s.Known(ctx, swarmEnvID) {
 		return ErrNotFound
@@ -231,6 +287,19 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	}
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	q := s.st.Q.WithTx(tx)
+	// D-12, D-17: the Local environment's row is deleted below and every ingress table cascades
+	// from it, so ingress state refuses the fold. The count is read here, in the write
+	// transaction, so state added after the offer is still seen. A socket fold has no Local row
+	// and so nothing to lose.
+	if p.source == foldSourceLocal {
+		row, err := q.CountIngressStateByEnv(ctx, p.localID)
+		if err != nil {
+			return fmt.Errorf("count the local environment's ingress state: %w", err)
+		}
+		if ia := ingressActive(row); ia != nil {
+			return ia
+		}
+	}
 	local, err := q.GetEnvironment(ctx, p.localID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrFoldNotOffered

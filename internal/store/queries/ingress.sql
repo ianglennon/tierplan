@@ -97,3 +97,16 @@ SELECT r.* FROM ingress_routes r
 JOIN ingress_hostnames h ON h.hostname = r.hostname
 WHERE h.stack_id = ?
 ORDER BY r.hostname, r.path_prefix;
+
+-- name: CountIngressStateByEnv :one
+-- What a fold of the Local environment would delete through the cascade (D-12, D-17): domains, the reserved
+-- names under them (ingress_reserved has no env_id, so through its domain), hostname claims, routes, and
+-- whether ingress is turned on. An ingress_env row with enabled = 0 is only a version counter and counts as
+-- nothing.
+SELECT
+    (SELECT COUNT(*) FROM ingress_domains AS d WHERE d.env_id = ?1) AS domains,
+    (SELECT COUNT(*) FROM ingress_reserved AS r JOIN ingress_domains AS rd ON rd.id = r.domain_id
+        WHERE rd.env_id = ?1) AS reserved,
+    (SELECT COUNT(*) FROM ingress_hostnames AS h WHERE h.env_id = ?1) AS hostnames,
+    (SELECT COUNT(*) FROM ingress_routes AS rt WHERE rt.env_id = ?1) AS routes,
+    (SELECT COUNT(*) FROM ingress_env AS e WHERE e.env_id = ?1 AND e.enabled = 1) AS enabled;
