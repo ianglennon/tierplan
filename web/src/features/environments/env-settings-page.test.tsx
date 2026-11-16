@@ -202,7 +202,8 @@ beforeEach(() => {
       if (path === "/api/environments/e2/fold-offer") {
         const listed = items.find((e) => e.id === "e2")?.foldOffered === true;
         return Response.json(
-          foldOffer ?? (listed ? { offered: true, source: "local_environment" } : { offered: false }),
+          foldOffer ??
+            (listed ? { offered: true, source: "local_environment" } : { offered: false }),
         );
       }
       if (path === "/api/environments/e2/fold-local" && req.method === "POST") {

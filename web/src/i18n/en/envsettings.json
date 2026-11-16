@@ -221,6 +221,25 @@
       "pending": "Folding…",
       "done": "{{swarm}} now reaches this host through the Docker socket.",
       "notOffered": "This host is no longer a node of that swarm, or it was folded a moment ago. Nothing was changed.",
+      "nodeNotListed": "{{swarm}} doesn't list this host as one of its nodes, or its managers don't match this host's. Check that the swarm's agents are connected, then try again. Nothing was changed.",
+      "ingressBlocked": "Ingress is set up on the Local environment ({{what}}), and folding would delete it. To fold this host, first remove that environment's domains and reserved names{{andOff}}. Then fold, and register them on {{swarm}} afterwards.",
+      "ingressActive": "Ingress is set up on the Local environment ({{what}}), and folding would delete it. Nothing was changed. To fold this host, first remove that environment's domains and reserved names{{andOff}}. Then fold, and register them on {{swarm}} afterwards.",
+      "ingressAndOff": ", and turn ingress off",
+      "ingressDocsBefore": "The",
+      "ingressDocsLink": "install-in-swarm guide",
+      "ingressDocsAfter": "in the docs shows how.",
+      "ingressWhat": {
+        "domains_one": "{{count}} domain",
+        "domains_other": "{{count}} domains",
+        "reserved_one": "{{count}} reserved name",
+        "reserved_other": "{{count}} reserved names",
+        "hostnames_one": "{{count}} hostname",
+        "hostnames_other": "{{count}} hostnames",
+        "routes_one": "{{count}} route",
+        "routes_other": "{{count}} routes",
+        "enabled": "ingress turned on",
+        "unknown": "domains or reserved names"
+      },
       "failed": "Couldn't fold this host. Try again."
     },
     "updates": {

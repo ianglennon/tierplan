@@ -242,6 +242,102 @@ describe("FoldCard", () => {
     expect(within(dialog).getByText("1 registry login")).toBeTruthy();
   });
 
+  const DOCS_HREF =
+    "https://github.com/ianglennon/tierplan/blob/main/docs/install-in-swarm.md#fold-a-host-that-has-ingress-set-up";
+
+  it("refuses for ingress with what exists, the order, the docs link and no fold button", async () => {
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 2, reserved: 1, hostnames: 0, routes: 0, enabled: false },
+      });
+    show();
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(card.textContent).toContain(
+      "Ingress is set up on the Local environment (2 domains, 1 reserved name), and folding would delete it. To fold this host, first remove that environment's domains and reserved names. Then fold, and register them on edge swarm afterwards. The install-in-swarm guide in the docs shows how.",
+    );
+    const link = within(card).getByRole("link", { name: "install-in-swarm guide" });
+    expect(link.getAttribute("href")).toBe(DOCS_HREF);
+    expect(screen.queryByRole("button", { name: /Fold into/ })).toBeNull();
+  });
+
+  it("adds turning ingress off when it is on, and never lists a version counter", async () => {
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 1, reserved: 0, hostnames: 0, routes: 0, enabled: true },
+      });
+    show();
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(card.textContent).toContain("(1 domain, ingress turned on)");
+    expect(card.textContent).toContain("reserved names, and turn ingress off. Then fold");
+    expect(card.textContent).not.toMatch(/version/i);
+  });
+
+  it("refuses when the swarm does not list this host, with no fold button", async () => {
+    offerAnswer = () => Response.json({ offered: false, refusal: "fold_node_not_listed" });
+    show();
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(card.textContent).toContain(
+      "edge swarm doesn't list this host as one of its nodes, or its managers don't match this host's.",
+    );
+    expect(screen.queryByRole("button", { name: /Fold into/ })).toBeNull();
+  });
+
+  it("keeps the dialog open with the node-not-listed alert and the confirm usable again", async () => {
+    answer = () =>
+      Response.json(
+        { title: "Conflict", status: 409, type: "fold_node_not_listed" },
+        { status: 409 },
+      );
+    const dialog = await openDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain(
+      "edge swarm doesn't list this host as one of its nodes, or its managers don't match this host's. Check that the swarm's agents are connected, then try again. Nothing was changed.",
+    );
+    expect(
+      (within(dialog).getByRole("button", { name: "Fold into edge swarm" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("keeps the dialog open on fold_ingress_active, hides the confirm and refreshes the offer", async () => {
+    answer = () =>
+      Response.json(
+        { title: "Conflict", status: 409, type: "fold_ingress_active" },
+        { status: 409 },
+      );
+    const dialog = await openDialog();
+    const reads = () => sent.filter((s) => s.path.endsWith("/fold-offer")).length;
+    const before = reads();
+    // The refreshed offer carries what was found.
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 2, reserved: 1, hostnames: 0, routes: 0, enabled: false },
+      });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
+    const alert = await within(dialog).findByRole("alert");
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await waitFor(() => expect(alert.textContent).toContain("(2 domains, 1 reserved name)"));
+    expect(alert.textContent).toContain("Nothing was changed.");
+    expect(within(alert).getByRole("link", { name: "install-in-swarm guide" })).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "Fold into edge swarm" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep this host as it is" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The card now shows the same refusal.
+    expect(
+      within(screen.getByRole("region", { name: "Local host" })).getByRole("link", {
+        name: "install-in-swarm guide",
+      }),
+    ).toBeTruthy();
+  });
+
   it("is not rendered when the offer is on a local environment and no swarm environment offers one", async () => {
     listed = [LOCAL];
     queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL] });

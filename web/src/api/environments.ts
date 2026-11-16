@@ -304,6 +304,17 @@ export class FoldLocalError extends Error {
   get notOffered(): boolean {
     return this.status === 409 && this.type === "fold_not_offered";
   }
+
+  // That swarm's managers don't list this host, or don't match it. Nothing was changed.
+  get nodeNotListed(): boolean {
+    return this.status === 409 && this.type === "fold_node_not_listed";
+  }
+
+  // The Local environment has ingress set up that the fold would delete. Nothing was
+  // changed; it has to be removed first.
+  get ingressActive(): boolean {
+    return this.status === 409 && this.type === "fold_ingress_active";
+  }
 }
 
 // foldLocal folds this TierPlan host into the swarm environment envId (D-48): the swarm
