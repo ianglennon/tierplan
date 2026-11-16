@@ -43,6 +43,7 @@ const (
 	problemUpdateInProgress       = "update_in_progress"
 	problemNothingToChange        = "nothing_to_change"
 	problemFoldNotOffered         = "fold_not_offered"
+	problemLocalIsSwarmNode       = "local_is_swarm_node"
 )
 
 // EnvironmentsDeps are the dependencies of the environment routes.
@@ -369,6 +370,8 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 			return httpx.Problem(http.StatusUnprocessableEntity, problemInvalidName, "The name must be 1 to 64 characters.")
 		case errors.Is(err, envs.ErrNotFound), errors.Is(err, agents.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+		case errors.Is(err, envs.ErrLocalIsSwarmNode):
+			return httpx.Problem(http.StatusConflict, problemLocalIsSwarmNode, "This host is a node of a swarm. Add the swarm through its agents, then fold this host into it, so every stack is listed once. Nothing was added.")
 		case errors.Is(err, envs.ErrFoldNotOffered):
 			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This TierPlan host is not a manager of that swarm, or it was folded into it a moment ago.")
 		}
@@ -430,6 +433,10 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		}
 		if in.Body.Kind == agents.KindAgent {
 			return addAgentEnvironment(ctx, d, fail, p, in)
+		}
+		// A swarm node is reached through the swarm's agents, never as a Local environment of its own (D-02, D-21).
+		if err := d.Envs.RefuseLocalOnSwarmNode(ctx); err != nil {
+			return nil, fail("add environment", err)
 		}
 		e, err := d.Envs.AddLocal(ctx, p.AuditActor(), in.Body.Name, in.Body.AllowUnsupported, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {
