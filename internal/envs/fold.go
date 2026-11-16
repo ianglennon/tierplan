@@ -267,6 +267,11 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	}
 	src, ok := s.localFoldSource(rows)
 	if !ok {
+		// No Local environment to retire: the detected socket is the host (D-04). This is the
+		// one place besides FoldOfferDetail where it is probed, and only on this request (D-15).
+		src, ok = s.detectSocket(ctx, rows)
+	}
+	if !ok {
 		return ErrFoldNotOffered
 	}
 	var p foldPair
@@ -290,7 +295,9 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	// D-12, D-17: the Local environment's row is deleted below and every ingress table cascades
 	// from it, so ingress state refuses the fold. The count is read here, in the write
 	// transaction, so state added after the offer is still seen. A socket fold has no Local row
-	// and so nothing to lose.
+	// and so nothing to lose. The host's socket and the names the audit entry carries come from
+	// the Local row a fold retires; a socket fold has no such row.
+	socketPath, localName, localEnvID := p.socket, "", ""
 	if p.source == foldSourceLocal {
 		row, err := q.CountIngressStateByEnv(ctx, p.localID)
 		if err != nil {
@@ -299,13 +306,28 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 		if ia := ingressActive(row); ia != nil {
 			return ia
 		}
-	}
-	local, err := q.GetEnvironment(ctx, p.localID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrFoldNotOffered
-	}
-	if err != nil {
-		return fmt.Errorf("get the local environment: %w", err)
+		local, err := q.GetEnvironment(ctx, p.localID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrFoldNotOffered
+		}
+		if err != nil {
+			return fmt.Errorf("get the local environment: %w", err)
+		}
+		socketPath, localName, localEnvID = local.SocketPath, local.Name, p.localID
+	} else {
+		// D-04: the socket was probed before this transaction began, so a Local environment
+		// added or another environment folded since is seen here, and the loser changes nothing.
+		locals, err := q.CountEnvironmentsOfKind(ctx, KindLocal)
+		if err != nil {
+			return fmt.Errorf("count local environments: %w", err)
+		}
+		folded, err := q.CountFoldedEnvironments(ctx)
+		if err != nil {
+			return fmt.Errorf("count folded environments: %w", err)
+		}
+		if locals != 0 || folded != 0 {
+			return ErrFoldNotOffered
+		}
 	}
 	swarm, err := q.GetEnvironment(ctx, swarmEnvID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -317,7 +339,7 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	now := s.now().UTC().UnixNano()
 	n, err := q.FoldLocalHost(ctx, sqlc.FoldLocalHostParams{
 		LocalNodeID:     sql.NullString{String: p.nodeID, Valid: true},
-		LocalSocketPath: sql.NullString{String: local.SocketPath, Valid: true},
+		LocalSocketPath: sql.NullString{String: socketPath, Valid: true},
 		UpdatedAt:       now, ID: swarmEnvID,
 		SwarmClusterID: sql.NullString{String: p.clusterID, Valid: true},
 	})
@@ -328,21 +350,23 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 		// Folded, rebound or removed since it was looked at.
 		return ErrFoldNotOffered
 	}
-	if _, err := q.DeleteEnvironment(ctx, p.localID); err != nil {
-		return fmt.Errorf("retire the local environment: %w", err)
-	}
-	// The retired environment's ID is never used again, so what was granted on it
-	// goes with it rather than staying behind pointing at nothing.
-	grants, err := deleteEnvironmentGrants(ctx, q, p.localID)
-	if err != nil {
-		return err
+	var grants int64
+	if p.source == foldSourceLocal {
+		if _, err := q.DeleteEnvironment(ctx, p.localID); err != nil {
+			return fmt.Errorf("retire the local environment: %w", err)
+		}
+		// The retired environment's ID is never used again, so what was granted on it
+		// goes with it rather than staying behind pointing at nothing.
+		if grants, err = deleteEnvironmentGrants(ctx, q, p.localID); err != nil {
+			return err
+		}
 	}
 	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
 		Actor: actor, Action: audit.ActionEnvironmentLocalFolded, TargetType: targetEnvironment, TargetID: swarmEnvID,
 		EnvID: swarmEnvID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
 		Details: map[string]string{
-			"swarm": swarm.Name, "local": local.Name, "local_environment": p.localID,
-			"node": p.nodeID, "socket": local.SocketPath, "grants": strconv.FormatInt(grants, 10),
+			"swarm": swarm.Name, "local": localName, "local_environment": localEnvID,
+			"node": p.nodeID, "socket": socketPath, "grants": strconv.FormatInt(grants, 10),
 			"source": p.source, "role": p.role,
 		},
 	}); err != nil {
@@ -352,11 +376,13 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 		return fmt.Errorf("commit: %w", err)
 	}
 
-	s.mon.Stop(p.localID)
-	if s.clusters != nil {
-		s.clusters.Forget(p.localID)
+	if p.source == foldSourceLocal {
+		s.mon.Stop(p.localID)
+		if s.clusters != nil {
+			s.clusters.Forget(p.localID)
+		}
 	}
-	if err := s.mon.Start(s.ctx(), SocketTarget(swarmEnvID), engine.LocalSocketTransport{Path: local.SocketPath}); err != nil {
+	if err := s.mon.Start(s.ctx(), SocketTarget(swarmEnvID), engine.LocalSocketTransport{Path: socketPath}); err != nil {
 		// The fold is recorded; the socket target is started again with the server.
 		s.log.Error("monitor the folded local host", "environment", swarmEnvID, "error", err)
 	}
