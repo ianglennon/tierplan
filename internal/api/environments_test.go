@@ -102,13 +102,35 @@ func (r *envRec) env(t *testing.T) envBody {
 	return e
 }
 
+// add gives the fixture the Local environment an existing install has, and returns it as the API lists it. It seeds
+// through the service, not through POST /api/environments: the route refuses the socket of a swarm node (D-21), yet
+// every install made before Phase 19 has a Local environment over a swarm manager, and the tests of the swarm
+// features need that state. The POST itself is exercised by the tests that call it.
 func (f *envFix) add(t *testing.T) envBody {
 	t.Helper()
-	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local"}`)
-	if rec.code != http.StatusCreated {
-		t.Fatalf("add: %d %s", rec.code, rec.body)
+	admin := audit.Actor{Type: audit.ActorUser, ID: "id-admin", Name: "admin"}
+	e, err := f.svc.AddLocal(context.Background(), admin, "", false, authIP, authUA)
+	if err != nil {
+		t.Fatalf("add: %v", err)
 	}
-	return rec.env(t)
+	f.awaitFirstProbe(t, e.ID)
+	rec := f.req(t, http.MethodGet, "/api/environments", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("add: list: %d %s", rec.code, rec.body)
+	}
+	var list struct {
+		Items []envBody `json:"items"`
+	}
+	if err := json.Unmarshal(rec.body, &list); err != nil {
+		t.Fatalf("add: decode %s: %v", rec.body, err)
+	}
+	for _, it := range list.Items {
+		if it.ID == e.ID {
+			return it
+		}
+	}
+	t.Fatalf("add: environment %s is not in the list %s", e.ID, rec.body)
+	return envBody{}
 }
 
 func TestEnvironmentAddLocalAsAdminReturns201AndAudits(t *testing.T) {
