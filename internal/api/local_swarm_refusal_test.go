@@ -33,3 +33,20 @@ func TestTracerAddingTheLocalHostOnASwarmNodeIsRefused(t *testing.T) {
 		t.Errorf("a refused add wrote environment.added rows: %+v", entries)
 	}
 }
+
+// Folding retires the Local environment (D-48). Adding the host again is the hand-unfold, and it is the one add on a
+// swarm node that stays open, because the node is already managed through the swarm environment (D-21).
+func TestTheLocalHostCanBeAddedAgainAfterAFold(t *testing.T) {
+	t.Parallel()
+	f := newFoldFix(t, nil)
+	if rec := f.req(t, http.MethodPost, f.foldPath(), ""); rec.code != http.StatusOK {
+		t.Fatalf("fold: %d %s", rec.code, rec.body)
+	}
+	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"local"}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("add after a fold: %d %s, want 201 (the hand-unfold)", rec.code, rec.body)
+	}
+	if e := rec.env(t); e.Kind != "local" || e.ID == "" {
+		t.Errorf("environment = %+v", e)
+	}
+}
