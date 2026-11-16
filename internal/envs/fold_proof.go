@@ -4,8 +4,15 @@
 package envs
 
 import (
+	"time"
+
 	"github.com/ianglennon/tierplan/internal/dockerx"
 )
+
+// foldNodeListMaxAge is how old a node list may be and still decide a fold. It is the age the
+// agents service allows a node list (internal/agents nodeListMaxAge), kept here as its own
+// constant because envs must not import agents.
+const foldNodeListMaxAge = 2 * time.Minute
 
 // foldVerdict is the answer of the fold proof for one probed socket and one node list: whether
 // the socket's host is a node of the swarm the list belongs to, and if not, why not.
@@ -72,4 +79,19 @@ func proveNode(p dockerx.ProbeResult, nodes []dockerx.NodeRow) foldVerdict {
 		return verdictNodeNotListed
 	}
 	return verdictOffered
+}
+
+// foldNodeList is the node list of swarm environment envID that a fold may be proven against:
+// the one Clusters believes (its answerer is in it, the quorum is held) and no older than
+// foldNodeListMaxAge. It is nil when the service has no Clusters, nothing is believed, or the
+// list is stale; proveNode reads that as verdictNoNodeList. It does no I/O.
+func (s *Service) foldNodeList(envID string) []dockerx.NodeRow {
+	if s.clusters == nil {
+		return nil
+	}
+	nodes, at, ok := s.clusters.NodeList(envID)
+	if !ok || s.now().Sub(at) > foldNodeListMaxAge {
+		return nil
+	}
+	return nodes
 }

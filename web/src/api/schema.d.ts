@@ -11632,8 +11632,10 @@ export interface components {
             storageDriver?: string;
             supported: boolean;
             swarmClusterId?: string;
+            swarmManagerHosts?: string[] | null;
             swarmNodeId?: string;
             swarmNodeState?: string;
+            swarmRemoteManagers?: string[] | null;
             type?: string;
         };
         ProfileBody: {

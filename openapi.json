@@ -14207,11 +14207,29 @@
           "swarmClusterId": {
             "type": "string"
           },
+          "swarmManagerHosts": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "swarmNodeId": {
             "type": "string"
           },
           "swarmNodeState": {
             "type": "string"
+          },
+          "swarmRemoteManagers": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "type": {
             "type": "string"

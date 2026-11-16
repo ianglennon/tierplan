@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -289,6 +290,43 @@ func (c *Clusters) SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time
 		ids = append(ids, n.ID)
 	}
 	return ids, st.FetchedAt, true
+}
+
+// NodeList is the swarm's node list as last read for envID, with each node's role, and when it
+// was read. It is believed under the one rule SwarmNodeIDs applies: ok is false when nothing was
+// read yet, the quorum is lost, or the list does not name the manager that answered it (which
+// includes a read of the server's own socket), so a node's absence from it is only ever judged on
+// a list a manager of the swarm stood behind. The returned slice is a copy; the caller applies
+// its own age limit. It does no I/O and takes no refresh lock.
+func (c *Clusters) NodeList(envID string) (nodes []dockerx.NodeRow, fetchedAt time.Time, ok bool) {
+	st, found := c.Cached(envID)
+	if !found || !st.Known() || !st.Read.ListsAnswerer(st.AnsweredBy) {
+		return nil, time.Time{}, false
+	}
+	return slices.Clone(st.Read.Nodes), st.FetchedAt, true
+}
+
+// RefreshNodeList is NodeList after a read of the environment's cluster when the held list is
+// missing or older than minAge. A read that is running already is waited for and its list is
+// the answer, so concurrent callers share one read; ctx and the cluster read timeout bound it.
+// A failed read leaves the state as the read records it, and NodeList then judges what is held.
+//
+// Unlike RefreshSwarmNodeIDs it reads an environment that was never read: it serves an Admin's
+// explicit fold, one request at a time, not a burst of enrolments that must not drive the
+// managers.
+func (c *Clusters) RefreshNodeList(ctx context.Context, envID string, minAge time.Duration) (nodes []dockerx.NodeRow, fetchedAt time.Time, ok bool) {
+	if st, found := c.Cached(envID); found && !st.FetchedAt.IsZero() && c.now().Sub(st.FetchedAt) < minAge {
+		return c.NodeList(envID)
+	}
+	e := c.entry(envID)
+	if e.refresh.TryLock() {
+		_ = c.refresh(ctx, envID, e) // a failed read leaves the state as it records it
+	} else {
+		// A read is running: wait for it, then take the list it left.
+		e.refresh.Lock()
+	}
+	e.refresh.Unlock()
+	return c.NodeList(envID)
 }
 
 // RefreshSwarmNodeIDs is SwarmNodeIDs after one more read of the environment's cluster, for an
