@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Info, ShieldAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -113,7 +114,7 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   const probe = data?.probe;
   // Which screen is showing; the heading takes focus in the wizard whenever
   // this changes, as it does for the earlier steps.
-  const view = !data ? "none" : !data.detected ? "notDetected" : viewOfProbe(probe);
+  const view = !data ? "none" : !data.detected ? "notDetected" : viewOfProbe(probe, data.swarm);
   useEffect(() => {
     if (mode === "wizard" && view !== "none") headingRef.current?.focus();
   }, [mode, view]);
@@ -131,7 +132,9 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
         if (
           problem.type === "socket_not_found" ||
           problem.type === "engine_unreachable" ||
-          problem.type === "unsupported_engine"
+          problem.type === "unsupported_engine" ||
+          // The host joined a swarm since the panel loaded (D-21): show it.
+          problem.type === "local_is_swarm_node"
         ) {
           return "changed" as const;
         }
@@ -287,10 +290,32 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   const engine = probe?.engineName || "Docker";
   const engineVersion = probe?.engineVersion || MISSING;
 
-  // An engine TierPlan cannot manage: say why, and let the admin add it anyway
-  // so it shows up as unsupported (D-25).
-  if (view === "unsupported" && probe) {
+  // This node is joining or leaving a swarm: nothing is offered until that
+  // settles, whatever its engine (D-18).
+  if (view === "notReady") {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col items-start gap-2">
+          <Badge variant="outline" className="border-status-warning text-status-warning-text">
+            {t("env.localHost.notReady.badge")}
+          </Badge>
+          {heading("env.localHost.notReady.heading")}
+          <p className="text-sm text-muted-foreground">{t("env.localHost.notReady.body")}</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {checkAgain}
+          {skip}
+        </div>
+      </div>
+    );
+  }
+
+  // An engine TierPlan cannot manage: say why. A standalone one can still be
+  // added anyway so it shows up as unsupported (D-25); one on a swarm cannot,
+  // because the host is part of a swarm and is never its own environment (D-02).
+  if ((view === "unsupported" || view === "swarmUnsupported") && probe) {
     const podman = probe.reason === "podman";
+    const onSwarm = view === "swarmUnsupported";
     return (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col items-start gap-2">
@@ -307,20 +332,27 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
                   api: probe.apiVersion || MISSING,
                 })}
           </p>
+          {onSwarm ? (
+            <p className="text-sm text-muted-foreground">{t("env.localHost.unsupported.swarm")}</p>
+          ) : null}
         </div>
         <div className="flex flex-col gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            className={BUTTON}
-            disabled={adding}
-            onClick={() => add.mutate(true)}
-          >
-            {adding ? pendingLabel : t("env.localHost.unsupported.add")}
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            {t("env.localHost.unsupported.addHelper")}
-          </p>
+          {onSwarm ? null : (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                className={BUTTON}
+                disabled={adding}
+                onClick={() => add.mutate(true)}
+              >
+                {adding ? pendingLabel : t("env.localHost.unsupported.add")}
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                {t("env.localHost.unsupported.addHelper")}
+              </p>
+            </>
+          )}
           {skip}
         </div>
       </div>
@@ -340,6 +372,46 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
       <AlertDescription>{t("env.localHost.notice")}</AlertDescription>
     </Alert>
   );
+
+  // The swarm of this node is already an environment: point at its fold card,
+  // or wait for its agents to list this node (D-05). No add button, so a second
+  // environment for the same swarm is not started by habit.
+  if (view === "swarmAdded" && data.swarm) {
+    const swarmName = data.swarm.environmentName;
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          {heading("env.localHost.swarmAdded.heading")}
+          <p className="text-sm text-muted-foreground">
+            {t(
+              data.swarm.foldOffered
+                ? "env.localHost.swarmAdded.bodyOffered"
+                : "env.localHost.swarmAdded.bodyWaiting",
+              { swarm: swarmName },
+            )}
+          </p>
+        </div>
+        {roleLine}
+        {rootNotice}
+        <div className="flex flex-col gap-2">
+          {data.swarm.foldOffered ? (
+            <Button asChild variant="secondary" className={BUTTON}>
+              <Link
+                to="/settings/environments/$envId"
+                params={{ envId: data.swarm.environmentId }}
+                hash="fold"
+              >
+                {t("env.localHost.swarmAdded.open", { swarm: swarmName })}
+              </Link>
+            </Button>
+          ) : (
+            checkAgain
+          )}
+          {skip}
+        </div>
+      </div>
+    );
+  }
 
   // A swarm node: the swarm is added through its agents, never the socket as
   // its own environment, so every stack is listed once (D-01, D-02).
@@ -406,12 +478,31 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   );
 }
 
-type View = "unreachable" | "unsupported" | "swarm" | "supported";
+type View =
+  | "unreachable"
+  | "notReady"
+  | "swarmUnsupported"
+  | "unsupported"
+  | "swarmAdded"
+  | "swarm"
+  | "supported";
 
-function viewOfProbe(probe: Probe | undefined): View {
+const SWARM_STATES = new Set(["active", "locked"]);
+
+// viewOfProbe chooses the screen. The swarm checks come first (D-02, D-18): a
+// node that is joining or leaving a swarm is not ready whatever its engine, and
+// an unsupported engine on a swarm node must not fall into the view that adds
+// the socket as its own environment.
+function viewOfProbe(probe: Probe | undefined, swarm: unknown): View {
   // A socket that exists with no probe result is treated like one that does not
   // answer: there is nothing to show about the engine.
   if (!probe?.reachable) return "unreachable";
-  if (!probe.supported) return "unsupported";
-  return probe.type === "swarm-manager" || probe.type === "swarm-worker" ? "swarm" : "supported";
+  if (probe.swarmNodeState === "pending" || probe.swarmNodeState === "error") return "notReady";
+  const swarmType = probe.type === "swarm-manager" || probe.type === "swarm-worker";
+  if (!probe.supported) {
+    const onSwarm = swarmType || SWARM_STATES.has(probe.swarmNodeState ?? "");
+    return onSwarm ? "swarmUnsupported" : "unsupported";
+  }
+  if (!swarmType) return "supported";
+  return swarm ? "swarmAdded" : "swarm";
 }
