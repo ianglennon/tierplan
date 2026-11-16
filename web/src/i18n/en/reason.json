@@ -70,6 +70,11 @@
         "textGeneric": "The clock on a node is out of step.",
         "hint": "Sync the host's clock (NTP). TierPlan accepts up to 5 minutes of difference."
       },
+      "folded_node_gone": {
+        "text": "{{node}} is no longer a node of this swarm. It left the swarm or was removed.",
+        "textGeneric": "The TierPlan host is no longer a node of this swarm. It left the swarm or was removed.",
+        "hint": "TierPlan hasn't unfolded it. Add the host back to the swarm to reach it through its socket again."
+      },
       "timeout": {
         "text": "{{node}} stopped answering.",
         "textGeneric": "A node stopped answering.",
