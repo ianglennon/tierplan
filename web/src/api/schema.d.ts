@@ -1428,6 +1428,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the domains of an environment
+         * @description The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["listIngressDomains"];
+        put?: never;
+        /**
+         * Register a domain with its DNS token
+         * @description Registers a domain for the environment. The suffix is checked first: a public suffix is refused with 422 ingress_domain_public_suffix before the DNS provider is contacted, and anything that is not a domain with 422 ingress_domain_invalid. The token is then tested by asking the provider for the zone that holds the suffix, and the domain is stored only when a zone is found; a refused test is 422 dns_token_invalid, dns_token_scope or dns_zone_not_found, or 503 dns_rate_limited or dns_unavailable, and stores nothing. A token that sees the zone but may not edit its DNS records passes this test and fails when a certificate is first issued. The token is stored sealed and never returned: the answer carries tokenSet and tokenUpdatedAt only. The issuer is production unless staging is chosen, and no route changes it afterwards. 409 ingress_domain_exists when the environment already has the suffix (another environment may). Audited as ingress.domain_created without the token; a refused test is audited as a failure with the DNS class as its reason. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["createIngressDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/domains/{domainId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a domain
+         * @description Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 ingress_domain_in_use names every holding stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. 404 ingress_domain_not_found for a domain that is gone or belongs to another environment, with no audit row. Audited as ingress.domain_deleted. Needs ingress.manage on the environment (its Admin).
+         */
+        delete: operations["deleteIngressDomain"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/domains/{domainId}/reserved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reserve a hostname under a domain
+         * @description Holds back one exact hostname strictly below the domain, so no stack in any environment can claim it. The name is lower-cased and a trailing dot is dropped. 422 ingress_hostname_not_under_domain for the domain itself or a name outside it, 422 ingress_hostname_invalid for a wildcard or anything that is not a hostname. 409 ingress_hostname_claimed when a stack already holds the name: the detail names the stack and its environment only when the caller may see that environment, and says only that another environment holds it otherwise. Reserving a name that is reserved already is a no-op that writes no audit row. 404 ingress_domain_not_found for a domain of another environment. Audited as ingress.host_reserved. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["reserveIngressHostname"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/domains/{domainId}/reserved/{hostname}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Release a reserved hostname
+         * @description Lets a reserved name go. Releasing a name that is not reserved is a success that writes no audit row. 404 ingress_domain_not_found for a domain of another environment. Audited as ingress.host_unreserved. Needs ingress.manage on the environment (its Admin).
+         */
+        delete: operations["unreserveIngressHostname"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/domains/{domainId}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a domain's DNS token
+         * @description Tests the new token the way registration does, then replaces the saved one. The domain, its issuer and every hostname claimed under it stay; tokenUpdatedAt moves. A token that fails its test is refused with the same 422 or 503 problems as registration and the saved token stays in place. The token is never returned. 404 ingress_domain_not_found for a domain of another environment. Audited as ingress.domain_credential_replaced without the token. Needs ingress.manage on the environment (its Admin).
+         */
+        put: operations["replaceIngressDomainToken"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor": {
         parameters: {
             query?: never;
@@ -6957,6 +7061,18 @@ export interface components {
             /** @description The node the container is on */
             nodeId: string;
         };
+        CreateIngressDomainInputBody: {
+            /**
+             * @description The Let's Encrypt directory, production when left out
+             * @default production
+             * @enum {string}
+             */
+            issuer: "staging" | "production";
+            /** @description The domain to register, such as apps.example.com. A public suffix (co.uk, github.io) is refused with 422 ingress_domain_public_suffix before the DNS provider is asked */
+            suffix: string;
+            /** @description The DNS provider API token, at most 4096 bytes. It is tested first, then stored sealed; it is never returned. 422 ingress_token_missing when left out, ingress_token_too_long when over the bound */
+            token?: string;
+        };
         CreateTeamInputBody: {
             /** @description 1 to 64 characters; not case-sensitive for uniqueness */
             name: string;
@@ -9613,6 +9729,59 @@ export interface components {
             /** @description The user's username */
             username: string;
         };
+        IngressDomainBody: {
+            /**
+             * Format: date-time
+             * @description When the domain was registered
+             */
+            createdAt: string;
+            /** @description The ID of the user who registered the domain */
+            createdBy: string;
+            /** @description The DNS provider that validates the domain, such as cloudflare */
+            dnsProvider: string;
+            /** @description The domain's ID, used in the paths of the routes below */
+            id: string;
+            /**
+             * @description The Let's Encrypt directory certificates for this domain come from. Staging certificates are not trusted by browsers
+             * @enum {string}
+             */
+            issuer: "staging" | "production";
+            /** @description The hostnames held back under the domain, sorted. No stack can claim one */
+            reserved: string[] | null;
+            /** @description The domain stacks of this environment may serve hostnames under, such as apps.example.com. A hostname must be strictly below it */
+            suffix: string;
+            /** @description True when a DNS token is saved. The token is never returned */
+            tokenSet: boolean;
+            /**
+             * Format: date-time
+             * @description When the DNS token was last saved or replaced; left out when none is saved
+             */
+            tokenUpdatedAt?: string;
+            /**
+             * Format: date-time
+             * @description When the domain last changed
+             */
+            updatedAt: string;
+        };
+        IngressDomainsBody: {
+            /** @description The environment's domains, by suffix */
+            items: components["schemas"]["IngressDomainBody"][] | null;
+        };
+        IngressReservationBody: {
+            /**
+             * Format: date-time
+             * @description When it was reserved
+             */
+            createdAt: string;
+            /** @description The ID of the user who reserved it */
+            createdBy: string;
+            /** @description The domain the name is reserved under */
+            domainId: string;
+            /** @description The reserved hostname, lower-case with no trailing dot */
+            hostname: string;
+            /** @description The domain's suffix */
+            suffix: string;
+        };
         InstallBody: {
             /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
             agentUrl: string;
@@ -11773,6 +11942,10 @@ export interface components {
              */
             updatedAt: string;
         };
+        ReplaceIngressDomainTokenInputBody: {
+            /** @description The new DNS provider API token, at most 4096 bytes. It is tested first and replaces the saved one only when the test passes; it is never returned */
+            token?: string;
+        };
         RequirementBody: {
             /**
              * @description role: held by the named role and above. extra: held by Admin, and by Operator only when the assignment carries it. instance: held by instance admins alone
@@ -11784,6 +11957,10 @@ export interface components {
              * @enum {string}
              */
             role?: "viewer" | "operator" | "admin";
+        };
+        ReserveIngressHostnameInputBody: {
+            /** @description The exact hostname to hold back, strictly below the domain. It is lower-cased and a trailing dot is dropped. 422 ingress_hostname_not_under_domain for the domain itself or a name outside it, ingress_hostname_invalid for a wildcard or anything that is not a hostname */
+            hostname: string;
         };
         ResolveBody: {
             /** @description Every credential for the image's registry that the instance and this environment hold: the one used first, then those that cover the image from most to least specific, then those that do not */
@@ -19432,6 +19609,222 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageUsedByBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listIngressDomains: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDomainsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createIngressDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIngressDomainInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDomainBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteIngressDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The domain's ID */
+                domainId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    reserveIngressHostname: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The domain's ID */
+                domainId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReserveIngressHostnameInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressReservationBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unreserveIngressHostname: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The domain's ID */
+                domainId: string;
+                /** @description The reserved hostname */
+                hostname: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    replaceIngressDomainToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The domain's ID */
+                domainId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceIngressDomainTokenInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDomainBody"];
                 };
             };
             /** @description Error */

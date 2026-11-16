@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -461,15 +463,28 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	mode, update := deployModeOf(body)
 	// The stack's masker is built once for the request: the refusals below and the stored rendering use it.
 	masker := stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)
+	// A hostname the environment's ingress world refuses (outside every domain, reserved, held) is refused here as
+	// every other problem of the check is, before anything is stored (D-18). The world is read once for every draft
+	// (ingressGatePolicy). An automatic deploy names no person, so its refusal, which is recorded
+	// where every viewer of the environment reads it, names a holder only in the stack's own environment (D-20).
+	// The read changes nothing: no claim is written (D-21), and a read that fails refuses the deploy.
+	viewer := p
+	if o.Trigger != "" {
+		viewer = nil
+	}
+	pol, err := ingressGatePolicy(ctx, d, viewer, draft.Copy, env.ID, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	if st.Target == stacks.TargetStandalone {
-		return deployStandaloneStack(ctx, d, p, env, st, draft, body, userAgent, o, mode, update, masker)
+		return deployStandaloneStack(ctx, d, p, env, st, draft, body, userAgent, o, mode, update, masker, pol)
 	}
 
 	// The draft is judged once, by the check pipeline the review ran, before anything is stored or
 	// started: a compose file that cannot be deployed is refused here, with the problems the review
 	// lists, and leaves no revision behind. The project it returns is the one that is converted,
 	// rendered and deployed.
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline})
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
 	if err != nil {
 		return nil, deployableProblem(d, env.ID, err)
 	}
@@ -500,12 +515,12 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	// What the caller may not deploy and a name that something TierPlan does not manage holds are
 	// judged next (07-18 judges them once more under the lock). Nothing is stored or sent until they pass.
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
-	pol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, plan)
+	hostPol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, plan)
 	if err != nil {
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
-	if pol.Refused {
-		return nil, refuse(refusalPolicy, policyProblem(pol))
+	if hostPol.Refused {
+		return nil, refuse(refusalPolicy, policyProblem(hostPol))
 	}
 	o.noteHostAccess(d, draft.Copy, plan)
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
@@ -579,13 +594,32 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	return out, nil
 }
 
+// declaresIngress reports whether the working copy mentions an ingress label (ingress.LabelPrefix) in any file or
+// variable value. A deploy gate reads the ingress world for every copy (ingressGatePolicy); this decides only whether a
+// read that fails refuses the copy, so a stack with no ingress label is never refused because that read failed. The
+// match is on the text, so a key assembled from separate variables does not match: such a copy is judged against the
+// policy whenever the world can be read, and the claim write of a later phase judges the parsed labels again (D-21).
+func declaresIngress(c stacks.WorkingCopy) bool {
+	for _, f := range c.Files {
+		if bytes.Contains(f.Content, []byte(ingress.LabelPrefix)) {
+			return true
+		}
+	}
+	for _, v := range c.Vars {
+		if strings.Contains(v.Value, ingress.LabelPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // deployStandaloneStack is deployStack for a stack of a standalone host (STK-02): the draft is judged the
 // same way, and the job runs the Compose SDK instead of the swarm engine. Every step before the lock is a
 // read or a check; nothing is stored or started until the draft, the objects, the pins, the host-access
 // policy and the name have all passed.
-func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker) (*StackDeployOutput, error) {
+func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
 	repo := d.repo()
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline})
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
 	if checked.Loaded == nil {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
@@ -612,12 +646,12 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
-	pol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, convert.Plan{})
+	hostPol, err := d.ops().Policy(ctx, caller, env.ID, draft.Copy, convert.Plan{})
 	if err != nil {
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
-	if pol.Refused {
-		return nil, refuse(refusalPolicy, policyProblem(pol))
+	if hostPol.Refused {
+		return nil, refuse(refusalPolicy, policyProblem(hostPol))
 	}
 	o.noteHostAccess(d, draft.Copy, convert.Plan{})
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
@@ -668,6 +702,8 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
 		// The subnets small stack subnets gave its networks, read from the last good revision and stored on this one.
 		Subnets: repo,
+		// The job's own check refuses what this request refused (D-18).
+		IngressPolicy: pol,
 	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -752,30 +788,38 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	// cannot be redeployed as it stands is refused here, with the reason, and leaves no revision behind. The
 	// project it returns is the one that is rendered and deployed.
 	masker := stacks.NewMasker(target.Copy.Vars, target.Copy.Files)
+	// The revision's hostnames are judged against the environment's ingress world as a deploy's are (D-18): one that was
+	// reserved, or taken by another stack, since the revision ran is refused here, with nothing stored. A roll back is a
+	// person's request, so a holder may be named in an environment the person can view (D-20). The world is read once for every revision
+	// (ingressGatePolicy), and a read that fails refuses a revision that names an ingress label. Nothing is claimed (D-21).
+	pol, err := ingressGatePolicy(ctx, d, p, target.Copy, env.ID, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	var prep stackops.RollbackPlan
 	node := ""
 	if standalone {
 		// A standalone host runs the Compose SDK: the revision is prepared with its stored images and no swarm
 		// conversion, and the node it runs on is the environment's one engine.
-		if prep, err = d.ops().PrepareRollbackStandalone(ctx, st, target, pins); err != nil {
+		if prep, err = d.ops().PrepareRollbackStandaloneWith(ctx, st, target, pins, pol); err != nil {
 			return nil, rollbackPrepareProblem(err, masker)
 		}
 		if node, err = d.ops().StandaloneNode(ctx, env.ID); err != nil {
 			return nil, snapshotProblem(d.Log, env.ID, err)
 		}
-	} else if prep, err = d.ops().PrepareRollback(ctx, st, target, pins); err != nil {
+	} else if prep, err = d.ops().PrepareRollbackWith(ctx, st, target, pins, pol); err != nil {
 		return nil, rollbackPrepareProblem(err, masker)
 	}
 	// What a deploy of this revision would need is judged for the caller, as a deploy is: an Operator
 	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again. A standalone
 	// stack has no converted plan, so its compose file alone is judged, as a standalone deploy's is.
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
-	pol, err := d.ops().Policy(ctx, caller, env.ID, target.Copy, prep.Plan)
+	hostPol, err := d.ops().Policy(ctx, caller, env.ID, target.Copy, prep.Plan)
 	if err != nil {
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
-	if pol.Refused {
-		return nil, policyProblem(pol)
+	if hostPol.Refused {
+		return nil, policyProblem(hostPol)
 	}
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
@@ -838,6 +882,8 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 			// The revision's own record of the subnets its networks were given, which a network the roll back
 			// has to create again takes while it is free, and which a network that exists keeps.
 			Subnets: repo, RestoredSubnets: target.Subnets,
+			// The job's own check refuses what this request refused (D-18).
+			IngressPolicy: pol,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {

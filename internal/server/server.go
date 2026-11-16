@@ -39,6 +39,8 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -230,6 +232,9 @@ type RouterDeps struct {
 	HTTPS         api.HTTPSDeps
 	Backup        api.BackupDeps
 	Restore       api.RestoreDeps
+	// Ingress serves the domain and reservation routes under /api/env/{envId}/ingress/. The zero value registers every
+	// route answering 503 ingress_unavailable.
+	Ingress api.IngressDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -238,6 +243,10 @@ type RouterDeps struct {
 	// answers 404: the route exists in every router, so its exemption is always
 	// checked.
 	AgentConnect http.Handler
+	// IngressConnect serves the ingress proxy WebSocket at /ingress/connect (Phase 22). Like AgentConnect it is outside
+	// the policy, because the handshake inside it is its own authentication. Nil mounts a handler that answers 404, so
+	// nothing is served before Phase 22 and the exemption is always checked.
+	IngressConnect http.Handler
 }
 
 // NewRouter wires every operation.
@@ -248,6 +257,11 @@ func NewRouter(d RouterDeps) *httpx.Router {
 		agentConnect = http.NotFoundHandler()
 	}
 	r.AgentConnect(agentConnect)
+	ingressConnect := d.IngressConnect
+	if ingressConnect == nil {
+		ingressConnect = http.NotFoundHandler()
+	}
+	r.IngressConnect(ingressConnect)
 	api.RegisterSystem(r, d.System)
 	api.RegisterSetup(r, d.Setup)
 	api.RegisterAuth(r, d.Auth)
@@ -278,6 +292,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterPulls(r, d.Pulls)
 	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
+	api.RegisterIngress(r, d.Ingress)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -1009,7 +1024,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// listening is closed once the server accepts connections; the start-time issue of TIERPLAN_ACME=on
 	// waits for it.
 	listening := make(chan struct{})
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, bo.acmeDNS, hsts, listening)
+	// One DNS provider map for the whole server: the manager issues certificates through it and the ingress domain routes
+	// test a domain's token through it, so the one WithACMEDNS option redirects the token of both (and only a Go option can).
+	var acmeDNS acme.DNSDeps
+	if bo.acmeDNS != nil {
+		acmeDNS = *bo.acmeDNS
+	}
+	if acmeDNS.Providers == nil {
+		acmeDNS.Providers = defaultDNSProviders()
+	}
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, &acmeDNS, hsts, listening)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()
@@ -1049,6 +1073,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	gitConns := gitconn.NewStore(st, vlt, nil)
+	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
+	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
+	ingressNotifier := ingress.NewNotifier()
+	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier})
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
 	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
 	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
@@ -1171,7 +1199,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			return audit.Actor{Type: audit.ActorUser, ID: key, Name: name}
 		},
 	}
-	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{
@@ -1254,6 +1282,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Stacks:        stacksDeps,
+		Ingress:       api.IngressDeps{Store: ingressStore, DNSProviders: acmeDNS.Providers, Audit: aud, Checker: checker, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Git:           gitDeps,
 		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},

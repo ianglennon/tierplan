@@ -159,6 +159,14 @@ type acmeWiring struct {
 	challenges *acme.Challenges
 }
 
+// defaultDNSProviders is the one place the real DNS provider factories are built. The Let's Encrypt manager and the
+// ingress domain routes share the map Build makes from it, so WithACMEDNS redirects the token of both to a fake.
+func defaultDNSProviders() map[string]dns.Factory {
+	return map[string]dns.Factory{
+		"cloudflare": cloudflare.New(cloudflare.Options{UserAgent: "TierPlan/" + buildinfo.Get().Version}),
+	}
+}
+
 // wireACME builds the ACME manager over the server's parts. It does not start it: Build calls Start
 // before the server listens and runs the scheduler in the background. A bad directory setting is an
 // error that stops start-up.
@@ -189,9 +197,7 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 		dnsD = *dnsDeps
 	}
 	if dnsD.Providers == nil {
-		dnsD.Providers = map[string]dns.Factory{
-			"cloudflare": cloudflare.New(cloudflare.Options{UserAgent: "TierPlan/" + buildinfo.Get().Version}),
-		}
+		dnsD.Providers = defaultDNSProviders()
 	}
 	mgr := acme.NewManager(acme.Deps{
 		Store: acmeStore, Client: client, Challenges: challenges, Jobs: jobHub, Installer: installer, Clock: clock,

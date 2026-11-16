@@ -490,3 +490,32 @@ func TestRunningKeepsKeepLabel(t *testing.T) {
 		t.Errorf("labels after removal = %v, want tierplan.keep gone from the running service", labelKeys(lost))
 	}
 }
+
+// TestRunningKeepsIngressLabels: a service whose file carries tierplan.ingress.* labels reads back from its container
+// with them, beside the user's other labels, so a stack compared as running shows no drift for them (LBL-05, D-22); one
+// that lost a label shows the difference. tierplan.stack.id is still not the file's.
+func TestRunningKeepsIngressLabels(t *testing.T) {
+	t.Parallel()
+	p := preparedProject(t, "services:\n  web:\n    image: nginx:1.27-alpine\n    labels:\n      team: a\n"+
+		"      tierplan.ingress.host: app.example.org\n      tierplan.ingress.port: \"8080\"\n")
+	c := replica(t, p, "web", strings.Repeat("f", 64))
+	if c.Config.Labels["tierplan.stack.id"] == "" {
+		t.Fatalf("the container lacks the labels of TierPlan: %v", c.Config.Labels)
+	}
+
+	desired, running := compareService(t, p, "web", c, nil)
+
+	want := []string{"team", "tierplan.ingress.host", "tierplan.ingress.port"}
+	if !slices.Equal(labelKeys(running), want) {
+		t.Errorf("running labels = %v, want %v", labelKeys(running), want)
+	}
+	if !slices.Equal(labelKeys(desired), labelKeys(running)) {
+		t.Errorf("desired labels = %v, running = %v, want them to agree", labelKeys(desired), labelKeys(running))
+	}
+
+	delete(c.Config.Labels, "tierplan.ingress.port")
+	_, lost := compareService(t, p, "web", c, nil)
+	if slices.Contains(labelKeys(lost), "tierplan.ingress.port") {
+		t.Errorf("labels after removal = %v, want tierplan.ingress.port gone from the running service", labelKeys(lost))
+	}
+}

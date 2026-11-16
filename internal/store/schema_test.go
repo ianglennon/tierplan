@@ -5,6 +5,8 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"testing/fstest"
@@ -47,6 +49,7 @@ func TestSchemaConstraints(t *testing.T) {
 	assertRestartLoopChecks(t, s)
 	assertRestartLoopMutesTableWorks(t, s)
 	assertShellPrefsTableWorks(t, s, "u-1")
+	assertIngressTablesWork(t, s)
 }
 
 func assertRestartLoopChecks(t *testing.T, s *store.Store) {
@@ -366,5 +369,111 @@ func TestACMEDNSRecordsGainAnAccountIDOnA00041Database(t *testing.T) {
 	if _, err := s.Write.ExecContext(ctx, `INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, account_id, record_id, name, value, owner_kind, owner_id, created_at)
 		VALUES ('new-row', 'cloudflare', 'zone-1', 'example.org', 'acct-1', 'rec-2', '_acme-challenge.b.example.org', 'v', 'order', 'order-1', 2)`); err != nil {
 		t.Fatalf("a row with an account ID: %v", err)
+	}
+}
+
+// assertIngressTablesWork checks the ingress tables' constraints on raw SQL: one owner per hostname
+// install-wide, lower-case names, one route per hostname and path, the restrict on a domain in use,
+// the cascade from a stack and the guarded config_version trigger, and that an environment holding
+// all of it can still be removed.
+func assertIngressTablesWork(t *testing.T, s *store.Store) {
+	t.Helper()
+	exec := func(q string, args ...any) error {
+		_, err := s.Write.Exec(q, args...)
+		return err
+	}
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if err := exec(q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	mustFail := func(what, q string, args ...any) {
+		t.Helper()
+		if err := exec(q, args...); err == nil {
+			t.Errorf("%s was accepted", what)
+		}
+	}
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := s.Write.QueryRow(q, args...).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return n
+	}
+	const claim = `INSERT INTO ingress_hostnames (hostname, env_id, domain_id, owner_kind, stack_id, claimed_by, claimed_at) VALUES (?, ?, ?, 'stack', ?, 'u-1', 1)`
+	const route = `INSERT INTO ingress_routes (id, env_id, hostname, name, path_prefix, service, port, created_at, updated_at) VALUES (?, ?, ?, '', ?, 'web', 80, 1, 1)`
+
+	// Its own environments: earlier assertions remove env-b. env-i3 is the one removed at the end.
+	for _, e := range []string{"env-i1", "env-i2", "env-i3"} {
+		mustExec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type) VALUES (?, 'agent', ?, '', 1, 1, 1, 'standalone')`, e, e)
+	}
+	for _, d := range [][2]string{{"dom-a", "env-i1"}, {"dom-b", "env-i2"}, {"dom-c", "env-i3"}} {
+		mustExec(`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES (?, ?, 'example.org', 'u-1', 1, 1)`, d[0], d[1])
+	}
+	for _, st := range [][2]string{{"stack-a", "env-i1"}, {"stack-b", "env-i2"}, {"stack-c", "env-i3"}} {
+		mustExec(`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES (?, ?, 'web', 'standalone', 'u-1', 1)`, st[0], st[1])
+	}
+
+	// One owner per hostname, whichever environment asks (D-01).
+	mustExec(claim, "app.example.org", "env-i1", "dom-a", "stack-a")
+	mustFail("a second claim of one hostname from another environment", claim, "app.example.org", "env-i2", "dom-b", "stack-b")
+	mustFail("an upper-case hostname", claim, "App.example.org", "env-i2", "dom-b", "stack-b")
+	// A route needs a claimed hostname and is unique per hostname and path prefix.
+	mustFail("a route for an unclaimed hostname", route, "r-x", "env-i2", "other.example.org", "/")
+	mustExec(route, "r-1", "env-i1", "app.example.org", "/")
+	mustFail("a second route on one hostname and path prefix", route, "r-2", "env-i1", "app.example.org", "/")
+	mustExec(route, "r-3", "env-i1", "app.example.org", "/api")
+
+	// A domain in use cannot be deleted; its claim and routes survive (D-10).
+	mustFail("the deletion of a domain that holds a claim", `DELETE FROM ingress_domains WHERE id = 'dom-a'`)
+	if n := count(`SELECT COUNT(*) FROM ingress_hostnames WHERE hostname = 'app.example.org'`); n != 1 {
+		t.Errorf("the claim is gone after a refused domain deletion: %d rows", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM ingress_routes WHERE hostname = 'app.example.org'`); n != 2 {
+		t.Errorf("the routes are gone after a refused domain deletion: %d rows", n)
+	}
+
+	// A domain with only reserved names deletes, and its reserved rows go with it.
+	mustExec(`INSERT INTO ingress_reserved (domain_id, hostname, created_by, created_at) VALUES ('dom-b', 'admin.example.org', 'u-1', 1)`)
+	mustFail("an upper-case reserved name", `INSERT INTO ingress_reserved (domain_id, hostname, created_by, created_at) VALUES ('dom-b', 'Admin.example.org', 'u-1', 1)`)
+	mustExec(`DELETE FROM ingress_domains WHERE id = 'dom-b'`)
+	if n := count(`SELECT COUNT(*) FROM ingress_reserved WHERE domain_id = 'dom-b'`); n != 0 {
+		t.Errorf("%d reserved rows outlived their domain", n)
+	}
+
+	// Deleting a stack removes its claims and routes and moves config_version (D-23). Not by exactly
+	// one: it rises per cascaded claim row.
+	version := func(env string) int {
+		t.Helper()
+		var n int
+		err := s.Write.QueryRow(`SELECT config_version FROM ingress_env WHERE env_id = ?`, env).Scan(&n)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := version("env-i1")
+	mustExec(`DELETE FROM stacks WHERE id = 'stack-a'`)
+	if n := count(`SELECT COUNT(*) FROM ingress_hostnames WHERE env_id = 'env-i1'`); n != 0 {
+		t.Errorf("%d claims outlived their stack", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM ingress_routes WHERE env_id = 'env-i1'`); n != 0 {
+		t.Errorf("%d routes outlived their stack", n)
+	}
+	if after := version("env-i1"); after <= before {
+		t.Errorf("config_version = %d after a stack deletion, want more than %d", after, before)
+	}
+
+	// An environment holding a domain, a claim and a stack can be removed (RESEARCH Pitfall 1), and the
+	// guarded trigger does not fail on the way.
+	mustExec(claim, "c.example.org", "env-i3", "dom-c", "stack-c")
+	mustExec(route, "r-c", "env-i3", "c.example.org", "/")
+	mustExec(`DELETE FROM environments WHERE id = 'env-i3'`)
+	for _, table := range []string{"ingress_domains", "ingress_hostnames", "ingress_routes", "ingress_env", "stacks"} {
+		if n := count(`SELECT COUNT(*) FROM ` + table + ` WHERE env_id = 'env-i3'`); n != 0 {
+			t.Errorf("%s keeps %d rows of a removed environment", table, n)
+		}
 	}
 }

@@ -94,6 +94,10 @@ type StandaloneDeployInput struct {
 	// (Snapshot.Subnets), used in place of the last good revision's.
 	RestoredSubnets map[string]string
 	Caller          Caller
+	// IngressPolicy is the policy the deploy's caller judged the stack with, so the job's check refuses what the
+	// request refused (D-18). It is nil for the automatic roll back after a failed image update, which puts back
+	// what ran and must not be refused for a name reserved since.
+	IngressPolicy *stacks.IngressPolicy
 	// Masker hides the stack's secret values in every text a remote system sent that the deploy puts in
 	// its job.
 	Masker stacks.Masker
@@ -204,7 +208,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("a standalone host could not be written to before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy})
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
 	if checked.Loaded == nil || checked.Problems.Errors() > 0 {
 		d.log().Warn("a standalone stack no longer passes its check at deploy time", "environment", in.EnvID, "stack", in.Stack.Name)
 		return fail(ItemCheck, CodeStackInvalid, "")

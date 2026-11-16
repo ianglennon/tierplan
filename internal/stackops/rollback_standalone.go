@@ -21,12 +21,21 @@ import (
 // a revision of its own.
 //
 // Pins are keyed by the service's name in the compose file, as a standalone deploy stores them.
+//
+// PrepareRollbackStandalone judges the revision with no ingress policy, for the callers that put back or resume
+// what ran (D-18); a gate that deploys calls PrepareRollbackStandaloneWith.
 func (d Deps) PrepareRollbackStandalone(ctx context.Context, st Stack, target Snapshot, pins map[string]string) (RollbackPlan, error) {
+	return d.PrepareRollbackStandaloneWith(ctx, st, target, pins, nil)
+}
+
+// PrepareRollbackStandaloneWith is PrepareRollbackStandalone with the ingress policy on its check, as
+// PrepareRollbackWith is for a swarm stack. A nil policy is PrepareRollbackStandalone. Nothing is claimed (D-21).
+func (d Deps) PrepareRollbackStandaloneWith(ctx context.Context, st Stack, target Snapshot, pins map[string]string, policy *stacks.IngressPolicy) (RollbackPlan, error) {
 	// The masker is built only for a refusal: the revision is judged on every roll back.
 	refuse := func(stage string, err error) error {
 		return &PrepareError{Stage: stage, Err: err, Masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
 	}
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: target.Copy})
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: target.Copy, IngressPolicy: policy})
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}

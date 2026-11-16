@@ -3,7 +3,11 @@
 
 package stacks
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
+)
 
 // Ownership labels. Everything a stack creates carries them, and later phases read them without
 // asking the stack store: Phase 8 adopts a foreign stack by its swarm namespace or compose
@@ -42,6 +46,13 @@ const (
 	// contract users write into their compose files, so a rename needs a dual read for as long as
 	// labelled objects live.
 	LabelUpdates = "tierplan.updates"
+	// LabelIngressPrefix starts every label a user writes to declare a route (tierplan.ingress.host,
+	// tierplan.ingress.<service>.port, LBL-05, D-22). It is defined once, in the pure ingress package, so the
+	// parser and this bookkeeping filter can never disagree. Like LabelKeep it is the user's on-host
+	// contract: drift, adoption and rebuild keep these labels exactly as written, and a rename needs a
+	// dual read for as long as labelled services live. TierPlan's own ingress bookkeeping is
+	// tierplan.component=ingress (ingress.LabelComponent), which sits outside this prefix.
+	LabelIngressPrefix = ingress.LabelPrefix
 
 	// LabelSwarmNamespace is the label docker stack deploy puts on every object of a stack.
 	LabelSwarmNamespace = "com.docker.stack.namespace"
@@ -68,9 +79,13 @@ const (
 // who made an object and how, such as LabelStackID). Every place that removes TierPlan's labels before it compares or
 // rebuilds a definition (drift, adoption, rebuild) asks it. LabelKeep is not one of them: tierplan.keep is the user's
 // label (JAN-07, D-09), put there to protect an object from the janitor, so no site may drop it or hide its removal.
-// LabelUpdates is the user's too (IMG-08, D-16): drift, adoption and rebuild keep it as the user wrote it.
+// LabelUpdates is the user's too (IMG-08, D-16): drift, adoption and rebuild keep it as the user wrote it. So is
+// every key that starts with LabelIngressPrefix (tierplan.ingress.host, tierplan.ingress.api.port; LBL-05, D-22);
+// the match is byte-exact and case-sensitive, so tierplan.ingress and tierplan.ingressfoo stay ownership labels.
+// TierPlan's own ingress bookkeeping uses tierplan.component=ingress, which is an ownership label.
 func IsOwnershipLabel(key string) bool {
-	return key != LabelKeep && key != LabelUpdates && strings.HasPrefix(key, "tierplan.")
+	return key != LabelKeep && key != LabelUpdates && !strings.HasPrefix(key, LabelIngressPrefix) &&
+		strings.HasPrefix(key, "tierplan.")
 }
 
 // The neutral values of the two labels that record where a project was loaded from (RESEARCH Q2,

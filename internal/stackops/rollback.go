@@ -65,12 +65,25 @@ type RollbackPlan struct {
 //
 // The project comes from stacks.Deployable, the pipeline the review runs, so a revision that used
 // env_file or kept build beside image converts as it did when it was deployed.
+//
+// PrepareRollback judges the revision with no ingress policy. Its callers put back or resume what ran and
+// deploy nothing new: the drift check, start and stop, and the automatic roll back after a failed image
+// update, which must never strand a stack because a name was reserved since (D-18). A gate that deploys
+// calls PrepareRollbackWith.
 func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pins map[string]string) (RollbackPlan, error) {
+	return d.PrepareRollbackWith(ctx, st, target, pins, nil)
+}
+
+// PrepareRollbackWith is PrepareRollback with the ingress policy on its check: a revision whose hostname the
+// environment's world refuses (a name outside every domain, a reserved one, one another stack holds) is
+// refused at the load stage with the check's problems, before anything is stored (D-18). A nil policy is
+// PrepareRollback. The policy is read-only: nothing here claims a name (D-21).
+func (d Deps) PrepareRollbackWith(ctx context.Context, st Stack, target Snapshot, pins map[string]string, policy *stacks.IngressPolicy) (RollbackPlan, error) {
 	// The masker is built only for a refusal: the revision is judged on every roll back and start.
 	refuse := func(stage string, err error) error {
 		return &PrepareError{Stage: stage, Err: err, Masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
 	}
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy})
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy, IngressPolicy: policy})
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}

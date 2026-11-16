@@ -254,6 +254,13 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Subnets: repo, Revisions: repo,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Audit: d.Store,
 	}
+	// The environment's ingress world judges the hostnames the review lists. A read that fails is advisory here: the
+	// review is still made, without the policy (a deploy gate refuses instead).
+	if policy, perr := ingressPolicyFor(ctx, d, p, env.ID, st.ID); perr != nil {
+		d.Log.Debug("the ingress world of an environment could not be read for a stack review", "environment", env.ID, "error", perr)
+	} else {
+		ri.IngressPolicy = policy
+	}
 	restore := in.Body.Mode == stackops.ReviewModeRestore
 	rollback := in.Body.Mode == stackops.ReviewModeRollback || restore
 	good, haveGood, err := repo.LatestGoodRevision(ctx, st.ID)

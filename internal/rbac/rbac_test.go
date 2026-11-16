@@ -98,6 +98,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"git.read":               e(rbac.RoleViewer),
 		"git.manage":             e(rbac.RoleAdmin),
 		"git.instance":           g(true),
+		"ingress.manage":         e(rbac.RoleAdmin),
 	}
 	for name, w := range want {
 		p, ok := m[name]

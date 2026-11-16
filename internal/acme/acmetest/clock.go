@@ -78,3 +78,26 @@ func (c *Clock) Tick(t testing.TB, d time.Duration) {
 	c.WaitArmed(t)
 	c.Advance(d)
 }
+
+// AwaitTimer waits until a timer is armed to fire once the clock has moved on by exactly d from where it stands now.
+// Unlike WaitArmed it reads the timers themselves, so an announcement of some other timer cannot satisfy it: it is how
+// a test learns that the code under test is parked on one particular wait (an order poll, say) before it moves the
+// clock. It waits on the announcements After makes and consumes the ones it sees.
+func (c *Clock) AwaitTimer(t testing.TB, d time.Duration) {
+	t.Helper()
+	for !c.hasTimer(d) {
+		testsupport.Await(t, "the code under test to wait "+d.String()+" on the clock", c.armed)
+	}
+}
+
+func (c *Clock) hasTimer(d time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	due := c.now.Add(d)
+	for _, tm := range c.timers {
+		if tm.at.Equal(due) {
+			return true
+		}
+	}
+	return false
+}

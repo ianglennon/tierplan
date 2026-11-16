@@ -67,6 +67,7 @@ func TestRequirementOfEveryRegisteredPermission(t *testing.T) {
 		rbac.PermGitRead:               {Kind: rbac.NeedRole, Role: rbac.RoleViewer},
 		rbac.PermGitManage:             {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 		rbac.PermGitInstance:           {Kind: rbac.NeedInstance},
+		rbac.PermIngressManage:         {Kind: rbac.NeedRole, Role: rbac.RoleAdmin},
 	}
 	all := rbac.All()
 	if len(all) != len(want) {

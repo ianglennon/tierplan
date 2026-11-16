@@ -206,6 +206,21 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "https.fallback_ended",
   "https.hsts_withdrawn",
   "https.hsts_restored",
+  // The ingress actions (Phase 18). Every one is environment-scoped: "ingress." is in ENV_SCOPED_PREFIXES.
+  "ingress.domain_created",
+  "ingress.domain_credential_replaced",
+  "ingress.domain_deleted",
+  "ingress.host_reserved",
+  "ingress.host_unreserved",
+  "ingress.enabled",
+  "ingress.disabled",
+  "ingress.claim_replaced",
+  "ingress.claim_released",
+  "ingress.cert_issued",
+  "ingress.cert_failed",
+  "ingress.node_enrolled",
+  "ingress.node_removed",
+  "ingress.vip_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -238,6 +253,7 @@ const ENV_SCOPED_PREFIXES = [
   "janitor.",
   "swarm.",
   "updates.",
+  "ingress.",
 ];
 // The janitor's and the update checks' defaults are the changes that belong to the instance, not to an environment.
 const INSTANCE_LEVEL_ACTIONS = ["janitor.defaults_changed", "updates.defaults_changed"];

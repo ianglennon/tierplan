@@ -22,6 +22,8 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/access"
 	"github.com/ianglennon/tierplan/internal/acme"
+	"github.com/ianglennon/tierplan/internal/acme/dns"
+	"github.com/ianglennon/tierplan/internal/acme/dns/dnstest"
 	"github.com/ianglennon/tierplan/internal/agents"
 	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -34,6 +36,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -295,6 +298,10 @@ type authFixture struct {
 	// unknown is the registry of agents refused unknown_agent that the unknown-agents
 	// route and the warnings read (plan 03-28); newAuthFixture makes one.
 	unknown *agents.UnknownAgents
+	// ingressProv is the fake DNS provider behind the ingress domain routes, and ingressStore the store they write
+	// (phase 18). newAuthFixture gives the provider the zone example.com and a token that it accepts, ingressToken.
+	ingressProv  *dnstest.FakeProvider
+	ingressStore *ingressstore.Store
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -323,6 +330,8 @@ func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	}
 	f.sess = auth.NewSessions(f.st, v, authIdle, authRemain, f.clk.now)
 	f.limiter = auth.NewIPLimiter(time.Second, 1000, 10*time.Minute, f.clk.now)
+	f.ingressProv = dnstest.NewFakeProvider()
+	f.ingressProv.AddZone("example.com")
 	f.addUser(t, "admin", true)
 	f.h = f.build(t)
 	return f
@@ -547,6 +556,8 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Platforms: stackops.NewPlatformMemo(),
 			Updates:   updateSvc,
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
+			// The ingress store of a real server: the editor check and the review judge a stack's hostnames through it, and the tests seed it.
+			Ingress: ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now}),
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,
 			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
@@ -607,6 +618,19 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Now: f.clk.now, Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
+	f.ingressStore = ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now})
+	ingressBase := f.ingressProv.Factory(ingressToken)
+	api.RegisterIngress(r, api.IngressDeps{
+		Store: f.ingressStore,
+		// The fake accepts two tokens, so a replacement can be told from the token it replaces.
+		DNSProviders: map[string]dns.Factory{"cloudflare": func(token string) dns.Provider {
+			if token == ingressNextToken {
+				token = ingressToken
+			}
+			return ingressBase(token)
+		}},
+		Audit: f.aud, Checker: checker, Log: log,
+	})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
 		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,

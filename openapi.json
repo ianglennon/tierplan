@@ -2935,6 +2935,33 @@
         ],
         "type": "object"
       },
+      "CreateIngressDomainInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer": {
+            "default": "production",
+            "description": "The Let's Encrypt directory, production when left out",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "suffix": {
+            "description": "The domain to register, such as apps.example.com. A public suffix (co.uk, github.io) is refused with 422 ingress_domain_public_suffix before the DNS provider is asked",
+            "maxLength": 253,
+            "type": "string"
+          },
+          "token": {
+            "description": "The DNS provider API token, at most 4096 bytes. It is tested first, then stored sealed; it is never returned. 422 ingress_token_missing when left out, ingress_token_too_long when over the bound",
+            "type": "string"
+          }
+        },
+        "required": [
+          "suffix"
+        ],
+        "type": "object"
+      },
       "CreateTeamInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -9606,6 +9633,129 @@
         ],
         "type": "object"
       },
+      "IngressDomainBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the domain was registered",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "The ID of the user who registered the domain",
+            "type": "string"
+          },
+          "dnsProvider": {
+            "description": "The DNS provider that validates the domain, such as cloudflare",
+            "type": "string"
+          },
+          "id": {
+            "description": "The domain's ID, used in the paths of the routes below",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "The Let's Encrypt directory certificates for this domain come from. Staging certificates are not trusted by browsers",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "reserved": {
+            "description": "The hostnames held back under the domain, sorted. No stack can claim one",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "suffix": {
+            "description": "The domain stacks of this environment may serve hostnames under, such as apps.example.com. A hostname must be strictly below it",
+            "type": "string"
+          },
+          "tokenSet": {
+            "description": "True when a DNS token is saved. The token is never returned",
+            "type": "boolean"
+          },
+          "tokenUpdatedAt": {
+            "description": "When the DNS token was last saved or replaced; left out when none is saved",
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "description": "When the domain last changed",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "suffix",
+          "issuer",
+          "dnsProvider",
+          "tokenSet",
+          "createdBy",
+          "createdAt",
+          "updatedAt",
+          "reserved"
+        ],
+        "type": "object"
+      },
+      "IngressDomainsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The environment's domains, by suffix",
+            "items": {
+              "$ref": "#/components/schemas/IngressDomainBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "IngressReservationBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When it was reserved",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "The ID of the user who reserved it",
+            "type": "string"
+          },
+          "domainId": {
+            "description": "The domain the name is reserved under",
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The reserved hostname, lower-case with no trailing dot",
+            "type": "string"
+          },
+          "suffix": {
+            "description": "The domain's suffix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domainId",
+          "suffix",
+          "hostname",
+          "createdBy",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "InstallBody": {
         "additionalProperties": false,
         "properties": {
@@ -14943,6 +15093,16 @@
         ],
         "type": "object"
       },
+      "ReplaceIngressDomainTokenInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "description": "The new DNS provider API token, at most 4096 bytes. It is tested first and replaces the saved one only when the test passes; it is never returned",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RequirementBody": {
         "additionalProperties": false,
         "properties": {
@@ -14967,6 +15127,20 @@
         },
         "required": [
           "kind"
+        ],
+        "type": "object"
+      },
+      "ReserveIngressHostnameInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "description": "The exact hostname to hold back, strictly below the domain. It is lower-cased and a trailing dot is dropped. 422 ingress_hostname_not_under_domain for the domain itself or a name outside it, ingress_hostname_invalid for a wildcard or anything that is not a hostname",
+            "maxLength": 254,
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname"
         ],
         "type": "object"
       },
@@ -31467,6 +31641,376 @@
         "summary": "What uses one image",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/domains": {
+      "get": {
+        "description": "The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "listIngressDomains",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressDomainsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the domains of an environment",
+        "tags": [
+          "ingress"
+        ]
+      },
+      "post": {
+        "description": "Registers a domain for the environment. The suffix is checked first: a public suffix is refused with 422 ingress_domain_public_suffix before the DNS provider is contacted, and anything that is not a domain with 422 ingress_domain_invalid. The token is then tested by asking the provider for the zone that holds the suffix, and the domain is stored only when a zone is found; a refused test is 422 dns_token_invalid, dns_token_scope or dns_zone_not_found, or 503 dns_rate_limited or dns_unavailable, and stores nothing. A token that sees the zone but may not edit its DNS records passes this test and fails when a certificate is first issued. The token is stored sealed and never returned: the answer carries tokenSet and tokenUpdatedAt only. The issuer is production unless staging is chosen, and no route changes it afterwards. 409 ingress_domain_exists when the environment already has the suffix (another environment may). Audited as ingress.domain_created without the token; a refused test is audited as a failure with the DNS class as its reason. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "createIngressDomain",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIngressDomainInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressDomainBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Register a domain with its DNS token",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/domains/{domainId}": {
+      "delete": {
+        "description": "Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 ingress_domain_in_use names every holding stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. 404 ingress_domain_not_found for a domain that is gone or belongs to another environment, with no audit row. Audited as ingress.domain_deleted. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "deleteIngressDomain",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The domain's ID",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "description": "The domain's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a domain",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/domains/{domainId}/reserved": {
+      "post": {
+        "description": "Holds back one exact hostname strictly below the domain, so no stack in any environment can claim it. The name is lower-cased and a trailing dot is dropped. 422 ingress_hostname_not_under_domain for the domain itself or a name outside it, 422 ingress_hostname_invalid for a wildcard or anything that is not a hostname. 409 ingress_hostname_claimed when a stack already holds the name: the detail names the stack and its environment only when the caller may see that environment, and says only that another environment holds it otherwise. Reserving a name that is reserved already is a no-op that writes no audit row. 404 ingress_domain_not_found for a domain of another environment. Audited as ingress.host_reserved. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "reserveIngressHostname",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The domain's ID",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "description": "The domain's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReserveIngressHostnameInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressReservationBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Reserve a hostname under a domain",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/domains/{domainId}/reserved/{hostname}": {
+      "delete": {
+        "description": "Lets a reserved name go. Releasing a name that is not reserved is a success that writes no audit row. 404 ingress_domain_not_found for a domain of another environment. Audited as ingress.host_unreserved. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "unreserveIngressHostname",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The domain's ID",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "description": "The domain's ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The reserved hostname",
+            "in": "path",
+            "name": "hostname",
+            "required": true,
+            "schema": {
+              "description": "The reserved hostname",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Release a reserved hostname",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/domains/{domainId}/token": {
+      "put": {
+        "description": "Tests the new token the way registration does, then replaces the saved one. The domain, its issuer and every hostname claimed under it stay; tokenUpdatedAt moves. A token that fails its test is refused with the same 422 or 503 problems as registration and the saved token stays in place. The token is never returned. 404 ingress_domain_not_found for a domain of another environment. Audited as ingress.domain_credential_replaced without the token. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "replaceIngressDomainToken",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The domain's ID",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "description": "The domain's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceIngressDomainTokenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressDomainBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Replace a domain's DNS token",
+        "tags": [
+          "ingress"
         ]
       }
     },

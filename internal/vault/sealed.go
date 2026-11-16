@@ -70,6 +70,11 @@ var SealedColumns = []SealedColumn{
 		Table: "acme_dns_credentials", Column: "token_sealed", KeyColumns: []string{"provider"},
 		Context: func(keys []string) string { return ContextACMEDNSToken + keys[0] },
 	},
+	// Phase 18 (DOM-02): the DNS token of an ingress domain, sealed under the domain's ID.
+	{
+		Table: "ingress_domains", Column: "token_sealed", KeyColumns: []string{"id"},
+		Context: func(keys []string) string { return ContextIngressDNSToken + keys[0] },
+	},
 }
 
 // RewrapAll moves every sealed value in tx from the vault from to the vault to:

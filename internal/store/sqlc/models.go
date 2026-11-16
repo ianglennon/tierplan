@@ -363,6 +363,58 @@ type ImageUpdateRun struct {
 	FinishedAt   int64
 }
 
+type IngressDomain struct {
+	ID             string
+	EnvID          string
+	Suffix         string
+	Issuer         string
+	DnsProvider    string
+	TokenSealed    string
+	TokenUpdatedAt int64
+	CreatedBy      string
+	CreatedAt      int64
+	UpdatedAt      int64
+}
+
+type IngressEnv struct {
+	EnvID         string
+	Enabled       int64
+	ConfigVersion int64
+	UpdatedAt     int64
+	UpdatedBy     string
+}
+
+type IngressHostname struct {
+	Hostname  string
+	EnvID     string
+	DomainID  string
+	OwnerKind string
+	StackID   sql.NullString
+	ClaimedBy string
+	ClaimedAt int64
+}
+
+type IngressReserved struct {
+	DomainID  string
+	Hostname  string
+	CreatedBy string
+	CreatedAt int64
+}
+
+type IngressRoute struct {
+	ID         string
+	EnvID      string
+	Hostname   string
+	Name       string
+	PathPrefix string
+	Service    string
+	Port       int64
+	Scheme     string
+	Strip      int64
+	CreatedAt  int64
+	UpdatedAt  int64
+}
+
 type JanitorDefault struct {
 	ID                      int64
 	Enabled                 int64

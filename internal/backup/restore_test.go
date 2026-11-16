@@ -92,6 +92,7 @@ func TestInspectReadsTheManifestWithoutTheDatabaseEntry(t *testing.T) {
 
 func TestRestoreIntoAFreshDataDirectoryRewrapsSecretsAndVerifiesTheChainUnderTheNewKey(t *testing.T) {
 	f := newExportFixture(t)
+	liveDNS := f.addIngressDomain(t)
 	_, file, err := f.export(t, exportPass, testOptions)
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +130,16 @@ func TestRestoreIntoAFreshDataDirectoryRewrapsSecretsAndVerifiesTheChainUnderThe
 	}
 	if _, err := f.live.Open(vault.ContextAgentCA+"env-1", sealed); err == nil {
 		t.Fatal("the CA key still opens under the source key")
+	}
+	var dns string
+	if err := st.Read.QueryRow(`SELECT token_sealed FROM ingress_domains WHERE id = 'dom-1'`).Scan(&dns); err != nil {
+		t.Fatalf("the ingress domain did not survive the restore: %v", err)
+	}
+	if plain, err := target.Open(vault.ContextIngressDNSToken+"dom-1", dns); err != nil || string(plain) != "dns api token" {
+		t.Fatalf("ingress DNS token under the restored install's key = %q, %v", plain, err)
+	}
+	if dns == liveDNS {
+		t.Fatal("the ingress DNS token was restored under the source key")
 	}
 	res, err := audit.Verify(context.Background(), st, target)
 	if err != nil || res.Broken != nil || res.Entries != 5 {

@@ -656,7 +656,7 @@ func TestACMERunStreamCarriesTheDNSSteps(t *testing.T) {
 		t.Errorf("activeRun = %+v, want a run that says dns-01", run)
 	}
 	c := f.streamRun(t, jobID)
-	release()
+	f.releaseFinalize(t, release)
 	snap, done := followRun(t, c)
 
 	if snap.Challenge != "dns-01" || done.Challenge != "dns-01" {

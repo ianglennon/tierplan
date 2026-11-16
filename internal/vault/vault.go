@@ -77,6 +77,9 @@ const (
 	// The Cloudflare token for DNS-01 is sealed under the DNS provider's name (Phase 15), so a token
 	// copied into another provider's row does not open.
 	ContextACMEDNSToken = "acme-dns-token/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// The DNS token of an ingress domain is sealed under the domain's ID (Phase 18), so a token copied
+	// into another domain's row does not open.
+	ContextIngressDNSToken = "ingress-dns-token/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "tierplan/key-id/v1"

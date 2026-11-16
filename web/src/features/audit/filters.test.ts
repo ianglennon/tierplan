@@ -841,6 +841,46 @@ describe("actionLabel (HTTPS)", () => {
   });
 });
 
+describe("actionLabel (ingress)", () => {
+  const real = (key: string) => {
+    const parts = key.split(".");
+    let node: unknown = audit;
+    for (const part of parts) node = (node as Record<string, unknown>)?.[part];
+    return typeof node === "string" ? node : key;
+  };
+  const INGRESS_ACTIONS = [
+    "ingress.domain_created",
+    "ingress.domain_credential_replaced",
+    "ingress.domain_deleted",
+    "ingress.host_reserved",
+    "ingress.host_unreserved",
+    "ingress.enabled",
+    "ingress.disabled",
+    "ingress.claim_replaced",
+    "ingress.claim_released",
+    "ingress.cert_issued",
+    "ingress.cert_failed",
+    "ingress.node_enrolled",
+    "ingress.node_removed",
+    "ingress.vip_changed",
+  ];
+
+  it("labels every ingress action and lists it in the Action filter", () => {
+    for (const key of INGRESS_ACTIONS) {
+      expect(KNOWN_ACTIONS, key).toContain(key);
+      expect(actionLabel(key, real), key).not.toBe(key);
+    }
+    expect(actionLabel("ingress.domain_created", real)).toBe("Registered ingress domain");
+    expect(actionLabel("ingress.domain_credential_replaced", real)).toBe(
+      "Replaced ingress domain DNS token",
+    );
+  });
+
+  it("is an environment event: every ingress action is environment-scoped", () => {
+    for (const key of INGRESS_ACTIONS) expect(ENV_SCOPED_ACTIONS, key).toContain(key);
+  });
+});
+
 describe("actionLabel (agent replaced)", () => {
   const real = (key: string) => {
     const parts = key.split(".");

@@ -199,6 +199,8 @@ type stackUpdate struct {
 	standalone bool
 	node       string
 	caller     stackops.Caller
+	// ingress is the policy the update was judged with (nil when the revision names no ingress label), which the standalone job's own check applies again.
+	ingress *stacks.IngressPolicy
 }
 
 // judgeStackUpdate judges an update of a stack's images: the services it changes, the newest good revision and the pins, the deploy
@@ -254,8 +256,22 @@ func judgeStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, p 
 		standalone: st.Target == stacks.TargetStandalone, masker: stacks.NewMasker(good.Copy.Vars, good.Copy.Files),
 		caller: stackops.Caller{Principal: p, Actor: p.Name},
 	}
+	// The revision's hostnames are judged against the environment's ingress world, as a deploy's are, before anything is stored
+	// (D-18, D-21): a name that was reserved, or taken by another stack, since the revision ran stops the update. The world is read
+	// once for every revision (ingressGatePolicy). A person's own update is answered to them, so it may name a holder
+	// in an environment they can view; a bulk update (lockHeld) records its refusal in its run, where every viewer of the
+	// environment reads it, so it names a holder only in the stack's own environment (D-20). A read that fails refuses the update.
+	viewer := p
+	if lockHeld {
+		viewer = nil
+	}
+	pol, err := ingressGatePolicy(ctx, d, viewer, good.Copy, env.ID, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
+	su.ingress = pol
 	if su.standalone {
-		if su.prep, err = d.ops().PrepareRollbackStandalone(ctx, st, good, goodPins); err != nil {
+		if su.prep, err = d.ops().PrepareRollbackStandaloneWith(ctx, st, good, goodPins, pol); err != nil {
 			return nil, rollbackPrepareProblem(err, su.masker)
 		}
 		if su.node, err = d.ops().StandaloneNode(ctx, env.ID); err != nil {
@@ -265,7 +281,7 @@ func judgeStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, p 
 			return nil, pinsProblem(d, env.ID, err)
 		}
 	} else {
-		if su.prep, err = d.ops().PrepareRollback(ctx, st, good, goodPins); err != nil {
+		if su.prep, err = d.ops().PrepareRollbackWith(ctx, st, good, goodPins, pol); err != nil {
 			return nil, rollbackPrepareProblem(err, su.masker)
 		}
 		if err = d.ops().ValidatePins(ctx, env.ID, st, su.prep.Plan.Services, repo, update, pins); err != nil {
@@ -274,12 +290,12 @@ func judgeStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, p 
 	}
 	// What the stack needs to deploy is judged for the caller, as a deploy is (T-12-51): an Operator cannot update a stack
 	// only an Admin may deploy.
-	pol, err := d.ops().Policy(ctx, su.caller, env.ID, good.Copy, su.prep.Plan)
+	hostPol, err := d.ops().Policy(ctx, su.caller, env.ID, good.Copy, su.prep.Plan)
 	if err != nil {
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
-	if pol.Refused {
-		return nil, policyProblem(pol)
+	if hostPol.Refused {
+		return nil, policyProblem(hostPol)
 	}
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
@@ -389,6 +405,7 @@ func (su *stackUpdate) revise(ctx context.Context, actor audit.Actor, bulk, user
 		standaloneIn := stackops.StandaloneDeployInput{
 			EnvID: env.ID, NodeID: su.node, Stack: st, Copy: good.Copy, Reviewed: su.pins, Update: su.update,
 			Pins: repo, RevisionID: rev.ID, Caller: su.caller, Masker: rendering.masker, Subnets: repo,
+			IngressPolicy: su.ingress,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
