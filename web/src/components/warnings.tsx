@@ -707,7 +707,8 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
   const now = useNow();
   const envId = w.envId ?? "";
   const name = w.envName ?? "";
-  const node = w.node ?? "";
+  // The agent on the folded node is a standby: say so wherever its node is named (D-19).
+  const node = w.standby ? t("bell.env.standbyNode", { node: w.node ?? "" }) : (w.node ?? "");
 
   switch (w.id) {
     case "env_offline": {
@@ -764,7 +765,15 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
     }
     case "manual_update_needed":
       return (
-        <BellItem id={w.id} title={t("bell.env.manualUpdate.title", { count: w.count ?? 0 })}>
+        <BellItem
+          id={w.id}
+          title={t(
+            w.standby ? "bell.env.manualUpdate.titleStandby" : "bell.env.manualUpdate.title",
+            {
+              count: w.count ?? 0,
+            },
+          )}
+        >
           <ItemDescription className="line-clamp-none wrap-anywhere">
             {t("bell.env.manualUpdate.body")}
           </ItemDescription>

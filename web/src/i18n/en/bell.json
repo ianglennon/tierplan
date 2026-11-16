@@ -19,9 +19,12 @@
         "bodyExpired": "{{node}} on {{env}}: the certificate expired {{when}}. Check that the agent can reach TierPlan.",
         "view": "View nodes"
       },
+      "standbyNode": "{{node}} (standby agent)",
       "manualUpdate": {
         "title_one": "{{count}} agent needs a manual update",
         "title_other": "{{count}} agents need a manual update",
+        "titleStandby_one": "{{count}} agent needs a manual update (standby agent)",
+        "titleStandby_other": "{{count}} agents need a manual update (including the standby agent)",
         "body": "Auto-update is off or the agent is outside the compatibility window.",
         "view": "View"
       },
