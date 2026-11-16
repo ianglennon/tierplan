@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldAlert, TriangleAlert } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Info, ShieldAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { dockerRunSnippet } from "@/features/environments/docker-run-snippet";
+import { InstallDialog } from "@/features/environments/install-dialog";
 import { useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
 
@@ -48,6 +49,42 @@ const versionQuery = queryOptions({
 
 const TYPES = new Set(["swarm-manager", "swarm-worker", "standalone"]);
 const MISSING = "—";
+// How many manager hosts a worker's hint names before "and N more".
+const MANAGERS_SHOWN = 4;
+
+// WorkerHint says where to run the install command when this socket is a
+// worker (D-03): a worker can't create services. A default (neutral) Alert,
+// because a worker is a supported case (UI-SPEC U-01). The manager hosts are
+// shown only when the socket reports them, at most four, in mono.
+function WorkerHint({ managers }: { managers: readonly string[] }) {
+  const t = useT();
+  const shown = managers.slice(0, MANAGERS_SHOWN);
+  const more = managers.length - shown.length;
+  // The hosts are placed between the words of the translated line, so a
+  // language can order them as it needs.
+  const marker = "\u0000";
+  const [before = "", after = ""] = t("env.localHost.swarm.managers", { addresses: marker }).split(
+    marker,
+  );
+  return (
+    <Alert>
+      <Info aria-hidden="true" />
+      <AlertDescription className="flex flex-col gap-1">
+        <p>{t("env.localHost.swarm.workerHint")}</p>
+        {shown.length > 0 ? (
+          <p className="flex flex-wrap gap-x-1">
+            <span>{before}</span>
+            <span className="font-mono break-all">{shown.join(", ")}</span>
+            <span>{after}</span>
+            {more > 0 ? (
+              <span>{t("env.localHost.swarm.managersMore", { count: more })}</span>
+            ) : null}
+          </p>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 interface LocalHostPanelProps {
   // "wizard" is step 4 of setup; "settings" is the same panel inside Settings
@@ -69,6 +106,8 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   const localHost = useQuery(localHostQuery);
   const version = useQuery(versionQuery);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const addSwarmRef = useRef<HTMLButtonElement>(null);
+  const [installOpen, setInstallOpen] = useState(false);
 
   const data = localHost.data;
   const probe = data?.probe;
@@ -141,7 +180,7 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
 
   if (localHost.isPending) {
     return (
-      <div className="flex flex-col gap-3" aria-busy="true">
+      <div className="flex flex-col gap-2" aria-busy="true">
         <span className="sr-only" role="status">
           {t("env.localHost.loading")}
         </span>
@@ -288,8 +327,60 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
     );
   }
 
-  // Detected and supported.
   const type = probe?.type && TYPES.has(probe.type) ? probe.type : null;
+  const roleLine = (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span>{t("env.localHost.detected.engine", { engine, version: engineVersion })}</span>
+      {type ? <Badge variant="outline">{t(`env.type.${type}`)}</Badge> : null}
+    </div>
+  );
+  const rootNotice = (
+    <Alert>
+      <ShieldAlert aria-hidden="true" />
+      <AlertDescription>{t("env.localHost.notice")}</AlertDescription>
+    </Alert>
+  );
+
+  // A swarm node: the swarm is added through its agents, never the socket as
+  // its own environment, so every stack is listed once (D-01, D-02).
+  if (view === "swarm") {
+    const worker = type === "swarm-worker";
+    const hint = worker ? <WorkerHint managers={probe?.swarmManagerHosts ?? []} /> : null;
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          {heading("env.localHost.swarm.heading")}
+          <p className="text-sm text-muted-foreground">
+            {t("env.localHost.swarm.body", { name: probe?.hostname || data.socketPath })}
+          </p>
+        </div>
+        {roleLine}
+        {hint}
+        {rootNotice}
+        <div className="flex flex-col gap-2">
+          <Button
+            ref={addSwarmRef}
+            type="button"
+            className={BUTTON}
+            onClick={() => setInstallOpen(true)}
+          >
+            {t("env.localHost.swarm.add")}
+          </Button>
+          {skip}
+        </div>
+        <InstallDialog
+          open={installOpen}
+          onOpenChange={setInstallOpen}
+          mode="add"
+          kind="swarm"
+          returnFocusRef={addSwarmRef}
+          notice={hint}
+        />
+      </div>
+    );
+  }
+
+  // Detected and supported.
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
@@ -298,20 +389,8 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
           {t("env.localHost.detected.body", { name: probe?.hostname || data.socketPath })}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span>{t("env.localHost.detected.engine", { engine, version: engineVersion })}</span>
-        {type ? <Badge variant="outline">{t(`env.type.${type}`)}</Badge> : null}
-      </div>
-      {type === "swarm-worker" ? (
-        <Alert variant="warning">
-          <TriangleAlert aria-hidden="true" />
-          <AlertDescription>{t("env.localHost.workerNotice")}</AlertDescription>
-        </Alert>
-      ) : null}
-      <Alert>
-        <ShieldAlert aria-hidden="true" />
-        <AlertDescription>{t("env.localHost.notice")}</AlertDescription>
-      </Alert>
+      {roleLine}
+      {rootNotice}
       <div className="flex flex-col gap-2">
         <Button
           type="button"
@@ -327,9 +406,12 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   );
 }
 
-function viewOfProbe(probe: Probe | undefined): "unreachable" | "unsupported" | "supported" {
+type View = "unreachable" | "unsupported" | "swarm" | "supported";
+
+function viewOfProbe(probe: Probe | undefined): View {
   // A socket that exists with no probe result is treated like one that does not
   // answer: there is nothing to show about the engine.
   if (!probe?.reachable) return "unreachable";
-  return probe.supported ? "supported" : "unsupported";
+  if (!probe.supported) return "unsupported";
+  return probe.type === "swarm-manager" || probe.type === "swarm-worker" ? "swarm" : "supported";
 }

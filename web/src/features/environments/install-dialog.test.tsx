@@ -10,7 +10,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -67,7 +67,7 @@ let client: QueryClient;
 let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
 let router: ReturnType<typeof makeRouter>;
 
-type Props = { mode: "add" | "rotate"; envId?: string };
+type Props = { mode: "add" | "rotate"; envId?: string; kind?: "swarm"; notice?: ReactNode };
 
 function Harness(props: Props) {
   const [open, setOpen] = useState(true);
@@ -80,6 +80,8 @@ function Harness(props: Props) {
         open={open}
         mode={props.mode}
         envId={props.envId}
+        kind={props.kind}
+        notice={props.notice}
         onOpenChange={(next) => {
           onOpenChange(next);
           setOpen(next);
@@ -314,6 +316,18 @@ describe("InstallDialog step 2", () => {
       screen.getByText(/Run it on any manager node\. It creates a Docker secret/),
     ).toBeTruthy();
     expect(screen.getByText(/Run one of these on a swarm manager/)).toBeTruthy();
+  });
+
+  it("shows only the Swarm tab and the notice when opened with kind swarm", async () => {
+    await mount({ mode: "add", kind: "swarm", notice: <p>Run it on a manager</p> });
+    await createWith("edge");
+
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Swarm"]);
+    expect(screen.getByRole("tab", { name: "Swarm" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("tab", { name: "Standalone" })).toBeNull();
+    expect(screen.getByText("Run it on a manager")).toBeTruthy();
+    // The request is the same agent environment as for the two-tab dialog.
+    expect(posts()).toHaveLength(1);
   });
 
   it("shows the stack file with the helper and the secret sentence on the Swarm compose view", async () => {

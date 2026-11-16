@@ -15,6 +15,22 @@ vi.mock("@/lib/toast", () => ({
   toastSuccess: vi.fn(),
 }));
 
+// The real dialog is covered by install-dialog.test.tsx; here only what the
+// panel hands it matters.
+vi.mock("@/features/environments/install-dialog", () => ({
+  InstallDialog: (props: {
+    open: boolean;
+    mode: string;
+    kind?: string;
+    notice?: import("react").ReactNode;
+  }) =>
+    props.open ? (
+      <div role="dialog" data-mode={props.mode} data-kind={props.kind}>
+        {props.notice}
+      </div>
+    ) : null,
+}));
+
 const SOCKET = "/var/run/docker.sock";
 
 function probe(over: Record<string, unknown> = {}) {
@@ -124,24 +140,70 @@ describe("LocalHostPanel, a detected host", () => {
     expect(gets("/api/local-host")).toHaveLength(1);
   });
 
-  it("labels the type of a swarm manager", async () => {
+  it("offers Add this swarm on a manager, without the worker hint", async () => {
     localHost = host({ probe: probe({ type: "swarm-manager" }) });
     renderPanel();
-    expect(await screen.findByText("Swarm manager")).toBeTruthy();
-    expect(screen.queryByText(/This host is a swarm worker/)).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Add this swarm?" })).toBeTruthy();
+    expect(screen.getByText("Swarm manager")).toBeTruthy();
+    expect(button("Add this swarm")).toBeTruthy();
+    expect(screen.queryByText(/This host is a worker/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
   });
 
-  it("warns on a swarm worker and still offers Manage this host", async () => {
-    localHost = host({ probe: probe({ type: "swarm-worker" }) });
-    renderPanel();
+  it("offers Add this swarm on a worker, names its managers and never offers Manage this host", async () => {
+    localHost = host({
+      probe: probe({
+        type: "swarm-worker",
+        swarmManagerHosts: ["m1", "m2", "m3", "m4", "m5", "m6"],
+      }),
+    });
+    const { client } = renderPanel();
 
-    expect(await screen.findByText("Swarm worker")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Add this swarm?" })).toBeTruthy();
+    expect(screen.getByText("Swarm worker")).toBeTruthy();
     expect(
       screen.getByText(
-        "This host is a swarm worker. Pin TierPlan to a manager node to manage the swarm. TierPlan will show node-local data only.",
+        "This host is a worker. Run the install command on a manager node, because a worker can't create services.",
       ),
     ).toBeTruthy();
-    expect(button("Manage this host").disabled).toBe(false);
+    expect(screen.getByText("Managers:")).toBeTruthy();
+    expect(screen.getByText("m1, m2, m3, m4").className).toContain("font-mono");
+    expect(screen.getByText("and 2 more")).toBeTruthy();
+    expect(screen.queryByText(/m5/)).toBeNull();
+    expect(screen.queryByText(/Pin TierPlan to a manager node/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+
+    fireEvent.click(button("Add this swarm"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.getAttribute("data-mode")).toBe("add");
+    expect(dialog.getAttribute("data-kind")).toBe("swarm");
+    // The same worker hint is shown next to the command.
+    expect(dialog.textContent).toContain("This host is a worker.");
+    await settled(client);
+    expect(posts()).toEqual([]);
+  });
+
+  it("names no managers when the worker reports none, and says nothing more for four", async () => {
+    localHost = host({ probe: probe({ type: "swarm-worker" }) });
+    renderPanel();
+    await screen.findByRole("heading", { name: "Add this swarm?" });
+    expect(screen.queryByText(/Managers:/)).toBeNull();
+  });
+
+  it("shows exactly four managers with no more-line, and one with none", async () => {
+    localHost = host({
+      probe: probe({ type: "swarm-worker", swarmManagerHosts: ["m1", "m2", "m3", "m4"] }),
+    });
+    renderPanel();
+    await screen.findByRole("heading", { name: "Add this swarm?" });
+    expect(screen.getByText("m1, m2, m3, m4")).toBeTruthy();
+    expect(screen.queryByText(/more$/)).toBeNull();
+    cleanup();
+
+    localHost = host({ probe: probe({ type: "swarm-worker", swarmManagerHosts: ["m1"] }) });
+    renderPanel();
+    expect(await screen.findByText("m1")).toBeTruthy();
+    expect(screen.queryByText(/more$/)).toBeNull();
   });
 
   it("adds the local host only when Manage this host is clicked, then reports done", async () => {
