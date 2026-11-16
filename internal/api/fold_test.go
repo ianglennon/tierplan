@@ -23,6 +23,7 @@ import (
 
 type foldFix struct {
 	*agentFix
+	fake  *dockertest.Fake
 	env   tunneltest.Environment
 	local envBody
 }
@@ -115,7 +116,7 @@ func buildFoldFixWith(t *testing.T, rows func([]dockertest.FakeNode), cfg func(*
 	if err := clusters.Refresh(context.Background(), env.ID); err != nil {
 		t.Fatalf("read the swarm's nodes: %v", err)
 	}
-	return &foldFix{agentFix: f, env: env, local: local}
+	return &foldFix{agentFix: f, fake: fake, env: env, local: local}
 }
 
 type foldEnv struct {

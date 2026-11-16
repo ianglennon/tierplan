@@ -109,7 +109,7 @@ type EnvironmentsDeps struct {
 // missing, cannot reach Docker, runs an unsupported engine, or has a certificate or
 // clock that needs attention. It carries only a fixed code and a node name.
 type EnvironmentIssueBody struct {
-	Code    string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew or address_space_full"`
+	Code    string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew, address_space_full or folded_node_gone (the TierPlan host folded into the swarm is no longer one of its nodes; nothing is unfolded)"`
 	Node    string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet and for an issue of the whole cluster"`
 	Subject string `json:"subject,omitempty" doc:"For address_space_full, the address pool (its CIDR) or the network (its name) that is nearly full; absent for every other code"`
 	Percent int    `json:"percent,omitempty" doc:"For address_space_full, how full that pool or network is, in whole percent; absent for every other code"`
@@ -122,7 +122,7 @@ type EnvironmentIssueBody struct {
 type EnvironmentStatusBody struct {
 	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but TierPlan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
 	Since       string                 `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
-	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm"`
+	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring, folded_node_gone (the folded TierPlan host is no longer a node of the swarm) or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm"`
 	LastAttempt string                 `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe of the environment's engine finished"`
 	Issues      []EnvironmentIssueBody `json:"issues,omitempty" doc:"What is wrong with a degraded environment, worst first, then by node"`
 }
@@ -204,7 +204,7 @@ type EnvironmentBody struct {
 	LastSeen         *string                               `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
 	PendingClusterID string                                `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to"`
 	AddressSpace     Nullable[EnvironmentAddressSpaceBody] `json:"addressSpace" doc:"The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline"`
-	FoldOffered      bool                                  `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this TierPlan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
+	FoldOffered      bool                                  `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this TierPlan host is a node of that swarm, a manager or a worker, and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice. It is never true for an install with no local socket environment: that offer comes only from GET /api/environments/{envId}/fold-offer, because the list never probes the Docker socket"`
 }
 
 // InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
@@ -492,7 +492,9 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		DefaultStatus: http.StatusCreated,
 		Description: "kind local is the admin's explicit opt-in to managing the Docker host TierPlan runs on (D-19): nothing is " +
 			"added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine " +
-			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
+			"(unless allowUnsupported) or local_environment_exists, or " + problemLocalIsSwarmNode + " when the socket is a node of a swarm " +
+			"(active, pending, error or locked) that is not already folded into a swarm environment: add the swarm through its agents " +
+			"and fold the host into it instead, so each stack is listed once (D-21). kind agent creates an environment for hosts that run the " +
 			"TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
 			"and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, " +
 			"with its base path); 409 " + problemPublicURLRequired + " when TierPlan has neither, and nothing is created then. 422 invalid_name. " +
@@ -598,12 +600,17 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Method:      http.MethodPost,
 		Path:        "/api/environments/{envId}/fold-local",
 		Summary:     "Fold this TierPlan host into a swarm environment",
-		Description: "Offered when the Docker host TierPlan runs on is a manager of a swarm that is enrolled through agents: the local socket's own " +
-			"/info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment " +
-			"then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate " +
-			"local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. " +
-			"404 environment_not_found; 409 " + problemFoldNotOffered + " when the host is not a manager of that swarm, or was folded already. Needs " +
-			"environments.manage. Audited as environment.local_folded.",
+		Description: "Offered when the Docker host TierPlan runs on is a node of a swarm that is enrolled through agents, a manager or a worker. " +
+			"The proof is the host's own node ID in that environment's node list, as the swarm's managers report it, plus a manager the host " +
+			"and that list share; a manager is also matched by the cluster ID the environment is bound to. The source is the Local " +
+			"environment, which is retired with what is stored under it (its stacks, Git repositories, registry logins and janitor settings), or, " +
+			"when there is none, the Docker socket TierPlan detected, which the swarm environment then attaches to directly. Either way the node " +
+			"counts once however it is reached, in one transaction, and nothing changes on the host or in Docker: an agent already running on " +
+			"that node keeps running as a standby, and the node is reached through the socket. GET /api/environments/{envId}/fold-offer says " +
+			"what a fold would do first. Answers the swarm environment. 404 environment_not_found; 409 " + problemFoldNotOffered + " when the host " +
+			"is not a node of that swarm, or was folded already; 409 " + problemFoldNodeNotListed + " when that swarm's managers do not list " +
+			"this host (nothing is changed); 409 " + problemFoldIngressActive + " when the Local environment has ingress set up that the fold " +
+			"would delete (remove it first, then fold). Needs environments.manage. Audited as environment.local_folded.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *FoldLocalInput) (*EnvironmentOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
