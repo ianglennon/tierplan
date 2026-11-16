@@ -151,6 +151,41 @@ describe("EnvDegradedBanner", () => {
     expect(screen.getByText("and 1 more issue")).toBeTruthy();
   });
 
+  it("ranks folded_node_gone above a clock skew", async () => {
+    await mount(
+      degraded([
+        { code: "clock_skew", node: "node-2" },
+        { code: "folded_node_gone", node: "local-1" },
+      ]),
+    );
+    expect(
+      await screen.findByText(
+        "local-1 is no longer a node of this swarm. It left the swarm or was removed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/clock on node-2/)).toBeNull();
+    expect(screen.getByText("and 1 more issue")).toBeTruthy();
+  });
+
+  it("ranks folded_node_gone right after agent_offline", async () => {
+    await mount(
+      degraded([
+        { code: "folded_node_gone", node: "local-1" },
+        { code: "agent_offline", node: "node-3" },
+      ]),
+    );
+    expect(await screen.findByText("The agent on node-3 isn't connected.")).toBeTruthy();
+    expect(screen.queryByText(/no longer a node of this swarm/)).toBeNull();
+    expect(screen.getByText("and 1 more issue")).toBeTruthy();
+  });
+
+  it("offers nothing that unfolds the host for folded_node_gone", async () => {
+    await mount(degraded([{ code: "folded_node_gone", node: "local-1" }]));
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/unfold/i, { selector: "button, a, a *, button *" })).toBeNull();
+  });
+
   it("falls back to the status reason when the issue list is empty", async () => {
     await mount(degraded(null, { reason: "no_quorum" }));
     expect(await screen.findByText("This swarm has lost quorum.")).toBeTruthy();
