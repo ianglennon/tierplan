@@ -6,7 +6,9 @@ package envs
 import (
 	"context"
 	"fmt"
+	"slices"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/engine"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
@@ -134,4 +136,82 @@ func (s *Service) FoldOfferDetail(ctx context.Context, swarmEnvID string) (FoldO
 		d.Offered, d.Ingress, d.Refusal = false, ia, ia
 	}
 	return d, nil
+}
+
+// LocalSwarm is the swarm environment the TierPlan host's own swarm node belongs to, for the
+// setup panel (D-01, D-05).
+type LocalSwarm struct {
+	// EnvID and EnvName name the enabled, unfolded swarm environment.
+	EnvID, EnvName string
+	// FoldOffered is true when folding the host into it would be offered now. False with a match
+	// means the panel says it is waiting: the swarm's node list does not hold the node yet.
+	FoldOffered bool
+}
+
+// LocalSwarm names the unfolded swarm environment the host behind p is a node of, and whether
+// the fold into it is offered. p is the probe the caller already made of the socket, so no
+// Docker call is made here and nothing is cached (D-15). A manager belongs to the environment
+// bound to the cluster ID it reports; a worker, which cannot report one, to the environment
+// whose managers' node list holds a manager the worker reports (the same sharing the fold
+// proof asks for). A host that is no swarm node, or whose swarm no environment covers (or covers
+// without a node list yet), is not matched and the panel offers to add the swarm. The first
+// match in list order is returned.
+func (s *Service) LocalSwarm(ctx context.Context, p dockerx.ProbeResult) (LocalSwarm, bool) {
+	if p.Type != dockerx.TypeSwarmManager && p.Type != dockerx.TypeSwarmWorker {
+		return LocalSwarm{}, false
+	}
+	rows, err := s.st.RQ.ListEnvironments(ctx)
+	if err != nil {
+		s.log.Warn("look for the swarm of the local host", "error", err)
+		return LocalSwarm{}, false
+	}
+	for _, r := range rows {
+		if r.Kind != KindAgent || r.Enabled == 0 || r.EnvType.String != envTypeSwarm || r.LocalNodeID.Valid || r.ClusterChangedAt.Valid {
+			continue
+		}
+		if p.Type == dockerx.TypeSwarmManager {
+			if p.SwarmClusterID == "" || p.SwarmClusterID != r.SwarmClusterID.String {
+				continue
+			}
+		} else if !sharesManager(p.SwarmRemoteManagers, s.foldNodeList(r.ID)) {
+			continue
+		}
+		return LocalSwarm{EnvID: r.ID, EnvName: r.Name, FoldOffered: s.foldOfferedForProbe(rows, p, r)}, true
+	}
+	return LocalSwarm{}, false
+}
+
+// sharesManager is true when one of the manager node IDs a host reports is a manager in nodes.
+func sharesManager(reported []string, nodes []dockerx.NodeRow) bool {
+	for _, n := range nodes {
+		if n.Role == roleManager && slices.Contains(reported, n.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+// foldOfferedForProbe is whether FoldLocal would take the host behind p into r: through the
+// Local environment when there is one (what its monitor holds), else through the socket p came
+// from, which needs that no environment is folded yet.
+func (s *Service) foldOfferedForProbe(rows []sqlc.Environment, p dockerx.ProbeResult, r sqlc.Environment) bool {
+	hasLocal, folded := false, false
+	for _, e := range rows {
+		hasLocal = hasLocal || e.Kind == KindLocal
+		folded = folded || (e.Kind == KindAgent && e.LocalNodeID.Valid)
+	}
+	var src foldSrc
+	switch {
+	case hasLocal:
+		var ok bool
+		if src, ok = s.localFoldSource(rows); !ok {
+			return false
+		}
+	case folded:
+		return false
+	default:
+		src = foldSrc{probe: p, kind: foldSourceSocket}
+	}
+	_, v := s.proveFold(src, r)
+	return v == verdictOffered
 }

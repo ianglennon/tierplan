@@ -13,6 +13,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/engine"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -421,5 +422,94 @@ func TestASocketFoldLosesToALocalEnvironmentAddedInTheMeantime(t *testing.T) {
 	}
 	if n := len(f.audits(t, "environment.local_folded")); n != 0 {
 		t.Errorf("%d audit rows for a lost race", n)
+	}
+}
+
+func TestLocalSwarmNamesTheSwarmThisNodeBelongsTo(t *testing.T) {
+	ctx := context.Background()
+	// probeOf is what the setup panel's handler would have: one probe of the socket, made here.
+	probeOf := func(t *testing.T, f *foldRig) dockerx.ProbeResult {
+		t.Helper()
+		res, err := f.svc.probe(ctx, engine.LocalSocketTransport{Path: f.local.SocketPath()})
+		if err != nil {
+			t.Fatalf("probe: %v", err)
+		}
+		return res
+	}
+	cases := []struct {
+		name      string
+		build     func(t *testing.T) *foldRig
+		change    func(t *testing.T, f *foldRig, p *dockerx.ProbeResult)
+		wantOK    bool
+		wantOffer bool
+	}{
+		{"a manager of the bound cluster", func(t *testing.T) *foldRig { return newSocketManagerFoldRig(t) }, nil, true, true},
+		{"a worker the swarm's managers list", func(t *testing.T) *foldRig { return newSocketFoldRig(t) }, nil, true, true},
+		{
+			"a worker of the swarm whose node is not listed yet",
+			func(t *testing.T) *foldRig {
+				return newSocketFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" })
+			}, nil, true, false,
+		},
+		{
+			"a worker whose managers share none with the list",
+			func(t *testing.T) *foldRig {
+				return newSocketFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmRemoteManagers = []string{"node-elsewhere"} })
+			}, nil, false, false,
+		},
+		{
+			"a worker while the swarm environment has no node list yet",
+			func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			func(t *testing.T, f *foldRig, _ *dockerx.ProbeResult) { f.c.Forget(f.env.ID) }, false, false,
+		},
+		{
+			"a manager while the swarm environment has no node list yet",
+			func(t *testing.T) *foldRig { return newSocketManagerFoldRig(t) },
+			func(t *testing.T, f *foldRig, _ *dockerx.ProbeResult) { f.c.Forget(f.env.ID) }, true, false,
+		},
+		{
+			"a manager of another cluster",
+			func(t *testing.T) *foldRig {
+				return newSocketManagerFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmClusterID = "cluster-elsewhere" })
+			},
+			nil, false, false,
+		},
+		{
+			"a standalone engine", func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			func(t *testing.T, f *foldRig, p *dockerx.ProbeResult) { p.Type = dockerx.TypeStandalone }, false, false,
+		},
+		{
+			"an engine whose swarm is not active", func(t *testing.T) *foldRig {
+				return newSocketFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmState = "inactive" })
+			},
+			nil, false, false,
+		},
+		{
+			"a swarm environment that is folded already", func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			func(t *testing.T, f *foldRig, p *dockerx.ProbeResult) { f.fold(t) }, false, false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := c.build(t)
+			p := probeOf(t, f)
+			if c.change != nil {
+				c.change(t, f, &p)
+			}
+			before := len(f.local.Requests())
+			got, ok := f.svc.LocalSwarm(ctx, p)
+			if after := len(f.local.Requests()); after != before {
+				t.Errorf("LocalSwarm made %d Docker requests, want none", after-before)
+			}
+			if ok != c.wantOK {
+				t.Fatalf("LocalSwarm = %+v, %v, want ok %v", got, ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if got.EnvID != f.env.ID || got.EnvName == "" || got.FoldOffered != c.wantOffer {
+				t.Errorf("LocalSwarm = %+v, want environment %s with FoldOffered %v", got, f.env.ID, c.wantOffer)
+			}
+		})
 	}
 }
