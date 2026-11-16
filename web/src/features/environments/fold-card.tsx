@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { TriangleAlert } from "lucide-react";
 import { useRef, useState } from "react";
 
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/api/environments";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -23,6 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
@@ -58,6 +61,8 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
   const environments = useQuery(environmentsQuery);
   const [open, setOpen] = useState(false);
   const [failure, setFailure] = useState<FailureKey | null>(null);
+  // The explicit tick a fold that removes stored data needs (D-16).
+  const [confirmed, setConfirmed] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   // A second click can land before the pending state has rendered.
   const inFlight = useRef(false);
@@ -105,9 +110,27 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
     }
     if (fold.isPending) return;
     setFailure(null);
+    setConfirmed(false);
     fold.reset();
     setOpen(false);
   }
+
+  // The data-removal block (D-16): only for a Local-environment fold with something
+  // counted in it. A socket fold, or an empty Local environment, removes nothing stored.
+  const removes = offer.source === "local_environment" ? offer.removes : undefined;
+  const removal = removes
+    ? [
+        removes.stacks > 0 ? t("envsettings.fold.removes.stacks", { count: removes.stacks }) : null,
+        removes.gitRepos > 0
+          ? t("envsettings.fold.removes.repos", { count: removes.gitRepos })
+          : null,
+        removes.registries > 0
+          ? t("envsettings.fold.removes.registries", { count: removes.registries })
+          : null,
+        removes.janitor ? t("envsettings.fold.removes.janitor") : null,
+      ].filter((line): line is string => line !== null)
+    : [];
+  const destructive = removal.length > 0;
 
   const name = swarm.name;
   return (
@@ -146,6 +169,34 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
             ) : null}
             <li>{t("envsettings.fold.audited")}</li>
           </ul>
+          {destructive ? (
+            <Alert variant="warning">
+              <TriangleAlert aria-hidden="true" />
+              <AlertDescription className="flex flex-col gap-2 text-foreground">
+                <p>{t("envsettings.fold.removesIntro")}</p>
+                <ul className="flex list-disc flex-col gap-1 pl-4 break-words">
+                  {removal.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <p>{t("envsettings.fold.keepsContainers")}</p>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {destructive ? (
+            <div className="flex min-h-11 items-start gap-3 md:min-h-0">
+              <Checkbox
+                id="fold-understand"
+                checked={confirmed}
+                disabled={fold.isPending}
+                onCheckedChange={(next) => setConfirmed(next === true)}
+                className="mt-0.5"
+              />
+              <Label htmlFor="fold-understand" className="font-normal">
+                {t("envsettings.fold.understand")}
+              </Label>
+            </div>
+          ) : null}
           {failure ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>{t(`envsettings.fold.${failure}`)}</AlertDescription>
@@ -164,10 +215,12 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
             </DialogClose>
             <Button
               type="button"
-              disabled={fold.isPending}
+              variant={destructive ? "destructive" : "default"}
+              disabled={fold.isPending || (destructive && !confirmed)}
               className={TOUCH_HEIGHT}
               onClick={() => {
                 if (inFlight.current) return;
+                if (destructive && !confirmed) return;
                 inFlight.current = true;
                 setFailure(null);
                 fold.mutate(swarm.id);

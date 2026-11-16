@@ -204,6 +204,18 @@
       "standby": "The agent on this node keeps running, but TierPlan won't use it. It stays as a standby.",
       "removesLocal": "The separate Local environment is removed.",
       "audited": "Nothing changes on the host. This is recorded in the audit log.",
+      "removesIntro": "Removing the Local environment also removes everything else stored under it, for example:",
+      "removes": {
+        "stacks_one": "{{count}} stack",
+        "stacks_other": "{{count}} stacks",
+        "repos_one": "{{count}} Git repository",
+        "repos_other": "{{count}} Git repositories",
+        "registries_one": "{{count}} registry login",
+        "registries_other": "{{count}} registry logins",
+        "janitor": "Janitor settings"
+      },
+      "keepsContainers": "Running containers are not touched.",
+      "understand": "I understand this removes the items above and everything else stored under that environment.",
       "cancel": "Keep this host as it is",
       "confirm": "Fold into {{swarm}}",
       "pending": "Folding…",

@@ -165,6 +165,83 @@ describe("FoldCard", () => {
     });
   });
 
+  async function openDialog() {
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
+    return screen.findByRole("dialog", { name: "Fold this host into edge swarm?" });
+  }
+
+  it("lists only non-zero removals and needs the checkbox before a destructive confirm", async () => {
+    offerAnswer = () =>
+      Response.json({
+        ...OFFERED,
+        removes: { stacks: 2, gitRepos: 1, registries: 0, janitor: true },
+      });
+    const dialog = await openDialog();
+    expect(
+      within(dialog).getByText(
+        "Removing the Local environment also removes everything else stored under it, for example:",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("2 stacks")).toBeTruthy();
+    expect(within(dialog).getByText("1 Git repository")).toBeTruthy();
+    expect(within(dialog).getByText("Janitor settings")).toBeTruthy();
+    expect(within(dialog).queryByText(/registry login/)).toBeNull();
+    expect(within(dialog).getByText("Running containers are not touched.")).toBeTruthy();
+
+    const confirm = within(dialog).getByRole("button", {
+      name: "Fold into edge swarm",
+    }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(confirm.getAttribute("data-variant")).toBe("destructive");
+    fireEvent.click(confirm);
+    expect(posts()).toEqual([]);
+
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "I understand this removes the items above and everything else stored under that environment.",
+      }),
+    );
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+  });
+
+  it("needs no checkbox when nothing stored is removed or the socket is folded", async () => {
+    offerAnswer = () =>
+      Response.json({
+        ...OFFERED,
+        removes: { stacks: 0, gitRepos: 0, registries: 0, janitor: false },
+      });
+    let dialog = await openDialog();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    expect(within(dialog).queryByText(/Removing the Local environment also/)).toBeNull();
+    expect(within(dialog).getByText("The separate Local environment is removed.")).toBeTruthy();
+    let confirm = within(dialog).getByRole("button", { name: "Fold into edge swarm" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+    expect(confirm.getAttribute("data-variant")).toBe("default");
+    cleanup();
+    queryClient.removeQueries({ queryKey: ["fold-offer"] });
+
+    offerAnswer = () => Response.json({ offered: true, source: "socket", role: "worker" });
+    dialog = await openDialog();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    confirm = within(dialog).getByRole("button", { name: "Fold into edge swarm" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+    expect(confirm.getAttribute("data-variant")).toBe("default");
+  });
+
+  it("uses the singular for one stack", async () => {
+    offerAnswer = () =>
+      Response.json({
+        ...OFFERED,
+        removes: { stacks: 1, gitRepos: 0, registries: 1, janitor: false },
+      });
+    const dialog = await openDialog();
+    expect(within(dialog).getByText("1 stack")).toBeTruthy();
+    expect(within(dialog).getByText("1 registry login")).toBeTruthy();
+  });
+
   it("is not rendered when the offer is on a local environment and no swarm environment offers one", async () => {
     listed = [LOCAL];
     queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL] });
