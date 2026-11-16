@@ -21,6 +21,37 @@ func (q *Queries) CountEnvironmentsOfKind(ctx context.Context, kind string) (int
 	return count, err
 }
 
+const countFoldRemovalsByEnv = `-- name: CountFoldRemovalsByEnv :one
+SELECT
+    (SELECT COUNT(*) FROM stacks AS s WHERE s.env_id = ?1) AS stacks,
+    (SELECT COUNT(*) FROM git_repos AS g WHERE g.env_id = ?1) AS git_repos,
+    (SELECT COUNT(*) FROM registry_credentials AS c WHERE c.env_id = ?1) AS registries,
+    (SELECT COUNT(*) FROM janitor_env_policy AS je WHERE je.env_id = ?1)
+        + (SELECT COUNT(*) FROM janitor_node_policy AS jn WHERE jn.env_id = ?1) AS janitor
+`
+
+type CountFoldRemovalsByEnvRow struct {
+	Stacks     int64
+	GitRepos   int64
+	Registries int64
+	Janitor    int64
+}
+
+// What a fold of the Local environment removes through the cascade, for the card that offers it (D-16):
+// its stacks, Git repositories and registry logins, and the janitor settings (the environment's policy
+// row or any node's) as a count that is non-zero when there are any.
+func (q *Queries) CountFoldRemovalsByEnv(ctx context.Context, envID string) (CountFoldRemovalsByEnvRow, error) {
+	row := q.db.QueryRowContext(ctx, countFoldRemovalsByEnv, envID)
+	var i CountFoldRemovalsByEnvRow
+	err := row.Scan(
+		&i.Stacks,
+		&i.GitRepos,
+		&i.Registries,
+		&i.Janitor,
+	)
+	return i, err
+}
+
 const countFoldedEnvironments = `-- name: CountFoldedEnvironments :one
 SELECT COUNT(*) FROM environments WHERE kind = 'agent' AND local_node_id IS NOT NULL
 `

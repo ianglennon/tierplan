@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // A TierPlan with no Local environment folds the host behind its own socket into the swarm
@@ -159,5 +161,265 @@ func TestTracerASocketOnlyWorkerFoldsWithNoLocalEnvironment(t *testing.T) {
 	}
 	if n := len(f.audits(t, "environment.local_folded")); n != 1 {
 		t.Errorf("%d audit rows after a second fold, want 1", n)
+	}
+}
+
+// seedFoldRemovals gives the Local environment what a fold removes: two stacks, one Git
+// repository, no registry login and janitor settings.
+func (f *foldRig) seedFoldRemovals(t *testing.T) {
+	t.Helper()
+	for _, n := range []string{"a", "b"} {
+		f.mustExec(t, `INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES (?, ?, ?, 'swarm', 'u1', 1)`, "stack-"+n, f.localEnv.ID, n)
+	}
+	f.mustExec(t, `INSERT INTO git_repos (id, env_id, name, url, created_at, updated_at, created_by) VALUES ('repo-1', ?, 'r', 'https://example.org/r.git', 1, 1, 'u1')`, f.localEnv.ID)
+	f.mustExec(t, `INSERT INTO janitor_env_policy (env_id) VALUES (?)`, f.localEnv.ID)
+}
+
+func TestFoldOfferDetail(t *testing.T) {
+	const domain = `INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-1', ?, 'example.org', 'u1', 1, 1)`
+	elsewhere := func(c *dockertest.FakeConfig) { c.SwarmClusterID = "cluster-elsewhere" }
+
+	// noProbe rows run on a rig whose own host socket nobody watches, so that a probe of it shows
+	// as an /info request.
+	type rig struct {
+		askID    func(f *foldRig) string
+		noProbe  bool
+		seed     func(t *testing.T, f *foldRig)
+		wantErr  error
+		want     FoldOfferDetail
+		wantRem  *FoldRemovals
+		wantIngr *IngressActiveError
+	}
+	swarm := func(f *foldRig) string { return f.env.ID }
+	cases := []struct {
+		name  string
+		build func(t *testing.T) *foldRig
+		rig
+	}{
+		{
+			name:  "a Local-environment manager with things to lose",
+			build: func(t *testing.T) *foldRig { return newFoldRig(t, nil) },
+			rig: rig{
+				askID:   swarm,
+				seed:    func(t *testing.T, f *foldRig) { f.seedFoldRemovals(t) },
+				want:    FoldOfferDetail{Offered: true, Source: foldSourceLocal, Role: roleManager},
+				wantRem: &FoldRemovals{Stacks: 2, GitRepos: 1, Janitor: true},
+			},
+		},
+		{
+			name:  "a Local-environment manager holding ingress state",
+			build: func(t *testing.T) *foldRig { return newFoldRig(t, nil) },
+			rig: rig{
+				askID: swarm,
+				seed: func(t *testing.T, f *foldRig) {
+					f.seedFoldRemovals(t)
+					f.mustExec(t, domain, f.localEnv.ID)
+				},
+				want:     FoldOfferDetail{Source: foldSourceLocal, Role: roleManager},
+				wantRem:  &FoldRemovals{Stacks: 2, GitRepos: 1, Janitor: true},
+				wantIngr: &IngressActiveError{Domains: 1},
+			},
+		},
+		{
+			name:  "a socket-only worker the managers list",
+			build: func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			rig:   rig{askID: swarm, want: FoldOfferDetail{Offered: true, Source: foldSourceSocket, Role: roleWorker}},
+		},
+		{
+			name:  "a socket-only manager of this cluster that is listed and shares a manager",
+			build: func(t *testing.T) *foldRig { return newSocketManagerFoldRig(t) },
+			rig:   rig{askID: swarm, want: FoldOfferDetail{Offered: true, Source: foldSourceSocket, Role: roleManager}},
+		},
+		{
+			name:  "a socket-only manager of another cluster",
+			build: func(t *testing.T) *foldRig { return newSocketManagerFoldRig(t, elsewhere) },
+			rig:   rig{askID: swarm},
+		},
+		{
+			name: "a socket-only worker of this swarm that the list lacks",
+			build: func(t *testing.T) *foldRig {
+				return newSocketFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" })
+			},
+			rig: rig{askID: swarm, wantErr: ErrFoldNodeNotListed},
+		},
+		{
+			name: "a socket-only worker whose managers share none with the list",
+			build: func(t *testing.T) *foldRig {
+				return newSocketFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmRemoteManagers = []string{"node-elsewhere"} })
+			},
+			rig: rig{askID: swarm},
+		},
+		{
+			name:  "an environment that is folded already",
+			build: func(t *testing.T) *foldRig { f := newSocketFoldRig(t); f.fold(t); return f },
+			rig:   rig{askID: swarm, noProbe: true},
+		},
+		{
+			name:  "a standalone agent environment",
+			build: func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			rig: rig{
+				askID: swarm, noProbe: true,
+				seed: func(t *testing.T, f *foldRig) {
+					f.mustExec(t, `UPDATE environments SET env_type = 'standalone' WHERE id = ?`, f.env.ID)
+				},
+			},
+		},
+		{
+			name:  "a Local row that is not the environment asked, with the socket left alone",
+			build: func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			rig: rig{
+				askID: swarm, noProbe: true,
+				seed: func(t *testing.T, f *foldRig) {
+					f.mustExec(t, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('local-x', 'local', 'Local', '/nowhere.sock', 1, 1, 1)`)
+				},
+			},
+		},
+		{
+			name:  "the Local environment itself",
+			build: func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			rig: rig{
+				askID: func(*foldRig) string { return "local-x" }, noProbe: true,
+				seed: func(t *testing.T, f *foldRig) {
+					f.mustExec(t, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('local-x', 'local', 'Local', '/nowhere.sock', 1, 1, 1)`)
+				},
+			},
+		},
+		{
+			name:  "an environment that does not exist",
+			build: func(t *testing.T) *foldRig { return newSocketFoldRig(t) },
+			rig:   rig{askID: func(*foldRig) string { return "no-such-environment" }, noProbe: true, wantErr: ErrNotFound},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := c.build(t)
+			if c.seed != nil {
+				c.seed(t, f)
+			}
+			id := c.askID(f)
+			before := f.localInfoRequests()
+			got, err := f.svc.FoldOfferDetail(context.Background(), id)
+			if c.noProbe {
+				if after := f.localInfoRequests(); after != before {
+					t.Errorf("the socket was probed %d times, want none", after-before)
+				}
+			}
+			if errors.Is(c.wantErr, ErrNotFound) {
+				if !errors.Is(err, ErrNotFound) {
+					t.Fatalf("FoldOfferDetail = %v, want ErrNotFound", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("FoldOfferDetail: %v", err)
+			}
+			want := c.want
+			if want.Source == foldSourceLocal {
+				want.LocalEnvID = f.localEnv.ID
+			}
+			if got.Offered != want.Offered || got.Source != want.Source || got.Role != want.Role || got.LocalEnvID != want.LocalEnvID {
+				t.Errorf("detail = %+v, want offered %v source %q role %q local %q", got, want.Offered, want.Source, want.Role, want.LocalEnvID)
+			}
+			switch {
+			case c.wantErr != nil:
+				if !errors.Is(got.Refusal, c.wantErr) {
+					t.Errorf("Refusal = %v, want %v", got.Refusal, c.wantErr)
+				}
+			case c.wantIngr != nil:
+				var ia *IngressActiveError
+				if !errors.Is(got.Refusal, ErrFoldIngressActive) || !errors.As(got.Refusal, &ia) || *ia != *c.wantIngr || got.Ingress == nil || *got.Ingress != *c.wantIngr {
+					t.Errorf("Refusal = %v, Ingress = %+v, want the ingress refusal %+v", got.Refusal, got.Ingress, c.wantIngr)
+				}
+			default:
+				if got.Refusal != nil || got.Ingress != nil {
+					t.Errorf("Refusal = %v, Ingress = %+v, want none", got.Refusal, got.Ingress)
+				}
+			}
+			switch {
+			case c.wantRem == nil:
+				if got.Removes != nil {
+					t.Errorf("Removes = %+v, want none", got.Removes)
+				}
+			case got.Removes == nil || *got.Removes != *c.wantRem:
+				t.Errorf("Removes = %+v, want %+v", got.Removes, c.wantRem)
+			}
+		})
+	}
+}
+
+func TestASocketOnlyManagerFoldsByClusterAndNodeID(t *testing.T) {
+	f := newSocketManagerFoldRig(t)
+	ctx := context.Background()
+	if f.offered(t, f.env.ID) {
+		t.Fatal("foldOffered is true on a socket-only install")
+	}
+	f.fold(t)
+
+	if n := f.localEnvironments(t); n != 0 {
+		t.Fatalf("%d Local environments after the fold, want none", n)
+	}
+	rows := f.audits(t, "environment.local_folded")
+	if len(rows) != 1 {
+		t.Fatalf("audit = %+v, want one row", rows)
+	}
+	for _, want := range []string{`"source":"socket"`, `"role":"manager"`, `"grants":"0"`, "node-local"} {
+		if !strings.Contains(rows[0].Details, want) {
+			t.Errorf("audit details %q lack %q", rows[0].Details, want)
+		}
+	}
+	// With the manager agent gone the folded socket serves cluster reads, as a manager.
+	f.kick(t, f.m)
+	var host string
+	if err := f.c.ClusterRead(ctx, f.env.ID, func(cli *dockerx.Client) error {
+		res, err := cli.Probe(ctx)
+		host = res.Hostname
+		return err
+	}); err != nil {
+		t.Fatalf("ClusterRead with no agent connected: %v", err)
+	}
+	if host != "local-1" {
+		t.Errorf("the read went to %q, want the folded host local-1", host)
+	}
+
+	// A socket-only manager of another swarm is neither offered nor folded.
+	g := newSocketManagerFoldRig(t, func(c *dockertest.FakeConfig) { c.SwarmClusterID = "cluster-elsewhere" })
+	if err := g.svc.FoldLocal(ctx, admin, g.env.ID, "", ""); !errors.Is(err, ErrFoldNotOffered) {
+		t.Fatalf("FoldLocal of a manager of another cluster = %v, want ErrFoldNotOffered", err)
+	}
+	if n := len(g.audits(t, "environment.local_folded")); n != 0 {
+		t.Errorf("%d audit rows for a refused fold", n)
+	}
+	var node string
+	if err := g.st.Read.QueryRow(`SELECT COALESCE(local_node_id, '') FROM environments WHERE id = ?`, g.env.ID).Scan(&node); err != nil || node != "" {
+		t.Errorf("local_node_id = %q, %v after a refused fold, want none", node, err)
+	}
+}
+
+// A Local environment added between the probe and the write is seen inside the transaction, and
+// the fold that lost changes nothing (D-04, T-19-19). The probe is held on the fake's /_ping so
+// the Local row is added at exactly that point.
+func TestASocketFoldLosesToALocalEnvironmentAddedInTheMeantime(t *testing.T) {
+	hold := make(chan struct{})
+	f := newSocketFoldRig(t, func(c *dockertest.FakeConfig) { c.ProbeHold = hold })
+	ctx := testsupport.Context(t)
+	done := make(chan error, 1)
+	go func() { done <- f.svc.FoldLocal(ctx, admin, f.env.ID, "", "") }()
+	if err := f.local.Await(ctx, func() bool {
+		return slices.ContainsFunc(f.local.Requests(), func(p string) bool { return strings.HasSuffix(p, "/_ping") })
+	}); err != nil {
+		t.Fatalf("the fold never probed the socket: %v", err)
+	}
+	f.mustExec(t, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('local-race', 'local', 'Local', '/x.sock', 1, 1, 1)`)
+	close(hold)
+
+	if err := testsupport.Await(t, "the fold's answer", done); !errors.Is(err, ErrFoldNotOffered) {
+		t.Fatalf("FoldLocal = %v, want ErrFoldNotOffered", err)
+	}
+	var node string
+	if err := f.st.Read.QueryRow(`SELECT COALESCE(local_node_id, '') FROM environments WHERE id = ?`, f.env.ID).Scan(&node); err != nil || node != "" {
+		t.Errorf("local_node_id = %q, %v after a lost race, want none", node, err)
+	}
+	if n := len(f.audits(t, "environment.local_folded")); n != 0 {
+		t.Errorf("%d audit rows for a lost race", n)
 	}
 }

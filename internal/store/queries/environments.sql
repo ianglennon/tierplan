@@ -30,3 +30,14 @@ WHERE id = ? AND kind = 'agent' AND env_type = 'swarm' AND swarm_cluster_id = ? 
 
 -- name: CountFoldedEnvironments :one
 SELECT COUNT(*) FROM environments WHERE kind = 'agent' AND local_node_id IS NOT NULL;
+
+-- name: CountFoldRemovalsByEnv :one
+-- What a fold of the Local environment removes through the cascade, for the card that offers it (D-16):
+-- its stacks, Git repositories and registry logins, and the janitor settings (the environment's policy
+-- row or any node's) as a count that is non-zero when there are any.
+SELECT
+    (SELECT COUNT(*) FROM stacks AS s WHERE s.env_id = ?1) AS stacks,
+    (SELECT COUNT(*) FROM git_repos AS g WHERE g.env_id = ?1) AS git_repos,
+    (SELECT COUNT(*) FROM registry_credentials AS c WHERE c.env_id = ?1) AS registries,
+    (SELECT COUNT(*) FROM janitor_env_policy AS je WHERE je.env_id = ?1)
+        + (SELECT COUNT(*) FROM janitor_node_policy AS jn WHERE jn.env_id = ?1) AS janitor;
