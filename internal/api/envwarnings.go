@@ -59,6 +59,7 @@ type EnvWarningBody struct {
 	Days          int    `json:"days,omitempty" doc:"For pending_long: whole days since the environment was added"`
 	Count         int    `json:"count,omitempty" doc:"For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update"`
 	OffsetSeconds int    `json:"offsetSeconds,omitempty" doc:"For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind"`
+	Standby       bool   `json:"standby,omitempty" doc:"For cert_not_renewing and clock_skew: the agent is the standby agent on the node of this TierPlan host, which TierPlan reaches through the Docker socket (D-19). For manual_update_needed: the standby agent is among the agents counted (D-22)"`
 
 	Service       string `json:"service,omitempty" doc:"For restart_loop and, when the update was of a service, update_rolled_back and update_rollback_failed: the service's name, at most 64 characters"`
 	ServiceID     string `json:"serviceId,omitempty" doc:"For restart_loop and, when the update was of a service, update_rolled_back and update_rollback_failed: the service's ID"`
@@ -98,8 +99,8 @@ func envWarningBody(w envs.EnvWarning) EnvWarningBody {
 	return EnvWarningBody{
 		ID: w.ID, Severity: w.Severity, EnvID: w.EnvID, EnvName: w.EnvName, Node: w.Node, AgentID: w.AgentID, Reason: w.Reason,
 		Since: rfc3339(w.Since), ExpiresAt: rfc3339(w.ExpiresAt), Days: w.Days, Count: w.Count,
-		OffsetSeconds: envs.ClockOffsetSeconds(w.Offset),
-		Service:       w.Service, ServiceID: w.ServiceID, WindowMinutes: w.WindowMinutes, LatestError: w.LatestError,
+		OffsetSeconds: envs.ClockOffsetSeconds(w.Offset), Standby: w.Standby,
+		Service: w.Service, ServiceID: w.ServiceID, WindowMinutes: w.WindowMinutes, LatestError: w.LatestError,
 		Container: w.Container, ContainerID: w.ContainerID, NodeID: w.NodeID, LastExitCode: w.LastExitCode,
 		StackID: w.StackID, StackName: w.StackName, ReasonCode: w.ReasonCode, ReasonDetail: w.ReasonDetail,
 		Commit: w.Commit, Example: w.Example, Revision: w.Revision, Owner: w.Owner, Digest: w.Digest,
@@ -177,6 +178,11 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			bodies := agentBodies(nodes, d.Agents.Live, e.ID, "", at, d.Agents.updates())
+			// The agent on the folded host's node still stands by (D-10): its items stay and say so.
+			var foldedNodeID string
+			if fn, ok := d.Envs.FoldedNode(ctx, e.ID); ok {
+				foldedNodeID = fn.NodeID
+			}
 			stateOf := make(map[string]AgentBody, len(bodies))
 			for _, b := range bodies {
 				stateOf[b.ID] = b
@@ -188,6 +194,7 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 					ClockOffset:  time.Duration(b.ClockOffsetSeconds) * time.Second,
 					UpdateFailed: b.UpdateState.State == "failed",
 					ManualUpdate: b.ManualUpdateCommand != "",
+					Standby:      foldedNodeID != "" && n.SwarmNodeID == foldedNodeID,
 				})
 			}
 		}

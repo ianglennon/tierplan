@@ -75,6 +75,10 @@ type EnvWarning struct {
 	// For a failed image update: the short digest that failed. The workload is Service or Container (with its ID); Reason is why
 	// the update failed; Count, on a collapsed item, is how many updates it stands for.
 	Digest string
+	// Standby is true for a cert_not_renewing or clock_skew item whose agent runs on the folded
+	// TierPlan host's node, and for a manual_update_needed item that counts that agent (D-19,
+	// D-22): TierPlan reaches the node through the Docker socket, and the agent only stands by.
+	Standby bool
 }
 
 // AgentState is what the warnings need to know of one agent.
@@ -87,6 +91,9 @@ type AgentState struct {
 	UpdateFailed bool
 	// ManualUpdate is true when the agent is behind and TierPlan cannot update it.
 	ManualUpdate bool
+	// Standby is true for the agent that runs on the node of the folded TierPlan host. Its
+	// items are still raised and say so.
+	Standby bool
 }
 
 // PendingLongAfter is how long an environment may wait for its first agent before the
@@ -105,6 +112,7 @@ const PendingLongAfter = 7 * 24 * time.Hour
 func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time) []EnvWarning {
 	var out []EnvWarning
 	var manual []EnvWarning // one entry per agent that needs a manual update
+	manualStandby := false  // the standby agent is one of them
 	for _, e := range envs {
 		name := cleanText(e.Name, maxNodeLen)
 		base := EnvWarning{EnvID: e.ID, EnvName: name}
@@ -139,7 +147,7 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 			node := cleanText(a.Node, maxNodeLen)
 			if !a.CertNotAfter.IsZero() && a.CertNotAfter.Sub(now) < CertWarnBefore {
 				w := base
-				w.ID, w.Severity, w.Node, w.AgentID = WarnCertNotRenewing, SeverityWarning, node, a.ID
+				w.ID, w.Severity, w.Node, w.AgentID, w.Standby = WarnCertNotRenewing, SeverityWarning, node, a.ID, a.Standby
 				if !a.CertNotAfter.After(now) {
 					w.Severity = SeverityError
 				}
@@ -148,7 +156,7 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 			}
 			if abs(a.ClockOffset) > ClockWarnAbove {
 				w := base
-				w.ID, w.Severity, w.Node, w.AgentID, w.Offset = WarnClockSkew, SeverityWarning, node, a.ID, a.ClockOffset
+				w.ID, w.Severity, w.Node, w.AgentID, w.Offset, w.Standby = WarnClockSkew, SeverityWarning, node, a.ID, a.ClockOffset, a.Standby
 				// The rollup knows since when, under the name it gave the node.
 				for _, is := range e.Health.Issues {
 					if is.Code == ReasonClockSkew && is.Node == node {
@@ -160,12 +168,13 @@ func Warnings(envs []Environment, agents map[string][]AgentState, now time.Time)
 			}
 			if a.UpdateFailed || a.ManualUpdate {
 				manual = append(manual, base)
+				manualStandby = manualStandby || a.Standby
 			}
 		}
 	}
 	if len(manual) > 0 {
 		// One item for the count. It names an environment only when they are all one.
-		w := EnvWarning{ID: WarnManualUpdateNeeded, Severity: SeverityWarning, Count: len(manual), EnvID: manual[0].EnvID, EnvName: manual[0].EnvName}
+		w := EnvWarning{ID: WarnManualUpdateNeeded, Severity: SeverityWarning, Count: len(manual), EnvID: manual[0].EnvID, EnvName: manual[0].EnvName, Standby: manualStandby}
 		for _, m := range manual {
 			if m.EnvID != w.EnvID {
 				w.EnvID, w.EnvName = "", ""

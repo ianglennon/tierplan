@@ -7593,6 +7593,8 @@ export interface components {
             stackId?: string;
             /** @description For git_sync_error: the stack's name, at most 64 characters */
             stackName?: string;
+            /** @description For cert_not_renewing and clock_skew: the agent is the standby agent on the node of this TierPlan host, which TierPlan reaches through the Docker socket (D-19). For manual_update_needed: the standby agent is among the agents counted (D-22) */
+            standby?: boolean;
             /**
              * Format: int64
              * @description For restart_loop and restart_loop_container: the window the count is over, in minutes

@@ -126,3 +126,39 @@ func TestTheFoldedRowOfAWorkerHostSaysWorker(t *testing.T) {
 		t.Fatalf("the folded row is %+v in %s, want nodeRole worker", local, rec.body)
 	}
 }
+
+func TestTheBellLabelsTheStandbyAgentsClockItem(t *testing.T) {
+	t.Parallel()
+	f := newFoldFix(t, nil)
+	f.fold(t)
+	standby := f.connectStandby(t, 2*time.Minute)
+
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: f.cookie, csrf: f.csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings: %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []struct {
+			ID      string `json:"id"`
+			AgentID string `json:"agentId"`
+			Node    string `json:"node"`
+			Standby bool   `json:"standby"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var clocks int
+	for _, it := range body.Items {
+		if it.ID != "clock_skew" {
+			continue
+		}
+		clocks++
+		if it.AgentID != standby.id || !it.Standby {
+			t.Errorf("clock item %+v, want the standby agent %s labelled standby", it, standby.id)
+		}
+	}
+	if clocks != 1 {
+		t.Fatalf("clock_skew items = %d in %s, want the standby agent's, not suppressed", clocks, rec.Body)
+	}
+}
