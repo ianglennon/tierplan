@@ -361,13 +361,22 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 
 // socketView is the folded host as a node of the swarm environment: always connected,
 // with no certificate and no clock to report, and the monitor's status of its socket as
-// its target. It is a manager until the socket's own probe says it is not.
+// its target. Its role is never a default (D-08): the socket's own probe decides it (a
+// swarm manager is a manager, a swarm worker or an engine outside the swarm is a worker), so a
+// promotion or a demotion shows on the next probe without a new fold. Before the first probe
+// the role the swarm's own node list gives the node stands, and a worker when it has none, so
+// a worker's socket is never sent a cluster read it must refuse.
 func (s *Service) socketView(row sqlc.Environment, now time.Time) AgentView {
 	key := SocketTarget(row.ID)
 	st := s.mon.Status(key)
-	role := roleManager
-	if t := st.Probe.Type; t == dockerx.TypeSwarmWorker || t == dockerx.TypeStandalone {
+	var role string
+	switch st.Probe.Type {
+	case dockerx.TypeSwarmManager:
+		role = roleManager
+	case dockerx.TypeSwarmWorker, dockerx.TypeStandalone:
 		role = roleWorker
+	default:
+		role = s.listedRole(row)
 	}
 	node := cleanText(st.Probe.Hostname, maxNodeLen)
 	if node == "" {
@@ -377,6 +386,24 @@ func (s *Service) socketView(row sqlc.Environment, now time.Time) AgentView {
 		ID: key, Node: node, Role: role, SwarmNodeID: row.LocalNodeID.String, Socket: true,
 		Connected: true, ConnectedAt: firstSet(st.Since, now), LastSeen: now, EngineReachable: true, Target: st,
 	}
+}
+
+// listedRole is the role the swarm environment's last believable node list gives the folded
+// node, roleWorker when there is no such list or it does not have the node.
+func (s *Service) listedRole(row sqlc.Environment) string {
+	if s.clusters == nil || !row.LocalNodeID.Valid {
+		return roleWorker
+	}
+	nodes, _, ok := s.clusters.NodeList(row.ID)
+	if !ok {
+		return roleWorker
+	}
+	for _, n := range nodes {
+		if n.ID == row.LocalNodeID.String && n.Role == roleManager {
+			return roleManager
+		}
+	}
+	return roleWorker
 }
 
 // Known reports whether an environment with this ID exists. A lookup that fails

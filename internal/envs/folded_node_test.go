@@ -171,3 +171,114 @@ func TestFoldedNodeGoneIsDecidedOnlyFromAKnownListAndAnAnsweringSocket(t *testin
 		t.Errorf("an environment with no folded node reports one gone: %+v", g)
 	}
 }
+
+// foldedRole is the role the folded node has now.
+func (f *foldRig) foldedRole(t *testing.T) string {
+	t.Helper()
+	n, ok := f.svc.FoldedNode(context.Background(), f.env.ID)
+	if !ok {
+		t.Fatal("the environment has no folded node")
+	}
+	return n.Role
+}
+
+// localConfig is the rig's folded host as a daemon that reports the role and swarm it is given.
+func localConfig(control bool, rows []dockertest.FakeNode) dockertest.FakeConfig {
+	c := dockertest.FakeConfig{
+		Hostname: "local-1", EngineID: "ENG:local", SwarmState: "active", SwarmControl: control,
+		SwarmNodeID: "node-local", NodeRows: rows, SwarmRemoteManagers: []string{"node-m1"},
+		Containers: []dockertest.FakeContainer{fakeContainer("local-c", "on-the-local-host")},
+	}
+	if control {
+		c.SwarmClusterID = foldCluster
+	}
+	return c
+}
+
+func TestSocketViewRoleIsNeverManagerBeforeItsFirstProbe(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		// listed is the role the swarm's node list gives the folded node; none drops its row.
+		listed string
+		// noClusters runs the service with no cluster reader at all.
+		noClusters bool
+		want       string
+	}{
+		{name: "the list calls it a manager", listed: roleManager, want: roleManager},
+		{name: "the list calls it a worker", listed: roleWorker, want: roleWorker},
+		{name: "the list does not have it", listed: "", want: roleWorker},
+		{name: "there is no cluster reader", listed: roleManager, noClusters: true, want: roleWorker},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFoldRig(t, nil)
+			f.fold(t)
+			// The swarm's managers list the node as the case says.
+			rows := []dockertest.FakeNode{f.nodes[0]}
+			if tc.listed != "" {
+				n := f.nodes[1]
+				n.Role = tc.listed
+				rows = append(rows, n)
+			}
+			f.local.Reconfigure(localConfig(true, rows))
+			mc := managerConfig(1, rows, nil)
+			f.m.fake.Reconfigure(mc)
+			if err := f.c.Refresh(ctx, f.env.ID); err != nil {
+				t.Fatalf("Refresh: %v", err)
+			}
+			if got := f.foldedRole(t); got != roleManager {
+				t.Fatalf("role of a probed manager socket = %q, want manager", got)
+			}
+			// No probe: the monitor of the socket is gone, as before its first result.
+			f.mon.Stop(SocketTarget(f.env.ID))
+			if st := f.mon.Status(SocketTarget(f.env.ID)); st.Probe.Type != "" {
+				t.Fatalf("the socket still has a probe: %+v", st)
+			}
+			if tc.noClusters {
+				f.svc.WithClusters(nil)
+			}
+			if got := f.foldedRole(t); got != tc.want {
+				t.Errorf("role before the first probe = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSocketViewRoleFollowsTheProbeAfterPromotionAndDemotion(t *testing.T) {
+	f := newFoldRig(t, nil)
+	f.fold(t)
+	key := SocketTarget(f.env.ID)
+	probed := func(typ string) {
+		t.Helper()
+		f.mon.Kick(key)
+		f.awaitSocket(t, "the socket to probe as "+typ, func(s Status) bool { return s.Probe.Type == typ })
+	}
+	if got := f.foldedRole(t); got != roleManager {
+		t.Fatalf("role after the fold = %q, want manager", got)
+	}
+
+	// Demoted: still in the swarm, no longer in control of it.
+	f.local.Reconfigure(localConfig(false, f.nodes))
+	probed(dockerx.TypeSwarmWorker)
+	if got := f.foldedRole(t); got != roleWorker {
+		t.Errorf("role after a demotion = %q, want worker", got)
+	}
+
+	// Promoted again.
+	f.local.Reconfigure(localConfig(true, f.nodes))
+	probed(dockerx.TypeSwarmManager)
+	if got := f.foldedRole(t); got != roleManager {
+		t.Errorf("role after a promotion = %q, want manager", got)
+	}
+
+	// Outside the swarm altogether is a worker's role too, never a manager's.
+	f.local.Reconfigure(dockertest.FakeConfig{Hostname: "local-1", EngineID: "ENG:local", SwarmState: "inactive"})
+	probed(dockerx.TypeStandalone)
+	if got := f.foldedRole(t); got != roleWorker {
+		t.Errorf("role of a standalone engine = %q, want worker", got)
+	}
+	if got := f.foldedLocalNode(t); got != "node-local" {
+		t.Errorf("local_node_id = %q, want node-local: no re-fold happened and none is needed", got)
+	}
+}
