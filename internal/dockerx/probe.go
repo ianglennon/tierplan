@@ -6,12 +6,23 @@ package dockerx
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
+
+	"github.com/ianglennon/tierplan/proto/wire"
 )
+
+// maxRemoteManagers bounds how many managers (IDs, and hosts) one probe keeps of what the
+// engine reports. It is the cap the agent applies to the same list (agent/internal/facts).
+const maxRemoteManagers = 64
+
+// maxManagerHost is the longest hostname a manager address may carry (RFC 1035).
+const maxManagerHost = 253
 
 // minSupportedAPI is the API version of Docker Engine 24.0, the oldest engine
 // TierPlan supports (D-25). Engine 23 tops out at 1.42.
@@ -66,10 +77,19 @@ type ProbeResult struct {
 	// swarm it has joined, and SwarmClusterID the swarm's ID, kept for a manager only:
 	// a worker never learns it, and an agent drops it for anything but a manager, so
 	// the two sides compare the same facts (D-48).
-	EngineID       string    `json:"engineId,omitempty"`
-	SwarmNodeID    string    `json:"swarmNodeId,omitempty"`
-	SwarmClusterID string    `json:"swarmClusterId,omitempty"`
-	ProbedAt       time.Time `json:"probedAt"`
+	EngineID       string `json:"engineId,omitempty"`
+	SwarmNodeID    string `json:"swarmNodeId,omitempty"`
+	SwarmClusterID string `json:"swarmClusterId,omitempty"`
+	// SwarmRemoteManagers are the node IDs of the managers the engine reports (Info.Swarm.
+	// RemoteManagers), each checked with wire.ValidIdentity and at most 64 kept. A worker lists
+	// the managers; a manager lists itself among them. They are the second guard of the fold
+	// proof, never its decider: node-list membership is (internal/envs proveNode).
+	SwarmRemoteManagers []string `json:"swarmRemoteManagers,omitempty"`
+	// SwarmManagerHosts are the host parts of those managers' swarm addresses, never the port,
+	// so the setup panel can name the managers. Each is an IP or a hostname, de-duplicated, at
+	// most 64.
+	SwarmManagerHosts []string  `json:"swarmManagerHosts,omitempty"`
+	ProbedAt          time.Time `json:"probedAt"`
 }
 
 // ComponentFacts is one component of the engine's /version answer.
@@ -316,6 +336,7 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 			if info.ControlAvailable && in.Info.Swarm.Cluster != nil {
 				res.SwarmClusterID = in.Info.Swarm.Cluster.ID
 			}
+			res.SwarmRemoteManagers, res.SwarmManagerHosts = remoteManagers(in.Info.Swarm.RemoteManagers)
 		}
 
 	default:
@@ -342,6 +363,48 @@ func (c *Client) Probe(ctx context.Context) (ProbeResult, error) {
 		return res, probeFail
 	}
 	return res, nil
+}
+
+// remoteManagers is what a probe keeps of the managers an engine reports: the node IDs that
+// pass wire.ValidIdentity and the hosts (no port) of the addresses that are an IP or a plain
+// hostname, each at most maxRemoteManagers, hosts without repeats. Engine-supplied text goes no
+// further than this, so none reaches the API body, an audit row or the panel unchecked.
+func remoteManagers(peers []swarm.Peer) (ids, hosts []string) {
+	seen := map[string]bool{}
+	for _, p := range peers {
+		if wire.ValidIdentity(p.NodeID) && len(ids) < maxRemoteManagers {
+			ids = append(ids, p.NodeID)
+		}
+		if h := managerHost(p.Addr); h != "" && !seen[h] && len(hosts) < maxRemoteManagers {
+			seen[h] = true
+			hosts = append(hosts, h)
+		}
+	}
+	return ids, hosts
+}
+
+// managerHost is the host part of a swarm address "host:port", or empty when the address does
+// not split or the host is neither an IP nor a hostname of letters, digits, dots and hyphens.
+func managerHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return ""
+	}
+	if net.ParseIP(host) != nil {
+		return host
+	}
+	if len(host) > maxManagerHost {
+		return ""
+	}
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '-':
+		default:
+			return ""
+		}
+	}
+	return host
 }
 
 // failProbe marks a reachable engine whose details could not be read.

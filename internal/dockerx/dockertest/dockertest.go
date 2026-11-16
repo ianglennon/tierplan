@@ -109,6 +109,14 @@ type FakeConfig struct {
 	// engine outside a swarm reports it. A real worker leaves it unset too, which a
 	// fake worker does not do unless this is empty.
 	SwarmClusterID string
+	// SwarmRemoteManagers is Info.Swarm.RemoteManagers, the node IDs of the managers the engine
+	// reports; a real manager lists itself among them, a real worker lists the managers only.
+	// None by default: a fake that sets neither reports none.
+	SwarmRemoteManagers []string
+	// SwarmRemoteManagerAddrs are the swarm addresses (ip:port) of SwarmRemoteManagers, in the
+	// same order. When shorter than the IDs, the missing ones are generated as
+	// 10.0.0.<index+1>:2377.
+	SwarmRemoteManagerAddrs []string
 	// FailInfo makes /info answer 500, for the partial-failure path.
 	FailInfo bool
 	// SwarmDefaultAddrPool and SwarmSubnetSize are Info.Swarm.Cluster.DefaultAddrPool and
@@ -1166,6 +1174,13 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		NodeID:           c.SwarmNodeID,
 		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
 		ControlAvailable: c.SwarmControl,
+	}
+	for i, id := range c.SwarmRemoteManagers {
+		addr := fmt.Sprintf("10.0.0.%d:2377", i+1)
+		if i < len(c.SwarmRemoteManagerAddrs) {
+			addr = c.SwarmRemoteManagerAddrs[i]
+		}
+		info.RemoteManagers = append(info.RemoteManagers, swarm.Peer{NodeID: id, Addr: addr})
 	}
 	limit, limitSet := c.reportedLimit()
 	if c.SwarmClusterID != "" || limitSet || c.SwarmVersion != 0 || len(c.SwarmDefaultAddrPool) != 0 || c.SwarmSubnetSize != 0 {
