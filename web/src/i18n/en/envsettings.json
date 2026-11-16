@@ -129,8 +129,10 @@
         "worker": "Worker",
         "standalone": "Standalone",
         "localSocket": "Local socket",
-        "local": "Local socket"
+        "socket": "Socket",
+        "standby": "Standby"
       },
+      "standbyNote": "Standby: TierPlan reaches this node through the Docker socket. Its agent keeps running but isn't used.",
       "agentState": {
         "connected": "Connected",
         "disconnected": "Disconnected"

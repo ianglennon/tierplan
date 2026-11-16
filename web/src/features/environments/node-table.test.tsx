@@ -440,13 +440,13 @@ describe("NodeTable folded local host", () => {
     updateState: { state: "idle" },
   };
 
-  it("shows a Local socket row with dashes for the agent, version, certificate, clock and last seen, and no actions", async () => {
+  it("shows a Worker plus Socket row with dashes for the agent, version, certificate, clock and last seen, and no actions", async () => {
     agents = [MGR, FOLDED] as unknown as typeof agents;
     await mountLoaded();
     const row = rowFor("lab-1");
     const c = cells(row);
     expect(c[0]?.textContent).toBe("lab-1");
-    expect(c[1]?.textContent).toBe("Local socket");
+    expect(c[1]?.textContent).toBe("WorkerSocket");
     expect(c[2]?.textContent).toBe("—");
     expect(c[3]?.textContent).toBe("—");
     expect(c[4]?.textContent).toBe("29.8.2");
@@ -467,6 +467,48 @@ describe("NodeTable folded local host", () => {
     ] as unknown as typeof agents;
     await mountLoaded();
     expect(within(rowFor("lab-1")).queryByRole("button")).toBeNull();
+  });
+
+  it("shows the folded node's role with a Socket badge, the standby agent with a Standby badge, and one footnote", async () => {
+    agents = [
+      MGR,
+      agent("a9", "lab-1-agent", { standby: true }),
+      { ...FOLDED, nodeRole: "worker" },
+    ] as unknown as typeof agents;
+    await mountLoaded();
+    expect(cells(rowFor("lab-1"))[1]?.textContent).toBe("WorkerSocket");
+    expect(cells(rowFor("lab-1-agent"))[1]?.textContent).toBe("WorkerStandby");
+    expect(cells(rowFor("mgr-1"))[1]?.textContent).not.toContain("Standby");
+    expect(screen.getAllByText(/^Standby: TierPlan reaches this node/)).toHaveLength(1);
+    expect(
+      screen.getByText(
+        "Standby: TierPlan reaches this node through the Docker socket. Its agent keeps running but isn't used.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("names a folded manager Manager", async () => {
+    agents = [MGR, { ...FOLDED, nodeRole: "manager" }] as unknown as typeof agents;
+    await mountLoaded();
+    expect(cells(rowFor("lab-1"))[1]?.textContent).toBe("ManagerSocket");
+  });
+
+  it("shows no badge and no footnote with no folded node", async () => {
+    await mountLoaded();
+    expect(screen.queryByText("Socket")).toBeNull();
+    expect(screen.queryByText("Standby")).toBeNull();
+    expect(screen.queryByText(/^Standby: TierPlan/)).toBeNull();
+  });
+
+  it("marks every standby agent and shows the footnote once", async () => {
+    agents = [
+      MGR,
+      agent("a8", "dup-1", { standby: true }),
+      agent("a9", "dup-2", { standby: true }),
+    ] as unknown as typeof agents;
+    await mountLoaded();
+    expect(screen.getAllByText("Standby")).toHaveLength(2);
+    expect(screen.getAllByText(/^Standby: TierPlan/)).toHaveLength(1);
   });
 });
 
