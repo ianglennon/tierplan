@@ -12,6 +12,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The node list the fold proof reads (SWM-02, D-06, T-19-02): the list a manager agent read,
@@ -167,6 +168,23 @@ func TestClustersRefreshNodeListReadsAColdEnvironmentOnce(t *testing.T) {
 	if got := s.nodeReads() - before; got != oneRead {
 		t.Fatalf("a read in flight was repeated: %d node requests, want %d", got, oneRead)
 	}
+}
+
+func TestClustersRefreshNodeListStopsWaitingForARunningReadWhenItsContextEnds(t *testing.T) {
+	s := newSwarmRig(t, managerNodes(), nil)
+	e := s.c.entry(s.env.ID)
+	// A read of the environment is running: its lock is held and stays held for the whole test.
+	e.refresh.Lock()
+	defer e.refresh.Unlock()
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		s.c.RefreshNodeList(ctx, s.env.ID, time.Second)
+		close(done)
+	}()
+	// A wait that ignored the context would still be here when the test gives up.
+	testsupport.Await(t, "a cancelled request to stop waiting for the running read", done)
 }
 
 func TestFoldNodeListIsNilWithoutClustersAWholeListOrAFreshOne(t *testing.T) {

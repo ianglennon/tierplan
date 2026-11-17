@@ -321,11 +321,22 @@ func (c *Clusters) RefreshNodeList(ctx context.Context, envID string, minAge tim
 	e := c.entry(envID)
 	if e.refresh.TryLock() {
 		_ = c.refresh(ctx, envID, e) // a failed read leaves the state as it records it
-	} else {
-		// A read is running: wait for it, then take the list it left.
-		e.refresh.Lock()
+		e.refresh.Unlock()
+		return c.NodeList(envID)
 	}
-	e.refresh.Unlock()
+	// A read is running: wait for it, then take the list it left. The wait ends with ctx, so
+	// a cancelled request does not sit out the read; the waiter that is left behind lets go of
+	// the lock as soon as the read does, and the read is bounded by the cluster read timeout.
+	done := make(chan struct{})
+	go func() {
+		e.refresh.Lock()
+		defer e.refresh.Unlock()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 	return c.NodeList(envID)
 }
 

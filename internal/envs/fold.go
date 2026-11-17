@@ -136,6 +136,13 @@ func (s *Service) localFoldSource(rows []sqlc.Environment) (foldSrc, bool) {
 	return foldSrc{}, false
 }
 
+// isFoldTarget is true for an enabled, unfolded, bound swarm agent environment whose cluster was
+// not changed: the only kind of environment a fold can go into.
+func isFoldTarget(r sqlc.Environment) bool {
+	return r.Kind == KindAgent && r.Enabled != 0 && !r.LocalNodeID.Valid && !r.ClusterChangedAt.Valid &&
+		r.EnvType.String == envTypeSwarm && r.SwarmClusterID.String != ""
+}
+
 // proveFold decides whether the host behind src can be folded into swarm environment row r,
 // by identity and nothing else (D-06). The node ID must be listed by the environment's
 // managers (a list read through one of its own agents, shared with a manager the node
@@ -143,8 +150,7 @@ func (s *Service) localFoldSource(rows []sqlc.Environment) (foldSrc, bool) {
 // The binding was made by manager agents under the join token (D-12), so a remote swarm
 // cannot claim the host without a node of the host's swarm. No Docker call is made.
 func (s *Service) proveFold(src foldSrc, r sqlc.Environment) (foldPair, foldVerdict) {
-	if r.Kind != KindAgent || r.Enabled == 0 || r.LocalNodeID.Valid || r.ClusterChangedAt.Valid ||
-		r.EnvType.String != envTypeSwarm || r.SwarmClusterID.String == "" {
+	if !isFoldTarget(r) {
 		return foldPair{}, verdictNotATarget
 	}
 	p := src.probe
@@ -252,18 +258,36 @@ func (s *Service) foldOfferedFor(ctx context.Context, row sqlc.Environment) bool
 // *IngressActiveError (errors.Is ErrFoldIngressActive) that the local environment holds ingress
 // state the fold would delete (D-12).
 func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, ip, ua string) error {
-	if !s.Known(ctx, swarmEnvID) {
+	rows, err := s.st.RQ.ListEnvironments(ctx)
+	if err != nil {
+		return fmt.Errorf("list environments: %w", err)
+	}
+	var target sqlc.Environment
+	found := false
+	for _, r := range rows {
+		if r.ID == swarmEnvID {
+			target, found = r, true
+			break
+		}
+	}
+	if !found {
 		return ErrNotFound
+	}
+	// Any ID a fold cannot go into (the Local environment's own, a standalone host, a swarm that
+	// is folded already or disabled) is refused here, before the server reads a cluster or
+	// probes its Docker socket on behalf of a request that cannot end in a fold.
+	if !isFoldTarget(target) {
+		return ErrFoldNotOffered
 	}
 	// The one read of the swarm's nodes a fold may need, made before anything is held: a cold
 	// or older list is read through a manager agent first, so that a fold is refused only on
 	// a list that is current. Nothing after this point calls Docker or a tunnel.
 	if s.clusters != nil {
 		s.clusters.RefreshNodeList(ctx, swarmEnvID, foldListMinAge)
-	}
-	rows, err := s.st.RQ.ListEnvironments(ctx)
-	if err != nil {
-		return fmt.Errorf("list environments: %w", err)
+		// The read took time: take the rows again, so the proof below sees what it left.
+		if rows, err = s.st.RQ.ListEnvironments(ctx); err != nil {
+			return fmt.Errorf("list environments: %w", err)
+		}
 	}
 	src, ok := s.localFoldSource(rows)
 	if !ok {

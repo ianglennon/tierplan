@@ -257,6 +257,35 @@ func TestFoldLocalOfAnUnknownEnvironmentIsNotFound(t *testing.T) {
 	}
 }
 
+func TestFoldLocalOfAnEnvironmentThatCannotTakeAFoldReadsNoClusterAndAsksNoDocker(t *testing.T) {
+	f := newFoldRig(t, nil)
+	ctx := context.Background()
+	// asked is every request any engine of the rig has served so far.
+	asked := func() int { return len(f.local.Requests()) + len(f.m.fake.Requests()) }
+
+	// The Local environment's own ID is not a swarm to fold into.
+	before := asked()
+	if err := f.svc.FoldLocal(ctx, admin, f.localEnv.ID, "", ""); !errors.Is(err, ErrFoldNotOffered) {
+		t.Fatalf("FoldLocal of the Local environment's own ID = %v, want ErrFoldNotOffered", err)
+	}
+	if _, read := f.c.lookup(f.localEnv.ID); read {
+		t.Error("a fold request against the Local environment made the server keep a cluster read for it")
+	}
+	if got := asked(); got != before {
+		t.Errorf("a fold request against the Local environment made %d Docker requests, want none", got-before)
+	}
+
+	// A swarm that is folded already is not one either.
+	f.fold(t)
+	before = asked()
+	if err := f.svc.FoldLocal(ctx, admin, f.env.ID, "", ""); !errors.Is(err, ErrFoldNotOffered) {
+		t.Fatalf("a second fold = %v, want ErrFoldNotOffered", err)
+	}
+	if got := asked(); got != before {
+		t.Errorf("a second fold request made %d Docker requests, want none", got-before)
+	}
+}
+
 func TestAfterTheFoldTheSocketIsATargetACoveredNodeAndAManagerThatServesClusterReads(t *testing.T) {
 	f := newFoldRig(t, nil)
 	f.fold(t)
