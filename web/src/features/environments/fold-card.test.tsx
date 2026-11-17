@@ -575,4 +575,47 @@ describe("FoldCard, a 64-character swarm name", () => {
     expect(text.className).toContain("wrap-anywhere");
     expect(text.textContent).toContain(LONG_NAME);
   });
+
+  async function openLongDialog() {
+    show(LONG);
+    fireEvent.click(await screen.findByRole("button", { name: `Fold into ${LONG_NAME}` }));
+    return screen.findByRole("dialog", { name: `Fold this host into ${LONG_NAME}?` });
+  }
+
+  it("bounds the dialog's column and wraps its title", async () => {
+    const dialog = await openLongDialog();
+    expect(dialog.className).toContain("grid-cols-1");
+    const heading = within(dialog).getByRole("heading", {
+      name: `Fold this host into ${LONG_NAME}?`,
+    });
+    expect(heading.className).toContain("wrap-anywhere");
+    expect(heading.className).toContain("leading-tight");
+  });
+
+  it("lets the dialog's confirm button shrink and truncate its label, leaving the keep button alone", async () => {
+    const dialog = await openLongDialog();
+    const confirm = within(dialog).getByRole("button", { name: `Fold into ${LONG_NAME}` });
+    expect(confirm.className).toContain("min-w-0");
+    expect(confirm.className).toContain("max-w-full");
+    expect(confirm.className).toMatch(/(^|\s)shrink(\s|$)/);
+    expect(confirm.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(confirm.querySelector("span")?.className).toContain("truncate");
+    const keep = within(dialog).getByRole("button", { name: "Keep this host as it is" });
+    expect(keep.querySelector("span")).toBeNull();
+  });
+
+  it("wraps the inline failure alert that names the swarm", async () => {
+    answer = () =>
+      Response.json(
+        { title: "Conflict", status: 409, type: "fold_node_not_listed" },
+        { status: 409 },
+      );
+    const dialog = await openLongDialog();
+    tick(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: `Fold into ${LONG_NAME}` }));
+    const alert = await failureAlert(dialog);
+    const text = alertText(alert);
+    expect(text.className).toContain("wrap-anywhere");
+    expect(text.textContent).toContain(LONG_NAME);
+  });
 });

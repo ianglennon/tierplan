@@ -251,6 +251,7 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
       {offer ? (
         <Dialog open={open} onOpenChange={change}>
           <DialogContent
+            className="grid-cols-1"
             showCloseButton={false}
             onCloseAutoFocus={(event) => {
               const target = trigger.current?.isConnected ? trigger.current : focusFallback?.();
@@ -260,7 +261,9 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
             }}
           >
             <DialogHeader>
-              <DialogTitle>{t("envsettings.fold.dialogTitle", { swarm: name })}</DialogTitle>
+              <DialogTitle className="wrap-anywhere leading-tight">
+                {t("envsettings.fold.dialogTitle", { swarm: name })}
+              </DialogTitle>
               <DialogDescription>{t("envsettings.fold.body")}</DialogDescription>
             </DialogHeader>
             <ul className="flex list-disc flex-col gap-2 pl-4 text-sm">
@@ -280,7 +283,7 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
                       : t("envsettings.fold.removesNothingListed")}
                   </p>
                   {removal.length > 0 ? (
-                    <ul className="flex list-disc flex-col gap-1 pl-4 break-words">
+                    <ul className="flex list-disc flex-col gap-1 pl-4 wrap-anywhere">
                       {removal.map((line) => (
                         <li key={line}>{line}</li>
                       ))}
@@ -306,7 +309,7 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
             ) : null}
             {failure ? (
               <Alert variant="destructive" role="alert">
-                <AlertDescription className="break-words">
+                <AlertDescription className="wrap-anywhere">
                   {failure === "ingressActive" ? (
                     <>
                       {t("envsettings.fold.ingressActive", { what, andOff, swarm: name })}{" "}
@@ -335,7 +338,7 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
                   type="button"
                   variant={destructive ? "destructive" : "default"}
                   disabled={fold.isPending || (destructive && !confirmed)}
-                  className={TOUCH_HEIGHT}
+                  className={`${TOUCH_HEIGHT} min-w-0 max-w-full shrink`}
                   onClick={() => {
                     if (inFlight.current) return;
                     if (destructive && !confirmed) return;
@@ -350,7 +353,9 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
                       {t("envsettings.fold.pending")}
                     </>
                   ) : (
-                    t("envsettings.fold.confirm", { swarm: name })
+                    <span className="min-w-0 truncate">
+                      {t("envsettings.fold.confirm", { swarm: name })}
+                    </span>
                   )}
                 </Button>
               )}
