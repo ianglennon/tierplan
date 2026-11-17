@@ -371,7 +371,7 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 		return fmt.Errorf("record the folded host: %w", err)
 	}
 	if n != 1 {
-		// Folded, rebound or removed since it was looked at.
+		// Folded, rebound, disabled, its cluster changed or removed since it was looked at.
 		return ErrFoldNotOffered
 	}
 	var grants int64

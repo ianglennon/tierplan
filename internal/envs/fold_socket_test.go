@@ -433,6 +433,48 @@ func TestASocketFoldLosesToALocalEnvironmentAddedInTheMeantime(t *testing.T) {
 	}
 }
 
+// The swarm row is read before the socket is probed, so a change to it while the probe runs is
+// seen only by the write: a swarm disabled, or whose cluster changed, since the proof was made
+// takes no fold, and the fold that lost changes nothing (D-04, T-19-19). The probe is held on the
+// fake's /_ping so the row is changed at exactly that point.
+func TestAFoldLosesToAChangeOfTheSwarmRowBetweenTheProofAndTheWrite(t *testing.T) {
+	cases := []struct{ name, change string }{
+		{"the swarm was disabled", `UPDATE environments SET enabled = 0 WHERE id = ?`},
+		{"the swarm's cluster changed", `UPDATE environments SET cluster_changed_at = 1 WHERE id = ?`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hold := make(chan struct{})
+			f := newSocketFoldRig(t, func(cfg *dockertest.FakeConfig) { cfg.ProbeHold = hold })
+			ctx := testsupport.Context(t)
+			done := make(chan error, 1)
+			go func() { done <- f.svc.FoldLocal(ctx, admin, f.env.ID, "", "") }()
+			if err := f.local.Await(ctx, func() bool {
+				return slices.ContainsFunc(f.local.Requests(), func(p string) bool { return strings.HasSuffix(p, "/_ping") })
+			}); err != nil {
+				t.Fatalf("the fold never probed the socket: %v", err)
+			}
+			f.mustExec(t, c.change, f.env.ID)
+			close(hold)
+
+			if err := testsupport.Await(t, "the fold's answer", done); !errors.Is(err, ErrFoldNotOffered) {
+				t.Fatalf("FoldLocal = %v, want ErrFoldNotOffered", err)
+			}
+			var node, socket string
+			if err := f.st.Read.QueryRow(`SELECT COALESCE(local_node_id, ''), COALESCE(local_socket_path, '') FROM environments WHERE id = ?`, f.env.ID).Scan(&node, &socket); err != nil || node != "" || socket != "" {
+				t.Errorf("local_node_id = %q, local_socket_path = %q, %v after a lost race, want none", node, socket, err)
+			}
+			if n := len(f.audits(t, "environment.local_folded")); n != 0 {
+				t.Errorf("%d audit rows for a lost race", n)
+			}
+			var envs int
+			if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM environments`).Scan(&envs); err != nil || envs != 1 {
+				t.Errorf("%d environments after a lost race (%v), want the swarm's only", envs, err)
+			}
+		})
+	}
+}
+
 func TestLocalSwarmNamesTheSwarmThisNodeBelongsTo(t *testing.T) {
 	ctx := context.Background()
 	// probeOf is what the setup panel's handler would have: one probe of the socket, made here.

@@ -93,6 +93,7 @@ const foldLocalHost = `-- name: FoldLocalHost :execrows
 UPDATE environments
 SET local_node_id = ?, local_socket_path = ?, updated_at = ?
 WHERE id = ? AND kind = 'agent' AND env_type = 'swarm' AND swarm_cluster_id = ? AND local_node_id IS NULL
+  AND enabled = 1 AND cluster_changed_at IS NULL
 `
 
 type FoldLocalHostParams struct {
