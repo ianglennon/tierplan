@@ -47,9 +47,14 @@ services:
       DOCKER_TLS_CERTDIR: ""
       DOCKER_HOST: unix:///shared/docker.sock
     # registry:5000 is the registry service below, which the engine reaches by name over
-    # plain HTTP: a stack of the updates spec pulls its image from there.
-    # Test topology only: the flag is not in any shipped image or install document.
-    command: ["--insecure-registry=registry:5000"]
+    # plain HTTP: a stack of the updates spec pulls its image from there. localhost:5000 is the
+    # registry the stacks and git-stacks specs run inside this engine, on its own loopback
+    # (seedStackImage in tests/helpers.ts). It is named explicitly because Docker trusts a
+    # loopback registry over plain HTTP by itself only while no --insecure-registry is given,
+    # and from Docker 29.10 any such flag replaces that built-in exemption, so the loopback
+    # entry has to be listed with the other.
+    # Test topology only: the flags are not in any shipped image or install document.
+    command: ["--insecure-registry=registry:5000", "--insecure-registry=localhost:5000"]
     volumes:
       - sock:/shared
     healthcheck:
@@ -62,8 +67,8 @@ services:
   # A registry on the e2e network for the updates spec (plan 12-36). TierPlan's server asks
   # it for the digest a tag holds now (the HEAD check, D-01) and the dind engine pushes to
   # it and pulls from it, both by the name registry:5000, over plain HTTP: the server
-  # through a registry credential marked insecure, the engine through the flag above. No
-  # port is published, so nothing outside this network reaches it.
+  # through a registry credential marked insecure, the engine through the registry:5000 flag
+  # above. No port is published, so nothing outside this network reaches it.
   registry:
     image: registry:2
     healthcheck:
@@ -85,8 +90,10 @@ services:
       DOCKER_TLS_CERTDIR: ""
     # The updates spec builds and pushes its images from this engine, not from the one TierPlan
     # manages, so a new build under a tag reaches the managed engine only by a pull, as a release
-    # does. Test topology only, like the same flag on dind.
-    command: ["--insecure-registry=registry:5000"]
+    # does. localhost:5000 is the registry the stacks spec runs inside this engine, named for the
+    # same reason as on dind: from Docker 29.10 the registry:5000 flag ends the built-in loopback
+    # exemption. Test topology only, like the same flags on dind.
+    command: ["--insecure-registry=registry:5000", "--insecure-registry=localhost:5000"]
     healthcheck:
       test: ["CMD", "docker", "info"]
       interval: 2s
