@@ -705,6 +705,8 @@ describe("/settings/environments/$envId", () => {
     const router = renderAt("/settings/environments/e1");
     fireEvent.click(await screen.findByRole("button", { name: "Fold into edge" }));
     const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge?" });
+    // A fold of the Local environment is always confirmed with the tick.
+    fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge" }));
     await waitFor(() => expect(seen).toContain("POST /api/environments/e2/fold-local"));
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments/e2"));
@@ -716,6 +718,7 @@ describe("/settings/environments/$envId", () => {
     renderAt("/settings/environments/e2");
     fireEvent.click(await screen.findByRole("button", { name: "Fold into edge" }));
     const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge?" });
+    fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge" }));
     await waitFor(() =>
       expect(screen.queryByRole("heading", { level: 3, name: "Local host" })).toBeNull(),
