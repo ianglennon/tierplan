@@ -307,7 +307,7 @@ describe("dashboard", () => {
     renderAt("/env/e1");
     expect(
       await screen.findByText(
-        "This host is a swarm worker. Pin TierPlan to a manager node to manage the swarm. Showing node-local data only.",
+        "This host is a swarm worker, so TierPlan shows node-local data only. Add its swarm through the agents, then fold this host into it.",
       ),
     ).toBeTruthy();
   });

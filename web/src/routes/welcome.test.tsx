@@ -174,6 +174,24 @@ describe("/welcome (wizard step 4)", () => {
     expect(posts()).toEqual([]);
   });
 
+  it("offers Add this swarm at step 4 on a swarm worker and skips home", async () => {
+    localHost = {
+      ...DETECTED,
+      probe: { ...DETECTED.probe, type: "swarm-worker", swarmManagerHosts: ["m1"] },
+    };
+    const router = renderAt("/welcome");
+
+    const heading = await screen.findByRole("heading", { name: "Add this swarm?" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add this swarm" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/environments"));
+    expect(posts()).toEqual([]);
+  });
+
   it("sends a visitor who is not signed in to /login", async () => {
     me = null;
     const router = renderAt("/welcome");

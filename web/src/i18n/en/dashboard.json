@@ -3,7 +3,7 @@
     "tabTitle": "Dashboard",
     "environmentFallback": "this environment",
     "selfBadge": "TierPlan (this instance)",
-    "workerNotice": "This host is a swarm worker. Pin TierPlan to a manager node to manage the swarm. Showing node-local data only.",
+    "workerNotice": "This host is a swarm worker, so TierPlan shows node-local data only. Add its swarm through the agents, then fold this host into it.",
     "tiles": {
       "containers": "Containers",
       "containersSubline": "{{running}} running · {{stopped}} stopped",
