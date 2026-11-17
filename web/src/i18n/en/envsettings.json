@@ -205,6 +205,7 @@
       "removesLocal": "The separate Local environment is removed.",
       "audited": "Nothing changes on the host. This is recorded in the audit log.",
       "removesIntro": "Removing the Local environment also removes everything else stored under it, for example:",
+      "removesNothingListed": "Removing the Local environment also removes anything else stored under it. Nothing is listed here, and it can't be undone.",
       "removes": {
         "stacks_one": "{{count}} stack",
         "stacks_other": "{{count}} stacks",
@@ -212,6 +213,14 @@
         "repos_other": "{{count}} Git repositories",
         "registries_one": "{{count}} registry login",
         "registries_other": "{{count}} registry logins",
+        "gitCredentials_one": "{{count}} Git credential",
+        "gitCredentials_other": "{{count}} Git credentials",
+        "imageUpdateIgnores_one": "{{count}} image update ignore",
+        "imageUpdateIgnores_other": "{{count}} image update ignores",
+        "janitorKeeps_one": "{{count}} item kept from the janitor",
+        "janitorKeeps_other": "{{count}} items kept from the janitor",
+        "runs_one": "{{count}} janitor or image update run in the history",
+        "runs_other": "{{count}} janitor or image update runs in the history",
         "janitor": "Janitor settings"
       },
       "keepsContainers": "Running containers are not touched.",

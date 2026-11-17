@@ -31,10 +31,15 @@ type foldOfferResp struct {
 		Enabled   bool `json:"enabled"`
 	} `json:"ingress"`
 	Removes *struct {
-		Stacks     int  `json:"stacks"`
-		GitRepos   int  `json:"gitRepos"`
-		Registries int  `json:"registries"`
-		Janitor    bool `json:"janitor"`
+		Stacks     int `json:"stacks"`
+		GitRepos   int `json:"gitRepos"`
+		Registries int `json:"registries"`
+		// The other stored items the delete cascades to.
+		GitCredentials     int  `json:"gitCredentials"`
+		ImageUpdateIgnores int  `json:"imageUpdateIgnores"`
+		JanitorKeeps       int  `json:"janitorKeeps"`
+		Runs               int  `json:"runs"`
+		Janitor            bool `json:"janitor"`
 	} `json:"removes"`
 }
 
@@ -92,15 +97,20 @@ func TestTheFoldOfferCarriesRemovalsAndRefusals(t *testing.T) {
 		f.mustExec(t, `INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES ('s1', ?, 'one', 'swarm', 'u1', 1)`, f.local.ID)
 		f.mustExec(t, `INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES ('s2', ?, 'two', 'swarm', 'u1', 1)`, f.local.ID)
 		f.mustExec(t, `INSERT INTO janitor_env_policy (env_id) VALUES (?)`, f.local.ID)
+		f.mustExec(t, `INSERT INTO git_credentials (id, env_id, name, type, secret_sealed, created_at, updated_at, created_by) VALUES ('gc-1', ?, 'cred', 'https', 'sealed', 1, 1, 'u1')`, f.local.ID)
+		f.mustExec(t, `INSERT INTO image_update_ignores (id, env_id, mode, scope, set_by, set_at) VALUES ('ign-1', ?, 'skip', 'image', 'u1', 1)`, f.local.ID)
+		f.mustExec(t, `INSERT INTO janitor_keeps (env_id, kind, ref, kept_by, kept_at) VALUES (?, 'network', 'net-1', 'u1', 1)`, f.local.ID)
+		f.mustExec(t, `INSERT INTO janitor_runs (id, env_id, trigger, actor, state, started_at) VALUES ('jr-1', ?, 'manual', 'u1', 'completed', 1)`, f.local.ID)
 
 		got, raw := f.offer(t)
 		if !got.Offered || got.Source != "local_environment" || got.Role != "manager" || got.LocalEnvironmentID != f.local.ID || got.Refusal != "" {
 			t.Fatalf("fold-offer = %s, want offered from the Local environment as a manager", raw)
 		}
-		if got.Removes == nil || got.Removes.Stacks != 2 || got.Removes.GitRepos != 0 || got.Removes.Registries != 0 || !got.Removes.Janitor {
-			t.Errorf("removes = %+v, want 2 stacks, 0 Git repositories, 0 registries and janitor settings", got.Removes)
+		if got.Removes == nil || got.Removes.Stacks != 2 || got.Removes.GitRepos != 0 || got.Removes.Registries != 0 || !got.Removes.Janitor ||
+			got.Removes.GitCredentials != 1 || got.Removes.ImageUpdateIgnores != 1 || got.Removes.JanitorKeeps != 1 || got.Removes.Runs != 1 {
+			t.Errorf("removes = %+v, want 2 stacks, 0 Git repositories, 0 registries, 1 Git credential, 1 image-update ignore, 1 janitor keep, 1 run and janitor settings", got.Removes)
 		}
-		for _, key := range []string{`"removes"`, `"gitRepos"`, `"registries"`, `"janitor"`} {
+		for _, key := range []string{`"removes"`, `"gitRepos"`, `"registries"`, `"gitCredentials"`, `"imageUpdateIgnores"`, `"janitorKeeps"`, `"runs"`, `"janitor"`} {
 			if !strings.Contains(raw, key) {
 				t.Errorf("fold-offer lacks the key %s: %s", key, raw)
 			}

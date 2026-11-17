@@ -167,9 +167,12 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
     setOpen(false);
   }
 
-  // The data-removal block (D-16): only for a Local-environment fold with something
-  // counted in it. A socket fold, or an empty Local environment, removes nothing stored.
-  const removes = offer?.source === "local_environment" ? offer.removes : undefined;
+  // The data-removal block (D-16): every fold of a Local environment retires its row, which
+  // is irreversible whatever is counted in it, so it always needs the explicit tick and the
+  // destructive button. The lines name what is counted, non-zero items only, and the block
+  // says so when there is nothing to list. A socket fold removes nothing stored.
+  const fromLocal = offer?.source === "local_environment";
+  const removes = fromLocal ? offer.removes : undefined;
   const removal = removes
     ? [
         removes.stacks > 0 ? t("envsettings.fold.removes.stacks", { count: removes.stacks }) : null,
@@ -179,10 +182,20 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
         removes.registries > 0
           ? t("envsettings.fold.removes.registries", { count: removes.registries })
           : null,
+        removes.gitCredentials > 0
+          ? t("envsettings.fold.removes.gitCredentials", { count: removes.gitCredentials })
+          : null,
+        removes.imageUpdateIgnores > 0
+          ? t("envsettings.fold.removes.imageUpdateIgnores", { count: removes.imageUpdateIgnores })
+          : null,
+        removes.janitorKeeps > 0
+          ? t("envsettings.fold.removes.janitorKeeps", { count: removes.janitorKeeps })
+          : null,
+        removes.runs > 0 ? t("envsettings.fold.removes.runs", { count: removes.runs }) : null,
         removes.janitor ? t("envsettings.fold.removes.janitor") : null,
       ].filter((line): line is string => line !== null)
     : [];
-  const destructive = removal.length > 0;
+  const destructive = fromLocal;
 
   const name = swarm.name;
   const { what, andOff } = ingressParts(t, read?.ingress);
@@ -257,12 +270,18 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
               <Alert variant="warning">
                 <TriangleAlert aria-hidden="true" />
                 <AlertDescription className="flex flex-col gap-2 text-foreground">
-                  <p>{t("envsettings.fold.removesIntro")}</p>
-                  <ul className="flex list-disc flex-col gap-1 pl-4 break-words">
-                    {removal.map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
+                  <p>
+                    {removal.length > 0
+                      ? t("envsettings.fold.removesIntro")
+                      : t("envsettings.fold.removesNothingListed")}
+                  </p>
+                  {removal.length > 0 ? (
+                    <ul className="flex list-disc flex-col gap-1 pl-4 break-words">
+                      {removal.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                   <p>{t("envsettings.fold.keepsContainers")}</p>
                 </AlertDescription>
               </Alert>

@@ -57,6 +57,10 @@ func (s *Service) detectSocket(ctx context.Context, rows []sqlc.Environment) (fo
 // shows before an Admin confirms.
 type FoldRemovals struct {
 	Stacks, GitRepos, Registries int64
+	// GitCredentials, ImageUpdateIgnores, JanitorKeeps and Runs count the other stored items the
+	// cascade deletes: the environment's own Git credentials, image-update ignores, kept janitor
+	// items, and the history of janitor runs and image-update runs together.
+	GitCredentials, ImageUpdateIgnores, JanitorKeeps, Runs int64
 	// Janitor is true when the Local environment has janitor settings of its own.
 	Janitor bool
 }
@@ -131,7 +135,11 @@ func (s *Service) FoldOfferDetail(ctx context.Context, swarmEnvID string) (FoldO
 	if err != nil {
 		return FoldOfferDetail{}, fmt.Errorf("count what a fold removes: %w", err)
 	}
-	d.Removes = &FoldRemovals{Stacks: rem.Stacks, GitRepos: rem.GitRepos, Registries: rem.Registries, Janitor: rem.Janitor > 0}
+	d.Removes = &FoldRemovals{
+		Stacks: rem.Stacks, GitRepos: rem.GitRepos, Registries: rem.Registries,
+		GitCredentials: rem.GitCredentials, ImageUpdateIgnores: rem.ImageUpdateIgnores,
+		JanitorKeeps: rem.JanitorKeeps, Runs: rem.Runs, Janitor: rem.Janitor > 0,
+	}
 	if ia := ingressActive(ing); ia != nil {
 		d.Offered, d.Ingress, d.Refusal = false, ia, ia
 	}

@@ -327,10 +327,15 @@ type FoldIngressBody struct {
 
 // FoldRemovesBody counts what retiring a Local environment in a fold removes with it (D-16).
 type FoldRemovesBody struct {
-	Stacks     int  `json:"stacks" doc:"Stacks stored under the Local environment"`
-	GitRepos   int  `json:"gitRepos" doc:"Git repositories stored under the Local environment"`
-	Registries int  `json:"registries" doc:"Registry logins stored under the Local environment"`
-	Janitor    bool `json:"janitor" doc:"Whether the Local environment has janitor settings of its own"`
+	Stacks     int `json:"stacks" doc:"Stacks stored under the Local environment"`
+	GitRepos   int `json:"gitRepos" doc:"Git repositories stored under the Local environment"`
+	Registries int `json:"registries" doc:"Registry logins stored under the Local environment"`
+	// The next four are the other stored items the delete cascades to.
+	GitCredentials     int  `json:"gitCredentials" doc:"Git credentials stored under the Local environment"`
+	ImageUpdateIgnores int  `json:"imageUpdateIgnores" doc:"Image-update ignores stored under the Local environment"`
+	JanitorKeeps       int  `json:"janitorKeeps" doc:"Items the janitor is told to keep under the Local environment"`
+	Runs               int  `json:"runs" doc:"Janitor runs and image-update runs recorded under the Local environment"`
+	Janitor            bool `json:"janitor" doc:"Whether the Local environment has janitor settings of its own"`
 }
 
 // FoldOfferBody is what the fold card of a swarm environment shows (D-04, D-16, D-17).
@@ -655,7 +660,9 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		}
 		if det.Removes != nil {
 			body.Removes = &FoldRemovesBody{Stacks: int(det.Removes.Stacks), GitRepos: int(det.Removes.GitRepos),
-				Registries: int(det.Removes.Registries), Janitor: det.Removes.Janitor}
+				Registries: int(det.Removes.Registries), GitCredentials: int(det.Removes.GitCredentials),
+				ImageUpdateIgnores: int(det.Removes.ImageUpdateIgnores), JanitorKeeps: int(det.Removes.JanitorKeeps),
+				Runs: int(det.Removes.Runs), Janitor: det.Removes.Janitor}
 		}
 		return &FoldOfferOutput{CacheControl: "no-store", Body: body}, nil
 	})

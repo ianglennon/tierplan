@@ -166,7 +166,8 @@ func TestTracerASocketOnlyWorkerFoldsWithNoLocalEnvironment(t *testing.T) {
 }
 
 // seedFoldRemovals gives the Local environment what a fold removes: two stacks, one Git
-// repository, no registry login and janitor settings.
+// repository, no registry login, one Git credential, one image-update ignore, two janitor keeps,
+// two runs (one of the janitor's, one of an image update) and janitor settings.
 func (f *foldRig) seedFoldRemovals(t *testing.T) {
 	t.Helper()
 	for _, n := range []string{"a", "b"} {
@@ -174,6 +175,13 @@ func (f *foldRig) seedFoldRemovals(t *testing.T) {
 	}
 	f.mustExec(t, `INSERT INTO git_repos (id, env_id, name, url, created_at, updated_at, created_by) VALUES ('repo-1', ?, 'r', 'https://example.org/r.git', 1, 1, 'u1')`, f.localEnv.ID)
 	f.mustExec(t, `INSERT INTO janitor_env_policy (env_id) VALUES (?)`, f.localEnv.ID)
+	f.mustExec(t, `INSERT INTO git_credentials (id, env_id, name, type, secret_sealed, created_at, updated_at, created_by) VALUES ('gc-1', ?, 'cred', 'https', 'sealed', 1, 1, 'u1')`, f.localEnv.ID)
+	f.mustExec(t, `INSERT INTO image_update_ignores (id, env_id, mode, scope, set_by, set_at) VALUES ('ign-1', ?, 'skip', 'image', 'u1', 1)`, f.localEnv.ID)
+	for _, ref := range []string{"net-1", "net-2"} {
+		f.mustExec(t, `INSERT INTO janitor_keeps (env_id, kind, ref, kept_by, kept_at) VALUES (?, 'network', ?, 'u1', 1)`, f.localEnv.ID, ref)
+	}
+	f.mustExec(t, `INSERT INTO janitor_runs (id, env_id, trigger, actor, state, started_at) VALUES ('jr-1', ?, 'manual', 'u1', 'completed', 1)`, f.localEnv.ID)
+	f.mustExec(t, `INSERT INTO image_update_runs (id, env_id, kind, workload, state, actor, started_at) VALUES ('ir-1', ?, 'service', 'web', 'done', 'u1', 1)`, f.localEnv.ID)
 }
 
 func TestFoldOfferDetail(t *testing.T) {
@@ -204,7 +212,7 @@ func TestFoldOfferDetail(t *testing.T) {
 				askID:   swarm,
 				seed:    func(t *testing.T, f *foldRig) { f.seedFoldRemovals(t) },
 				want:    FoldOfferDetail{Offered: true, Source: foldSourceLocal, Role: roleManager},
-				wantRem: &FoldRemovals{Stacks: 2, GitRepos: 1, Janitor: true},
+				wantRem: &FoldRemovals{Stacks: 2, GitRepos: 1, GitCredentials: 1, ImageUpdateIgnores: 1, JanitorKeeps: 2, Runs: 2, Janitor: true},
 			},
 		},
 		{
@@ -217,7 +225,7 @@ func TestFoldOfferDetail(t *testing.T) {
 					f.mustExec(t, domain, f.localEnv.ID)
 				},
 				want:     FoldOfferDetail{Source: foldSourceLocal, Role: roleManager},
-				wantRem:  &FoldRemovals{Stacks: 2, GitRepos: 1, Janitor: true},
+				wantRem:  &FoldRemovals{Stacks: 2, GitRepos: 1, GitCredentials: 1, ImageUpdateIgnores: 1, JanitorKeeps: 2, Runs: 2, Janitor: true},
 				wantIngr: &IngressActiveError{Domains: 1},
 			},
 		},

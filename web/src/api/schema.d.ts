@@ -8450,16 +8450,36 @@ export interface components {
         FoldRemovesBody: {
             /**
              * Format: int64
+             * @description Git credentials stored under the Local environment
+             */
+            gitCredentials: number;
+            /**
+             * Format: int64
              * @description Git repositories stored under the Local environment
              */
             gitRepos: number;
+            /**
+             * Format: int64
+             * @description Image-update ignores stored under the Local environment
+             */
+            imageUpdateIgnores: number;
             /** @description Whether the Local environment has janitor settings of its own */
             janitor: boolean;
+            /**
+             * Format: int64
+             * @description Items the janitor is told to keep under the Local environment
+             */
+            janitorKeeps: number;
             /**
              * Format: int64
              * @description Registry logins stored under the Local environment
              */
             registries: number;
+            /**
+             * Format: int64
+             * @description Janitor runs and image-update runs recorded under the Local environment
+             */
+            runs: number;
             /**
              * Format: int64
              * @description Stacks stored under the Local environment
