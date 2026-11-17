@@ -640,19 +640,21 @@ func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*docker
 	if err == nil {
 		return first, nil
 	}
-	if first.Socket && ReasonFor(err) == ReasonNotAManager {
+	gone := errors.Is(err, tunnel.ErrAgentGone)
+	demoted := first.Socket && ReasonFor(err) == ReasonNotAManager
+	switch {
+	case demoted:
 		// The folded host's engine refused as a worker: it was demoted since it was last
 		// probed. The probe interval bounds how long its role would stay wrong, and this
-		// refusal is the earlier signal, so probe it now. The read is not repeated here: the
-		// next one chooses again from the role the probe finds.
+		// refusal is the earlier signal, so probe it now. The engine did not run the call,
+		// so the read is repeated on the next manager like one whose tunnel is gone.
 		c.svc.mon.Kick(SocketTarget(in.EnvID))
+	case gone:
+		// The tunnel to that manager is gone: a read is safe to repeat, once.
+		c.noteFailure(e, first.ID)
+	default:
 		return first, err
 	}
-	if !errors.Is(err, tunnel.ErrAgentGone) {
-		return first, err
-	}
-	// The tunnel to that manager is gone: a read is safe to repeat, once.
-	c.noteFailure(e, first.ID)
 	if !retry || len(cands) < 2 {
 		return first, err
 	}
@@ -663,7 +665,15 @@ func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*docker
 		}
 		return next, err
 	}
-	c.failover(ctx, in, e, first, next)
+	if gone {
+		c.failover(ctx, in, e, first, next)
+	} else {
+		// A demotion is not an outage: no "unreachable" event, the next read chooses
+		// again from the role the kicked probe finds.
+		e.mu.Lock()
+		e.state.InUse = next.ID
+		e.mu.Unlock()
+	}
 	return next, nil
 }
 

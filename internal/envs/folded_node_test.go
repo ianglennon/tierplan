@@ -288,8 +288,15 @@ func TestAClusterReadRefusedAsNotAManagerKicksTheSocketProbe(t *testing.T) {
 	f.fold(t)
 	ctx := context.Background()
 	key := SocketTarget(f.env.ID)
+	// answered is the host of the engine the read ran on, set only when that engine
+	// accepted the cluster call.
+	var answered string
 	read := func(cli *dockerx.Client) error {
-		_, err := cli.Cluster(ctx)
+		if _, err := cli.Cluster(ctx); err != nil {
+			return err
+		}
+		res, err := cli.Probe(ctx)
+		answered = res.Hostname
 		return err
 	}
 	if st := f.mon.Status(key); st.Probe.Type != dockerx.TypeSwarmManager {
@@ -297,11 +304,14 @@ func TestAClusterReadRefusedAsNotAManagerKicksTheSocketProbe(t *testing.T) {
 	}
 
 	// The host is demoted on the engine; nothing has probed it since. A read goes to the
-	// socket (it is the leader), is refused as a worker's, and must not wait out the interval.
+	// socket (it is the leader), is refused as a worker's, fails over to the swarm's own
+	// manager agent so that it still succeeds, and must not wait out the probe interval.
 	f.local.Reconfigure(localConfig(false, f.nodes))
-	err := f.c.ClusterRead(ctx, f.env.ID, read)
-	if got := ReasonFor(err); got != ReasonNotAManager {
-		t.Fatalf("a cluster read through a demoted socket = %v (reason %q), want not_a_manager", err, got)
+	if err := f.c.ClusterRead(ctx, f.env.ID, read); err != nil {
+		t.Fatalf("a cluster read through a demoted socket = %v, want it to succeed on the manager agent", err)
+	}
+	if answered != "mgr-1" {
+		t.Fatalf("the read through a demoted socket was answered by %q, want mgr-1", answered)
 	}
 	// The regular probe is 30 s away (defaultInterval): a probe that comes sooner is the kick's.
 	wait, cancel := context.WithTimeout(testsupport.Context(t), defaultInterval/2)
