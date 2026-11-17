@@ -517,3 +517,62 @@ describe("FoldCard", () => {
     expect(alert.textContent).toContain("Couldn't fold this host. Try again.");
   });
 });
+
+// The server accepts a swarm name up to 64 characters (NAME_MAX), and this one holds a
+// 47-character run with no break opportunity. UAT 19 test 3 found it clipping the card and
+// the dialog at 360px. jsdom has no layout, so these pin the classes that bound the text;
+// the 360px re-check confirms the layout.
+const LONG_NAME = `Prod ${"x".repeat(47)} cluster-eu1`;
+const LONG = env({ name: LONG_NAME });
+
+function alertText(card: HTMLElement): HTMLElement {
+  const el = card.querySelector<HTMLElement>('[data-slot="alert-description"]');
+  if (!el) throw new Error("no alert description in the card");
+  return el;
+}
+
+describe("FoldCard, a 64-character swarm name", () => {
+  beforeEach(() => {
+    listed = [LOCAL, LONG];
+    queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL, LONG] });
+  });
+
+  it("is 64 characters, the server's name limit", () => {
+    expect(LONG_NAME).toHaveLength(64);
+  });
+
+  it("wraps the card's sentence and truncates the Fold button's label inside the card", async () => {
+    show(LONG);
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(alertText(card).className).toContain("wrap-anywhere");
+    const button = within(card).getByRole("button", { name: `Fold into ${LONG_NAME}` });
+    expect(button.className).toContain("max-w-full");
+    const label = button.querySelector("span");
+    expect(label?.className).toContain("min-w-0");
+    expect(label?.className).toContain("truncate");
+    expect(label?.textContent).toBe(`Fold into ${LONG_NAME}`);
+  });
+
+  it("wraps the node-not-listed refusal on the card", async () => {
+    offerAnswer = () => Response.json({ offered: false, refusal: "fold_node_not_listed" });
+    show(LONG);
+    const card = await screen.findByRole("region", { name: "Local host" });
+    const text = alertText(card);
+    expect(text.className).toContain("wrap-anywhere");
+    expect(text.textContent).toContain(LONG_NAME);
+  });
+
+  it("wraps the ingress refusal on the card", async () => {
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 1, reserved: 0, hostnames: 0, routes: 0, enabled: false },
+      });
+    show(LONG);
+    const card = await screen.findByRole("region", { name: "Local host" });
+    const text = alertText(card);
+    expect(text.className).toContain("wrap-anywhere");
+    expect(text.textContent).toContain(LONG_NAME);
+  });
+});

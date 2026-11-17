@@ -214,7 +214,7 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
       {refusal === "fold_ingress_active" ? (
         <Alert variant="warning">
           <TriangleAlert aria-hidden="true" />
-          <AlertDescription className="text-foreground break-words">
+          <AlertDescription className="text-foreground wrap-anywhere">
             {t("envsettings.fold.ingressBlocked", { what, andOff, swarm: name })}{" "}
             {t("envsettings.fold.ingressDocsBefore")} {docsLink}{" "}
             {t("envsettings.fold.ingressDocsAfter")}
@@ -223,23 +223,27 @@ export function FoldCard({ env, onFolded, focusFallback }: FoldCardProps) {
       ) : refusal === "fold_node_not_listed" ? (
         <Alert variant="warning">
           <TriangleAlert aria-hidden="true" />
-          <AlertDescription className="text-foreground break-words">
+          <AlertDescription className="text-foreground wrap-anywhere">
             {t("envsettings.fold.nodeNotListed", { swarm: name })}
           </AlertDescription>
         </Alert>
       ) : (
         <>
           <Alert>
-            <AlertDescription>{t("envsettings.fold.alert", { swarm: name })}</AlertDescription>
+            <AlertDescription className="wrap-anywhere">
+              {t("envsettings.fold.alert", { swarm: name })}
+            </AlertDescription>
           </Alert>
           <div>
             <Button
               ref={trigger}
               type="button"
-              className={`${TOUCH_HEIGHT} max-md:w-full`}
+              className={`${TOUCH_HEIGHT} max-w-full max-md:w-full`}
               onClick={() => setOpen(true)}
             >
-              {t("envsettings.fold.button", { swarm: name })}
+              <span className="min-w-0 truncate">
+                {t("envsettings.fold.button", { swarm: name })}
+              </span>
             </Button>
           </div>
         </>
