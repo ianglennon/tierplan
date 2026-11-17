@@ -329,6 +329,45 @@ describe("/welcome on a swarm node, Add this swarm", () => {
   });
 });
 
+describe("/welcome on a swarm node, once the swarm is online", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  it("opens the swarm once it is online and leaves one health stream open", async () => {
+    const { router, dialog } = await openWaitingStep({
+      type: "swarm-manager",
+      swarmNodeState: "active",
+    });
+    expect(within(dialog).getByText("Waiting for the first agent…")).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    const welcomeStream = FakeEventSource.instances[0];
+
+    const online = { ...SWARM_PENDING, status: { state: "online" } };
+    environments = [online];
+    act(() => {
+      welcomeStream?.open();
+      welcomeStream?.sendFrame(
+        "env.status",
+        { envId: "e9", at: new Date().toISOString(), environment: online },
+        "1",
+      );
+    });
+    expect(await within(dialog).findByText("lab-swarm is online")).toBeTruthy();
+
+    // The waiting panel opens the environment two seconds later.
+    await waitFor(() => expect(router.state.location.pathname.startsWith("/env/e9")).toBe(true));
+
+    // The welcome page's stream is gone; the signed-in shell holds the only one.
+    expect(welcomeStream?.closed).toBe(true);
+    const open = FakeEventSource.instances.filter((s) => !s.closed);
+    expect(open).toHaveLength(1);
+    expect(open[0]).not.toBe(welcomeStream);
+    expect(open[0]?.url.endsWith("/api/environments/stream")).toBe(true);
+  });
+});
+
 describe("the signed-in home with no environments", () => {
   it("offers the opt-in to an admin and adds the host only on the click", async () => {
     renderAt("/");
