@@ -5,13 +5,19 @@
 package agents_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/engine"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
@@ -267,6 +273,84 @@ func TestSwarmWorkerFold(t *testing.T) {
 	if !sawLocal || !sawStandby {
 		t.Errorf("agents list: local row %v, standby agent on the worker %v, want both: %+v", sawLocal, sawStandby, f.agentRows(t))
 	}
+
+	// Spike S13 row 8, through the product: the folded worker's engine, which is the server's own socket,
+	// refuses a cluster question, and TierPlan classifies the refusal as not_a_manager. No cluster read
+	// of the environment is ever sent to it: each is answered by a manager.
+	cli, err := dockerx.New(engine.LocalSocketTransport{Path: proxy.Path()})
+	if err != nil {
+		t.Fatalf("open the server's own socket: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	_, err = cli.Cluster(execCtx(t, time.Minute))
+	if err == nil || envs.ReasonFor(err) != envs.ReasonNotAManager {
+		t.Fatalf("a cluster call through the folded worker's socket = %v (reason %q), want a refusal classified %s", err, envs.ReasonFor(err), envs.ReasonNotAManager)
+	}
+	managerNames := []string{sw.Managers[0].Hostname, sw.Managers[1].Hostname}
+	for i := range 3 {
+		srv.RefreshCluster(f.env.ID)
+		var answered string
+		readErr := srv.Core().Clusters().ClusterRead(execCtx(t, time.Minute), f.env.ID, func(c *dockerx.Client) error {
+			p, err := c.Probe(context.Background())
+			answered = p.Hostname
+			return err
+		})
+		if readErr != nil || !slices.Contains(managerNames, answered) {
+			t.Fatalf("cluster read %d: answered by %q (error %v), want one of the managers %v and never the worker %s", i+1, answered, readErr, managerNames, worker.Hostname)
+		}
+	}
+	t.Logf("S13 row 8: the worker's socket refuses cluster calls (not_a_manager); cluster reads are answered by a manager")
+
+	// D-08: promotion. The node ID does not change, so the fold stays; the row's role follows the probe.
+	sh(t, mgr, "docker node promote "+worker.Hostname)
+	f.waitNodeRole(t, "manager")
+	f.waitOnline(t, "after the promotion")
+	srv.RefreshCluster(f.env.ID)
+
+	// D-08: demotion.
+	sh(t, mgr, "docker node demote "+worker.Hostname)
+	f.waitNodeRole(t, "worker")
+	f.waitOnline(t, "after the demotion")
+	srv.RefreshCluster(f.env.ID)
+
+	// D-09: the node is removed from the swarm while it still runs. The environment is degraded and says
+	// why, and nothing unfolds it.
+	sh(t, mgr, "docker node rm --force "+worker.Hostname)
+	var gone servertest.Environment
+	srv.WaitFor("the environment to be degraded with folded_node_gone", 2*time.Minute, func() (bool, string) {
+		srv.RefreshCluster(f.env.ID)
+		e, ok := srv.Environment(f.env.ID)
+		gone = e
+		return ok && e.Status.State == "degraded" && e.HasIssue("folded_node_gone"), summarise(e)
+	})
+	t.Logf("after node rm --force: %s", summarise(gone))
+	if row := srv.Row(f.env.ID); !row.LocalNodeID.Valid || row.LocalNodeID.String == "" {
+		t.Errorf("local_node_id = %+v after the node left the swarm, want it kept (nothing unfolds a host)", row.LocalNodeID)
+	}
+}
+
+// waitNodeRole waits for the folded node's row in the agents list to say its role is want, which follows
+// the socket's probe (every 30 seconds), and logs the answer.
+func (f *workerFoldFix) waitNodeRole(t *testing.T, want string) {
+	t.Helper()
+	f.srv.WaitFor("the folded node's nodeRole to read "+want, 2*time.Minute, func() (bool, string) {
+		for _, a := range f.agentRows(t) {
+			if a.Role == "local" {
+				return a.NodeRole == want, "local row nodeRole " + a.NodeRole
+			}
+		}
+		return false, "no local row"
+	})
+	t.Logf("the folded node's nodeRole reads %s", want)
+}
+
+// waitOnline waits for the swarm environment to be online again, so no cluster read is left failing.
+func (f *workerFoldFix) waitOnline(t *testing.T, when string) {
+	t.Helper()
+	f.srv.WaitFor("the environment to be online "+when, 2*time.Minute, func() (bool, string) {
+		e, ok := f.srv.Environment(f.env.ID)
+		return ok && e.Status.State == "online", summarise(e)
+	})
 }
 
 // toJSON is a value as one line, for a failure message.
