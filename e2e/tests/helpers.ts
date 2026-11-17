@@ -459,8 +459,11 @@ export async function environmentsOf(context: BrowserContext): Promise<Environme
 
 // The registry the stacks spec pins images against. It runs inside the engine it serves, on that
 // engine's own loopback, the way the Go integration tests do (internal/dockerx/dockertest): a
-// stack's image is pinned to a digest a registry gave, the engines of this topology have no route
-// to a real one, and Docker treats localhost:5000 as insecure without any daemon setting.
+// stack's image is pinned to a digest a registry gave, and the engines of this topology have no
+// route to a real one. Both engines name localhost:5000 with --insecure-registry in
+// e2e/compose.yaml. Docker trusts a loopback registry over plain HTTP by itself only while no
+// --insecure-registry is set, and from Docker 29.10 the registry:5000 flag those services also
+// carry ends that exemption, so the loopback entry is explicit.
 const REGISTRY_IMAGE = "registry:2";
 const REGISTRY_NAME = "e2e-registry";
 export const REGISTRY_HOST = "localhost:5000";
