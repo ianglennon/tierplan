@@ -29,6 +29,41 @@ func (q *Queries) BumpIngressConfigVersion(ctx context.Context, arg BumpIngressC
 	return err
 }
 
+const countIngressStateByEnv = `-- name: CountIngressStateByEnv :one
+SELECT
+    (SELECT COUNT(*) FROM ingress_domains AS d WHERE d.env_id = ?1) AS domains,
+    (SELECT COUNT(*) FROM ingress_reserved AS r JOIN ingress_domains AS rd ON rd.id = r.domain_id
+        WHERE rd.env_id = ?1) AS reserved,
+    (SELECT COUNT(*) FROM ingress_hostnames AS h WHERE h.env_id = ?1) AS hostnames,
+    (SELECT COUNT(*) FROM ingress_routes AS rt WHERE rt.env_id = ?1) AS routes,
+    (SELECT COUNT(*) FROM ingress_env AS e WHERE e.env_id = ?1 AND e.enabled = 1) AS enabled
+`
+
+type CountIngressStateByEnvRow struct {
+	Domains   int64
+	Reserved  int64
+	Hostnames int64
+	Routes    int64
+	Enabled   int64
+}
+
+// What a fold of the Local environment would delete through the cascade (D-12, D-17): domains, the reserved
+// names under them (ingress_reserved has no env_id, so through its domain), hostname claims, routes, and
+// whether ingress is turned on. An ingress_env row with enabled = 0 is only a version counter and counts as
+// nothing.
+func (q *Queries) CountIngressStateByEnv(ctx context.Context, envID string) (CountIngressStateByEnvRow, error) {
+	row := q.db.QueryRowContext(ctx, countIngressStateByEnv, envID)
+	var i CountIngressStateByEnvRow
+	err := row.Scan(
+		&i.Domains,
+		&i.Reserved,
+		&i.Hostnames,
+		&i.Routes,
+		&i.Enabled,
+	)
+	return i, err
+}
+
 const deleteIngressDomain = `-- name: DeleteIngressDomain :execrows
 DELETE FROM ingress_domains WHERE id = ? AND env_id = ?
 `

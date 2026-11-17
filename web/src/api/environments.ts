@@ -265,6 +265,27 @@ export async function adoptCluster(envId: string): Promise<void> {
   if (!response.ok) throw new AdoptClusterError(error, response);
 }
 
+// The fold the server would carry out for a swarm environment, read from GET
+// /api/environments/{envId}/fold-offer: where it takes the host from, what it removes,
+// and why it is refused when it is.
+export type FoldOffer = components["schemas"]["FoldOfferBody"];
+
+// foldOfferQuery reads what folding this TierPlan host into the swarm environment envId
+// would do (D-15). The environments list does not carry the offer for an install with no
+// Local environment, because it never probes the Docker socket, so the fold card reads it
+// itself. Needs environments.manage.
+export const foldOfferQuery = (envId: string) =>
+  queryOptions({
+    queryKey: ["fold-offer", envId],
+    queryFn: async (): Promise<FoldOffer> => {
+      const { data, response } = await api.GET("/api/environments/{envId}/fold-offer", {
+        params: { path: { envId } },
+      });
+      if (!response.ok || !data) throw new Error("GET fold-offer failed");
+      return data;
+    },
+  });
+
 // FoldLocalError is a failed fold. It keeps the status and the problem type, which is
 // what the dialog picks its sentence from.
 export class FoldLocalError extends Error {
@@ -282,6 +303,17 @@ export class FoldLocalError extends Error {
   // The host is no longer a manager of that swarm, or another admin folded it first.
   get notOffered(): boolean {
     return this.status === 409 && this.type === "fold_not_offered";
+  }
+
+  // That swarm's managers don't list this host, or don't match it. Nothing was changed.
+  get nodeNotListed(): boolean {
+    return this.status === 409 && this.type === "fold_node_not_listed";
+  }
+
+  // The Local environment has ingress set up that the fold would delete. Nothing was
+  // changed; it has to be removed first.
+  get ingressActive(): boolean {
+    return this.status === 409 && this.type === "fold_ingress_active";
   }
 }
 
@@ -304,5 +336,7 @@ export function refreshAfterFold(queryClient: QueryClient, envId: string): Promi
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: environmentsQuery.queryKey }),
     queryClient.invalidateQueries({ queryKey: ["agents", envId] }),
+    queryClient.invalidateQueries({ queryKey: ["fold-offer", envId] }),
+    queryClient.invalidateQueries({ queryKey: ["local-host"] }),
   ]);
 }

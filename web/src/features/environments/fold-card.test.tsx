@@ -55,10 +55,44 @@ interface Sent {
 
 let sent: Sent[];
 let answer: () => Response | Promise<Response>;
+// What GET fold-offer answers.
+let offerAnswer: () => Response | Promise<Response>;
+// What GET /api/environments answers, so a refetch keeps the list the test set.
+let listed: EnvironmentItem[];
+const OFFERED = { offered: true, source: "local_environment", role: "manager" };
+// The counts of a Local environment that holds nothing the cascade would delete.
+const NO_REMOVALS = {
+  stacks: 0,
+  gitRepos: 0,
+  registries: 0,
+  gitCredentials: 0,
+  imageUpdateIgnores: 0,
+  janitorKeeps: 0,
+  runs: 0,
+  janitor: false,
+};
+
+// tick answers the confirmation every fold of a Local environment asks for.
+function tick(dialog: HTMLElement) {
+  fireEvent.click(within(dialog).getByRole("checkbox"));
+}
+
+// failureAlert is the alert that reports a failed fold: the last one in the dialog, after the
+// warning that lists what the fold removes.
+function failureAlert(dialog: HTMLElement) {
+  return waitFor(() => {
+    const alerts = within(dialog).getAllByRole("alert");
+    const last = alerts[alerts.length - 1];
+    if (alerts.length < 2 || !last) throw new Error("no failure alert yet");
+    return last;
+  });
+}
 
 beforeEach(() => {
   sent = [];
   answer = () => Response.json({ ...SWARM, foldOffered: undefined });
+  offerAnswer = () => Response.json(OFFERED);
+  listed = [LOCAL, SWARM];
   setCsrfToken("csrf-1");
   queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL, SWARM] });
   vi.stubGlobal(
@@ -67,6 +101,8 @@ beforeEach(() => {
       const path = new URL(req.url).pathname;
       sent.push({ method: req.method, path, csrf: req.headers.get("X-CSRF-Token") });
       if (path === "/api/environments/e2/fold-local") return answer();
+      if (path === "/api/environments/e2/fold-offer") return offerAnswer();
+      if (path === "/api/environments") return Response.json({ items: listed });
       return Response.json({ items: [] });
     }),
   );
@@ -94,40 +130,301 @@ function show(target: EnvironmentItem = SWARM, onFolded = vi.fn()) {
 const posts = () => sent.filter((s) => s.method === "POST");
 
 describe("FoldCard", () => {
-  it("says this host is a manager of the swarm and offers Fold into {swarm} under the Local host title", () => {
+  it("says this host is a node in the swarm and offers Fold into {swarm} under the Local host title", async () => {
     show();
-    const card = screen.getByRole("region", { name: "Local host" });
+    const card = await screen.findByRole("region", { name: "Local host" });
     expect(
       within(card).getByText(
-        "This TierPlan host is a manager of edge swarm. It can be reached through the Docker socket, so it needs no agent.",
+        "This TierPlan host is a node in edge swarm. TierPlan can reach it through the Docker socket, so it needs no separate environment.",
       ),
     ).toBeTruthy();
     expect(within(card).getByRole("button", { name: "Fold into edge swarm" })).toBeTruthy();
   });
 
-  it("is not rendered unless a fold is offered", () => {
-    show(env({ foldOffered: false }));
+  it("renders nothing while the offer is loading, after it fails, or when it is not offered", async () => {
+    // Loading: the read never answers.
+    offerAnswer = () => new Promise<Response>(() => {});
+    show();
+    expect(screen.queryByRole("region", { name: "Local host" })).toBeNull();
+    cleanup();
+    queryClient.removeQueries({ queryKey: ["fold-offer"] });
+
+    // Failed.
+    offerAnswer = () => Response.json({ title: "Internal", status: 500 }, { status: 500 });
+    show();
+    await waitFor(() =>
+      expect(sent.filter((s) => s.path.endsWith("/fold-offer")).length).toBeGreaterThan(1),
+    );
+    expect(screen.queryByRole("region", { name: "Local host" })).toBeNull();
+    cleanup();
+    queryClient.removeQueries({ queryKey: ["fold-offer"] });
+
+    // Not offered, no refusal.
+    offerAnswer = () => Response.json({ offered: false });
+    sent.length = 0;
+    show();
+    await waitFor(() => expect(sent.some((s) => s.path.endsWith("/fold-offer"))).toBe(true));
+    await act(async () => {});
     expect(screen.queryByRole("region", { name: "Local host" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Fold into/ })).toBeNull();
   });
 
-  it("is not rendered when the offer is on a local environment and no swarm environment offers one", () => {
-    queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL] });
-    show(LOCAL);
+  it("offers the fold of a socket-only host from its own read and posts once", async () => {
+    offerAnswer = () => Response.json({ offered: true, source: "socket", role: "worker" });
+    // The list carries no offer for a socket-only install.
+    show(env({ foldOffered: false }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
+    const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge swarm?" });
+    expect(dialog.textContent).toContain(
+      "The agent on this node keeps running, but TierPlan won't use it. It stays as a standby.",
+    );
+    expect(dialog.textContent).toContain(
+      "Nothing changes on the host. This is recorded in the audit log.",
+    );
+    expect(dialog.textContent).not.toContain("The separate Local environment is removed.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]).toEqual({
+      method: "POST",
+      path: "/api/environments/e2/fold-local",
+      csrf: "csrf-1",
+    });
+  });
+
+  async function openDialog() {
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
+    return screen.findByRole("dialog", { name: "Fold this host into edge swarm?" });
+  }
+
+  it("lists only non-zero removals and needs the checkbox before a destructive confirm", async () => {
+    offerAnswer = () =>
+      Response.json({
+        ...OFFERED,
+        removes: { ...NO_REMOVALS, stacks: 2, gitRepos: 1, runs: 3, janitor: true },
+      });
+    const dialog = await openDialog();
+    expect(
+      within(dialog).getByText(
+        "Removing the Local environment also removes everything else stored under it, for example:",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("2 stacks")).toBeTruthy();
+    expect(within(dialog).getByText("1 Git repository")).toBeTruthy();
+    expect(within(dialog).getByText("3 janitor or image update runs in the history")).toBeTruthy();
+    expect(within(dialog).getByText("Janitor settings")).toBeTruthy();
+    expect(within(dialog).queryByText(/registry login/)).toBeNull();
+    expect(within(dialog).queryByText(/Git credential/)).toBeNull();
+    expect(within(dialog).getByText("Running containers are not touched.")).toBeTruthy();
+
+    const confirm = within(dialog).getByRole("button", {
+      name: "Fold into edge swarm",
+    }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(confirm.getAttribute("data-variant")).toBe("destructive");
+    fireEvent.click(confirm);
+    expect(posts()).toEqual([]);
+
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "I understand this removes everything stored under that environment.",
+      }),
+    );
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+  });
+
+  it("needs the checkbox for a Local environment with nothing counted, and not for a socket fold", async () => {
+    offerAnswer = () => Response.json({ ...OFFERED, removes: NO_REMOVALS });
+    let dialog = await openDialog();
+    // The row delete is irreversible whatever the counts, so the tick is still needed.
+    expect(
+      within(dialog).getByText(
+        "Removing the Local environment also removes anything else stored under it. Nothing is listed here, and it can't be undone.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByRole("checkbox", {
+        name: "I understand this removes everything stored under that environment.",
+      }),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("The separate Local environment is removed.")).toBeTruthy();
+    let confirm = within(dialog).getByRole("button", { name: "Fold into edge swarm" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(confirm.getAttribute("data-variant")).toBe("destructive");
+    cleanup();
+    queryClient.removeQueries({ queryKey: ["fold-offer"] });
+
+    offerAnswer = () => Response.json({ offered: true, source: "socket", role: "worker" });
+    dialog = await openDialog();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    confirm = within(dialog).getByRole("button", { name: "Fold into edge swarm" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+    expect(confirm.getAttribute("data-variant")).toBe("default");
+  });
+
+  it("uses the singular for one stack and names the other stored items", async () => {
+    offerAnswer = () =>
+      Response.json({
+        ...OFFERED,
+        removes: {
+          ...NO_REMOVALS,
+          stacks: 1,
+          registries: 1,
+          gitCredentials: 1,
+          imageUpdateIgnores: 1,
+          janitorKeeps: 1,
+          runs: 1,
+        },
+      });
+    const dialog = await openDialog();
+    expect(within(dialog).getByText("1 stack")).toBeTruthy();
+    expect(within(dialog).getByText("1 registry login")).toBeTruthy();
+    expect(within(dialog).getByText("1 Git credential")).toBeTruthy();
+    expect(within(dialog).getByText("1 image update ignore")).toBeTruthy();
+    expect(within(dialog).getByText("1 item kept from the janitor")).toBeTruthy();
+    expect(within(dialog).getByText("1 janitor or image update run in the history")).toBeTruthy();
+  });
+
+  it("lists plural counts of the other stored items", async () => {
+    offerAnswer = () =>
+      Response.json({
+        ...OFFERED,
+        removes: { ...NO_REMOVALS, gitCredentials: 2, imageUpdateIgnores: 4, janitorKeeps: 5 },
+      });
+    const dialog = await openDialog();
+    expect(within(dialog).getByText("2 Git credentials")).toBeTruthy();
+    expect(within(dialog).getByText("4 image update ignores")).toBeTruthy();
+    expect(within(dialog).getByText("5 items kept from the janitor")).toBeTruthy();
+    expect(within(dialog).queryByText(/stack/)).toBeNull();
+  });
+
+  const DOCS_HREF =
+    "https://github.com/ianglennon/tierplan/blob/main/docs/install-in-swarm.md#fold-a-host-that-has-ingress-set-up";
+
+  it("refuses for ingress with what exists, the order, the docs link and no fold button", async () => {
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 2, reserved: 1, hostnames: 0, routes: 0, enabled: false },
+      });
+    show();
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(card.textContent).toContain(
+      "Ingress is set up on the Local environment (2 domains, 1 reserved name), and folding would delete it. To fold this host, first remove that environment's domains and reserved names. Then fold, and register them on edge swarm afterwards. The install-in-swarm guide in the docs shows how.",
+    );
+    const link = within(card).getByRole("link", { name: "install-in-swarm guide" });
+    expect(link.getAttribute("href")).toBe(DOCS_HREF);
     expect(screen.queryByRole("button", { name: /Fold into/ })).toBeNull();
   });
 
-  it("opens Fold this host into {swarm}? with the UI-SPEC body, Cancel and the primary confirm, and posts nothing yet", async () => {
+  it("adds turning ingress off when it is on, and never lists a version counter", async () => {
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 1, reserved: 0, hostnames: 0, routes: 0, enabled: true },
+      });
     show();
-    fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(card.textContent).toContain("(1 domain, ingress turned on)");
+    expect(card.textContent).toContain("reserved names, and turn ingress off. Then fold");
+    expect(card.textContent).not.toMatch(/version/i);
+  });
+
+  it("refuses when the swarm does not list this host, with no fold button", async () => {
+    offerAnswer = () => Response.json({ offered: false, refusal: "fold_node_not_listed" });
+    show();
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(card.textContent).toContain(
+      "edge swarm doesn't list this host as one of its nodes, or its managers don't match this host's.",
+    );
+    expect(screen.queryByRole("button", { name: /Fold into/ })).toBeNull();
+  });
+
+  it("keeps the dialog open with the node-not-listed alert and the confirm usable again", async () => {
+    answer = () =>
+      Response.json(
+        { title: "Conflict", status: 409, type: "fold_node_not_listed" },
+        { status: 409 },
+      );
+    const dialog = await openDialog();
+    tick(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
+    const alert = await failureAlert(dialog);
+    expect(alert.textContent).toContain(
+      "edge swarm doesn't list this host as one of its nodes, or its managers don't match this host's. Check that the swarm's agents are connected, then try again. Nothing was changed.",
+    );
+    expect(
+      (within(dialog).getByRole("button", { name: "Fold into edge swarm" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("keeps the dialog open on fold_ingress_active, hides the confirm and refreshes the offer", async () => {
+    answer = () =>
+      Response.json(
+        { title: "Conflict", status: 409, type: "fold_ingress_active" },
+        { status: 409 },
+      );
+    const dialog = await openDialog();
+    const reads = () => sent.filter((s) => s.path.endsWith("/fold-offer")).length;
+    const before = reads();
+    // The refreshed offer carries what was found.
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 2, reserved: 1, hostnames: 0, routes: 0, enabled: false },
+      });
+    tick(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
+    const alert = await failureAlert(dialog);
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await waitFor(() => expect(alert.textContent).toContain("(2 domains, 1 reserved name)"));
+    expect(alert.textContent).toContain("Nothing was changed.");
+    expect(within(alert).getByRole("link", { name: "install-in-swarm guide" })).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "Fold into edge swarm" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep this host as it is" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The card now shows the same refusal.
+    expect(
+      within(screen.getByRole("region", { name: "Local host" })).getByRole("link", {
+        name: "install-in-swarm guide",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("is not rendered when the offer is on a local environment and no swarm environment offers one", async () => {
+    listed = [LOCAL];
+    queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL] });
+    show(LOCAL);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: /Fold into/ })).toBeNull();
+  });
+
+  it("opens Fold this host into {swarm}? with the UI-SPEC body, the keep button and the primary confirm, and posts nothing yet", async () => {
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
     const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge swarm?" });
     expect(dialog.textContent).toContain(
-      "TierPlan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
+      "TierPlan will reach this node through the Docker socket from now on.",
     );
-    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(dialog.textContent).toContain(
+      "The agent on this node keeps running, but TierPlan won't use it. It stays as a standby.",
+    );
+    expect(dialog.textContent).toContain("The separate Local environment is removed.");
+    expect(dialog.textContent).toContain(
+      "Nothing changes on the host. This is recorded in the audit log.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Keep this host as it is" })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Fold into edge swarm" })).toBeTruthy();
     expect(posts()).toEqual([]);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep this host as it is" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(posts()).toEqual([]);
   });
@@ -137,8 +434,9 @@ describe("FoldCard", () => {
     answer = () => new Promise<Response>((resolve) => (release = resolve));
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const onFolded = show();
-    fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
     const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge swarm?" });
+    tick(dialog);
     const confirm = within(dialog).getByRole("button", { name: "Fold into edge swarm" });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
@@ -147,7 +445,8 @@ describe("FoldCard", () => {
       expect(within(dialog).getByRole("button", { name: "Folding…" })).toBeTruthy(),
     );
     expect(
-      (within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled,
+      (within(dialog).getByRole("button", { name: "Keep this host as it is" }) as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
     expect(posts()).toEqual([
       { method: "POST", path: "/api/environments/e2/fold-local", csrf: "csrf-1" },
@@ -158,6 +457,8 @@ describe("FoldCard", () => {
     const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(["environments"]));
     expect(keys).toContain(JSON.stringify(["agents", "e2"]));
+    expect(keys).toContain(JSON.stringify(["fold-offer", "e2"]));
+    expect(keys).toContain(JSON.stringify(["local-host"]));
     expect(
       await screen.findByText("edge swarm now reaches this host through the Docker socket."),
     ).toBeTruthy();
@@ -168,12 +469,13 @@ describe("FoldCard", () => {
   it("from the local host's own page names the swarm and posts to the swarm environment", async () => {
     show(LOCAL);
     expect(
-      screen.getByText(
-        "This TierPlan host is a manager of edge swarm. It can be reached through the Docker socket, so it needs no agent.",
+      await screen.findByText(
+        "This TierPlan host is a node in edge swarm. TierPlan can reach it through the Docker socket, so it needs no separate environment.",
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));
     const dialog = await screen.findByRole("dialog");
+    tick(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(posts()[0]?.path).toBe("/api/environments/e2/fold-local");
@@ -187,12 +489,13 @@ describe("FoldCard", () => {
       );
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     show();
-    fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
     const dialog = await screen.findByRole("dialog");
+    tick(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
-    const alert = await within(dialog).findByRole("alert");
+    const alert = await failureAlert(dialog);
     expect(alert.textContent).toContain(
-      "This host is no longer a manager of that swarm, or it was folded a moment ago. Nothing was changed.",
+      "This host is no longer a node of that swarm, or it was folded a moment ago. Nothing was changed.",
     );
     expect(screen.getByRole("dialog")).toBeTruthy();
     await waitFor(() =>
@@ -210,10 +513,113 @@ describe("FoldCard", () => {
   it("says Couldn't fold this host for any other failure", async () => {
     answer = () => Response.json({ title: "Internal", status: 500 }, { status: 500 });
     show();
-    fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fold into edge swarm" }));
     const dialog = await screen.findByRole("dialog");
+    tick(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Fold into edge swarm" }));
-    const alert = await within(dialog).findByRole("alert");
+    const alert = await failureAlert(dialog);
     expect(alert.textContent).toContain("Couldn't fold this host. Try again.");
+  });
+});
+
+// The server accepts a swarm name up to 64 characters (NAME_MAX), and this one holds a
+// 47-character run with no break opportunity. UAT 19 test 3 found it clipping the card and
+// the dialog at 360px. jsdom has no layout, so these pin the classes that bound the text;
+// the 360px re-check confirms the layout.
+const LONG_NAME = `Prod ${"x".repeat(47)} cluster-eu1`;
+const LONG = env({ name: LONG_NAME });
+
+function alertText(card: HTMLElement): HTMLElement {
+  const el = card.querySelector<HTMLElement>('[data-slot="alert-description"]');
+  if (!el) throw new Error("no alert description in the card");
+  return el;
+}
+
+describe("FoldCard, a 64-character swarm name", () => {
+  beforeEach(() => {
+    listed = [LOCAL, LONG];
+    queryClient.setQueryData(environmentsQuery.queryKey, { items: [LOCAL, LONG] });
+  });
+
+  it("is 64 characters, the server's name limit", () => {
+    expect(LONG_NAME).toHaveLength(64);
+  });
+
+  it("wraps the card's sentence and truncates the Fold button's label inside the card", async () => {
+    show(LONG);
+    const card = await screen.findByRole("region", { name: "Local host" });
+    expect(alertText(card).className).toContain("wrap-anywhere");
+    const button = within(card).getByRole("button", { name: `Fold into ${LONG_NAME}` });
+    expect(button.className).toContain("max-w-full");
+    const label = button.querySelector("span");
+    expect(label?.className).toContain("min-w-0");
+    expect(label?.className).toContain("truncate");
+    expect(label?.textContent).toBe(`Fold into ${LONG_NAME}`);
+  });
+
+  it("wraps the node-not-listed refusal on the card", async () => {
+    offerAnswer = () => Response.json({ offered: false, refusal: "fold_node_not_listed" });
+    show(LONG);
+    const card = await screen.findByRole("region", { name: "Local host" });
+    const text = alertText(card);
+    expect(text.className).toContain("wrap-anywhere");
+    expect(text.textContent).toContain(LONG_NAME);
+  });
+
+  it("wraps the ingress refusal on the card", async () => {
+    offerAnswer = () =>
+      Response.json({
+        offered: false,
+        refusal: "fold_ingress_active",
+        ingress: { domains: 1, reserved: 0, hostnames: 0, routes: 0, enabled: false },
+      });
+    show(LONG);
+    const card = await screen.findByRole("region", { name: "Local host" });
+    const text = alertText(card);
+    expect(text.className).toContain("wrap-anywhere");
+    expect(text.textContent).toContain(LONG_NAME);
+  });
+
+  async function openLongDialog() {
+    show(LONG);
+    fireEvent.click(await screen.findByRole("button", { name: `Fold into ${LONG_NAME}` }));
+    return screen.findByRole("dialog", { name: `Fold this host into ${LONG_NAME}?` });
+  }
+
+  it("bounds the dialog's column and wraps its title", async () => {
+    const dialog = await openLongDialog();
+    expect(dialog.className).toContain("grid-cols-1");
+    const heading = within(dialog).getByRole("heading", {
+      name: `Fold this host into ${LONG_NAME}?`,
+    });
+    expect(heading.className).toContain("wrap-anywhere");
+    expect(heading.className).toContain("leading-tight");
+  });
+
+  it("lets the dialog's confirm button shrink and truncate its label, leaving the keep button alone", async () => {
+    const dialog = await openLongDialog();
+    const confirm = within(dialog).getByRole("button", { name: `Fold into ${LONG_NAME}` });
+    expect(confirm.className).toContain("min-w-0");
+    expect(confirm.className).toContain("max-w-full");
+    expect(confirm.className).toMatch(/(^|\s)shrink(\s|$)/);
+    expect(confirm.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(confirm.querySelector("span")?.className).toContain("truncate");
+    const keep = within(dialog).getByRole("button", { name: "Keep this host as it is" });
+    expect(keep.querySelector("span")).toBeNull();
+  });
+
+  it("wraps the inline failure alert that names the swarm", async () => {
+    answer = () =>
+      Response.json(
+        { title: "Conflict", status: 409, type: "fold_node_not_listed" },
+        { status: 409 },
+      );
+    const dialog = await openLongDialog();
+    tick(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: `Fold into ${LONG_NAME}` }));
+    const alert = await failureAlert(dialog);
+    const text = alertText(alert);
+    expect(text.className).toContain("wrap-anywhere");
+    expect(text.textContent).toContain(LONG_NAME);
   });
 });

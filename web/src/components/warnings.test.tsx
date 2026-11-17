@@ -531,6 +531,81 @@ describe("HealthBell environment items", () => {
     );
   });
 
+  it("names the standby agent on a clock item", async () => {
+    envItems = [
+      {
+        id: "clock_skew",
+        severity: "warning",
+        envId: "e1",
+        envName: "prod",
+        node: "node-2",
+        offsetSeconds: 45,
+        standby: true,
+      },
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("The clock is off on node-2 (standby agent)")).toBeTruthy();
+    expect(screen.getByText(/^node-2 \(standby agent\) on prod is 45 s out of step/)).toBeTruthy();
+  });
+
+  it("names the standby agent on a certificate item and leaves other agents' text alone", async () => {
+    const expires = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    envItems = [
+      {
+        id: "cert_not_renewing",
+        severity: "warning",
+        envId: "e1",
+        envName: "prod",
+        node: "node-2",
+        expiresAt: expires,
+        standby: true,
+      },
+      {
+        id: "cert_not_renewing",
+        severity: "warning",
+        envId: "e1",
+        envName: "prod",
+        node: "node-3",
+        expiresAt: expires,
+      },
+    ];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(
+      await screen.findByText(/^node-2 \(standby agent\) on prod: the certificate expires/),
+    ).toBeTruthy();
+    expect(screen.getByText(/^node-3 on prod: the certificate expires/)).toBeTruthy();
+  });
+
+  it("says the standby agent is among those needing a manual update, and never hides the item", async () => {
+    envItems = [
+      { id: "manual_update_needed", severity: "warning", count: 1, envId: "e1", standby: true },
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("1 agent needs a manual update (standby agent)")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View" })).toBeTruthy();
+    cleanup();
+
+    envItems = [
+      { id: "manual_update_needed", severity: "warning", count: 3, envId: "e1", standby: true },
+    ];
+    queryClient.clear();
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(
+      await screen.findByText("3 agents need a manual update (including the standby agent)"),
+    ).toBeTruthy();
+    cleanup();
+
+    envItems = [{ id: "manual_update_needed", severity: "warning", count: 3, envId: "e1" }];
+    queryClient.clear();
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("3 agents need a manual update")).toBeTruthy();
+  });
+
   it("names the node and the offset when a clock is out of step", async () => {
     envItems = [
       {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -289,6 +290,54 @@ func (c *Clusters) SwarmNodeIDs(envID string) (ids []string, fetchedAt time.Time
 		ids = append(ids, n.ID)
 	}
 	return ids, st.FetchedAt, true
+}
+
+// NodeList is the swarm's node list as last read for envID, with each node's role, and when it
+// was read. It is believed under the one rule SwarmNodeIDs applies: ok is false when nothing was
+// read yet, the quorum is lost, or the list does not name the manager that answered it (which
+// includes a read of the server's own socket), so a node's absence from it is only ever judged on
+// a list a manager of the swarm stood behind. The returned slice is a copy; the caller applies
+// its own age limit. It does no I/O and takes no refresh lock.
+func (c *Clusters) NodeList(envID string) (nodes []dockerx.NodeRow, fetchedAt time.Time, ok bool) {
+	st, found := c.Cached(envID)
+	if !found || !st.Known() || !st.Read.ListsAnswerer(st.AnsweredBy) {
+		return nil, time.Time{}, false
+	}
+	return slices.Clone(st.Read.Nodes), st.FetchedAt, true
+}
+
+// RefreshNodeList is NodeList after a read of the environment's cluster when the held list is
+// missing or older than minAge. A read that is running already is waited for and its list is
+// the answer, so concurrent callers share one read; ctx and the cluster read timeout bound it.
+// A failed read leaves the state as the read records it, and NodeList then judges what is held.
+//
+// Unlike RefreshSwarmNodeIDs it reads an environment that was never read: it serves an Admin's
+// explicit fold, one request at a time, not a burst of enrolments that must not drive the
+// managers.
+func (c *Clusters) RefreshNodeList(ctx context.Context, envID string, minAge time.Duration) (nodes []dockerx.NodeRow, fetchedAt time.Time, ok bool) {
+	if st, found := c.Cached(envID); found && !st.FetchedAt.IsZero() && c.now().Sub(st.FetchedAt) < minAge {
+		return c.NodeList(envID)
+	}
+	e := c.entry(envID)
+	if e.refresh.TryLock() {
+		_ = c.refresh(ctx, envID, e) // a failed read leaves the state as it records it
+		e.refresh.Unlock()
+		return c.NodeList(envID)
+	}
+	// A read is running: wait for it, then take the list it left. The wait ends with ctx, so
+	// a cancelled request does not sit out the read; the waiter that is left behind lets go of
+	// the lock as soon as the read does, and the read is bounded by the cluster read timeout.
+	done := make(chan struct{})
+	go func() {
+		e.refresh.Lock()
+		defer e.refresh.Unlock()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	return c.NodeList(envID)
 }
 
 // RefreshSwarmNodeIDs is SwarmNodeIDs after one more read of the environment's cluster, for an
@@ -602,11 +651,21 @@ func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*docker
 	if err == nil {
 		return first, nil
 	}
-	if !errors.Is(err, tunnel.ErrAgentGone) {
+	gone := errors.Is(err, tunnel.ErrAgentGone)
+	demoted := first.Socket && ReasonFor(err) == ReasonNotAManager
+	switch {
+	case demoted:
+		// The folded host's engine refused as a worker: it was demoted since it was last
+		// probed. The probe interval bounds how long its role would stay wrong, and this
+		// refusal is the earlier signal, so probe it now. The engine did not run the call,
+		// so the read is repeated on the next manager like one whose tunnel is gone.
+		c.svc.mon.Kick(SocketTarget(in.EnvID))
+	case gone:
+		// The tunnel to that manager is gone: a read is safe to repeat, once.
+		c.noteFailure(e, first.ID)
+	default:
 		return first, err
 	}
-	// The tunnel to that manager is gone: a read is safe to repeat, once.
-	c.noteFailure(e, first.ID)
 	if !retry || len(cands) < 2 {
 		return first, err
 	}
@@ -617,7 +676,15 @@ func (c *Clusters) readWith(ctx context.Context, in RollupInput, fn func(*docker
 		}
 		return next, err
 	}
-	c.failover(ctx, in, e, first, next)
+	if gone {
+		c.failover(ctx, in, e, first, next)
+	} else {
+		// A demotion is not an outage: no "unreachable" event, the next read chooses
+		// again from the role the kicked probe finds.
+		e.mu.Lock()
+		e.state.InUse = next.ID
+		e.mu.Unlock()
+	}
 	return next, nil
 }
 
@@ -1037,11 +1104,34 @@ func (c *Clusters) view(in RollupInput) *ClusterView {
 	v.NoQuorum, v.NoQuorumSince = st.NoQuorum, st.NoQuorumSince
 	if v.Known {
 		fillFromNodes(v, st)
+		v.FoldedNodeGone = foldedNodeGone(in, st)
 	}
 	v.NotAManager = notAManager(in)
 	sort.Slice(away, func(i, j int) bool { return away[i].Node < away[j].Node })
 	v.ManagersUnreachable = append(away, v.ManagersUnreachable...)
 	return v
+}
+
+// foldedNodeGone is the folded host as a node the swarm no longer lists (D-09), or nil. It
+// needs a node list with nodes in it and a socket whose engine is answering, so that an
+// unreachable engine is reported as that and not as a node that left. A read is only ever
+// answered by a manager, so the list is the swarm's.
+func foldedNodeGone(in RollupInput, st ClusterState) *NodeSince {
+	if len(st.Read.Nodes) == 0 {
+		return nil
+	}
+	for _, a := range in.Agents {
+		if !a.Socket || a.SwarmNodeID == "" || a.Target.State != StateOnline {
+			continue
+		}
+		for _, n := range st.Read.Nodes {
+			if n.ID == a.SwarmNodeID {
+				return nil
+			}
+		}
+		return &NodeSince{Node: nodeName(a), Since: st.FetchedAt}
+	}
+	return nil
 }
 
 // fillFromNodes fills the counts and per-node problems from the node list.

@@ -3,11 +3,12 @@
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
 import { routeTree } from "@/routeTree.gen";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -65,6 +66,48 @@ const ADDED = {
   updateAvailable: false,
 };
 
+// The swarm environment "Add this swarm" creates: pending until its first agent.
+const SWARM_PENDING = {
+  id: "e9",
+  name: "lab-swarm",
+  kind: "agent",
+  enabled: true,
+  isSelfHost: false,
+  isLocalSocket: false,
+  createdAt: "2026-10-03T10:00:00Z",
+  engine: {},
+  status: { state: "pending" },
+  agentVersion: null,
+  agents: null,
+  engineVersion: null,
+  failingServices: null,
+  lastSeen: null,
+  nodes: null,
+  updateAvailable: false,
+};
+
+const JOIN_TOKEN = "tpjt_E9_s3cr3tvalue";
+const INSTALL = {
+  agentUrl: "wss://tierplan.example.com/agent/connect",
+  generation: 1,
+  image: "ghcr.io/ianglennon/tierplan-agent:0.1.0",
+  joinToken: JOIN_TOKEN,
+  manualCleanup: {
+    standalone: " docker rm -f tierplan-agent",
+    swarm: " docker service rm tierplan-agent",
+  },
+  secretName: "tierplan-agent-token-g1",
+  trust: "public",
+  standalone: {
+    command: ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${JOIN_TOKEN}' ghcr.io/ianglennon/tierplan-agent:0.1.0`,
+    composeFile: `services:\n  agent:\n    environment:\n      TIERPLAN_AGENT_JOIN_TOKEN: '${JOIN_TOKEN}'\n`,
+  },
+  swarm: {
+    command: ` printf %s '${JOIN_TOKEN}' | docker secret create tierplan-agent-token-g1 - && docker service create --name tierplan-agent ghcr.io/ianglennon/tierplan-agent:0.1.0`,
+    stackFile: `services:\n  agent:\n    image: ghcr.io/ianglennon/tierplan-agent:0.1.0\n`,
+  },
+};
+
 let calls: Call[];
 let me: Record<string, unknown> | null;
 let needsSetup: boolean;
@@ -92,6 +135,11 @@ beforeEach(() => {
         return me ? Response.json(me) : Response.json({ status: 401 }, { status: 401 });
       }
       if (path === "/api/local-host") return Response.json(localHost);
+      if (path === "/api/environments" && req.method === "POST" && call.body?.kind === "agent") {
+        // Adding the swarm creates a pending agent environment and its install info.
+        environments = [{ ...SWARM_PENDING }];
+        return Response.json({ ...SWARM_PENDING, install: INSTALL }, { status: 201 });
+      }
       if (path === "/api/environments" && req.method === "POST") {
         // Adding the host makes it an environment.
         environments = [{ ...ADDED }];
@@ -174,6 +222,24 @@ describe("/welcome (wizard step 4)", () => {
     expect(posts()).toEqual([]);
   });
 
+  it("offers Add this swarm at step 4 on a swarm worker and skips home", async () => {
+    localHost = {
+      ...DETECTED,
+      probe: { ...DETECTED.probe, type: "swarm-worker", swarmManagerHosts: ["m1"] },
+    };
+    const router = renderAt("/welcome");
+
+    const heading = await screen.findByRole("heading", { name: "Add this swarm?" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add this swarm" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/environments"));
+    expect(posts()).toEqual([]);
+  });
+
   it("sends a visitor who is not signed in to /login", async () => {
     me = null;
     const router = renderAt("/welcome");
@@ -197,6 +263,108 @@ describe("/welcome (wizard step 4)", () => {
     localHost = { ...DETECTED, managed: true };
     const router = renderAt("/welcome");
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+  });
+});
+
+// Drives the wizard from step 4 on a swarm socket to the install dialog's
+// waiting step, and returns the router.
+async function openWaitingStep(probe: Record<string, unknown>) {
+  localHost = { ...DETECTED, probe: { ...DETECTED.probe, ...probe } };
+  const router = renderAt("/welcome");
+  await screen.findByRole("heading", { name: "Add this swarm?" });
+  fireEvent.click(screen.getByRole("button", { name: "Add this swarm" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Generate install command" }));
+  await within(dialog).findByRole("heading", { name: "Install the agent" });
+  return { router, dialog };
+}
+
+describe("/welcome on a swarm node, Add this swarm", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  it.each([
+    ["swarm-manager", {}],
+    ["swarm-worker", { swarmManagerHosts: ["m1"] }],
+  ] as const)("reaches the waiting step from Add this swarm on a %s", async (type, extra) => {
+    const { router, dialog } = await openWaitingStep({
+      type,
+      swarmNodeState: "active",
+      ...extra,
+    });
+
+    expect(within(dialog).getByText("Waiting for the first agent…")).toBeTruthy();
+    expect(screen.queryByText(/Can't reach TierPlan/)).toBeNull();
+    expect(router.state.location.pathname).toBe("/welcome");
+
+    // One health stream, owned by this page.
+    expect(FakeEventSource.instances).toHaveLength(1);
+    const stream = FakeEventSource.instances[0];
+    expect(stream?.closed).toBe(false);
+    expect(stream?.url.endsWith("/api/environments/stream")).toBe(true);
+
+    act(() => {
+      stream?.open();
+      stream?.sendFrame(
+        "agent.connected",
+        {
+          envId: "e9",
+          at: new Date().toISOString(),
+          agentId: "a1",
+          node: "m1",
+          type: "manager",
+          version: "0.1.0",
+        },
+        "1",
+      );
+    });
+    expect(await within(dialog).findByText("Agent connecting…")).toBeTruthy();
+
+    // PROH-19-01: the only create is an agent environment, never a local one.
+    expect(posts()).toEqual([
+      { path: "/api/environments", method: "POST", csrf: "csrf-1", body: { kind: "agent" } },
+    ]);
+  });
+});
+
+describe("/welcome on a swarm node, once the swarm is online", () => {
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  it("opens the swarm once it is online and leaves one health stream open", async () => {
+    const { router, dialog } = await openWaitingStep({
+      type: "swarm-manager",
+      swarmNodeState: "active",
+    });
+    expect(within(dialog).getByText("Waiting for the first agent…")).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    const welcomeStream = FakeEventSource.instances[0];
+
+    const online = { ...SWARM_PENDING, status: { state: "online" } };
+    environments = [online];
+    act(() => {
+      welcomeStream?.open();
+      welcomeStream?.sendFrame(
+        "env.status",
+        { envId: "e9", at: new Date().toISOString(), environment: online },
+        "1",
+      );
+    });
+    expect(await within(dialog).findByText("lab-swarm is online")).toBeTruthy();
+
+    // The waiting panel opens the environment two seconds later.
+    await waitFor(() => expect(router.state.location.pathname.startsWith("/env/e9")).toBe(true));
+
+    // The welcome page's stream is gone; the signed-in shell holds the only one.
+    expect(welcomeStream?.closed).toBe(true);
+    const open = FakeEventSource.instances.filter((s) => !s.closed);
+    expect(open).toHaveLength(1);
+    expect(open[0]).not.toBe(welcomeStream);
+    expect(open[0]?.url.endsWith("/api/environments/stream")).toBe(true);
   });
 });
 

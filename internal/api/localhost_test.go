@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -245,4 +246,111 @@ func TestLocalHostHasNoWritePath(t *testing.T) {
 			t.Errorf("the server called %s on the daemon", p)
 		}
 	}
+}
+
+// GET /api/local-host names the swarm environment this node belongs to (D-01, D-03, D-05), from the
+// one probe the handler already made.
+
+type localHostSwarmResp struct {
+	Managed bool `json:"managed"`
+	Probe   struct {
+		Type              string   `json:"type"`
+		SwarmManagerHosts []string `json:"swarmManagerHosts"`
+	} `json:"probe"`
+	Swarm *struct {
+		EnvironmentID   string `json:"environmentId"`
+		EnvironmentName string `json:"environmentName"`
+		FoldOffered     bool   `json:"foldOffered"`
+	} `json:"swarm"`
+}
+
+func TestLocalHostNamesTheSwarmEnvironmentOfThisNode(t *testing.T) {
+	t.Parallel()
+	managerAddrs := func(c *dockertest.FakeConfig) {
+		c.SwarmRemoteManagerAddrs = []string{"10.0.0.5:2377"}
+	}
+	cases := []struct {
+		name      string
+		fix       func(t *testing.T) *foldFix
+		wantSwarm bool
+		wantOffer bool
+		wantHosts []string
+	}{
+		{
+			"a standalone socket carries no swarm",
+			func(t *testing.T) *foldFix {
+				return newSocketOnlyWorkerFoldFix(t, func(c *dockertest.FakeConfig) {
+					c.SwarmState, c.SwarmNodeID, c.SwarmRemoteManagers = "", "", nil
+				})
+			},
+			false, false, nil,
+		},
+		{
+			"a worker the swarm environment lists is offered the fold, and the probe names the managers",
+			func(t *testing.T) *foldFix { return newSocketOnlyWorkerFoldFix(t, managerAddrs) },
+			true, true, []string{"10.0.0.5"},
+		},
+		{
+			"a worker of that swarm that is not listed yet is matched but not offered",
+			func(t *testing.T) *foldFix {
+				return newSocketOnlyWorkerFoldFix(t, func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" })
+			},
+			true, false, nil,
+		},
+		{
+			"a worker of no known swarm carries no swarm",
+			func(t *testing.T) *foldFix {
+				return newSocketOnlyWorkerFoldFix(t, func(c *dockertest.FakeConfig) { c.SwarmRemoteManagers = []string{"node-elsewhere"} })
+			},
+			false, false, nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := c.fix(t)
+			f.localHost = api.LocalHostDeps{DockerHost: "unix://" + f.fake.SocketPath(), ProbeTimeout: testsupport.Deadline, Envs: f.svc}
+			f.h = f.build(t)
+			infoBefore := countInfoRequests(f.fake.Requests())
+
+			rec := f.call(t, authReq{method: http.MethodGet, path: "/api/local-host", cookie: f.cookie})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("local-host: %d %s", rec.Code, rec.Body)
+			}
+			var got localHostSwarmResp
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body, err)
+			}
+			if got.Managed {
+				t.Fatalf("managed = true with no Local environment: %s", rec.Body)
+			}
+			if (got.Swarm != nil) != c.wantSwarm {
+				t.Fatalf("swarm = %+v, want present=%v: %s", got.Swarm, c.wantSwarm, rec.Body)
+			}
+			if got.Swarm != nil {
+				if got.Swarm.EnvironmentID != f.env.ID || got.Swarm.EnvironmentName != "Swarm" || got.Swarm.FoldOffered != c.wantOffer {
+					t.Errorf("swarm = %+v, want environment %s named Swarm, foldOffered %v", *got.Swarm, f.env.ID, c.wantOffer)
+				}
+			} else if strings.Contains(rec.Body.String(), `"swarm"`) {
+				t.Errorf("the body carries a swarm key for a host with no swarm: %s", rec.Body)
+			}
+			if c.wantHosts != nil && strings.Join(got.Probe.SwarmManagerHosts, ",") != strings.Join(c.wantHosts, ",") {
+				t.Errorf("swarmManagerHosts = %v, want %v (hosts only, no port)", got.Probe.SwarmManagerHosts, c.wantHosts)
+			}
+			if n := countInfoRequests(f.fake.Requests()) - infoBefore; n != 1 {
+				t.Errorf("the request made %d /info requests of the socket, want exactly 1", n)
+			}
+		})
+	}
+}
+
+// countInfoRequests counts the /info requests among a fake daemon's request paths.
+func countInfoRequests(paths []string) int {
+	n := 0
+	for _, p := range paths {
+		if strings.HasSuffix(p, "/info") {
+			n++
+		}
+	}
+	return n
 }

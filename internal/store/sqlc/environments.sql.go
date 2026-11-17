@@ -21,6 +21,51 @@ func (q *Queries) CountEnvironmentsOfKind(ctx context.Context, kind string) (int
 	return count, err
 }
 
+const countFoldRemovalsByEnv = `-- name: CountFoldRemovalsByEnv :one
+SELECT
+    (SELECT COUNT(*) FROM stacks AS s WHERE s.env_id = ?1) AS stacks,
+    (SELECT COUNT(*) FROM git_repos AS g WHERE g.env_id = ?1) AS git_repos,
+    (SELECT COUNT(*) FROM registry_credentials AS c WHERE c.env_id = ?1) AS registries,
+    (SELECT COUNT(*) FROM git_credentials AS gc WHERE gc.env_id = ?1) AS git_credentials,
+    (SELECT COUNT(*) FROM image_update_ignores AS iu WHERE iu.env_id = ?1) AS image_update_ignores,
+    (SELECT COUNT(*) FROM janitor_keeps AS jk WHERE jk.env_id = ?1) AS janitor_keeps,
+    (SELECT COUNT(*) FROM janitor_runs AS jr WHERE jr.env_id = ?1)
+        + (SELECT COUNT(*) FROM image_update_runs AS ir WHERE ir.env_id = ?1) AS runs,
+    (SELECT COUNT(*) FROM janitor_env_policy AS je WHERE je.env_id = ?1)
+        + (SELECT COUNT(*) FROM janitor_node_policy AS jn WHERE jn.env_id = ?1) AS janitor
+`
+
+type CountFoldRemovalsByEnvRow struct {
+	Stacks             int64
+	GitRepos           int64
+	Registries         int64
+	GitCredentials     int64
+	ImageUpdateIgnores int64
+	JanitorKeeps       int64
+	Runs               int64
+	Janitor            int64
+}
+
+// What a fold of the Local environment removes through the cascade, for the card that offers it (D-16):
+// its stacks, Git repositories and registry logins, its own Git credentials, image-update ignores, janitor
+// keeps and run history (the janitor's and the image updates' runs together), and the janitor settings
+// (the environment's policy row or any node's) as a count that is non-zero when there are any.
+func (q *Queries) CountFoldRemovalsByEnv(ctx context.Context, envID string) (CountFoldRemovalsByEnvRow, error) {
+	row := q.db.QueryRowContext(ctx, countFoldRemovalsByEnv, envID)
+	var i CountFoldRemovalsByEnvRow
+	err := row.Scan(
+		&i.Stacks,
+		&i.GitRepos,
+		&i.Registries,
+		&i.GitCredentials,
+		&i.ImageUpdateIgnores,
+		&i.JanitorKeeps,
+		&i.Runs,
+		&i.Janitor,
+	)
+	return i, err
+}
+
 const countFoldedEnvironments = `-- name: CountFoldedEnvironments :one
 SELECT COUNT(*) FROM environments WHERE kind = 'agent' AND local_node_id IS NOT NULL
 `
@@ -48,6 +93,7 @@ const foldLocalHost = `-- name: FoldLocalHost :execrows
 UPDATE environments
 SET local_node_id = ?, local_socket_path = ?, updated_at = ?
 WHERE id = ? AND kind = 'agent' AND env_type = 'swarm' AND swarm_cluster_id = ? AND local_node_id IS NULL
+  AND enabled = 1 AND cluster_changed_at IS NULL
 `
 
 type FoldLocalHostParams struct {

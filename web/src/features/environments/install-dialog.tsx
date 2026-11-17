@@ -5,7 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import {
   createAgentEnvironment,
@@ -86,6 +86,10 @@ interface FlowProps {
   envId?: string;
   onClose: () => void;
   onBusyChange: (busy: boolean) => void;
+  // Opened for a swarm only: the standalone tab is not offered (Phase 19, D-01).
+  kind?: "swarm";
+  // Shown above the tabs of the install step.
+  notice?: ReactNode;
   // Gets the element that should take focus when the dialog opens, if it is
   // not the first control.
   initialFocus: RefObject<HTMLElement | null>;
@@ -195,22 +199,35 @@ interface InstallStepProps {
   envType?: EnvKind;
   hasAgents: boolean;
   onClose: () => void;
+  kind?: "swarm";
+  notice?: ReactNode;
 }
 
 // InstallStep is step 2: tabs, the masked command or file, the key-value list
 // and the secret notice. A new environment does not know its type yet, so
 // Swarm is first; one that has agents shows only its own type's tab, because
-// the type is locked once an agent has enrolled (D-11).
-function InstallStep({ info, envId, envName, envType, hasAgents, onClose }: InstallStepProps) {
+// the type is locked once an agent has enrolled (D-11). Opened with kind swarm
+// (the panel on a swarm node), only the Swarm tab is offered.
+function InstallStep({
+  info,
+  envId,
+  envName,
+  envType,
+  hasAgents,
+  onClose,
+  kind: only,
+  notice,
+}: InstallStepProps) {
   const t = useT();
   const locked: EnvKind | undefined = hasAgents ? envType : undefined;
-  const kinds: EnvKind[] = locked ? [locked] : ["swarm", "standalone"];
+  const kinds: EnvKind[] = locked ? [locked] : only ? [only] : ["swarm", "standalone"];
   const [tab, setTab] = useState<EnvKind>(kinds[0] ?? "swarm");
   const [view, setView] = useState<View>("command");
   const update = hasAgents && envType === "swarm" && Boolean(info.swarm.rotateCommand);
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
+      {notice}
       <Tabs
         value={tab}
         onValueChange={(next) => setTab(next === "standalone" ? "standalone" : "swarm")}
@@ -422,7 +439,15 @@ function FormFailure({ error }: { error: string }) {
 // InstallFlow is what is inside the dialog. It is mounted only while the dialog
 // is open, so closing it drops the step, and the join token with it, along
 // with the mutations that fetched it (they have no cache time either).
-function InstallFlow({ mode, envId, onClose, onBusyChange, initialFocus }: FlowProps) {
+function InstallFlow({
+  mode,
+  envId,
+  onClose,
+  onBusyChange,
+  initialFocus,
+  kind,
+  notice,
+}: FlowProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const [step, setStep] = useState<Step>({ kind: mode === "add" ? "name" : "confirm" });
@@ -553,6 +578,8 @@ function InstallFlow({ mode, envId, onClose, onBusyChange, initialFocus }: FlowP
             envType={step.envType}
             hasAgents={step.hasAgents}
             onClose={onClose}
+            kind={kind}
+            notice={notice}
           />
           <DialogFooter>
             <Button type="button" variant="outline" className={TOUCH_HEIGHT} onClick={onClose}>
@@ -588,6 +615,11 @@ export interface InstallDialogProps {
   // What takes focus when the dialog closes. A dialog with no Radix trigger
   // (this one is opened from state) otherwise leaves focus on the page body.
   returnFocusRef?: RefObject<HTMLElement | null>;
+  // "swarm" offers the Swarm tab only (Add this swarm on a swarm node). Without
+  // it a new environment shows both tabs, as before.
+  kind?: "swarm";
+  // Shown above the tabs, for example where to run the command on a worker.
+  notice?: ReactNode;
 }
 
 // InstallDialog is the one surface for "Add environment", "Show install
@@ -600,6 +632,8 @@ export function InstallDialog({
   mode,
   envId,
   returnFocusRef,
+  kind,
+  notice,
 }: InstallDialogProps) {
   const [busy, setBusy] = useState(false);
   const initialFocus = useRef<HTMLElement | null>(null);
@@ -634,6 +668,8 @@ export function InstallDialog({
             onClose={() => change(false)}
             onBusyChange={setBusy}
             initialFocus={initialFocus}
+            kind={kind}
+            notice={notice}
           />
         ) : null}
       </DialogContent>

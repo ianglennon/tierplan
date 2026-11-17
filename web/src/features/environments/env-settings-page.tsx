@@ -282,7 +282,7 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
           }}
         />
       ) : null}
-      {canFold && env.foldOffered ? (
+      {canFold && (env.foldOffered || (env.kind === "agent" && env.envType === "swarm")) ? (
         <FoldCard
           env={env}
           // The card and its dialog are gone with the offer, so focus would fall to the

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"regexp"
@@ -1818,5 +1819,90 @@ func TestServiceRefsNameTheImageOfTheSpec(t *testing.T) {
 	}
 	if len(got) != 2 || got[1].Image != "nginx:1.27@sha256:cc" || got[0].Image != "" {
 		t.Fatalf("ServiceRefs = %+v, want the image of web and none for bare", got)
+	}
+}
+
+// A probe keeps the managers an engine reports only after bounding and checking them: the IDs
+// pass wire.ValidIdentity and stop at 64, the hosts are IPs or plain hostnames without the port
+// (T-19-01).
+func TestProbeReportsTheSwarmManagersBoundedAndChecked(t *testing.T) {
+	many := make([]string, 70)
+	for i := range many {
+		many[i] = fmt.Sprintf("node-m%02d", i)
+	}
+	cases := []struct {
+		name      string
+		cfg       dockertest.FakeConfig
+		wantIDs   []string
+		wantHosts []string
+		// wantHostCount, when not zero, checks only how many hosts are kept.
+		wantHostCount int
+		cluster       string
+	}{
+		{
+			name:    "70 reported managers keep 64 IDs and 64 hosts",
+			cfg:     dockertest.FakeConfig{SwarmState: "active", SwarmNodeID: "node-w", SwarmRemoteManagers: many},
+			wantIDs: many[:64], wantHostCount: 64,
+		},
+		{
+			name:      "an ID with a space or longer than 128 bytes is dropped",
+			cfg:       dockertest.FakeConfig{SwarmState: "active", SwarmNodeID: "node-w", SwarmRemoteManagers: []string{"node ok", "node-m1", strings.Repeat("a", 129), "node-m2"}},
+			wantIDs:   []string{"node-m1", "node-m2"},
+			wantHosts: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"},
+		},
+		{
+			name: "the port is never kept; hostnames and IPv6 hosts are",
+			cfg: dockertest.FakeConfig{
+				SwarmState: "active", SwarmNodeID: "node-w", SwarmRemoteManagers: []string{"node-m1", "node-m2", "node-m3"},
+				SwarmRemoteManagerAddrs: []string{"10.0.0.5:2377", "mgr-2.example.com:2377", "[fd00::1]:2377"},
+			},
+			wantIDs:   []string{"node-m1", "node-m2", "node-m3"},
+			wantHosts: []string{"10.0.0.5", "mgr-2.example.com", "fd00::1"},
+		},
+		{
+			name: "a host with a slash, a space, an empty host or no port is dropped; repeats are kept once",
+			cfg: dockertest.FakeConfig{
+				SwarmState: "active", SwarmNodeID: "node-w", SwarmRemoteManagers: []string{"node-m1", "node-m2", "node-m3", "node-m4", "node-m5", "node-m6"},
+				SwarmRemoteManagerAddrs: []string{"evil/host:2377", "bad host:2377", ":2377", "10.0.0.9", "10.0.0.7:2377", "10.0.0.7:2378"},
+			},
+			wantIDs:   []string{"node-m1", "node-m2", "node-m3", "node-m4", "node-m5", "node-m6"},
+			wantHosts: []string{"10.0.0.7"},
+		},
+		{
+			name:      "a worker reports its managers and no cluster ID",
+			cfg:       dockertest.FakeConfig{SwarmState: "active", SwarmNodeID: "node-w", SwarmClusterID: "cluster-1", SwarmRemoteManagers: []string{"node-m1"}},
+			wantIDs:   []string{"node-m1"},
+			wantHosts: []string{"10.0.0.1"},
+		},
+		{
+			name:    "a manager keeps its cluster ID and lists itself",
+			cfg:     dockertest.FakeConfig{SwarmState: "active", SwarmControl: true, SwarmNodeID: "node-m1", SwarmClusterID: "cluster-1", SwarmRemoteManagers: []string{"node-m1"}},
+			wantIDs: []string{"node-m1"}, wantHosts: []string{"10.0.0.1"}, cluster: "cluster-1",
+		},
+		{
+			name: "an engine outside a swarm reports no managers",
+			cfg:  dockertest.FakeConfig{SwarmState: "inactive", SwarmRemoteManagers: []string{"node-m1"}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := newClient(t, dockertest.NewFake(t, c.cfg)).Probe(context.Background())
+			if err != nil {
+				t.Fatalf("Probe: %v", err)
+			}
+			if !slices.Equal(res.SwarmRemoteManagers, c.wantIDs) {
+				t.Errorf("SwarmRemoteManagers = %v, want %v", res.SwarmRemoteManagers, c.wantIDs)
+			}
+			if c.wantHostCount != 0 {
+				if len(res.SwarmManagerHosts) != c.wantHostCount {
+					t.Errorf("SwarmManagerHosts has %d entries, want %d", len(res.SwarmManagerHosts), c.wantHostCount)
+				}
+			} else if !slices.Equal(res.SwarmManagerHosts, c.wantHosts) {
+				t.Errorf("SwarmManagerHosts = %v, want %v", res.SwarmManagerHosts, c.wantHosts)
+			}
+			if res.SwarmClusterID != c.cluster {
+				t.Errorf("SwarmClusterID = %q, want %q", res.SwarmClusterID, c.cluster)
+			}
+		})
 	}
 }

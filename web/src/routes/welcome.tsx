@@ -7,6 +7,7 @@ import { loadInstance } from "@/api/instance";
 import { queryClient } from "@/api/query-client";
 import { AuthLayout } from "@/components/auth-layout";
 import { WizardStepper } from "@/components/wizard-stepper";
+import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { LocalHostPanel, localHostQuery } from "@/features/environments/local-host-panel";
 import {
   hasPermission,
@@ -28,7 +29,12 @@ function WelcomePage() {
   return (
     <AuthLayout title={t("common.brand.wordmark")} wide showSignOut>
       <WizardStepper current={4} />
-      <LocalHostPanel mode="wizard" onDone={() => void navigate({ to: "/", replace: true })} />
+      {/* /welcome is a signed-in page outside routes/_app.tsx, so it holds its
+          own single health stream (D-36) for the install dialog's waiting step
+          (Add this swarm). The two layouts are never mounted together. */}
+      <EnvHealthStreamProvider>
+        <LocalHostPanel mode="wizard" onDone={() => void navigate({ to: "/", replace: true })} />
+      </EnvHealthStreamProvider>
     </AuthLayout>
   );
 }

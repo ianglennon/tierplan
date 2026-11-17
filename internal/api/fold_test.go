@@ -4,8 +4,10 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -21,6 +23,7 @@ import (
 
 type foldFix struct {
 	*agentFix
+	fake  *dockertest.Fake
 	env   tunneltest.Environment
 	local envBody
 }
@@ -30,30 +33,90 @@ type foldFix struct {
 // change the local daemon.
 func newFoldFix(t *testing.T, cfg func(*dockertest.FakeConfig)) *foldFix {
 	t.Helper()
+	return buildFoldFix(t, nil, cfg)
+}
+
+// newWorkerFoldFix is newFoldFix with a local host that is a swarm worker: no cluster ID, no
+// control, and a node row of a worker. Only its node ID in the manager's list proves it belongs.
+// more may change the local daemon further.
+func newWorkerFoldFix(t *testing.T, more func(*dockertest.FakeConfig)) *foldFix {
+	t.Helper()
+	return buildFoldFix(t, func(nodes []dockertest.FakeNode) {
+		nodes[1].Role = "worker"
+		nodes[1].Leader = false
+	}, func(c *dockertest.FakeConfig) {
+		c.SwarmControl = false
+		c.SwarmClusterID = ""
+		c.SwarmRemoteManagers = []string{"node-mgr-1"}
+		if more != nil {
+			more(c)
+		}
+	})
+}
+
+func buildFoldFix(t *testing.T, rows func([]dockertest.FakeNode), cfg func(*dockertest.FakeConfig)) *foldFix {
+	t.Helper()
+	return buildFoldFixWith(t, rows, cfg, true)
+}
+
+// newSocketOnlyWorkerFoldFix is newWorkerFoldFix for an install with no Local environment: the
+// worker's socket is configured, nothing is added for it, and only the swarm's agent is enrolled.
+func newSocketOnlyWorkerFoldFix(t *testing.T, more func(*dockertest.FakeConfig)) *foldFix {
+	t.Helper()
+	return buildFoldFixWith(t, func(nodes []dockertest.FakeNode) {
+		nodes[1].Role = "worker"
+		nodes[1].Leader = false
+	}, func(c *dockertest.FakeConfig) {
+		c.SwarmControl = false
+		c.SwarmClusterID = ""
+		c.SwarmRemoteManagers = []string{"node-mgr-1"}
+		if more != nil {
+			more(c)
+		}
+	}, false)
+}
+
+// buildFoldFixWith builds the fold fixture; withLocal says whether the host is also added as a Local environment.
+func buildFoldFixWith(t *testing.T, rows func([]dockertest.FakeNode), cfg func(*dockertest.FakeConfig), withLocal bool) *foldFix {
+	t.Helper()
+	nodes := []dockertest.FakeNode{
+		{ID: "node-mgr-1", Hostname: "mgr-1", Role: "manager", EngineVersion: "29.1.0", OS: "linux"},
+		{ID: "node-local", Hostname: "local-1", Role: "manager", EngineVersion: "29.1.0", OS: "linux", Leader: true},
+	}
+	if rows != nil {
+		rows(nodes)
+	}
 	lc := dockertest.FakeConfig{
 		Hostname: "local-1", EngineID: "ENG:local", SwarmState: "active", SwarmControl: true,
 		SwarmNodeID: "node-local", SwarmClusterID: "cluster-1",
-		NodeRows: []dockertest.FakeNode{
-			{ID: "node-mgr-1", Hostname: "mgr-1", Role: "manager", EngineVersion: "29.1.0", OS: "linux"},
-			{ID: "node-local", Hostname: "local-1", Role: "manager", EngineVersion: "29.1.0", OS: "linux", Leader: true},
-		},
+		SwarmRemoteManagers: []string{"node-mgr-1", "node-local"}, NodeRows: nodes,
 	}
 	if cfg != nil {
 		cfg(&lc)
 	}
 	fake := dockertest.NewFake(t, lc)
 	f := newAgentFixHost(t, "unix://"+fake.SocketPath())
-	local := f.add(t)
-	f.awaitFirstProbe(t, local.ID)
+	var local envBody
+	if withLocal {
+		local = f.add(t)
+		f.awaitFirstProbe(t, local.ID)
+	}
 	env := f.srv.NewEnvironment(t, "Swarm")
 	f.connect(t, env, dockertest.FakeConfig{
 		Hostname: "mgr-1", SwarmState: "active", SwarmControl: true, SwarmNodeID: "node-mgr-1", SwarmClusterID: "cluster-1",
+		NodeRows: nodes,
 	}, &wire.Facts{
 		EngineID: "ENG:mgr-1", Hostname: "mgr-1", EngineReachable: true, EngineVersion: "29.1.0",
 		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-mgr-1", ClusterID: "cluster-1", Control: true},
 	})
 	f.whenState(t, env.ID, "online")
-	return &foldFix{agentFix: f, env: env, local: local}
+	// The node list a fold is proven against is cached, as the cluster loop would cache it.
+	clusters := envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.tclk.Now, Publisher: f.brk, Events: f.hub})
+	f.svc.WithClusters(clusters)
+	if err := clusters.Refresh(context.Background(), env.ID); err != nil {
+		t.Fatalf("read the swarm's nodes: %v", err)
+	}
+	return &foldFix{agentFix: f, fake: fake, env: env, local: local}
 }
 
 type foldEnv struct {
@@ -196,5 +259,113 @@ func TestTheNodeListOfAFoldedEnvironmentHasALocalSocketRowWithNoCertificateAndNo
 	}
 	if row["renewalFailing"] != false || row["updateAvailable"] != false || row["clockOffsetSeconds"] != float64(0) {
 		t.Errorf("local row = %v, want no renewal, update or clock to report", row)
+	}
+}
+
+func TestAWorkerHostIsOfferedTheFoldAndFoldsThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	f := newWorkerFoldFix(t, nil)
+	got := f.list(t)
+	if !got[f.local.ID].FoldOffered || !got[f.env.ID].FoldOffered {
+		t.Fatalf("foldOffered = local %v swarm %v, want both true for a listed worker", got[f.local.ID].FoldOffered, got[f.env.ID].FoldOffered)
+	}
+	rec := f.req(t, http.MethodPost, f.foldPath(), "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("fold: %d %s", rec.code, rec.body)
+	}
+	got = f.list(t)
+	if _, ok := got[f.local.ID]; ok {
+		t.Error("the local environment is still listed after the fold")
+	}
+	if got[f.env.ID].FoldOffered {
+		t.Error("the folded environment still offers a fold")
+	}
+	entries := f.audits(t, audit.ActionEnvironmentLocalFolded)
+	if len(entries) != 1 || entries[0].TargetID != f.env.ID {
+		t.Fatalf("environment.local_folded = %+v, want one entry for the swarm", entries)
+	}
+}
+
+func TestFoldLocalOfAnUnlistedNodeAnswers409FoldNodeNotListed(t *testing.T) {
+	t.Parallel()
+	f := newWorkerFoldFix(t, func(c *dockertest.FakeConfig) { c.SwarmNodeID = "node-removed" })
+	got := f.list(t)
+	if got[f.local.ID].FoldOffered || got[f.env.ID].FoldOffered {
+		t.Fatalf("foldOffered = %+v, want false for both: the managers do not list the host", got)
+	}
+	rec := f.req(t, http.MethodPost, f.foldPath(), "")
+	if rec.code != http.StatusConflict || rec.ptyp != "fold_node_not_listed" {
+		t.Fatalf("fold: %d type %q %s, want 409 fold_node_not_listed", rec.code, rec.ptyp, rec.body)
+	}
+	if n := len(f.audits(t, audit.ActionEnvironmentLocalFolded)); n != 0 {
+		t.Errorf("%d audit rows for a refused fold", n)
+	}
+	if _, ok := f.list(t)[f.local.ID]; !ok {
+		t.Error("a refused fold retired the local environment")
+	}
+}
+
+func TestFoldLocalWithIngressStateAnswers409FoldIngressActive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		seed    []string
+		want    []string
+		notWant []string
+	}{
+		{
+			"domains and a reserved name",
+			[]string{
+				`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-1', ?, 'one.example.org', 'u1', 1, 1)`,
+				`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-2', ?, 'two.example.org', 'u1', 1, 1)`,
+				`INSERT INTO ingress_reserved (domain_id, hostname, created_by, created_at) VALUES ('dom-1', 'vault.one.example.org', 'u1', 1)`,
+			},
+			[]string{"2 domains", "1 reserved name", "Nothing was changed", "remove that environment's domains and reserved names", "Then fold, and register them on the swarm environment"},
+			[]string{"turn ingress off"},
+		},
+		{
+			"ingress turned on as well",
+			[]string{
+				`INSERT INTO ingress_domains (id, env_id, suffix, created_by, created_at, updated_at) VALUES ('dom-1', ?, 'one.example.org', 'u1', 1, 1)`,
+				`INSERT INTO ingress_env (env_id, enabled, config_version, updated_at, updated_by) VALUES (?, 1, 4, 1, 'u1')`,
+			},
+			[]string{"1 domain", "ingress turned on", "and turn ingress off"},
+			[]string{"version", "domains,"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFoldFix(t, nil)
+			for _, q := range c.seed {
+				args := []any{}
+				if strings.Contains(q, "?") {
+					args = append(args, f.local.ID)
+				}
+				if _, err := f.st.Write.Exec(q, args...); err != nil {
+					t.Fatalf("%s: %v", q, err)
+				}
+			}
+			rec := f.req(t, http.MethodPost, f.foldPath(), "")
+			if rec.code != http.StatusConflict || rec.ptyp != "fold_ingress_active" {
+				t.Fatalf("fold: %d type %q %s, want 409 fold_ingress_active", rec.code, rec.ptyp, rec.body)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(string(rec.body), w) {
+					t.Errorf("detail lacks %q: %s", w, rec.body)
+				}
+			}
+			for _, w := range c.notWant {
+				if strings.Contains(string(rec.body), w) {
+					t.Errorf("detail should not contain %q: %s", w, rec.body)
+				}
+			}
+			if n := len(f.audits(t, audit.ActionEnvironmentLocalFolded)); n != 0 {
+				t.Errorf("%d audit rows for a refused fold", n)
+			}
+			if _, ok := f.list(t)[f.local.ID]; !ok {
+				t.Error("a refused fold retired the local environment")
+			}
+		})
 	}
 }

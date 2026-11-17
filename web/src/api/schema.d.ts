@@ -3839,7 +3839,7 @@ export interface paths {
         put?: never;
         /**
          * Add an environment
-         * @description kind local is the admin's explicit opt-in to managing the Docker host TierPlan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when TierPlan has neither, and nothing is created then. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
+         * @description kind local is the admin's explicit opt-in to managing the Docker host TierPlan runs on (D-19): nothing is added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine (unless allowUnsupported) or local_environment_exists, or local_is_swarm_node when the socket is a node of a swarm (active, pending, error or locked) that is not already folded into a swarm environment: add the swarm through its agents and fold the host into it instead, so each stack is listed once (D-21). kind agent creates an environment for hosts that run the TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, with its base path); 409 public_url_required when TierPlan has neither, and nothing is created then. 422 invalid_name. The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.
          */
         post: operations["addEnvironment"];
         delete?: never;
@@ -3919,9 +3919,29 @@ export interface paths {
         put?: never;
         /**
          * Fold this TierPlan host into a swarm environment
-         * @description Offered when the Docker host TierPlan runs on is a manager of a swarm that is enrolled through agents: the local socket's own /info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a manager of that swarm, or was folded already. Needs environments.manage. Audited as environment.local_folded.
+         * @description Offered when the Docker host TierPlan runs on is a node of a swarm that is enrolled through agents, a manager or a worker. The proof is the host's own node ID in that environment's node list, as the swarm's managers report it, plus a manager the host and that list share; a manager is also matched by the cluster ID the environment is bound to. The source is the Local environment, which is retired with what is stored under it (its stacks, Git repositories, registry logins and janitor settings), or, when there is none, the Docker socket TierPlan detected, which the swarm environment then attaches to directly. Either way the node counts once however it is reached, in one transaction, and nothing changes on the host or in Docker: an agent already running on that node keeps running as a standby, and the node is reached through the socket. GET /api/environments/{envId}/fold-offer says what a fold would do first. Answers the swarm environment. 404 environment_not_found; 409 fold_not_offered when the host is not a node of that swarm, or was folded already; 409 fold_node_not_listed when that swarm's managers do not list this host (nothing is changed); 409 fold_ingress_active when the Local environment has ingress set up that the fold would delete (remove it first, then fold). Needs environments.manage. Audited as environment.local_folded.
          */
         post: operations["foldLocalHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/environments/{envId}/fold-offer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read whether this TierPlan host can be folded into a swarm environment
+         * @description Says whether the Docker host TierPlan runs on could be folded into this swarm environment now, from where, as which role and what the fold would remove, or why it is refused. The source is the Local environment when there is one; with none, this server's own Docker socket is probed on demand, once per request and never cached (D-15: the environments list, the bell and the overview never probe it, so a socket-only install shows its offer through this read alone). Read-only: it changes nothing and audits nothing. offered false with no refusal means there is nothing to offer. 404 environment_not_found. Needs environments.manage.
+         */
+        get: operations["getFoldOffer"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4586,7 +4606,7 @@ export interface paths {
         };
         /**
          * Detect the Docker engine on this server's own host
-         * @description Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.
+         * @description Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm worker or standalone. The probe carries the manager hosts a swarm node reports (swarmManagerHosts, host parts only), and for a node of a swarm that is already added through its agents, swarm names that environment and says whether its fold card offers the fold (worked out from this one probe; no second Docker call). Read-only. Needs environments.create because it is the context for adding the host.
          */
         get: operations["getLocalHost"];
         put?: never;
@@ -5924,7 +5944,7 @@ export interface components {
             envType?: "swarm" | "standalone";
             /** @description Failing and total services; null until service data is known */
             failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
-            /** @description True on both the local socket environment and the swarm environment while this TierPlan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            /** @description True on both the local socket environment and the swarm environment while this TierPlan host is a node of that swarm, a manager or a worker, and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice. It is never true for an install with no local socket environment: that offer comes only from GET /api/environments/{envId}/fold-offer, because the list never probes the Docker socket */
             foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
@@ -6295,6 +6315,11 @@ export interface components {
             manualUpdateCommand?: string;
             /** @description The hostname the agent reported when it enrolled */
             node: string;
+            /**
+             * @description For the role local row only: whether the folded node is a swarm manager or a worker, from its socket's last probe, or before that from the swarm's node list (D-08)
+             * @enum {string}
+             */
+            nodeRole?: "manager" | "worker";
             /** @description The host owner set the agent to read-only. Reported only while it is connected */
             readOnly: boolean;
             /** @description True when the certificate has less than 7 days left, which means it should have renewed already and has not, or has expired. Never set for a revoked agent */
@@ -6307,12 +6332,14 @@ export interface components {
              */
             revokedAt?: string;
             /**
-             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it
+             * @description What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this TierPlan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it. The local row's nodeRole says whether that node is a manager or a worker
              * @enum {string}
              */
             role: "leader" | "manager" | "worker" | "standalone" | "local";
             /** @description The host owner allowed the agent to update itself. Reported only while it is connected */
             selfUpdate: boolean;
+            /** @description True for an agent that runs on the node of this TierPlan host after the host was folded into the swarm: TierPlan reaches that node through the Docker socket and does not use this agent, which keeps running as a standby (D-10) */
+            standby: boolean;
             /**
              * @description revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back
              * @enum {string}
@@ -7586,6 +7613,8 @@ export interface components {
             stackId?: string;
             /** @description For git_sync_error: the stack's name, at most 64 characters */
             stackName?: string;
+            /** @description For cert_not_renewing and clock_skew: the agent is the standby agent on the node of this TierPlan host, which TierPlan reaches through the Docker socket (D-19). For manual_update_needed: the standby agent is among the agents counted (D-22) */
+            standby?: boolean;
             /**
              * Format: int64
              * @description For restart_loop and restart_loop_container: the window the count is over, in minutes
@@ -7671,7 +7700,7 @@ export interface components {
             envType?: "swarm" | "standalone";
             /** @description Failing and total services; null until service data is known */
             failingServices: components["schemas"]["EnvironmentFailingBody"] | null;
-            /** @description True on both the local socket environment and the swarm environment while this TierPlan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice */
+            /** @description True on both the local socket environment and the swarm environment while this TierPlan host is a node of that swarm, a manager or a worker, and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice. It is never true for an install with no local socket environment: that offer comes only from GET /api/environments/{envId}/fold-offer, because the list never probes the Docker socket */
             foldOffered?: boolean;
             /** @description The environment ID, used in /api/env/{envId}/... */
             id: string;
@@ -7727,7 +7756,7 @@ export interface components {
             total: number;
         };
         EnvironmentIssueBody: {
-            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew or address_space_full */
+            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew, address_space_full or folded_node_gone (the TierPlan host folded into the swarm is no longer one of its nodes; nothing is unfolded) */
             code: string;
             /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet and for an issue of the whole cluster */
             node?: string;
@@ -7822,7 +7851,7 @@ export interface components {
              * @description When the most recent probe of the environment's engine finished
              */
             lastAttempt?: string;
-            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm */
+            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring, folded_node_gone (the folded TierPlan host is no longer a node of the swarm) or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm */
             reason?: string;
             /**
              * Format: date-time
@@ -8368,6 +8397,94 @@ export interface components {
              * @description The newest time any workload was checked, whatever came of it; empty when none was
              */
             lastCheckedAt: string;
+        };
+        FoldIngressBody: {
+            /**
+             * Format: int64
+             * @description Ingress domains on the Local environment
+             */
+            domains: number;
+            /** @description Whether ingress is turned on for the Local environment */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description Ingress hostnames
+             */
+            hostnames: number;
+            /**
+             * Format: int64
+             * @description Reserved hostnames on those domains
+             */
+            reserved: number;
+            /**
+             * Format: int64
+             * @description Ingress routes
+             */
+            routes: number;
+        };
+        FoldOfferBody: {
+            /** @description The ingress state that blocks the fold; present only with refusal fold_ingress_active */
+            ingress?: components["schemas"]["FoldIngressBody"];
+            /** @description The Local environment a fold would retire; present only when source is local_environment */
+            localEnvironmentId?: string;
+            /** @description True when POST /api/environments/{envId}/fold-local would go ahead now, as far as can be told without trying it */
+            offered: boolean;
+            /**
+             * @description Why the fold is refused, in the same terms as the 409 that POST fold-local answers
+             * @enum {string}
+             */
+            refusal?: "fold_node_not_listed" | "fold_ingress_active";
+            /** @description What the fold removes with the Local environment; present only when source is local_environment */
+            removes?: components["schemas"]["FoldRemovesBody"];
+            /**
+             * @description The host's role in the swarm
+             * @enum {string}
+             */
+            role?: "manager" | "worker";
+            /**
+             * @description Where the fold takes the host from: the Local environment (which the fold retires) or, when there is none, the Docker socket TierPlan detected (attached directly). Absent when there is no source
+             * @enum {string}
+             */
+            source?: "local_environment" | "socket";
+        };
+        FoldRemovesBody: {
+            /**
+             * Format: int64
+             * @description Git credentials stored under the Local environment
+             */
+            gitCredentials: number;
+            /**
+             * Format: int64
+             * @description Git repositories stored under the Local environment
+             */
+            gitRepos: number;
+            /**
+             * Format: int64
+             * @description Image-update ignores stored under the Local environment
+             */
+            imageUpdateIgnores: number;
+            /** @description Whether the Local environment has janitor settings of its own */
+            janitor: boolean;
+            /**
+             * Format: int64
+             * @description Items the janitor is told to keep under the Local environment
+             */
+            janitorKeeps: number;
+            /**
+             * Format: int64
+             * @description Registry logins stored under the Local environment
+             */
+            registries: number;
+            /**
+             * Format: int64
+             * @description Janitor runs and image-update runs recorded under the Local environment
+             */
+            runs: number;
+            /**
+             * Format: int64
+             * @description Stacks stored under the Local environment
+             */
+            stacks: number;
         };
         GeneratedComposeBody: {
             /**
@@ -10634,6 +10751,16 @@ export interface components {
             probe?: components["schemas"]["ProbeResult"];
             /** @description The Docker socket path TierPlan was configured with */
             socketPath: string;
+            /** @description The swarm environment this host's node belongs to; present only when the host is a node of a swarm, is not managed yet, and an unfolded swarm environment of that swarm exists. Absent otherwise, and then the setup panel offers to add the swarm */
+            swarm?: components["schemas"]["LocalHostSwarmBody"];
+        };
+        LocalHostSwarmBody: {
+            /** @description The swarm environment, added through its agents, that this host is a node of */
+            environmentId: string;
+            /** @description That environment's name */
+            environmentName: string;
+            /** @description Whether the fold card of that environment offers to fold this host into it now. False means its fold card is not ready: the swarm's node list does not hold this host yet, or the host is not in a state to be folded */
+            foldOffered: boolean;
         };
         LogLine: {
             m: string;
@@ -11632,8 +11759,10 @@ export interface components {
             storageDriver?: string;
             supported: boolean;
             swarmClusterId?: string;
+            swarmManagerHosts?: string[] | null;
             swarmNodeId?: string;
             swarmNodeState?: string;
+            swarmRemoteManagers?: string[] | null;
             type?: string;
         };
         ProfileBody: {
@@ -24934,6 +25063,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getFoldOffer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FoldOfferBody"];
                 };
             };
             /** @description Error */

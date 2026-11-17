@@ -327,7 +327,16 @@ function NodeRow({
           ) : null}
         </div>
       </TableCell>
-      <TableCell>{t(`envsettings.nodes.roles.${agent.role}`)}</TableCell>
+      <TableCell>
+        <span className="inline-flex items-center gap-2">
+          {t(`envsettings.nodes.roles.${agent.role}`)}
+          {agent.standby ? (
+            <Badge variant="outline" className="shrink-0">
+              {t("envsettings.nodes.roles.standby")}
+            </Badge>
+          ) : null}
+        </span>
+      </TableCell>
       <TableCell>
         {revoked ? (
           <Dash />
@@ -437,7 +446,14 @@ function LocalNodeRow({ agent }: { agent: AgentItem }) {
       <TableCell className="max-w-56">
         <Truncated value={agent.node} mono />
       </TableCell>
-      <TableCell>{t("envsettings.nodes.roles.local")}</TableCell>
+      <TableCell>
+        <span className="inline-flex items-center gap-2">
+          {t(`envsettings.nodes.roles.${agent.nodeRole === "manager" ? "manager" : "worker"}`)}
+          <Badge variant="outline" className="shrink-0">
+            {t("envsettings.nodes.roles.socket")}
+          </Badge>
+        </span>
+      </TableCell>
       <TableCell>
         <Dash />
       </TableCell>
@@ -661,6 +677,9 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
           </TableBody>
         </table>
       </div>
+      {!loading && sorted.some((a) => a.standby) ? (
+        <p className="text-xs text-muted-foreground">{t("envsettings.nodes.standbyNote")}</p>
+      ) : null}
       <RevokeDialog
         envId={envId}
         agent={revoking}

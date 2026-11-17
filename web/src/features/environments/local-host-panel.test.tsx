@@ -15,6 +15,35 @@ vi.mock("@/lib/toast", () => ({
   toastSuccess: vi.fn(),
 }));
 
+// The real dialog is covered by install-dialog.test.tsx; here only what the
+// panel hands it matters.
+vi.mock("@/features/environments/install-dialog", () => ({
+  InstallDialog: (props: {
+    open: boolean;
+    mode: string;
+    kind?: string;
+    notice?: import("react").ReactNode;
+  }) =>
+    props.open ? (
+      <div role="dialog" data-mode={props.mode} data-kind={props.kind}>
+        {props.notice}
+      </div>
+    ) : null,
+}));
+
+// A plain anchor, so the panel renders without a router.
+vi.mock("@tanstack/react-router", () => ({
+  Link: (props: {
+    to: string;
+    params?: Record<string, string>;
+    hash?: string;
+    children?: import("react").ReactNode;
+  }) => {
+    const path = props.to.replace(/\$(\w+)/g, (_, name: string) => props.params?.[name] ?? "");
+    return <a href={`${path}${props.hash ? `#${props.hash}` : ""}`}>{props.children}</a>;
+  },
+}));
+
 const SOCKET = "/var/run/docker.sock";
 
 function probe(over: Record<string, unknown> = {}) {
@@ -124,24 +153,70 @@ describe("LocalHostPanel, a detected host", () => {
     expect(gets("/api/local-host")).toHaveLength(1);
   });
 
-  it("labels the type of a swarm manager", async () => {
+  it("offers Add this swarm on a manager, without the worker hint", async () => {
     localHost = host({ probe: probe({ type: "swarm-manager" }) });
     renderPanel();
-    expect(await screen.findByText("Swarm manager")).toBeTruthy();
-    expect(screen.queryByText(/This host is a swarm worker/)).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Add this swarm?" })).toBeTruthy();
+    expect(screen.getByText("Swarm manager")).toBeTruthy();
+    expect(button("Add this swarm")).toBeTruthy();
+    expect(screen.queryByText(/This host is a worker/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
   });
 
-  it("warns on a swarm worker and still offers Manage this host", async () => {
-    localHost = host({ probe: probe({ type: "swarm-worker" }) });
-    renderPanel();
+  it("offers Add this swarm on a worker, names its managers and never offers Manage this host", async () => {
+    localHost = host({
+      probe: probe({
+        type: "swarm-worker",
+        swarmManagerHosts: ["m1", "m2", "m3", "m4", "m5", "m6"],
+      }),
+    });
+    const { client } = renderPanel();
 
-    expect(await screen.findByText("Swarm worker")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Add this swarm?" })).toBeTruthy();
+    expect(screen.getByText("Swarm worker")).toBeTruthy();
     expect(
       screen.getByText(
-        "This host is a swarm worker. Pin TierPlan to a manager node to manage the swarm. TierPlan will show node-local data only.",
+        "This host is a worker. Run the install command on a manager node, because a worker can't create services.",
       ),
     ).toBeTruthy();
-    expect(button("Manage this host").disabled).toBe(false);
+    expect(screen.getByText("Managers:")).toBeTruthy();
+    expect(screen.getByText("m1, m2, m3, m4").className).toContain("font-mono");
+    expect(screen.getByText("and 2 more")).toBeTruthy();
+    expect(screen.queryByText(/m5/)).toBeNull();
+    expect(screen.queryByText(/Pin TierPlan to a manager node/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+
+    fireEvent.click(button("Add this swarm"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.getAttribute("data-mode")).toBe("add");
+    expect(dialog.getAttribute("data-kind")).toBe("swarm");
+    // The same worker hint is shown next to the command.
+    expect(dialog.textContent).toContain("This host is a worker.");
+    await settled(client);
+    expect(posts()).toEqual([]);
+  });
+
+  it("names no managers when the worker reports none, and says nothing more for four", async () => {
+    localHost = host({ probe: probe({ type: "swarm-worker" }) });
+    renderPanel();
+    await screen.findByRole("heading", { name: "Add this swarm?" });
+    expect(screen.queryByText(/Managers:/)).toBeNull();
+  });
+
+  it("shows exactly four managers with no more-line, and one with none", async () => {
+    localHost = host({
+      probe: probe({ type: "swarm-worker", swarmManagerHosts: ["m1", "m2", "m3", "m4"] }),
+    });
+    renderPanel();
+    await screen.findByRole("heading", { name: "Add this swarm?" });
+    expect(screen.getByText("m1, m2, m3, m4")).toBeTruthy();
+    expect(screen.queryByText(/more$/)).toBeNull();
+    cleanup();
+
+    localHost = host({ probe: probe({ type: "swarm-worker", swarmManagerHosts: ["m1"] }) });
+    renderPanel();
+    expect(await screen.findByText("m1")).toBeTruthy();
+    expect(screen.queryByText(/more$/)).toBeNull();
   });
 
   it("adds the local host only when Manage this host is clicked, then reports done", async () => {
@@ -305,6 +380,171 @@ describe("LocalHostPanel, an unsupported engine", () => {
       await screen.findByText("Podman 5.2.1 detected. TierPlan manages Docker Engine only."),
     ).toBeTruthy();
     expect(screen.queryByText(/isn't supported/)).toBeNull();
+  });
+});
+
+// Every click in a view that must not add the socket as an environment.
+function clickEveryButton() {
+  for (const b of screen.getAllByRole("button")) fireEvent.click(b);
+}
+const localPosts = () => posts().filter((p) => p.path === "/api/environments");
+
+describe("LocalHostPanel, a swarm that is already added", () => {
+  const swarm = (over: Record<string, unknown> = {}) => ({
+    environmentId: "e9",
+    environmentName: "prod swarm",
+    foldOffered: true,
+    ...over,
+  });
+
+  it("points at the fold card when the fold is offered, with no add button", async () => {
+    localHost = host({ probe: probe({ type: "swarm-worker" }), swarm: swarm() });
+    renderPanel();
+
+    expect(
+      await screen.findByRole("heading", { name: "This swarm is already added" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "prod swarm manages this swarm. Fold this host into it so TierPlan reaches this node through the socket.",
+      ),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open prod swarm settings" });
+    expect(link.getAttribute("href")).toBe("/settings/environments/e9#fold");
+    expect(screen.queryByRole("button", { name: "Add this swarm" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    clickEveryButton();
+    expect(localPosts()).toEqual([]);
+  });
+
+  it("waits for the agents when the fold is not offered yet, and looks again on Check again", async () => {
+    localHost = host({
+      probe: probe({ type: "swarm-manager" }),
+      swarm: swarm({ foldOffered: false }),
+    });
+    renderPanel();
+
+    expect(
+      await screen.findByText(
+        "prod swarm manages this swarm. TierPlan is waiting for its agents to list this node.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add this swarm" })).toBeNull();
+
+    localHost = host({ probe: probe({ type: "swarm-manager" }), swarm: swarm() });
+    fireEvent.click(button("Check again"));
+    expect(await screen.findByRole("link", { name: "Open prod swarm settings" })).toBeTruthy();
+    expect(gets("/api/local-host")).toHaveLength(2);
+    expect(localPosts()).toEqual([]);
+  });
+});
+
+describe("LocalHostPanel, a node joining or leaving a swarm", () => {
+  it("says the node isn't ready and offers no add button", async () => {
+    localHost = host({ probe: probe({ swarmNodeState: "pending" }) });
+    renderPanel();
+
+    expect(await screen.findByRole("heading", { name: "This node isn't ready" })).toBeTruthy();
+    const badge = screen.getByText("Not ready");
+    expect(badge.className).toContain("border-status-warning");
+    expect(badge.className).toContain("text-status-warning-text");
+    expect(
+      screen.getByText(
+        "Docker says this node is joining or leaving a swarm. Wait for that to finish, then check again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Check again",
+      "Skip for now",
+    ]);
+    clickEveryButton();
+    expect(localPosts()).toEqual([]);
+  });
+
+  it("shows the same view for a swarm state of error, and no Skip in Settings", async () => {
+    localHost = host({ probe: probe({ swarmNodeState: "error" }) });
+    renderPanel({ mode: "settings" });
+
+    expect(await screen.findByRole("heading", { name: "This node isn't ready" })).toBeTruthy();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Check again"]);
+  });
+
+  it("is not ready on an unsupported engine too, with no way to add it", async () => {
+    localHost = host({
+      probe: probe({ supported: false, reason: "rootless", swarmNodeState: "pending" }),
+    });
+    renderPanel();
+
+    expect(await screen.findByRole("heading", { name: "This node isn't ready" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add this host anyway" })).toBeNull();
+    clickEveryButton();
+    expect(localPosts()).toEqual([]);
+  });
+});
+
+describe("LocalHostPanel, an unsupported engine on a swarm node", () => {
+  const SENTENCE =
+    "This host is part of a swarm, so TierPlan doesn't add it as its own environment.";
+
+  it.each([
+    ["worker", { type: "swarm-worker", reason: "rootless", swarmNodeState: "active" }],
+    ["manager", { type: "swarm-manager", reason: "docker_desktop", swarmNodeState: "active" }],
+    ["locked node", { type: "standalone", reason: "rootless", swarmNodeState: "locked" }],
+  ])("explains it and offers nothing to add, for a %s", async (_name, over) => {
+    localHost = host({ probe: probe({ supported: false, ...over }) });
+    renderPanel();
+
+    expect(await screen.findByText("Unsupported")).toBeTruthy();
+    expect(screen.getByText(SENTENCE)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add this host anyway" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add this swarm" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+    expect(screen.queryByText(/It will appear as unsupported/)).toBeNull();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Skip for now"]);
+    clickEveryButton();
+    expect(localPosts()).toEqual([]);
+  });
+
+  it("keeps Add this host anyway for a standalone engine", async () => {
+    localHost = host({
+      probe: probe({
+        supported: false,
+        reason: "podman",
+        engineName: "Podman",
+        engineVersion: "5.2.1",
+        swarmNodeState: "inactive",
+      }),
+    });
+    renderPanel();
+
+    expect(await screen.findByRole("button", { name: "Add this host anyway" })).toBeTruthy();
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+});
+
+describe("LocalHostPanel, a host that joined a swarm since it loaded", () => {
+  it("reads the panel again and shows the swarm view on 409 local_is_swarm_node, with no toast", async () => {
+    postAnswer = () => Response.json({ status: 409, type: "local_is_swarm_node" }, { status: 409 });
+    const { onDone } = renderPanel();
+    await screen.findByRole("heading", { name: "Manage this Docker host?" });
+
+    localHost = host({ probe: probe({ type: "swarm-manager", swarmNodeState: "active" }) });
+    fireEvent.click(button("Manage this host"));
+
+    expect(await screen.findByRole("heading", { name: "Add this swarm?" })).toBeTruthy();
+    expect(gets("/api/local-host")).toHaveLength(2);
+    expect(toastError).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
+  });
+
+  it("keeps Manage this host for a standalone node whose swarm state is inactive", async () => {
+    localHost = host({ probe: probe({ swarmNodeState: "inactive" }) });
+    renderPanel();
+    expect(await screen.findByRole("button", { name: "Manage this host" })).toBeTruthy();
+    expect(screen.queryByText(/swarm/i)).toBeNull();
   });
 });
 

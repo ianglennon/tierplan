@@ -18,6 +18,7 @@ const SEVERITY = [
   "no_quorum",
   "not_a_manager",
   "agent_offline",
+  "folded_node_gone",
   "engine_unreachable",
   "unsupported_engine",
   "cert_expired",

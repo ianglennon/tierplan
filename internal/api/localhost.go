@@ -13,6 +13,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/engine"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -40,6 +41,16 @@ type LocalHostDeps struct {
 type LocalHostEnvs interface {
 	HasLocal(ctx context.Context) (bool, error)
 	SelfContainerID() string
+	// LocalSwarm names the swarm environment the host behind p is a node of, and whether the
+	// fold into it is offered. It makes no Docker call: p is the probe the handler already made.
+	LocalSwarm(ctx context.Context, p dockerx.ProbeResult) (envs.LocalSwarm, bool)
+}
+
+// LocalHostSwarmBody is the swarm environment this host's own swarm node belongs to (D-01, D-05).
+type LocalHostSwarmBody struct {
+	EnvironmentID   string `json:"environmentId" doc:"The swarm environment, added through its agents, that this host is a node of"`
+	EnvironmentName string `json:"environmentName" doc:"That environment's name"`
+	FoldOffered     bool   `json:"foldOffered" doc:"Whether the fold card of that environment offers to fold this host into it now. False means its fold card is not ready: the swarm's node list does not hold this host yet, or the host is not in a state to be folded"`
 }
 
 // LocalHostBody says whether this server's own Docker socket exists, and what
@@ -53,6 +64,8 @@ type LocalHostBody struct {
 	OwnContainerID string `json:"ownContainerId,omitempty" doc:"The ID of the container TierPlan runs in, when it can tell (D-27)"`
 	// Probe is only present when a socket was detected.
 	Probe *dockerx.ProbeResult `json:"probe,omitempty" doc:"What the engine behind the socket reported; absent when no socket exists"`
+	// Swarm is only present for a host that is a swarm node and is not managed yet.
+	Swarm *LocalHostSwarmBody `json:"swarm,omitempty" doc:"The swarm environment this host's node belongs to; present only when the host is a node of a swarm, is not managed yet, and an unfolded swarm environment of that swarm exists. Absent otherwise, and then the setup panel offers to add the swarm"`
 }
 
 // LocalHostOutput wraps LocalHostBody for huma.
@@ -80,7 +93,9 @@ func RegisterLocalHost(r *httpx.Router, d LocalHostDeps) {
 		Summary:     "Detect the Docker engine on this server's own host",
 		Description: "Reports whether a Docker socket exists at the configured path and, if so, what engine answers on it: " +
 			"supported or not (and why), its version and API version, and whether the host is a Swarm manager, a Swarm " +
-			"worker or standalone. Read-only. Needs environments.create because it is the context for adding the host.",
+			"worker or standalone. The probe carries the manager hosts a swarm node reports (swarmManagerHosts, host parts only), and for a node " +
+			"of a swarm that is already added through its agents, swarm names that environment and says whether its fold card offers the fold " +
+			"(worked out from this one probe; no second Docker call). Read-only. Needs environments.create because it is the context for adding the host.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal},
 		func(ctx context.Context, _ *struct{}) (*LocalHostOutput, error) {
@@ -121,6 +136,11 @@ func RegisterLocalHost(r *httpx.Router, d LocalHostDeps) {
 				d.Log.Debug("local docker engine probe", "socket", path, "error", err)
 			}
 			out.Body.Probe = &res
+			if d.Envs != nil && !out.Body.Managed && (res.Type == dockerx.TypeSwarmManager || res.Type == dockerx.TypeSwarmWorker) {
+				if ls, ok := d.Envs.LocalSwarm(ctx, res); ok {
+					out.Body.Swarm = &LocalHostSwarmBody{EnvironmentID: ls.EnvID, EnvironmentName: ls.EnvName, FoldOffered: ls.FoldOffered}
+				}
+			}
 			return out, nil
 		})
 }

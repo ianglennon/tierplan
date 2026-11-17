@@ -35,7 +35,7 @@ const ENROLMENT = [
   "host_already_connected",
   "node_not_in_swarm",
 ];
-const EXTRA = ["cert_expiring", "address_space_full"];
+const EXTRA = ["cert_expiring", "address_space_full", "folded_node_gone"];
 // Said when an agent holds a certificate the environment issued but is not in the
 // database, as after a restore (D-31).
 const RESTORE = ["unknown_agent"];
@@ -70,6 +70,27 @@ describe("ReasonText", () => {
     expect(
       screen.getByText(
         "Sync the host's clock (NTP). TierPlan accepts up to 5 minutes of difference.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("states folded_node_gone with the node, or as the TierPlan host without one, and says nothing was unfolded", () => {
+    const { unmount } = render(<ReasonText code="folded_node_gone" params={{ node: "local-1" }} />);
+    expect(
+      screen.getByText(
+        "local-1 is no longer a node of this swarm. It left the swarm or was removed.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "TierPlan hasn't unfolded it. Add the host back to the swarm to reach it through its socket again.",
+      ),
+    ).toBeTruthy();
+    unmount();
+    render(<ReasonText code="folded_node_gone" />);
+    expect(
+      screen.getByText(
+        "The TierPlan host is no longer a node of this swarm. It left the swarm or was removed.",
       ),
     ).toBeTruthy();
   });
