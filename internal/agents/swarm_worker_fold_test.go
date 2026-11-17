@@ -126,8 +126,10 @@ func (f *workerFoldFix) agentRows(t *testing.T) []foldAgentRow {
 	return l.Items
 }
 
-// TestSwarmWorkerFold is the S13 path on a real swarm (2 managers, 1 worker): the server's socket is a
-// worker's, it has no Local environment, and its swarm is added through the agents.
+// TestSwarmWorkerFold is the S13 path on a real swarm A (2 managers, 1 worker), with no Local environment.
+// The server's socket is first a worker of another swarm, B, which swarm A's environment must refuse; it is
+// then switched to swarm A's worker, which folds, follows promotion and demotion, and shows as degraded
+// once it is removed from the swarm.
 func TestSwarmWorkerFold(t *testing.T) {
 	sw := dockertest.StartSwarm(t, "", 2, 1)
 	dockertest.LoadAgentImage(t, sw.Nodes()...)
@@ -136,7 +138,11 @@ func TestSwarmWorkerFold(t *testing.T) {
 	worker := sw.Workers[0]
 	mgr := sw.Managers[0]
 
-	proxy := dockertest.SwitchableUnixProxy(t, worker.Host())
+	// Swarm B is only a place for the server's socket to point at: no agent is installed on it.
+	swB := dockertest.StartSwarm(t, "", 1, 1)
+	dumpOnFailure(t, swB.Nodes()...)
+
+	proxy := dockertest.SwitchableUnixProxy(t, swB.Workers[0].Host())
 	srv := servertest.Start(t, servertest.Options{Host: sw.Gateway, Env: map[string]string{"DOCKER_HOST": "unix://" + proxy.Path()}})
 	f := &workerFoldFix{sw: sw, worker: worker, proxy: proxy, srv: srv, env: srv.CreateAgentEnvironment("")}
 
@@ -152,9 +158,38 @@ func TestSwarmWorkerFold(t *testing.T) {
 		return true, summarise(e)
 	})
 
+	// S13 row 6: the socket is a worker of swarm B. Its managers are not swarm A's, so the offer is hidden
+	// with no refusal to explain, local-host names no swarm, and the fold is refused with nothing changed.
+	h := localHost(t, srv)
+	if !h.Detected || h.Probe == nil || h.Probe.Type != "swarm-worker" || len(h.Probe.SwarmManagerHosts) != 1 || h.Managed || h.Swarm != nil {
+		t.Fatalf("local-host on swarm B's worker = %+v probe %+v swarm %+v, want a detected, unmanaged swarm-worker with its one manager and no swarm field", h, h.Probe, h.Swarm)
+	}
+	if o := foldOffer(t, srv, f.env.ID); o.Offered || o.Refusal != "" {
+		t.Fatalf("fold-offer on swarm B's worker = %+v, want not offered and no refusal", o)
+	}
+	code, body := srv.Do(http.MethodPost, "/api/environments/"+f.env.ID+"/fold-local", map[string]any{})
+	var problem struct {
+		Type string `json:"type"`
+	}
+	if code != http.StatusConflict || json.Unmarshal(body, &problem) != nil || problem.Type != "fold_node_not_listed" {
+		t.Fatalf("POST fold-local on swarm B's worker = %d %s, want 409 fold_node_not_listed", code, body)
+	}
+	if n := environmentCount(t, srv); n != 1 {
+		t.Errorf("%d environments after the refused fold, want swarm A's only", n)
+	}
+	if row := srv.Row(f.env.ID); row.LocalNodeID.Valid {
+		t.Errorf("local_node_id = %+v after the refused fold, want unset", row.LocalNodeID)
+	}
+	if rows := srv.AuditRows("environment.local_folded"); len(rows) != 0 {
+		t.Errorf("audit environment.local_folded = %+v after the refused fold, want none", rows)
+	}
+
+	// From here on the socket is swarm A's worker.
+	proxy.PointAt(worker.Host())
+
 	// The socket is the worker's: a swarm-worker probe naming the managers, not managed, and the swarm
 	// environment that this node belongs to, offered for the fold.
-	h := localHost(t, srv)
+	h = localHost(t, srv)
 	if !h.Detected || h.Probe == nil || h.Probe.Type != "swarm-worker" || len(h.Probe.SwarmManagerHosts) != 2 || h.Managed {
 		t.Fatalf("local-host = %+v probe %+v, want a detected, unmanaged swarm-worker with 2 manager hosts", h, h.Probe)
 	}
