@@ -7,6 +7,7 @@ package agents_test
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -103,6 +104,73 @@ func TestSwarmManagerFold(t *testing.T) {
 		t.Errorf("%d environments after the fold, want exactly one", n)
 	}
 	t.Logf("after the fold: %s", summarise(mustEnvironment(t, srv, env.ID)))
+
+	// SWM-01 success criterion 1: one stack with a task on TierPlan's own manager and one on the other,
+	// listed once in the one environment, each task container once with its own node.
+	stack := func(svc, node string) {
+		sh(t, other, "docker service create --detach --no-resolve-image --name s19m_"+svc+" --label com.docker.stack.namespace=s19m "+
+			"--container-label com.docker.stack.namespace=s19m --constraint node.hostname=="+node+" busybox sleep 600")
+	}
+	stack("here", host.Hostname)
+	stack("there", other.Hostname)
+	srv.WaitFor("the stack s19m to be listed once", installWait, func() (bool, string) {
+		srv.RefreshCluster(env.ID)
+		n := stackNamed(t, srv, env.ID, "s19m")
+		return n == 1, "stacks named s19m: " + strconv.Itoa(n)
+	})
+	if n := environmentCount(t, srv); n != 1 {
+		t.Errorf("%d environments with the stack running, want exactly one", n)
+	}
+	srv.WaitFor("each task container of s19m to be listed once, with its own node", installWait, func() (bool, string) {
+		srv.RefreshCluster(env.ID)
+		list, code, body := srv.Containers(env.ID, "")
+		if code != http.StatusOK {
+			return false, string(body)
+		}
+		count := map[string]int{}
+		for _, c := range list.Items {
+			for prefix, node := range map[string]string{"s19m_here.": host.Hostname, "s19m_there.": other.Hostname} {
+				if strings.HasPrefix(c.Name, prefix) {
+					count[prefix]++
+					if c.Node != node {
+						return false, "container " + c.Name + " on " + c.Node + ", want " + node
+					}
+				}
+			}
+		}
+		return count["s19m_here."] == 1 && count["s19m_there."] == 1, "task containers: " + toJSON(count)
+	})
+
+	// D-10, D-08: the agent the global service runs on TierPlan's own manager stays connected as the
+	// standby, the other manager's agent is not one, and the folded row says it is a manager.
+	var sawStandby, sawOther, sawLocal bool
+	var agentList struct {
+		Items []foldAgentRow `json:"items"`
+	}
+	getInto(t, srv, "/api/env/"+env.ID+"/agents", &agentList)
+	for _, a := range agentList.Items {
+		switch {
+		case a.Role == "local":
+			sawLocal = true
+			if a.NodeRole != "manager" {
+				t.Errorf("the local row's nodeRole = %q, want manager", a.NodeRole)
+			}
+		case a.Node == host.Hostname:
+			sawStandby = true
+			if !a.Standby {
+				t.Errorf("the agent on TierPlan's own manager is not marked standby: %+v", a)
+			}
+		case a.Node == other.Hostname:
+			sawOther = true
+			if a.Standby {
+				t.Errorf("the agent on the other manager is marked standby, only the folded node's is: %+v", a)
+			}
+		}
+	}
+	if !sawLocal || !sawStandby || !sawOther {
+		t.Errorf("agents list: local row %v, standby agent on the host %v, agent on the other manager %v, want all: %+v", sawLocal, sawStandby, sawOther, agentList.Items)
+	}
+	t.Logf("s19m listed once in one environment; the agent on %s is the standby", host.Hostname)
 }
 
 // mustEnvironment is the environment as the list reports it, for a log line.
