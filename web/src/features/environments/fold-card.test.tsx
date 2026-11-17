@@ -228,7 +228,7 @@ describe("FoldCard", () => {
 
     fireEvent.click(
       within(dialog).getByRole("checkbox", {
-        name: "I understand this removes the items above and everything else stored under that environment.",
+        name: "I understand this removes everything stored under that environment.",
       }),
     );
     await waitFor(() => expect(confirm.disabled).toBe(false));
@@ -245,7 +245,11 @@ describe("FoldCard", () => {
         "Removing the Local environment also removes anything else stored under it. Nothing is listed here, and it can't be undone.",
       ),
     ).toBeTruthy();
-    expect(within(dialog).getByRole("checkbox")).toBeTruthy();
+    expect(
+      within(dialog).getByRole("checkbox", {
+        name: "I understand this removes everything stored under that environment.",
+      }),
+    ).toBeTruthy();
     expect(within(dialog).getByText("The separate Local environment is removed.")).toBeTruthy();
     let confirm = within(dialog).getByRole("button", { name: "Fold into edge swarm" });
     expect((confirm as HTMLButtonElement).disabled).toBe(true);

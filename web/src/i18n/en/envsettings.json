@@ -224,7 +224,7 @@
         "janitor": "Janitor settings"
       },
       "keepsContainers": "Running containers are not touched.",
-      "understand": "I understand this removes the items above and everything else stored under that environment.",
+      "understand": "I understand this removes everything stored under that environment.",
       "cancel": "Keep this host as it is",
       "confirm": "Fold into {{swarm}}",
       "pending": "Folding…",
