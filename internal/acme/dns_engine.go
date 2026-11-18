@@ -72,6 +72,17 @@ func NewDNSEngine(d DNSEngineDeps) *DNSEngine {
 	}
 }
 
+// Provider builds the provider id for token, with the same defaults the engine's own deletes use. ok is
+// false for an id no provider is built in under. The token is held by the provider returned and nowhere
+// else.
+func (e *DNSEngine) Provider(id, token string) (p dns.Provider, ok bool) {
+	factory, ok := e.providers[id]
+	if !ok {
+		return nil, false
+	}
+	return factory(token), true
+}
+
 // CredentialResolver builds the provider the rows of one (provider, credentialRef) group are deleted
 // with. It returns a nil provider and the class the rows are stamped with when the credential cannot be
 // opened: no token, one that does not open, or a credential that no longer exists.

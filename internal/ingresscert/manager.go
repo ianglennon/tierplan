@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	mrand "math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme"
@@ -103,6 +104,9 @@ type Manager struct {
 
 	// wake is signalled by Wake and by every run that ends, so a queued row does not wait for the tick.
 	wake chan struct{}
+	// sweepAll is set by Start and SweepNow: the next round's ingress DNS sweep reads every ledger row, not only
+	// the rows that are due.
+	sweepAll atomic.Bool
 
 	mu sync.Mutex
 	// active holds the id of every certificate a run is reserved or running for.
@@ -161,7 +165,9 @@ func (m *Manager) client(issuer string) (*acme.Client, acme.Directory) {
 
 // Start must run before Run. It puts every row that was ordering back to queued, because a crash must not hold
 // a reservation and nothing is ordering in a new process, and it prunes the closed orders that are old enough.
-// An open order is kept: the next run resumes it.
+// An open order is kept: the next run resumes it. It also asks for a full ingress DNS sweep, which the first
+// round runs (never while issuing is paused), so a record a crash left behind is deleted without waiting for its
+// retry time and without startup waiting on a DNS provider.
 func (m *Manager) Start(ctx context.Context) error {
 	n, err := m.d.Store.ResetOrdering(ctx)
 	if err != nil {
@@ -173,6 +179,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if _, err := m.d.Store.PruneClosedOrders(ctx, m.clock.Now().Add(-ClosedOrderRetention)); err != nil {
 		return err
 	}
+	m.sweepAll.Store(true)
 	return nil
 }
 

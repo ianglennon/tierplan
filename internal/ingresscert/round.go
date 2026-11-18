@@ -21,6 +21,8 @@ func (m *Manager) round(ctx context.Context) {
 	if st.PausedReason != "" {
 		return
 	}
+	// The ledger's leftover challenge records go first: a due row every round, every row after Start or SweepNow.
+	m.sweep(ctx, !m.sweepAll.Swap(false))
 	m.reconcile(ctx)
 	m.renewals(ctx)
 	m.refreshReady(ctx)

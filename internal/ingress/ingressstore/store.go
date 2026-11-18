@@ -293,6 +293,9 @@ func (s *Store) SetDomainToken(ctx context.Context, envID, domainID string, toke
 		if err != nil {
 			return false, err
 		}
+		if err := cleanupPending(ctx, q, row.ID); err != nil {
+			return false, err
+		}
 		sealed, err := s.v.Seal(vault.ContextIngressDNSToken+row.ID, token)
 		if err != nil {
 			return false, fmt.Errorf("ingressstore: seal the DNS token: %w", err)
@@ -352,8 +355,36 @@ func holdersOf(ctx context.Context, q *sqlc.Queries, domainID string) ([]Holder,
 	return out, nil
 }
 
-// DeleteDomain removes a domain, with the names reserved under it. A domain that claims sit under
-// is refused with *DomainInUseError and nothing changes; only claims that reference this domain row
+// CleanupPendingError is a domain that cannot be deleted, nor its token replaced, because the DNS ledger
+// still holds TXT records TierPlan made with that token. The records are deleted by the ingress sweep with
+// the token that made them; until then the token must stay, so no record is orphaned from the one credential
+// that can delete it (D-27).
+type CleanupPendingError struct {
+	// Records is how many ledger rows the domain still holds.
+	Records int
+}
+
+// Error implements error.
+func (e *CleanupPendingError) Error() string {
+	return fmt.Sprintf("ingressstore: %d DNS record(s) made with the domain's token are still to be removed", e.Records)
+}
+
+// cleanupPending is *CleanupPendingError when the ledger holds a row made with domainID's token. It reads
+// inside the caller's write transaction, so a row cannot land between the check and the change.
+func cleanupPending(ctx context.Context, q *sqlc.Queries, domainID string) error {
+	n, err := q.CountACMEDNSRecordsByCredential(ctx, domainID)
+	if err != nil {
+		return fmt.Errorf("ingressstore: count the DNS records of domain %q: %w", domainID, err)
+	}
+	if n > 0 {
+		return &CleanupPendingError{Records: int(n)}
+	}
+	return nil
+}
+
+// DeleteDomain removes a domain, with the names reserved under it. A domain whose token still has
+// DNS records in the ledger is refused with *CleanupPendingError, and one that claims sit under is refused
+// with *DomainInUseError, and nothing changes in either case; only claims that reference this domain row
 // count, so a claim under apps.example.com does not block example.com. hook, which may be nil, runs
 // in the same transaction after the delete, with the domain as it was.
 func (s *Store) DeleteDomain(ctx context.Context, envID, domainID string, hook DomainHook) error {
@@ -361,6 +392,9 @@ func (s *Store) DeleteDomain(ctx context.Context, envID, domainID string, hook D
 	return s.write(ctx, envID, "", now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
 		row, err := domainInEnv(ctx, q, envID, domainID)
 		if err != nil {
+			return false, err
+		}
+		if err := cleanupPending(ctx, q, row.ID); err != nil {
 			return false, err
 		}
 		holders, err := holdersOf(ctx, q, row.ID)
