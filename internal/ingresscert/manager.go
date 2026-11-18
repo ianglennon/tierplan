@@ -38,6 +38,9 @@ const (
 	QueueNoAccount = "no_account"
 	// StopDomainRemoved is the stopped reason of a row whose domain was removed (D-12).
 	StopDomainRemoved = "domain_removed"
+	// PruneInterval is how often a running manager prunes the closed orders, with the sealed keys they hold, and
+	// the issuance ledger (D-35), counted on its clock from the last prune. Start prunes as well.
+	PruneInterval = 24 * time.Hour
 )
 
 // How a run ended, as RunEnded reports it.
@@ -107,6 +110,10 @@ type Manager struct {
 	// sweepAll is set by Start and SweepNow: the next round's ingress DNS sweep reads every ledger row, not only
 	// the rows that are due.
 	sweepAll atomic.Bool
+
+	// lastPrune is when the closed orders and the issuance ledger were last pruned, in Unix nanoseconds on the
+	// manager's clock; zero before the first prune.
+	lastPrune atomic.Int64
 
 	// schedMu serializes the scheduler's rounds, so candidates are weighed and reserved one at a time.
 	schedMu sync.Mutex
@@ -179,15 +186,36 @@ func (m *Manager) Start(ctx context.Context) error {
 	if n > 0 {
 		m.log.Info("certificates that were ordering when the last process stopped are queued again", "count", n)
 	}
-	if _, err := m.d.Store.PruneClosedOrders(ctx, m.clock.Now().Add(-ClosedOrderRetention)); err != nil {
-		return err
-	}
-	// The issuance ledger only needs the window and a day more (D-38).
-	if _, err := m.d.Store.PruneIssuances(ctx, m.clock.Now().Add(-IssuanceRetention)); err != nil {
+	if err := m.prune(ctx, m.clock.Now()); err != nil {
 		return err
 	}
 	m.sweepAll.Store(true)
 	return nil
+}
+
+// prune deletes the closed orders, with their sealed keys, kept past ClosedOrderRetention (D-35) and the issuance
+// ledger rows past IssuanceRetention, which is the window and a day more (D-38), and records now as the last prune.
+func (m *Manager) prune(ctx context.Context, now time.Time) error {
+	if _, err := m.d.Store.PruneClosedOrders(ctx, now.Add(-ClosedOrderRetention)); err != nil {
+		return err
+	}
+	if _, err := m.d.Store.PruneIssuances(ctx, now.Add(-IssuanceRetention)); err != nil {
+		return err
+	}
+	m.lastPrune.Store(now.UnixNano())
+	return nil
+}
+
+// pruneIfDue prunes when PruneInterval has passed on the manager's clock since the last prune, so a manager that
+// runs for weeks does not keep every closed order's key. A failure is logged and tried again next round.
+func (m *Manager) pruneIfDue(ctx context.Context) {
+	now := m.clock.Now()
+	if last := m.lastPrune.Load(); last != 0 && now.Sub(time.Unix(0, last)) < PruneInterval {
+		return
+	}
+	if err := m.prune(ctx, now); err != nil {
+		m.log.Error("the certificate manager could not prune the closed orders and the issuance ledger", "error", err)
+	}
 }
 
 // Wake asks Run for a round soon. It never blocks, and a wake that is already waiting absorbs another.
