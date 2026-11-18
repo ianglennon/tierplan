@@ -245,6 +245,7 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 	}
 	ready := func() bool { return d.Manager != nil && d.Store != nil }
 	registerIngressCertUpload(r, d)
+	registerIngressIssuer(r, d)
 	internal := func(what string, err error) error {
 		d.Log.Error("ingress certificate request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")

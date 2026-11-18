@@ -1551,6 +1551,30 @@
         ],
         "type": "object"
       },
+      "ChangeIngressDomainIssuerInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmCount": {
+            "description": "The number of certificates the preview showed. 409 ingress_issuer_count_mismatch, with the number now in errors[0].value, when it is not the number now",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issuer": {
+            "description": "The directory to change to",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer",
+          "confirmCount"
+        ],
+        "type": "object"
+      },
       "ChangePasswordBody": {
         "additionalProperties": false,
         "properties": {
@@ -10074,6 +10098,148 @@
         ],
         "type": "object"
       },
+      "IngressCertUploadedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "consecutiveFailures": {
+            "description": "How many attempts in a row have failed",
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "description": "When the certificate's row was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "When the certificate expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The hostname the certificate covers",
+            "type": "string"
+          },
+          "id": {
+            "description": "The certificate's ID, used in the paths of the routes below",
+            "type": "string"
+          },
+          "issuedAt": {
+            "description": "When the certificate was issued",
+            "format": "date-time",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "The Let's Encrypt directory the certificate comes from; left out for an uploaded certificate",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "lastError": {
+            "$ref": "#/components/schemas/IngressCertErrorBody",
+            "description": "The last failed attempt, left out when there is none"
+          },
+          "nextAttemptAt": {
+            "description": "When the next attempt is made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/IngressCertQueueBody",
+            "description": "Why the certificate waits, left out when it waits for nothing"
+          },
+          "ready": {
+            "description": "True when the certificate may be served now",
+            "type": "boolean"
+          },
+          "renewAt": {
+            "description": "When the next renewal is planned",
+            "format": "date-time",
+            "type": "string"
+          },
+          "renewBasis": {
+            "description": "What the renewal time is based on, such as the certificate authority's renewal information",
+            "type": "string"
+          },
+          "requestedAt": {
+            "description": "When an Admin last asked for the certificate ahead of a claim",
+            "format": "date-time",
+            "type": "string"
+          },
+          "requestedBy": {
+            "description": "The ID of the user who asked for it",
+            "type": "string"
+          },
+          "retiredAt": {
+            "description": "When the certificate was retired, left out while it is live",
+            "format": "date-time",
+            "type": "string"
+          },
+          "retiredReason": {
+            "description": "Why it was retired",
+            "type": "string"
+          },
+          "retryAfterUntil": {
+            "description": "Until when the certificate authority asked TierPlan to wait",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "description": "Whether TierPlan ordered the certificate or an Admin uploaded it",
+            "enum": [
+              "acme",
+              "upload"
+            ],
+            "type": "string"
+          },
+          "staging": {
+            "description": "True for a staging certificate, which browsers do not trust and TierPlan never serves",
+            "type": "boolean"
+          },
+          "state": {
+            "description": "One word for where it stands: queued, ordering, valid, uploaded, dns_proven_on_staging, renewal_failed, failed, expired, stopped or retired",
+            "type": "string"
+          },
+          "stateText": {
+            "description": "The state in words for a person",
+            "type": "string"
+          },
+          "stoppedReason": {
+            "description": "Why a stopped certificate does nothing",
+            "type": "string"
+          },
+          "unreferencedSince": {
+            "description": "Since when no stack and no request refers to the hostname",
+            "format": "date-time",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What to know about the accepted certificate, such as chain_untrusted when its chain does not verify against the system's roots (an internal CA is a valid reason to upload)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "warnings",
+          "id",
+          "hostname",
+          "staging",
+          "source",
+          "state",
+          "stateText",
+          "ready",
+          "consecutiveFailures",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "IngressCertsBody": {
         "additionalProperties": false,
         "properties": {
@@ -10199,6 +10365,46 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "IngressIssuerPreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "certificates": {
+            "description": "How many live Let's Encrypt certificates under the domain come from the other directory: the change retires each and orders a new one from the new directory",
+            "format": "int64",
+            "type": "integer"
+          },
+          "confirmCount": {
+            "description": "The count to send back as confirmCount to make the change; it is checked again when the change is made",
+            "format": "int64",
+            "type": "integer"
+          },
+          "issuer": {
+            "description": "The directory the domain would change to",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "uploads": {
+            "description": "The hostnames of the uploaded certificates under the domain, sorted. The change leaves them alone",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "issuer",
+          "certificates",
+          "uploads",
+          "confirmCount"
         ],
         "type": "object"
       },
@@ -26069,6 +26275,30 @@
         ],
         "type": "object"
       },
+      "UploadIngressCertInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "certificatePem": {
+            "description": "The certificate chain as PEM certificates, the server certificate first, at most 256 KiB. 422 ingress_cert_chain_unparsable when it is not, ingress_cert_host_not_covered, ingress_cert_expired or ingress_cert_not_yet_valid when the server certificate does not fit the hostname or the time",
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The hostname the certificate is for, under a domain registered for this environment and not held by another environment. It is lower-cased and a trailing dot is dropped",
+            "maxLength": 253,
+            "type": "string"
+          },
+          "privateKeyPem": {
+            "description": "The unencrypted private key as PEM (RSA 2048 to 8192 bits, or ECDSA on P-256, P-384 or P-521), at most 256 KiB. It is stored sealed and never returned",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname",
+          "certificatePem",
+          "privateKeyPem"
+        ],
+        "type": "object"
+      },
       "UserAccessBody": {
         "additionalProperties": false,
         "properties": {
@@ -32344,6 +32574,128 @@
         ]
       }
     },
+    "/api/env/{envId}/ingress/certificates/upload": {
+      "post": {
+        "description": "Makes an uploaded certificate the hostname's certificate. The hostname follows the rules of a request ahead (422 ingress_domain_not_allowed, ingress_host_invalid, 409 ingress_host_reserved and ingress_host_taken, which names nothing of the other environment). The chain and key are refused with 422 and a stable code and a fixed sentence: ingress_cert_key_mismatch, ingress_cert_host_not_covered, ingress_cert_expired, ingress_cert_not_yet_valid, ingress_cert_chain_unparsable, ingress_cert_key_unsupported, ingress_cert_key_encrypted and ingress_cert_too_large. A chain that does not verify against the system's roots is accepted with the warning chain_untrusted. A live certificate of the hostname, whatever its source, is replaced. The key is stored sealed and is never returned, audited or logged. Audited as ingress.cert_uploaded. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "uploadIngressCertificate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadIngressCertInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertUploadedBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Upload a certificate and its private key for a hostname",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/certificates/{certId}/acme": {
+      "post": {
+        "description": "Retires the uploaded certificate, which keeps serving until its replacement is ready or it expires, and queues a Let's Encrypt certificate for the hostname from the issuer its domain has now. Answers 200 with the new queued certificate. 404 ingress_cert_not_found for a certificate that is not a live upload of this environment (an ACME certificate, a retired one, another environment's or an unknown id). Audited as ingress.cert_switched_to_acme. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "switchIngressCertificateToACME",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The uploaded certificate's ID",
+            "in": "path",
+            "name": "certId",
+            "required": true,
+            "schema": {
+              "description": "The uploaded certificate's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Return an uploaded hostname to Let's Encrypt",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
     "/api/env/{envId}/ingress/certificates/{certId}/retry": {
       "post": {
         "description": "Queues the certificate with its next attempt now, without waiting for its backoff. The order is placed by the next round, so 202. 404 ingress_cert_not_found for a certificate that is not a live one of this environment that TierPlan orders (another environment's, retired, uploaded or gone); 409 ingress_certs_paused while issuing is paused after a restore; 409 ingress_cert_stopped for a stopped certificate, which waits for a claim or a request, not a retry; 429 ingress_cert_blocked while the certificate authority has asked TierPlan to wait or three attempts failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). A certificate whose order is already in flight is left alone and answers 202. Audited as ingress.cert_retried. Needs ingress.manage on the environment (its Admin).",
@@ -32574,6 +32926,151 @@
           }
         },
         "summary": "Delete a domain",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/domains/{domainId}/issuer": {
+      "get": {
+        "description": "Says what changing the domain's Let's Encrypt directory to the one in the query would do, and writes nothing: how many live certificates under the domain come from the other directory (each is retired and ordered again from the new one) and which uploaded certificates it leaves alone. confirmCount is the number to send back to make the change. 404 ingress_domain_not_found for a domain that is not this environment's. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "previewIngressDomainIssuer",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The domain's ID",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "description": "The domain's ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The directory the domain would change to",
+            "explode": false,
+            "in": "query",
+            "name": "issuer",
+            "required": true,
+            "schema": {
+              "description": "The directory the domain would change to",
+              "enum": [
+                "staging",
+                "production"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressIssuerPreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview an issuer change",
+        "tags": [
+          "ingress"
+        ]
+      },
+      "put": {
+        "description": "Changes the domain's Let's Encrypt directory, only when confirmCount is the number of certificates the change affects now: the preview's count, checked again inside the write. 409 ingress_issuer_count_mismatch with the number now in errors[0].value when a certificate was added or retired since, and nothing changes. The certificates under the domain from the other directory are retired and ordered again by the certificate manager; uploads are left alone. Audited as ingress.domain_issuer_changed. Asking for the issuer the domain already has changes nothing and writes no audit row. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "changeIngressDomainIssuer",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The domain's ID",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "description": "The domain's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeIngressDomainIssuerInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressDomainBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change the issuer of a domain",
         "tags": [
           "ingress"
         ]
