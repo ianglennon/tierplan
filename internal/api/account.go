@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/backup"
 	"github.com/ianglennon/tierplan/internal/datadir"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store"
@@ -53,6 +54,11 @@ const (
 	warningHTTPSClockOff      = "https_clock_off"
 	warningHTTPSExpiring      = "https_cert_expiring"
 	warningHTTPSTXTLeft       = "https_txt_left"
+	// The ingress_ warnings are the per-hostname certificate problems an instance admin sees in
+	// the bell (phase 20 D-10, D-32).
+	warningIngressCertExpiring      = "ingress_cert_expiring"
+	warningIngressCertRenewalFailed = "ingress_cert_renewal_failed"
+	warningIngressCertsPaused       = "ingress_certs_paused"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -103,6 +109,9 @@ type AccountDeps struct {
 	Limiter *auth.IPLimiter
 	// HTTPS lists what is wrong with HTTPS now, for the https_ warnings. Nil means nothing is.
 	HTTPS func(ctx context.Context) ([]acme.Alert, error)
+	// IngressCerts lists what needs attention among the per-hostname certificates, for the ingress_
+	// warnings. Nil means nothing does.
+	IngressCerts func(ctx context.Context) ([]ingresscert.Alert, error)
 	// ListenPort is the port TierPlan listens on, which the renewal-failed fix names when Let's
 	// Encrypt cannot reach it.
 	ListenPort int
@@ -135,7 +144,7 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents,https_cert_fallback,https_renewal_failed,https_acme_paused,https_clock_off,https_cert_expiring,https_txt_left" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents,https_cert_fallback,https_renewal_failed,https_acme_paused,https_clock_off,https_cert_expiring,https_txt_left,ingress_cert_expiring,ingress_cert_renewal_failed,ingress_certs_paused" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
@@ -147,6 +156,22 @@ type WarningBody struct {
 	// Since is a pointer so that "no good backup yet" leaves it out.
 	Since *time.Time        `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
 	HTTPS *WarningHTTPSBody `json:"https,omitempty" doc:"For the https_ warnings: the facts the bell turns into a headline and a fix"`
+	// Ingress is a pointer so that the other warnings leave it out.
+	Ingress *WarningIngressCertBody `json:"ingress,omitempty" doc:"For the ingress_ warnings: the facts the bell turns into a headline and a sentence"`
+}
+
+// WarningIngressCertBody is the facts of one ingress_ warning: closed-vocabulary names, times, a failure
+// class and a count. The certificate authority's own problem text is never part of it.
+type WarningIngressCertBody struct {
+	Hostname      string     `json:"hostname,omitempty" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: the most urgent hostname"`
+	Issuer        string     `json:"issuer,omitempty" enum:",staging,production" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: the issuer of an ACME certificate; absent for an uploaded one"`
+	Source        string     `json:"source,omitempty" enum:",acme,upload" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: where the certificate comes from"`
+	NotAfter      *time.Time `json:"notAfter,omitempty" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: when the certificate expires"`
+	Days          int        `json:"days,omitempty" doc:"For ingress_cert_expiring: the warning reached, 14 or 7 days before expiry"`
+	Class         string     `json:"class,omitempty" doc:"For ingress_cert_renewal_failed: the error class of the last failed order"`
+	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty" doc:"For ingress_cert_renewal_failed: when the order is tried again"`
+	Reason        string     `json:"reason,omitempty" enum:",restore" doc:"For ingress_certs_paused: why issuing is paused"`
+	More          int        `json:"more,omitempty" doc:"For the kinds that name one hostname: how many other certificates the item covers"`
 }
 
 // WarningHTTPSBody is the facts of one https_ warning: closed-vocabulary names, times and counts. The
@@ -388,6 +413,11 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("read the HTTPS state", err)
 		}
 		items = append(items, httpsList...)
+		ingressList, err := ingressItems(ctx, d)
+		if err != nil {
+			return nil, internal("read the certificate state", err)
+		}
+		items = append(items, ingressList...)
 		return &WarningsOutput{CacheControl: "no-store", Body: WarningsBody{Items: items}}, nil
 	})
 
@@ -604,6 +634,45 @@ func httpsItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
 			b.Port = d.ListenPort
 		}
 		out = append(out, WarningBody{ID: id, HTTPS: b})
+	}
+	return out, nil
+}
+
+// ingressWarningIDs maps each certificate alert kind to its warning ID.
+var ingressWarningIDs = map[ingresscert.AlertKind]string{
+	ingresscert.AlertExpiring:      warningIngressCertExpiring,
+	ingresscert.AlertRenewalFailed: warningIngressCertRenewalFailed,
+	ingresscert.AlertPaused:        warningIngressCertsPaused,
+}
+
+// ingressItems is the ingress_ warnings, for an active instance admin only, like the https_ ones: they name
+// hostnames across every environment. Each is derived from the state on every read. In Phase 20 an
+// environment Admin sees their certificates through the API list, not here.
+func ingressItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.IngressCerts == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	alerts, err := d.IngressCerts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []WarningBody
+	for _, al := range alerts {
+		id, ok := ingressWarningIDs[al.Kind]
+		if !ok {
+			continue
+		}
+		out = append(out, WarningBody{ID: id, Ingress: &WarningIngressCertBody{
+			Hostname: al.Hostname, Issuer: al.Issuer, Source: al.Source, NotAfter: timePtr(al.NotAfter), Days: al.Days,
+			Class: al.Class, NextAttemptAt: timePtr(al.NextAttemptAt), Reason: al.Reason, More: al.More,
+		}})
 	}
 	return out, nil
 }

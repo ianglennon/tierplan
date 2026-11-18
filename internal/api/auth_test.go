@@ -382,6 +382,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now, Unknown: f.unknown,
 		HTTPS: f.httpsAlerts, ListenPort: 7480,
+		// The manager is built later in the fixture, so the feed reads it when asked.
+		IngressCerts: func(ctx context.Context) ([]ingresscert.Alert, error) {
+			if f.ingressCerts == nil {
+				return nil, nil
+			}
+			return f.ingressCerts.Alerts(ctx)
+		},
 	})
 	f.access = access.New(f.st, f.aud, checker, f.inviteTTL)
 	f.access.Now = f.clk.now
