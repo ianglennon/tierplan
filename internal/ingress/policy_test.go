@@ -489,3 +489,96 @@ func TestCheckClashMessageStartsWithDescribeHolder(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckRequest covers the rule for a hostname asked for before any stack claims it (D-08): one
+// row per policy bullet, over a pure world.
+func TestCheckRequest(t *testing.T) {
+	apps := policyDomain("d1", "apps.example.com")
+	system := func(w World, host string) {
+		w.Claims[host] = ClaimInfo{Claim: Claim{EnvID: "env-a", Hostname: host, OwnerKind: OwnerSystem}, EnvName: "Alpha"}
+	}
+	sameEnv := func(w World, host string) {
+		policyHold(w, host, "s-own", "web-own", "env-a", "Alpha")
+	}
+	otherEnv := func(w World, host string) {
+		policyHold(w, host, "s-other", "web-other", "env-b", "Beta")
+	}
+	reserve := func(w World, host string) { w.Reserved[host] = true }
+
+	tests := []struct {
+		name     string
+		host     string
+		setup    func(w World, host string)
+		wantCode string // "" means allowed
+		wantDom  string
+	}{
+		{name: "unclaimed under a registered domain", host: "web.apps.example.com", wantDom: "d1"},
+		{name: "claimed by a stack of the same environment", host: "web.apps.example.com", setup: sameEnv, wantDom: "d1"},
+		{name: "under no registered domain", host: "web.other.org", wantCode: CodeDomainNotAllowed},
+		{name: "reserved", host: "web.apps.example.com", setup: reserve, wantCode: CodeHostReserved},
+		{name: "claimed by another environment's stack", host: "web.apps.example.com", setup: otherEnv, wantCode: CodeHostTaken},
+		{name: "claimed by the system", host: "web.apps.example.com", setup: system, wantCode: CodeHostTaken},
+		{name: "an underscore label", host: "bad_name.apps.example.com", wantCode: CodeHostInvalid},
+		{name: "empty", host: "", wantCode: CodeHostInvalid},
+		{name: "an address", host: "10.0.0.1", wantCode: CodeHostInvalid},
+		{name: "a single label", host: "localhost", wantCode: CodeHostInvalid},
+		{name: "the domain's own suffix", host: "apps.example.com", wantCode: CodeDomainNotAllowed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := policyWorld(apps)
+			if tc.setup != nil {
+				tc.setup(w, tc.host)
+			}
+			dom, p, bad := CheckRequest(tc.host, w)
+			if tc.wantCode == "" {
+				if bad || dom.ID != tc.wantDom {
+					t.Fatalf("CheckRequest(%q) = %+v, %+v, %v, want allowed under %s", tc.host, dom, p, bad, tc.wantDom)
+				}
+				return
+			}
+			if !bad || p.Code != tc.wantCode || p.Severity != SeverityError || p.Message == "" {
+				t.Fatalf("CheckRequest(%q) = %+v, %v, want a refusal with code %s", tc.host, p, bad, tc.wantCode)
+			}
+			if dom.ID != "" {
+				t.Fatalf("a refusal returned the domain %+v", dom)
+			}
+		})
+	}
+}
+
+// TestCheckRequestTakenIsRedactedAndWordedThroughDescribeHolder is T-20-09: a claim of another
+// environment's stack names neither stack nor environment to a caller who cannot see it, and does
+// when the caller can; a system claim names no stack.
+func TestCheckRequestTakenIsRedactedAndWordedThroughDescribeHolder(t *testing.T) {
+	const host = "web.apps.example.com"
+	w := policyWorld(policyDomain("d1", "apps.example.com"))
+	policyHold(w, host, "s-other", "secret-stack", "env-b", "Secret Env")
+
+	_, p, bad := CheckRequest(host, w)
+	if !bad || p.Code != CodeHostTaken {
+		t.Fatalf("CheckRequest = %+v, %v, want ingress_host_taken", p, bad)
+	}
+	for _, leak := range []string{"secret-stack", "Secret Env", "s-other", "env-b"} {
+		if strings.Contains(p.Message, leak) {
+			t.Fatalf("message %q names %q to a caller who cannot see the environment", p.Message, leak)
+		}
+	}
+	want := DescribeHolder(w.Claims[host], nil)
+	if !strings.HasPrefix(p.Message, want) {
+		t.Fatalf("message %q does not start with DescribeHolder's %q", p.Message, want)
+	}
+
+	w.CanView = func(envID string) bool { return envID == "env-b" }
+	_, p, _ = CheckRequest(host, w)
+	if !strings.Contains(p.Message, "secret-stack") || !strings.Contains(p.Message, "Secret Env") {
+		t.Fatalf("message %q should name the stack and environment to a caller who may see them", p.Message)
+	}
+
+	sys := policyWorld(policyDomain("d1", "apps.example.com"))
+	sys.Claims[host] = ClaimInfo{Claim: Claim{EnvID: "env-a", Hostname: host, OwnerKind: OwnerSystem}, EnvName: "Alpha"}
+	_, p, bad = CheckRequest(host, sys)
+	if !bad || p.Code != CodeHostTaken || !strings.HasPrefix(p.Message, DescribeHolder(sys.Claims[host], nil)) {
+		t.Fatalf("a system claim gave %+v, %v", p, bad)
+	}
+}

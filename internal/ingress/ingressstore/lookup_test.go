@@ -62,3 +62,42 @@ func TestTracerARequestedHostnameLeadsToItsDomainsToken(t *testing.T) {
 		t.Fatalf("DomainTokenByID of a domain with no token = %v, want ErrNoToken", err)
 	}
 }
+
+// TestInstallClaimsListsEveryEnvironment checks the reconciler's read: claims of two environments,
+// each with its domain id and the names of its environment and stack.
+func TestInstallClaimsListsEveryEnvironment(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-b", "Beta")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	seedStack(t, st, "stack-b", "env-b", "web-b")
+	domA := registerDomain(t, s, "env-a", "a.example.com")
+	domB := registerDomain(t, s, "env-b", "b.example.com")
+	claim(t, s, "env-a", "stack-a", "web.a.example.com")
+	claim(t, s, "env-b", "stack-b", "web.b.example.com")
+
+	got, err := s.InstallClaims(ctx)
+	if err != nil {
+		t.Fatalf("InstallClaims: %v", err)
+	}
+	byHost := map[string]ingress.ClaimInfo{}
+	for _, c := range got {
+		byHost[c.Hostname] = c
+	}
+	if len(got) != 2 {
+		t.Fatalf("InstallClaims returned %d claims, want 2: %+v", len(got), got)
+	}
+	for host, want := range map[string]struct{ env, envName, stack, stackName, domain string }{
+		"web.a.example.com": {"env-a", "Alpha", "stack-a", "web-a", domA.ID},
+		"web.b.example.com": {"env-b", "Beta", "stack-b", "web-b", domB.ID},
+	} {
+		c, ok := byHost[host]
+		if !ok {
+			t.Fatalf("InstallClaims has no claim for %s", host)
+		}
+		if c.EnvID != want.env || c.EnvName != want.envName || c.StackID != want.stack || c.StackName != want.stackName || c.DomainID != want.domain {
+			t.Fatalf("claim %s = %+v, want %+v", host, c, want)
+		}
+	}
+}
