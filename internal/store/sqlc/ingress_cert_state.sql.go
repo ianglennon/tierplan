@@ -44,3 +44,16 @@ func (q *Queries) GetIngressCertState(ctx context.Context) (IngressCertState, er
 	)
 	return i, err
 }
+
+const resumeIngressCerts = `-- name: ResumeIngressCerts :execrows
+UPDATE ingress_cert_state SET paused_reason = '', updated_at = ? WHERE id = 1 AND paused_reason <> ''
+`
+
+// Lifts the pause a restore set. It writes only while paused, so a second Resume changes nothing.
+func (q *Queries) ResumeIngressCerts(ctx context.Context, updatedAt int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resumeIngressCerts, updatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
