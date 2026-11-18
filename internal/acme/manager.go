@@ -182,6 +182,9 @@ type Manager struct {
 	log   *slog.Logger
 	// checker asks DNS servers whether a TXT record shows and whether a name is delegated.
 	checker *dnscheck.Checker
+	// dns is the DNS-01 engine this manager's own solver and sweep run on; a hostname certificate's order
+	// runs on another one over the same code (dns_engine.go).
+	dns *DNSEngine
 
 	// opMu serialises the admin's mutations, so two requests cannot both pass the guards.
 	opMu sync.Mutex
@@ -248,6 +251,8 @@ func NewManager(d Deps) *Manager {
 			NameserverAddrs: d.DNS.NameserverAddrs, ResolvConf: d.DNS.ResolvConf,
 		},
 	}
+	m.dns = NewDNSEngine(DNSEngineDeps{DNS: d.DNS, Ledger: d.Store, Clock: d.Clock, Log: m.log, Jitter: d.Jitter})
+	m.dns.checker = m.checker // the one checker, so the engine and the manager ask the same servers
 	if d.Installer != nil {
 		// Every swap goes through the tracker, so the scheduler knows what is being served.
 		m.d.Installer = trackedInstaller{Installer: d.Installer, m: m}

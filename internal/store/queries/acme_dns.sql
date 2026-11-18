@@ -18,16 +18,22 @@ SELECT COUNT(*) FROM acme_dns_credentials WHERE provider = ?;
 -- name: InsertACMEDNSRecord :exec
 INSERT INTO acme_dns_records (id, provider, zone_id, zone_name, account_id, record_id, name, value, comment,
                               owner_kind, owner_id, token, created_at, attempts, last_try_at, next_try_at,
-                              last_error_class)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                              last_error_class, credential_ref)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListACMEDNSRecordsByOwner :many
--- The rows of one owner (an order or a test) for one ACME challenge token, oldest first.
-SELECT * FROM acme_dns_records WHERE owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id;
+-- The rows of one owner (an order or a test) for one ACME challenge token, oldest first. Own rows only:
+-- a row made for a hostname certificate carries a credential_ref and is never this manager's.
+SELECT * FROM acme_dns_records WHERE credential_ref = '' AND owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id;
+
+-- name: ListACMEDNSRecordsByOwnerAndCredential :many
+-- One credential's rows of one owner for one ACME challenge token, oldest first.
+SELECT * FROM acme_dns_records WHERE credential_ref = ? AND owner_kind = ? AND owner_id = ? AND token = ? ORDER BY created_at, id;
 
 -- name: GetPendingACMEDNSRecord :one
--- A row that already holds this exact record at the provider, newest first, so a resumed order reuses it.
-SELECT * FROM acme_dns_records WHERE provider = ? AND zone_id = ? AND name = ? AND value = ?
+-- A row of this credential that already holds this exact record at the provider, newest first, so a
+-- resumed order reuses it. The own manager passes the empty credential_ref.
+SELECT * FROM acme_dns_records WHERE credential_ref = ? AND provider = ? AND zone_id = ? AND name = ? AND value = ?
 ORDER BY created_at DESC, id DESC LIMIT 1;
 
 -- name: RestampACMEDNSRecord :exec
@@ -43,11 +49,24 @@ DELETE FROM acme_dns_records WHERE id = ?;
 UPDATE acme_dns_records SET attempts = ?, last_try_at = ?, next_try_at = ?, last_error_class = ? WHERE id = ?;
 
 -- name: ListDueACMEDNSRecords :many
--- The rows whose next try has come, oldest first.
-SELECT * FROM acme_dns_records WHERE next_try_at <= ? ORDER BY created_at, id;
+-- The own rows whose next try has come, oldest first.
+SELECT * FROM acme_dns_records WHERE credential_ref = '' AND next_try_at <= ? ORDER BY created_at, id;
 
 -- name: ListACMEDNSRecords :many
-SELECT * FROM acme_dns_records ORDER BY created_at, id;
+-- The own rows (credential_ref = ''), oldest first.
+SELECT * FROM acme_dns_records WHERE credential_ref = '' ORDER BY created_at, id;
+
+-- name: ListDueIngressDNSRecords :many
+-- The hostname-certificate rows (a credential_ref is set) whose next try has come, oldest first.
+SELECT * FROM acme_dns_records WHERE credential_ref <> '' AND next_try_at <= ? ORDER BY created_at, id;
+
+-- name: ListIngressDNSRecords :many
+-- Every hostname-certificate row, oldest first.
+SELECT * FROM acme_dns_records WHERE credential_ref <> '' ORDER BY created_at, id;
+
+-- name: CountACMEDNSRecordsByCredential :one
+-- How many ledger rows one credential still holds.
+SELECT COUNT(*) FROM acme_dns_records WHERE credential_ref = ?;
 
 -- name: SetACMEValidation :exec
 -- The only statement that writes the challenge type, the provider, the resolvers and the untested

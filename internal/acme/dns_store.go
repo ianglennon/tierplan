@@ -101,7 +101,25 @@ type DNSRecord struct {
 	Attempts             int
 	LastTryAt, NextTryAt time.Time
 	LastErrorClass       string
+	// CredentialRef names the credential whose token can delete the record: empty for the own
+	// certificate's records, the ingress domain's id for a hostname certificate's. The own manager sees
+	// only rows where it is empty.
+	CredentialRef string
 }
+
+// DNSLedger is the part of the Store the DNS engine and the shared DNSSolver write through, so a
+// hostname certificate's engine can run over the same ledger without the own Manager's Deps.
+type DNSLedger interface {
+	InsertDNSRecord(ctx context.Context, r DNSRecord) error
+	PendingDNSRecordFor(ctx context.Context, credentialRef, provider, zoneID, name, value string) (DNSRecord, bool, error)
+	RestampDNSRecord(ctx context.Context, id, ownerKind, ownerID, token string) error
+	DNSRecordsForCredential(ctx context.Context, credentialRef, ownerKind, ownerID, token string) ([]DNSRecord, error)
+	DeleteDNSRecord(ctx context.Context, id string) error
+	MarkDNSRecordFailed(ctx context.Context, id string, attempts int, lastTry, nextTry time.Time, class string) error
+	InstallID(ctx context.Context) (string, error)
+}
+
+var _ DNSLedger = (*Store)(nil)
 
 // InsertDNSRecord stores a ledger row and does not return before it is durable: the provider's record
 // ID is on disk before the CA is asked to validate, so a crash after this call can still delete the
@@ -117,7 +135,7 @@ func (s *Store) InsertDNSRecord(ctx context.Context, r DNSRecord) error {
 		RecordID: r.RecordID, Name: r.Name, Value: r.Value,
 		Comment: r.Comment, OwnerKind: r.OwnerKind, OwnerID: r.OwnerID, Token: r.Token,
 		CreatedAt: toNanos(r.CreatedAt), Attempts: int64(r.Attempts), LastTryAt: toNanos(r.LastTryAt),
-		NextTryAt: toNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,
+		NextTryAt: toNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass, CredentialRef: r.CredentialRef,
 	}); err != nil {
 		return fmt.Errorf("insert the DNS record %q: %w", r.ID, err)
 	}
@@ -127,7 +145,8 @@ func (s *Store) InsertDNSRecord(ctx context.Context, r DNSRecord) error {
 	return s.checkpoint(ctx, "the DNS record ID")
 }
 
-// DNSRecordsFor returns the rows of one owner for one ACME challenge token, oldest first.
+// DNSRecordsFor returns the own rows (credential_ref empty) of one owner for one ACME challenge token,
+// oldest first.
 func (s *Store) DNSRecordsFor(ctx context.Context, ownerKind, ownerID, token string) ([]DNSRecord, error) {
 	rows, err := s.st.RQ.ListACMEDNSRecordsByOwner(ctx, sqlc.ListACMEDNSRecordsByOwnerParams{
 		OwnerKind: ownerKind, OwnerID: ownerID, Token: token,
@@ -138,11 +157,28 @@ func (s *Store) DNSRecordsFor(ctx context.Context, ownerKind, ownerID, token str
 	return dnsRecords(rows), nil
 }
 
+// DNSRecordsForCredential returns the rows one credential made for one owner and ACME challenge token,
+// oldest first. It is what the shared DNSSolver's CleanUp reads; the own DNSRecordsFor never sees them.
+func (s *Store) DNSRecordsForCredential(ctx context.Context, credentialRef, ownerKind, ownerID, token string) ([]DNSRecord, error) {
+	rows, err := s.st.RQ.ListACMEDNSRecordsByOwnerAndCredential(ctx, sqlc.ListACMEDNSRecordsByOwnerAndCredentialParams{
+		CredentialRef: credentialRef, OwnerKind: ownerKind, OwnerID: ownerID, Token: token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the DNS records of %s %q: %w", ownerKind, ownerID, err)
+	}
+	return dnsRecords(rows), nil
+}
+
 // PendingDNSRecord finds a row holding exactly this record at the provider (newest first), so a resumed
 // order reuses the record it already made instead of creating a second one.
 func (s *Store) PendingDNSRecord(ctx context.Context, provider, zoneID, name, value string) (DNSRecord, bool, error) {
+	return s.PendingDNSRecordFor(ctx, "", provider, zoneID, name, value)
+}
+
+// PendingDNSRecordFor is PendingDNSRecord over the rows of one credential: "" is the own manager's.
+func (s *Store) PendingDNSRecordFor(ctx context.Context, credentialRef, provider, zoneID, name, value string) (DNSRecord, bool, error) {
 	row, err := s.st.RQ.GetPendingACMEDNSRecord(ctx, sqlc.GetPendingACMEDNSRecordParams{
-		Provider: provider, ZoneID: zoneID, Name: name, Value: value,
+		CredentialRef: credentialRef, Provider: provider, ZoneID: zoneID, Name: name, Value: value,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return DNSRecord{}, false, nil
@@ -192,13 +228,39 @@ func (s *Store) DueDNSRecords(ctx context.Context, now time.Time) ([]DNSRecord, 
 	return dnsRecords(rows), nil
 }
 
-// DNSRecords returns every row, oldest first and, for the same instant, by id.
+// DNSRecords returns every own row (credential_ref empty), oldest first and, for the same instant, by id.
 func (s *Store) DNSRecords(ctx context.Context) ([]DNSRecord, error) {
 	rows, err := s.st.RQ.ListACMEDNSRecords(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list the DNS records: %w", err)
 	}
 	return dnsRecords(rows), nil
+}
+
+// IngressDNSRecords returns the rows made for hostname certificates (credential_ref set), oldest first;
+// with dueOnly only those whose next try has come at now. The own sweep and the own left-over list never
+// read them.
+func (s *Store) IngressDNSRecords(ctx context.Context, now time.Time, dueOnly bool) ([]DNSRecord, error) {
+	var rows []sqlc.AcmeDnsRecord
+	var err error
+	if dueOnly {
+		rows, err = s.st.RQ.ListDueIngressDNSRecords(ctx, toNanos(now))
+	} else {
+		rows, err = s.st.RQ.ListIngressDNSRecords(ctx)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list the hostname certificate DNS records: %w", err)
+	}
+	return dnsRecords(rows), nil
+}
+
+// CountDNSRecordsByCredential is how many ledger rows credentialRef still holds.
+func (s *Store) CountDNSRecordsByCredential(ctx context.Context, credentialRef string) (int, error) {
+	n, err := s.st.RQ.CountACMEDNSRecordsByCredential(ctx, credentialRef)
+	if err != nil {
+		return 0, fmt.Errorf("count the DNS records of credential %q: %w", credentialRef, err)
+	}
+	return int(n), nil
 }
 
 func dnsRecords(rows []sqlc.AcmeDnsRecord) []DNSRecord {
@@ -215,7 +277,7 @@ func dnsRecord(r sqlc.AcmeDnsRecord) DNSRecord {
 		RecordID: r.RecordID, Name: r.Name, Value: r.Value,
 		Comment: r.Comment, OwnerKind: r.OwnerKind, OwnerID: r.OwnerID, Token: r.Token,
 		CreatedAt: fromNanos(r.CreatedAt), Attempts: int(r.Attempts), LastTryAt: fromNanos(r.LastTryAt),
-		NextTryAt: fromNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass,
+		NextTryAt: fromNanos(r.NextTryAt), LastErrorClass: r.LastErrorClass, CredentialRef: r.CredentialRef,
 	}
 }
 
