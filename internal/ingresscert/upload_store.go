@@ -49,6 +49,15 @@ func refuseHeldElsewhere() *RequestRefusedError {
 	}}
 }
 
+// refuseUploadedElsewhere is the refusal of an upload for a hostname whose live certificate another environment
+// uploaded. Like refuseHeldElsewhere it names nothing of that environment.
+func refuseUploadedElsewhere() *RequestRefusedError {
+	return &RequestRefusedError{Problem: ingress.Problem{
+		Severity: ingress.SeverityError, Code: ingress.CodeHostTaken,
+		Message: "Another environment uploaded the certificate for this hostname. Choose another name.",
+	}}
+}
+
 // refuseHostChanged is the refusal of a write that found, inside its transaction, a live certificate of an
 // environment it does not bump: the hostname's certificate changed while the request was written.
 func refuseHostChanged() *RequestRefusedError {
@@ -74,8 +83,8 @@ type UploadHook func(ctx context.Context, tx *sql.Tx, c Cert, replaced string, w
 // hostname must pass the environment's request rules and the second gate before anything is read, and the
 // chain and key must pass ValidateUpload; a refusal writes nothing. The live row of the hostname, whatever
 // its source, is replaced in the same transaction: deleted by the id read inside the write, with its orders.
-// A live row of another environment is replaced only when that environment's request ahead no longer holds
-// it, with an ingress.cert_moved audit row, and certs_version of both environments rises (D-31). The key is
+// A live row of another environment is replaced only when it is not an upload and that environment's request
+// ahead no longer holds it, with an ingress.cert_moved audit row, and certs_version of both environments rises (D-31). The key is
 // sealed under the new row's id and is never logged or returned. roots nil means the system pool. It returns
 // the new row and the warnings.
 func (s *Store) Upload(ctx context.Context, in UploadInput, roots *x509.CertPool, hook UploadHook) (Cert, []string, error) {
@@ -135,6 +144,10 @@ func (s *Store) Upload(ctx context.Context, in UploadInput, roots *x509.CertPool
 				}
 				if RequestHeld(live, now) {
 					return false, refuseHeldElsewhere()
+				}
+				// Another environment's upload is its Admin's own material: an upload never deletes it.
+				if live.Source == SourceUpload {
+					return false, refuseUploadedElsewhere()
 				}
 				moved, fromEnv, fromDomain = true, row.EnvID, row.DomainID
 			}

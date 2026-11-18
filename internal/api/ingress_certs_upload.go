@@ -94,7 +94,7 @@ func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 			"and " + ingress.CodeHostTaken + ", which names nothing of the other environment). The chain and key are refused with 422 and a stable code and a fixed sentence: " +
 			ingresscert.UploadKeyMismatch + ", " + ingresscert.UploadHostNotCovered + ", " + ingresscert.UploadExpired + ", " + ingresscert.UploadNotYetValid + ", " + ingresscert.UploadChainUnparsable + ", " +
 			ingresscert.UploadKeyUnsupported + ", " + ingresscert.UploadKeyEncrypted + " and " + ingresscert.UploadTooLarge + ". A chain that does not verify against the system's roots is accepted with " +
-			"the warning " + ingresscert.WarningChainUntrusted + ". A live certificate of the hostname, whatever its source, is replaced. The key is stored sealed and is never returned, audited or logged. " +
+			"the warning " + ingresscert.WarningChainUntrusted + ". A live certificate of the hostname in this environment, whatever its source, is replaced; another environment's uploaded certificate never is (409 " + ingress.CodeHostTaken + "). The key is stored sealed and is never returned, audited or logged. " +
 			"Audited as ingress.cert_uploaded. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *UploadIngressCertInput) (*IngressCertUploadedOutput, error) {
