@@ -387,6 +387,14 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 		}); err != nil {
 			return fmt.Errorf("move the local environment's certificates: %w", err)
 		}
+		// Every certificate write raises certs_version of the environment it touches
+		// (internal/ingresscert/doc.go); the Local environment's own ingress_env row goes with the Local
+		// row, and a fold that moved nothing raises nothing.
+		if moved > 0 {
+			if err := q.BumpIngressCertsVersion(ctx, sqlc.BumpIngressCertsVersionParams{EnvID: swarmEnvID, UpdatedAt: now}); err != nil {
+				return fmt.Errorf("count the moved certificates of the swarm environment: %w", err)
+			}
+		}
 		if _, err := q.DeleteEnvironment(ctx, p.localID); err != nil {
 			return fmt.Errorf("retire the local environment: %w", err)
 		}
