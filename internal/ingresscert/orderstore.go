@@ -46,6 +46,9 @@ func issuanceKind(orderKind string) string {
 type orderStore struct {
 	s      *Store
 	certID string
+	// known is what the issuance ledger needs of the certificate, as the run read it before ordering. It counts a
+	// certificate the CA issued for a row that is gone by the time it is stored. Empty for OrderStore.
+	known issuance
 }
 
 var _ acme.OrderStore = orderStore{}
@@ -53,6 +56,65 @@ var _ acme.OrderStore = orderStore{}
 // OrderStore returns the order store of certificate certID, the seam acme.Orderer runs against.
 func (s *Store) OrderStore(certID string) acme.OrderStore {
 	return orderStore{s: s, certID: certID}
+}
+
+// runOrderStore is OrderStore for a run of certificate c: it also knows c's hostname, issuer and kind of order, so
+// a certificate issued for c is counted even when c's row was deleted before it could be stored.
+func (s *Store) runOrderStore(c Cert) acme.OrderStore {
+	kind := issuanceKind(acme.KindIssue)
+	if len(c.ChainPEM) > 0 {
+		kind = issuanceKind(acme.KindRenew)
+	}
+	return orderStore{s: s, certID: c.ID, known: issuance{host: c.Hostname, issuer: c.Issuer, kind: kind}}
+}
+
+// issuance is what an issuance ledger row says besides its time.
+type issuance struct{ host, issuer, kind string }
+
+// issuanceOfRow is the issuance of a certificate row's order: a row that holds a chain is renewing it, which is
+// how a run chooses the kind of its order.
+func issuanceOfRow(row sqlc.IngressCert) issuance {
+	kind := issuanceKind(acme.KindIssue)
+	if row.ChainPem != "" {
+		kind = issuanceKind(acme.KindRenew)
+	}
+	return issuance{host: row.Hostname, issuer: row.Issuer, kind: kind}
+}
+
+// countGone records in the issuance ledger a certificate the CA issued, and so counted against its limits, whose
+// row was deleted, retired or replaced by an upload before the certificate could be stored. Nothing else is
+// written: no certificate, no version and no audit row. An issuance with no hostname, or one under no registered
+// domain, is not counted, as the governor would not read it.
+func (o orderStore) countGone(ctx context.Context, inf issuance, now time.Time) error {
+	if inf.host == "" || inf.issuer == "" {
+		return nil
+	}
+	registered, rerr := RegisteredDomain(inf.host)
+	if rerr != nil {
+		return nil // a hostname with no registered domain has no budget to count against
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("ingresscert: make an issuance id: %w", err)
+	}
+	bg := context.WithoutCancel(ctx) // the CA has counted it; a run being stopped does not undo that
+	return o.s.write(bg, nil, func(_ *sql.Tx, q *sqlc.Queries) (bool, error) {
+		if err := q.InsertIngressCertIssuance(bg, sqlc.InsertIngressCertIssuanceParams{
+			ID: id.String(), Issuer: inf.issuer, RegisteredDomain: registered, Hostname: inf.host, Kind: inf.kind, IssuedAt: toNanos(now),
+		}); err != nil {
+			return false, fmt.Errorf("ingresscert: count the issuance of %q: %w", inf.host, err)
+		}
+		return false, nil
+	})
+}
+
+// gone is ErrCertGone after the issued certificate was counted with inf; a failure to count is joined to it, so
+// the run still ends as gone.
+func (o orderStore) gone(ctx context.Context, inf issuance, now time.Time) error {
+	if err := o.countGone(ctx, inf, now); err != nil {
+		return errors.Join(ErrCertGone, err)
+	}
+	return ErrCertGone
 }
 
 // OpenOrderID returns the id of the open order of certificate certID. found is false, with a nil error, when
@@ -159,8 +221,8 @@ const storeIssuedAttempts = 3
 // StoreIssued writes the issued chain and its key into the certificate's ingress_certs row, closes the order
 // as stored, counts the issuance, raises the environment's certs_version and records the audit entry, in one
 // transaction: a failure keeps none of it. The certificate row is checked first, inside the transaction: when
-// it is missing, retired or no longer an ACME row (an upload replaced it), nothing is written and ErrCertGone
-// is returned (CRT-08, T-20-11). The certificate is durable when StoreIssued returns.
+// it is missing, retired or no longer an ACME row (an upload replaced it), the certificate is not stored and
+// ErrCertGone is returned (CRT-08, T-20-11); the issuance alone is still counted, since the CA counted it. The certificate is durable when StoreIssued returns.
 func (o orderStore) StoreIssued(ctx context.Context, orderID string, chainPEM []byte, key *ecdsa.PrivateKey, now time.Time) error {
 	keyPEM, err := encodeECKey(key)
 	if err != nil {
@@ -170,7 +232,8 @@ func (o orderStore) StoreIssued(ctx context.Context, orderID string, chainPEM []
 		// The environment is needed to open the transaction, so it is read first and checked again inside it.
 		pre, err := o.s.st.RQ.GetIngressCert(ctx, o.certID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrCertGone
+			// The CA issued and counted the certificate all the same (WR-06).
+			return o.gone(ctx, o.known, now)
 		}
 		if err != nil {
 			return fmt.Errorf("ingresscert: read certificate %q: %w", o.certID, err)
@@ -178,6 +241,9 @@ func (o orderStore) StoreIssued(ctx context.Context, orderID string, chainPEM []
 		err = o.storeIssued(ctx, pre.EnvID, orderID, chainPEM, keyPEM, now)
 		if errors.Is(err, errEnvMoved) {
 			continue
+		}
+		if errors.Is(err, ErrCertGone) {
+			return o.gone(ctx, issuanceOfRow(pre), now)
 		}
 		if err != nil {
 			return err

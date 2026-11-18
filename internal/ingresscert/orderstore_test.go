@@ -418,7 +418,7 @@ func TestOrderStoreResumesACutRun(t *testing.T) {
 	}
 }
 
-// StoreIssued writes nothing when the certificate row it was ordered for is gone: deleted, retired, or
+// StoreIssued stores no certificate when the certificate row it was ordered for is gone: deleted, retired, or
 // replaced by an upload. An upload is never overwritten by an ACME certificate (CRT-08, T-20-11).
 func TestStoreIssuedRefusesAReplacedCertificate(t *testing.T) {
 	const host = "app.example.com"
@@ -480,9 +480,7 @@ func TestStoreIssuedRefusesAReplacedCertificate(t *testing.T) {
 			if n := r.count(`SELECT COUNT(*) FROM ingress_certs WHERE hostname = ? AND source = 'acme' AND chain_pem != ''`, host); n != 0 {
 				t.Errorf("%d ACME rows hold a chain, want none", n)
 			}
-			if n := r.count(`SELECT COUNT(*) FROM ingress_cert_issuances`); n != 0 {
-				t.Errorf("%d issuance rows, want none", n)
-			}
+			// The issuance the CA counted is still recorded: TestStoreIssuedCountsWhatTheCAIssuedForAGoneRow.
 			if n := r.count(`SELECT COUNT(*) FROM audit_log WHERE action IN (?, ?)`, audit.ActionIngressCertIssued, audit.ActionIngressCertRenewed); n != 0 {
 				t.Errorf("%d issue audit rows, want none", n)
 			}

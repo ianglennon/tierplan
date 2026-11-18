@@ -146,7 +146,7 @@ func (m *Manager) runCert(ctx, mgr context.Context, id string) string {
 		req.Kind = acme.KindRenew
 		req.Replaces = m.replacesOf(ctx, client, dir.URL, c)
 	}
-	_, err = acme.NewOrderer(client, m.d.Store.OrderStore(id), solver, m.clock).Run(ctx, req, nil)
+	_, err = acme.NewOrderer(client, m.d.Store.runOrderStore(c), solver, m.clock).Run(ctx, req, nil)
 	switch {
 	case err == nil && req.Kind == acme.KindRenew:
 		return OutcomeRenewed
