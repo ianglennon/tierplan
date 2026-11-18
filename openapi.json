@@ -1,6 +1,19 @@
 {
   "components": {
     "schemas": {
+      "AcceptIngressCertTermsInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "agreeTos": {
+            "description": "Must be true: the Admin agrees to the terms of service of the directories, on behalf of this install",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agreeTos"
+        ],
+        "type": "object"
+      },
       "AcceptInviteInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -9812,6 +9825,76 @@
           "environmentName",
           "before",
           "after"
+        ],
+        "type": "object"
+      },
+      "IngressCertAccountBody": {
+        "additionalProperties": false,
+        "properties": {
+          "directories": {
+            "description": "The directories certificates are ordered from, production then staging, with the terms each advertises",
+            "items": {
+              "$ref": "#/components/schemas/IngressCertAccountDirectoryBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "paused": {
+            "description": "True while issuing is paused, as it is after a restore until an Admin resumes it",
+            "type": "boolean"
+          },
+          "pausedReason": {
+            "description": "Why issuing is paused, such as restore; empty when it is not",
+            "type": "string"
+          },
+          "termsAccepted": {
+            "description": "True once an Admin acknowledged the terms of the directories below. No certificate is ordered before that",
+            "type": "boolean"
+          },
+          "termsAcceptedAt": {
+            "description": "When the terms were acknowledged, left out before",
+            "format": "date-time",
+            "type": "string"
+          },
+          "termsAcceptedBy": {
+            "description": "The ID of the user who acknowledged them, left out before",
+            "type": "string"
+          }
+        },
+        "required": [
+          "termsAccepted",
+          "directories",
+          "paused",
+          "pausedReason"
+        ],
+        "type": "object"
+      },
+      "IngressCertAccountDirectoryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "issuer": {
+            "description": "The Let's Encrypt directory this is",
+            "enum": [
+              "production",
+              "staging"
+            ],
+            "type": "string"
+          },
+          "termsOfService": {
+            "description": "The URL of the terms the directory advertises; empty when it names none or could not be read just now",
+            "type": "string"
+          },
+          "url": {
+            "description": "The directory's address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer",
+          "url",
+          "termsOfService"
         ],
         "type": "object"
       },
@@ -43880,6 +43963,124 @@
         "summary": "Get the certificate the server serves",
         "tags": [
           "https"
+        ]
+      }
+    },
+    "/api/ingress/certificates/account": {
+      "get": {
+        "description": "Whether an Admin has acknowledged the certificate authority's terms (and when and by whom), the directories certificates are ordered from with the terms each one advertises (empty when a directory cannot be read just now), and whether issuing is paused, with the reason. No certificate is ordered before the terms are acknowledged. Needs settings.read.",
+        "operationId": "getIngressCertificateAccount",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertAccountBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the install-wide state of the per-hostname certificates",
+        "tags": [
+          "ingress"
+        ]
+      },
+      "put": {
+        "description": "Records, once for the whole install, that the Admin agrees to the terms of service of the directories listed by the GET, so TierPlan may register the ACME accounts it needs to order certificates for ingress hostnames. Certificates queued for want of an account are ordered on the next round. 422 ingress_terms_required when agreeTos is not true, and nothing is recorded. Repeating it once accepted answers 200 and records nothing more. Audited as https.ingress_terms_accepted with the directories it covers. Needs settings.write.",
+        "operationId": "acceptIngressCertificateTerms",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptIngressCertTermsInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertAccountBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Acknowledge the certificate authority's terms for per-hostname certificates",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/ingress/certificates/resume": {
+      "post": {
+        "description": "Lifts the pause a restore puts on ordering and renewing the per-hostname certificates, once the Admin has seen what was restored. Nothing is ordered by the call itself; the next round does that, and it is woken now. 204. 409 ingress_certs_not_paused when nothing is paused. Audited as https.ingress_resumed with the reason that was lifted. Needs settings.write.",
+        "operationId": "resumeIngressCertificates",
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Resume per-hostname certificates after a restore",
+        "tags": [
+          "ingress"
         ]
       }
     },

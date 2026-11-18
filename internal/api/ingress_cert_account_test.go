@@ -142,3 +142,123 @@ func TestIngressTermsAcceptanceThroughTheAPI(t *testing.T) {
 		t.Errorf("%d audit rows after a repeat, want 1", n)
 	}
 }
+
+// D-36: an acknowledgement without agreement is refused whatever way it is left out, nothing is stored and nothing is
+// audited.
+func TestIngressTermsRefusedWithoutAgreement(t *testing.T) {
+	t.Parallel()
+	f, _ := newIngressCAFix(t)
+
+	rec := f.credCall(t, f.admin, http.MethodPut, certAccountPath, `{"agreeTos":false}`)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "ingress_terms_required" {
+		t.Errorf("PUT agreeTos false: %d %s, want 422 ingress_terms_required", rec.Code, rec.Body)
+	}
+	// Leaving the field out is refused by the schema before the handler runs; it records nothing either.
+	if rec := f.credCall(t, f.admin, http.MethodPut, certAccountPath, `{}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("PUT {}: %d %s, want 422", rec.Code, rec.Body)
+	}
+	if st, err := f.ingressCertStore.State(context.Background()); err != nil || !st.TermsAcceptedAt.IsZero() || st.TermsAcceptedBy != "" {
+		t.Errorf("State = %+v, %v, want nothing stored", st, err)
+	}
+	if a := f.account(t, f.admin); a.TermsAccepted || a.TermsAcceptedAt != "" {
+		t.Errorf("GET = %+v, want terms not accepted", a)
+	}
+	if n := len(f.ingressAudit(t, audit.ActionHTTPSIngressTermsAccepted)); n != 0 {
+		t.Errorf("%d audit rows, want none for a refusal", n)
+	}
+
+	// A directory that cannot be read just now leaves its terms empty and does not fail the read.
+	g, gfake := newIngressCAFix(t)
+	gfake.FailNext(acmetest.EndpointDirectory, acmetest.Problem{Status: 503, Type: "serverInternal", Detail: "maintenance"})
+	a := g.account(t, g.admin)
+	if len(a.Directories) != 2 {
+		t.Fatalf("directories = %+v, want both listed", a.Directories)
+	}
+	if a.Directories[0].TermsOfService != "" || a.Directories[0].URL != gfake.DirectoryURL() {
+		t.Errorf("unreadable production directory = %+v, want its URL and empty terms", a.Directories[0])
+	}
+}
+
+// D-32: after a restore the state says it is paused and why; resuming lifts it, is audited with the reason that was
+// lifted, and a second resume finds nothing to lift.
+func TestIngressResumeAfterRestore(t *testing.T) {
+	t.Parallel()
+	f, _ := newIngressCAFix(t)
+	if _, err := f.st.Write.Exec(`UPDATE ingress_cert_state SET paused_reason = 'restore' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if a := f.account(t, f.admin); !a.Paused || a.PausedReason != "restore" {
+		t.Fatalf("GET while paused = %+v, want paused with reason restore", a)
+	}
+
+	rec := f.credCall(t, f.admin, http.MethodPost, certResumePath, "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume: %d %s, want 204", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("resume Cache-Control = %q, want no-store", cc)
+	}
+	if a := f.account(t, f.admin); a.Paused || a.PausedReason != "" {
+		t.Errorf("GET after resume = %+v, want not paused", a)
+	}
+	if st, err := f.ingressCertStore.State(context.Background()); err != nil || st.PausedReason != "" {
+		t.Errorf("State after resume = %+v, %v, want the pause cleared", st, err)
+	}
+	rows := f.ingressAudit(t, audit.ActionHTTPSIngressResumed)
+	if len(rows) != 1 || rows[0].ActorID != "id-admin" || rows[0].Details["reason"] != "restore" || rows[0].EnvID != "" || rows[0].Result != string(audit.ResultSuccess) {
+		t.Fatalf("audit rows = %+v, want one https.ingress_resumed with reason restore", rows)
+	}
+
+	rec = f.credCall(t, f.admin, http.MethodPost, certResumePath, "")
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_certs_not_paused" {
+		t.Errorf("resume when not paused: %d %s, want 409 ingress_certs_not_paused", rec.Code, rec.Body)
+	}
+	if n := len(f.ingressAudit(t, audit.ActionHTTPSIngressResumed)); n != 1 {
+		t.Errorf("%d audit rows after a refused resume, want 1", n)
+	}
+}
+
+// D-37, T-20-40: the three routes are instance settings. An environment's Admin (ingress.manage) and an Operator are
+// refused on every one, and what they tried changes nothing; the instance admin is let through.
+func TestIngressInstallRoutesNeedGlobalSettingsPermissions(t *testing.T) {
+	t.Parallel()
+	f, _ := newIngressCAFix(t)
+	if _, err := f.st.Write.Exec(`UPDATE ingress_cert_state SET paused_reason = 'restore' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	routes := []struct {
+		name, method, path, body string
+		ok                       int
+	}{
+		{"read", http.MethodGet, certAccountPath, "", http.StatusOK},
+		{"accept", http.MethodPut, certAccountPath, `{"agreeTos":true}`, http.StatusOK},
+		{"resume", http.MethodPost, certResumePath, "", http.StatusNoContent},
+	}
+	for _, r := range routes {
+		for who, u := range map[string]credentialUser{"the Admin of A": f.adminA, "an Operator of A": f.operatorA, "the Admin of B": f.adminB} {
+			rec := f.credCall(t, u, r.method, r.path, r.body)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s as %s: %d %s, want 403", r.name, who, rec.Code, rec.Body)
+			}
+		}
+	}
+	st, err := f.ingressCertStore.State(context.Background())
+	if err != nil || !st.TermsAcceptedAt.IsZero() || st.PausedReason != "restore" {
+		t.Errorf("State after the refusals = %+v, %v, want nothing changed", st, err)
+	}
+	for _, action := range []string{audit.ActionHTTPSIngressTermsAccepted, audit.ActionHTTPSIngressResumed} {
+		if n := len(f.ingressAudit(t, action)); n != 0 {
+			t.Errorf("%d %s rows after the refusals, want none", n, action)
+		}
+	}
+
+	for _, r := range routes {
+		rec := f.credCall(t, f.admin, r.method, r.path, r.body)
+		if rec.Code != r.ok {
+			t.Errorf("%s as the instance admin: %d %s, want %d", r.name, rec.Code, rec.Body, r.ok)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want no-store", r.name, cc)
+		}
+	}
+}

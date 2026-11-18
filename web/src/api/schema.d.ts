@@ -4648,6 +4648,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ingress/certificates/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the install-wide state of the per-hostname certificates
+         * @description Whether an Admin has acknowledged the certificate authority's terms (and when and by whom), the directories certificates are ordered from with the terms each one advertises (empty when a directory cannot be read just now), and whether issuing is paused, with the reason. No certificate is ordered before the terms are acknowledged. Needs settings.read.
+         */
+        get: operations["getIngressCertificateAccount"];
+        /**
+         * Acknowledge the certificate authority's terms for per-hostname certificates
+         * @description Records, once for the whole install, that the Admin agrees to the terms of service of the directories listed by the GET, so TierPlan may register the ACME accounts it needs to order certificates for ingress hostnames. Certificates queued for want of an account are ordered on the next round. 422 ingress_terms_required when agreeTos is not true, and nothing is recorded. Repeating it once accepted answers 200 and records nothing more. Audited as https.ingress_terms_accepted with the directories it covers. Needs settings.write.
+         */
+        put: operations["acceptIngressCertificateTerms"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ingress/certificates/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume per-hostname certificates after a restore
+         * @description Lifts the pause a restore puts on ordering and renewing the per-hostname certificates, once the Admin has seen what was restored. Nothing is ordered by the call itself; the next round does that, and it is woken now. 204. 409 ingress_certs_not_paused when nothing is paused. Audited as https.ingress_resumed with the reason that was lifted. Needs settings.write.
+         */
+        post: operations["resumeIngressCertificates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instance": {
         parameters: {
             query?: never;
@@ -6044,6 +6088,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptIngressCertTermsInputBody: {
+            /** @description Must be true: the Admin agrees to the terms of service of the directories, on behalf of this install */
+            agreeTos: boolean;
+        };
         AcceptInviteInputBody: {
             /** @description At least 12 characters, not on the common-password list and not containing the username */
             password: string;
@@ -9985,6 +10033,34 @@ export interface components {
             userId: string;
             /** @description The user's username */
             username: string;
+        };
+        IngressCertAccountBody: {
+            /** @description The directories certificates are ordered from, production then staging, with the terms each advertises */
+            directories: components["schemas"]["IngressCertAccountDirectoryBody"][] | null;
+            /** @description True while issuing is paused, as it is after a restore until an Admin resumes it */
+            paused: boolean;
+            /** @description Why issuing is paused, such as restore; empty when it is not */
+            pausedReason: string;
+            /** @description True once an Admin acknowledged the terms of the directories below. No certificate is ordered before that */
+            termsAccepted: boolean;
+            /**
+             * Format: date-time
+             * @description When the terms were acknowledged, left out before
+             */
+            termsAcceptedAt?: string;
+            /** @description The ID of the user who acknowledged them, left out before */
+            termsAcceptedBy?: string;
+        };
+        IngressCertAccountDirectoryBody: {
+            /**
+             * @description The Let's Encrypt directory this is
+             * @enum {string}
+             */
+            issuer: "production" | "staging";
+            /** @description The URL of the terms the directory advertises; empty when it names none or could not be read just now */
+            termsOfService: string;
+            /** @description The directory's address */
+            url: string;
         };
         IngressCertBody: {
             /**
@@ -26964,6 +27040,98 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPSStatusBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressCertificateAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressCertAccountBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acceptIngressCertificateTerms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptIngressCertTermsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressCertAccountBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resumeIngressCertificates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

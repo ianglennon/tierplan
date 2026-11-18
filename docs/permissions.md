@@ -62,8 +62,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `services.control` | environment | no | yes | yes | yes | no | Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts |
 | `services.manage` | environment | no | no | yes | yes | no | Create and remove services |
 | `services.read` | environment | yes | yes | yes | yes | no | View services, their tasks, logs, stats and placement |
-| `settings.read` | global | no | no | no | yes | no | View settings |
-| `settings.write` | global | no | no | no | yes | no | Change settings |
+| `settings.read` | global | no | no | no | yes | no | View settings, including whether the certificate authority's terms are acknowledged for hostname certificates |
+| `settings.write` | global | no | no | no | yes | no | Change settings, including acknowledging the certificate authority's terms for hostname certificates and resuming them after a restore |
 | `shells.manage` | environment | no | no | yes | yes | no | See and end other people's shells |
 | `stacks.create` | environment | no | no | yes | yes | no | Create stacks |
 | `stacks.delete` | environment | no | no | yes | yes | no | Remove stacks |
