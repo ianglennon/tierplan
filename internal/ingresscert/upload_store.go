@@ -124,7 +124,7 @@ func (s *Store) Upload(ctx context.Context, in UploadInput, roots *x509.CertPool
 	}
 
 	var out Cert
-	err = s.writeDurable(ctx, envs, "the uploaded certificate", func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+	err = s.writeCommitted(ctx, envs, "the uploaded certificate", func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
 		replaced := ReplacedNone
 		moved := false
 		var fromEnv, fromDomain string

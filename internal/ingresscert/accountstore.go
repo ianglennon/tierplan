@@ -30,7 +30,7 @@ func (s *Store) AccountStore() acme.AccountStore {
 }
 
 // SaveAccount stores the account and seals its key under ingress-acme-account/v1/<directory url>. The key is
-// durable when SaveAccount returns.
+// committed when SaveAccount returns, and made durable at once unless the checkpoint is blocked.
 func (a accountStore) SaveAccount(ctx context.Context, acct acme.Account, key *ecdsa.PrivateKey) error {
 	keyPEM, err := encodeECKey(key)
 	if err != nil {
@@ -40,7 +40,7 @@ func (a accountStore) SaveAccount(ctx context.Context, acct acme.Account, key *e
 	if err != nil {
 		return fmt.Errorf("ingresscert: seal the ACME account key %q: %w", acct.DirectoryURL, err)
 	}
-	return a.s.writeDurable(ctx, nil, "the ACME account key", func(_ *sql.Tx, q *sqlc.Queries) (bool, error) {
+	return a.s.writeCommitted(ctx, nil, "the ACME account key", func(_ *sql.Tx, q *sqlc.Queries) (bool, error) {
 		if err := q.UpsertIngressACMEAccount(ctx, sqlc.UpsertIngressACMEAccountParams{
 			DirectoryUrl: acct.DirectoryURL, AccountUrl: acct.URL, KeySealed: sealed, Contact: acct.Contact,
 			TosUrl: acct.TermsOfService, CreatedAt: toNanos(acct.CreatedAt),

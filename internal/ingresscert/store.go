@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -73,6 +74,9 @@ type StoreDeps struct {
 	Notifier *ingress.Notifier
 	// Audit records the audit rows written inside a certificate write; nil records nothing.
 	Audit AuditTx
+	// Log receives the warning of a write that committed but could not be made durable at once; nil is the default
+	// logger.
+	Log *slog.Logger
 }
 
 // Store keeps the per-hostname certificates in the database. Private keys are vault envelopes sealed
@@ -83,6 +87,9 @@ type Store struct {
 	now      func() time.Time
 	notifier *ingress.Notifier
 	audit    AuditTx
+	log      *slog.Logger
+	// walCheckpoint runs the checkpoint and returns its busy column; a test seam, nil is the database's own.
+	walCheckpoint func(ctx context.Context) (busy int, err error)
 }
 
 // NewStore returns a Store.
@@ -91,7 +98,11 @@ func NewStore(d StoreDeps) *Store {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{st: d.St, v: d.Vault, now: now, notifier: d.Notifier, audit: d.Audit}
+	log := d.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Store{st: d.St, v: d.Vault, now: now, notifier: d.Notifier, audit: d.Audit, log: log}
 }
 
 // Cert is one ingress_certs row. Every instant is the zero time.Time when it is not set. KeySealed is the
@@ -248,7 +259,8 @@ func (s *Store) write(ctx context.Context, envIDs []string, fn func(tx *sql.Tx, 
 }
 
 // writeDurable is write followed by a WAL checkpoint, for a write that stores a private key: a key that
-// is about to be used must not be lost to a power cut (the acme Store does the same).
+// is about to be used must not be lost to a power cut (the acme Store does the same). A blocked checkpoint is an
+// error, so the caller does not go on to use the key; a write whose caller only reports it uses writeCommitted.
 func (s *Store) writeDurable(ctx context.Context, envIDs []string, what string, fn func(tx *sql.Tx, q *sqlc.Queries) (changed bool, err error)) error {
 	if err := s.write(ctx, envIDs, fn); err != nil {
 		return err
@@ -256,17 +268,43 @@ func (s *Store) writeDurable(ctx context.Context, envIDs []string, what string, 
 	return s.checkpoint(ctx, what)
 }
 
+// writeCommitted is write followed by a best-effort WAL checkpoint (settle), for a write that stores a private key
+// whose caller must not be told it failed once it has committed: the change, its audit row and its certs_version
+// are in place, and a retry would repeat them.
+func (s *Store) writeCommitted(ctx context.Context, envIDs []string, what string, fn func(tx *sql.Tx, q *sqlc.Queries) (changed bool, err error)) error {
+	if err := s.write(ctx, envIDs, fn); err != nil {
+		return err
+	}
+	s.settle(ctx, what)
+	return nil
+}
+
 // checkpoint folds the write-ahead log into the database file. The store runs with synchronous(NORMAL),
 // under which a committed transaction can still be lost to a power cut until the log is checkpointed.
 func (s *Store) checkpoint(ctx context.Context, what string) error {
-	var busy, logFrames, checkpointed int
-	if err := s.st.Write.QueryRowContext(ctx, `PRAGMA wal_checkpoint(FULL)`).Scan(&busy, &logFrames, &checkpointed); err != nil {
+	var busy int
+	var err error
+	if s.walCheckpoint != nil {
+		busy, err = s.walCheckpoint(ctx)
+	} else {
+		var logFrames, checkpointed int
+		err = s.st.Write.QueryRowContext(ctx, `PRAGMA wal_checkpoint(FULL)`).Scan(&busy, &logFrames, &checkpointed)
+	}
+	if err != nil {
 		return fmt.Errorf("ingresscert: make %s durable: %w", what, err)
 	}
 	if busy != 0 {
 		return fmt.Errorf("ingresscert: make %s durable: the checkpoint was blocked by another connection", what)
 	}
 	return nil
+}
+
+// settle is checkpoint after a commit: a checkpoint that is blocked (a reader on the read pool can do it) or fails
+// does not undo the commit, so it is logged as a warning and not returned. The next checkpoint folds the log in.
+func (s *Store) settle(ctx context.Context, what string) {
+	if err := s.checkpoint(context.WithoutCancel(ctx), what); err != nil {
+		s.log.Warn("a certificate write committed but is not yet durable", "what", what, "error", err)
+	}
 }
 
 // PendingInput is a certificate to ask for.

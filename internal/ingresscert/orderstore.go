@@ -222,7 +222,9 @@ const storeIssuedAttempts = 3
 // as stored, counts the issuance, raises the environment's certs_version and records the audit entry, in one
 // transaction: a failure keeps none of it. The certificate row is checked first, inside the transaction: when
 // it is missing, retired or no longer an ACME row (an upload replaced it), the certificate is not stored and
-// ErrCertGone is returned (CRT-08, T-20-11); the issuance alone is still counted, since the CA counted it. The certificate is durable when StoreIssued returns.
+// ErrCertGone is returned (CRT-08, T-20-11); the issuance alone is still counted, since the CA counted it. The
+// certificate is committed when StoreIssued returns, and made durable at once unless the checkpoint is blocked,
+// which is logged and not returned: the certificate is stored and counted either way.
 func (o orderStore) StoreIssued(ctx context.Context, orderID string, chainPEM []byte, key *ecdsa.PrivateKey, now time.Time) error {
 	keyPEM, err := encodeECKey(key)
 	if err != nil {
@@ -248,7 +250,9 @@ func (o orderStore) StoreIssued(ctx context.Context, orderID string, chainPEM []
 		if err != nil {
 			return err
 		}
-		return o.s.checkpoint(ctx, "the issued certificate")
+		// Committed: the certificate is stored and counted, so a blocked checkpoint is not a failed issue.
+		o.s.settle(ctx, "the issued certificate")
+		return nil
 	}
 	return errEnvMoved
 }
