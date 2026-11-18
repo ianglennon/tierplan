@@ -16,8 +16,8 @@ import (
 
 // runJob is the body of one run's hub job. jctx is the job's context (the hub cancels it on Cancel and Close) and
 // mgr the context of the round that started the run: either ending ends the order, which stays open to be
-// resumed. The slot is freed and the run's outcome reported only after the result is written, and the manager
-// is woken so a queued row does not wait for the tick.
+// resumed. The slot is freed, the manager woken (so a queued row does not wait for the tick) and the run's outcome
+// reported only after the result is written.
 func (m *Manager) runJob(jctx, mgr context.Context, id string) {
 	ctx, cancel := context.WithCancelCause(jctx)
 	defer cancel(nil)
@@ -27,10 +27,12 @@ func (m *Manager) runJob(jctx, mgr context.Context, id string) {
 	outcome := OutcomeFailed // a panic still frees the slot
 	defer func() {
 		m.drop(id)
+		// The wake comes before the report: the test seam is the only reader of RunEnded, and a test that
+		// waits for the report and then drains the wake channel must find this run's wake already there.
+		m.Wake()
 		if m.d.RunEnded != nil {
 			m.d.RunEnded(id, outcome)
 		}
-		m.Wake()
 	}()
 	outcome = m.runCert(ctx, mgr, id)
 }
