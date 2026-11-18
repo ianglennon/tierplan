@@ -208,6 +208,39 @@ func TestPebbleIssuesAPerHostnameCertificate(t *testing.T) {
 	}
 }
 
+// TestPebbleRenewsAPerHostnameCertificateInPlace (D-34, D-44, CRT-04): with renew_at forced to now the next round
+// renews the certificate against Pebble in the same row: a new serial, an issuance of kind renewal, no TXT record
+// left.
+func TestPebbleRenewsAPerHostnameCertificateInPlace(t *testing.T) {
+	g := newPebbleRig(t)
+	first := g.roundAndAwait(OutcomeIssued)
+	g.requireIssued(first)
+	g.requireNoTXT()
+
+	// Pebble runs on real time, so the renewal is forced by the row's clock rather than by advancing one. The
+	// next window check is put a day off so the round does not replace the time with the authority's own.
+	now := time.Now()
+	if _, err := g.s.st.Write.Exec(
+		`UPDATE ingress_certs SET renew_at = ?, renew_basis = ?, ari_next_check_at = ? WHERE id = ?`,
+		toNanos(now.Add(-time.Second)), string(acme.BasisHalf), toNanos(now.Add(24*time.Hour)), first.ID); err != nil {
+		t.Fatalf("force the renewal time: %v", err)
+	}
+
+	row := g.roundAndAwait(OutcomeRenewed)
+
+	if row.ID != first.ID {
+		t.Errorf("the renewal is in row %s, want the same row %s", row.ID, first.ID)
+	}
+	if row.Serial == first.Serial {
+		t.Errorf("the serial is still %s after the renewal", row.Serial)
+	}
+	g.requireIssued(row)
+	g.requireNoTXT()
+	if n := countRows(t, g, `SELECT COUNT(*) FROM ingress_cert_issuances WHERE kind = 'renewal'`); n != 1 {
+		t.Errorf("%d renewal issuances, want 1", n)
+	}
+}
+
 // countRows runs a count query on the rig's database.
 func countRows(t *testing.T, g *pebbleRig, query string, args ...any) int {
 	t.Helper()
