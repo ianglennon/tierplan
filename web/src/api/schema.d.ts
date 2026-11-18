@@ -17255,7 +17255,9 @@ export interface components {
              * @description Which warning this is
              * @enum {string}
              */
-            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents" | "https_cert_fallback" | "https_renewal_failed" | "https_acme_paused" | "https_clock_off" | "https_cert_expiring" | "https_txt_left";
+            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents" | "https_cert_fallback" | "https_renewal_failed" | "https_acme_paused" | "https_clock_off" | "https_cert_expiring" | "https_txt_left" | "ingress_cert_expiring" | "ingress_cert_renewal_failed" | "ingress_certs_paused";
+            /** @description For the ingress_ warnings: the facts the bell turns into a headline and a sentence */
+            ingress?: components["schemas"]["WarningIngressCertBody"];
             /** @description For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from */
             ip?: string;
             /** @description For key_backup: where the generated encryption key is stored */
@@ -17340,6 +17342,47 @@ export interface components {
             until?: string;
             /** @description For https_renewal_failed: the DNS zone a DNS-01 failure was about */
             zone?: string;
+        };
+        WarningIngressCertBody: {
+            /** @description For ingress_cert_renewal_failed: the error class of the last failed order */
+            class?: string;
+            /**
+             * Format: int64
+             * @description For ingress_cert_expiring: the warning reached, 14 or 7 days before expiry
+             */
+            days?: number;
+            /** @description For ingress_cert_expiring and ingress_cert_renewal_failed: the most urgent hostname */
+            hostname?: string;
+            /**
+             * @description For ingress_cert_expiring and ingress_cert_renewal_failed: the issuer of an ACME certificate; absent for an uploaded one
+             * @enum {string}
+             */
+            issuer?: "" | "staging" | "production";
+            /**
+             * Format: int64
+             * @description For the kinds that name one hostname: how many other certificates the item covers
+             */
+            more?: number;
+            /**
+             * Format: date-time
+             * @description For ingress_cert_renewal_failed: when the order is tried again
+             */
+            nextAttemptAt?: string;
+            /**
+             * Format: date-time
+             * @description For ingress_cert_expiring and ingress_cert_renewal_failed: when the certificate expires
+             */
+            notAfter?: string;
+            /**
+             * @description For ingress_certs_paused: why issuing is paused
+             * @enum {string}
+             */
+            reason?: "" | "restore";
+            /**
+             * @description For ingress_cert_expiring and ingress_cert_renewal_failed: where the certificate comes from
+             * @enum {string}
+             */
+            source?: "" | "acme" | "upload";
         };
         WarningsBody: {
             /** @description Only the warnings that apply; empty when there are none */

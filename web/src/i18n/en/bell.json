@@ -217,6 +217,53 @@
       "description_one": "It was installed after the backup you restored.",
       "description_other": "They were installed after the backup you restored.",
       "link": "View"
+    },
+    "ingress": {
+      "more_one": "and {{count}} more",
+      "more_other": "and {{count}} more",
+      "expiring": {
+        "title": "Certificate expires soon",
+        "titleUrgent": "Certificate expires within a week",
+        "bodyAcme": "The certificate for {{hostname}} expires on {{date}} and has not renewed.",
+        "bodyAcmeUrgent": "The certificate for {{hostname}} expires on {{date}} and still has not renewed. Visitors get a certificate error after that.",
+        "bodyUpload": "The uploaded certificate for {{hostname}} expires on {{date}}. TierPlan never renews an uploaded certificate, so upload a new one before then.",
+        "bodyUploadUrgent": "The uploaded certificate for {{hostname}} expires on {{date}}. TierPlan never renews an uploaded certificate, so upload a new one now, or visitors get a certificate error."
+      },
+      "renewalFailed": {
+        "title": "A certificate couldn't be renewed",
+        "titleStaging": "A staging certificate failed",
+        "body": "The certificate for {{hostname}} couldn't be renewed: {{reason}}.",
+        "bodyStaging": "The staging (test) certificate for {{hostname}} failed: {{reason}}. It is a test certificate and is never served.",
+        "next": "Next attempt {{time}}."
+      },
+      "paused": {
+        "title": "Certificates are paused",
+        "restore": "This TierPlan was restored from a backup, so it won't order or renew certificates until an instance admin resumes them.",
+        "other": "TierPlan isn't ordering or renewing certificates until an instance admin resumes them."
+      },
+      "class": {
+        "generic": "the order failed",
+        "rate_limited": "the certificate authority is limiting requests",
+        "validation_unreachable": "the certificate authority couldn't reach the host",
+        "validation_dns": "the certificate authority couldn't look up the host's DNS records",
+        "validation_txt": "the challenge record wasn't found in DNS",
+        "caa_forbids": "a CAA record doesn't allow this certificate authority",
+        "identifier_rejected": "the certificate authority won't issue for this hostname",
+        "contact_invalid": "the ACME account's contact email was rejected",
+        "tos_action_required": "the certificate authority needs its terms accepted again",
+        "account_gone": "the ACME account is no longer known",
+        "profile_invalid": "the certificate profile isn't offered",
+        "ca_unavailable": "the certificate authority had an error",
+        "ca_untrusted": "the certificate authority's certificate isn't trusted",
+        "internal": "an error TierPlan couldn't classify",
+        "dns_token_invalid": "the DNS provider refused the domain's token",
+        "dns_token_scope": "the domain's token can't edit DNS records",
+        "dns_zone_not_found": "the token can't see the DNS zone",
+        "dns_delegation_target": "the challenge name is delegated to a zone TierPlan can't edit",
+        "dns_not_visible": "the challenge record didn't appear in DNS in time",
+        "dns_rate_limited": "the DNS provider is limiting changes",
+        "dns_unavailable": "the DNS provider couldn't be reached"
+      }
     }
   }
 }

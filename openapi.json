@@ -27256,9 +27256,16 @@
               "https_acme_paused",
               "https_clock_off",
               "https_cert_expiring",
-              "https_txt_left"
+              "https_txt_left",
+              "ingress_cert_expiring",
+              "ingress_cert_renewal_failed",
+              "ingress_certs_paused"
             ],
             "type": "string"
+          },
+          "ingress": {
+            "$ref": "#/components/schemas/WarningIngressCertBody",
+            "description": "For the ingress_ warnings: the facts the bell turns into a headline and a sentence"
           },
           "ip": {
             "description": "For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from",
@@ -27397,6 +27404,66 @@
           },
           "zone": {
             "description": "For https_renewal_failed: the DNS zone a DNS-01 failure was about",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "WarningIngressCertBody": {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "description": "For ingress_cert_renewal_failed: the error class of the last failed order",
+            "type": "string"
+          },
+          "days": {
+            "description": "For ingress_cert_expiring: the warning reached, 14 or 7 days before expiry",
+            "format": "int64",
+            "type": "integer"
+          },
+          "hostname": {
+            "description": "For ingress_cert_expiring and ingress_cert_renewal_failed: the most urgent hostname",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "For ingress_cert_expiring and ingress_cert_renewal_failed: the issuer of an ACME certificate; absent for an uploaded one",
+            "enum": [
+              "",
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "more": {
+            "description": "For the kinds that name one hostname: how many other certificates the item covers",
+            "format": "int64",
+            "type": "integer"
+          },
+          "nextAttemptAt": {
+            "description": "For ingress_cert_renewal_failed: when the order is tried again",
+            "format": "date-time",
+            "type": "string"
+          },
+          "notAfter": {
+            "description": "For ingress_cert_expiring and ingress_cert_renewal_failed: when the certificate expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "description": "For ingress_certs_paused: why issuing is paused",
+            "enum": [
+              "",
+              "restore"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "description": "For ingress_cert_expiring and ingress_cert_renewal_failed: where the certificate comes from",
+            "enum": [
+              "",
+              "acme",
+              "upload"
+            ],
             "type": "string"
           }
         },

@@ -132,6 +132,7 @@ type Entry =
   | { kind: "backupFailed"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "unknownAgents"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "https"; key: string; severity: "error" | "warning"; since?: string; w: Warning }
+  | { kind: "ingress"; key: string; severity: "warning"; since?: string; w: Warning }
   | { kind: "env"; key: string; severity: EnvWarning["severity"]; since?: string; w: EnvWarning }
   | {
       kind: "registry";
@@ -185,6 +186,14 @@ const isAutoDeployKind = (id: string): id is AutoDeployKind =>
 
 // The HTTPS items, in the order the bell lists them (D-04): the fallback first, then the failed
 // renewal, the pause, the clock, the certificate that runs short and the TXT record left behind.
+// The per-hostname certificate items, in the order the bell lists them (D-10, D-32): the install-wide
+// pause, then failing renewals, then certificates that expire soon.
+const INGRESS_ORDER = [
+  "ingress_certs_paused",
+  "ingress_cert_renewal_failed",
+  "ingress_cert_expiring",
+] as const;
+
 const HTTPS_ORDER = [
   "https_cert_fallback",
   "https_renewal_failed",
@@ -214,6 +223,7 @@ export function bellEntries(
     unknownAgents?: Warning[];
     registry?: CredentialAlert[];
     https?: Warning[];
+    ingress?: Warning[];
   },
   now: number = Date.now(),
 ): Entry[] {
@@ -373,6 +383,11 @@ export function bellEntries(
       severity: httpsError(w) ? "error" : "warning",
       w,
     });
+  }
+  // Ingress certificate items follow the HTTPS ones: text only, one per kind (D-41).
+  const ingressRank = (w: Warning) => INGRESS_ORDER.findIndex((id) => id === w.id);
+  for (const w of [...(instance.ingress ?? [])].sort((a, b) => ingressRank(a) - ingressRank(b))) {
+    entries.push({ kind: "ingress", key: w.id, severity: "warning", w });
   }
   for (const w of instance.proxy) {
     entries.push({ kind: "proxy", key: w.id, severity: "warning", w });
@@ -608,6 +623,108 @@ function HttpsEntry({ w, close }: { w: Warning; close: () => void }) {
       <Link to="/settings/https" className={`${linkClass} text-sm ${touchLink}`} onClick={close}>
         {t("bell.https.link")}
       </Link>
+    </BellItem>
+  );
+}
+
+// A date and a date with its time, in the reader's locale, for a certificate's end and the next attempt.
+function certDate(iso: string | undefined): string {
+  const ms = Date.parse(iso ?? "");
+  if (Number.isNaN(ms)) return "";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(ms);
+}
+function certDateTime(iso: string | undefined): string {
+  const ms = Date.parse(iso ?? "");
+  if (Number.isNaN(ms)) return "";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(ms);
+}
+
+// The failure classes the certificate order can report, each with a phrase of its own in bell.json.
+// A class this build does not know gets the generic phrase.
+const INGRESS_CLASSES = [
+  "rate_limited",
+  "validation_unreachable",
+  "validation_dns",
+  "validation_txt",
+  "caa_forbids",
+  "identifier_rejected",
+  "contact_invalid",
+  "tos_action_required",
+  "account_gone",
+  "profile_invalid",
+  "ca_unavailable",
+  "ca_untrusted",
+  "internal",
+  "dns_token_invalid",
+  "dns_token_scope",
+  "dns_zone_not_found",
+  "dns_delegation_target",
+  "dns_not_visible",
+  "dns_rate_limited",
+  "dns_unavailable",
+] as const;
+
+// The title and body of one ingress certificate item (D-10, D-32, D-41, D-45), or null for an id this
+// build has no words for. The server sends facts, never sentences. Every value is plain text, and
+// the item carries no link: there is no ingress page until Phase 27.
+function ingressItemCopy(w: Warning, t: Translate): { title: string; body: string } | null {
+  const g = w.ingress;
+  const hostname = g?.hostname ?? "";
+  const more = g?.more ?? 0;
+  const withMore = (body: string) =>
+    more > 0 ? `${body} ${t("bell.ingress.more", { count: more })}` : body;
+  switch (w.id) {
+    case "ingress_cert_expiring": {
+      const urgent = g?.days === 7;
+      const kind = g?.source === "upload" ? "Upload" : "Acme";
+      return {
+        title: t(urgent ? "bell.ingress.expiring.titleUrgent" : "bell.ingress.expiring.title"),
+        body: withMore(
+          t(`bell.ingress.expiring.body${kind}${urgent ? "Urgent" : ""}`, {
+            hostname,
+            date: certDate(g?.notAfter),
+          }),
+        ),
+      };
+    }
+    case "ingress_cert_renewal_failed": {
+      const cls = INGRESS_CLASSES.find((c) => c === g?.class);
+      const reason = t(cls ? `bell.ingress.class.${cls}` : "bell.ingress.class.generic");
+      const staging = g?.issuer === "staging";
+      const time = certDateTime(g?.nextAttemptAt);
+      const sentence = t(
+        staging ? "bell.ingress.renewalFailed.bodyStaging" : "bell.ingress.renewalFailed.body",
+        { hostname, reason },
+      );
+      const next = time ? ` ${t("bell.ingress.renewalFailed.next", { time })}` : "";
+      return {
+        title: t(
+          staging ? "bell.ingress.renewalFailed.titleStaging" : "bell.ingress.renewalFailed.title",
+        ),
+        body: withMore(`${sentence}${next}`),
+      };
+    }
+    case "ingress_certs_paused":
+      return {
+        title: t("bell.ingress.paused.title"),
+        body: t(
+          g?.reason === "restore" ? "bell.ingress.paused.restore" : "bell.ingress.paused.other",
+        ),
+      };
+    default:
+      return null;
+  }
+}
+
+// One ingress certificate item: words only, no link, and nothing to dismiss. It derives from live
+// state and ends when its cause does.
+function IngressEntry({ w }: { w: Warning }) {
+  const t = useT();
+  const copy = ingressItemCopy(w, t);
+  if (!copy) return null;
+  return (
+    <BellItem id={w.id} title={copy.title}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">{copy.body}</ItemDescription>
     </BellItem>
   );
 }
@@ -1112,6 +1229,7 @@ export function HealthBell() {
   const backupFailed = items.filter((w) => w.id === "backup_failed");
   const unknownAgents = items.filter((w) => w.id === "unknown_agents");
   const httpsItems = items.filter((w) => HTTPS_ORDER.some((id) => id === w.id));
+  const ingressItems = items.filter((w) => INGRESS_ORDER.some((id) => id === w.id));
   const now = useNow();
   const entries = bellEntries(
     envItems,
@@ -1123,6 +1241,7 @@ export function HealthBell() {
       unknownAgents,
       registry: registryItems,
       https: httpsItems,
+      ingress: ingressItems,
     },
     now,
   );
@@ -1402,6 +1521,8 @@ export function HealthBell() {
                       );
                     case "https":
                       return <HttpsEntry key={entry.key} w={entry.w} close={actions.close} />;
+                    case "ingress":
+                      return <IngressEntry key={entry.key} w={entry.w} />;
                     case "keyBackup":
                       return (
                         <Item
