@@ -361,9 +361,9 @@ func TestReclaimAfterDomainReRegistrationGetsACertificate(t *testing.T) {
 	const newToken = "domain-token-second-7d2f"
 	g := newRenewRig(t, true)
 	mod, tokens := g.recordTokens()
-	m, first := g.issueOne("app.example.com", mod)
+	m, _ := g.issueOne("app.example.com", mod)
 	m.round(ctx) // gives the certificate its renewal clock
-	first = g.live("app.example.com")
+	first := g.live("app.example.com")
 
 	g.claim() // release
 	m.round(ctx)

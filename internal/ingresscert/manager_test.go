@@ -357,8 +357,8 @@ func TestManagerRunsAtMostTwoOrdersAtOnce(t *testing.T) {
 	m := g.newManager()
 
 	m.round(ctx)
-	g.clk.Clock.WaitArmed(t) // both runs wait on the CA
-	g.clk.Clock.WaitArmed(t)
+	g.clk.WaitArmed(t) // both runs wait on the CA
+	g.clk.WaitArmed(t)
 	if n := g.fake.Count(acmetest.EndpointNewOrder); n != MaxConcurrent {
 		t.Fatalf("the CA saw %d orders, want %d", n, MaxConcurrent)
 	}
@@ -387,7 +387,7 @@ func TestManagerRunsAtMostTwoOrdersAtOnce(t *testing.T) {
 	}
 
 	release()
-	g.clk.Clock.Advance(acme.PollInterval)
+	g.clk.Advance(acme.PollInterval)
 	g.awaitEnd()
 	g.awaitEnd()
 	m.round(ctx)
@@ -505,9 +505,9 @@ func TestManagerResumesACutOrderAfterARestart(t *testing.T) {
 		t.Fatalf("phase = %q after Start, want queued: a crash must not hold a reservation", row.Phase)
 	}
 	m2.round(ctx)
-	g.clk.Clock.WaitArmed(t) // the resumed run waits on the CA
+	g.clk.WaitArmed(t) // the resumed run waits on the CA
 	release()
-	g.clk.Clock.Advance(acme.PollInterval)
+	g.clk.Advance(acme.PollInterval)
 	if end := g.awaitEnd(); end.outcome != OutcomeIssued {
 		t.Fatalf("the resumed run ended %q, want issued", end.outcome)
 	}
@@ -578,7 +578,7 @@ func TestRunWakesOnTheNotifier(t *testing.T) {
 	}
 
 	// Time moving on ends the cycle and arms the next.
-	g.clk.Clock.Advance(Tick)
+	g.clk.Advance(Tick)
 	testsupport.Await(t, "Run to arm its next tick", g.clk.ticks)
 	if n := g.clk.armed.Load(); n != 2 {
 		t.Errorf("Run armed %d tick timers after one tick, want 2", n)

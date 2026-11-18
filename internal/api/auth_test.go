@@ -321,7 +321,7 @@ type authFixture struct {
 type fixtureClock struct{ c *fakeClock }
 
 func (c fixtureClock) Now() time.Time                         { return c.c.now() }
-func (c fixtureClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+func (c fixtureClock) After(d time.Duration) <-chan time.Time { return make(chan time.Time) }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()

@@ -150,9 +150,9 @@ func TestTwoRunsCannotBothTakeTheLastSlot(t *testing.T) {
 func TestRenewalsBypassTheDomainCap(t *testing.T) {
 	ctx := context.Background()
 	g := newRenewRig(t, true)
-	m, first := g.issueOne("a.example.com")
+	m, _ := g.issueOne("a.example.com")
 	m.round(ctx)
-	first = g.live("a.example.com")
+	first := g.live("a.example.com")
 	g.clock.Advance(first.RenewAt.Sub(g.clock.Now()))
 	g.seedNew(NewCertsCap)
 	g.claim("a.example.com", "b.example.com")

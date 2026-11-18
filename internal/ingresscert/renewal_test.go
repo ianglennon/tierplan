@@ -62,9 +62,9 @@ func (g *mgrRig) issueOne(host string, mod ...func(*Deps)) (*Manager, Cert) {
 func TestTracerAnIssuedCertificateRenewsAtHalfLife(t *testing.T) {
 	ctx := context.Background()
 	g := newRenewRig(t, true)
-	m, first := g.issueOne("app.example.com")
+	m, _ := g.issueOne("app.example.com")
 	m.round(ctx) // gives the certificate its renewal clock
-	first = g.live("app.example.com")
+	first := g.live("app.example.com")
 
 	wantAt, _ := HalfLifeRenewAt(first.NotBefore, first.NotAfter)
 	if !first.RenewAt.Equal(wantAt) || first.RenewBasis != string(acme.BasisHalf) {
@@ -253,9 +253,9 @@ func TestARIPollFailureKeepsRenewAt(t *testing.T) {
 func TestRenewalNamesTheReplacedCertificateOnlyForTheSameAccount(t *testing.T) {
 	ctx := context.Background()
 	g := newRenewRig(t, false)
-	m, first := g.issueOne("app.example.com")
+	m, _ := g.issueOne("app.example.com")
 	m.round(ctx)
-	first = g.live("app.example.com")
+	first := g.live("app.example.com")
 
 	g.clock.Advance(first.RenewAt.Sub(g.clock.Now()))
 	m.round(ctx)
@@ -300,9 +300,9 @@ func TestRenewalNamesTheReplacedCertificateOnlyForTheSameAccount(t *testing.T) {
 func TestRenewalsAreScheduledBeforeNewNames(t *testing.T) {
 	ctx := context.Background()
 	g := newRenewRig(t, true)
-	m, first := g.issueOne("a.example.com")
+	m, _ := g.issueOne("a.example.com")
 	m.round(ctx)
-	first = g.live("a.example.com")
+	first := g.live("a.example.com")
 
 	// Two new names, both made before the renewal is due and so older than the renewal row (set to the far future), and one slot of the two taken by something else.
 	g.claim("a.example.com", "b.example.com", "c.example.com")

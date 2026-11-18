@@ -300,12 +300,12 @@ func (m *Manager) deleteRecord(ctx context.Context, p dns.Provider, row DNSRecor
 }
 
 // zoneGone reports whether a refused delete was refused because the zone is gone (DNSEngine.zoneGone).
-func (m *Manager) zoneGone(ctx context.Context, p dns.Provider, row DNSRecord, delErr error) bool {
+func (m *Manager) zoneGone(ctx context.Context, p dns.Provider, row DNSRecord, delErr error) bool { //nolint:unused // kept as a three-line wrapper by D-43: the own path keeps its shape
 	return m.dns.zoneGone(ctx, p, row, delErr)
 }
 
 // stampFailed records a failed delete on the row (DNSEngine.stampFailed).
-func (m *Manager) stampFailed(ctx context.Context, row DNSRecord, class string) {
+func (m *Manager) stampFailed(ctx context.Context, row DNSRecord, class string) { //nolint:unused // kept as a three-line wrapper by D-43: the own path keeps its shape
 	m.dns.stampFailed(ctx, row, class)
 }
 

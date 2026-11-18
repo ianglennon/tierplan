@@ -127,7 +127,7 @@ func TestIngressCertRequestAheadThenList(t *testing.T) {
 // setCert changes columns of a certificate row directly, as the manager's own writes would have left them.
 func (f *ingressFix) setCert(t *testing.T, id, set string, args ...any) {
 	t.Helper()
-	if _, err := f.st.Write.Exec(`UPDATE ingress_certs SET `+set+` WHERE id = ?`, append(args, id)...); err != nil {
+	if _, err := f.st.Write.Exec(`UPDATE ingress_certs SET `+set+` WHERE id = ?`, append(args, id)...); err != nil { //nolint:gosec // G202: set is a literal column list from this file
 		t.Fatalf("update certificate %s: %v", id, err)
 	}
 }

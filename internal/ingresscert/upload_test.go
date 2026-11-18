@@ -52,7 +52,7 @@ func ecKey(t *testing.T, curve elliptic.Curve) *ecdsa.PrivateKey {
 
 // pubOf returns the public half of a generated key.
 func pubOf(key crypto.PrivateKey) crypto.PublicKey {
-	return key.(interface{ Public() crypto.PublicKey }).Public()
+	return key.(interface{ Public() crypto.PublicKey }).Public() //nolint:errcheck,forcetypeassert // a test helper: every key it is given has Public
 }
 
 // TestValidateUpload is the matrix of D-23: every refusal has its stable code, a wildcard covers one label,

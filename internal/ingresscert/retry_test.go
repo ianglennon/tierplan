@@ -199,9 +199,9 @@ func TestRetryNowQueuesAndTheNextRoundRuns(t *testing.T) {
 
 	t.Run("an idle certificate", func(t *testing.T) {
 		g := newRenewRig(t, true)
-		m, first := g.issueOne("app.example.com")
+		m, _ := g.issueOne("app.example.com")
 		m.round(ctx) // the renewal clock
-		first = g.live("app.example.com")
+		first := g.live("app.example.com")
 		if first.Phase != PhaseIdle {
 			t.Fatalf("phase = %q, want idle", first.Phase)
 		}

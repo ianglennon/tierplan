@@ -263,9 +263,9 @@ func TestTokenFailureHoldsTheWholeDomain(t *testing.T) {
 func TestRemovedDomainIsNeverRetried(t *testing.T) {
 	ctx := context.Background()
 	g := newRenewRig(t, true)
-	m, first := g.issueOne("app.example.com")
+	m, _ := g.issueOne("app.example.com")
 	m.round(ctx) // the renewal clock
-	first = g.live("app.example.com")
+	first := g.live("app.example.com")
 	g.claim()
 	m.round(ctx)
 	if err := g.dom.DeleteDomain(ctx, "env-1", g.domain.ID, nil); err != nil {
@@ -301,9 +301,9 @@ func TestRemovedDomainStopNeverBlocksAReclaim(t *testing.T) {
 	const newToken = "domain-token-after-removal-31c9"
 	g := newRenewRig(t, true)
 	mod, tokens := g.recordTokens()
-	m, first := g.issueOne("app.example.com", mod)
+	m, _ := g.issueOne("app.example.com", mod)
 	m.round(ctx) // the renewal clock
-	first = g.live("app.example.com")
+	first := g.live("app.example.com")
 	g.claim()
 	m.round(ctx)
 	if err := g.dom.DeleteDomain(ctx, "env-1", g.domain.ID, nil); err != nil {
