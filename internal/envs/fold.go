@@ -256,7 +256,8 @@ func (s *Service) foldOfferedFor(ctx context.Context, row sqlc.Environment) bool
 // not a node of that environment's swarm, or that it was folded already; ErrFoldNodeNotListed
 // that the host calls itself a node of it but its managers do not list it (D-06);
 // *IngressActiveError (errors.Is ErrFoldIngressActive) that the local environment holds ingress
-// state the fold would delete (D-12).
+// state the fold would delete (D-12). The local environment's certificates are moved to the
+// swarm environment, not deleted, and how many is audited as certificates_moved.
 func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, ip, ua string) error {
 	rows, err := s.st.RQ.ListEnvironments(ctx)
 	if err != nil {
@@ -316,8 +317,9 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 	}
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	q := s.st.Q.WithTx(tx)
-	// D-12, D-17: the Local environment's row is deleted below and every ingress table cascades
-	// from it, so ingress state refuses the fold. The count is read here, in the write
+	// D-12, D-17: the Local environment's row is deleted below and the ingress tables cascade
+	// from it, so ingress state refuses the fold. Certificate rows are not counted here: the fold
+	// moves them to the swarm environment below. The count is read here, in the write
 	// transaction, so state added after the offer is still seen. A socket fold has no Local row
 	// and so nothing to lose. The host's socket and the names the audit entry carries come from
 	// the Local row a fold retires; a socket fold has no such row.
@@ -374,8 +376,17 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 		// Folded, rebound, disabled, its cluster changed or removed since it was looked at.
 		return ErrFoldNotOffered
 	}
-	var grants int64
+	var grants, moved int64
 	if p.source == foldSourceLocal {
+		// Phase 20 D-01 keys certificates by hostname for the whole install and a key is sealed under
+		// the cert id, so a row changes environment with nothing re-sealed; an ordering row is safe to
+		// move because StoreIssued re-reads the row's environment. The 00045 cascade would otherwise
+		// delete them with the Local row.
+		if moved, err = q.MoveIngressCertsToEnv(ctx, sqlc.MoveIngressCertsToEnvParams{
+			ToEnvID: swarmEnvID, UpdatedAt: now, FromEnvID: p.localID,
+		}); err != nil {
+			return fmt.Errorf("move the local environment's certificates: %w", err)
+		}
 		if _, err := q.DeleteEnvironment(ctx, p.localID); err != nil {
 			return fmt.Errorf("retire the local environment: %w", err)
 		}
@@ -392,6 +403,7 @@ func (s *Service) FoldLocal(ctx context.Context, actor audit.Actor, swarmEnvID, 
 			"swarm": swarm.Name, "local": localName, "local_environment": localEnvID,
 			"node": p.nodeID, "socket": socketPath, "grants": strconv.FormatInt(grants, 10),
 			"source": p.source, "role": p.role,
+			"certificates_moved": strconv.FormatInt(moved, 10),
 		},
 	}); err != nil {
 		return fmt.Errorf("audit local host folded: %w", err)

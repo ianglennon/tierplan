@@ -46,3 +46,14 @@ DELETE FROM ingress_certs WHERE id = ?;
 -- Every retired row of the install: they stopped being the live certificate of their hostname and are kept only
 -- while they still serve.
 SELECT * FROM ingress_certs WHERE retired_at <> 0 ORDER BY hostname, retired_at, id;
+
+-- name: MoveIngressCertsToEnv :execrows
+-- The fold of a Local environment moves every certificate row of that environment, live or retired and whatever
+-- its phase, to the swarm environment, because the 00045 cascade would otherwise delete them with the Local row.
+-- Certificates are keyed by hostname for the whole install (Phase 20 D-01) and a key is sealed under the row's own
+-- id, so nothing is re-sealed; domain_id, phase and every other column stay as they are. The rows affected are how
+-- many moved.
+UPDATE ingress_certs SET
+    env_id = sqlc.arg(to_env_id),
+    updated_at = sqlc.arg(updated_at)
+WHERE env_id = sqlc.arg(from_env_id);

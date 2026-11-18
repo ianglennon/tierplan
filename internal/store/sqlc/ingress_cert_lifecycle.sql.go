@@ -118,6 +118,32 @@ func (q *Queries) ListRetiredIngressCerts(ctx context.Context) ([]IngressCert, e
 	return items, nil
 }
 
+const moveIngressCertsToEnv = `-- name: MoveIngressCertsToEnv :execrows
+UPDATE ingress_certs SET
+    env_id = ?1,
+    updated_at = ?2
+WHERE env_id = ?3
+`
+
+type MoveIngressCertsToEnvParams struct {
+	ToEnvID   string
+	UpdatedAt int64
+	FromEnvID string
+}
+
+// The fold of a Local environment moves every certificate row of that environment, live or retired and whatever
+// its phase, to the swarm environment, because the 00045 cascade would otherwise delete them with the Local row.
+// Certificates are keyed by hostname for the whole install (Phase 20 D-01) and a key is sealed under the row's own
+// id, so nothing is re-sealed; domain_id, phase and every other column stay as they are. The rows affected are how
+// many moved.
+func (q *Queries) MoveIngressCertsToEnv(ctx context.Context, arg MoveIngressCertsToEnvParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, moveIngressCertsToEnv, arg.ToEnvID, arg.UpdatedAt, arg.FromEnvID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const repointIngressCert = `-- name: RepointIngressCert :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The TierPlan Authors */
