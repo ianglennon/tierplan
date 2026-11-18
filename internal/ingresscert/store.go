@@ -480,5 +480,10 @@ func (s *Store) writeCertificate(ctx context.Context, q *sqlc.Queries, certID st
 	}); err != nil {
 		return fmt.Errorf("ingresscert: store certificate %q: %w", certID, err)
 	}
+	// The renewal clock of the certificate this one replaces is not this one's: it is worked out afresh at the
+	// next round.
+	if err := q.UpdateIngressCertRenewal(ctx, sqlc.UpdateIngressCertRenewalParams{UpdatedAt: ts, ID: certID}); err != nil {
+		return fmt.Errorf("ingresscert: clear the renewal time of certificate %q: %w", certID, err)
+	}
 	return nil
 }

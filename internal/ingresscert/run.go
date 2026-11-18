@@ -129,10 +129,16 @@ func (m *Manager) runCert(ctx, mgr context.Context, id string) string {
 			return orderID, nil
 		},
 	}
-	_, err = acme.NewOrderer(client, m.d.Store.OrderStore(id), solver, m.clock).Run(ctx, acme.OrderRequest{
-		Kind: acme.KindIssue, Names: []string{c.Hostname}, Profile: profile,
-	}, nil)
+	req := acme.OrderRequest{Kind: acme.KindIssue, Names: []string{c.Hostname}, Profile: profile}
+	if len(c.ChainPEM) > 0 {
+		// A row that holds a chain is renewing it (D-09).
+		req.Kind = acme.KindRenew
+		req.Replaces = m.replacesOf(ctx, client, dir.URL, c)
+	}
+	_, err = acme.NewOrderer(client, m.d.Store.OrderStore(id), solver, m.clock).Run(ctx, req, nil)
 	switch {
+	case err == nil && req.Kind == acme.KindRenew:
+		return OutcomeRenewed
 	case err == nil:
 		return OutcomeIssued
 	case errors.Is(err, ErrCertGone):

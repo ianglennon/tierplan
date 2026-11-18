@@ -4,7 +4,9 @@
 package ingresscert
 
 import (
+	"cmp"
 	"context"
+	"slices"
 
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
@@ -19,6 +21,11 @@ func (m *Manager) schedule(ctx context.Context, st State) {
 		m.log.Error("the certificate manager could not list the queued certificates", "error", err)
 		return
 	}
+	// Renewals first (D-14): a row that holds a chain is a certificate that is being served and is about to run
+	// out, which matters more than a name that has none. The order within each group is the oldest first.
+	slices.SortStableFunc(due, func(a, b Cert) int {
+		return cmp.Compare(rank(a), rank(b))
+	})
 	for _, c := range due {
 		if ctx.Err() != nil {
 			return
@@ -56,6 +63,14 @@ func (m *Manager) schedule(ctx context.Context, st State) {
 			m.drop(id)
 		}
 	}
+}
+
+// rank orders the rows the scheduler starts: a renewal (a row with a chain) before a new name.
+func rank(c Cert) int {
+	if len(c.ChainPEM) > 0 {
+		return 0
+	}
+	return 1
 }
 
 // waitsForTerms reports whether row c, which is queued for want of an account, still has no way forward: the
