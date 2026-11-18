@@ -98,14 +98,32 @@ type Issued struct {
 // variable, so it cannot be resumed after a restart, and it deactivates authorizations on failure.
 type Orderer struct {
 	client *Client
-	store  *Store
+	store  OrderStore
 	solver Solver
 	clock  stackops.Clock
 }
 
+// OrderStore is where an Orderer keeps its one open order and the issued certificate. *Store is the
+// own certificate's; internal/ingresscert has one per certificate (D-30).
+type OrderStore interface {
+	// OpenOrder returns the open order and its certificate key; found is false, with a nil error,
+	// only when no order is open.
+	OpenOrder(ctx context.Context) (Order, *ecdsa.PrivateKey, bool, error)
+	// InsertOrder stores a new open order with its certificate key, durably.
+	InsertOrder(ctx context.Context, o Order, key *ecdsa.PrivateKey) error
+	// UpdateOrder moves an order to a stage and records how many times it has been resumed.
+	UpdateOrder(ctx context.Context, id, stage string, resumeCount int, now time.Time) error
+	// CloseOrder closes an order in a final stage; OpenOrder no longer returns it.
+	CloseOrder(ctx context.Context, id, stage string, now time.Time) error
+	// StoreIssued keeps the issued chain and its key and closes the order as stored.
+	StoreIssued(ctx context.Context, orderID string, chainPEM []byte, key *ecdsa.PrivateKey, now time.Time) error
+}
+
+var _ OrderStore = (*Store)(nil)
+
 // NewOrderer is an Orderer that orders through c, keeps its state in s, answers challenges with solver
 // and judges time by clock.
-func NewOrderer(c *Client, s *Store, solver Solver, clock stackops.Clock) *Orderer {
+func NewOrderer(c *Client, s OrderStore, solver Solver, clock stackops.Clock) *Orderer {
 	return &Orderer{client: c, store: s, solver: solver, clock: clock}
 }
 

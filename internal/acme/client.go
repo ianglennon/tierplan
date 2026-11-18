@@ -98,7 +98,7 @@ type DirectoryMeta struct {
 // Client talks to one ACME directory on behalf of TierPlan.
 type Client struct {
 	dir   Directory
-	store *Store
+	store AccountStore
 	clock stackops.Clock
 	ua    string
 
@@ -116,8 +116,22 @@ type Client struct {
 	metaTil time.Time // zero until the first fetch
 }
 
+// AccountStore is where a Client keeps its ACME account, one per directory. *Store is the own
+// certificate's; internal/ingresscert keeps one per issuer (D-30).
+type AccountStore interface {
+	// Account returns the account and key held for directoryURL; found is false, with a nil error,
+	// when there is none.
+	Account(ctx context.Context, directoryURL string) (Account, *ecdsa.PrivateKey, bool, error)
+	// SaveAccount stores the account and its key.
+	SaveAccount(ctx context.Context, a Account, key *ecdsa.PrivateKey) error
+	// ForgetAccount removes the account held for directoryURL.
+	ForgetAccount(ctx context.Context, directoryURL string) error
+}
+
+var _ AccountStore = (*Store)(nil)
+
 // NewClient is a Client for dir, keeping its account in store and judging time by clock.
-func NewClient(dir Directory, store *Store, clock stackops.Clock, userAgent string) *Client {
+func NewClient(dir Directory, store AccountStore, clock stackops.Clock, userAgent string) *Client {
 	return &Client{dir: dir, store: store, clock: clock, ua: userAgent, skew: newSkewRecorder(clock)}
 }
 
