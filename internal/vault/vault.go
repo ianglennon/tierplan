@@ -80,6 +80,13 @@ const (
 	// The DNS token of an ingress domain is sealed under the domain's ID (Phase 18), so a token copied
 	// into another domain's row does not open.
 	ContextIngressDNSToken = "ingress-dns-token/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// A per-hostname certificate's private key is sealed under the certificate row's ID, the fresh key of an
+	// open per-hostname order under the order's ID, and the per-hostname ACME account key under its
+	// directory URL (Phase 20), so a value copied into another row does not open. The row ID, not the
+	// hostname, so a hostname that moves to another environment keeps its key.
+	ContextIngressCertKey        = "ingress-cert-key/v1/"     //nolint:gosec // G101: a sealing context label, not a credential
+	ContextIngressOrderKey       = "ingress-order-key/v1/"    //nolint:gosec // G101: a sealing context label, not a credential
+	ContextIngressACMEAccountKey = "ingress-acme-account/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "tierplan/key-id/v1"

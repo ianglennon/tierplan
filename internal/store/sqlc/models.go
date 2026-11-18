@@ -41,6 +41,7 @@ type AcmeDnsRecord struct {
 	LastErrorClass string
 	ZoneName       string
 	AccountID      string
+	CredentialRef  string
 }
 
 type AcmeOrder struct {
@@ -363,6 +364,98 @@ type ImageUpdateRun struct {
 	FinishedAt   int64
 }
 
+type IngressAcmeAccount struct {
+	DirectoryUrl string
+	AccountUrl   string
+	KeySealed    string
+	Contact      string
+	TosUrl       string
+	CreatedAt    int64
+}
+
+type IngressCert struct {
+	ID                  string
+	Hostname            string
+	EnvID               string
+	DomainID            string
+	Source              string
+	Issuer              string
+	RetiredAt           int64
+	RetiredReason       string
+	ChainPem            string
+	KeySealed           string
+	Serial              string
+	NotBefore           int64
+	NotAfter            int64
+	IssuedAt            int64
+	AccountUrl          string
+	Phase               string
+	StoppedReason       string
+	QueueCode           string
+	QueueUsed           int64
+	QueueCap            int64
+	QueueDomain         string
+	QueueNextSlotAt     int64
+	RequestedAt         int64
+	RequestedBy         string
+	UnreferencedSince   int64
+	ConsecutiveFailures int64
+	LastAttemptAt       int64
+	NextAttemptAt       int64
+	RetryAfterUntil     int64
+	FailureTimes        string
+	LastErrorAt         int64
+	LastErrorClass      string
+	LastErrorDetail     string
+	RenewAt             int64
+	RenewBasis          string
+	AriWindowStart      int64
+	AriWindowEnd        int64
+	AriCheckedAt        int64
+	AriNextCheckAt      int64
+	Ready               int64
+	LastSuccessAt       int64
+	CreatedBy           string
+	CreatedAt           int64
+	UpdatedAt           int64
+}
+
+type IngressCertIssuance struct {
+	ID               string
+	Issuer           string
+	RegisteredDomain string
+	Hostname         string
+	Kind             string
+	IssuedAt         int64
+}
+
+type IngressCertOrder struct {
+	ID            string
+	CertID        string
+	DirectoryUrl  string
+	OrderUrl      string
+	Kind          string
+	Names         string
+	Profile       string
+	Replaces      string
+	AccountUrl    string
+	CertKeySealed string
+	Stage         string
+	Status        string
+	ResumeCount   int64
+	ExpiresAt     int64
+	CreatedAt     int64
+	UpdatedAt     int64
+}
+
+type IngressCertState struct {
+	ID              int64
+	PausedReason    string
+	TermsAcceptedAt int64
+	TermsAcceptedBy string
+	UpdatedAt       int64
+}
+
 type IngressDomain struct {
 	ID             string
 	EnvID          string
@@ -382,6 +475,7 @@ type IngressEnv struct {
 	ConfigVersion int64
 	UpdatedAt     int64
 	UpdatedBy     string
+	CertsVersion  int64
 }
 
 type IngressHostname struct {
