@@ -6,12 +6,19 @@ package ingresscert
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
@@ -21,6 +28,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
 	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // rigProvider is the provider id of the fake DNS provider, which is what its ledger rows carry.
@@ -270,5 +278,258 @@ func TestTracerOrdererIssuesIntoIngressCerts(t *testing.T) {
 	}
 	if n, err := r.ledger.CountDNSRecordsByCredential(ctx, rigCredential); err != nil || n != 0 {
 		t.Errorf("ledger rows of the credential = %d, %v, want 0", n, err)
+	}
+}
+
+// insertOrder stores an open order of certificate certID for host and returns it with its key.
+func (r *issueRig) insertOrder(certID, host string) (acme.Order, *ecdsa.PrivateKey) {
+	r.t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	now := r.clock.Now()
+	o := acme.Order{
+		ID: id.String(), DirectoryURL: r.fake.DirectoryURL(), URL: "https://ca.test/order/" + id.String(),
+		Kind: acme.KindIssue, Names: []string{host}, AccountURL: "https://ca.test/acct/1",
+		Stage: acme.StageCreated, ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := r.s.OrderStore(certID).InsertOrder(context.Background(), o, key); err != nil {
+		r.t.Fatalf("InsertOrder: %v", err)
+	}
+	return o, key
+}
+
+// An order store sees only its own certificate's orders, the order key opens only under the order's own
+// context, and deleting the certificate deletes its orders and their sealed keys (D-35).
+func TestOrderStoreIsScopedToItsCertificate(t *testing.T) {
+	ctx := context.Background()
+	r := newIssueRig(t)
+	a, b := r.pending("a.example.com"), r.pending("b.example.com")
+	orderA, _ := r.insertOrder(a.ID, "a.example.com")
+	orderB, _ := r.insertOrder(b.ID, "b.example.com")
+
+	for _, tc := range []struct {
+		cert Cert
+		want acme.Order
+	}{{a, orderA}, {b, orderB}} {
+		got, key, found, err := r.s.OrderStore(tc.cert.ID).OpenOrder(ctx)
+		if err != nil || !found || key == nil {
+			t.Fatalf("OpenOrder(%s) = found %v, %v", tc.cert.Hostname, found, err)
+		}
+		if got.ID != tc.want.ID || !slices.Equal(got.Names, tc.want.Names) || got.Status != "open" || got.AccountURL != tc.want.AccountURL {
+			t.Errorf("OpenOrder(%s) = %+v, want order %s", tc.cert.Hostname, got, tc.want.ID)
+		}
+		if id, found, err := r.s.OpenOrderID(ctx, tc.cert.ID); err != nil || !found || id != tc.want.ID {
+			t.Errorf("OpenOrderID(%s) = %q, %v, %v, want %s", tc.cert.Hostname, id, found, err, tc.want.ID)
+		}
+	}
+	if _, _, found, err := r.s.OrderStore("no-such-cert").OpenOrder(ctx); err != nil || found {
+		t.Errorf("OpenOrder of an unknown certificate = found %v, %v, want none", found, err)
+	}
+
+	// The key is sealed under the order's id and opens nowhere else.
+	var sealed string
+	if err := r.st.Read.QueryRow(`SELECT cert_key_sealed FROM ingress_cert_orders WHERE id = ?`, orderA.ID).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.v.Open(vault.ContextIngressOrderKey+orderA.ID, sealed); err != nil {
+		t.Errorf("the order key does not open under its own context: %v", err)
+	}
+	for _, wrong := range []string{vault.ContextIngressOrderKey + orderB.ID, vault.ContextIngressCertKey + a.ID, vault.ContextACMEOrderKey + orderA.ID} {
+		if _, err := r.v.Open(wrong, sealed); err == nil {
+			t.Errorf("the order key opened under %q", wrong)
+		}
+	}
+
+	// Deleting the certificate takes its orders, and so their sealed keys, with it; the other's stay.
+	if _, err := r.st.Write.Exec(`DELETE FROM ingress_certs WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.count(`SELECT COUNT(*) FROM ingress_cert_orders WHERE cert_id = ?`, a.ID); n != 0 {
+		t.Errorf("%d orders of the deleted certificate remain, want 0", n)
+	}
+	if n := r.count(`SELECT COUNT(*) FROM ingress_cert_orders WHERE cert_id = ?`, b.ID); n != 1 {
+		t.Errorf("%d orders of the other certificate, want 1", n)
+	}
+}
+
+// A run cut short after the order was created resumes on the next Run with the same order and key: the CA is
+// asked for one order only.
+func TestOrderStoreResumesACutRun(t *testing.T) {
+	ctx := context.Background()
+	r := newIssueRig(t)
+	c := r.pending("app.example.com")
+	client := r.client()
+	req := acme.OrderRequest{Kind: acme.KindIssue, Names: []string{"app.example.com"}}
+
+	release := r.fake.HoldValidation()
+	cutCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if _, err := r.orderer(client, c.ID).Run(cutCtx, req, cancelOn(cancel, acme.StepValidate)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the cut run ended with %v, want context.Canceled", err)
+	}
+	first, firstKey, found, err := r.s.OrderStore(c.ID).OpenOrder(ctx)
+	if err != nil || !found {
+		t.Fatalf("OpenOrder after the cut = found %v, %v, want the order left open", found, err)
+	}
+	if n := r.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Fatalf("newOrder was called %d times, want 1", n)
+	}
+
+	// A new Orderer, as after a restart: it finds the order, answers the challenge again without submitting it
+	// and waits for the CA. The CA validates what it holds once the second run has put the record back.
+	type result struct {
+		issued acme.Issued
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		issued, err := r.orderer(client, c.ID).Run(ctx, req, nil)
+		done <- result{issued, err}
+	}()
+	r.clock.WaitArmed(t)
+	release()
+	r.clock.Advance(acme.PollInterval)
+	res := testsupport.Await(t, "the resumed run to finish", done)
+	if res.err != nil {
+		t.Fatalf("the second Run: %v", res.err)
+	}
+	issued := res.issued
+	if issued.OrderID != first.ID {
+		t.Errorf("the second run used order %s, want the first %s", issued.OrderID, first.ID)
+	}
+	if !firstKey.PublicKey.Equal(&issued.Key.PublicKey) {
+		t.Error("the resumed run used another key than the one sealed with the order")
+	}
+	if n := r.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Errorf("newOrder was called %d times after the resume, want still 1", n)
+	}
+	row, err := r.s.Cert(ctx, c.ID)
+	if err != nil || row.Phase != PhaseIdle || row.ChainPEM == nil {
+		t.Fatalf("Cert = %+v, %v, want an issued row", row, err)
+	}
+	if _, found, err := r.s.OpenOrderID(ctx, c.ID); err != nil || found {
+		t.Errorf("OpenOrderID found = %v, %v, want the order closed", found, err)
+	}
+}
+
+// StoreIssued writes nothing when the certificate row it was ordered for is gone: deleted, retired, or
+// replaced by an upload. An upload is never overwritten by an ACME certificate (CRT-08, T-20-11).
+func TestStoreIssuedRefusesAReplacedCertificate(t *testing.T) {
+	const host = "app.example.com"
+	for _, tc := range []struct {
+		name  string
+		apply func(t *testing.T, r *issueRig, c Cert) (uploadID string)
+	}{
+		{"deleted", func(t *testing.T, r *issueRig, c Cert) string {
+			if _, err := r.st.Write.Exec(`DELETE FROM ingress_certs WHERE id = ?`, c.ID); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		}},
+		{"retired", func(t *testing.T, r *issueRig, c Cert) string {
+			if _, err := r.st.Write.Exec(`UPDATE ingress_certs SET retired_at = ?, retired_reason = 'replaced' WHERE id = ?`,
+				r.clock.Now().UnixNano(), c.ID); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		}},
+		{"replaced by an upload", func(t *testing.T, r *issueRig, c Cert) string {
+			if _, err := r.st.Write.Exec(`DELETE FROM ingress_certs WHERE id = ?`, c.ID); err != nil {
+				t.Fatal(err)
+			}
+			_, chain, _ := selfSigned(t, host)
+			id, err := uuid.NewV7()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.st.Write.Exec(
+				`INSERT INTO ingress_certs (id, hostname, env_id, domain_id, source, issuer, phase, chain_pem, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'upload', '', 'idle', ?, 1, 1)`,
+				id.String(), host, c.EnvID, c.DomainID, string(chain)); err != nil {
+				t.Fatal(err)
+			}
+			return id.String()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			r := newIssueRig(t)
+			c := r.pending(host)
+			order, _ := r.insertOrder(c.ID, host)
+			uploadID := tc.apply(t, r, c)
+			certsBefore, _ := versions(t, r.st, "env-1")
+			var uploadBefore string
+			if uploadID != "" {
+				if err := r.st.Read.QueryRow(`SELECT chain_pem FROM ingress_certs WHERE id = ?`, uploadID).Scan(&uploadBefore); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			key, chain, _ := selfSigned(t, host)
+			err := r.s.OrderStore(c.ID).StoreIssued(ctx, order.ID, chain, key, r.clock.Now())
+			if !errors.Is(err, ErrCertGone) {
+				t.Fatalf("StoreIssued = %v, want ErrCertGone", err)
+			}
+
+			if n := r.count(`SELECT COUNT(*) FROM ingress_certs WHERE hostname = ? AND source = 'acme' AND chain_pem != ''`, host); n != 0 {
+				t.Errorf("%d ACME rows hold a chain, want none", n)
+			}
+			if n := r.count(`SELECT COUNT(*) FROM ingress_cert_issuances`); n != 0 {
+				t.Errorf("%d issuance rows, want none", n)
+			}
+			if n := r.count(`SELECT COUNT(*) FROM audit_log WHERE action IN (?, ?)`, audit.ActionIngressCertIssued, audit.ActionIngressCertRenewed); n != 0 {
+				t.Errorf("%d issue audit rows, want none", n)
+			}
+			if after, _ := versions(t, r.st, "env-1"); after != certsBefore {
+				t.Errorf("certs_version moved from %d to %d, want it left alone", certsBefore, after)
+			}
+			if uploadID != "" {
+				var source, chainAfter string
+				if err := r.st.Read.QueryRow(`SELECT source, chain_pem FROM ingress_certs WHERE id = ?`, uploadID).Scan(&source, &chainAfter); err != nil {
+					t.Fatal(err)
+				}
+				if source != SourceUpload || chainAfter != uploadBefore {
+					t.Errorf("the upload row is now source %q with a changed chain %v", source, chainAfter != uploadBefore)
+				}
+			}
+		})
+	}
+}
+
+// PruneClosedOrders removes the closed orders last touched before the cutoff and never an open one.
+func TestPruneKeepsOpenOrders(t *testing.T) {
+	ctx := context.Background()
+	r := newIssueRig(t)
+	c := r.pending("app.example.com")
+	store := r.s.OrderStore(c.ID)
+
+	oldClosed, _ := r.insertOrder(c.ID, "app.example.com")
+	if err := store.CloseOrder(ctx, oldClosed.ID, acme.StageFailed, r.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r.clock.Advance(ClosedOrderRetention + time.Hour)
+	recentClosed, _ := r.insertOrder(c.ID, "app.example.com")
+	if err := store.CloseOrder(ctx, recentClosed.ID, acme.StageFailed, r.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := r.insertOrder(c.ID, "app.example.com")
+
+	n, err := r.s.PruneClosedOrders(ctx, r.clock.Now().Add(-ClosedOrderRetention))
+	if err != nil || n != 1 {
+		t.Fatalf("PruneClosedOrders = %d, %v, want 1", n, err)
+	}
+	for id, want := range map[string]int{oldClosed.ID: 0, recentClosed.ID: 1, open.ID: 1} {
+		if got := r.count(`SELECT COUNT(*) FROM ingress_cert_orders WHERE id = ?`, id); got != want {
+			t.Errorf("order %s: %d rows, want %d", id, got, want)
+		}
+	}
+	if id, found, err := r.s.OpenOrderID(ctx, c.ID); err != nil || !found || id != open.ID {
+		t.Errorf("OpenOrderID = %q, %v, %v, want the open order %s", id, found, err, open.ID)
 	}
 }
