@@ -8,7 +8,7 @@ import "context"
 // round is one look at the certificates: while issuing is paused (after a restore) it does nothing at all, so
 // no request reaches the certificate authority and none reaches a DNS provider (D-32). Otherwise the
 // reconciler gives every claimed hostname a row, the renewal clocks queue the certificates that are due for
-// renewal, and the scheduler starts the runs that are due.
+// renewal, the stored readiness is brought up to date, and the scheduler starts the runs that are due.
 func (m *Manager) round(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
@@ -23,5 +23,6 @@ func (m *Manager) round(ctx context.Context) {
 	}
 	m.reconcile(ctx)
 	m.renewals(ctx)
+	m.refreshReady(ctx)
 	m.schedule(ctx, st)
 }

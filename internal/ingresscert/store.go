@@ -481,9 +481,24 @@ func (s *Store) writeCertificate(ctx context.Context, q *sqlc.Queries, certID st
 		return fmt.Errorf("ingresscert: store certificate %q: %w", certID, err)
 	}
 	// The renewal clock of the certificate this one replaces is not this one's: it is worked out afresh at the
-	// next round.
+	// next round. The readiness is worked out here, for the row as written (D-41).
 	if err := q.UpdateIngressCertRenewal(ctx, sqlc.UpdateIngressCertRenewalParams{UpdatedAt: ts, ID: certID}); err != nil {
 		return fmt.Errorf("ingresscert: clear the renewal time of certificate %q: %w", certID, err)
+	}
+	row, err := q.GetIngressCert(ctx, certID)
+	if err != nil {
+		return fmt.Errorf("ingresscert: read back certificate %q: %w", certID, err)
+	}
+	c, err := certOf(row)
+	if err != nil {
+		return err
+	}
+	ready := int64(0)
+	if Ready(c, now, true) {
+		ready = 1
+	}
+	if err := q.SetIngressCertReady(ctx, sqlc.SetIngressCertReadyParams{Ready: ready, UpdatedAt: ts, ID: certID}); err != nil {
+		return fmt.Errorf("ingresscert: set the readiness of certificate %q: %w", certID, err)
 	}
 	return nil
 }
