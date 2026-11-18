@@ -233,10 +233,13 @@ func domainInEnv(ctx context.Context, q *sqlc.Queries, envID, domainID string) (
 	return row, nil
 }
 
-// DomainView is a domain with the hostnames reserved under it, sorted.
+// DomainView is a domain with the hostnames reserved under it, sorted, and the count of its live certificates.
 type DomainView struct {
 	ingress.Domain
 	Reserved []string
+	// Certificates is how many live certificates sit under the domain. Deleting the domain leaves them to expire:
+	// they stop renewing (D-28).
+	Certificates int
 }
 
 // Domains lists the domains of an environment by suffix, each with its reserved names.
@@ -251,7 +254,11 @@ func (s *Store) Domains(ctx context.Context, envID string) ([]DomainView, error)
 		if err != nil {
 			return nil, fmt.Errorf("ingressstore: list the reserved names of %q: %w", row.Suffix, err)
 		}
-		v := DomainView{Domain: domainOf(row), Reserved: make([]string, 0, len(reserved))}
+		certs, err := s.st.RQ.CountLiveIngressCertsByDomain(ctx, row.ID)
+		if err != nil {
+			return nil, fmt.Errorf("ingressstore: count the certificates of %q: %w", row.Suffix, err)
+		}
+		v := DomainView{Domain: domainOf(row), Reserved: make([]string, 0, len(reserved)), Certificates: int(certs)}
 		for _, r := range reserved {
 			v.Reserved = append(v.Reserved, r.Hostname)
 		}
