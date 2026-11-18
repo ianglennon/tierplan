@@ -93,6 +93,18 @@ var Tables = map[string]Class{
 	"ingress_hostnames": Included,
 	"ingress_routes":    Included,
 
+	// Per-hostname certificates (Phase 20). The certificate and its sealed key travel (key_sealed is sealed
+	// under the row's ID and re-wrapped by RewrapAll); a restored instance is paused until a person resumes
+	// it (D-32), so it never orders in the source install's name. The account key travels the same way.
+	// The issuance ledger is the rate-limit budget, a property of the CA and the registered domain and not
+	// of this instance (D-38). An open order is the in-flight work of the source instance and, like
+	// acme_orders, never comes back with a restore; its sealed key goes with it.
+	"ingress_certs":          Included, // the certificate and its sealed key; a restored instance is paused (D-32)
+	"ingress_acme_account":   Included, // key_sealed is re-wrapped by RewrapAll
+	"ingress_cert_state":     Included, // the pause and the terms acknowledgement
+	"ingress_cert_issuances": Included, // the budget belongs to the CA and the registered domain, not the instance (D-38)
+	"ingress_cert_orders":    Excluded, // an in-flight order never comes back with a restore, as acme_orders
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key

@@ -49,6 +49,30 @@ func (c *Clock) After(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+// Quiet is a view of the clock for a second consumer of the same time: it reads the same time and its timers fire on the
+// same Advance, but arming one announces nothing to WaitArmed, Tick or AwaitTimer. A test that moves a clock shared by
+// two loops synchronises on one of them; the other's timers would otherwise be counted as that one's. The result
+// satisfies stackops.Clock; it is spelled as an interface so this package stays free of the stackops import.
+func (c *Clock) Quiet() interface {
+	Now() time.Time
+	After(d time.Duration) <-chan time.Time
+} {
+	return quietClock{c}
+}
+
+// quietClock is the view Quiet returns.
+type quietClock struct{ c *Clock }
+
+func (q quietClock) Now() time.Time { return q.c.Now() }
+
+func (q quietClock) After(d time.Duration) <-chan time.Time {
+	q.c.mu.Lock()
+	defer q.c.mu.Unlock()
+	ch := make(chan time.Time, 1)
+	q.c.timers = append(q.c.timers, clockTimer{at: q.c.now.Add(d), ch: ch})
+	return ch
+}
+
 // Advance moves the clock on by d and fires every timer that is due.
 func (c *Clock) Advance(d time.Duration) {
 	c.mu.Lock()

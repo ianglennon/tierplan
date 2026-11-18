@@ -44,7 +44,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `images.delete` | environment | no | yes | yes | yes | no | Remove and untag images |
 | `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
-| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains and reserve hostnames |
+| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `janitor.run` | environment | no | no | yes | yes | no | Clean an environment now, keep items out of cleanup and set the swarm task history limit |
 | `networks.addressing` | environment | no | no | yes | yes | no | Change the address space settings: small stack subnets and entered address pools |
@@ -62,8 +62,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `services.control` | environment | no | yes | yes | yes | no | Scale, force update, roll back and change the settings of services, and mute their restart-loop alerts |
 | `services.manage` | environment | no | no | yes | yes | no | Create and remove services |
 | `services.read` | environment | yes | yes | yes | yes | no | View services, their tasks, logs, stats and placement |
-| `settings.read` | global | no | no | no | yes | no | View settings |
-| `settings.write` | global | no | no | no | yes | no | Change settings |
+| `settings.read` | global | no | no | no | yes | no | View settings, including whether the certificate authority's terms are acknowledged for hostname certificates |
+| `settings.write` | global | no | no | no | yes | no | Change settings, including acknowledging the certificate authority's terms for hostname certificates and resuming them after a restore |
 | `shells.manage` | environment | no | no | yes | yes | no | See and end other people's shells |
 | `stacks.create` | environment | no | no | yes | yes | no | Create stacks |
 | `stacks.delete` | environment | no | no | yes | yes | no | Remove stacks |

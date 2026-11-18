@@ -75,6 +75,20 @@ var SealedColumns = []SealedColumn{
 		Table: "ingress_domains", Column: "token_sealed", KeyColumns: []string{"id"},
 		Context: func(keys []string) string { return ContextIngressDNSToken + keys[0] },
 	},
+	// Phase 20 (CRT-01): the per-hostname certificate key under its row's ID, the fresh key of an open
+	// per-hostname order under the order's ID, and the per-hostname ACME account key under its directory URL.
+	{
+		Table: "ingress_certs", Column: "key_sealed", KeyColumns: []string{"id"},
+		Context: func(keys []string) string { return ContextIngressCertKey + keys[0] },
+	},
+	{
+		Table: "ingress_cert_orders", Column: "cert_key_sealed", KeyColumns: []string{"id"},
+		Context: func(keys []string) string { return ContextIngressOrderKey + keys[0] },
+	},
+	{
+		Table: "ingress_acme_account", Column: "key_sealed", KeyColumns: []string{"directory_url"},
+		Context: func(keys []string) string { return ContextIngressACMEAccountKey + keys[0] },
+	},
 }
 
 // RewrapAll moves every sealed value in tx from the vault from to the vault to:

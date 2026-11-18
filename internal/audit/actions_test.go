@@ -542,7 +542,7 @@ func TestEveryPhase17ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 var phase18DetailKeys = map[string][]string{
 	audit.ActionIngressDomainCreated:            {"suffix", "issuer", "provider", "credential", "reason"},
 	audit.ActionIngressDomainCredentialReplaced: {"suffix", "credential", "reason"},
-	audit.ActionIngressDomainDeleted:            {"suffix", "issuer"},
+	audit.ActionIngressDomainDeleted:            {"suffix", "issuer", "certificates"},
 	audit.ActionIngressHostReserved:             {"suffix", "hostname"},
 	audit.ActionIngressHostUnreserved:           {"suffix", "hostname"},
 	audit.ActionIngressEnabled:                  {},
@@ -601,6 +601,76 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 		if strings.Count(constant, ".") != 1 {
 			t.Errorf("%q must have exactly one dot so the audit page finds its label", constant)
 		}
+	}
+}
+
+// phase20DetailKeys maps every per-hostname certificate action to the detail keys the plans that record it must use
+// (Phase 20, D-33). The ingress.* actions are environment-scoped; the two https.* ones are install-wide (D-37). A key
+// containing a secret word would fail Record, so the whole table is recorded through the real Writer.
+var phase20DetailKeys = map[string][]string{
+	audit.ActionIngressCertRenewed:         {"hostname", "issuer", "basis"},
+	audit.ActionIngressCertRequested:       {"hostname", "issuer"},
+	audit.ActionIngressCertRetried:         {"hostname"},
+	audit.ActionIngressCertUploaded:        {"hostname", "replaced", "warning"},
+	audit.ActionIngressCertSwitchedToACME:  {"hostname", "issuer"},
+	audit.ActionIngressCertDeleted:         {"hostname", "issuer", "source", "reason"},
+	audit.ActionIngressCertMoved:           {"hostname", "from_env", "to_env", "from_domain", "to_domain", "outcome", "cause"},
+	audit.ActionIngressDomainIssuerChanged: {"suffix", "issuer", "previous", "certificates", "uploads"},
+	audit.ActionHTTPSIngressTermsAccepted:  {"directories"},
+	audit.ActionHTTPSIngressResumed:        {"reason"},
+}
+
+func TestEveryPhase20ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase20DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+		for _, k := range keys {
+			for _, word := range []string{"password", "token", "secret", "key", "cookie", "session", "csrf"} {
+				if strings.Contains(k, word) {
+					t.Errorf("%s: detail key %q contains the secret word %q", action, k, word)
+				}
+			}
+		}
+	}
+	if len(phase20DetailKeys) != 10 {
+		t.Fatalf("phase20DetailKeys pins %d actions, want the 8 ingress and 2 https ingress actions", len(phase20DetailKeys))
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase20DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"ingress.cert_renewed":          audit.ActionIngressCertRenewed,
+		"ingress.cert_requested":        audit.ActionIngressCertRequested,
+		"ingress.cert_retried":          audit.ActionIngressCertRetried,
+		"ingress.cert_uploaded":         audit.ActionIngressCertUploaded,
+		"ingress.cert_switched_to_acme": audit.ActionIngressCertSwitchedToACME,
+		"ingress.cert_deleted":          audit.ActionIngressCertDeleted,
+		"ingress.cert_moved":            audit.ActionIngressCertMoved,
+		"ingress.domain_issuer_changed": audit.ActionIngressDomainIssuerChanged,
+		"https.ingress_terms_accepted":  audit.ActionHTTPSIngressTermsAccepted,
+		"https.ingress_resumed":         audit.ActionHTTPSIngressResumed,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+		if strings.Count(constant, ".") != 1 {
+			t.Errorf("%q must have exactly one dot so the audit page finds its label", constant)
+		}
+	}
+	if audit.SystemIngress.ID != "system:ingress" || audit.SystemIngress.Type != audit.ActorSystem {
+		t.Errorf("SystemIngress = %+v", audit.SystemIngress)
 	}
 }
 

@@ -393,7 +393,9 @@
         "fallback_started": "Fell back to the self-signed certificate",
         "fallback_ended": "Returned to the Let's Encrypt certificate",
         "hsts_withdrawn": "Withdrew HSTS",
-        "hsts_restored": "Restored HSTS"
+        "hsts_restored": "Restored HSTS",
+        "ingress_terms_accepted": "Accepted Let's Encrypt terms for ingress certificates",
+        "ingress_resumed": "Resumed ingress certificates after a restore"
       },
       "ingress": {
         "domain_created": "Registered ingress domain",
@@ -407,6 +409,14 @@
         "claim_released": "Released a stack's ingress hostnames",
         "cert_issued": "Issued ingress certificate",
         "cert_failed": "Ingress certificate failed",
+        "cert_requested": "Requested ingress certificate ahead of a claim",
+        "cert_renewed": "Renewed ingress certificate",
+        "cert_retried": "Retried ingress certificate now",
+        "cert_uploaded": "Uploaded ingress certificate",
+        "cert_switched_to_acme": "Switched ingress certificate back to Let's Encrypt",
+        "cert_deleted": "Deleted expired ingress certificate",
+        "cert_moved": "Moved ingress certificate to another environment",
+        "domain_issuer_changed": "Changed ingress domain issuer",
         "node_enrolled": "Enrolled ingress node",
         "node_removed": "Removed ingress node",
         "vip_changed": "Changed ingress virtual address"

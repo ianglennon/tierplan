@@ -119,8 +119,8 @@ var defaultRegistry = Registry{
 	{Name: PermNetworksConnect, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Connect and disconnect containers and networks"},
 	{Name: PermVolumesCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create volumes"},
 	{Name: PermAuditRead, Scope: ScopeGlobal, Description: "Read the audit log"},
-	{Name: PermSettingsRead, Scope: ScopeGlobal, Description: "View settings"},
-	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings"},
+	{Name: PermSettingsRead, Scope: ScopeGlobal, Description: "View settings, including whether the certificate authority's terms are acknowledged for hostname certificates"},
+	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings, including acknowledging the certificate authority's terms for hostname certificates and resuming them after a restore"},
 	{Name: PermUsersManage, Scope: ScopeGlobal, Description: "Create, change, disable and delete users"},
 	{Name: PermTeamsManage, Scope: ScopeGlobal, Description: "Create teams and change their members"},
 	{Name: PermBackupManage, Scope: ScopeGlobal, Dangerous: true, Description: "Back up and restore TierPlan"},
@@ -151,7 +151,7 @@ var defaultRegistry = Registry{
 	{Name: PermGitRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View the git repositories and credentials that apply to this environment"},
 	{Name: PermGitManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's git repositories and credentials, the webhooks of its git stacks, and convert or detach git stacks"},
 	{Name: PermGitInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage git repositories and credentials that apply to every environment"},
-	{Name: PermIngressManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Register this environment's ingress domains and reserve hostnames"},
+	{Name: PermIngressManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

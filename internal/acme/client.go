@@ -26,6 +26,10 @@ import (
 // another (D-19).
 const LetsEncryptDirectory = "https://acme-v02.api.letsencrypt.org/directory"
 
+// LetsEncryptStagingDirectory is Let's Encrypt's staging directory, the one a per-hostname certificate
+// uses when its hostname is set to the staging issuer (D-19).
+const LetsEncryptStagingDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
 const (
 	// httpTimeout bounds every request to the CA, including the directory fetch lego makes with a
 	// background context.
@@ -73,6 +77,16 @@ func NewDirectory(cfg config.Config) (Directory, error) {
 	return d, nil
 }
 
+// NewDirectoryFor resolves the directory for one issuer: Let's Encrypt staging when staging is set and
+// production otherwise. When TIERPLAN_ACME_DIRECTORY_URL names a directory both issuers map to it, as
+// NewDirectory resolves it, so a Pebble or fake CA serves staging and production alike (D-19).
+func NewDirectoryFor(cfg config.Config, staging bool) (Directory, error) {
+	if staging && cfg.ACMEDirectoryURL == "" {
+		return Directory{URL: LetsEncryptStagingDirectory}, nil
+	}
+	return NewDirectory(cfg)
+}
+
 // newHTTPClient is a new client over a new transport on every call: lego wraps the transport it is
 // given and keeps the client, so one shared client would be rewrapped by every Core.
 func newHTTPClient(roots *x509.CertPool) *http.Client {
@@ -98,7 +112,7 @@ type DirectoryMeta struct {
 // Client talks to one ACME directory on behalf of TierPlan.
 type Client struct {
 	dir   Directory
-	store *Store
+	store AccountStore
 	clock stackops.Clock
 	ua    string
 
@@ -116,8 +130,22 @@ type Client struct {
 	metaTil time.Time // zero until the first fetch
 }
 
+// AccountStore is where a Client keeps its ACME account, one per directory. *Store is the own
+// certificate's; internal/ingresscert keeps one per issuer (D-30).
+type AccountStore interface {
+	// Account returns the account and key held for directoryURL; found is false, with a nil error,
+	// when there is none.
+	Account(ctx context.Context, directoryURL string) (Account, *ecdsa.PrivateKey, bool, error)
+	// SaveAccount stores the account and its key.
+	SaveAccount(ctx context.Context, a Account, key *ecdsa.PrivateKey) error
+	// ForgetAccount removes the account held for directoryURL.
+	ForgetAccount(ctx context.Context, directoryURL string) error
+}
+
+var _ AccountStore = (*Store)(nil)
+
 // NewClient is a Client for dir, keeping its account in store and judging time by clock.
-func NewClient(dir Directory, store *Store, clock stackops.Clock, userAgent string) *Client {
+func NewClient(dir Directory, store AccountStore, clock stackops.Clock, userAgent string) *Client {
 	return &Client{dir: dir, store: store, clock: clock, ua: userAgent, skew: newSkewRecorder(clock)}
 }
 

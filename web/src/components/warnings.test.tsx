@@ -2217,3 +2217,184 @@ describe("HealthBell HTTPS items", () => {
     });
   });
 });
+
+// The per-hostname certificate items of the bell (plan 20-20, CRT-04, D-10, D-32, D-41, D-45).
+const ingressWarning = (id: string, ingress: Record<string, unknown> = {}) => ({ id, ingress });
+const certDay = (iso: string) =>
+  new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(Date.parse(iso));
+const certTime = (iso: string) =>
+  new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+    Date.parse(iso),
+  );
+const itemOf = (id: string) => {
+  const item = document.querySelector(`[data-warning="${id}"]`);
+  if (!item) throw new Error(`no ${id} item in the bell`);
+  return item as HTMLElement;
+};
+
+describe("HealthBell ingress certificate items", () => {
+  it("words a certificate 14 days out with its hostname and end date, and no link", async () => {
+    const end = "2026-12-01T09:00:00Z";
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "app.example.com",
+        source: "acme",
+        issuer: "production",
+        notAfter: end,
+        days: 14,
+        more: 0,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Certificate expires soon")).toBeTruthy();
+    expect(itemOf("ingress_cert_expiring").textContent).toContain(
+      `The certificate for app.example.com expires on ${certDay(end)} and has not renewed.`,
+    );
+    expect(within(itemOf("ingress_cert_expiring")).queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
+  });
+
+  it("adds how many others the item covers", async () => {
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "app.example.com",
+        source: "acme",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 14,
+        more: 2,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Certificate expires soon")).toBeTruthy();
+    expect(itemOf("ingress_cert_expiring").textContent).toContain("and 2 more");
+  });
+
+  it("uses the stronger wording at 7 days, and tells an upload to be replaced", async () => {
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "app.example.com",
+        source: "acme",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 7,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Certificate expires within a week")).toBeTruthy();
+    expect(itemOf("ingress_cert_expiring").textContent).toContain("still has not renewed");
+
+    cleanup();
+    queryClient.clear();
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "up.example.com",
+        source: "upload",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 14,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Certificate expires soon")).toBeTruthy();
+    expect(itemOf("ingress_cert_expiring").textContent).toContain(
+      "TierPlan never renews an uploaded certificate",
+    );
+  });
+
+  it("words a failed renewal with the hostname, the class in words and the next attempt", async () => {
+    const next = "2026-11-13T14:05:00Z";
+    items = [
+      ingressWarning("ingress_cert_renewal_failed", {
+        hostname: "app.example.com",
+        issuer: "production",
+        source: "acme",
+        class: "rate_limited",
+        nextAttemptAt: next,
+        more: 1,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("A certificate couldn't be renewed")).toBeTruthy();
+    const text = itemOf("ingress_cert_renewal_failed").textContent ?? "";
+    expect(text).toContain(
+      "The certificate for app.example.com couldn't be renewed: the certificate authority is limiting requests.",
+    );
+    expect(text).toContain(`Next attempt ${certTime(next)}.`);
+    expect(text).toContain("and 1 more");
+    expect(within(itemOf("ingress_cert_renewal_failed")).queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("falls back to a generic phrase for a class it has no words for", async () => {
+    items = [
+      ingressWarning("ingress_cert_renewal_failed", {
+        hostname: "app.example.com",
+        issuer: "production",
+        class: "from_the_future",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("A certificate couldn't be renewed")).toBeTruthy();
+    const text = itemOf("ingress_cert_renewal_failed").textContent ?? "";
+    expect(text).toContain("couldn't be renewed: the order failed.");
+    expect(text).not.toContain("Next attempt");
+    expect(text).not.toContain("from_the_future");
+  });
+
+  it("says a failing staging certificate is a test certificate that is never served", async () => {
+    items = [
+      ingressWarning("ingress_cert_renewal_failed", {
+        hostname: "stg.example.com",
+        issuer: "staging",
+        source: "acme",
+        class: "validation_dns",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("A staging certificate failed")).toBeTruthy();
+    const text = itemOf("ingress_cert_renewal_failed").textContent ?? "";
+    expect(text).toContain("The staging (test) certificate for stg.example.com failed");
+    expect(text).toContain("never served");
+  });
+
+  it("says certificates are paused after a restore and that an instance admin can resume them", async () => {
+    items = [ingressWarning("ingress_certs_paused", { reason: "restore" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Certificates are paused")).toBeTruthy();
+    expect(itemOf("ingress_certs_paused").textContent).toContain(
+      "restored from a backup, so it won't order or renew certificates until an instance admin resumes them.",
+    );
+    expect(within(itemOf("ingress_certs_paused")).queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("lists the items after the HTTPS ones, in the order paused, renewal failed, expiring", async () => {
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "a.example.com",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 14,
+      }),
+      ingressWarning("ingress_cert_renewal_failed", {
+        hostname: "a.example.com",
+        class: "internal",
+        issuer: "production",
+      }),
+      ingressWarning("ingress_certs_paused", { reason: "restore" }),
+      httpsWarning("https_clock_off", { offsetSeconds: 600 }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 4 items");
+    expect(await screen.findByText("Certificates are paused")).toBeTruthy();
+    expect(listed().map(([id]) => id)).toEqual([
+      "https_clock_off",
+      "ingress_certs_paused",
+      "ingress_cert_renewal_failed",
+      "ingress_cert_expiring",
+    ]);
+  });
+});

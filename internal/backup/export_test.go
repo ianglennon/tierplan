@@ -261,6 +261,12 @@ func (f *exportFixture) seedExcluded(t *testing.T) {
 	// must never delete records by them (Phase 15).
 	f.exec(t, `INSERT INTO acme_dns_records (id, provider, zone_id, record_id, name, value, owner_kind, owner_id, created_at)
 		VALUES ('rec-1', 'cloudflare', 'zone-1', 'cf-rec-1', '_acme-challenge.a.example.org', 'v', 'order', 'order-1', 1)`)
+	// An open per-hostname certificate order is in-flight work too: a restore must not resurrect it
+	// (Phase 20). The order hangs off a certificate row, which travels (a restored instance is paused).
+	f.exec(t, `INSERT INTO ingress_certs (id, hostname, env_id, domain_id, source, created_at, updated_at)
+		VALUES ('icert-1', 'app.example.org', 'env-1', 'dom-1', 'acme', 1, 1)`)
+	f.exec(t, `INSERT INTO ingress_cert_orders (id, cert_id, directory_url, order_url, kind, names, cert_key_sealed, stage, created_at, updated_at)
+		VALUES ('iorder-1', 'icert-1', 'https://acme.example/directory', 'https://acme.example/order/2', 'issue', '["app.example.org"]', 'v1.k1-x.sealed', 'created', 1, 1)`)
 }
 
 func (f *exportFixture) liveCount(t *testing.T, table string) int {

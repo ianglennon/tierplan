@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -31,15 +32,18 @@ import (
 // value, which would echo a secret. The handler bounds it at maxIngressTokenBytes instead and never puts it in a detail.
 
 const (
-	problemIngressUnavailable      = "ingress_unavailable"
-	problemIngressDomainNotFound   = "ingress_domain_not_found"
-	problemIngressDomainExists     = "ingress_domain_exists"
-	problemIngressDomainInUse      = "ingress_domain_in_use"
-	problemIngressTokenMissing     = "ingress_token_missing"  //nolint:gosec // G101: a problem type, not a credential
-	problemIngressTokenTooLong     = "ingress_token_too_long" //nolint:gosec // G101: a problem type, not a credential
-	problemIngressHostnameInvalid  = "ingress_hostname_invalid"
-	problemIngressHostnameNotUnder = "ingress_hostname_not_under_domain"
-	problemIngressHostnameClaimed  = "ingress_hostname_claimed"
+	problemIngressUnavailable    = "ingress_unavailable"
+	problemIngressDomainNotFound = "ingress_domain_not_found"
+	problemIngressDomainExists   = "ingress_domain_exists"
+	problemIngressDomainInUse    = "ingress_domain_in_use"
+	// problemIngressDomainCleanupPending is a delete or a token replacement refused while TierPlan still holds DNS
+	// records made with the domain's token (D-27).
+	problemIngressDomainCleanupPending = "ingress_domain_cleanup_pending"
+	problemIngressTokenMissing         = "ingress_token_missing"  //nolint:gosec // G101: a problem type, not a credential
+	problemIngressTokenTooLong         = "ingress_token_too_long" //nolint:gosec // G101: a problem type, not a credential
+	problemIngressHostnameInvalid      = "ingress_hostname_invalid"
+	problemIngressHostnameNotUnder     = "ingress_hostname_not_under_domain"
+	problemIngressHostnameClaimed      = "ingress_hostname_claimed"
 
 	// ingressDomainTarget is the target type of every audit row of these routes.
 	ingressDomainTarget = "ingress_domain"
@@ -61,6 +65,10 @@ type IngressDeps struct {
 	Audit        *audit.Writer
 	// Checker decides which environments the caller may see, so a refusal names no stack of one they cannot.
 	Checker *rbac.Checker
+	// CertSweep asks the certificate manager for a full sweep of the DNS records it still holds, so the cleanup a
+	// refused delete or token replacement waits for starts at once. It is wired to the manager's SweepNow; nil does
+	// nothing.
+	CertSweep func()
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -78,6 +86,7 @@ type IngressDomainBody struct {
 	CreatedAt      time.Time  `json:"createdAt" doc:"When the domain was registered"`
 	UpdatedAt      time.Time  `json:"updatedAt" doc:"When the domain last changed"`
 	Reserved       []string   `json:"reserved" doc:"The hostnames held back under the domain, sorted. No stack can claim one"`
+	Certificates   int        `json:"certificates" doc:"The live certificates under the domain. If the domain is deleted they stop renewing and expire"`
 }
 
 // IngressDomainsBody is the list of the domains of one environment.
@@ -100,6 +109,19 @@ type IngressDomainsOutput struct {
 // IngressNoContentOutput is an answer with no body that must still not be cached.
 type IngressNoContentOutput struct {
 	CacheControl string `header:"Cache-Control"`
+}
+
+// IngressDomainDeletedBody is what a deletion that left certificates behind says.
+type IngressDomainDeletedBody struct {
+	CertificatesLeft int `json:"certificatesLeft" doc:"The live certificates the deletion left behind. They stop renewing and are deleted when they expire"`
+}
+
+// IngressDomainDeletedOutput is the answer of the domain delete: 200 with the count when certificates are left to expire,
+// 204 with no body when none are, as before certificates existed. Never cached.
+type IngressDomainDeletedOutput struct {
+	Status       int
+	CacheControl string `header:"Cache-Control"`
+	Body         *IngressDomainDeletedBody
 }
 
 // IngressReservationBody is a reserved hostname.
@@ -174,9 +196,10 @@ type UnreserveIngressHostnameInput struct {
 }
 
 // ingressDomainBody maps a domain onto the contract. reserved may be nil.
-func ingressDomainBody(d ingress.Domain, reserved []string) IngressDomainBody {
+func ingressDomainBody(d ingress.Domain, reserved []string, certificates int) IngressDomainBody {
 	b := IngressDomainBody{
-		ID: d.ID, Suffix: d.Suffix, Issuer: string(d.Issuer), DNSProvider: d.DNSProvider, TokenSet: d.HasToken,
+		Certificates: certificates,
+		ID:           d.ID, Suffix: d.Suffix, Issuer: string(d.Issuer), DNSProvider: d.DNSProvider, TokenSet: d.HasToken,
 		CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, Reserved: nonNil(reserved),
 	}
 	if !d.TokenUpdatedAt.IsZero() {
@@ -343,10 +366,17 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 	// failed maps a refusal of the store onto its problem.
 	failed := func(what string, err error) error {
 		var (
-			ne  *ingress.NameError
-			clm *ingressstore.ReservedClaimedError
+			ne      *ingress.NameError
+			clm     *ingressstore.ReservedClaimedError
+			pending *ingressstore.CleanupPendingError
 		)
 		switch {
+		case errors.As(err, &pending):
+			// The records are removed with the domain's own token by the sweep; start it now.
+			if d.CertSweep != nil {
+				d.CertSweep()
+			}
+			return httpx.Problem(http.StatusConflict, problemIngressDomainCleanupPending, cleanupPendingDetail(pending))
 		case errors.As(err, &ne):
 			return httpx.Problem(http.StatusUnprocessableEntity, ne.Code, ne.Message)
 		case errors.Is(err, ingressstore.ErrDomainNotFound):
@@ -398,7 +428,7 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		out := &IngressDomainsOutput{CacheControl: "no-store"}
 		out.Body.Items = make([]IngressDomainBody, 0, len(views))
 		for _, v := range views {
-			out.Body.Items = append(out.Body.Items, ingressDomainBody(v.Domain, v.Reserved))
+			out.Body.Items = append(out.Body.Items, ingressDomainBody(v.Domain, v.Reserved, v.Certificates))
 		}
 		return out, nil
 	})
@@ -453,7 +483,7 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		if err != nil {
 			return nil, failed("register the domain", err)
 		}
-		return &IngressDomainOutput{CacheControl: "no-store", Body: ingressDomainBody(dom, nil)}, nil
+		return &IngressDomainOutput{CacheControl: "no-store", Body: ingressDomainBody(dom, nil, 0)}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -463,7 +493,9 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		Summary:     "Replace a domain's DNS token",
 		Description: "Tests the new token the way registration does, then replaces the saved one. The domain, its issuer and every hostname claimed under it stay; " +
 			"tokenUpdatedAt moves. A token that fails its test is refused with the same 422 or 503 problems as registration and the saved token stays in place. The token is " +
-			"never returned. 404 " + problemIngressDomainNotFound + " for a domain of another environment. Audited as ingress.domain_credential_replaced without the token. " +
+			"never returned. 404 " + problemIngressDomainNotFound + " for a domain of another environment. While TierPlan holds DNS records it made with the saved token and that " +
+			"token may still remove, 409 " + problemIngressDomainCleanupPending + ", the removal is started and the saved token stays; records the DNS provider refuses the saved token for " +
+			"do not hold the replacement back, and are retried with the new token at once. Audited as ingress.domain_credential_replaced without the token. " +
 			"Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ReplaceIngressDomainTokenInput) (*IngressDomainOutput, error) {
@@ -492,20 +524,41 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		if err != nil {
 			return nil, failed("replace the token", err)
 		}
-		return &IngressDomainOutput{CacheControl: "no-store", Body: ingressDomainBody(dom, cur.Reserved)}, nil
+		// Records the old token could not remove are tried with the new one now, not at their backoff time.
+		if d.CertSweep != nil {
+			d.CertSweep()
+		}
+		return &IngressDomainOutput{CacheControl: "no-store", Body: ingressDomainBody(dom, cur.Reserved, cur.Certificates)}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
 		OperationID:   "deleteIngressDomain",
 		Method:        http.MethodDelete,
 		Path:          "/api/env/{envId}/ingress/domains/{domainId}",
-		DefaultStatus: http.StatusNoContent,
+		DefaultStatus: http.StatusOK,
 		Summary:       "Delete a domain",
 		Description: "Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 " + problemIngressDomainInUse + " names every holding " +
-			"stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. 404 " + problemIngressDomainNotFound +
-			" for a domain that is gone or belongs to another environment, with no audit row. Audited as ingress.domain_deleted. Needs ingress.manage on the environment (its Admin).",
+			"stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. While TierPlan still holds DNS records it made " +
+			"with the domain's token, 409 " + problemIngressDomainCleanupPending + " and nothing changes: the removal is started at once and the detail says how many records are left. " +
+			"When the DNS provider refuses the domain's token for them, the detail says so: replace the token with one that can edit the zone, and the records are then removed. " +
+			"404 " + problemIngressDomainNotFound + " for a domain that is gone or belongs to another environment, with no audit row. " +
+			"Answers 200 with certificatesLeft when live certificates under the domain are left to expire (they stop renewing), and 204 with no body when none are. " +
+			"Audited as ingress.domain_deleted, with the certificate count. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *DeleteIngressDomainInput) (*IngressNoContentOutput, error) {
+		Responses: map[string]*huma.Response{
+			"204": {
+				Description: "Deleted, and no certificates were left behind",
+				Headers:     map[string]*huma.Param{"Cache-Control": {Schema: &huma.Schema{Type: "string"}}},
+			},
+			// Two success answers make huma leave out the default error answer it adds for one, so it is stated here.
+			"default": {
+				Description: "Error",
+				Content: map[string]*huma.MediaType{"application/problem+json": {
+					Schema: r.API().OpenAPI().Components.Schemas.Schema(reflect.TypeFor[huma.ErrorModel](), true, "ErrorModel"),
+				}},
+			},
+		},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *DeleteIngressDomainInput) (*IngressDomainDeletedOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
@@ -513,22 +566,27 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		if d.Store == nil {
 			return nil, unavailable()
 		}
-		err := d.Store.DeleteDomain(ctx, in.EnvID, in.DomainID, func(ctx context.Context, tx *sql.Tx, dom ingress.Domain) error {
-			details := map[string]string{"suffix": dom.Suffix, "issuer": string(dom.Issuer)}
+		// The certificates the deletion leaves behind: they stop renewing and expire (D-28), and the Admin is told how many (D-46).
+		cur, err := domainOf(ctx, in.EnvID, in.DomainID)
+		if err != nil {
+			return nil, failed("read the domain", err)
+		}
+		certs := cur.Certificates
+		err = d.Store.DeleteDomain(ctx, in.EnvID, in.DomainID, func(ctx context.Context, tx *sql.Tx, dom ingress.Domain) error {
+			details := map[string]string{"suffix": dom.Suffix, "issuer": string(dom.Issuer), "certificates": strconv.Itoa(certs)}
 			return d.Audit.RecordTx(ctx, tx, audited(ctx, p, in.UserAgent, audit.ActionIngressDomainDeleted, in.EnvID, dom.ID, details))
 		})
 		var use *ingressstore.DomainInUseError
 		if errors.As(err, &use) {
-			suffix := ""
-			if cur, derr := domainOf(ctx, in.EnvID, in.DomainID); derr == nil {
-				suffix = cur.Suffix
-			}
-			return nil, holdersProblem(suffix, use.Holders)
+			return nil, holdersProblem(cur.Suffix, use.Holders)
 		}
 		if err != nil {
 			return nil, failed("delete the domain", err)
 		}
-		return &IngressNoContentOutput{CacheControl: "no-store"}, nil
+		if certs == 0 {
+			return &IngressDomainDeletedOutput{Status: http.StatusNoContent, CacheControl: "no-store"}, nil
+		}
+		return &IngressDomainDeletedOutput{Status: http.StatusOK, CacheControl: "no-store", Body: &IngressDomainDeletedBody{CertificatesLeft: certs}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -603,4 +661,22 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		}
 		return &IngressNoContentOutput{CacheControl: "no-store"}, nil
 	})
+}
+
+// cleanupPendingDetail is the detail of a refusal while the DNS ledger holds records made with a domain's token
+// (D-27). It says how many are left and never promises that waiting is enough: records the provider refuses the
+// token for are only removed once the domain has a token that works.
+func cleanupPendingDetail(e *ingressstore.CleanupPendingError) string {
+	records := func(n int) string {
+		if n == 1 {
+			return "1 DNS record"
+		}
+		return strconv.Itoa(n) + " DNS records"
+	}
+	if e.TokenRefused > 0 {
+		return "TierPlan cannot remove " + records(e.TokenRefused) + " it made with this domain's token, because the DNS provider refuses the token. " +
+			"Replace the token with one that can edit the zone: the records are then removed, and the domain can be deleted after that."
+	}
+	return "TierPlan is removing " + records(e.Records) + " it made with this domain's token and has started the cleanup. " +
+		"The domain cannot be deleted, and its token cannot change, until they are gone."
 }

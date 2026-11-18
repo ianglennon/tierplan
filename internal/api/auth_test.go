@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -302,7 +304,27 @@ type authFixture struct {
 	// (phase 18). newAuthFixture gives the provider the zone example.com and a token that it accepts, ingressToken.
 	ingressProv  *dnstest.FakeProvider
 	ingressStore *ingressstore.Store
+	// ingressSweeps counts how many times the ingress routes asked for a DNS sweep (IngressDeps.CertSweep).
+	ingressSweeps atomic.Int32
+	// ingressCerts and ingressCertStore are the per-hostname certificate manager and store behind the certificate routes
+	// (phase 20). The manager is never Run in an API test; the fixture clock is its clock, so a test moves time by
+	// moving f.clk.
+	ingressCerts     *ingresscert.Manager
+	ingressCertStore *ingresscert.Store
+	// ingressCertCfg is the configuration the certificate manager is built with. The zero value points both issuers at
+	// Let's Encrypt, which no API test may call: a test that reads the directories sets it to a fake directory and
+	// builds again.
+	ingressCertCfg config.Config
+	// ingressCertNoClock registers the certificate routes without a clock, as the server does, so the routes fall back
+	// to time.Now (Phase 20 review CR-01).
+	ingressCertNoClock bool
 }
+
+// fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
+type fixtureClock struct{ c *fakeClock }
+
+func (c fixtureClock) Now() time.Time                         { return c.c.now() }
+func (c fixtureClock) After(d time.Duration) <-chan time.Time { return make(chan time.Time) }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
@@ -363,6 +385,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now, Unknown: f.unknown,
 		HTTPS: f.httpsAlerts, ListenPort: 7480,
+		// The manager is built later in the fixture, so the feed reads it when asked.
+		IngressCerts: func(ctx context.Context) ([]ingresscert.Alert, error) {
+			if f.ingressCerts == nil {
+				return nil, nil
+			}
+			return f.ingressCerts.Alerts(ctx)
+		},
 	})
 	f.access = access.New(f.st, f.aud, checker, f.inviteTTL)
 	f.access.Now = f.clk.now
@@ -630,6 +659,26 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			return ingressBase(token)
 		}},
 		Audit: f.aud, Checker: checker, Log: log,
+		CertSweep: func() { f.ingressSweeps.Add(1) },
+	})
+	f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+	certHub := jobs.New(jobs.Options{})
+	t.Cleanup(certHub.Close)
+	certMgr, certErr := ingresscert.New(ingresscert.Deps{
+		Store: f.ingressCertStore, Domains: f.ingressStore, Jobs: certHub, Clock: fixtureClock{f.clk},
+		Config: f.ingressCertCfg, DNS: acme.DNSDeps{Providers: map[string]dns.Factory{"cloudflare": ingressBase}},
+		Ledger: acme.NewStore(f.st, f.v), Log: log, UserAgent: "tierplan-test/0",
+	})
+	if certErr != nil {
+		t.Fatal(certErr)
+	}
+	f.ingressCerts = certMgr
+	certNow := f.clk.now
+	if f.ingressCertNoClock {
+		certNow = nil
+	}
+	api.RegisterIngressCerts(r, api.IngressCertDeps{
+		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: certNow,
 	})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{

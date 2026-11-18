@@ -41,6 +41,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -164,6 +165,9 @@ type Server struct {
 	challenge http.Handler
 	// acme is the Let's Encrypt manager: issue, renew, stop and the status.
 	acme *acme.Manager
+	// ingressCerts is the per-hostname certificate manager and ingressCertStore the rows it keeps (Phase 20).
+	ingressCerts     *ingresscert.Manager
+	ingressCertStore *ingresscert.Store
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -235,6 +239,10 @@ type RouterDeps struct {
 	// Ingress serves the domain and reservation routes under /api/env/{envId}/ingress/. The zero value registers every
 	// route answering 503 ingress_unavailable.
 	Ingress api.IngressDeps
+	// IngressCerts serves the per-hostname certificate routes under /api/env/{envId}/ingress/certificates: the list, the
+	// request ahead, the retry now and the budget. The zero value registers every route answering 503
+	// ingress_unavailable.
+	IngressCerts api.IngressCertDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -293,6 +301,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
 	api.RegisterIngress(r, d.Ingress)
+	api.RegisterIngressCerts(r, d.IngressCerts)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -1077,6 +1086,15 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
 	ingressNotifier := ingress.NewNotifier()
 	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier})
+	// The per-hostname certificate manager shares the DNS provider map and the clock of the Let's Encrypt manager, so
+	// WithACMEDNS and WithACMEClock move both. It is started before the server listens and run in the background below.
+	certMgr, certStore, err := wireIngressCerts(cfg, log, st, vlt, jobHub, ingressStore, ingressNotifier, bo.acmeClock, acmeDNS)
+	if err != nil {
+		jobHub.Close()
+		tunnelHub.Close()
+		_ = st.Close()
+		return nil, err
+	}
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
 	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
 	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
@@ -1249,7 +1267,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 				}
 				return acmeWire.mgr.Alerts(ctx, served)
 			},
-			ListenPort: listenPort(cfg.Listen),
+			IngressCerts: certMgr.Alerts,
+			ListenPort:   listenPort(cfg.Listen),
 			// Five password-change attempts per user at once, then one every 12
 			// seconds (T-01-60): ample for a person, slow for a guesser.
 			Limiter: auth.NewIPLimiter(12*time.Second, 5, 10*time.Minute, nil),
@@ -1282,7 +1301,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Stacks:        stacksDeps,
-		Ingress:       api.IngressDeps{Store: ingressStore, DNSProviders: acmeDNS.Providers, Audit: aud, Checker: checker, Log: log},
+		Ingress:       api.IngressDeps{Store: ingressStore, DNSProviders: acmeDNS.Providers, Audit: aud, Checker: checker, CertSweep: certMgr.SweepNow, Log: log},
+		IngressCerts:  api.IngressCertDeps{Manager: certMgr, Store: certStore, Domains: ingressStore, Audit: aud, Checker: checker, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Git:           gitDeps,
 		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},
@@ -1331,6 +1351,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			startErr = fmt.Errorf("start Let's Encrypt: %w", err)
 		}
 	}
+	// Certificates that were ordering when the last process stopped are queued again before anything is served.
+	if startErr == nil {
+		if err := certMgr.Start(ctx); err != nil {
+			startErr = fmt.Errorf("start the per-hostname certificates: %w", err)
+		}
+	}
 	if startErr != nil {
 		jobHub.Close()
 		statsHub.Close()
@@ -1376,6 +1402,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		hsts:       hsts,
 		acme:       acmeWire.mgr,
 		challenge:  challenges.Handler(),
+
+		ingressCerts:     certMgr,
+		ingressCertStore: certStore,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -1387,6 +1416,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
 	// Renewals, the expiry fallback and the resume of an open order run on the ACME clock.
 	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
+	// The per-hostname certificates are ordered and renewed by their own manager, on the same clock.
+	srv.background.Go(func() { certMgr.Run(bg) })
 	// The header is decided once before anything is served, then again on every certificate install
 	// and every minute.
 	hsts.Recompute(ctx)
