@@ -860,6 +860,14 @@ describe("actionLabel (ingress)", () => {
     "ingress.claim_released",
     "ingress.cert_issued",
     "ingress.cert_failed",
+    "ingress.cert_requested",
+    "ingress.cert_renewed",
+    "ingress.cert_retried",
+    "ingress.cert_uploaded",
+    "ingress.cert_switched_to_acme",
+    "ingress.cert_deleted",
+    "ingress.cert_moved",
+    "ingress.domain_issuer_changed",
     "ingress.node_enrolled",
     "ingress.node_removed",
     "ingress.vip_changed",
@@ -878,6 +886,14 @@ describe("actionLabel (ingress)", () => {
 
   it("is an environment event: every ingress action is environment-scoped", () => {
     for (const key of INGRESS_ACTIONS) expect(ENV_SCOPED_ACTIONS, key).toContain(key);
+  });
+
+  it("keeps the install-wide ingress certificate actions out of the environment scope", () => {
+    for (const key of ["https.ingress_terms_accepted", "https.ingress_resumed"]) {
+      expect(KNOWN_ACTIONS, key).toContain(key);
+      expect(actionLabel(key, real), key).not.toBe(key);
+      expect(ENV_SCOPED_ACTIONS, key).not.toContain(key);
+    }
   });
 });
 

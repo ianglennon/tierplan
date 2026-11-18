@@ -338,6 +338,12 @@ const (
 	// TierPlan stopped sending HSTS because the certificate it covers is no longer trusted, and sent it again.
 	ActionHTTPSHSTSWithdrawn = "https.hsts_withdrawn"
 	ActionHTTPSHSTSRestored  = "https.hsts_restored"
+	// Install-wide ingress certificate actions, instance-level like the other https.* actions: an admin accepted the
+	// Let's Encrypt terms for the ingress certificate directories, or resumed ingress certificates after a restore
+	// (Phase 20, D-37). "ingress." is an environment-scoped prefix, so these two use "https." to stay away from
+	// environment Admins.
+	ActionHTTPSIngressTermsAccepted = "https.ingress_terms_accepted"
+	ActionHTTPSIngressResumed       = "https.ingress_resumed"
 )
 
 // The ingress actions (Phase 18, D-26). Every key has exactly one dot, so the audit page finds its label under
@@ -364,8 +370,21 @@ const (
 	// A certificate for a hostname was issued, or its issue failed (Phase 22 onwards).
 	ActionIngressCertIssued = "ingress.cert_issued"
 	ActionIngressCertFailed = "ingress.cert_failed"
-	// An admin asked for a certificate ahead of a claim (Phase 20, D-33).
-	ActionIngressCertRequested = "ingress.cert_requested"
+	// Per-hostname certificate events (Phase 20, D-33). The scheduler writes renewed, deleted and moved as
+	// SystemIngress; an admin writes requested, retried, uploaded, switched_to_acme and domain_issuer_changed.
+	// requested: an admin asked for a certificate ahead of a claim. renewed: a certificate was renewed. retried: an admin
+	// retried a failed run. uploaded: an admin uploaded their own certificate (replaced, warning). switched_to_acme: an
+	// admin put an uploaded hostname back on Let's Encrypt. deleted: an expired or orphaned certificate was removed.
+	// moved: a certificate was re-pointed across environments (D-04). domain_issuer_changed: an admin changed the issuer
+	// of a domain; certificates and uploads count what it affects.
+	ActionIngressCertRequested       = "ingress.cert_requested"
+	ActionIngressCertRenewed         = "ingress.cert_renewed"
+	ActionIngressCertRetried         = "ingress.cert_retried"
+	ActionIngressCertUploaded        = "ingress.cert_uploaded"
+	ActionIngressCertSwitchedToACME  = "ingress.cert_switched_to_acme"
+	ActionIngressCertDeleted         = "ingress.cert_deleted"
+	ActionIngressCertMoved           = "ingress.cert_moved"
+	ActionIngressDomainIssuerChanged = "ingress.domain_issuer_changed"
 	// A node joined or left the ingress, and the virtual address changed (Phase 24 to 26).
 	ActionIngressNodeEnrolled = "ingress.node_enrolled"
 	ActionIngressNodeRemoved  = "ingress.node_removed"
