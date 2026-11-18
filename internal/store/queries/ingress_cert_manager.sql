@@ -6,6 +6,10 @@
 -- queued, so a crash never holds a reservation. The open order is kept and the next run resumes it.
 UPDATE ingress_certs SET phase = 'queued', updated_at = ? WHERE phase = 'ordering';
 
+-- name: ListOrderingIngressCertIDs :many
+-- The rows reserved for a run. The scheduler gives back the reservation of any that has no run in this process.
+SELECT id FROM ingress_certs WHERE phase = 'ordering' ORDER BY id;
+
 -- name: ListQueuedIngressCerts :many
 -- The live ACME rows that wait for an order and whose turn has come: neither the soft backoff nor a CA's
 -- Retry-After is still in the future. Oldest first.

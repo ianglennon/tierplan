@@ -23,6 +23,7 @@ import (
 func (m *Manager) schedule(ctx context.Context, st State) {
 	m.schedMu.Lock()
 	defer m.schedMu.Unlock()
+	m.releaseOrphans(ctx)
 	due, err := m.d.Store.DueQueued(ctx, m.clock.Now())
 	if err != nil {
 		m.log.Error("the certificate manager could not list the queued certificates", "error", err)
@@ -85,6 +86,41 @@ func (m *Manager) schedule(ctx context.Context, st State) {
 			m.drop(id)
 		}
 	}
+}
+
+// releaseOrphans gives back the reservation of every row that is ordering in the database with no run of it active
+// in this process. A run releases its own reservation when it ends, but only best-effort: a failed write while it
+// records a failure or lets go, or a panic, leaves the row ordering. Such a row is never listed as queued, holds a
+// slot of its registered domain's budget and is skipped by the reconciler, so without this it would wait for the
+// next process start. It runs under schedMu, which is where a row is reserved, and a run takes its slot before its
+// row is reserved and frees it only after its result is written, so a row with a live run is never released.
+func (m *Manager) releaseOrphans(ctx context.Context) {
+	if ctx.Err() != nil {
+		return // a stopping process leaves its rows ordering for the next Start, which resumes their orders
+	}
+	ids, err := m.d.Store.OrderingIDs(ctx)
+	if err != nil {
+		m.log.Error("the certificate manager could not list the certificates that are ordering", "error", err)
+		return
+	}
+	for _, id := range ids {
+		if m.running(id) {
+			continue
+		}
+		if err := m.d.Store.ReleaseOrdering(ctx, id); err != nil {
+			m.log.Error("the certificate manager could not release a reservation left by an ended run", "cert", id, "error", err)
+			continue
+		}
+		m.log.Warn("a certificate reserved by a run that has ended is queued again", "cert", id)
+	}
+}
+
+// running reports whether a run of certificate id holds a slot.
+func (m *Manager) running(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.active[id]
+	return ok
 }
 
 // decide gathers what the governor reads for candidate c and asks Decide. A hostname with no registered domain

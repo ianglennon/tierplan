@@ -47,6 +47,15 @@ func (s *Store) MarkOrdering(ctx context.Context, id string) (won bool, err erro
 	return n == 1, nil
 }
 
+// OrderingIDs returns the ids of the rows in phase ordering.
+func (s *Store) OrderingIDs(ctx context.Context) ([]string, error) {
+	ids, err := s.st.Q.ListOrderingIngressCertIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ingresscert: list the certificates that are ordering: %w", err)
+	}
+	return ids, nil
+}
+
 // ReleaseOrdering gives a reservation back: the row returns to queued if it is still ordering.
 func (s *Store) ReleaseOrdering(ctx context.Context, id string) error {
 	if err := s.st.Q.ReleaseIngressCertOrdering(ctx, sqlc.ReleaseIngressCertOrderingParams{UpdatedAt: toNanos(s.now()), ID: id}); err != nil {

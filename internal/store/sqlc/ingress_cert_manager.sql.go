@@ -9,6 +9,34 @@ import (
 	"context"
 )
 
+const listOrderingIngressCertIDs = `-- name: ListOrderingIngressCertIDs :many
+SELECT id FROM ingress_certs WHERE phase = 'ordering' ORDER BY id
+`
+
+// The rows reserved for a run. The scheduler gives back the reservation of any that has no run in this process.
+func (q *Queries) ListOrderingIngressCertIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listOrderingIngressCertIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listQueuedIngressCerts = `-- name: ListQueuedIngressCerts :many
 SELECT id, hostname, env_id, domain_id, source, issuer, retired_at, retired_reason, chain_pem, key_sealed, serial, not_before, not_after, issued_at, account_url, phase, stopped_reason, queue_code, queue_used, queue_cap, queue_domain, queue_next_slot_at, requested_at, requested_by, unreferenced_since, consecutive_failures, last_attempt_at, next_attempt_at, retry_after_until, failure_times, last_error_at, last_error_class, last_error_detail, renew_at, renew_basis, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at, ready, last_success_at, created_by, created_at, updated_at FROM ingress_certs
 WHERE phase = 'queued' AND retired_at = 0 AND source = 'acme'
