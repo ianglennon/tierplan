@@ -26,6 +26,10 @@ import (
 // another (D-19).
 const LetsEncryptDirectory = "https://acme-v02.api.letsencrypt.org/directory"
 
+// LetsEncryptStagingDirectory is Let's Encrypt's staging directory, the one a per-hostname certificate
+// uses when its hostname is set to the staging issuer (D-19).
+const LetsEncryptStagingDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
 const (
 	// httpTimeout bounds every request to the CA, including the directory fetch lego makes with a
 	// background context.
@@ -71,6 +75,16 @@ func NewDirectory(cfg config.Config) (Directory, error) {
 	}
 	d.Roots = pool
 	return d, nil
+}
+
+// NewDirectoryFor resolves the directory for one issuer: Let's Encrypt staging when staging is set and
+// production otherwise. When TIERPLAN_ACME_DIRECTORY_URL names a directory both issuers map to it, as
+// NewDirectory resolves it, so a Pebble or fake CA serves staging and production alike (D-19).
+func NewDirectoryFor(cfg config.Config, staging bool) (Directory, error) {
+	if staging && cfg.ACMEDirectoryURL == "" {
+		return Directory{URL: LetsEncryptStagingDirectory}, nil
+	}
+	return NewDirectory(cfg)
 }
 
 // newHTTPClient is a new client over a new transport on every call: lego wraps the transport it is

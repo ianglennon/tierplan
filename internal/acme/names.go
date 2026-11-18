@@ -63,6 +63,25 @@ func WantedNames(publicURL, agentURL string, checkPublic bool) NameSet {
 	return ns
 }
 
+// CheckName is the per-hostname second gate's name rule (D-21): nil when host is a name an order can
+// be made for, and otherwise the one Refusal that stops it: an IP address (names_ip), a wildcard
+// (names_wildcard) or, when checkPublic is set, a name Let's Encrypt can never issue for
+// (names_not_public). It applies the rules WantedNames applies, in the same order and through the same
+// helpers; WantedNames stays the own certificate's. checkPublic is false when the directory is
+// overridden for a test.
+func CheckName(host string, checkPublic bool) *Refusal {
+	host = canonicalHost(strings.ToLower(strings.TrimSpace(host)))
+	switch {
+	case net.ParseIP(host) != nil:
+		return &Refusal{Code: RefuseNamesIP, Host: host}
+	case strings.Contains(host, "*"):
+		return &Refusal{Code: RefuseNamesWildcard, Host: host}
+	case checkPublic && !isPublicName(host):
+		return &Refusal{Code: RefuseNamesNotPublic, Host: host}
+	}
+	return nil
+}
+
 // hostOf is the trimmed, lower-cased host of raw, or "" when raw has none.
 func hostOf(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
