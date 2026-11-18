@@ -105,3 +105,60 @@ func TestTracerFoldLocalMovesTheLocalEnvironmentsCertificatesToTheSwarmEnvironme
 		t.Fatalf("audit rows = %+v, want one carrying certificates_moved 3", rows)
 	}
 }
+
+// certsVersion is the swarm environment's certs_version, 0 while it has no ingress_env row.
+func (f *foldRig) certsVersion(t *testing.T, envID string) int64 {
+	t.Helper()
+	var v int64
+	if err := f.st.Read.QueryRow(`SELECT COALESCE((SELECT certs_version FROM ingress_env WHERE env_id = ?), 0)`, envID).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestFoldLocalMovesOnlyTheLocalEnvironmentsCertificatesAndRaisesTheSwarmsCertsVersionOnce(t *testing.T) {
+	f := newFoldRig(t, nil)
+	f.insertCert(t, certFixture{id: "cert-local", hostname: "local.example.org", envID: f.localEnv.ID, domainID: "dom-gone", source: "acme",
+		issuer: "production", phase: "idle", chainPEM: "local-chain", keySealed: "local-key"})
+	f.insertCert(t, certFixture{id: "cert-swarm", hostname: "swarm.example.org", envID: f.env.ID, domainID: "dom-gone", source: "acme",
+		issuer: "production", phase: "idle", chainPEM: "swarm-chain", keySealed: "swarm-key"})
+	before := f.certsVersion(t, f.env.ID)
+
+	f.fold(t)
+
+	if got := f.readCert(t, "cert-local"); got.envID != f.env.ID {
+		t.Errorf("cert-local env_id = %q, want %q", got.envID, f.env.ID)
+	}
+	if got := f.readCert(t, "cert-swarm"); got.envID != f.env.ID || got.updatedAt != 1 {
+		t.Errorf("cert-swarm env_id/updated_at = %q/%d, want %q/1: the fold touched a row it does not own", got.envID, got.updatedAt, f.env.ID)
+	}
+	if after := f.certsVersion(t, f.env.ID); after != before+1 {
+		t.Errorf("certs_version = %d, want %d: one raise for the moved certificates", after, before+1)
+	}
+	rows := f.audits(t, "environment.local_folded")
+	if len(rows) != 1 || !strings.Contains(rows[0].Details, `"certificates_moved":"1"`) {
+		t.Fatalf("audit rows = %+v, want one carrying certificates_moved 1", rows)
+	}
+}
+
+func TestFoldLocalWithNoCertificatesRecordsNoneMovedAndLeavesIngressEnvAlone(t *testing.T) {
+	f := newFoldRig(t, nil)
+	count := func() int {
+		var n int
+		if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM ingress_env WHERE env_id = ?`, f.env.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+
+	f.fold(t)
+
+	if after := count(); after != before {
+		t.Errorf("ingress_env rows for the swarm environment = %d, want %d: a fold that moved nothing creates none", after, before)
+	}
+	rows := f.audits(t, "environment.local_folded")
+	if len(rows) != 1 || !strings.Contains(rows[0].Details, `"certificates_moved":"0"`) {
+		t.Fatalf("audit rows = %+v, want one carrying certificates_moved 0", rows)
+	}
+}
