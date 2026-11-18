@@ -107,6 +107,9 @@ type Manager struct {
 	mu sync.Mutex
 	// active holds the id of every certificate a run is reserved or running for.
 	active map[string]struct{}
+	// warned holds the keys of the warnings the reconciler has already logged, so one it meets every round is said
+	// once.
+	warned map[string]struct{}
 }
 
 // New returns a Manager. It resolves both directories and builds one ACME client per directory over the
@@ -132,6 +135,7 @@ func New(d Deps) (*Manager, error) {
 		d: d, clock: d.Clock, log: log.With("component", "ingresscert"),
 		clients: map[string]*acme.Client{}, dirs: map[string]acme.Directory{},
 		wake: make(chan struct{}, 1), active: map[string]struct{}{},
+		warned: map[string]struct{}{},
 	}
 	for issuer, staging := range map[string]bool{IssuerStaging: true, IssuerProduction: false} {
 		dir, err := acme.NewDirectoryFor(d.Config, staging)
