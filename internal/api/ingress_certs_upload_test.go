@@ -6,6 +6,7 @@ package api_test
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -19,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/httpx"
 )
 
 // The upload and switch-back routes (Phase 20, CRT-08, D-22, D-23).
@@ -193,4 +196,276 @@ func TestIngressCertUploadThroughTheAPI(t *testing.T) {
 	requireNoKey(t, "the answers", bodies, keyPEM)
 	requireNoKey(t, "the audit log", f.everyAuditText(t), keyPEM)
 	requireNoKey(t, "the server log", f.logs.String(), keyPEM)
+}
+
+// certRows counts the certificate rows of an environment.
+func (f *ingressFix) certRows(t *testing.T, env string) int {
+	t.Helper()
+	var n int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM ingress_certs WHERE env_id = ?`, env).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// upload uploads a fresh valid certificate for host as u and requires 201.
+func (f *ingressFix) upload(t *testing.T, u credentialUser, ca *uploadCA, env, host string) uploadResp {
+	t.Helper()
+	chainPEM, keyPEM := ca.issue(t, f.clk.now(), uploadLeaf{sans: []string{host}})
+	rec := f.credCall(t, u, http.MethodPost, uploadPath(env), uploadBody(host, chainPEM, keyPEM))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload %s in %s: %d %s", host, env, rec.Code, rec.Body)
+	}
+	return decodeUpload(t, rec)
+}
+
+// D-23: each way an upload can be wrong is a 422 with its own stable code and a fixed sentence that holds no input byte; a
+// hostname another environment holds is 409 ingress_host_taken; and no refusal writes a row or an audit entry.
+func TestIngressCertUploadRefusals(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.register(t, f.adminA, f.envA, "shared.example.com")
+	f.register(t, f.adminB, f.envB, "shared.example.com")
+	now := f.clk.now()
+	ca := newUploadCA(t, now)
+	const host = "app.apps.example.com"
+	const marker = "SECRET-MARKER-9f2c41"
+
+	chainPEM, keyPEM := ca.issue(t, now, uploadLeaf{sans: []string{host}})
+	_, otherKeyPEM := ca.issue(t, now, uploadLeaf{sans: []string{host}})
+	otherHostChain, otherHostKey := ca.issue(t, now, uploadLeaf{sans: []string{"other.apps.example.com"}})
+	expiredChain, expiredKey := ca.issue(t, now, uploadLeaf{sans: []string{host}, notBefore: now.Add(-48 * time.Hour), notAfter: now.Add(-time.Hour)})
+	futureChain, futureKey := ca.issue(t, now, uploadLeaf{sans: []string{host}, notBefore: now.Add(time.Hour), notAfter: now.Add(48 * time.Hour)})
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edPEM := pkcs8PEM(t, edKey)
+	encryptedPEM := string(pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: []byte(marker)}))
+
+	cases := []struct {
+		name, code, chain, key string
+		secrets                []string
+	}{
+		{"a key that is not the certificate's", "ingress_cert_key_mismatch", chainPEM, otherKeyPEM, []string{otherKeyPEM}},
+		{"a certificate for another name", "ingress_cert_host_not_covered", otherHostChain, otherHostKey, []string{otherHostKey}},
+		{"an expired certificate", "ingress_cert_expired", expiredChain, expiredKey, []string{expiredKey}},
+		{"a certificate not valid yet", "ingress_cert_not_yet_valid", futureChain, futureKey, []string{futureKey}},
+		{"a chain that is not PEM", "ingress_cert_chain_unparsable", marker, keyPEM, []string{marker, keyPEM}},
+		{"an Ed25519 key", "ingress_cert_key_unsupported", chainPEM, edPEM, []string{edPEM}},
+		{"an encrypted key", "ingress_cert_key_encrypted", chainPEM, encryptedPEM, []string{marker}},
+		{"a 300 KiB chain", "ingress_cert_too_large", strings.Repeat("A", 300<<10), keyPEM, []string{keyPEM}},
+		{"a 300 KiB key", "ingress_cert_too_large", chainPEM, marker + strings.Repeat("A", 300<<10), []string{marker}},
+	}
+	for _, tc := range cases {
+		rec := f.credCall(t, f.adminA, http.MethodPost, uploadPath(f.envA), uploadBody(host, tc.chain, tc.key))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != tc.code {
+			t.Errorf("%s: %d %s, want 422 %s", tc.name, rec.Code, rec.Body, tc.code)
+			continue
+		}
+		for _, secret := range tc.secrets {
+			requireNoKey(t, tc.name+": the problem", rec.Body.String(), secret)
+			if strings.Contains(rec.Body.String(), marker) {
+				t.Errorf("%s: the problem holds input bytes", tc.name)
+			}
+		}
+	}
+
+	// The name rules are those of a request ahead: another environment's request holds the name, and the refusal names nothing of it.
+	f.requestCert(t, f.adminB, f.envB, "web.shared.example.com")
+	sharedChain, sharedKey := ca.issue(t, now, uploadLeaf{sans: []string{"web.shared.example.com"}})
+	rec := f.credCall(t, f.adminA, http.MethodPost, uploadPath(f.envA), uploadBody("web.shared.example.com", sharedChain, sharedKey))
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_host_taken" {
+		t.Errorf("a hostname another environment holds: %d %s, want 409 ingress_host_taken", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), f.envB) || strings.Contains(rec.Body.String(), "ing-admin-b") {
+		t.Errorf("the refusal names the other environment: %s", rec.Body)
+	}
+	rec = f.credCall(t, f.adminA, http.MethodPost, uploadPath(f.envA), uploadBody("web.elsewhere.org", sharedChain, sharedKey))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "ingress_domain_not_allowed" {
+		t.Errorf("a hostname under no domain: %d %s, want 422 ingress_domain_not_allowed", rec.Code, rec.Body)
+	}
+
+	if n := f.certRows(t, f.envA); n != 0 {
+		t.Errorf("%d certificate rows of A, want none written by refusals", n)
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressCertUploaded); len(rows) != 0 {
+		t.Errorf("audit rows = %+v, want none", rows)
+	}
+	requireNoKey(t, "the audit log", f.everyAuditText(t), keyPEM)
+	requireNoKey(t, "the server log", f.logs.String(), keyPEM)
+	requireNoKey(t, "the server log", f.logs.String(), otherKeyPEM)
+	if strings.Contains(f.logs.String(), marker) {
+		t.Errorf("the server log holds input bytes")
+	}
+}
+
+// Pitfall 7: a schema violation is answered with the offending value, so the private key field must carry no maxLength; the
+// hostname's bound is still there, which shows the check reads the right schema.
+func TestIngressCertUploadSchemaHasNoKeyLength(t *testing.T) {
+	t.Parallel()
+	r := httpx.New(httpx.Options{})
+	api.RegisterIngressCerts(r, api.IngressCertDeps{})
+	raw, err := json.Marshal(r.API().OpenAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]struct {
+			OperationID string `json:"operationId"`
+			RequestBody struct {
+				Content map[string]struct {
+					Schema struct {
+						Ref string `json:"$ref"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"requestBody"`
+		} `json:"paths"`
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]map[string]any `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	op, ok := doc.Paths["/api/env/{envId}/ingress/certificates/upload"]["post"]
+	if !ok || op.OperationID != "uploadIngressCertificate" {
+		t.Fatalf("the upload operation is not in the contract: %+v", op)
+	}
+	ref := op.RequestBody.Content["application/json"].Schema.Ref
+	schema, ok := doc.Components.Schemas[strings.TrimPrefix(ref, "#/components/schemas/")]
+	if !ok {
+		t.Fatalf("the request body schema %q is not in the contract", ref)
+	}
+	key, ok := schema.Properties["privateKeyPem"]
+	if !ok {
+		t.Fatalf("the request body has no privateKeyPem: %v", schema.Properties)
+	}
+	for _, k := range []string{"maxLength", "minLength", "pattern", "enum", "format"} {
+		if _, has := key[k]; has {
+			t.Errorf("privateKeyPem has %s in the schema: a violation would echo the key", k)
+		}
+	}
+	if _, has := schema.Properties["certificatePem"]["maxLength"]; has {
+		t.Errorf("certificatePem has a maxLength")
+	}
+	if host, has := schema.Properties["hostname"]["maxLength"]; !has || host != float64(253) {
+		t.Errorf("hostname maxLength = %v, want 253", host)
+	}
+}
+
+// D-22: switching an uploaded hostname back to ACME queues a certificate for the hostname from the domain's issuer, leaves the
+// retired upload listed as retired, and is audited; an ACME certificate, a retired upload and another environment's upload
+// are 404.
+func TestIngressCertSwitchBackToACME(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.register(t, f.adminB, f.envB, "other.example.com")
+	ca := newUploadCA(t, f.clk.now())
+	up := f.upload(t, f.adminA, ca, f.envA, "app.apps.example.com")
+	acme := f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+	bUp := f.upload(t, f.adminB, ca, f.envB, "web.other.example.com")
+	switchBack := func(env, id string) *httptest.ResponseRecorder {
+		return f.credCall(t, f.adminA, http.MethodPost, certsPath(env, "/", id, "/acme"), "")
+	}
+
+	for name, id := range map[string]string{"an ACME certificate": acme.ID, "another environment's upload": bUp.ID, "an unknown id": "no-such-cert"} {
+		rec := switchBack(f.envA, id)
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "ingress_cert_not_found" {
+			t.Errorf("%s: %d %s, want 404 ingress_cert_not_found", name, rec.Code, rec.Body)
+		}
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressCertSwitchedToACME); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v, want none for refused switches", rows)
+	}
+
+	rec := switchBack(f.envA, up.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("switch back: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	fresh := decodeCert(t, rec)
+	if fresh.ID == "" || fresh.ID == up.ID || fresh.Hostname != "app.apps.example.com" || fresh.Source != "acme" || fresh.State != "queued" || fresh.Issuer != "production" || fresh.Ready {
+		t.Errorf("the new certificate = %+v", fresh)
+	}
+
+	byID := map[string]certResp{}
+	for _, c := range decodeCerts(t, f.credCall(t, f.adminA, http.MethodGet, certsPath(f.envA), "")) {
+		byID[c.ID] = c
+	}
+	if got := byID[up.ID]; got.State != "retired" || got.Source != "upload" {
+		t.Errorf("the switched upload = %+v, want listed as retired", got)
+	}
+	if got := byID[fresh.ID]; got.State != "queued" {
+		t.Errorf("the queued certificate = %+v", got)
+	}
+
+	rows := f.ingressAudit(t, audit.ActionIngressCertSwitchedToACME)
+	if len(rows) != 1 {
+		t.Fatalf("ingress.cert_switched_to_acme rows = %+v, want one", rows)
+	}
+	if r := rows[0]; r.Result != "success" || r.ActorID != "id-ing-admin-a" || r.TargetType != "ingress_certificate" || r.TargetID != fresh.ID ||
+		r.EnvID != f.envA || r.Details["hostname"] != "app.apps.example.com" || r.Details["issuer"] != "production" {
+		t.Errorf("audit row = %+v", r)
+	}
+
+	// The upload is retired now: switching it again is a 404, and B's upload is untouched.
+	if rec := switchBack(f.envA, up.ID); rec.Code != http.StatusNotFound {
+		t.Errorf("a second switch of the same upload: %d %s, want 404", rec.Code, rec.Body)
+	}
+	var retired int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM ingress_certs WHERE id = ? AND retired_at = 0`, bUp.ID).Scan(&retired); err != nil || retired != 1 {
+		t.Errorf("B's upload live rows = %d, %v, want it untouched", retired, err)
+	}
+}
+
+// T-20-37: the upload and the switch back need ingress.manage on the environment: an Operator gets 403, the Admin of another
+// environment cannot see it, and a refused caller changes nothing.
+func TestIngressCertUploadRoutesNeedTheAdmin(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	ca := newUploadCA(t, f.clk.now())
+	up := f.upload(t, f.adminA, ca, f.envA, "app.apps.example.com")
+	chainPEM, keyPEM := ca.issue(t, f.clk.now(), uploadLeaf{sans: []string{"api.apps.example.com"}})
+
+	routes := []struct {
+		name, method, path, body string
+		ok                       int
+	}{
+		{"upload", http.MethodPost, uploadPath(f.envA), uploadBody("api.apps.example.com", chainPEM, keyPEM), http.StatusCreated},
+		{"switch back", http.MethodPost, certsPath(f.envA, "/", up.ID, "/acme"), "", http.StatusOK},
+	}
+	for _, r := range routes {
+		before := f.certRows(t, f.envA)
+		for who, u := range map[string]credentialUser{"an Operator of A": f.operatorA, "the Admin of B": f.adminB} {
+			rec := f.credCall(t, u, r.method, r.path, r.body)
+			if rec.Code != http.StatusForbidden && (who == "an Operator of A" || rec.Code != http.StatusNotFound) {
+				t.Errorf("%s as %s: %d %s, want 403 (404 for an environment the caller cannot see)", r.name, who, rec.Code, rec.Body)
+			}
+			requireNoKey(t, r.name+" as "+who, rec.Body.String(), keyPEM)
+		}
+		if n := f.certRows(t, f.envA); n != before {
+			t.Fatalf("after refused %s calls there are %d certificate rows of A, want %d", r.name, n, before)
+		}
+		rec := f.credCall(t, f.adminA, r.method, r.path, r.body)
+		if rec.Code != r.ok {
+			t.Errorf("%s as the Admin of A: %d %s, want %d", r.name, rec.Code, rec.Body, r.ok)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s Cache-Control = %q, want no-store", r.name, cc)
+		}
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressCertUploaded); len(rows) != 2 {
+		t.Errorf("upload audit rows = %d, want 2 (the setup and the Admin's call): refused callers write none", len(rows))
+	}
+	if rows := f.ingressAudit(t, audit.ActionIngressCertSwitchedToACME); len(rows) != 1 {
+		t.Errorf("switch audit rows = %d, want 1: refused callers write none", len(rows))
+	}
 }

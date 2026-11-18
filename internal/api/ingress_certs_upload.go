@@ -56,6 +56,14 @@ type IngressCertUploadedOutput struct {
 	Body         IngressCertUploadedBody
 }
 
+// SwitchIngressCertInput is the path of a switch back to ACME.
+type SwitchIngressCertInput struct {
+	EnvironmentPathInput
+	CertID string `path:"certId" doc:"The uploaded certificate's ID"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 // uploadProblem is the problem of a refused upload: its code and a fixed sentence, never a byte of the input.
 func uploadProblem(e *ingresscert.UploadError) error {
 	return httpx.Problem(http.StatusUnprocessableEntity, e.Code, e.Error())
@@ -145,5 +153,54 @@ func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 		out.Body.IngressCertBody = ingressCertBody(c, now())
 		out.Body.Warnings = nonNil(warnings)
 		return out, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "switchIngressCertificateToACME",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/ingress/certificates/{certId}/acme",
+		Summary:     "Return an uploaded hostname to Let's Encrypt",
+		Description: "Retires the uploaded certificate, which keeps serving until its replacement is ready or it expires, and queues a Let's Encrypt certificate for the hostname from the " +
+			"issuer its domain has now. Answers 200 with the new queued certificate. 404 " + problemIngressCertNotFound + " for a certificate that is not a live upload of this environment " +
+			"(an ACME certificate, a retired one, another environment's or an unknown id). Audited as ingress.cert_switched_to_acme. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *SwitchIngressCertInput) (*IngressCertOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if !ready() {
+			return nil, unavailable()
+		}
+		notFound := httpx.Problem(http.StatusNotFound, problemIngressCertNotFound, "No such uploaded certificate in this environment.")
+		cur, err := d.Store.Cert(ctx, in.CertID)
+		switch {
+		case errors.Is(err, ingresscert.ErrCertNotFound):
+			return nil, notFound
+		case err != nil:
+			return nil, internal("read the certificate", err)
+		case cur.EnvID != in.EnvID:
+			return nil, notFound
+		}
+		dom, err := d.Domains.DomainByID(ctx, cur.DomainID)
+		if err != nil {
+			return nil, internal("read the domain of the certificate", err)
+		}
+		c, err := d.Store.SwitchToACME(ctx, in.EnvID, in.CertID, p.ID, string(dom.Issuer), func(ctx context.Context, tx *sql.Tx, c ingresscert.Cert) error {
+			return d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: p.AuditActor(), Action: audit.ActionIngressCertSwitchedToACME, TargetType: ingressCertTarget, TargetID: c.ID, EnvID: in.EnvID,
+				Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+				Details: map[string]string{"hostname": c.Hostname, "issuer": c.Issuer},
+			})
+		})
+		switch {
+		case err == nil:
+		case errors.Is(err, ingresscert.ErrCertNotFound):
+			return nil, notFound
+		default:
+			return nil, internal("switch the certificate to ACME", err)
+		}
+		d.Manager.Wake()
+		return &IngressCertOutput{CacheControl: "no-store", Body: ingressCertBody(c, now())}, nil
 	})
 }
