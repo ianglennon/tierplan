@@ -244,6 +244,7 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 		return httpx.Problem(http.StatusServiceUnavailable, problemIngressUnavailable, "Per-hostname certificates are not available on this server.")
 	}
 	ready := func() bool { return d.Manager != nil && d.Store != nil }
+	registerIngressCertUpload(r, d)
 	internal := func(what string, err error) error {
 		d.Log.Error("ingress certificate request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
