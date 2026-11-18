@@ -5,12 +5,10 @@ package ingresscert
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme"
-	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
@@ -85,32 +83,6 @@ func (s *Store) Stop(ctx context.Context, id, reason string) error {
 		return fmt.Errorf("ingresscert: stop certificate %q: %w", id, err)
 	}
 	return nil
-}
-
-// RecordFailure stores the ledger of a failed run on the row, which returns to queued to wait for its next
-// attempt, and writes the ingress.cert_failed audit row as system:ingress in the same transaction. class is
-// the failure class and the only thing the audit row says about why: a CA's text never reaches it.
-func (s *Store) RecordFailure(ctx context.Context, c Cert, class string, l acme.Ledger, now time.Time) error {
-	ts := toNanos(now)
-	return s.write(ctx, nil, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
-		if err := q.RecordIngressCertFailureBasic(ctx, sqlc.RecordIngressCertFailureBasicParams{
-			LastErrorClass: class, LastErrorAt: ts, ConsecutiveFailures: int64(l.ConsecutiveFailures),
-			LastAttemptAt: toNanos(l.LastAttemptAt), NextAttemptAt: toNanos(l.NextAttemptAt),
-			RetryAfterUntil: toNanos(l.RetryAfterUntil), UpdatedAt: ts, ID: c.ID,
-		}); err != nil {
-			return false, fmt.Errorf("ingresscert: record the failure of certificate %q: %w", c.ID, err)
-		}
-		if s.audit != nil {
-			if err := s.audit.RecordTx(ctx, tx, audit.Entry{
-				Actor: audit.SystemIngress, Action: audit.ActionIngressCertFailed, TargetType: auditTargetCertificate,
-				TargetID: c.ID, EnvID: c.EnvID, Result: audit.ResultFailure,
-				Details: map[string]string{"hostname": c.Hostname, "issuer": c.Issuer, "reason": class},
-			}); err != nil {
-				return false, fmt.Errorf("ingresscert: record the failure of %q: %w", c.Hostname, err)
-			}
-		}
-		return false, nil
-	})
 }
 
 // LedgerOf is the backoff ledger the row carries.

@@ -8,6 +8,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
@@ -26,9 +27,15 @@ func (m *Manager) schedule(ctx context.Context, st State) {
 	slices.SortStableFunc(due, func(a, b Cert) int {
 		return cmp.Compare(rank(a), rank(b))
 	})
+	now := m.clock.Now()
 	for _, c := range due {
 		if ctx.Err() != nil {
 			return
+		}
+		// The ledger decides whether this row may run: neither its backoff nor a CA's Retry-After is still ahead.
+		// The listing already asks the same, so this is the rule stated where the run is started.
+		if !acme.AutomaticAllowed(LedgerOf(c), now) {
+			continue
 		}
 		// A row that waits for the terms, while the terms are still not acknowledged and no account exists,
 		// would only start a job to find that out again.

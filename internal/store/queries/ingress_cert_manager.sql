@@ -37,10 +37,3 @@ WHERE id = ? AND retired_at = 0;
 -- name: StopIngressCert :exec
 -- Stops a row until a person (or a claim that resolves to a live domain) acts; stopped_reason says why.
 UPDATE ingress_certs SET phase = 'stopped', stopped_reason = ?, updated_at = ? WHERE id = ? AND retired_at = 0;
-
--- name: RecordIngressCertFailureBasic :exec
--- The ledger after a failed run, and the row back in phase queued to wait for next_attempt_at.
-UPDATE ingress_certs SET
-    last_error_class = ?, last_error_at = ?, consecutive_failures = ?, last_attempt_at = ?, next_attempt_at = ?,
-    retry_after_until = ?, phase = 'queued', updated_at = ?
-WHERE id = ? AND retired_at = 0;

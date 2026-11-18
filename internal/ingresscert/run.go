@@ -157,16 +157,18 @@ func (m *Manager) fail(ctx, mgr context.Context, c Cert, runErr error, profile s
 	return m.charge(ctx, c, acme.Classify(runErr, acme.ClassifyInput{ChallengeType: acme.ChallengeDNS01, Profile: profile}))
 }
 
-// charge puts a failure in the row's backoff ledger and writes the ingress.cert_failed audit row, and the row waits
-// queued for its next attempt. The audit row carries the class and never the CA's text.
+// charge records a failure on the row (recordFailure): its backoff, the audit row that carries the class and never
+// the CA's text, and the row waits queued for its next attempt. An account the CA no longer knows is forgotten, so
+// the next run registers a new one.
 func (m *Manager) charge(ctx context.Context, c Cert, f acme.Failure) string {
 	bg := context.WithoutCancel(ctx)
-	now := m.clock.Now()
-	l := acme.RecordFailure(LedgerOf(c), now, f.RetryAfter, 0, m.d.Jitter())
-	if err := m.d.Store.RecordFailure(bg, c, f.Class, l, now); err != nil {
+	if err := m.recordFailure(bg, c, f, m.clock.Now()); err != nil {
 		m.log.Error("a certificate run could not record its failure", "host", c.Hostname, "error", err)
 	}
 	m.log.Warn("a certificate run failed", "host", c.Hostname, "class", f.Class)
+	if f.Class == acme.ClassAccountGone {
+		m.forgetAccount(bg, c)
+	}
 	return OutcomeFailed
 }
 

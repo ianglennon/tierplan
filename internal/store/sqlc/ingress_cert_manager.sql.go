@@ -109,39 +109,6 @@ func (q *Queries) MarkIngressCertOrdering(ctx context.Context, arg MarkIngressCe
 	return result.RowsAffected()
 }
 
-const recordIngressCertFailureBasic = `-- name: RecordIngressCertFailureBasic :exec
-UPDATE ingress_certs SET
-    last_error_class = ?, last_error_at = ?, consecutive_failures = ?, last_attempt_at = ?, next_attempt_at = ?,
-    retry_after_until = ?, phase = 'queued', updated_at = ?
-WHERE id = ? AND retired_at = 0
-`
-
-type RecordIngressCertFailureBasicParams struct {
-	LastErrorClass      string
-	LastErrorAt         int64
-	ConsecutiveFailures int64
-	LastAttemptAt       int64
-	NextAttemptAt       int64
-	RetryAfterUntil     int64
-	UpdatedAt           int64
-	ID                  string
-}
-
-// The ledger after a failed run, and the row back in phase queued to wait for next_attempt_at.
-func (q *Queries) RecordIngressCertFailureBasic(ctx context.Context, arg RecordIngressCertFailureBasicParams) error {
-	_, err := q.db.ExecContext(ctx, recordIngressCertFailureBasic,
-		arg.LastErrorClass,
-		arg.LastErrorAt,
-		arg.ConsecutiveFailures,
-		arg.LastAttemptAt,
-		arg.NextAttemptAt,
-		arg.RetryAfterUntil,
-		arg.UpdatedAt,
-		arg.ID,
-	)
-	return err
-}
-
 const releaseIngressCertOrdering = `-- name: ReleaseIngressCertOrdering :exec
 UPDATE ingress_certs SET phase = 'queued', updated_at = ? WHERE id = ? AND phase = 'ordering'
 `
