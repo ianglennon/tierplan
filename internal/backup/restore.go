@@ -362,6 +362,17 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 		now.UnixNano()); err != nil {
 		return fmt.Errorf("pause automatic ACME after the restore: %w", err)
 	}
+	// The per-hostname certificates are paused the same way. A clone that holds a certificate, an ingress
+	// account or an acknowledgement of the CA's terms could order or renew production names straight away
+	// (the account and the acknowledgement travel in the backup), spending the original install's budget
+	// and fighting it for the same names; one with none of them has nothing to protect and is not paused.
+	// Written in this transaction, so no restored database exists without it.
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE ingress_cert_state SET paused_reason = 'restore', updated_at = ? WHERE id = 1 AND "+
+			"(EXISTS (SELECT 1 FROM ingress_acme_account) OR EXISTS (SELECT 1 FROM ingress_certs) OR terms_accepted_at <> 0)",
+		now.UnixNano()); err != nil {
+		return fmt.Errorf("pause ingress certificates after the restore: %w", err)
+	}
 	// The HSTS ramp starts again on a restore: a restored clone may serve a different certificate
 	// history, so it must not resume a long lifetime on its first day. The admin's choice
 	// (hsts_enabled) and the bound on what browsers may still hold (hsts_held_until) travel, so the
