@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -302,6 +303,8 @@ type authFixture struct {
 	// (phase 18). newAuthFixture gives the provider the zone example.com and a token that it accepts, ingressToken.
 	ingressProv  *dnstest.FakeProvider
 	ingressStore *ingressstore.Store
+	// ingressSweeps counts how many times the ingress routes asked for a DNS sweep (IngressDeps.CertSweep).
+	ingressSweeps atomic.Int32
 }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
@@ -630,6 +633,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			return ingressBase(token)
 		}},
 		Audit: f.aud, Checker: checker, Log: log,
+		CertSweep: func() { f.ingressSweeps.Add(1) },
 	})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{

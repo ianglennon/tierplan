@@ -1464,7 +1464,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a domain
-         * @description Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 ingress_domain_in_use names every holding stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. 404 ingress_domain_not_found for a domain that is gone or belongs to another environment, with no audit row. Audited as ingress.domain_deleted. Needs ingress.manage on the environment (its Admin).
+         * @description Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 ingress_domain_in_use names every holding stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. While TierPlan still holds DNS records it made with the domain's token, 409 ingress_domain_cleanup_pending and nothing changes: the removal is started at once, so the same request succeeds shortly. 404 ingress_domain_not_found for a domain that is gone or belongs to another environment, with no audit row. Answers 200 with certificatesLeft when live certificates under the domain are left to expire (they stop renewing), and 204 with no body when none are. Audited as ingress.domain_deleted, with the certificate count. Needs ingress.manage on the environment (its Admin).
          */
         delete: operations["deleteIngressDomain"];
         options?: never;
@@ -9848,6 +9848,11 @@ export interface components {
         };
         IngressDomainBody: {
             /**
+             * Format: int64
+             * @description The live certificates under the domain. If the domain is deleted they stop renewing and expire
+             */
+            certificates: number;
+            /**
              * Format: date-time
              * @description When the domain was registered
              */
@@ -9879,6 +9884,13 @@ export interface components {
              * @description When the domain last changed
              */
             updatedAt: string;
+        };
+        IngressDomainDeletedBody: {
+            /**
+             * Format: int64
+             * @description The live certificates the deletion left behind. They stop renewing and are deleted when they expire
+             */
+            certificatesLeft: number;
         };
         IngressDomainsBody: {
             /** @description The environment's domains, by suffix */
@@ -19835,7 +19847,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description No Content */
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDomainDeletedBody"];
+                };
+            };
+            /** @description Deleted, and no certificates were left behind */
             204: {
                 headers: {
                     "Cache-Control"?: string;
