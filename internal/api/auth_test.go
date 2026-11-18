@@ -315,6 +315,9 @@ type authFixture struct {
 	// Let's Encrypt, which no API test may call: a test that reads the directories sets it to a fake directory and
 	// builds again.
 	ingressCertCfg config.Config
+	// ingressCertNoClock registers the certificate routes without a clock, as the server does, so the routes fall back
+	// to time.Now (Phase 20 review CR-01).
+	ingressCertNoClock bool
 }
 
 // fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
@@ -670,8 +673,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		t.Fatal(certErr)
 	}
 	f.ingressCerts = certMgr
+	certNow := f.clk.now
+	if f.ingressCertNoClock {
+		certNow = nil
+	}
 	api.RegisterIngressCerts(r, api.IngressCertDeps{
-		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: f.clk.now,
+		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: certNow,
 	})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{

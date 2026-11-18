@@ -236,10 +236,10 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
-	now := d.Now
-	if now == nil {
-		now = time.Now
+	if d.Now == nil {
+		d.Now = time.Now
 	}
+	now := d.Now
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemIngressUnavailable, "Per-hostname certificates are not available on this server.")
 	}
