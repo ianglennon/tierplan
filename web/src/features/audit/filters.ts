@@ -218,6 +218,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "ingress.claim_released",
   "ingress.cert_issued",
   "ingress.cert_failed",
+  "ingress.cert_requested",
   "ingress.node_enrolled",
   "ingress.node_removed",
   "ingress.vip_changed",

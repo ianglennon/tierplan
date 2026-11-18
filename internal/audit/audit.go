@@ -52,6 +52,10 @@ var (
 	// itself (Phase 17, D-09). It matches acme.OwnerScheduler. It is an audit actor only: it holds no permission, so it
 	// is not in rbac.SystemPrincipals.
 	SystemACME = Actor{Type: ActorSystem, ID: "system:acme", Name: "system:acme"}
+	// SystemIngress writes the outcome of per-hostname certificate runs and the changes the scheduler makes to them by
+	// itself: issued, renewed, failed, deleted and moved (Phase 20). Like SystemACME it is an audit actor only and holds
+	// no permission.
+	SystemIngress = Actor{Type: ActorSystem, ID: "system:ingress", Name: "system:ingress"}
 )
 
 // Result is the outcome of an action.
@@ -360,6 +364,8 @@ const (
 	// A certificate for a hostname was issued, or its issue failed (Phase 22 onwards).
 	ActionIngressCertIssued = "ingress.cert_issued"
 	ActionIngressCertFailed = "ingress.cert_failed"
+	// An admin asked for a certificate ahead of a claim (Phase 20, D-33).
+	ActionIngressCertRequested = "ingress.cert_requested"
 	// A node joined or left the ingress, and the virtual address changed (Phase 24 to 26).
 	ActionIngressNodeEnrolled = "ingress.node_enrolled"
 	ActionIngressNodeRemoved  = "ingress.node_removed"

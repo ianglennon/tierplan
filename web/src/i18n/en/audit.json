@@ -407,6 +407,7 @@
         "claim_released": "Released a stack's ingress hostnames",
         "cert_issued": "Issued ingress certificate",
         "cert_failed": "Ingress certificate failed",
+        "cert_requested": "Requested ingress certificate ahead of a claim",
         "node_enrolled": "Enrolled ingress node",
         "node_removed": "Removed ingress node",
         "vip_changed": "Changed ingress virtual address"
