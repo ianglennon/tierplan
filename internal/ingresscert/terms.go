@@ -59,3 +59,38 @@ func (s *Store) AcceptTerms(ctx context.Context, actor string, hook func(ctx con
 		return false, nil
 	})
 }
+
+// DirectoryInfo is one certificate authority directory the manager orders from, with the terms its operator
+// publishes for it.
+type DirectoryInfo struct {
+	// Issuer is IssuerProduction or IssuerStaging.
+	Issuer string
+	// URL is the directory's address.
+	URL string
+	// TermsOfService is the URL of the terms an account agrees to; empty when the directory names none or could not
+	// be read.
+	TermsOfService string
+}
+
+// Directories lists the directories the manager orders from, production then staging, with the terms each one
+// advertises, so an Admin sees what the acknowledgement covers (D-36). A directory that cannot be read leaves its
+// terms empty and is logged: the list is for a person to read and never fails. The client caches what it reads for
+// a day and a failure for a minute, so listing does not call the authority on every request.
+func (m *Manager) Directories(ctx context.Context) []DirectoryInfo {
+	out := make([]DirectoryInfo, 0, 2)
+	for _, issuer := range []string{IssuerProduction, IssuerStaging} {
+		c, dir := m.client(issuer)
+		if c == nil {
+			continue
+		}
+		info := DirectoryInfo{Issuer: issuer, URL: dir.URL}
+		meta, err := c.Meta(ctx)
+		if err != nil {
+			m.log.Warn("read the terms of the certificate authority directory", "issuer", issuer, "directory", dir.URL, "error", err)
+		} else {
+			info.TermsOfService = meta.TermsOfService
+		}
+		out = append(out, info)
+	}
+	return out
+}

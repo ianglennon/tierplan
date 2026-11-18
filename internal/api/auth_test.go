@@ -311,6 +311,10 @@ type authFixture struct {
 	// moving f.clk.
 	ingressCerts     *ingresscert.Manager
 	ingressCertStore *ingresscert.Store
+	// ingressCertCfg is the configuration the certificate manager is built with. The zero value points both issuers at
+	// Let's Encrypt, which no API test may call: a test that reads the directories sets it to a fake directory and
+	// builds again.
+	ingressCertCfg config.Config
 }
 
 // fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
@@ -652,7 +656,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	t.Cleanup(certHub.Close)
 	certMgr, certErr := ingresscert.New(ingresscert.Deps{
 		Store: f.ingressCertStore, Domains: f.ingressStore, Jobs: certHub, Clock: fixtureClock{f.clk},
-		Config: config.Config{}, DNS: acme.DNSDeps{Providers: map[string]dns.Factory{"cloudflare": ingressBase}},
+		Config: f.ingressCertCfg, DNS: acme.DNSDeps{Providers: map[string]dns.Factory{"cloudflare": ingressBase}},
 		Ledger: acme.NewStore(f.st, f.v), Log: log, UserAgent: "tierplan-test/0",
 	})
 	if certErr != nil {
