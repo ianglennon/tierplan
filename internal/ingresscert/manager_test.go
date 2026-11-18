@@ -469,3 +469,118 @@ func TestManagerRefusesAHostnameOutsideItsDomain(t *testing.T) {
 		t.Errorf("%d jobs, want 1: the row is backing off", n)
 	}
 }
+
+// Restart: a run cut mid-order leaves its row ordering and its order open. A new manager's Start queues the row
+// again and its next round resumes the same order: the CA sees one newOrder in all.
+func TestManagerResumesACutOrderAfterARestart(t *testing.T) {
+	ctx := context.Background()
+	g := newMgrRig(t, nil, "")
+	g.claim("app.example.com")
+	if err := g.s.AcceptTerms(ctx, "user:1", nil); err != nil {
+		t.Fatalf("AcceptTerms: %v", err)
+	}
+	release := g.fake.HoldValidation()
+	m1 := g.newManager()
+	ctx1, stop := context.WithCancel(ctx)
+	defer stop()
+	g.prov.AfterCreate = stop // the process stops once the challenge record exists, so the order is open
+
+	m1.round(ctx1)
+	if end := g.awaitEnd(); end.outcome != OutcomeQueued {
+		t.Fatalf("the cut run ended %q, want queued", end.outcome)
+	}
+	row := g.live("app.example.com")
+	if row.Phase != PhaseOrdering {
+		t.Fatalf("phase = %q after the cut, want ordering", row.Phase)
+	}
+	if _, found, err := g.s.OpenOrderID(ctx, row.ID); err != nil || !found {
+		t.Fatalf("OpenOrderID found = %v, %v, want the order left open", found, err)
+	}
+	if n := g.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Fatalf("the CA saw %d orders, want 1", n)
+	}
+
+	m2 := g.newManager() // Start runs
+	if row := g.live("app.example.com"); row.Phase != PhaseQueued {
+		t.Fatalf("phase = %q after Start, want queued: a crash must not hold a reservation", row.Phase)
+	}
+	m2.round(ctx)
+	g.clk.Clock.WaitArmed(t) // the resumed run waits on the CA
+	release()
+	g.clk.Clock.Advance(acme.PollInterval)
+	if end := g.awaitEnd(); end.outcome != OutcomeIssued {
+		t.Fatalf("the resumed run ended %q, want issued", end.outcome)
+	}
+	if n := g.fake.Count(acmetest.EndpointNewOrder); n != 1 {
+		t.Errorf("the CA saw %d orders after the resume, want still 1", n)
+	}
+	if row := g.live("app.example.com"); row.Phase != PhaseIdle || len(row.ChainPEM) == 0 {
+		t.Errorf("row = phase %q chain %d bytes, want an issued row", row.Phase, len(row.ChainPEM))
+	}
+}
+
+// Queued rows are rows, so a restart keeps them: a row waiting for the terms is still queued with its reason
+// after a new manager's Start, and nothing reached the CA.
+func TestQueuedRowsSurviveARestart(t *testing.T) {
+	ctx := context.Background()
+	g := newMgrRig(t, nil, "")
+	g.claim("app.example.com", "web.example.com")
+	m1 := g.newManager()
+	m1.round(ctx)
+	g.awaitEnd()
+	g.awaitEnd()
+	before := []Cert{g.live("app.example.com"), g.live("web.example.com")}
+	for _, c := range before {
+		if c.Phase != PhaseQueued || c.QueueCode != QueueNoAccount {
+			t.Fatalf("%s = phase %q queue %q, want queued no_account", c.Hostname, c.Phase, c.QueueCode)
+		}
+	}
+
+	g.newManager() // a restart
+	for _, b := range before {
+		after := g.live(b.Hostname)
+		if after.ID != b.ID || after.Phase != PhaseQueued || after.QueueCode != QueueNoAccount {
+			t.Errorf("%s after the restart = %s %q %q, want the same queued row", b.Hostname, after.ID, after.Phase, after.QueueCode)
+		}
+	}
+	if n := g.requests(); n != 0 {
+		t.Errorf("the CA saw %d requests, want none", n)
+	}
+}
+
+// Run arms exactly one Tick timer per cycle, and a change the ingress notifier reports wakes it for a round
+// without the clock moving.
+func TestRunWakesOnTheNotifier(t *testing.T) {
+	ctx, stop := context.WithCancel(context.Background())
+	g := newMgrRig(t, nil, "")
+	if err := g.s.AcceptTerms(ctx, "user:1", nil); err != nil {
+		t.Fatalf("AcceptTerms: %v", err)
+	}
+	m := g.newManager()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Run(ctx)
+	}()
+	defer func() {
+		stop()
+		testsupport.Await(t, "Run to return", done)
+	}()
+	testsupport.Await(t, "Run to arm its first tick", g.clk.ticks)
+
+	// A claim notifies the environment; Run wakes, orders, and is back on the same timer.
+	g.claim("app.example.com")
+	if end := g.awaitEnd(); end.outcome != OutcomeIssued {
+		t.Fatalf("the run ended %q, want issued", end.outcome)
+	}
+	if n := g.clk.armed.Load(); n != 1 {
+		t.Errorf("Run armed %d tick timers, want exactly 1 for the cycle", n)
+	}
+
+	// Time moving on ends the cycle and arms the next.
+	g.clk.Clock.Advance(Tick)
+	testsupport.Await(t, "Run to arm its next tick", g.clk.ticks)
+	if n := g.clk.armed.Load(); n != 2 {
+		t.Errorf("Run armed %d tick timers after one tick, want 2", n)
+	}
+}
