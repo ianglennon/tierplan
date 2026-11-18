@@ -32787,7 +32787,7 @@
     },
     "/api/env/{envId}/ingress/certificates/{certId}/acme": {
       "post": {
-        "description": "Retires the uploaded certificate, which keeps serving until its replacement is ready or it expires, and queues a Let's Encrypt certificate for the hostname from the issuer its domain has now. Answers 200 with the new queued certificate. 404 ingress_cert_not_found for a certificate that is not a live upload of this environment (an ACME certificate, a retired one, another environment's or an unknown id). Audited as ingress.cert_switched_to_acme. Needs ingress.manage on the environment (its Admin).",
+        "description": "Retires the uploaded certificate, which keeps serving until its replacement is ready or it expires, and queues a Let's Encrypt certificate for the hostname from the issuer its domain has now. Answers 200 with the new queued certificate. 404 ingress_cert_not_found for a certificate that is not a live upload of this environment (an ACME certificate, a retired one, another environment's or an unknown id). 409 ingress_domain_not_found when the domain the upload was under is no longer registered. Audited as ingress.cert_switched_to_acme. Needs ingress.manage on the environment (its Admin).",
         "operationId": "switchIngressCertificateToACME",
         "parameters": [
           {

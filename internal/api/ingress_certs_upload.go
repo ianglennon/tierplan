@@ -14,6 +14,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -162,7 +163,7 @@ func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 		Summary:     "Return an uploaded hostname to Let's Encrypt",
 		Description: "Retires the uploaded certificate, which keeps serving until its replacement is ready or it expires, and queues a Let's Encrypt certificate for the hostname from the " +
 			"issuer its domain has now. Answers 200 with the new queued certificate. 404 " + problemIngressCertNotFound + " for a certificate that is not a live upload of this environment " +
-			"(an ACME certificate, a retired one, another environment's or an unknown id). Audited as ingress.cert_switched_to_acme. Needs ingress.manage on the environment (its Admin).",
+			"(an ACME certificate, a retired one, another environment's or an unknown id). 409 " + problemIngressDomainNotFound + " when the domain the upload was under is no longer registered. Audited as ingress.cert_switched_to_acme. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *SwitchIngressCertInput) (*IngressCertOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -179,11 +180,16 @@ func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 			return nil, notFound
 		case err != nil:
 			return nil, internal("read the certificate", err)
-		case cur.EnvID != in.EnvID:
+		case cur.EnvID != in.EnvID, cur.Source != ingresscert.SourceUpload, !cur.RetiredAt.IsZero():
 			return nil, notFound
 		}
+		// D-28 leaves a deleted domain's certificates in place, so the domain may be gone.
 		dom, err := d.Domains.DomainByID(ctx, cur.DomainID)
-		if err != nil {
+		switch {
+		case errors.Is(err, ingressstore.ErrDomainNotFound):
+			return nil, httpx.Problem(http.StatusConflict, problemIngressDomainNotFound,
+				"The domain this certificate was under is no longer registered. Register it again before returning the hostname to Let's Encrypt.")
+		case err != nil:
 			return nil, internal("read the domain of the certificate", err)
 		}
 		c, err := d.Store.SwitchToACME(ctx, in.EnvID, in.CertID, p.ID, string(dom.Issuer), func(ctx context.Context, tx *sql.Tx, c ingresscert.Cert) error {
