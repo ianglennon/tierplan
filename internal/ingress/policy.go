@@ -158,3 +158,47 @@ func DescribeHolder(c ClaimInfo, canView func(envID string) bool) string {
 		return "“" + c.Hostname + "” is already claimed in an environment you can't see."
 	}
 }
+
+// CheckRequest judges a hostname an Admin asks a certificate for before any stack claims it, or
+// uploads a certificate for (D-08). It applies the hostname rules Check applies to a declaration,
+// to a bare hostname: host, which the caller has already normalized with NormalizeHost, is
+// validated here, must be under a domain registered for the environment (the world's Domains) and
+// not be that domain's own suffix, must not be reserved, and must not be held by the system or by a
+// stack of another environment. A claim by any stack of the environment the domain belongs to is
+// allowed: the certificate then follows that claim. It returns the domain the hostname is under;
+// bad is false when the request may go ahead.
+//
+// Certificates are keyed by hostname across the whole install, so a request for a name another
+// environment's stack holds would take over that environment's certificate; the refusal is
+// CodeHostTaken, worded through DescribeHolder, so it names nothing the caller cannot see. It is
+// pure: the world is read by the caller, and no ingress switch is read.
+func CheckRequest(host string, w World) (dom Domain, p Problem, bad bool) {
+	p = Problem{Severity: SeverityError}
+	if err := ValidateHost(host); err != nil {
+		p.Code = CodeHostInvalid
+		p.Message = "The hostname “" + host + "” is not valid: " + err.Error() + "."
+		return Domain{}, p, true
+	}
+	dom, ok := MatchDomain(host, w.Domains)
+	if !ok {
+		p.Code = CodeDomainNotAllowed
+		p.Message = "“" + host + "” is not under a domain registered for this environment. Ask an Admin to register the domain, or choose a name under one that is."
+		return Domain{}, p, true
+	}
+	if w.Reserved[host] {
+		p.Code = CodeHostReserved
+		p.Message = "“" + host + "” is reserved by an Admin and cannot be used. Choose another name."
+		return Domain{}, p, true
+	}
+	if c, held := w.Claims[host]; held && (c.OwnerKind != OwnerStack || c.EnvID != dom.EnvID) {
+		p.Code = CodeHostTaken
+		c.Hostname = host
+		p.Message = DescribeHolder(c, w.CanView)
+		if c.OwnerKind == OwnerStack {
+			p.Message += " A name has one owner across TierPlan."
+		}
+		p.Message += " Choose another name."
+		return Domain{}, p, true
+	}
+	return dom, Problem{}, false
+}

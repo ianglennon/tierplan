@@ -594,15 +594,20 @@ func readWorld(ctx context.Context, q *sqlc.Queries, envID string, canView func(
 		w.Reserved[r.Hostname] = true
 	}
 	for _, c := range claims {
-		w.Claims[c.Hostname] = ingress.ClaimInfo{
-			Claim: ingress.Claim{
-				EnvID: c.EnvID, Hostname: c.Hostname, DomainID: c.DomainID, OwnerKind: ingress.OwnerKind(c.OwnerKind),
-				StackID: c.StackID.String, ClaimedBy: c.ClaimedBy, ClaimedAt: fromNanos(c.ClaimedAt),
-			},
-			EnvName: c.EnvName, StackName: c.StackName.String,
-		}
+		w.Claims[c.Hostname] = claimInfoOf(c)
 	}
 	return w, nil
+}
+
+// claimInfoOf converts an install-wide claim row, with the names a message about it uses.
+func claimInfoOf(c sqlc.ListIngressClaimsInstallRow) ingress.ClaimInfo {
+	return ingress.ClaimInfo{
+		Claim: ingress.Claim{
+			EnvID: c.EnvID, Hostname: c.Hostname, DomainID: c.DomainID, OwnerKind: ingress.OwnerKind(c.OwnerKind),
+			StackID: c.StackID.String, ClaimedBy: c.ClaimedBy, ClaimedAt: fromNanos(c.ClaimedAt),
+		},
+		EnvName: c.EnvName, StackName: c.StackName.String,
+	}
 }
 
 // ReplaceInput is a stack's declarations to store.
