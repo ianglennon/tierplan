@@ -38,6 +38,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -305,7 +306,18 @@ type authFixture struct {
 	ingressStore *ingressstore.Store
 	// ingressSweeps counts how many times the ingress routes asked for a DNS sweep (IngressDeps.CertSweep).
 	ingressSweeps atomic.Int32
+	// ingressCerts and ingressCertStore are the per-hostname certificate manager and store behind the certificate routes
+	// (phase 20). The manager is never Run in an API test; the fixture clock is its clock, so a test moves time by
+	// moving f.clk.
+	ingressCerts     *ingresscert.Manager
+	ingressCertStore *ingresscert.Store
 }
+
+// fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
+type fixtureClock struct{ c *fakeClock }
+
+func (c fixtureClock) Now() time.Time                         { return c.c.now() }
+func (c fixtureClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 func newAuthFixture(t *testing.T, cfg config.Config) *authFixture {
 	t.Helper()
@@ -634,6 +646,21 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}},
 		Audit: f.aud, Checker: checker, Log: log,
 		CertSweep: func() { f.ingressSweeps.Add(1) },
+	})
+	f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+	certHub := jobs.New(jobs.Options{})
+	t.Cleanup(certHub.Close)
+	certMgr, certErr := ingresscert.New(ingresscert.Deps{
+		Store: f.ingressCertStore, Domains: f.ingressStore, Jobs: certHub, Clock: fixtureClock{f.clk},
+		Config: config.Config{}, DNS: acme.DNSDeps{Providers: map[string]dns.Factory{"cloudflare": ingressBase}},
+		Ledger: acme.NewStore(f.st, f.v), Log: log, UserAgent: "tierplan-test/0",
+	})
+	if certErr != nil {
+		t.Fatal(certErr)
+	}
+	f.ingressCerts = certMgr
+	api.RegisterIngressCerts(r, api.IngressCertDeps{
+		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: f.clk.now,
 	})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
