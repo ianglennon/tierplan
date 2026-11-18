@@ -277,6 +277,9 @@ type PendingInput struct {
 	Issuer      string
 	CreatedBy   string
 	RequestedAt time.Time
+	// NotRequested leaves requested_at and requested_by empty. A row the reconciler creates for a claim is not a
+	// request ahead, and a request would hold it for Grace against every other environment (D-08).
+	NotRequested bool
 }
 
 // CreatePending records that hostname wants a certificate: a new live row in phase queued. When the
@@ -295,9 +298,12 @@ func (s *Store) CreatePending(ctx context.Context, in PendingInput, hook CertHoo
 		return Cert{}, false, fmt.Errorf("ingresscert: make a certificate id: %w", err)
 	}
 	now := s.now()
-	requested := in.RequestedAt
-	if requested.IsZero() {
+	requested, requestedBy := in.RequestedAt, in.CreatedBy
+	if requested.IsZero() && !in.NotRequested {
 		requested = now
+	}
+	if in.NotRequested {
+		requested, requestedBy = time.Time{}, ""
 	}
 	err = s.write(ctx, []string{in.EnvID}, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
 		existing, err := q.GetLiveIngressCertByHostname(ctx, host)
@@ -311,7 +317,7 @@ func (s *Store) CreatePending(ctx context.Context, in PendingInput, hook CertHoo
 		id := uid.String()
 		if err := q.InsertIngressCert(ctx, sqlc.InsertIngressCertParams{
 			ID: id, Hostname: host, EnvID: in.EnvID, DomainID: in.DomainID, Source: SourceACME, Issuer: in.Issuer,
-			Phase: PhaseQueued, RequestedAt: toNanos(requested), RequestedBy: in.CreatedBy,
+			Phase: PhaseQueued, RequestedAt: toNanos(requested), RequestedBy: requestedBy,
 			CreatedBy: in.CreatedBy, CreatedAt: toNanos(now), UpdatedAt: toNanos(now),
 		}); err != nil {
 			return false, fmt.Errorf("ingresscert: insert the certificate of %q: %w", host, err)
