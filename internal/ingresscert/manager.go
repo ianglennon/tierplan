@@ -108,6 +108,9 @@ type Manager struct {
 	// the rows that are due.
 	sweepAll atomic.Bool
 
+	// schedMu serializes the scheduler's rounds, so candidates are weighed and reserved one at a time.
+	schedMu sync.Mutex
+
 	mu sync.Mutex
 	// active holds the id of every certificate a run is reserved or running for.
 	active map[string]struct{}
@@ -164,7 +167,7 @@ func (m *Manager) client(issuer string) (*acme.Client, acme.Directory) {
 }
 
 // Start must run before Run. It puts every row that was ordering back to queued, because a crash must not hold
-// a reservation and nothing is ordering in a new process, and it prunes the closed orders that are old enough.
+// a reservation and nothing is ordering in a new process, and it prunes the closed orders and the issuance ledger rows that are old enough.
 // An open order is kept: the next run resumes it. It also asks for a full ingress DNS sweep, which the first
 // round runs (never while issuing is paused), so a record a crash left behind is deleted without waiting for its
 // retry time and without startup waiting on a DNS provider.
@@ -177,6 +180,10 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.log.Info("certificates that were ordering when the last process stopped are queued again", "count", n)
 	}
 	if _, err := m.d.Store.PruneClosedOrders(ctx, m.clock.Now().Add(-ClosedOrderRetention)); err != nil {
+		return err
+	}
+	// The issuance ledger only needs the window and a day more (D-38).
+	if _, err := m.d.Store.PruneIssuances(ctx, m.clock.Now().Add(-IssuanceRetention)); err != nil {
 		return err
 	}
 	m.sweepAll.Store(true)

@@ -94,7 +94,7 @@ func (m *Manager) runCert(ctx, mgr context.Context, id string) string {
 			return m.fail(ctx, mgr, c, err, "")
 		}
 		if st.TermsAcceptedAt.IsZero() {
-			if err := m.d.Store.SetQueue(bg, id, QueueReason{Code: QueueNoAccount}); err != nil {
+			if err := m.d.Store.SetQueue(bg, id, QueueState{Code: QueueNoAccount}); err != nil {
 				m.log.Error("a certificate run could not record that it waits for the terms", "host", c.Hostname, "error", err)
 			}
 			return OutcomeQueued

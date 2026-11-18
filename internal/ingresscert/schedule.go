@@ -7,16 +7,22 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/jobs"
 )
 
-// schedule starts a run for each queued row whose turn has come, oldest first, while fewer than MaxConcurrent
-// runs are active (D-16). A row is reserved (phase ordering) before its job starts, and the rows affected say
-// who won, so two callers never run one row. Every run is a hub job of kind JobKind owned by JobOwner, and it
-// ends with ctx: the manager's context cancels its runs.
+// schedule starts a run for each queued row whose turn has come, renewals first and the oldest first within each
+// group, while fewer than MaxConcurrent runs are active (D-16). Every candidate passes the governor before it is
+// reserved (D-14, D-15): a refusal is written on the row, with why and when the next slot opens (D-17), and no
+// order is placed for it. A row is reserved (phase ordering) before its job starts, and the rows affected say who
+// won, so two callers never run one row; the candidates are chosen serially under schedMu and a reserved new name
+// counts against its registered domain's budget, so two names never take the last slot. Every run is a hub job of
+// kind JobKind owned by JobOwner, and it ends with ctx: the manager's context cancels its runs.
 func (m *Manager) schedule(ctx context.Context, st State) {
+	m.schedMu.Lock()
+	defer m.schedMu.Unlock()
 	due, err := m.d.Store.DueQueued(ctx, m.clock.Now())
 	if err != nil {
 		m.log.Error("the certificate manager could not list the queued certificates", "error", err)
@@ -37,14 +43,23 @@ func (m *Manager) schedule(ctx context.Context, st State) {
 		if !acme.AutomaticAllowed(LedgerOf(c), now) {
 			continue
 		}
-		// A row that waits for the terms, while the terms are still not acknowledged and no account exists,
-		// would only start a job to find that out again.
+		// A row that waits for the terms, while the terms are not acknowledged and no account exists, would only
+		// start a job to find that out again.
 		if c.QueueCode == QueueNoAccount && m.waitsForTerms(ctx, st, c) {
+			continue
+		}
+		d, err := m.decide(ctx, c, now)
+		if err != nil {
+			m.log.Error("the certificate manager could not weigh a certificate against the rate limits", "host", c.Hostname, "error", err)
+			continue
+		}
+		if !d.OK {
+			m.queue(ctx, c, QueueState{Code: d.Code, Used: d.Used, Cap: d.Cap, Domain: d.Domain, NextSlot: d.NextSlot})
 			continue
 		}
 		if !m.take(c.ID) {
 			if m.full() {
-				return
+				m.queue(ctx, c, QueueState{Code: QueueConcurrency})
 			}
 			continue
 		}
@@ -69,6 +84,47 @@ func (m *Manager) schedule(ctx context.Context, st State) {
 			}
 			m.drop(id)
 		}
+	}
+}
+
+// decide gathers what the governor reads for candidate c and asks Decide. A hostname with no registered domain
+// has no budget; its run fails on its own account.
+func (m *Manager) decide(ctx context.Context, c Cert, now time.Time) (Decision, error) {
+	rd, err := RegisteredDomain(c.Hostname)
+	if err != nil {
+		return Decision{OK: true}, nil
+	}
+	in := DecideInput{Now: now, Renewal: len(c.ChainPEM) > 0, Issuer: c.Issuer, RegisteredDomain: rd}
+	if in.HostIssued, err = m.d.Store.hostIssuances(ctx, c.Issuer, c.Hostname, now); err != nil {
+		return Decision{}, err
+	}
+	if !in.Renewal {
+		if in.DomainIssued, err = m.domainIssued(ctx, c.Issuer, rd, now); err != nil {
+			return Decision{}, err
+		}
+		if _, dir := m.client(c.Issuer); dir.URL != "" {
+			if in.OrderStarts, err = m.d.Store.orderStarts(ctx, dir.URL, now); err != nil {
+				return Decision{}, err
+			}
+		}
+		governed, err := m.d.Store.governed(ctx, now)
+		if err != nil {
+			return Decision{}, err
+		}
+		in.Reserved = reservedOf(governed, c.Issuer, rd, c.ID)
+		in.CAHoldUntil = holdOf(governed, c.Issuer, rd, c.ID, now)
+	}
+	return Decide(in), nil
+}
+
+// queue records why row c waits, unless the row already says so: a round that finds the same answer writes nothing.
+func (m *Manager) queue(ctx context.Context, c Cert, q QueueState) {
+	if c.QueueCode == q.Code && c.QueueUsed == q.Used && c.QueueCap == q.Cap && c.QueueDomain == q.Domain &&
+		c.QueueNextSlotAt.Equal(q.NextSlot) {
+		return
+	}
+	if err := m.d.Store.SetQueue(ctx, c.ID, q); err != nil {
+		m.log.Error("the certificate manager could not record why a certificate waits", "host", c.Hostname, "error", err)
 	}
 }
 

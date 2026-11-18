@@ -55,9 +55,9 @@ func (s *Store) ReleaseOrdering(ctx context.Context, id string) error {
 	return nil
 }
 
-// QueueReason is why a queued row waits: a code, and for a rate-limit budget how much of which cap is used and
-// when a slot opens.
-type QueueReason struct {
+// QueueState is why a queued row waits, as it is stored: a code, and for a rate-limit budget how much of which cap
+// is used and when a slot opens. QueueReason turns it into a sentence.
+type QueueState struct {
 	Code     string
 	Used     int
 	Cap      int
@@ -66,7 +66,7 @@ type QueueReason struct {
 }
 
 // SetQueue puts the row in phase queued and records why it waits.
-func (s *Store) SetQueue(ctx context.Context, id string, r QueueReason) error {
+func (s *Store) SetQueue(ctx context.Context, id string, r QueueState) error {
 	if err := s.st.Q.SetIngressCertQueue(ctx, sqlc.SetIngressCertQueueParams{
 		QueueCode: r.Code, QueueUsed: int64(r.Used), QueueCap: int64(r.Cap), QueueDomain: r.Domain,
 		QueueNextSlotAt: toNanos(r.NextSlot), UpdatedAt: toNanos(s.now()), ID: id,
