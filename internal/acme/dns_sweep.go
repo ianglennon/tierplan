@@ -43,29 +43,11 @@ func (m *Manager) sweepDNS(ctx context.Context, dueOnly bool) {
 		return
 	}
 
-	// A provider is built once per sweep, from the token saved for it, the first time a row needs it.
-	type opened struct {
-		p     dns.Provider
-		class string // why p is nil
-	}
-	providers := map[string]opened{}
-	for _, row := range rows {
-		if ctx.Err() != nil {
-			return
-		}
-		o, ok := providers[row.Provider]
-		if !ok {
-			o.p, o.class = m.sweepProvider(ctx, row.Provider)
-			providers[row.Provider] = o
-		}
-		if o.p == nil {
-			m.stampFailed(ctx, row, o.class)
-			continue
-		}
-		if err := m.deleteRecord(ctx, o.p, row); err != nil {
-			m.log.Warn("a DNS record could not be deleted", "name", row.Name, "class", deleteClass(err))
-		}
-	}
+	// A provider is built once per sweep and provider, from the token saved for it, the first time a row
+	// needs it. Own rows carry no credential_ref, so the resolver ignores it (DNSEngine.Sweep groups by it).
+	m.dns.Sweep(ctx, rows, func(ctx context.Context, provider, _ string) (dns.Provider, string) {
+		return m.sweepProvider(ctx, provider)
+	})
 }
 
 // sweepProvider builds the provider for a sweep from the effective token (the environment's, else the saved one). When it cannot, it returns the

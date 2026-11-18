@@ -6,7 +6,12 @@ package acme
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 )
@@ -117,4 +122,146 @@ func TestDNSSolverWithAWrongTokenFailsAsTokenInvalid(t *testing.T) {
 	if err := empty.Present(ctx, testHost, "chal-token", "chal-token.thumb"); !isDNSClass(err, dns.ClassTokenInvalid) {
 		t.Errorf("Present with an empty token = %v, want class %s", err, dns.ClassTokenInvalid)
 	}
+}
+
+// ingressRow makes a record at the provider and a ledger row for it under credentialRef, the way a
+// hostname certificate's order that was cut short leaves one.
+func (e *dnsEnv) ingressRow(credentialRef, fqdn, value string, created time.Time) DNSRecord {
+	e.t.Helper()
+	ctx := context.Background()
+	p := e.prov.Factory(dnsToken)(dnsToken)
+	z, err := p.Zone(ctx, fqdn)
+	if err != nil {
+		e.t.Fatalf("Zone(%s): %v", fqdn, err)
+	}
+	ref, err := p.CreateTXT(ctx, z, fqdn, value, "tierplan:old-install:old-order")
+	if err != nil {
+		e.t.Fatalf("CreateTXT: %v", err)
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	row := DNSRecord{
+		ID: id.String(), Provider: dnsProviderID, ZoneID: ref.ZoneID, ZoneName: z.Name, AccountID: z.AccountID, RecordID: ref.RecordID,
+		Name: fqdn, Value: value, Comment: "tierplan:old-install:old-order", OwnerKind: OwnerOrder, OwnerID: "old-order",
+		Token: "old", CreatedAt: created, CredentialRef: credentialRef,
+	}
+	if err := e.store.InsertDNSRecord(ctx, row); err != nil {
+		e.t.Fatalf("InsertDNSRecord: %v", err)
+	}
+	return row
+}
+
+// deleteTracker is a provider that notes which credential's provider deleted which record.
+type deleteTracker struct {
+	dns.Provider
+	credentialRef string
+	deleted       *[]string
+}
+
+func (d deleteTracker) DeleteTXT(ctx context.Context, ref dns.RecordRef) error {
+	*d.deleted = append(*d.deleted, d.credentialRef+":"+ref.RecordID)
+	return d.Provider.DeleteTXT(ctx, ref)
+}
+
+// The sweep builds one provider per (provider, credential_ref) group and deletes each row with its own
+// credential's provider; a credential that cannot be opened stamps only its own rows; a cancelled context
+// stops it before the next row.
+func TestDNSEngineSweepGroupsByCredential(t *testing.T) {
+	ctx := context.Background()
+	tokens := map[string]string{"dom-1": "tok-a", "dom-2": "tok-b"}
+
+	// resolver builds a provider per credential from a fake provider that accepts that credential's
+	// token, counting the builds and noting every delete by the credential that made it.
+	type rig struct {
+		e       *dnsEnv
+		eng     *DNSEngine
+		built   map[string]int
+		deleted []string
+	}
+	newRig := func(t *testing.T) *rig {
+		e := newDNSEnv(t, ChallengeDNS01)
+		return &rig{e: e, eng: e.sharedEngine(), built: map[string]int{}}
+	}
+	resolve := func(r *rig, unopenable ...string) CredentialResolver {
+		return func(_ context.Context, provider, ref string) (dns.Provider, string) {
+			r.built[ref]++
+			for _, u := range unopenable {
+				if u == ref {
+					return nil, dns.ClassTokenInvalid
+				}
+			}
+			factory := r.e.prov.Factory(tokens[ref])
+			return deleteTracker{Provider: factory(tokens[ref]), credentialRef: ref, deleted: &r.deleted}, ""
+		}
+	}
+
+	t.Run("each row is deleted with its own credential's provider", func(t *testing.T) {
+		r := newRig(t)
+		a1 := r.e.ingressRow("dom-1", "_acme-challenge.a.example.com", "va1", testNow)
+		b1 := r.e.ingressRow("dom-2", "_acme-challenge.b.example.com", "vb1", testNow.Add(time.Second))
+		a2 := r.e.ingressRow("dom-1", "_acme-challenge.c.example.com", "va2", testNow.Add(2*time.Second))
+		rows, err := r.e.store.IngressDNSRecords(ctx, r.e.clock.Now(), false)
+		if err != nil || len(rows) != 3 {
+			t.Fatalf("IngressDNSRecords = %+v, %v, want 3 rows", rows, err)
+		}
+
+		r.eng.Sweep(ctx, rows, resolve(r))
+
+		want := []string{"dom-1:" + a1.RecordID, "dom-2:" + b1.RecordID, "dom-1:" + a2.RecordID}
+		if !slices.Equal(r.deleted, want) {
+			t.Errorf("deletes = %v, want %v", r.deleted, want)
+		}
+		if r.built["dom-1"] != 1 || r.built["dom-2"] != 1 {
+			t.Errorf("providers built = %v, want one per credential", r.built)
+		}
+		if left, _ := r.e.store.IngressDNSRecords(ctx, r.e.clock.Now(), false); len(left) != 0 {
+			t.Errorf("ledger = %+v, want every row gone", left)
+		}
+		if recs := r.e.prov.Records(); len(recs) != 0 {
+			t.Errorf("the provider still holds %+v", recs)
+		}
+	})
+
+	t.Run("a credential that cannot be opened stamps its own rows and spares the others", func(t *testing.T) {
+		r := newRig(t)
+		r.e.ingressRow("dom-1", "_acme-challenge.a.example.com", "va1", testNow)
+		bad := r.e.ingressRow("dom-2", "_acme-challenge.b.example.com", "vb1", testNow.Add(time.Second))
+		rows, _ := r.e.store.IngressDNSRecords(ctx, r.e.clock.Now(), false)
+
+		r.eng.Sweep(ctx, rows, resolve(r, "dom-2"))
+
+		left, err := r.e.store.IngressDNSRecords(ctx, r.e.clock.Now(), false)
+		if err != nil || len(left) != 1 || left[0].ID != bad.ID {
+			t.Fatalf("ledger = %+v, %v, want only dom-2's row", left, err)
+		}
+		wantNext := r.e.clock.Now().Add(BackoffDelay(1, 0, 0))
+		if left[0].Attempts != 1 || left[0].LastErrorClass != dns.ClassTokenInvalid || !left[0].NextTryAt.Equal(wantNext) {
+			t.Errorf("row = attempts %d class %q next %v, want 1, %s, %v", left[0].Attempts, left[0].LastErrorClass, left[0].NextTryAt, dns.ClassTokenInvalid, wantNext)
+		}
+		if len(r.deleted) != 1 || !strings.HasPrefix(r.deleted[0], "dom-1:") {
+			t.Errorf("deletes = %v, want only dom-1's record", r.deleted)
+		}
+	})
+
+	t.Run("a cancelled context stops before the next row", func(t *testing.T) {
+		r := newRig(t)
+		r.e.ingressRow("dom-1", "_acme-challenge.a.example.com", "va1", testNow)
+		second := r.e.ingressRow("dom-1", "_acme-challenge.b.example.com", "va2", testNow.Add(time.Second))
+		rows, _ := r.e.store.IngressDNSRecords(ctx, r.e.clock.Now(), false)
+
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		inner := resolve(r)
+		r.eng.Sweep(cctx, rows, func(c context.Context, provider, ref string) (dns.Provider, string) {
+			cancel() // cut short while the first row is being handled
+			return inner(c, provider, ref)
+		})
+
+		left, err := r.e.store.IngressDNSRecords(ctx, r.e.clock.Now(), false)
+		if err != nil || len(left) != 1 || left[0].ID != second.ID {
+			t.Errorf("ledger = %+v, %v, want only the second row left", left, err)
+		}
+	})
 }
