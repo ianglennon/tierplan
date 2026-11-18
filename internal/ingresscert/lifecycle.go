@@ -35,6 +35,12 @@ const (
 // is ordered under the claim's domain (D-04).
 const RetiredDomainChanged = "domain_changed"
 
+// RetiredIssuerChanged is the retired_reason of a row whose domain's issuer was changed to the other one (D-26): the
+// certificate was ordered from an issuer the domain no longer uses, so it is never renewed or reused. The retired-row
+// rules delete it like any other retired row: a staging one at once, a production one when its replacement is ready or
+// it expires.
+const RetiredIssuerChanged = "issuer_changed"
+
 // Why a row was deleted, as the ingress.cert_deleted audit row says it.
 const (
 	// DeletedExpiredUnreferenced is an expired certificate nothing has referred to for longer than Grace (D-07).

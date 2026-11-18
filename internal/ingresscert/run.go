@@ -66,6 +66,15 @@ func (m *Manager) runCert(ctx, mgr context.Context, id string) string {
 		return m.cut(ctx, mgr, id)
 	}
 	issuer := string(dom.Issuer)
+	if c.Issuer != issuer {
+		// D-03: the domain's issuer changed since this row was made. A certificate is never ordered from one issuer
+		// into a row that names the other, so the run lets go; the next round retires the row and queues one
+		// that names the domain's issuer.
+		if rerr := m.d.Store.ReleaseOrdering(bg, id); rerr != nil {
+			m.log.Error("a certificate run could not release its reservation", "host", c.Hostname, "error", rerr)
+		}
+		return OutcomeQueued
+	}
 	client, dir := m.client(issuer)
 	if client == nil {
 		return m.fail(ctx, mgr, c, errors.New("ingresscert: the domain has an issuer that is neither staging nor production"), "")

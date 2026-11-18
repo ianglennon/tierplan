@@ -143,6 +143,9 @@ func (m *Manager) secondGate(host string, dom ingress.Domain) bool {
 // reconcileClaimed handles a live row whose hostname a claim holds.
 func (m *Manager) reconcileClaimed(ctx context.Context, c Cert, claim ingress.ClaimInfo, doms domainCache, now time.Time) {
 	if c.DomainID == claim.DomainID && c.EnvID == claim.EnvID {
+		if dom, found, ok := m.domain(ctx, doms, c.DomainID); ok && found && m.retireForIssuer(ctx, c, dom, true) {
+			return // ordered from the issuer the domain had before: retired and replaced (D-03, D-26)
+		}
 		if !c.UnreferencedSince.IsZero() || (c.Phase == PhaseStopped && c.StoppedReason == StoppedUnreferenced) {
 			m.must("bring back a certificate that is claimed again", c, m.d.Store.clearUnreferenced(ctx, c, now))
 		}
@@ -178,9 +181,12 @@ func (m *Manager) reconcileClaimed(ctx context.Context, c Cert, claim ingress.Cl
 // reconcileUnclaimed handles a live row whose hostname no claim holds.
 func (m *Manager) reconcileUnclaimed(ctx context.Context, c Cert, doms domainCache, now time.Time) {
 	hasChain := len(c.ChainPEM) > 0
-	_, found, ok := m.domain(ctx, doms, c.DomainID)
+	dom, found, ok := m.domain(ctx, doms, c.DomainID)
 	if !ok {
 		return
+	}
+	if found && m.retireForIssuer(ctx, c, dom, Referenced(c, false, now)) {
+		return // ordered from the issuer the domain had before (D-03, D-26)
 	}
 	if !found {
 		// D-12: the domain is gone and no claim resolves the hostname elsewhere. A row that holds nothing has
@@ -218,6 +224,72 @@ func (m *Manager) reconcileUnclaimed(ctx context.Context, c Cert, doms domainCac
 			m.must("mark a certificate nobody refers to", c, m.d.Store.markUnreferenced(ctx, c, now, stop))
 		}
 	}
+}
+
+// retireForIssuer retires the live ACME row c when it was ordered from another issuer than its domain's now has
+// (D-03, D-26): it is never renewed and never reused, and the retired-row rules delete it, a production one only
+// once its replacement is ready or it has expired, so it keeps serving until then. When something still refers to
+// the hostname (refer: a claim, or a request ahead that Grace has not outlived) a queued row with the domain's
+// issuer is created in the same write, carrying the request of the old row, and the manager orders it like any
+// other. An upload is left alone (D-24): it names no issuer. The issuer is read again inside the write, so a
+// change that landed since the scan began is not judged against the old value. It reports whether the row was
+// retired. A row whose order is in flight is skipped; the run finishes or lets go of it first.
+func (m *Manager) retireForIssuer(ctx context.Context, c Cert, dom ingress.Domain, refer bool) bool {
+	if c.Source != SourceACME || c.Issuer == string(dom.Issuer) || c.Phase == PhaseOrdering {
+		return false
+	}
+	now := m.clock.Now()
+	retired := false
+	// The new row serves nothing yet, and the retired one keeps serving, so what is served does not change and
+	// certs_version stays where it was.
+	err := m.d.Store.write(ctx, []string{c.EnvID}, func(_ *sql.Tx, q *sqlc.Queries) (bool, error) {
+		row, err := q.GetLiveIngressCertByHostname(ctx, c.Hostname)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("ingresscert: read the certificate of %q: %w", c.Hostname, err)
+		}
+		if row.ID != c.ID || row.Source != SourceACME || row.Phase == PhaseOrdering {
+			return false, nil // it changed since the scan began: the next round looks again
+		}
+		d, err := q.GetIngressDomainInEnv(ctx, sqlc.GetIngressDomainInEnvParams{ID: c.DomainID, EnvID: c.EnvID})
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("ingresscert: read the domain of %q: %w", c.Hostname, err)
+		}
+		if row.Issuer == d.Issuer {
+			return false, nil // the issuer was changed back since the scan began
+		}
+		ts := toNanos(now)
+		if err := q.RetireIngressCert(ctx, sqlc.RetireIngressCertParams{RetiredAt: ts, RetiredReason: RetiredIssuerChanged, UpdatedAt: ts, ID: row.ID}); err != nil {
+			return false, fmt.Errorf("ingresscert: retire the certificate of %q: %w", c.Hostname, err)
+		}
+		retired = true
+		if !refer {
+			return false, nil
+		}
+		uid, err := uuid.NewV7()
+		if err != nil {
+			return false, fmt.Errorf("ingresscert: make a certificate id: %w", err)
+		}
+		if err := q.InsertIngressCert(ctx, sqlc.InsertIngressCertParams{
+			ID: uid.String(), Hostname: c.Hostname, EnvID: c.EnvID, DomainID: c.DomainID, Source: SourceACME, Issuer: d.Issuer,
+			Phase: PhaseQueued, RequestedAt: row.RequestedAt, RequestedBy: row.RequestedBy, CreatedBy: JobOwner, CreatedAt: ts, UpdatedAt: ts,
+		}); err != nil {
+			return false, fmt.Errorf("ingresscert: queue the certificate of %q: %w", c.Hostname, err)
+		}
+		return false, nil
+	})
+	if !m.must("retire a certificate of the other issuer", c, err) {
+		return false
+	}
+	if retired {
+		m.log.Info("a certificate ordered from the domain's previous issuer is retired", "host", c.Hostname, "issuer", c.Issuer)
+	}
+	return retired
 }
 
 // reconcileRetired deletes the retired rows that serve nothing any more: a staging row at once, a row with no
