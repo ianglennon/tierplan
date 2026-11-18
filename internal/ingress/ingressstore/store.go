@@ -288,7 +288,9 @@ func (s *Store) DomainToken(ctx context.Context, envID, domainID string) ([]byte
 // SetDomainToken replaces the domain's DNS token. It is the only writer of token_sealed after the
 // domain is registered. The token is sealed under the domain's own id; the domain, its issuer and
 // every claim under it stay. hook, which may be nil, runs in the same transaction after the update.
-// The token is never logged and never put in an error.
+// The token is never logged and never put in an error. It is refused with *CleanupPendingError while the ledger
+// holds a record the current token may still delete; the records the provider refused the current token for are
+// made due again, so the next sweep tries them with the new token.
 func (s *Store) SetDomainToken(ctx context.Context, envID, domainID string, token []byte, actor string, hook DomainHook) (ingress.Domain, error) {
 	if len(token) == 0 {
 		return ingress.Domain{}, ErrTokenEmpty
@@ -300,7 +302,9 @@ func (s *Store) SetDomainToken(ctx context.Context, envID, domainID string, toke
 		if err != nil {
 			return false, err
 		}
-		if err := cleanupPending(ctx, q, row.ID); err != nil {
+		// Records the provider refuses the current token for do not hold the replacement back: the new token is the
+		// only credential that can delete them.
+		if err := cleanupPendingForReplace(ctx, q, row.ID); err != nil {
 			return false, err
 		}
 		sealed, err := s.v.Seal(vault.ContextIngressDNSToken+row.ID, token)
@@ -312,6 +316,10 @@ func (s *Store) SetDomainToken(ctx context.Context, envID, domainID string, toke
 			TokenSealed: sealed, TokenUpdatedAt: ts, UpdatedAt: ts, ID: row.ID, EnvID: envID,
 		}); err != nil {
 			return false, fmt.Errorf("ingressstore: save the DNS token of domain %q: %w", row.Suffix, err)
+		}
+		// Every record left with the old token is tried with the new one at the next sweep.
+		if _, err := q.RetryACMEDNSRecordsByCredential(ctx, row.ID); err != nil {
+			return false, fmt.Errorf("ingressstore: retry the DNS records of domain %q: %w", row.Suffix, err)
 		}
 		row.TokenSealed, row.TokenUpdatedAt, row.UpdatedAt = sealed, ts, ts
 		out = domainOf(row)
@@ -365,10 +373,14 @@ func holdersOf(ctx context.Context, q *sqlc.Queries, domainID string) ([]Holder,
 // CleanupPendingError is a domain that cannot be deleted, nor its token replaced, because the DNS ledger
 // still holds TXT records TierPlan made with that token. The records are deleted by the ingress sweep with
 // the token that made them; until then the token must stay, so no record is orphaned from the one credential
-// that can delete it (D-27).
+// that can delete it (D-27). A record the provider refuses that token for is the exception for a replacement:
+// the token cannot delete it, and a new one is the way to.
 type CleanupPendingError struct {
 	// Records is how many ledger rows the domain still holds.
 	Records int
+	// TokenRefused is how many of them last failed because the provider refused the domain's token. Those wait for
+	// a token that works, not for time: a token replacement is never held back by them.
+	TokenRefused int
 }
 
 // Error implements error.
@@ -379,14 +391,45 @@ func (e *CleanupPendingError) Error() string {
 // cleanupPending is *CleanupPendingError when the ledger holds a row made with domainID's token. It reads
 // inside the caller's write transaction, so a row cannot land between the check and the change.
 func cleanupPending(ctx context.Context, q *sqlc.Queries, domainID string) error {
-	n, err := q.CountACMEDNSRecordsByCredential(ctx, domainID)
+	n, refused, err := ledgerRows(ctx, q, domainID)
 	if err != nil {
-		return fmt.Errorf("ingressstore: count the DNS records of domain %q: %w", domainID, err)
+		return err
 	}
 	if n > 0 {
-		return &CleanupPendingError{Records: int(n)}
+		return &CleanupPendingError{Records: n, TokenRefused: refused}
 	}
 	return nil
+}
+
+// cleanupPendingForReplace is cleanupPending for a token replacement: only the rows the current token may still
+// delete hold it back. A row the provider last refused the token for waits for a working token, and the
+// replacement is how it gets one, so refusing it would leave the records with no way out (D-27).
+func cleanupPendingForReplace(ctx context.Context, q *sqlc.Queries, domainID string) error {
+	n, refused, err := ledgerRows(ctx, q, domainID)
+	if err != nil {
+		return err
+	}
+	if n > refused {
+		return &CleanupPendingError{Records: n - refused}
+	}
+	return nil
+}
+
+// ledgerRows counts the ledger rows made with domainID's token, and how many of them the provider last refused
+// the token for.
+func ledgerRows(ctx context.Context, q *sqlc.Queries, domainID string) (total, refused int, err error) {
+	n, err := q.CountACMEDNSRecordsByCredential(ctx, domainID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ingressstore: count the DNS records of domain %q: %w", domainID, err)
+	}
+	if n == 0 {
+		return 0, 0, nil
+	}
+	r, err := q.CountACMEDNSRecordsTokenRefused(ctx, domainID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ingressstore: count the refused DNS records of domain %q: %w", domainID, err)
+	}
+	return int(n), int(r), nil
 }
 
 // DeleteDomain removes a domain, with the names reserved under it. A domain whose token still has

@@ -9,6 +9,21 @@ import (
 	"context"
 )
 
+const countACMEDNSRecordsTokenRefused = `-- name: CountACMEDNSRecordsTokenRefused :one
+SELECT COUNT(*) FROM acme_dns_records
+WHERE credential_ref = ? AND last_error_class IN ('dns_token_invalid', 'dns_token_scope')
+`
+
+// How many of one domain's DNS ledger rows last failed because the provider refused the domain's token
+// (dns_token_invalid or dns_token_scope). The token cannot delete those records, so they do not hold its
+// replacement back (D-27): the replacement is the only thing that can.
+func (q *Queries) CountACMEDNSRecordsTokenRefused(ctx context.Context, credentialRef string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countACMEDNSRecordsTokenRefused, credentialRef)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveIngressCertsByDomain = `-- name: CountLiveIngressCertsByDomain :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The TierPlan Authors */
@@ -23,4 +38,18 @@ func (q *Queries) CountLiveIngressCertsByDomain(ctx context.Context, domainID st
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const retryACMEDNSRecordsByCredential = `-- name: RetryACMEDNSRecordsByCredential :execrows
+UPDATE acme_dns_records SET attempts = 0, next_try_at = 0 WHERE credential_ref = ?
+`
+
+// Makes one domain's DNS ledger rows due now, with their backoff started again, after the domain's token was
+// replaced: the next sweep tries them with the new token.
+func (q *Queries) RetryACMEDNSRecordsByCredential(ctx context.Context, credentialRef string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, retryACMEDNSRecordsByCredential, credentialRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

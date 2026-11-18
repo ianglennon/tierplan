@@ -376,8 +376,7 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 			if d.CertSweep != nil {
 				d.CertSweep()
 			}
-			return httpx.Problem(http.StatusConflict, problemIngressDomainCleanupPending,
-				"TierPlan is still removing DNS records it made with this domain's token. Try again in a minute: the domain's token cannot change or be deleted until they are gone.")
+			return httpx.Problem(http.StatusConflict, problemIngressDomainCleanupPending, cleanupPendingDetail(pending))
 		case errors.As(err, &ne):
 			return httpx.Problem(http.StatusUnprocessableEntity, ne.Code, ne.Message)
 		case errors.Is(err, ingressstore.ErrDomainNotFound):
@@ -494,7 +493,9 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		Summary:     "Replace a domain's DNS token",
 		Description: "Tests the new token the way registration does, then replaces the saved one. The domain, its issuer and every hostname claimed under it stay; " +
 			"tokenUpdatedAt moves. A token that fails its test is refused with the same 422 or 503 problems as registration and the saved token stays in place. The token is " +
-			"never returned. 404 " + problemIngressDomainNotFound + " for a domain of another environment. Audited as ingress.domain_credential_replaced without the token. " +
+			"never returned. 404 " + problemIngressDomainNotFound + " for a domain of another environment. While TierPlan holds DNS records it made with the saved token and that " +
+			"token may still remove, 409 " + problemIngressDomainCleanupPending + ", the removal is started and the saved token stays; records the DNS provider refuses the saved token for " +
+			"do not hold the replacement back, and are retried with the new token at once. Audited as ingress.domain_credential_replaced without the token. " +
 			"Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ReplaceIngressDomainTokenInput) (*IngressDomainOutput, error) {
@@ -523,6 +524,10 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		if err != nil {
 			return nil, failed("replace the token", err)
 		}
+		// Records the old token could not remove are tried with the new one now, not at their backoff time.
+		if d.CertSweep != nil {
+			d.CertSweep()
+		}
 		return &IngressDomainOutput{CacheControl: "no-store", Body: ingressDomainBody(dom, cur.Reserved, cur.Certificates)}, nil
 	})
 
@@ -534,7 +539,8 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		Summary:       "Delete a domain",
 		Description: "Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 " + problemIngressDomainInUse + " names every holding " +
 			"stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. While TierPlan still holds DNS records it made " +
-			"with the domain's token, 409 " + problemIngressDomainCleanupPending + " and nothing changes: the removal is started at once, so the same request succeeds shortly. " +
+			"with the domain's token, 409 " + problemIngressDomainCleanupPending + " and nothing changes: the removal is started at once and the detail says how many records are left. " +
+			"When the DNS provider refuses the domain's token for them, the detail says so: replace the token with one that can edit the zone, and the records are then removed. " +
 			"404 " + problemIngressDomainNotFound + " for a domain that is gone or belongs to another environment, with no audit row. " +
 			"Answers 200 with certificatesLeft when live certificates under the domain are left to expire (they stop renewing), and 204 with no body when none are. " +
 			"Audited as ingress.domain_deleted, with the certificate count. Needs ingress.manage on the environment (its Admin).",
@@ -655,4 +661,22 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		}
 		return &IngressNoContentOutput{CacheControl: "no-store"}, nil
 	})
+}
+
+// cleanupPendingDetail is the detail of a refusal while the DNS ledger holds records made with a domain's token
+// (D-27). It says how many are left and never promises that waiting is enough: records the provider refuses the
+// token for are only removed once the domain has a token that works.
+func cleanupPendingDetail(e *ingressstore.CleanupPendingError) string {
+	records := func(n int) string {
+		if n == 1 {
+			return "1 DNS record"
+		}
+		return strconv.Itoa(n) + " DNS records"
+	}
+	if e.TokenRefused > 0 {
+		return "TierPlan cannot remove " + records(e.TokenRefused) + " it made with this domain's token, because the DNS provider refuses the token. " +
+			"Replace the token with one that can edit the zone: the records are then removed, and the domain can be deleted after that."
+	}
+	return "TierPlan is removing " + records(e.Records) + " it made with this domain's token and has started the cleanup. " +
+		"The domain cannot be deleted, and its token cannot change, until they are gone."
 }
