@@ -9791,6 +9791,308 @@
         ],
         "type": "object"
       },
+      "IngressCertBody": {
+        "additionalProperties": false,
+        "properties": {
+          "consecutiveFailures": {
+            "description": "How many attempts in a row have failed",
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "description": "When the certificate's row was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "When the certificate expires",
+            "format": "date-time",
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The hostname the certificate covers",
+            "type": "string"
+          },
+          "id": {
+            "description": "The certificate's ID, used in the paths of the routes below",
+            "type": "string"
+          },
+          "issuedAt": {
+            "description": "When the certificate was issued",
+            "format": "date-time",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "The Let's Encrypt directory the certificate comes from; left out for an uploaded certificate",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "lastError": {
+            "$ref": "#/components/schemas/IngressCertErrorBody",
+            "description": "The last failed attempt, left out when there is none"
+          },
+          "nextAttemptAt": {
+            "description": "When the next attempt is made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/IngressCertQueueBody",
+            "description": "Why the certificate waits, left out when it waits for nothing"
+          },
+          "ready": {
+            "description": "True when the certificate may be served now",
+            "type": "boolean"
+          },
+          "renewAt": {
+            "description": "When the next renewal is planned",
+            "format": "date-time",
+            "type": "string"
+          },
+          "renewBasis": {
+            "description": "What the renewal time is based on, such as the certificate authority's renewal information",
+            "type": "string"
+          },
+          "requestedAt": {
+            "description": "When an Admin last asked for the certificate ahead of a claim",
+            "format": "date-time",
+            "type": "string"
+          },
+          "requestedBy": {
+            "description": "The ID of the user who asked for it",
+            "type": "string"
+          },
+          "retiredAt": {
+            "description": "When the certificate was retired, left out while it is live",
+            "format": "date-time",
+            "type": "string"
+          },
+          "retiredReason": {
+            "description": "Why it was retired",
+            "type": "string"
+          },
+          "retryAfterUntil": {
+            "description": "Until when the certificate authority asked TierPlan to wait",
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "description": "Whether TierPlan ordered the certificate or an Admin uploaded it",
+            "enum": [
+              "acme",
+              "upload"
+            ],
+            "type": "string"
+          },
+          "staging": {
+            "description": "True for a staging certificate, which browsers do not trust and TierPlan never serves",
+            "type": "boolean"
+          },
+          "state": {
+            "description": "One word for where it stands: queued, ordering, valid, uploaded, dns_proven_on_staging, renewal_failed, failed, expired, stopped or retired",
+            "type": "string"
+          },
+          "stateText": {
+            "description": "The state in words for a person",
+            "type": "string"
+          },
+          "stoppedReason": {
+            "description": "Why a stopped certificate does nothing",
+            "type": "string"
+          },
+          "unreferencedSince": {
+            "description": "Since when no stack and no request refers to the hostname",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "hostname",
+          "staging",
+          "source",
+          "state",
+          "stateText",
+          "ready",
+          "consecutiveFailures",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "IngressCertBudgetBody": {
+        "additionalProperties": false,
+        "properties": {
+          "cap": {
+            "description": "Where TierPlan stops ordering new certificates",
+            "format": "int64",
+            "type": "integer"
+          },
+          "domains": {
+            "description": "This environment's domains under the registered domain, sorted",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "headroom": {
+            "description": "How many more new certificates TierPlan will order now",
+            "format": "int64",
+            "type": "integer"
+          },
+          "issuer": {
+            "description": "The directory the budget is on",
+            "enum": [
+              "staging",
+              "production"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "description": "The certificate authority's own limit",
+            "format": "int64",
+            "type": "integer"
+          },
+          "nextSlotAt": {
+            "description": "When a slot opens; left out while there is headroom or nothing in the window will expire",
+            "format": "date-time",
+            "type": "string"
+          },
+          "registeredDomain": {
+            "description": "The registered domain the certificate authority counts",
+            "type": "string"
+          },
+          "shared": {
+            "description": "True when another domain, in any environment, or TierPlan's own address is under the same registered domain, so the budget is not this environment's alone",
+            "type": "boolean"
+          },
+          "used": {
+            "description": "New certificates in the last 7 days plus orders in flight, TierPlan's own certificate included on production",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "registeredDomain",
+          "issuer",
+          "used",
+          "cap",
+          "limit",
+          "headroom",
+          "domains",
+          "shared"
+        ],
+        "type": "object"
+      },
+      "IngressCertBudgetsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "One row per registered domain and issuer in use, by domain",
+            "items": {
+              "$ref": "#/components/schemas/IngressCertBudgetBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "IngressCertErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When the attempt failed",
+            "format": "date-time",
+            "type": "string"
+          },
+          "class": {
+            "description": "The class of the failure, such as dns_token_invalid or rate_limited",
+            "type": "string"
+          },
+          "detail": {
+            "description": "What the certificate authority or DNS provider answered, capped in length. Only Admins read it here",
+            "type": "string"
+          },
+          "hint": {
+            "description": "One fixed sentence for a person about this class of failure",
+            "type": "string"
+          }
+        },
+        "required": [
+          "class",
+          "hint"
+        ],
+        "type": "object"
+      },
+      "IngressCertQueueBody": {
+        "additionalProperties": false,
+        "properties": {
+          "cap": {
+            "description": "Where TierPlan stops ordering, which is below the certificate authority's own limit",
+            "format": "int64",
+            "type": "integer"
+          },
+          "code": {
+            "description": "Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_hold or concurrency",
+            "type": "string"
+          },
+          "domain": {
+            "description": "The registered domain the budget is counted for",
+            "type": "string"
+          },
+          "nextSlotAt": {
+            "description": "When a slot opens, left out when none is known",
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "description": "The reason in one sentence, built from the figures below; it never carries the certificate authority's own words",
+            "type": "string"
+          },
+          "used": {
+            "description": "How many of the budget is used",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "reason",
+          "used",
+          "cap"
+        ],
+        "type": "object"
+      },
+      "IngressCertsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The environment's certificates, live and retired, by hostname",
+            "items": {
+              "$ref": "#/components/schemas/IngressCertBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "IngressDomainBody": {
         "additionalProperties": false,
         "properties": {
@@ -15324,6 +15626,20 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "RequestIngressCertInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "description": "The hostname to get a certificate for, under a domain registered for this environment and not held by a stack of another environment. It is lower-cased and a trailing dot is dropped",
+            "maxLength": 253,
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname"
+        ],
         "type": "object"
       },
       "RequirementBody": {
@@ -31864,6 +32180,221 @@
         "summary": "What uses one image",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/certificates": {
+      "get": {
+        "description": "Every per-hostname certificate of the environment, live and retired, by hostname: its issuer (staging flagged), source, state and the state in words, whether it is ready to serve, when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the capped detail and the time), the failures in a row, when the next attempt is, how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it and when, since when nothing refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "listIngressCertificates",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the certificates of an environment",
+        "tags": [
+          "ingress"
+        ]
+      },
+      "post": {
+        "description": "Asks for the certificate of a hostname before any stack holds the name. The hostname must be under a domain registered for the environment: 422 ingress_domain_not_allowed otherwise, 422 ingress_host_invalid when it is not a hostname a certificate can be ordered for, 409 ingress_host_reserved when an Admin reserved it, and 409 ingress_host_taken when another environment holds it, in words that name nothing the caller may not see. The certificate is queued and ordered by the next round; asking again for a hostname that already has one reuses it and starts its grace period again, and a certificate stopped for being unreferenced is brought back. Requests are accepted while issuing is paused: nothing is ordered until it resumes. Audited as ingress.cert_requested. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "requestIngressCertificate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestIngressCertInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Request a certificate ahead of any claim",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/certificates/budget": {
+      "get": {
+        "description": "One row per registered domain and issuer the environment's domains use: the new certificates used in the last 7 days (orders in flight and TierPlan's own certificate included), where TierPlan stops (cap), the certificate authority's own limit, the headroom, when the next slot opens, the environment's own domains under it, and whether the budget is shared with another domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "getIngressCertificateBudget",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressCertBudgetsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the weekly new-certificate budget",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/certificates/{certId}/retry": {
+      "post": {
+        "description": "Queues the certificate with its next attempt now, without waiting for its backoff. The order is placed by the next round, so 202. 404 ingress_cert_not_found for a certificate that is not a live one of this environment that TierPlan orders (another environment's, retired, uploaded or gone); 409 ingress_certs_paused while issuing is paused after a restore; 409 ingress_cert_stopped for a stopped certificate, which waits for a claim or a request, not a retry; 429 ingress_cert_blocked while the certificate authority has asked TierPlan to wait or three attempts failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). A certificate whose order is already in flight is left alone and answers 202. Audited as ingress.cert_retried. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "retryIngressCertificate",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The certificate's ID",
+            "in": "path",
+            "name": "certId",
+            "required": true,
+            "schema": {
+              "description": "The certificate's ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Try a certificate again now",
+        "tags": [
+          "ingress"
         ]
       }
     },

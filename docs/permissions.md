@@ -44,7 +44,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `images.delete` | environment | no | yes | yes | yes | no | Remove and untag images |
 | `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
-| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains and reserve hostnames |
+| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains, reserve hostnames, and list, request and retry its hostname certificates |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `janitor.run` | environment | no | no | yes | yes | no | Clean an environment now, keep items out of cleanup and set the swarm task history limit |
 | `networks.addressing` | environment | no | no | yes | yes | no | Change the address space settings: small stack subnets and entered address pools |
