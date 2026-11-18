@@ -177,8 +177,9 @@ func encodeChain(certs []*x509.Certificate) []byte {
 
 // parseUploadKey reads the uploaded private key in PKCS#8, PKCS#1 or SEC1 form. An encrypted key, a key that
 // cannot be read and a key of a type or size outside the allow-list are refused with their own codes. The
-// first PEM block that is not a certificate is the key, so a bundle that lists the certificates before the
-// key is read the same way a pasted key is.
+// first PEM block that is neither a certificate nor EC parameters is the key, so a bundle that lists the
+// certificates before the key, or a key with the parameters block openssl writes first, is read the same way a
+// pasted key is.
 func parseUploadKey(keyPEM []byte) (crypto.Signer, error) {
 	rest := keyPEM
 	var block *pem.Block
@@ -187,7 +188,9 @@ func parseUploadKey(keyPEM []byte) (crypto.Signer, error) {
 		if block == nil {
 			return nil, &UploadError{Code: UploadKeyUnsupported}
 		}
-		if block.Type != "CERTIFICATE" {
+		// The EC PARAMETERS block that `openssl ecparam -genkey` writes before the key only names the curve,
+		// which the key itself names too.
+		if block.Type != "CERTIFICATE" && block.Type != "EC PARAMETERS" {
 			break
 		}
 	}
