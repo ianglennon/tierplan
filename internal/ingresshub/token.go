@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -122,4 +123,78 @@ func (s *Service) IssueToken(ctx context.Context, actor audit.Actor, envID, ip, 
 		return Token{}, fmt.Errorf("commit: %w", err)
 	}
 	return Token{Token: token, Generation: int(next), Rotated: rotated}, nil
+}
+
+// DisableToken stops the current join token enrolling anyone, until the next IssueToken makes a new one.
+// Nodes already enrolled are not affected. It changes nothing, and audits nothing, when the environment has no
+// token or the current one is disabled already.
+func (s *Service) DisableToken(ctx context.Context, actor audit.Actor, envID, ip, ua string) error {
+	now := s.now().UTC()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	if _, err := q.IngressEnvironmentTopology(ctx, envID); errors.Is(err, sql.ErrNoRows) {
+		return ErrEnvironmentNotFound
+	} else if err != nil {
+		return fmt.Errorf("look up the environment: %w", err)
+	}
+	cur, err := q.IngressTokenStatus(ctx, envID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("load the join token: %w", err)
+	}
+	rows, err := q.DisableCurrentIngressToken(ctx, sqlc.DisableCurrentIngressTokenParams{DisabledAt: now.UnixNano(), EnvID: envID})
+	if err != nil {
+		return fmt.Errorf("disable the join token: %w", err)
+	}
+	if rows == 0 {
+		return nil
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: actor, Action: audit.ActionIngressJoinTokenDisabled, TargetType: targetEnvironment, TargetID: envID,
+		EnvID: envID, Result: audit.ResultSuccess, IP: ip, UserAgent: ua,
+		Details: map[string]string{"generation": strconv.FormatInt(cur.Generation, 10)},
+	}); err != nil {
+		return fmt.Errorf("audit join token disabled: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// TokenStatus says which join token of an environment is current: the generation, when and by whom it was made
+// and whether it is disabled. It never returns the token, which exists in clear only in IssueToken's result.
+type TokenStatus struct {
+	// Exists is false when the environment has never had a token.
+	Exists     bool
+	Generation int
+	CreatedAt  time.Time
+	CreatedBy  string
+	Disabled   bool
+}
+
+// TokenStatus reports which join token is current and whether it is disabled.
+func (s *Service) TokenStatus(ctx context.Context, envID string) (TokenStatus, error) {
+	if _, err := s.st.RQ.IngressEnvironmentTopology(ctx, envID); errors.Is(err, sql.ErrNoRows) {
+		return TokenStatus{}, ErrEnvironmentNotFound
+	} else if err != nil {
+		return TokenStatus{}, fmt.Errorf("look up the environment: %w", err)
+	}
+	row, err := s.st.RQ.IngressTokenStatus(ctx, envID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return TokenStatus{}, nil
+	case err != nil:
+		return TokenStatus{}, fmt.Errorf("load the join token: %w", err)
+	}
+	return TokenStatus{
+		Exists: true, Generation: int(row.Generation), CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
+		CreatedBy: row.CreatedBy, Disabled: row.DisabledAt != 0,
+	}, nil
 }
