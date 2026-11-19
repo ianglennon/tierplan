@@ -10,7 +10,8 @@ import (
 
 // The codes a RefusedError carries. They are stable: the API and the logs key on them.
 const (
-	// CodeUnsafeValue: a stored value holds a backtick or a brace (D-08).
+	// CodeUnsafeValue: a stored value holds a backtick or a brace (D-08), or a stack or service name holds
+	// a character compose does not allow there, which could change the backend URL (WR-02).
 	CodeUnsafeValue = "ingress_render_unsafe_value"
 	// CodeStripRoot: a route strips the root prefix, which would remove every path (D-17).
 	CodeStripRoot = "ingress_render_strip_root"

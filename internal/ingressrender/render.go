@@ -349,8 +349,10 @@ func renderSchema1(in Input) (Result, error) {
 
 // refuseRoute is the defence in depth behind the label parser. It checks every route, rendered or not
 // (the parser refuses these values, so a hit means corrupted data, and failing the render keeps the
-// node's last good bundle): no field may hold a backtick or a brace (D-08), and a route that strips the
-// root prefix would forward every request with no path (D-17).
+// node's last good bundle): no field may hold a backtick or a brace (D-08), the stack and service names
+// that make up the backend URL hold only what compose allows in them (so no character can give that
+// URL another host, userinfo, path, query or fragment: phase 21 review, WR-02), and a route that strips
+// the root prefix would forward every request with no path (D-17).
 func refuseRoute(r ingress.SnapshotRoute) error {
 	for _, f := range []struct{ field, value string }{
 		{"hostname", r.Hostname},
@@ -363,10 +365,33 @@ func refuseRoute(r ingress.SnapshotRoute) error {
 			return &RefusedError{Code: CodeUnsafeValue, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Field: f.field}
 		}
 	}
+	for _, f := range []struct{ field, value string }{
+		{"service", r.Service},
+		{"stackName", r.StackName},
+	} {
+		if !urlLabel(f.value) {
+			return &RefusedError{Code: CodeUnsafeValue, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Field: f.field}
+		}
+	}
 	if r.Strip && r.PathPrefix == "/" {
 		return &RefusedError{Code: CodeStripRoot, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Field: "strip"}
 	}
 	return nil
+}
+
+// urlLabel reports whether a stack or service name may go into a backend URL: empty (the route then has
+// no backend and is skipped), or only ASCII letters, digits, '.', '_' and '-', the characters compose
+// allows in a service name and a project name.
+func urlLabel(v string) bool {
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '.', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // namedObject is one Traefik router, service or middleware name in a bundle, with what makes it the
@@ -453,14 +478,18 @@ func schemeOf(r ingress.SnapshotRoute) ingress.Scheme {
 	return r.Scheme
 }
 
-// backendURL is the URL of a route's backend, or false when it cannot be named. A swarm service is
-// reached by its DNS name, <stack>_<service>, on the proxy's overlay network (D-12).
+// maxPort is the highest TCP port.
+const maxPort = 65535
+
+// backendURL is the URL of a route's backend, or false when it cannot be named (including a port outside
+// 1 to 65535). A swarm service is reached by its DNS name, <stack>_<service>, on the proxy's overlay
+// network (D-12).
 func backendURL(r ingress.SnapshotRoute) (string, bool) {
 	scheme := schemeOf(r)
 	if scheme != ingress.SchemeHTTP && scheme != ingress.SchemeHTTPS {
 		return "", false
 	}
-	if r.Target != ingress.TargetSwarm || r.StackName == "" || r.Service == "" || r.Port <= 0 {
+	if r.Target != ingress.TargetSwarm || r.StackName == "" || r.Service == "" || r.Port <= 0 || r.Port > maxPort {
 		return "", false
 	}
 	return string(scheme) + "://" + r.StackName + "_" + r.Service + ":" + strconv.Itoa(r.Port), true
