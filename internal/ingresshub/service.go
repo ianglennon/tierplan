@@ -36,9 +36,18 @@ const (
 	targetIngressNode = "ingress_node"
 	targetEnvironment = "environment"
 
-	// notReadyRetryAfter is how long a node is told to wait when the server cannot yet confirm it: an agent
-	// environment that has not reported its type, or a swarm with no fresh node list.
-	notReadyRetryAfter = 15 * time.Second
+	// nodeUnverifiedRetryAfter is how long a node is told to wait when the server cannot yet confirm it: an
+	// agent environment that has not reported its type, or a swarm with no fresh node list, or a node the list
+	// does not hold yet.
+	nodeUnverifiedRetryAfter = 15 * time.Second
+
+	// detailTokenNotAccepted is the one outward detail of every refusal of the token or the proof of
+	// possession, so a probe learns neither which environments exist nor whether a token was once valid. The
+	// audit reason says which it was (D-27, D-35).
+	detailTokenNotAccepted = "the ingress join token was not accepted"
+	// detailWrongTokenKind names both token kinds, since the person holding an agent token has only picked the
+	// wrong command.
+	detailWrongTokenKind = "this is an agent join token; an ingress node needs the environment's ingress join token"
 
 	// Kinds and types of an environment, as the environments table stores them.
 	kindAgent         = "agent"
@@ -99,7 +108,7 @@ type EnrolResult struct {
 func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, error) {
 	reject := func(reason string) error {
 		return &RefuseError{
-			Code: ingresswire.RefuseAuthRejected, Detail: "the join token was not accepted", AuditReason: reason,
+			Code: ingresswire.RefuseAuthRejected, Detail: detailTokenNotAccepted, AuditReason: reason,
 		}
 	}
 
@@ -110,11 +119,11 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 		if strings.HasPrefix(req.Token, ingresswire.AgentTokenPrefix) {
 			return EnrolResult{}, &RefuseError{
 				Code:        ingresswire.RefuseWrongTokenKind,
-				Detail:      "this is an agent join token; an ingress node needs the ingress join token of its environment",
+				Detail:      detailWrongTokenKind,
 				AuditReason: ingresswire.RefuseWrongTokenKind,
 			}
 		}
-		return EnrolResult{}, reject("malformed")
+		return EnrolResult{}, reject("bad_token")
 	}
 
 	// (2) The hash is compared against every token the environment ever had, whether or not any exists, so the
@@ -180,7 +189,7 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 		return EnrolResult{}, &RefuseError{
 			Code:        ingresswire.RefuseNodeUnverified,
 			Detail:      "TierPlan does not yet know whether this environment is a swarm or a standalone host; try again shortly",
-			AuditReason: "environment_type_unknown", RetryAfter: notReadyRetryAfter,
+			AuditReason: "environment_type_unknown", RetryAfter: nodeUnverifiedRetryAfter,
 		}
 	}
 
@@ -200,7 +209,7 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 			return EnrolResult{}, &RefuseError{
 				Code: ingresswire.RefuseNodeUnverified, AuditReason: ingresswire.RefuseNodeUnverified,
 				Detail:     "TierPlan cannot yet confirm this node against the swarm's node list; try again shortly",
-				RetryAfter: notReadyRetryAfter,
+				RetryAfter: nodeUnverifiedRetryAfter,
 			}
 		}
 	}
