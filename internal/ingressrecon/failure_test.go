@@ -8,15 +8,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // corruptedPrefix is a stored path that the parser would never let in: it holds braces.
@@ -367,5 +371,169 @@ func TestFailuresAreSortedAndHoldNamesOnly(t *testing.T) {
 	got[0].Code = "changed"
 	if r.Failures()[0].Code == "changed" {
 		t.Error("Failures returned the book itself, want a copy")
+	}
+}
+
+// renderGate is a Deps.Render that renders for real and reports, per environment, how many renders were inside it at
+// once. before runs inside the render, between the count going up and coming down.
+type renderGate struct {
+	mu       sync.Mutex
+	inflight map[string]int
+	maxSeen  map[string]int
+	before   func(envID string)
+}
+
+func newRenderGate() *renderGate {
+	return &renderGate{inflight: map[string]int{}, maxSeen: map[string]int{}}
+}
+
+func (g *renderGate) render(in ingressrender.Input) (ingressrender.Result, error) {
+	env := in.Snapshot.Settings.EnvID
+	g.mu.Lock()
+	g.inflight[env]++
+	g.maxSeen[env] = max(g.maxSeen[env], g.inflight[env])
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.inflight[env]--
+		g.mu.Unlock()
+	}()
+	if g.before != nil {
+		g.before(env)
+	}
+	return ingressrender.Render(in)
+}
+
+func (g *renderGate) most(env string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.maxSeen[env]
+}
+
+// D-19: two reconciles of one environment never render at the same time. The check is an invariant, not a race: the
+// count of renders inside the seam can only exceed one if two overlap.
+func TestRendersAreSerialisedPerEnvironment(t *testing.T) {
+	ctx := context.Background()
+	rg := newRig(t)
+	rg.certs.setServable("app.example.com")
+	rg.seedSwarmStack("stack-shop", "shop")
+	rg.storeRoutes("stack-shop", decl("app.example.com", "/"))
+
+	g := newRenderGate()
+	g.before = func(string) {
+		for range 20 {
+			runtime.Gosched()
+		}
+	}
+	d := rg.deps(nil)
+	d.Render = g.render
+	r := New(d)
+
+	const workers = 8
+	errs := make(chan error, workers)
+	for range workers {
+		go func() { errs <- r.Reconcile(ctx, rigEnv) }()
+	}
+	for range workers {
+		if err := testsupport.Await(t, "a Reconcile to return", errs); err != nil {
+			t.Errorf("Reconcile: %v", err)
+		}
+	}
+	if got := g.most(rigEnv); got != 1 {
+		t.Fatalf("at most %d renders of %s ran at once, want exactly 1 (serialised)", got, rigEnv)
+	}
+}
+
+// D-19: the serialising lock is per environment. The render of env-1 waits until the render of env-2 has begun and
+// the other way round, so both return only if the two renders were inside the seam together; a lock shared by the
+// environments would stop the test at its deadline.
+func TestEnvironmentsRenderConcurrently(t *testing.T) {
+	ctx := context.Background()
+	rg := newRig(t)
+	seedSecondEnv(t, rg)
+	rg.certs.setServable("app.example.com")
+	rg.certs.setServable("blog.example.org")
+	rg.seedSwarmStack("stack-shop", "shop")
+	rg.storeRoutes("stack-shop", decl("app.example.com", "/"))
+
+	entered := map[string]chan struct{}{rigEnv: make(chan struct{}), "env-2": make(chan struct{})}
+	other := map[string]string{rigEnv: "env-2", "env-2": rigEnv}
+	g := newRenderGate()
+	g.before = func(env string) {
+		close(entered[env])
+		testsupport.Await(t, "the render of "+other[env]+" to begin while "+env+" renders", entered[other[env]])
+	}
+	d := rg.deps(nil)
+	d.Render = g.render
+	r := New(d)
+
+	errs := make(chan error, 2)
+	for _, env := range []string{rigEnv, "env-2"} {
+		go func() { errs <- r.Reconcile(ctx, env) }()
+	}
+	for range 2 {
+		if err := testsupport.Await(t, "a Reconcile to return", errs); err != nil {
+			t.Errorf("Reconcile: %v", err)
+		}
+	}
+	for _, env := range []string{rigEnv, "env-2"} {
+		if _, ok := r.Current(env); !ok {
+			t.Errorf("Current has no bundle for %s", env)
+		}
+	}
+}
+
+// D-19 / T-21-42: a render never holds up a store write. While the render of env-1 is held inside the seam, a route
+// is written to env-1 and the write returns; its Notify reaches a subscriber, and the held render then finishes.
+func TestARenderNeverBlocksAStoreWrite(t *testing.T) {
+	ctx := context.Background()
+	rg := newRig(t)
+	rg.certs.setServable("app.example.com")
+	rg.seedSwarmStack("stack-shop", "shop")
+	rg.storeRoutes("stack-shop", decl("app.example.com", "/"))
+
+	var hold atomic.Bool
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	g := newRenderGate()
+	g.before = func(string) {
+		if hold.Load() {
+			close(inside)
+			testsupport.Await(t, "the test to release the render", release)
+		}
+	}
+	d := rg.deps(nil)
+	d.Render = g.render
+	r := New(d)
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("the first render: %v", err)
+	}
+
+	sub := rg.notifier.Subscribe()
+	t.Cleanup(sub.Close)
+	hold.Store(true)
+	rendered := make(chan error, 1)
+	go func() { rendered <- r.Reconcile(ctx, rigEnv) }()
+	testsupport.Await(t, "the render to be held inside the seam", inside)
+
+	written := make(chan error, 1)
+	go func() {
+		_, err := rg.model.ReplaceStackRoutes(ctx, ingressstore.ReplaceInput{
+			EnvID: rigEnv, StackID: "stack-shop", Actor: "alice",
+			Decls: []ingress.Declaration{decl("app.example.com", "/"), decl("app.example.com", "/shop")},
+		})
+		written <- err
+	}()
+	if err := testsupport.Await(t, "the store write to return while a render is held", written); err != nil {
+		t.Fatalf("the write: %v", err)
+	}
+
+	close(release)
+	if err := testsupport.Await(t, "the held render to finish", rendered); err != nil {
+		t.Fatalf("the held render: %v", err)
+	}
+	testsupport.Await(t, "the write's Notify", sub.C())
+	if got := sub.Pending(); len(got) != 1 || got[0] != rigEnv {
+		t.Fatalf("the subscription holds %v, want [%s]", got, rigEnv)
 	}
 }
