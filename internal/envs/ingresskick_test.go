@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
@@ -51,5 +52,20 @@ func TestIngressKickOnLocalEnvironmentRemoval(t *testing.T) {
 	}
 	if k.envRows != 0 {
 		t.Fatalf("%d environment rows when the sessions were kicked, want 0", k.envRows)
+	}
+}
+
+func TestIngressKickWithoutASourceStillRemoves(t *testing.T) {
+	r := newRig(t, dockertest.FakeConfig{})
+	insertAgentEnv(t, r, "agent-env-1", "Remote")
+
+	if err := r.svc.Remove(context.Background(), admin, "agent-env-1", "203.0.113.5", "test", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.svc.Get(context.Background(), "agent-env-1"); err == nil {
+		t.Fatal("the environment is still there")
+	}
+	if got := r.audits(t, audit.ActionEnvironmentRemoved); len(got) != 1 || got[0].TargetID != "agent-env-1" {
+		t.Fatalf("audit = %+v, want one environment.removed row for agent-env-1", got)
 	}
 }
