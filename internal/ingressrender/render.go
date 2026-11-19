@@ -206,20 +206,13 @@ func Render(in Input) (Result, error) {
 				Hostname: r.Hostname, PathPrefix: r.PathPrefix, Stack: r.StackName, Service: r.Service, Reason: reason,
 			})
 		}
-		cert, hasCert := certs[r.Hostname]
-		switch {
-		case !hasCert:
-			skip(SkipNoCertificate)
-			continue
-		case cert.Reason != "":
-			skip(cert.Reason)
-			continue
-		case !cert.servable():
-			skip(SkipNoCertificate)
+		cert, reason := selectRoute(r, claimed, certs)
+		if reason != "" {
+			skip(reason)
 			continue
 		}
 		url, ok := backendURL(r)
-		if _, isClaimed := claimed[r.Hostname]; !ok || !isClaimed {
+		if !ok {
 			skip(SkipNoBackend)
 			continue
 		}
@@ -289,6 +282,39 @@ func Render(in Input) (Result, error) {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.PathPrefix, b.PathPrefix))
 	})
 	return Result{Bundle: bundle, Skipped: skipped}, nil
+}
+
+// selectRoute decides whether a route is served, in this order (D-09, D-10, D-12, D-28). It returns the
+// route's certificate and an empty reason when the route is served, and the stable skip reason when it
+// is not.
+//
+//  1. A route whose hostname is not claimed has no owner to name a backend. The store makes this
+//     impossible (ingress_routes references ingress_hostnames), so it is a defensive no_backend; the
+//     renderer is pure and logs nothing.
+//  2. The hostname's certificate must be servable: none at all is no_certificate; one with a reason
+//     keeps that reason (Serving reports a staging, issuing or expiring certificate as
+//     certificate_not_ready); one with no reason but no key bytes is certificate_not_ready too, never
+//     served. The same answer applies to every route of the hostname, so a host is served whole or not
+//     at all and a name with no usable certificate fails at the handshake.
+//  3. A system-owned claim and a standalone target have no backend until Phases 28 and 25, and a stack
+//     with no name cannot be addressed: no_backend. There is no fourth reason code.
+func selectRoute(r ingress.SnapshotRoute, claimed map[string]struct{}, certs map[string]HostCert) (HostCert, SkipReason) {
+	if _, ok := claimed[r.Hostname]; !ok {
+		return HostCert{}, SkipNoBackend
+	}
+	cert, ok := certs[r.Hostname]
+	switch {
+	case !ok:
+		return HostCert{}, SkipNoCertificate
+	case cert.Reason != "":
+		return HostCert{}, cert.Reason
+	case !cert.servable():
+		return HostCert{}, SkipCertificateNotReady
+	}
+	if r.OwnerKind != ingress.OwnerStack || r.Target != ingress.TargetSwarm || r.StackName == "" {
+		return HostCert{}, SkipNoBackend
+	}
+	return cert, ""
 }
 
 // schemeOf is the scheme a route's backend is spoken to over; an unset scheme is http.
