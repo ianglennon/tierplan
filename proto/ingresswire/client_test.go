@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,156 @@ func TestDecodeBundleChecksTheInstancePin(t *testing.T) {
 		if _, err := DecodeBundle(data, pinned); !errors.Is(err, ErrInstanceMismatch) {
 			t.Fatalf("pinned %q: err = %v, want ErrInstanceMismatch", pinned, err)
 		}
+	}
+}
+
+func TestConnectAuthVerifies(t *testing.T) {
+	key, err := NewNodeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := testChallenge(t)
+	ekm := testEKM(4)
+	now := time.Unix(1_700_000_099, 0)
+	a, err := ConnectAuth(ch, ConnectOptions{NodeID: "node-1", Version: "0.2.0", Aud: testAud, Key: key, EKM: ekm, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.T != TypeAuth || a.Mode != ModeConnect || a.Proto != ProtoVersion || a.NodeID != "node-1" || a.Token != "" || a.Aud != testAud || a.NodeVersion != "0.2.0" {
+		t.Fatalf("fields = %+v", a)
+	}
+	if a.TS != now.Unix() || len(a.Nonce) != 32 {
+		t.Fatalf("TS %d nonce %d bytes", a.TS, len(a.Nonce))
+	}
+	if !bytes.Equal(a.EKM, ekm) {
+		t.Fatal("Auth.EKM is not o.EKM byte for byte")
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	if !bytes.Equal(a.Pub, pub) {
+		t.Fatal("Auth.Pub is not the key's public half")
+	}
+	if !authn.Verify(a.Pub, serverRebuild(ch, a, a.EKM), a.Sig) {
+		t.Fatal("the server's rebuild does not verify the connect auth")
+	}
+	if authn.Verify(pub, serverRebuild(ch, a, testEKM(5)), a.Sig) {
+		t.Fatal("rebuild with another exporter verified")
+	}
+	if _, err := ConnectAuth(ch, ConnectOptions{Aud: testAud, Key: key, Now: now}); err == nil {
+		t.Fatal("ConnectAuth with an empty NodeID succeeded")
+	}
+	if _, err := ConnectAuth(ch, ConnectOptions{NodeID: "n", Key: key, Now: now}); err == nil {
+		t.Fatal("ConnectAuth with an empty Aud succeeded")
+	}
+	if _, err := ConnectAuth(ch, ConnectOptions{NodeID: "n", Aud: testAud, Key: key[:3], Now: now}); err == nil {
+		t.Fatal("ConnectAuth with a short key succeeded")
+	}
+}
+
+func TestCheckWelcomePinsOnEnrolAndRefusesAChange(t *testing.T) {
+	w := Welcome{T: TypeWelcome, NodeID: "n", EnvID: "e", InstanceID: "inst-1"}
+	if got, err := CheckWelcome(w, ""); err != nil || got != "inst-1" {
+		t.Fatalf("unpinned: %q, %v", got, err)
+	}
+	if got, err := CheckWelcome(w, "inst-1"); err != nil || got != "inst-1" {
+		t.Fatalf("equal pin: %q, %v", got, err)
+	}
+	if got, err := CheckWelcome(w, "inst-2"); !errors.Is(err, ErrInstanceMismatch) || got != "" {
+		t.Fatalf("different pin: %q, %v", got, err)
+	}
+	w.InstanceID = ""
+	if _, err := CheckWelcome(w, ""); err == nil {
+		t.Fatal("an empty instance ID in the welcome was accepted")
+	}
+	if _, err := CheckWelcome(w, "inst-1"); err == nil {
+		t.Fatal("an empty instance ID in the welcome was accepted against a pin")
+	}
+}
+
+func TestParseServerMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want any
+		err  error
+	}{
+		{"challenge", `{"t":"challenge","proto":1,"nonce":"AQID","ts":5}`, Challenge{T: TypeChallenge, Proto: 1, Nonce: []byte{1, 2, 3}, TS: 5}, nil},
+		{"welcome", `{"t":"welcome","nodeId":"n","envId":"e","instanceId":"i","healthMs":30000}`, Welcome{T: TypeWelcome, NodeID: "n", EnvID: "e", InstanceID: "i", HealthMs: 30000}, nil},
+		{"refuse", `{"t":"refuse","code":"auth_rejected"}`, Refuse{T: TypeRefuse, Code: RefuseAuthRejected}, nil},
+		{"hello", `{"t":"hello"}`, nil, ErrUnknownMessage},
+		{"bundle", `{"t":"bundle"}`, nil, ErrUnknownMessage},
+		{"auth", `{"t":"auth"}`, nil, ErrUnknownMessage},
+		{"no type", `{"nonce":"AQID"}`, nil, ErrMalformed},
+		{"not JSON", `{"t":`, nil, ErrMalformed},
+		{"wrong field type", `{"t":"welcome","healthMs":"x"}`, nil, ErrMalformed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ParseServerMessage([]byte(c.line))
+			if c.err != nil {
+				if !errors.Is(err, c.err) || got != nil {
+					t.Fatalf("got %+v, %v; want %v", got, err, c.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got %#v, want %#v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDecodeBundleRefusesOversizeAndUnverifiable(t *testing.T) {
+	big := make([]byte, MaxBundleMessageBytes+1)
+	if _, err := DecodeBundle(big, "inst-1"); !errors.Is(err, ErrBundleTooLarge) {
+		t.Fatalf("oversize: err = %v, want ErrBundleTooLarge", err)
+	}
+	b := testBundle(t)
+	b.Manifest.Files = append([]ingressbundle.FileEntry(nil), b.Manifest.Files...)
+	b.Manifest.Files[0].SHA256 = strings.Repeat("0", 64)
+	_, err := DecodeBundle(testEnvelope(t, "inst-1", b), "inst-1")
+	var ve *ingressbundle.VerifyError
+	if !errors.As(err, &ve) {
+		t.Fatalf("a tampered checksum: err = %v, want a *VerifyError", err)
+	}
+	if _, err := DecodeBundle([]byte(`{"t":"hello"}`), "inst-1"); !errors.Is(err, ErrUnknownMessage) {
+		t.Fatalf("not a bundle: err = %v", err)
+	}
+	if _, err := DecodeBundle([]byte(`{"t":`), "inst-1"); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("bad JSON: err = %v", err)
+	}
+}
+
+func TestDecodeBundleAcceptsALowerVersion(t *testing.T) {
+	mk := func(cfg int64, data string) ingressbundle.Bundle {
+		b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: cfg},
+			[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: []byte(data)}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	high, low := mk(9, "http: {a: 1}\n"), mk(3, "http: {b: 2}\n")
+	got, err := DecodeBundle(testEnvelope(t, "inst-1", high), "inst-1")
+	if err != nil || got.Version.Config != 9 {
+		t.Fatalf("high: %+v, %v", got.Version, err)
+	}
+	got, err = DecodeBundle(testEnvelope(t, "inst-1", low), "inst-1")
+	if err != nil || got.Version.Config != 3 || got.ID != low.ID {
+		t.Fatalf("a lower version was refused or altered: %+v, %v", got.Version, err)
+	}
+}
+
+type recordingLimiter struct{ calls []int64 }
+
+func (r *recordingLimiter) SetReadLimit(n int64) { r.calls = append(r.calls, n) }
+
+func TestPrepareNodeConnSetsTheBundleReadLimit(t *testing.T) {
+	r := &recordingLimiter{}
+	PrepareNodeConn(r)
+	if len(r.calls) != 1 || r.calls[0] != MaxBundleMessageBytes {
+		t.Fatalf("calls = %v, want exactly [%d]", r.calls, int64(MaxBundleMessageBytes))
 	}
 }
