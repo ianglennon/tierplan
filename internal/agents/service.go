@@ -184,26 +184,9 @@ type NodeLists interface {
 	RefreshSwarmNodeIDs(ctx context.Context, envID string, minAge time.Duration) (ids []string, fetchedAt time.Time, ok bool)
 }
 
-// nodeListMaxAge is how old a node list may be and still decide an enrolment. The cluster
-// cache re-reads every 15 seconds, so a list older than this means no manager has answered
-// for a while (the quorum is lost, the only manager is the one enrolling, or none is
-// connected), and a list that stale is no basis for a refusal.
-const nodeListMaxAge = 2 * time.Minute
-
-const (
-	// nodeListRefreshAfter is how old a fresh list that lacks an enrolling agent's node must be
-	// before the enrolment has it read again, once, before it refuses: a node that just joined
-	// the swarm is then found at its first try, and enrolments cannot make the managers read
-	// their cluster more than once per this time.
-	nodeListRefreshAfter = 5 * time.Second
-	// nodeListRefreshTimeout bounds that read inside the handshake, which has
-	// wire.HandshakeTimeout (10 seconds) in all, so the refusal or the welcome still has time
-	// to reach the agent.
-	nodeListRefreshTimeout = 3 * time.Second
-	// nodeNotInSwarmRetryAfter is how long an agent that does not know node_not_in_swarm is
-	// told to wait, with the rate_limited code it already retries (nodeNotInSwarmRefusal).
-	nodeNotInSwarmRetryAfter = 15 * time.Second
-)
+// nodeNotInSwarmRetryAfter is how long an agent that does not know node_not_in_swarm is
+// told to wait, with the rate_limited code it already retries (nodeNotInSwarmRefusal).
+const nodeNotInSwarmRetryAfter = 15 * time.Second
 
 // nodeNotInSwarmSince is the first agent release that knows node_not_in_swarm and retries on
 // it. An agent before it does not, and would exit at its first enrolment on that code.
@@ -304,32 +287,19 @@ func (s *Service) WithNodeLists(n NodeLists) *Service {
 // once before the refusal, so a node that joined since the last read is usually accepted at
 // the agent's first try.
 func (s *Service) checkSwarmNode(ctx context.Context, envID string, f wire.Facts, agentVersion string) (nodeVerdict, error) {
-	if f.Swarm == nil || s.nodes == nil {
+	if f.Swarm == nil {
 		return nodeNotChecked, nil
 	}
-	if f.Swarm.NodeID == "" {
-		return nodeUnverified, nil
-	}
-	ids, fetchedAt, ok := s.nodes.SwarmNodeIDs(envID)
-	fresh := func() bool { return ok && s.now().Sub(fetchedAt) <= nodeListMaxAge }
-	if !fresh() {
-		return nodeUnverified, nil
-	}
-	if slices.Contains(ids, f.Swarm.NodeID) {
+	switch CheckSwarmNode(ctx, s.nodes, s.now, envID, f.Swarm.NodeID) {
+	case NodeNotChecked:
+		return nodeNotChecked, nil
+	case NodeListed:
 		return nodeListed, nil
+	case NodeNotListed:
+		return nodeUnverified, nodeNotInSwarmRefusal(agentVersion)
+	default:
+		return nodeUnverified, nil
 	}
-	if s.now().Sub(fetchedAt) >= nodeListRefreshAfter {
-		rctx, cancel := context.WithTimeout(ctx, nodeListRefreshTimeout)
-		ids, fetchedAt, ok = s.nodes.RefreshSwarmNodeIDs(rctx, envID, nodeListRefreshAfter)
-		cancel()
-		if !fresh() {
-			return nodeUnverified, nil
-		}
-		if slices.Contains(ids, f.Swarm.NodeID) {
-			return nodeListed, nil
-		}
-	}
-	return nodeUnverified, nodeNotInSwarmRefusal(agentVersion)
 }
 
 // nodeNotInSwarmRefusal is the refusal of an enrolment whose node a fresh list lacks. An agent
