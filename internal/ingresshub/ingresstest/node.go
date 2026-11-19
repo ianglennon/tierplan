@@ -61,6 +61,10 @@ type Dial struct {
 	Mode string
 	// Token is the ingress join token to enrol with. Name and SwarmNodeID are the claims an enrolment makes.
 	Token, Name, SwarmNodeID string
+	// WireToken, when set, is sent and signed as the enrol token instead of Token. ingresswire.EnrolAuth
+	// refuses a token that is not an ingress join token before anything is sent, so this is how a test puts
+	// one on the wire (an agent join token, say) to see what the server answers.
+	WireToken string
 	// Aud is the audience sent and signed. Empty means the audience DialNode was given.
 	Aud string
 	// SignedAud, when set, is signed instead of Aud, so the signature is for another audience than the one sent.
@@ -183,8 +187,12 @@ func DialNode(t testing.TB, url string, client *http.Client, aud string, id *Ide
 				NodeID: id.NodeID, Version: testVersion, Aud: signedAud, Key: id.Key, EKM: ekm, Now: time.Now(),
 			})
 		} else {
+			token := d.Token
+			if d.WireToken != "" {
+				token = ingresswire.TokenPrefix + "placeholder"
+			}
 			a, err = ingresswire.EnrolAuth(ch, ingresswire.EnrolOptions{
-				Token: d.Token, Name: d.Name, SwarmNodeID: d.SwarmNodeID, Version: testVersion,
+				Token: token, Name: d.Name, SwarmNodeID: d.SwarmNodeID, Version: testVersion,
 				Aud: signedAud, Key: id.Key, EKM: ekm, Now: time.Now(),
 			})
 		}
@@ -192,6 +200,11 @@ func DialNode(t testing.TB, url string, client *http.Client, aud string, id *Ide
 			t.Fatalf("ingresstest: build the auth: %v", err)
 		}
 		a.Aud = sentAud
+		if d.WireToken != "" {
+			// Signed again, over the ingress transcript, so the token is the only fault in the auth.
+			a.Token = d.WireToken
+			a.Sig = authn.Sign(id.Key, authn.IngressTranscript(mode, ingresswire.ProtoVersion, ch.Nonce, a.Nonce, signedAud, a.Pub, ekm))
+		}
 		if d.Mode != "" {
 			a.Mode = d.Mode
 		}
