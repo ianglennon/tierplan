@@ -17,3 +17,8 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
 
 -- name: DeleteSetting :exec
 DELETE FROM settings WHERE key = ?;
+
+-- name: InsertSettingIfAbsent :exec
+-- Writes a default only when the key has no value yet, so a value an admin set is never overwritten.
+INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+ON CONFLICT (key) DO NOTHING;
