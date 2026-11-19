@@ -419,7 +419,9 @@ jobs:
   # job has no secrets; the privileged dind container is what Docker-in-Docker
   # needs (T-01-115).
   e2e:
-    runs-on: [self-hosted, linux, x64]
+    # Pinned to build01: the Hyper-V runners sit behind the Default Switch NAT, where
+    # apt and the Chrome for Testing download stall and time out.
+    runs-on: [self-hosted, linux, x64, bp-a]
     # IN-07: this covers the setup that runs BEFORE Playwright's globalTimeout starts
     # (preflight, e2e-copy, the image and agent builds, compose up) plus the 20 minutes
     # of e2e/playwright.config.ts globalTimeout plus a margin, so a hang ends in

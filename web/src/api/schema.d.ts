@@ -17255,9 +17255,11 @@ export interface components {
              * @description Which warning this is
              * @enum {string}
              */
-            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents" | "https_cert_fallback" | "https_renewal_failed" | "https_acme_paused" | "https_clock_off" | "https_cert_expiring" | "https_txt_left" | "ingress_cert_expiring" | "ingress_cert_renewal_failed" | "ingress_certs_paused";
+            id: "data_not_persisted" | "key_backup" | "proxy_untrusted_forwarded" | "proxy_url_mismatch" | "proxy_websocket_failing" | "refusal_burst" | "backup_failed" | "unknown_agents" | "https_cert_fallback" | "https_renewal_failed" | "https_acme_paused" | "https_clock_off" | "https_cert_expiring" | "https_txt_left" | "ingress_cert_expiring" | "ingress_cert_renewal_failed" | "ingress_certs_paused" | "ingress_render_failed";
             /** @description For the ingress_ warnings: the facts the bell turns into a headline and a sentence */
             ingress?: components["schemas"]["WarningIngressCertBody"];
+            /** @description For ingress_render_failed: the route TierPlan could not render and why, as a code */
+            ingressRender?: components["schemas"]["WarningIngressRenderBody"];
             /** @description For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from */
             ip?: string;
             /** @description For key_backup: where the generated encryption key is stored */
@@ -17383,6 +17385,22 @@ export interface components {
              * @enum {string}
              */
             source?: "" | "acme" | "upload";
+        };
+        WarningIngressRenderBody: {
+            /**
+             * @description Why the render failed
+             * @enum {string}
+             */
+            code: "ingress_render_unsafe_value" | "ingress_render_strip_root" | "ingress_render_template_delimiter" | "ingress_render_name_collision" | "ingress_render_read_failed" | "ingress_render_failed" | "ingress_schema_unsupported";
+            /** @description The hostname of the route that could not be rendered; absent when the failure is not about one route */
+            hostname?: string;
+            /**
+             * Format: int64
+             * @description How many other failures the item covers; the one named is the oldest
+             */
+            more?: number;
+            /** @description The path prefix of that route; absent when the failure is not about one route */
+            path?: string;
         };
         WarningsBody: {
             /** @description Only the warnings that apply; empty when there are none */

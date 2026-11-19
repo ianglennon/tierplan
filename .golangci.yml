@@ -96,6 +96,7 @@ linters:
             - $all
             - "!$test"
             - "!**/internal/acme/acmetest/**"
+            - "!**/internal/ingressrender/traefiktest/**"
             - "!**/internal/dockerx/dockertest/**"
             - "!**/internal/tunnel/tunneltest/**"
             - "!**/internal/server/servertest/**"
@@ -103,7 +104,7 @@ linters:
             - "!**/proto/testsupport/**"
           deny:
             - pkg: github.com/ianglennon/tierplan/proto/testsupport
-              desc: test helpers are for _test.go files and the test helper packages (acmetest, dockertest, tunneltest, servertest, storetest) only, so they never reach a shipped binary (docs/testing.md)
+              desc: test helpers are for _test.go files and the test helper packages (acmetest, traefiktest, dockertest, tunneltest, servertest, storetest) only, so they never reach a shipped binary (docs/testing.md)
         forbidden-libraries:
           list-mode: lax
           files:

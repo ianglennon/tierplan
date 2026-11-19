@@ -27259,13 +27259,18 @@
               "https_txt_left",
               "ingress_cert_expiring",
               "ingress_cert_renewal_failed",
-              "ingress_certs_paused"
+              "ingress_certs_paused",
+              "ingress_render_failed"
             ],
             "type": "string"
           },
           "ingress": {
             "$ref": "#/components/schemas/WarningIngressCertBody",
             "description": "For the ingress_ warnings: the facts the bell turns into a headline and a sentence"
+          },
+          "ingressRender": {
+            "$ref": "#/components/schemas/WarningIngressRenderBody",
+            "description": "For ingress_render_failed: the route TierPlan could not render and why, as a code"
           },
           "ip": {
             "description": "For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from",
@@ -27467,6 +27472,41 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "WarningIngressRenderBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why the render failed",
+            "enum": [
+              "ingress_render_unsafe_value",
+              "ingress_render_strip_root",
+              "ingress_render_template_delimiter",
+              "ingress_render_name_collision",
+              "ingress_render_read_failed",
+              "ingress_render_failed",
+              "ingress_schema_unsupported"
+            ],
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The hostname of the route that could not be rendered; absent when the failure is not about one route",
+            "type": "string"
+          },
+          "more": {
+            "description": "How many other failures the item covers; the one named is the oldest",
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "description": "The path prefix of that route; absent when the failure is not about one route",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
         "type": "object"
       },
       "WarningsBody": {

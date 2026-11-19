@@ -2398,3 +2398,91 @@ describe("HealthBell ingress certificate items", () => {
     ]);
   });
 });
+
+// The render failure item of the bell (plan 21-15, RTE-01, D-20, D-29).
+const renderWarning = (ingressRender: Record<string, unknown>) => ({
+  id: "ingress_render_failed",
+  ingressRender,
+});
+
+describe("HealthBell ingress render failure item", () => {
+  it("names the route, the reason in words and that the proxy keeps its last working configuration, with no link", async () => {
+    items = [
+      renderWarning({
+        hostname: "app.example.com",
+        path: "/api",
+        code: "ingress_render_unsafe_value",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Proxy configuration not updated")).toBeTruthy();
+    const text = itemOf("ingress_render_failed").textContent ?? "";
+    expect(text).toContain("app.example.com/api");
+    expect(text).toContain("a brace or backtick");
+    expect(text).toContain("keeps serving its last working configuration");
+    expect(text).not.toContain("ingress_render_unsafe_value");
+    expect(within(itemOf("ingress_render_failed")).queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("adds the count of the other failures", async () => {
+    items = [
+      renderWarning({
+        hostname: "app.example.com",
+        path: "/api",
+        code: "ingress_render_strip_root",
+        more: 2,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Proxy configuration not updated")).toBeTruthy();
+    expect(itemOf("ingress_render_failed").textContent).toContain("and 2 more");
+  });
+
+  it("says a read failure without naming a route", async () => {
+    items = [renderWarning({ code: "ingress_render_read_failed" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Proxy configuration not updated")).toBeTruthy();
+    const text = itemOf("ingress_render_failed").textContent ?? "";
+    expect(text).toContain("couldn't read the routes or certificates");
+    expect(text).toContain("keeps serving its last working configuration");
+    expect(text).not.toContain("undefined");
+    expect(text).not.toContain("for /");
+  });
+
+  it("falls back to a generic reason for a code this build does not know", async () => {
+    items = [
+      renderWarning({
+        hostname: "app.example.com",
+        path: "/",
+        code: "ingress_render_from_the_future",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Proxy configuration not updated")).toBeTruthy();
+    expect(itemOf("ingress_render_failed").textContent).toContain("the render failed");
+  });
+
+  it("lists the item before the certificate items", async () => {
+    items = [
+      ingressWarning("ingress_certs_paused", { reason: "restore" }),
+      renderWarning({ hostname: "app.example.com", path: "/", code: "ingress_render_failed" }),
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "a.example.com",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 14,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 3 items");
+    expect(await screen.findByText("Proxy configuration not updated")).toBeTruthy();
+    expect(listed().map(([id]) => id)).toEqual([
+      "ingress_render_failed",
+      "ingress_certs_paused",
+      "ingress_cert_expiring",
+    ]);
+  });
+});

@@ -1,0 +1,51 @@
+{
+  "id": "46cf4c4536382bfeb1d2925aa1ae81f2e56b7dc3bb1d110cd1d5fb6b8e637d76",
+  "schema": 1,
+  "version": {
+    "config": 9,
+    "certs": 2,
+    "own": 0
+  },
+  "manifest": {
+    "schema": 1,
+    "files": [
+      {
+        "path": "certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key",
+        "sha256": "50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d",
+        "mode": 384,
+        "step": 1
+      },
+      {
+        "path": "certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt",
+        "sha256": "6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98",
+        "mode": 420,
+        "step": 1
+      },
+      {
+        "path": "dynamic/tierplan.yml",
+        "sha256": "63b5a1deaec75e75b0dc5afb553de7fa34d02a7dfe2d4fc4b6d11fa0a678900f",
+        "mode": 420,
+        "step": 2
+      }
+    ],
+    "routes": [
+      {
+        "router": "r-5237ab02d99e",
+        "hostname": "app.example.com",
+        "pathPrefix": "/api",
+        "stack": "shop",
+        "service": "api",
+        "hash": "5237ab02d99e642b18a403bdd776715d695e34b3a0b83020e5796295c93a2892"
+      },
+      {
+        "router": "r-d0698b37ca62",
+        "hostname": "app.example.com",
+        "pathPrefix": "/",
+        "stack": "shop",
+        "service": "web",
+        "hash": "d0698b37ca62b2fea26025495198b2e7b0be6ce5126c861b7f1fc948225571d6"
+      }
+    ]
+  },
+  "skipped": []
+}

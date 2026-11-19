@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/datadir"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store"
@@ -59,6 +60,9 @@ const (
 	warningIngressCertExpiring      = "ingress_cert_expiring"
 	warningIngressCertRenewalFailed = "ingress_cert_renewal_failed"
 	warningIngressCertsPaused       = "ingress_certs_paused"
+	// warningIngressRenderFailed is TierPlan failing to render an environment's proxy configuration while the proxy
+	// keeps serving its last working one (phase 21 D-20, D-29).
+	warningIngressRenderFailed = "ingress_render_failed"
 	// warningProxyPrefix turns an observer signal kind into a warning ID: the
 	// reverse proxy warnings are proxy_untrusted_forwarded, proxy_url_mismatch and
 	// the third kind with the same prefix (D-53).
@@ -112,6 +116,10 @@ type AccountDeps struct {
 	// IngressCerts lists what needs attention among the per-hostname certificates, for the ingress_
 	// warnings. Nil means nothing does.
 	IngressCerts func(ctx context.Context) ([]ingresscert.Alert, error)
+	// IngressRender lists the environments whose proxy configuration could not be rendered, for the
+	// ingress_render_failed warning. It is read on every request, so the item comes and goes with the failure.
+	// Nil means none.
+	IngressRender func() []ingressrecon.Failure
 	// ListenPort is the port TierPlan listens on, which the renewal-failed fix names when Let's
 	// Encrypt cannot reach it.
 	ListenPort int
@@ -144,7 +152,7 @@ type ChangePasswordOutput struct {
 
 // WarningBody is one instance warning that needs an admin's attention.
 type WarningBody struct {
-	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents,https_cert_fallback,https_renewal_failed,https_acme_paused,https_clock_off,https_cert_expiring,https_txt_left,ingress_cert_expiring,ingress_cert_renewal_failed,ingress_certs_paused" doc:"Which warning this is"`
+	ID      string `json:"id" enum:"data_not_persisted,key_backup,proxy_untrusted_forwarded,proxy_url_mismatch,proxy_websocket_failing,refusal_burst,backup_failed,unknown_agents,https_cert_fallback,https_renewal_failed,https_acme_paused,https_clock_off,https_cert_expiring,https_txt_left,ingress_cert_expiring,ingress_cert_renewal_failed,ingress_certs_paused,ingress_render_failed" doc:"Which warning this is"`
 	Reason  string `json:"reason,omitempty" doc:"For data_not_persisted: why the data directory is not persisted"`
 	KeyPath string `json:"keyPath,omitempty" doc:"For key_backup: where the generated encryption key is stored"`
 	IP      string `json:"ip,omitempty" doc:"For the untrusted-forwarded and failing-upgrade warnings: the address the newest sighting came from"`
@@ -158,6 +166,17 @@ type WarningBody struct {
 	HTTPS *WarningHTTPSBody `json:"https,omitempty" doc:"For the https_ warnings: the facts the bell turns into a headline and a fix"`
 	// Ingress is a pointer so that the other warnings leave it out.
 	Ingress *WarningIngressCertBody `json:"ingress,omitempty" doc:"For the ingress_ warnings: the facts the bell turns into a headline and a sentence"`
+	// IngressRender is a pointer so that the other warnings leave it out.
+	IngressRender *WarningIngressRenderBody `json:"ingressRender,omitempty" doc:"For ingress_render_failed: the route TierPlan could not render and why, as a code"`
+}
+
+// WarningIngressRenderBody is the facts of the ingress_render_failed warning: a route, a code from a fixed list and a
+// count. It never holds an error text, a certificate or any of an environment's secrets.
+type WarningIngressRenderBody struct {
+	Hostname string `json:"hostname,omitempty" doc:"The hostname of the route that could not be rendered; absent when the failure is not about one route"`
+	Path     string `json:"path,omitempty" doc:"The path prefix of that route; absent when the failure is not about one route"`
+	Code     string `json:"code" enum:"ingress_render_unsafe_value,ingress_render_strip_root,ingress_render_template_delimiter,ingress_render_name_collision,ingress_render_read_failed,ingress_render_failed,ingress_schema_unsupported" doc:"Why the render failed"`
+	More     int    `json:"more,omitempty" doc:"How many other failures the item covers; the one named is the oldest"`
 }
 
 // WarningIngressCertBody is the facts of one ingress_ warning: closed-vocabulary names, times, a failure
@@ -413,6 +432,11 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 			return nil, internal("read the HTTPS state", err)
 		}
 		items = append(items, httpsList...)
+		renderList, err := ingressRenderItems(ctx, d)
+		if err != nil {
+			return nil, internal("read the ingress render state", err)
+		}
+		items = append(items, renderList...)
 		ingressList, err := ingressItems(ctx, d)
 		if err != nil {
 			return nil, internal("read the certificate state", err)
@@ -675,6 +699,36 @@ func ingressItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
 		}})
 	}
 	return out, nil
+}
+
+// ingressRenderItems is the ingress_render_failed warning, for an active instance admin only like the ingress
+// certificate items: it names hostnames across every environment. It is derived on every read from the reconciler's
+// failures and never stored. Several failures give one item that names the oldest (it has kept its proxy frozen
+// longest) and counts the others, so many broken routes cannot flood the bell.
+func ingressRenderItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
+	if d.IngressRender == nil || d.Checker == nil {
+		return nil, nil
+	}
+	a, err := d.Checker.Access(ctx, httpx.PrincipalFrom(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if !a.Active || !a.InstanceAdmin {
+		return nil, nil
+	}
+	failures := d.IngressRender()
+	if len(failures) == 0 {
+		return nil, nil
+	}
+	oldest := failures[0]
+	for _, f := range failures[1:] {
+		if f.Since.Before(oldest.Since) || (f.Since.Equal(oldest.Since) && f.EnvID < oldest.EnvID) {
+			oldest = f
+		}
+	}
+	return []WarningBody{{ID: warningIngressRenderFailed, IngressRender: &WarningIngressRenderBody{
+		Hostname: oldest.Hostname, Path: oldest.PathPrefix, Code: oldest.Code, More: len(failures) - 1,
+	}}}, nil
 }
 
 // timePtr is t in UTC, or nil when t is the zero time.
