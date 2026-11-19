@@ -39,6 +39,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
@@ -322,6 +323,9 @@ type authFixture struct {
 	// ingressCertNoClock registers the certificate routes without a clock, as the server does, so the routes fall back
 	// to time.Now (Phase 20 review CR-01).
 	ingressCertNoClock bool
+	// ingressNodes is the ingress node service behind the join token and node routes (phase 22), over the fixture's store,
+	// audit writer and clock. A test enrols nodes through it and sets what it knows of the swarm with WithNodeLists.
+	ingressNodes *ingresshub.Service
 }
 
 // fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
@@ -690,6 +694,8 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	api.RegisterIngressCerts(r, api.IngressCertDeps{
 		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: certNow,
 	})
+	f.ingressNodes = ingresshub.NewService(f.st, f.aud, f.clk.now)
+	api.RegisterIngressNodes(r, api.IngressNodesDeps{Service: f.ingressNodes, Log: log})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
 		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,
