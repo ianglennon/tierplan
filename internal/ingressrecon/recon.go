@@ -22,6 +22,15 @@ import (
 // rendered. A stream of writes cannot postpone the render, because the window is fixed, not restarted.
 const Debounce = 250 * time.Millisecond
 
+// PollInterval is how often Run reads every environment's two versions (D-26). It is one indexed read of the
+// whole table, cheap enough every two seconds, and it is the only thing that sees a stack deleted by cascade
+// until Phase 24 notifies on the stack-delete path: the cascade raises config_version and calls no Notify.
+const PollInterval = 2 * time.Second
+
+// SafetyTick is how often Run renders every environment regardless of versions (D-19). It is the last net,
+// for a change no version recorded (a certificate source that changed without a bump, say).
+const SafetyTick = time.Minute
+
 // Model is the ingress model the reconciler reads. *ingressstore.Store satisfies it.
 type Model interface {
 	// Snapshot reads everything the renderer needs of one environment.
@@ -183,7 +192,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 
 // Run renders every environment, then keeps them current until ctx ends: a wake-up from the notifier arms
 // the debounce window if it is not armed, and when the window fires every environment that changed is
-// reconciled. It subscribes before it renders, so a change during the first pass is not lost.
+// reconciled. Two more timers run beside it, both armed on the injected clock and re-armed after each fire: every
+// PollInterval the environments whose version pair moved since their last render are reconciled (D-26), and every
+// SafetyTick every environment is (D-19). It subscribes before it renders, so a change during the first pass is
+// not lost.
 func (r *Reconciler) Run(ctx context.Context) {
 	// A reconciler built without a notifier is woken by nothing; a nil channel never fires.
 	var wake <-chan struct{}
@@ -196,6 +208,8 @@ func (r *Reconciler) Run(ctx context.Context) {
 
 	r.renderAll(ctx)
 
+	poll := r.clock.After(PollInterval)
+	tick := r.clock.After(SafetyTick)
 	var debounce <-chan time.Time
 	for {
 		select {
@@ -205,37 +219,109 @@ func (r *Reconciler) Run(ctx context.Context) {
 			if debounce == nil {
 				debounce = r.clock.After(Debounce)
 			}
+		case <-poll:
+			r.pollVersions(ctx)
+			poll = r.clock.After(PollInterval)
+		case <-tick:
+			r.renderAll(ctx)
+			tick = r.clock.After(SafetyTick)
 		case <-debounce:
 			debounce = nil
 			if pending == nil {
 				continue
 			}
-			for _, envID := range pending() {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := r.Reconcile(ctx, envID); err != nil {
-					r.log.Error("the ingress reconciler could not render an environment", "env_id", envID, "error", err)
-				}
-			}
+			r.reconcileEach(ctx, pending())
 		}
 	}
 }
 
-// renderAll renders every environment Versions lists. A read error is logged once and the loop goes on: the
-// notifier and the later poll bring the environments in.
+// renderAll renders every environment Versions lists and every environment the reconciler holds a bundle for
+// (one that was removed is in the second set only, and its render drops the bundle). A read error is logged and
+// the held environments are still rendered; the notifier and the next poll bring the others in.
 func (r *Reconciler) renderAll(ctx context.Context) {
 	versions, err := r.d.Model.Versions(ctx)
 	if err != nil {
 		r.log.Error("the ingress reconciler could not list the environments", "error", err)
+	}
+	r.reconcileEach(ctx, r.union(versions))
+}
+
+// pollVersions reconciles the environments whose version pair differs from the pair their bundle was last
+// rendered at, those with no bundle yet, and those holding a bundle that Versions no longer lists. A read error
+// is logged and the caller re-arms the timer, so a failing read is never a tight loop (T-21-38).
+func (r *Reconciler) pollVersions(ctx context.Context) {
+	versions, err := r.d.Model.Versions(ctx)
+	if err != nil {
+		r.log.Error("the ingress reconciler could not read the ingress versions", "error", err)
 		return
 	}
+	listed := make(map[string]struct{}, len(versions))
+	var due []string
 	for _, v := range versions {
+		listed[v.EnvID] = struct{}{}
+		if r.moved(v) {
+			due = append(due, v.EnvID)
+		}
+	}
+	for _, envID := range r.held() {
+		if _, ok := listed[envID]; !ok {
+			due = append(due, envID)
+		}
+	}
+	r.reconcileEach(ctx, due)
+}
+
+// moved reports whether the environment has no bundle or its bundle was rendered at another version pair.
+func (r *Reconciler) moved(v ingress.EnvVersion) bool {
+	r.mu.Lock()
+	s, ok := r.envs[v.EnvID]
+	r.mu.Unlock()
+	if !ok {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.have || s.config != v.ConfigVersion || s.certs != v.CertsVersion
+}
+
+// held lists the environments the reconciler holds a bundle for.
+func (r *Reconciler) held() []string {
+	r.mu.Lock()
+	states := make(map[string]*envState, len(r.envs))
+	for id, s := range r.envs {
+		states[id] = s
+	}
+	r.mu.Unlock()
+	var out []string
+	for id, s := range states {
+		s.mu.Lock()
+		if s.have {
+			out = append(out, id)
+		}
+		s.mu.Unlock()
+	}
+	slices.Sort(out)
+	return out
+}
+
+// union is the environments in versions and those holding a bundle, each once.
+func (r *Reconciler) union(versions []ingress.EnvVersion) []string {
+	out := r.held()
+	for _, v := range versions {
+		out = append(out, v.EnvID)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// reconcileEach reconciles each environment, logging a failure and going on to the next.
+func (r *Reconciler) reconcileEach(ctx context.Context, envIDs []string) {
+	for _, envID := range envIDs {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := r.Reconcile(ctx, v.EnvID); err != nil {
-			r.log.Error("the ingress reconciler could not render an environment", "env_id", v.EnvID, "error", err)
+		if err := r.Reconcile(ctx, envID); err != nil {
+			r.log.Error("the ingress reconciler could not render an environment", "env_id", envID, "error", err)
 		}
 	}
 }
