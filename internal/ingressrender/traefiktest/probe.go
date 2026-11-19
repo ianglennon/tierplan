@@ -102,15 +102,30 @@ func PresentedSubject(err error) string {
 // status, the body and the headers, or the transport error. The connection always goes to Traefik,
 // and the host gives both the SNI and the Host header; the certificate is verified against roots.
 func (tr *Traefik) TryGet(roots *x509.CertPool, host, pathAndQuery string, header http.Header) (int, string, http.Header, error) {
+	status, body, h, _, err := tr.TryGetFromIP(roots, host, pathAndQuery, header)
+	return status, body, h, err
+}
+
+// TryGetFromIP is TryGet that also returns the IP address the connection was made from, which is the
+// address Traefik sees as the client's. A test of forwarded headers compares them with it; it is "" when
+// no connection was made.
+func (tr *Traefik) TryGetFromIP(roots *x509.CertPool, host, pathAndQuery string, header http.Header) (status int, body string, h http.Header, clientIP string, err error) {
 	tp := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(tr.ip, httpsPort))
+			conn, err := d.DialContext(ctx, network, net.JoinHostPort(tr.ip, httpsPort))
+			if err == nil {
+				if ta, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+					clientIP = ta.IP.String()
+				}
+			}
+			return conn, err
 		},
 		TLSClientConfig:   &tls.Config{ServerName: host, RootCAs: roots, MinVersion: tls.VersionTLS12},
 		DisableKeepAlives: true,
 	}
-	return do(tp, "https://"+host+pathAndQuery, header, true)
+	status, body, h, err = do(tp, "https://"+host+pathAndQuery, header, true)
+	return status, body, h, clientIP, err
 }
 
 // Get is TryGet that fails the test on a transport error.
