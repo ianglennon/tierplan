@@ -389,6 +389,15 @@ const (
 	ActionIngressNodeEnrolled = "ingress.node_enrolled"
 	ActionIngressNodeRemoved  = "ingress.node_removed"
 	ActionIngressVIPChanged   = "ingress.vip_changed"
+	// The node lifecycle and the ingress join token (Phase 22). A refused enrolment or connect is
+	// ingress.node_enrol_refused (D-35: one action for both, told apart by the "mode" detail, "enrol" or "connect"),
+	// written by an anonymous actor through a throttle and never with an environment, because the environment named in
+	// an unauthenticated token is attacker-chosen (D-27).
+	ActionIngressNodeRevoked       = "ingress.node_revoked"
+	ActionIngressJoinTokenCreated  = "ingress.join_token_created"
+	ActionIngressJoinTokenRotated  = "ingress.join_token_rotated"
+	ActionIngressJoinTokenDisabled = "ingress.join_token_disabled"
+	ActionIngressNodeEnrolRefused  = "ingress.node_enrol_refused"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or
