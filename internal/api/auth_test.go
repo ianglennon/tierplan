@@ -39,6 +39,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -127,6 +128,9 @@ type authFixture struct {
 	https api.HTTPSDeps
 	// httpsAlerts feeds the https_ items of GET /api/warnings (phase 17); nil means none.
 	httpsAlerts func(context.Context) ([]acme.Alert, error)
+	// renderFailures feeds the ingress_render_failed item of GET /api/warnings (phase 21); nil means none. A test
+	// sets it before the request, and it is read through a closure so it can change between two reads.
+	renderFailures func() []ingressrecon.Failure
 	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
 	// that talks to a registry of its own sets one that trusts that registry's certificate.
 	registryEgress registry.EgressPolicy
@@ -385,6 +389,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		DataDir: f.dataInfo, Vault: f.acctVault, Limiter: f.pwLimiter, Proxy: f.proxy, Log: log,
 		Checker: checker, Refusals: refusalSource(f.refusals), Now: f.clk.now, Unknown: f.unknown,
 		HTTPS: f.httpsAlerts, ListenPort: 7480,
+		IngressRender: func() []ingressrecon.Failure {
+			if f.renderFailures == nil {
+				return nil
+			}
+			return f.renderFailures()
+		},
 		// The manager is built later in the fixture, so the feed reads it when asked.
 		IngressCerts: func(ctx context.Context) ([]ingresscert.Alert, error) {
 			if f.ingressCerts == nil {
