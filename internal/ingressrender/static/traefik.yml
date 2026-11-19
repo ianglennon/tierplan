@@ -1,0 +1,34 @@
+# The fixed static configuration of TierPlan's ingress proxy. It is owned by internal/ingressrender
+# (embedded, see Static) and is not rendered per environment; the proxy image and the test harness
+# ship the same bytes. The host publishes ports 80 and 443 to 8080 and 8443, so the proxy runs
+# without privileges. A change to what this file expects of the dynamic bundle needs a schema bump.
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+log:
+  level: INFO
+  format: json
+entryPoints:
+  web:
+    address: ":8080"
+    http:
+      aliasHeadersStrategy: delete
+      redirections:
+        entryPoint:
+          to: ":443"
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":8443"
+    http:
+      aliasHeadersStrategy: delete
+  ping:
+    address: ":8082"
+    http:
+      aliasHeadersStrategy: delete
+ping:
+  entryPoint: ping
+providers:
+  providersThrottleDuration: 1s
+  file:
+    directory: /var/lib/tierplan-ingress/dynamic
