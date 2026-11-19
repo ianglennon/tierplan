@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
 // TestStaticConfig pins every key of the fixed static Traefik file (D-03, D-25): the proxy never calls
@@ -82,6 +84,8 @@ func TestStaticConfig(t *testing.T) {
 		t.Errorf("providers.file keys = %v: a single watched directory, no single-file mode", got)
 	}
 	expect(t, "providers.file.directory", file["directory"], "/var/lib/tierplan-ingress/dynamic")
+	// The directory Traefik watches is the one the bundle writes its single dynamic file into.
+	expect(t, "providers.file.directory is ingressbundle.DynamicRoot", file["directory"], ingressbundle.DynamicRoot)
 }
 
 func TestStaticReturnsACopy(t *testing.T) {

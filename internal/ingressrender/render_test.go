@@ -4,6 +4,7 @@
 package ingressrender
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -294,5 +295,146 @@ func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 	}
 	if routers == 0 {
 		t.Fatal("no router was checked")
+	}
+}
+
+// oneHostInput is the one-host golden's input with the versions the caller picks.
+func oneHostInput(config, certs int64) Input {
+	in := goldenScenarios()["one-host"]
+	in.Snapshot.Settings.ConfigVersion = config
+	in.CertsVersion = certs
+	return in
+}
+
+func mustRender(t *testing.T, in Input) Result {
+	t.Helper()
+	res, err := Render(in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	return res
+}
+
+func filePaths(b ingressbundle.Bundle) []string {
+	out := make([]string, 0, len(b.Files))
+	for _, f := range b.Files {
+		out = append(out, f.Path)
+	}
+	return out
+}
+
+// TestDeterministicSameSnapshot pins D-07: the same snapshot renders the same bytes and the same ID,
+// however its slices happen to be ordered.
+func TestDeterministicSameSnapshot(t *testing.T) {
+	a := mustRender(t, oneHostInput(3, 1))
+	b := mustRender(t, oneHostInput(3, 1))
+	if a.Bundle.ID != b.Bundle.ID {
+		t.Errorf("IDs differ between two renders: %s and %s", a.Bundle.ID, b.Bundle.ID)
+	}
+	if !slices.Equal(filePaths(a.Bundle), filePaths(b.Bundle)) {
+		t.Fatalf("file lists differ: %v and %v", filePaths(a.Bundle), filePaths(b.Bundle))
+	}
+	for i := range a.Bundle.Files {
+		if !bytes.Equal(a.Bundle.Files[i].Data, b.Bundle.Files[i].Data) {
+			t.Errorf("%s differs between two renders", a.Bundle.Files[i].Path)
+		}
+	}
+
+	// The order the model hands its rows in does not matter either.
+	rev := oneHostInput(3, 1)
+	slices.Reverse(rev.Snapshot.Routes)
+	slices.Reverse(rev.Snapshot.Claims)
+	slices.Reverse(rev.Certs)
+	c := mustRender(t, rev)
+	if c.Bundle.ID != a.Bundle.ID {
+		t.Errorf("reversing the input order changed the ID: %s and %s", c.Bundle.ID, a.Bundle.ID)
+	}
+	if !bytes.Equal(dynamicBytes(t, c), dynamicBytes(t, a)) {
+		t.Error("reversing the input order changed the dynamic file")
+	}
+}
+
+// TestIDFollowsContentNotVersion pins D-06 through Render: a version moves the Version and never the
+// ID; a certificate or a route changes the ID.
+func TestIDFollowsContentNotVersion(t *testing.T) {
+	base := mustRender(t, oneHostInput(3, 1))
+
+	moved := mustRender(t, oneHostInput(9, 5))
+	if moved.Bundle.ID != base.Bundle.ID {
+		t.Errorf("a version change moved the ID: %s and %s", moved.Bundle.ID, base.Bundle.ID)
+	}
+	if moved.Bundle.Version == base.Bundle.Version {
+		t.Errorf("versions did not follow the input: %+v", moved.Bundle.Version)
+	}
+	if want := (ingressbundle.Version{Config: 9, Certs: 5}); moved.Bundle.Version != want {
+		t.Errorf("version = %+v, want %+v", moved.Bundle.Version, want)
+	}
+	own := oneHostInput(3, 1)
+	own.OwnVersion = 4
+	if got := mustRender(t, own); got.Bundle.ID != base.Bundle.ID || got.Bundle.Version.Own != 4 {
+		t.Errorf("OwnVersion 4: id %s (want %s), version %+v", got.Bundle.ID, base.Bundle.ID, got.Bundle.Version)
+	}
+
+	newCert := oneHostInput(3, 1)
+	newCert.Certs = []HostCert{{
+		Hostname: "app.example.com",
+		ChainPEM: []byte("-----BEGIN CERTIFICATE-----\nQkJC\n-----END CERTIFICATE-----\n"),
+		KeyPEM:   keyA,
+	}}
+	rotated := mustRender(t, newCert)
+	if rotated.Bundle.ID == base.Bundle.ID {
+		t.Error("a different certificate kept the ID")
+	}
+	if slices.Equal(filePaths(rotated.Bundle), filePaths(base.Bundle)) {
+		t.Errorf("a different certificate kept the file names: %v", filePaths(rotated.Bundle))
+	}
+
+	newPort := oneHostInput(3, 1)
+	newPort.Snapshot.Routes[1].Port = 9090
+	if got := mustRender(t, newPort); got.Bundle.ID == base.Bundle.ID {
+		t.Error("a different port kept the ID")
+	}
+}
+
+// TestSharedCertificatePairIsWrittenOnce pins D-02: two hostnames on one identical pair give one
+// certificate file, one key file and one tls.certificates entry.
+func TestSharedCertificatePairIsWrittenOnce(t *testing.T) {
+	in := Input{
+		Snapshot: ingress.Snapshot{
+			Settings: ingress.Settings{Exists: true, Enabled: true, ConfigVersion: 1},
+			Claims:   []ingress.SnapshotClaim{claimFor("app.example.com"), claimFor("www.example.com")},
+			Routes: []ingress.SnapshotRoute{
+				swarmRoute("app.example.com", "/", "shop", "web", 8080),
+				swarmRoute("www.example.com", "/", "shop", "web", 8080),
+			},
+		},
+		Certs: []HostCert{
+			{Hostname: "app.example.com", ChainPEM: chainA, KeyPEM: keyA},
+			{Hostname: "www.example.com", ChainPEM: chainA, KeyPEM: keyA},
+		},
+	}
+	res := mustRender(t, in)
+
+	var crts, keys int
+	for _, p := range filePaths(res.Bundle) {
+		switch {
+		case strings.HasSuffix(p, ".crt"):
+			crts++
+		case strings.HasSuffix(p, ".key"):
+			keys++
+		}
+	}
+	if crts != 1 || keys != 1 {
+		t.Errorf("certificate files = %d, key files = %d, want 1 and 1 (%v)", crts, keys, filePaths(res.Bundle))
+	}
+	_, doc := dynamicOf(t, res.Bundle)
+	if certs, ok := dig(t, doc, "tls", "certificates").([]any); !ok || len(certs) != 1 {
+		t.Errorf("tls.certificates = %v, want one entry", certs)
+	}
+	if routers, ok := dig(t, doc, "http", "routers").(map[string]any); !ok || len(routers) != 2 {
+		t.Errorf("routers = %v, want two", routers)
+	}
+	if services, ok := dig(t, doc, "http", "services").(map[string]any); !ok || len(services) != 1 {
+		t.Errorf("services = %v, want one shared service", services)
 	}
 }
