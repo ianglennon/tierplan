@@ -203,7 +203,8 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 		case agents.NodeNotListed:
 			return EnrolResult{}, &RefuseError{
 				Code: ingresswire.RefuseNodeNotInSwarm, AuditReason: ingresswire.RefuseNodeNotInSwarm,
-				Detail: "this node is not in the swarm's node list as TierPlan last read it; a node that just joined enrols by itself once TierPlan reads the list again, within about a minute",
+				Detail:     "this node is not in the swarm's node list as TierPlan last read it; a node that just joined enrols by itself once TierPlan reads the list again, within about a minute",
+				RetryAfter: nodeUnverifiedRetryAfter,
 			}
 		default:
 			return EnrolResult{}, &RefuseError{
