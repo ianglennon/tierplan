@@ -4,6 +4,8 @@
 package ingressrender
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -216,4 +218,81 @@ func toStrings(t *testing.T, v any) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// TestRuleAndPriority pins D-15 and D-16: the segment-exact rule and the explicit priority.
+func TestRuleAndPriority(t *testing.T) {
+	long := "/" + strings.Repeat("a", 254) // the longest prefix the parser accepts, 255 bytes
+	rules := []struct{ host, prefix, want string }{
+		{"h", "/", "Host(`h`)"},
+		{"h", "/api", "Host(`h`) && (Path(`/api`) || PathPrefix(`/api/`))"},
+		{"app.example.com", "/api/v2", "Host(`app.example.com`) && (Path(`/api/v2`) || PathPrefix(`/api/v2/`))"},
+	}
+	for _, r := range rules {
+		if got := Rule(r.host, r.prefix); got != r.want {
+			t.Errorf("Rule(%q, %q) = %q, want %q", r.host, r.prefix, got, r.want)
+		}
+	}
+	priorities := []struct {
+		prefix string
+		want   int
+	}{
+		{"/", 1},
+		{"/api", 1004},
+		{"/api/v2", 2007},
+		{"/apiary", 1007},
+		{"/api/v2x", 2008},
+		{long, 1255},
+		{"/a/b/c", 3006},
+	}
+	for _, p := range priorities {
+		if got := Priority(p.prefix); got != p.want {
+			t.Errorf("Priority(%q) = %d, want %d", p.prefix, got, p.want)
+		}
+	}
+	// A deeper prefix always beats a shallower one, even a longer shallow one.
+	if Priority("/a/b") <= Priority(long) {
+		t.Errorf("Priority(/a/b) = %d does not beat a 255-byte one-segment prefix (%d)", Priority("/a/b"), Priority(long))
+	}
+}
+
+// TestEveryRouterIsOnWebsecureOnly pins PROH-21-03: no rendered router is ever on the web entry point.
+func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(goldenDir, "*", "tierplan.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no golden dynamic file was found")
+	}
+	routers := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f) //nolint:gosec // G304: a golden file under testdata
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		httpSec, ok := doc["http"].(map[string]any)
+		if !ok {
+			continue // the empty bundle has no routers
+		}
+		rs, ok := httpSec["routers"].(map[string]any)
+		if !ok {
+			t.Errorf("%s: http without routers", f)
+			continue
+		}
+		for name, r := range rs {
+			routers++
+			eps := toStrings(t, dig(t, r, "entryPoints"))
+			if !slices.Equal(eps, []string{"websecure"}) {
+				t.Errorf("%s: router %s entryPoints = %v, want [websecure] only", f, name, eps)
+			}
+		}
+	}
+	if routers == 0 {
+		t.Fatal("no router was checked")
+	}
 }
