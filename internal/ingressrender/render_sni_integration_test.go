@@ -5,6 +5,7 @@
 package ingressrender
 
 import (
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -179,4 +180,91 @@ func TestTraefikEmptyBundleFailsClosed(t *testing.T) {
 // emptyInput is an enabled environment with no claim and no route.
 func emptyInput() Input {
 	return Input{Snapshot: ingress.Snapshot{Settings: ingress.Settings{Exists: true, Enabled: true, ConfigVersion: 1}}}
+}
+
+// TestTraefikRedirect proves RTE-02 on rendered bundles: the web entrypoint answers every plain-HTTP
+// request with a permanent redirect to https, the path and the query kept verbatim and a port in the
+// Host dropped, for a routed hostname, an unrouted one, and with the empty bundle applied.
+func TestTraefikRedirect(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	env := traefiktest.NewEnv(t)
+	ca := traefiktest.NewCA(t)
+
+	res := mustRender(t, Input{
+		Snapshot:     snapshotOf(swarmRoute(rAppHost, "/", "shop", "web", 80)),
+		Certs:        servable(t, ca, rAppHost),
+		CertsVersion: 1,
+	})
+	s := startRendered(t, env, ca, res.Bundle)
+	// Not needed for the redirect itself, which is an entrypoint's, but it shows the bundle is loaded
+	// so the redirect is observed over the rendered configuration.
+	s.awaitHandshake(t, rAppHost)
+
+	requireRedirects := func(t *testing.T, when string) {
+		t.Helper()
+		for _, tc := range []struct{ name, host, target, want string }{
+			{"path and query kept verbatim", rAppHost, "/p/q?x=1&a=2", "https://app.test.local/p/q?x=1&a=2"},
+			{"a port in the Host is dropped", rAppHost + ":18080", "/p", "https://app.test.local/p"},
+			{"a hostname with no route", "other.test.local", "/p", "https://other.test.local/p"},
+		} {
+			status, location := s.tr.HTTPGet(t, tc.host, tc.target)
+			if status != http.StatusMovedPermanently || location != tc.want {
+				t.Errorf("%s, %s: GET http://%s%s answered %d Location %q, want 301 %q", when, tc.name, tc.host, tc.target, status, location, tc.want)
+			}
+		}
+	}
+	requireRedirects(t, "with the route")
+
+	// The empty bundle replaces the route; the redirect never depended on it.
+	applyBundle(t, env, mustRender(t, emptyInput()).Bundle)
+	s.awaitRefusal(t, rAppHost)
+	requireRedirects(t, "with the empty bundle")
+}
+
+// TestTraefikRemovedRouteStopsBeingServed proves PROH-21-05 on the data plane: a route removed by a
+// re-render stops being served once the proxy reloads (its path falls to the hostname's / route), and
+// a hostname removed entirely fails the handshake. Both are observed by a bounded poll (D-21).
+func TestTraefikRemovedRouteStopsBeingServed(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	env := traefiktest.NewEnv(t)
+	ca := traefiktest.NewCA(t)
+	const gone = "gone.test.local"
+	env.StartWhoami(t, traefiktest.WhoamiOptions{Alias: "shop_root", Hostname: "root"})
+	env.StartWhoami(t, traefiktest.WhoamiOptions{Alias: "shop_shop", Hostname: "shop"})
+
+	root := swarmRoute(rAppHost, "/", "shop", "root", 80)
+	shop := swarmRoute(rAppHost, "/shop", "shop", "shop", 80)
+	goneRoute := swarmRoute(gone, "/", "shop", "root", 80)
+	certs := servable(t, ca, rAppHost, gone)
+
+	before := mustRender(t, Input{Snapshot: snapshotOf(root, shop, goneRoute), Certs: certs, CertsVersion: 1})
+	s := startRendered(t, env, ca, before.Bundle)
+	s.awaitHandshake(t, gone)
+	s.awaitHandshake(t, rAppHost)
+	if status, body, _ := s.tr.Get(t, ca.Pool(), rAppHost, "/shop", nil); status != http.StatusOK || bodyHostname(body) != "shop" {
+		t.Fatalf("before the removal GET /shop answered %d from %q, want 200 from the backend shop; body:\n%s", status, bodyHostname(body), body)
+	}
+
+	after := mustRender(t, Input{Snapshot: snapshotOf(root), Certs: certs[:1], CertsVersion: 2})
+	if after.Bundle.ID == before.Bundle.ID {
+		t.Fatalf("removing a route and a hostname left the bundle ID %s unchanged", after.Bundle.ID)
+	}
+	applyBundle(t, env, after.Bundle)
+
+	testsupport.Poll(t, testsupport.Deadline, "/shop to fall to the root route after the re-render", func() (bool, string) { // testsupport: external, Traefik reloads its file provider asynchronously
+		status, body, _, err := s.tr.TryGet(ca.Pool(), rAppHost, "/shop", nil)
+		if err != nil {
+			return false, err.Error()
+		}
+		return status == http.StatusOK && bodyHostname(body) == "root", "answered " + http.StatusText(status) + " from " + bodyHostname(body)
+	})
+	testsupport.Poll(t, testsupport.Deadline, gone+" to fail the handshake after the re-render", func() (bool, string) { // testsupport: external, the same reload
+		_, err := s.tr.Handshake(gone, ca.Pool())
+		if err == nil {
+			return false, "the handshake still succeeds"
+		}
+		return strings.Contains(err.Error(), unrecognizedName), err.Error()
+	})
+	_, err := s.tr.Handshake(gone, ca.Pool())
+	requireRefused(t, "the removed hostname "+gone, err)
 }
