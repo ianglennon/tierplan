@@ -85,6 +85,12 @@ type Reconciler struct {
 
 	mu   sync.Mutex
 	envs map[string]*envState
+
+	// fmu guards the failure book: the environments whose latest render failed, and the failures already logged for
+	// each, so one that repeats is said once.
+	fmu      sync.Mutex
+	failures map[string]Failure
+	logged   map[string]map[string]struct{}
 }
 
 // New returns a Reconciler.
@@ -104,6 +110,7 @@ func New(d Deps) *Reconciler {
 	return &Reconciler{
 		clock: clock, log: log.With("component", "ingressrecon"), d: d, render: render,
 		changes: ingress.NewNotifier(), envs: map[string]*envState{},
+		failures: map[string]Failure{}, logged: map[string]map[string]struct{}{},
 	}
 }
 
@@ -139,16 +146,31 @@ func (r *Reconciler) Skipped(envID string) []ingressrender.Skipped {
 	return slices.Clone(s.skipped)
 }
 
-// Reconcile renders one environment and publishes the bundle when its ID is new. An error leaves the
-// stored bundle untouched.
+// Reconcile renders one environment and publishes the bundle when its ID is new. An error leaves the stored
+// bundle, its version pair and its skipped list untouched (D-20, PROH-21-06): the environment's nodes keep the last
+// good configuration, and the error is recorded as the environment's Failure and logged once. A render that
+// succeeds clears the Failure. A render cut short by ctx is neither: it says nothing about the data.
 func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 	s := r.state(envID)
 	s.run.Lock()
 	defer s.run.Unlock()
 
+	if err := r.reconcile(ctx, envID, s); err != nil {
+		if ctx.Err() == nil {
+			r.recordFailure(envID, err, r.clock.Now())
+		}
+		return err
+	}
+	r.clearFailure(envID)
+	return nil
+}
+
+// reconcile is one render of the environment, with the environment's run lock held. It writes the stored bundle
+// only after the render succeeded.
+func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) error {
 	snap, err := r.d.Model.Snapshot(ctx, envID)
 	if err != nil {
-		return err
+		return &readError{err}
 	}
 	if !snap.Settings.Exists && len(snap.Claims) == 0 {
 		// No ingress row and no claim: the environment was removed (its row and claims cascaded away) or
@@ -162,7 +184,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 	}
 	certsVersion, serving, err := r.d.Certs.Serving(ctx, envID, hosts, r.clock.Now())
 	if err != nil {
-		return err
+		return &readError{err}
 	}
 	certs := make([]ingressrender.HostCert, 0, len(serving))
 	for _, c := range serving {
@@ -331,14 +353,13 @@ func (r *Reconciler) union(versions []ingress.EnvVersion) []string {
 	return slices.Compact(out)
 }
 
-// reconcileEach reconciles each environment, logging a failure and going on to the next.
+// reconcileEach reconciles each environment and goes on to the next after a failure. Reconcile records and logs a
+// failure itself, once per distinct cause, so a failure that the poll meets every two seconds is not logged here.
 func (r *Reconciler) reconcileEach(ctx context.Context, envIDs []string) {
 	for _, envID := range envIDs {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := r.Reconcile(ctx, envID); err != nil {
-			r.log.Error("the ingress reconciler could not render an environment", "env_id", envID, "error", err)
-		}
+		_ = r.Reconcile(ctx, envID)
 	}
 }
