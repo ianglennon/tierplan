@@ -1,0 +1,40 @@
+tls:
+  options:
+    default:
+      sniStrict: true
+      minVersion: VersionTLS12
+  certificates:
+    - certFile: /var/lib/tierplan-ingress/certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt
+      keyFile: /var/lib/tierplan-ingress/certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key
+http:
+  routers:
+    r-7d807883dd9d:
+      rule: Host(`app.example.com`) && (Path(`/api/v2`) || PathPrefix(`/api/v2/`))
+      entryPoints:
+        - websecure
+      service: s-88ab643baf77
+      priority: 2007
+      tls: {}
+    r-5237ab02d99e:
+      rule: Host(`app.example.com`) && (Path(`/api`) || PathPrefix(`/api/`))
+      entryPoints:
+        - websecure
+      service: s-88ab643baf77
+      priority: 1004
+      tls: {}
+    r-d0698b37ca62:
+      rule: Host(`app.example.com`)
+      entryPoints:
+        - websecure
+      service: s-fa45dadb5357
+      priority: 1
+      tls: {}
+  services:
+    s-88ab643baf77:
+      loadBalancer:
+        servers:
+          - url: http://shop_api:9000
+    s-fa45dadb5357:
+      loadBalancer:
+        servers:
+          - url: http://shop_web:8080

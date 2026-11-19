@@ -44,6 +44,59 @@ func goldenScenarios() map[string]Input {
 			Certs:        []HostCert{{Hostname: "app.example.com", ChainPEM: chainA, KeyPEM: keyA}},
 			CertsVersion: 2,
 		},
+		// One host with nested prefixes: the priorities are 1, 1004 and 2007, the longest segment prefix wins (D-16).
+		"overlap": {
+			Snapshot: ingress.Snapshot{
+				Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 5},
+				Claims:   []ingress.SnapshotClaim{claimFor("app.example.com")},
+				Routes: []ingress.SnapshotRoute{
+					swarmRoute("app.example.com", "/api/v2", "shop", "api", 9000),
+					swarmRoute("app.example.com", "/", "shop", "web", 8080),
+					swarmRoute("app.example.com", "/api", "shop", "api", 9000),
+				},
+			},
+			Certs:        []HostCert{{Hostname: "app.example.com", ChainPEM: chainA, KeyPEM: keyA}},
+			CertsVersion: 2,
+		},
+		// A host whose certificate is not ready is left out whole (two routes, both skipped) and the ready
+		// host beside it is rendered alone (D-10).
+		"not-ready": {
+			Snapshot: ingress.Snapshot{
+				Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 6},
+				Claims:   []ingress.SnapshotClaim{claimFor("pending.example.com"), claimFor("ready.example.com")},
+				Routes: []ingress.SnapshotRoute{
+					swarmRoute("pending.example.com", "/", "shop", "web", 8080),
+					swarmRoute("pending.example.com", "/api", "shop", "api", 9000),
+					swarmRoute("ready.example.com", "/", "shop", "web", 8080),
+				},
+			},
+			Certs: []HostCert{
+				{Hostname: "pending.example.com", Reason: SkipCertificateNotReady},
+				{Hostname: "ready.example.com", ChainPEM: chainA, KeyPEM: keyA},
+			},
+			CertsVersion: 3,
+		},
+		// A staging certificate is reported by Serving as certificate_not_ready, so it never serves: with
+		// this the only host, the dynamic file is the empty bundle's (PROH-21-01).
+		"staging": {
+			Snapshot: ingress.Snapshot{
+				Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 7},
+				Claims:   []ingress.SnapshotClaim{claimFor("staging.example.com")},
+				Routes:   []ingress.SnapshotRoute{swarmRoute("staging.example.com", "/", "shop", "web", 8080)},
+			},
+			Certs:        []HostCert{{Hostname: "staging.example.com", Reason: SkipCertificateNotReady}},
+			CertsVersion: 4,
+		},
+		// A standalone host has a ready certificate and still renders nothing until Phase 25 (D-12).
+		"standalone-skipped": {
+			Snapshot: ingress.Snapshot{
+				Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 8},
+				Claims:   []ingress.SnapshotClaim{standaloneClaim("old.example.com")},
+				Routes:   []ingress.SnapshotRoute{standaloneRoute("old.example.com", "/", "legacy", "app", 80)},
+			},
+			Certs:        []HostCert{{Hostname: "old.example.com", ChainPEM: chainA, KeyPEM: keyA}},
+			CertsVersion: 5,
+		},
 	}
 }
 

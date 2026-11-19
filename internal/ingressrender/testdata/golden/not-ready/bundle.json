@@ -1,0 +1,58 @@
+{
+  "id": "df0211517a1134c938091de4b2507d9b5e8fe1b561fdc4342a21d9c9135faced",
+  "schema": 1,
+  "version": {
+    "config": 6,
+    "certs": 3,
+    "own": 0
+  },
+  "manifest": {
+    "schema": 1,
+    "files": [
+      {
+        "path": "certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key",
+        "sha256": "50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d",
+        "mode": 384,
+        "step": 1
+      },
+      {
+        "path": "certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt",
+        "sha256": "6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98",
+        "mode": 420,
+        "step": 1
+      },
+      {
+        "path": "dynamic/tierplan.yml",
+        "sha256": "e5fc06c0c28cfb77e86daa72647b0f17dcd2406d3a4c38367f8ce0176acfc763",
+        "mode": 420,
+        "step": 2
+      }
+    ],
+    "routes": [
+      {
+        "router": "r-907f8a9b432b",
+        "hostname": "ready.example.com",
+        "pathPrefix": "/",
+        "stack": "shop",
+        "service": "web",
+        "hash": "907f8a9b432b951a7c1f030676924c98d16b1d80a2e4078e764b9c2ef0d68276"
+      }
+    ]
+  },
+  "skipped": [
+    {
+      "hostname": "pending.example.com",
+      "pathPrefix": "/",
+      "stack": "shop",
+      "service": "web",
+      "reason": "certificate_not_ready"
+    },
+    {
+      "hostname": "pending.example.com",
+      "pathPrefix": "/api",
+      "stack": "shop",
+      "service": "api",
+      "reason": "certificate_not_ready"
+    }
+  ]
+}
