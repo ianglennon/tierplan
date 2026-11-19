@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -66,10 +67,16 @@ const (
 // Service is the ingress node service: the join token of each environment and the enrolment of nodes with it.
 // It is a structural copy of agents.Service with its own token kind and table.
 type Service struct {
-	st    *store.Store
-	aud   *audit.Writer
-	now   func() time.Time
-	nodes agents.NodeLists
+	st     *store.Store
+	aud    *audit.Writer
+	now    func() time.Time
+	nodes  agents.NodeLists
+	kicker Kicker
+
+	// seen is when each node's last_seen_at was last written, so a heartbeat costs the single writer at most
+	// one write a minute per node (TouchLastSeen).
+	seenMu sync.Mutex
+	seen   map[string]time.Time
 }
 
 // NewService returns the service. now defaults to time.Now.
@@ -77,7 +84,7 @@ func NewService(st *store.Store, w *audit.Writer, now func() time.Time) *Service
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{st: st, aud: w, now: now}
+	return &Service{st: st, aud: w, now: now, seen: map[string]time.Time{}}
 }
 
 // WithNodeLists tells the service where the node lists of swarm environments are, so an enrolment checks the
