@@ -5,11 +5,15 @@ package ingressstore
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // seedSwarmStack inserts a swarm stack in an environment.
@@ -257,5 +261,103 @@ func TestSnapshotReadsSettingsFirst(t *testing.T) {
 	}
 	if set != snap.Settings {
 		t.Fatalf("Settings = %+v, differs from the Snapshot's %+v", set, snap.Settings)
+	}
+}
+
+func TestVersionsListsEveryEnvironment(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	// Created out of id order, so the order Versions returns is the query's.
+	seedEnv(t, st, "env-b", "Beta")
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-c", "Gamma") // never has an ingress change, so no ingress_env row
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	seedStack(t, st, "stack-b", "env-b", "web-b")
+	registerDomain(t, s, "env-a", "a.example.com")
+	registerDomain(t, s, "env-b", "b.example.com")
+	claim(t, s, "env-b", "stack-b", "app.b.example.com")
+	claim(t, s, "env-a", "stack-a", "app.a.example.com")
+	replaceRoutes(t, s, "env-a", "stack-a") // a second change to env-a only
+	if _, err := st.Write.Exec(`UPDATE ingress_env SET certs_version = 7 WHERE env_id = 'env-b'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Versions(ctx)
+	if err != nil {
+		t.Fatalf("Versions: %v", err)
+	}
+	want := []ingress.EnvVersion{
+		{EnvID: "env-a", ConfigVersion: configVersion(t, st, "env-a"), CertsVersion: 0},
+		{EnvID: "env-b", ConfigVersion: configVersion(t, st, "env-b"), CertsVersion: 7},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Versions = %+v, want %+v", got, want)
+	}
+	if want[0].ConfigVersion <= want[1].ConfigVersion {
+		t.Fatalf("env-a has had more changes than env-b, so its version %d should be higher than %d", want[0].ConfigVersion, want[1].ConfigVersion)
+	}
+}
+
+// Pitfall 4: a claim deleted because its stack row was deleted raises the environment's config_version
+// through the ingress_hostnames_cascade trigger, and no Notify is called until a later phase wires one.
+func TestVersionsSeesACascadeWithoutNotify(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.New(t)
+	v, err := vault.LoadOrCreate("", t.TempDir(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("vault: %v", err)
+	}
+	n := ingress.NewNotifier()
+	s := New(Deps{St: st, Vault: v, Now: func() time.Time { return fixedNow }, Notifier: n})
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "example.com")
+	claim(t, s, "env-a", "stack-a", "app.example.com")
+
+	before, err := s.Versions(ctx)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("Versions before = %+v, %v; want one environment", before, err)
+	}
+	sub := n.Subscribe()
+	defer sub.Close()
+
+	if _, err := st.Write.Exec(`DELETE FROM stacks WHERE id = 'stack-a'`); err != nil {
+		t.Fatalf("delete the stack: %v", err)
+	}
+	if c := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames`) + count(t, st, `SELECT COUNT(*) FROM ingress_routes`); c != 0 {
+		t.Fatalf("%d claim and route rows remain after the stack was deleted, want none", c)
+	}
+	after, err := s.Versions(ctx)
+	if err != nil {
+		t.Fatalf("Versions after: %v", err)
+	}
+	if len(after) != 1 || after[0].ConfigVersion != before[0].ConfigVersion+1 || after[0].CertsVersion != before[0].CertsVersion {
+		t.Fatalf("Versions after = %+v, want config_version %d and certs_version unchanged", after, before[0].ConfigVersion+1)
+	}
+	if p := sub.Pending(); len(p) != 0 {
+		t.Fatalf("Pending = %v, want none: a cascade announces nothing", p)
+	}
+}
+
+// A certificate write moves certs_version alone.
+func TestVersionsSeesACertsVersionBump(t *testing.T) {
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "example.com")
+	claim(t, s, "env-a", "stack-a", "app.example.com")
+	before, err := s.Versions(context.Background())
+	if err != nil || len(before) != 1 {
+		t.Fatalf("Versions before = %+v, %v", before, err)
+	}
+	if _, err := st.Write.Exec(`UPDATE ingress_env SET certs_version = certs_version + 1 WHERE env_id = 'env-a'`); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Versions(context.Background())
+	if err != nil || len(after) != 1 {
+		t.Fatalf("Versions after = %+v, %v", after, err)
+	}
+	if after[0].CertsVersion != before[0].CertsVersion+1 || after[0].ConfigVersion != before[0].ConfigVersion {
+		t.Fatalf("Versions = %+v then %+v, want only certs_version to move", before, after)
 	}
 }
