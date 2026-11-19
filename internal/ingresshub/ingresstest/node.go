@@ -335,6 +335,18 @@ func (c *Conn) Hello(t testing.TB, schemas []int, appliedID string) {
 // ingresswire.DecodeBundle against the instance ID this connection pinned.
 func (c *Conn) NextBundle(t testing.TB) ingressbundle.Bundle {
 	t.Helper()
+	b, err := c.TryNextBundle(t)
+	if err != nil {
+		t.Fatalf("ingresstest: decode the bundle: %v", err)
+	}
+	return b
+}
+
+// TryNextBundle is NextBundle for a test that expects the decode to fail: it returns the error of
+// ingresswire.DecodeBundle (an ErrInstanceMismatch, say) instead of failing the test. A read that fails, or a
+// message that is not a binary frame, still fails the test.
+func (c *Conn) TryNextBundle(t testing.TB) (ingressbundle.Bundle, error) {
+	t.Helper()
 	typ, data, err := c.WS.Read(testsupport.Context(t))
 	if err != nil {
 		t.Fatalf("ingresstest: read a bundle: %v", err)
@@ -342,11 +354,17 @@ func (c *Conn) NextBundle(t testing.TB) ingressbundle.Bundle {
 	if typ != websocket.MessageBinary {
 		t.Fatalf("ingresstest: the next message is a text frame, not a bundle: %s", data)
 	}
-	b, err := ingresswire.DecodeBundle(data, c.pinned)
+	return ingresswire.DecodeBundle(data, c.pinned)
+}
+
+// NextRaw reads the next message as it came off the socket, whatever it is, with no decoding.
+func (c *Conn) NextRaw(t testing.TB) (websocket.MessageType, []byte) {
+	t.Helper()
+	typ, data, err := c.WS.Read(testsupport.Context(t))
 	if err != nil {
-		t.Fatalf("ingresstest: decode the bundle: %v", err)
+		t.Fatalf("ingresstest: read a message: %v", err)
 	}
-	return b
+	return typ, data
 }
 
 // AwaitClose reads until the connection ends and returns the status and reason the server closed it with. A
