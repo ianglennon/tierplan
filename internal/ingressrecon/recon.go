@@ -274,9 +274,10 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
-// renderAll renders every environment Versions lists and every environment the reconciler holds a bundle for
-// (one that was removed is in the second set only, and its render drops the bundle). A read error is logged and
-// the held environments are still rendered; the notifier and the next poll bring the others in.
+// renderAll renders every environment Versions lists and every environment the reconciler holds a bundle or a
+// failure for (one that was removed is in the second set only, and its render drops the bundle and the failure). A
+// read error is logged and the tracked environments are still rendered; the notifier and the next poll bring the
+// others in.
 func (r *Reconciler) renderAll(ctx context.Context) {
 	versions, err := r.d.Model.Versions(ctx)
 	if err != nil {
@@ -286,7 +287,7 @@ func (r *Reconciler) renderAll(ctx context.Context) {
 }
 
 // pollVersions reconciles the environments whose version pair differs from the pair their bundle was last
-// rendered at, those with no bundle yet, and those holding a bundle that Versions no longer lists. A read error
+// rendered at, those with no bundle yet, and those holding a bundle or a failure that Versions no longer lists. A read error
 // is logged and the caller re-arms the timer, so a failing read is never a tight loop (T-21-38).
 func (r *Reconciler) pollVersions(ctx context.Context) {
 	versions, err := r.d.Model.Versions(ctx)
@@ -302,7 +303,7 @@ func (r *Reconciler) pollVersions(ctx context.Context) {
 			due = append(due, v.EnvID)
 		}
 	}
-	for _, envID := range r.held() {
+	for _, envID := range r.tracked() {
 		if _, ok := listed[envID]; !ok {
 			due = append(due, envID)
 		}
@@ -323,8 +324,10 @@ func (r *Reconciler) moved(v ingress.EnvVersion) bool {
 	return !s.have || s.config != v.ConfigVersion || s.certs != v.CertsVersion
 }
 
-// held lists the environments the reconciler holds a bundle for.
-func (r *Reconciler) held() []string {
+// tracked lists the environments the reconciler holds a bundle or a failure for. An environment whose renders have
+// only ever failed holds no bundle, so without its failure it would never be visited again once Versions stops
+// listing it, and the failure would stand in Failures until a restart (phase 21 review, WR-01).
+func (r *Reconciler) tracked() []string {
 	r.mu.Lock()
 	states := make(map[string]*envState, len(r.envs))
 	for id, s := range r.envs {
@@ -339,13 +342,18 @@ func (r *Reconciler) held() []string {
 		}
 		s.mu.Unlock()
 	}
+	r.fmu.Lock()
+	for id := range r.failures {
+		out = append(out, id)
+	}
+	r.fmu.Unlock()
 	slices.Sort(out)
-	return out
+	return slices.Compact(out)
 }
 
-// union is the environments in versions and those holding a bundle, each once.
+// union is the environments in versions and those holding a bundle or a failure, each once.
 func (r *Reconciler) union(versions []ingress.EnvVersion) []string {
-	out := r.held()
+	out := r.tracked()
 	for _, v := range versions {
 		out = append(out, v.EnvID)
 	}
