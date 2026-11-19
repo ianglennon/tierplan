@@ -48,6 +48,10 @@ const (
 	// detailWrongTokenKind names both token kinds, since the person holding an agent token has only picked the
 	// wrong command.
 	detailWrongTokenKind = "this is an agent join token; an ingress node needs the environment's ingress join token"
+	// detailNodeAlreadyEnrolled and detailNodeRevoked tell the holder of a valid token what to ask an
+	// administrator for (D-05, D-20).
+	detailNodeAlreadyEnrolled = "this node is already enrolled; an administrator must revoke the old enrolment first"
+	detailNodeRevoked         = "an administrator revoked this node; it can enrol again only after an administrator allows it"
 
 	// Kinds and types of an environment, as the environments table stores them.
 	kindAgent         = "agent"
@@ -193,6 +197,19 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 		}
 	}
 
+	// (5b) The block of a revoke (D-20) and the live enrolment of the node, before the node list is asked: a
+	// swarm node is the node ID it reports, a standalone host the environment's one slot (a NULL swarm node
+	// ID). A swarm node that reports no ID has no row to match and is refused node_unverified below. The
+	// pre-check on the live row only spares the list read; the partial unique index decides under a race, in
+	// the insert (7).
+	if !swarm || req.SwarmNodeID != "" {
+		if refuse, err := s.checkNodeSlot(ctx, envID, swarm, req.SwarmNodeID); err != nil {
+			return EnrolResult{}, err
+		} else if refuse != nil {
+			return EnrolResult{}, refuse
+		}
+	}
+
 	// (6) A swarm node must be in the node list a manager last gave. The node ID is only the node's own claim,
 	// so no fresh list that lists it is no enrolment (D-22), where the agent would accept it.
 	nodeID := sql.NullString{}
@@ -234,7 +251,7 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return EnrolResult{}, &RefuseError{
 				Code: ingresswire.RefuseNodeAlreadyEnrolled, AuditReason: ingresswire.RefuseNodeAlreadyEnrolled,
-				Detail: "this node already has an ingress node record; revoke it in TierPlan before it enrols again",
+				Detail: detailNodeAlreadyEnrolled,
 			}
 		}
 		return EnrolResult{}, fmt.Errorf("insert the ingress node: %w", err)
@@ -267,4 +284,39 @@ func cleanName(s string) string {
 		s = string([]rune(s)[:maxNameLen])
 	}
 	return s
+}
+
+// checkNodeSlot refuses an enrolment for a node an administrator revoked with the block (node_revoked) or one that
+// has an active row already (node_already_enrolled), and returns nil for both a free slot and any other state.
+// The error is a database failure, not a refusal.
+func (s *Service) checkNodeSlot(ctx context.Context, envID string, swarm bool, swarmNodeID string) (*RefuseError, error) {
+	var blocked, active int64
+	var err error
+	if swarm {
+		node := sql.NullString{String: swarmNodeID, Valid: true}
+		if blocked, err = s.st.RQ.CountBlockedIngressSwarmNode(ctx, sqlc.CountBlockedIngressSwarmNodeParams{EnvID: envID, SwarmNodeID: node}); err != nil {
+			return nil, fmt.Errorf("look for a block on the node: %w", err)
+		}
+		if blocked == 0 {
+			if active, err = s.st.RQ.CountActiveIngressSwarmNode(ctx, sqlc.CountActiveIngressSwarmNodeParams{EnvID: envID, SwarmNodeID: node}); err != nil {
+				return nil, fmt.Errorf("look for a live enrolment of the node: %w", err)
+			}
+		}
+	} else {
+		if blocked, err = s.st.RQ.CountBlockedIngressStandalone(ctx, envID); err != nil {
+			return nil, fmt.Errorf("look for a block on the node: %w", err)
+		}
+		if blocked == 0 {
+			if active, err = s.st.RQ.CountActiveIngressStandalone(ctx, envID); err != nil {
+				return nil, fmt.Errorf("look for a live enrolment of the node: %w", err)
+			}
+		}
+	}
+	switch {
+	case blocked > 0:
+		return &RefuseError{Code: ingresswire.RefuseNodeRevoked, AuditReason: ingresswire.RefuseNodeRevoked, Detail: detailNodeRevoked}, nil
+	case active > 0:
+		return &RefuseError{Code: ingresswire.RefuseNodeAlreadyEnrolled, AuditReason: ingresswire.RefuseNodeAlreadyEnrolled, Detail: detailNodeAlreadyEnrolled}, nil
+	}
+	return nil, nil
 }
