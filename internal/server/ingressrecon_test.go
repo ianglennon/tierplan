@@ -85,3 +85,24 @@ func TestServerStartsTheIngressReconciler(t *testing.T) {
 		t.Errorf("failures = %+v, want none", f)
 	}
 }
+
+// Phase 21, D-19: Close stops the reconciler with the other background goroutines. Close waits for them, so it returns
+// only once the reconciler's Run has returned on the ended background context.
+func TestServerCloseStopsTheReconciler(t *testing.T) {
+	ctx := testsupport.Context(t)
+	dir := filepath.Join(t.TempDir(), "data")
+	clock := acmetest.NewClock(time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC))
+	srv, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler), WithACMEClock(clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.ingressRecon == nil {
+		_ = srv.Close()
+		t.Fatal("the server built no ingress reconciler")
+	}
+	done := make(chan error, 1)
+	go func() { done <- srv.Close() }()
+	if err := testsupport.Await(t, "Close to return", done); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
