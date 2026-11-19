@@ -150,6 +150,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 	if err != nil {
 		return err
 	}
+	if !snap.Settings.Exists && len(snap.Claims) == 0 {
+		// No ingress row and no claim: the environment was removed (its row and claims cascaded away) or
+		// never had ingress. It holds no bundle (Pitfall 12).
+		r.drop(envID, s)
+		return nil
+	}
 	hosts := make([]string, 0, len(snap.Claims))
 	for _, c := range snap.Claims {
 		hosts = append(hosts, c.Hostname)
@@ -188,6 +194,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 		r.d.OnRender(envID, res.Bundle.ID, changed)
 	}
 	return nil
+}
+
+// drop forgets the environment's bundle and tells Changes, but only if there was one.
+func (r *Reconciler) drop(envID string, s *envState) {
+	s.mu.Lock()
+	existed := s.have
+	s.bundle, s.have, s.skipped, s.config, s.certs = ingressbundle.Bundle{}, false, nil, 0, 0
+	s.mu.Unlock()
+	if existed {
+		r.changes.Notify(envID)
+	}
 }
 
 // Run renders every environment, then keeps them current until ctx ends: a wake-up from the notifier arms
