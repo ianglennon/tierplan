@@ -1,0 +1,27 @@
+tls:
+  options:
+    default:
+      sniStrict: true
+      minVersion: VersionTLS12
+  certificates:
+    - certFile: /var/lib/tierplan-ingress/certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt
+      keyFile: /var/lib/tierplan-ingress/certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key
+http:
+  routers:
+    r-1e681804124c:
+      rule: Host(`secure.example.com`)
+      entryPoints:
+        - websecure
+      service: s-a00c429fe23b
+      priority: 1
+      tls: {}
+  services:
+    s-a00c429fe23b:
+      loadBalancer:
+        servers:
+          - url: https://shop_web:8443
+        serversTransport: t-user-https
+  serversTransports:
+    t-user-https:
+      insecureSkipVerify: true
+      disableHTTP2: true

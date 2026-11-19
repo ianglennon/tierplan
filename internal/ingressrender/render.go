@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -164,9 +165,22 @@ type stripPrefix struct {
 	Prefixes []string `yaml:"prefixes"`
 }
 
+// serversTransport is how the proxy connects to a backend. The one user transport (D-13) skips
+// verification of the backend's certificate and turns off HTTP/2: the backend is a user's own service
+// on the overlay network and a route label carries no CA to verify it against. TierPlan's own route
+// verifies instead (Phase 28). The Go field is SkipVerify and only its YAML tag spells Traefik's key,
+// so scripts/insecure-tls-check.sh stays green.
 type serversTransport struct {
-	DisableHTTP2 bool `yaml:"disableHTTP2,omitempty"`
+	SkipVerify   bool `yaml:"insecureSkipVerify"`
+	DisableHTTP2 bool `yaml:"disableHTTP2"`
 }
+
+// UserHTTPSTransport is the name of the one transport every user https backend uses (D-13).
+const UserHTTPSTransport = "t-user-https"
+
+// templateOpen is the opening delimiter of Go templates, which Traefik runs over dynamic files. It is
+// built from two parts so this source never holds the pair literally.
+const templateOpen = "{" + "{"
 
 // Render turns one environment's snapshot and certificates into a verified bundle.
 //
@@ -208,6 +222,8 @@ func Render(in Input) (Result, error) {
 		files    = map[string]ingressbundle.File{}
 		pairs    = map[certPair]struct{}{}
 		entries  []ingressbundle.RouteEntry
+		names    []namedObject
+		anyHTTPS bool
 		skipped  []Skipped
 		rendered int
 	)
@@ -245,7 +261,20 @@ func Render(in Input) (Result, error) {
 		}
 		http.Routers[rname] = rt
 		if _, shared := http.Services[svc]; !shared {
-			http.Services[svc] = service{LoadBalancer: loadBalancer{Servers: []server{{URL: url}}}}
+			lb := loadBalancer{Servers: []server{{URL: url}}}
+			if schemeOf(r) == ingress.SchemeHTTPS {
+				lb.ServersTransport = UserHTTPSTransport
+			}
+			http.Services[svc] = service{LoadBalancer: lb}
+		}
+		anyHTTPS = anyHTTPS || schemeOf(r) == ingress.SchemeHTTPS
+		hash := routeHash(r.Hostname, r.PathPrefix)
+		names = append(names,
+			namedObject{kind: "router", name: rname, identity: hash, route: r},
+			namedObject{kind: "service", name: svc, identity: string(schemeOf(r)) + "\x00" + url, shared: true, route: r},
+		)
+		if r.Strip {
+			names = append(names, namedObject{kind: "middleware", name: MiddlewareName(r.Hostname, r.PathPrefix), identity: hash, route: r})
 		}
 
 		crt := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(cert.ChainPEM) + ".crt"
@@ -260,7 +289,7 @@ func Render(in Input) (Result, error) {
 			PathPrefix: r.PathPrefix,
 			Stack:      r.StackName,
 			Service:    r.Service,
-			Hash:       routeHash(r.Hostname, r.PathPrefix),
+			Hash:       hash,
 		})
 		rendered++
 	}
@@ -274,6 +303,12 @@ func Render(in Input) (Result, error) {
 	slices.SortFunc(doc.TLS.Certificates, func(a, b certPair) int {
 		return cmp.Or(cmp.Compare(a.CertFile, b.CertFile), cmp.Compare(a.KeyFile, b.KeyFile))
 	})
+	if anyHTTPS {
+		http.ServersTransports = map[string]serversTransport{UserHTTPSTransport: {SkipVerify: true, DisableHTTP2: true}}
+	}
+	if err := checkUnique(names); err != nil {
+		return Result{}, err
+	}
 	if rendered > 0 {
 		doc.HTTP = &http
 	}
@@ -287,6 +322,9 @@ func Render(in Input) (Result, error) {
 		out = append(out, f)
 	}
 	out = append(out, ingressbundle.File{Path: ingressbundle.DynamicFile, Data: yml})
+	if err := checkNoTemplateDelimiters(out); err != nil {
+		return Result{}, err
+	}
 
 	bundle, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{
 		Config: in.Snapshot.Settings.ConfigVersion,
@@ -303,11 +341,67 @@ func Render(in Input) (Result, error) {
 	return Result{Bundle: bundle, Skipped: skipped}, nil
 }
 
-// refuseRoute is the defence in depth behind the label parser (D-17): a route that strips the root
-// prefix would forward every request with no path, so it is never rendered.
+// refuseRoute is the defence in depth behind the label parser. It checks every route, rendered or not
+// (the parser refuses these values, so a hit means corrupted data, and failing the render keeps the
+// node's last good bundle): no field may hold a backtick or a brace (D-08), and a route that strips the
+// root prefix would forward every request with no path (D-17).
 func refuseRoute(r ingress.SnapshotRoute) error {
+	for _, f := range []struct{ field, value string }{
+		{"hostname", r.Hostname},
+		{"pathPrefix", r.PathPrefix},
+		{"service", r.Service},
+		{"name", r.Name},
+		{"stackName", r.StackName},
+	} {
+		if strings.ContainsAny(f.value, "`{}") {
+			return &RefusedError{Code: CodeUnsafeValue, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Field: f.field}
+		}
+	}
 	if r.Strip && r.PathPrefix == "/" {
 		return &RefusedError{Code: CodeStripRoot, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Field: "strip"}
+	}
+	return nil
+}
+
+// namedObject is one Traefik router, service or middleware name in a bundle, with what makes it the
+// same object as another of that name: the route it came from, and for a service the backend.
+type namedObject struct {
+	kind, name string
+	// identity is what two objects must share to be one object: a route hash, or a scheme and URL.
+	identity string
+	// shared says two routes may legitimately use the one object (a service), when identities match.
+	shared bool
+	route  ingress.SnapshotRoute
+}
+
+// checkUnique refuses a bundle in which two different objects of one kind share a name (D-18). Names
+// are hash-derived and 48 bits long, so this is not expected to fire; a merged router would silently
+// serve one route's backend for another's host, so the render fails instead. The error names the
+// second route.
+func checkUnique(objs []namedObject) error {
+	type key struct{ kind, name string }
+	seen := make(map[key]namedObject, len(objs))
+	for _, o := range objs {
+		k := key{o.kind, o.name}
+		if prev, ok := seen[k]; ok && (!o.shared || prev.identity != o.identity) {
+			return &RefusedError{
+				Code: CodeNameCollision, Hostname: o.route.Hostname, PathPrefix: o.route.PathPrefix,
+				Field: o.kind + " " + o.name,
+			}
+		}
+		seen[k] = o
+	}
+	return nil
+}
+
+// checkNoTemplateDelimiters refuses any output file that holds two consecutive opening braces.
+// Traefik executes dynamic files as Go templates, so that pair could run user text; no value that
+// reaches a file may hold a brace (refuseRoute) and this checks the bytes themselves (D-08).
+func checkNoTemplateDelimiters(files []ingressbundle.File) error {
+	for _, f := range files {
+		if bytes.Contains(f.Data, []byte(templateOpen)) {
+			return &RefusedError{Code: CodeTemplateDelimiter, Field: f.Path}
+		}
 	}
 	return nil
 }

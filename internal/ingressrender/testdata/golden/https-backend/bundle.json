@@ -1,0 +1,43 @@
+{
+  "id": "bdbb46e616161ce82ad4b3222039793aa8ac3d01a3ae35cf1da5dacc478f3d56",
+  "schema": 1,
+  "version": {
+    "config": 10,
+    "certs": 2,
+    "own": 0
+  },
+  "manifest": {
+    "schema": 1,
+    "files": [
+      {
+        "path": "certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key",
+        "sha256": "50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d",
+        "mode": 384,
+        "step": 1
+      },
+      {
+        "path": "certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt",
+        "sha256": "6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98",
+        "mode": 420,
+        "step": 1
+      },
+      {
+        "path": "dynamic/tierplan.yml",
+        "sha256": "87dd67239ea5f74f77b22ed0a9fcf87f1fb0a7c3d4647e9eb6b2912cbafa52f8",
+        "mode": 420,
+        "step": 2
+      }
+    ],
+    "routes": [
+      {
+        "router": "r-1e681804124c",
+        "hostname": "secure.example.com",
+        "pathPrefix": "/",
+        "stack": "shop",
+        "service": "web",
+        "hash": "1e681804124cf73297836cdf239c04a80b92e4d0865a825374da7912fbbfef4b"
+      }
+    ]
+  },
+  "skipped": []
+}

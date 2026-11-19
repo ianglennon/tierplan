@@ -100,6 +100,16 @@ func goldenScenarios() map[string]Input {
 		// The root and a path under it with strip: the /api router lists its own stripPrefix middleware
 		// and the root router lists none (LBL-07, D-17).
 		"strip": stripInput(),
+		// One https route on port 8443: its service names the user transport and the bundle holds it (D-13).
+		"https-backend": {
+			Snapshot: ingress.Snapshot{
+				Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 10},
+				Claims:   []ingress.SnapshotClaim{claimFor("secure.example.com")},
+				Routes:   []ingress.SnapshotRoute{httpsRoute("secure.example.com", "/", "shop", "web", 8443)},
+			},
+			Certs:        []HostCert{{Hostname: "secure.example.com", ChainPEM: chainA, KeyPEM: keyA}},
+			CertsVersion: 2,
+		},
 	}
 }
 
