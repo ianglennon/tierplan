@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/testcontainers/testcontainers-go"
+
 	"github.com/ianglennon/tierplan/internal/ingressrender/traefiktest"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -326,5 +328,84 @@ func TestS1AbsoluteCertPaths(t *testing.T) {
 			requireRefused(t, "the known name with the certificate path "+tc.cert, err)
 			t.Logf("certFile %q was not loaded: a relative path is not read against the YAML's directory or the bundle root (O14: Traefik reads it against its own working directory, which is / in this image)", tc.cert)
 		})
+	}
+}
+
+// TestS1Redirect proves RTE-02 (O5): the web entrypoint answers every plain-HTTP request with a
+// permanent redirect to https on 443, the path and the query kept verbatim and any port of the Host
+// header dropped. It is an entrypoint redirect, so it needs no router: a hostname with no route, and a
+// bundle with no routes at all, are redirected the same way.
+func TestS1Redirect(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	s := startS1(t, fullBundle(), true)
+
+	for _, tc := range []struct{ name, host, target, want string }{
+		{"path and query kept verbatim", s1Host, "/p/q?x=1&a=2", "https://a.test.local/p/q?x=1&a=2"},
+		{"a port in the Host header is dropped", s1Host + ":18080", "/p", "https://a.test.local/p"},
+		{"a hostname with no route", "nothing.test.local", "/p", "https://nothing.test.local/p"},
+	} {
+		status, location := s.tr.HTTPGet(t, tc.host, tc.target)
+		if status != http.StatusMovedPermanently || location != tc.want {
+			t.Errorf("%s: GET http://%s%s answered %d Location %q, want 301 %q", tc.name, tc.host, tc.target, status, location, tc.want)
+		}
+	}
+
+	// A bundle with no routes: the redirect does not depend on the dynamic configuration at all.
+	empty := startS1(t, s1Bundle{Options: true}, false)
+	status, location := empty.tr.HTTPGet(t, s1Host, "/p?x=1")
+	if status != http.StatusMovedPermanently || location != "https://a.test.local/p?x=1" {
+		t.Errorf("empty bundle: GET http://%s/p?x=1 answered %d Location %q, want 301 https://a.test.local/p?x=1", s1Host, status, location)
+	}
+}
+
+// TestS1NoCallHome proves the proxy does not call home (SC 2, D-03, D-22, O16 and O17): Traefik says
+// in its own log that its version check is off, it warns of no unconfigured header strategy, and its
+// only network is the harness network, which is internal and so has no route to the internet. The
+// claim rests on the configuration and the isolation together; the log lines are Traefik's statement of
+// the setting, not the proof.
+func TestS1NoCallHome(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	s := startS1(t, fullBundle(), true)
+
+	// The version check is decided at startup, so its line is in the log once Traefik is up; the poll
+	// is for the log stream catching up, not for a behaviour.
+	var logs string
+	testsupport.Poll(t, testsupport.Deadline, "Traefik's startup log to hold the version-check line", func() (bool, string) {
+		logs = s.tr.Logs(t)
+		return strings.Contains(logs, "Version check is disabled."), "no version-check line yet"
+	})
+	// Exact phrases, never "traefik.io": unrelated lines carry documentation links.
+	if strings.Contains(logs, "Version check is enabled.") {
+		t.Error("Traefik logged `Version check is enabled.`")
+	}
+	if strings.Contains(logs, "aliasHeadersStrategy is not configured") {
+		t.Error("Traefik warns that aliasHeadersStrategy is not configured on an entrypoint (O17)")
+	}
+
+	ctx := testsupport.Context(t)
+	info, err := s.tr.Container().Inspect(ctx)
+	if err != nil {
+		t.Fatalf("inspect the Traefik container: %v", err)
+	}
+	if info.NetworkSettings == nil || len(info.NetworkSettings.Networks) != 1 {
+		t.Fatalf("Traefik's networks = %v, want exactly the harness network", info.NetworkSettings)
+	}
+	if _, ok := info.NetworkSettings.Networks[s.env.NetworkName()]; !ok {
+		t.Fatalf("Traefik is not on the harness network %s: %v", s.env.NetworkName(), info.NetworkSettings.Networks)
+	}
+
+	prov, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		t.Fatalf("connect to Docker: %v", err)
+	}
+	defer func() { _ = prov.Close() }()
+	// testcontainers has no network inspection that is not deprecated, and only internal/dockerx may
+	// import the Docker client itself, so the deprecated request type is the way to read Internal.
+	nw, err := prov.GetNetwork(ctx, testcontainers.NetworkRequest{Name: s.env.NetworkName()}) //nolint:staticcheck // see above
+	if err != nil {
+		t.Fatalf("inspect the harness network: %v", err)
+	}
+	if !nw.Internal {
+		t.Errorf("the harness network %s is not internal: Traefik could reach the internet", s.env.NetworkName())
 	}
 }
