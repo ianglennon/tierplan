@@ -172,3 +172,114 @@ func TestS1ForwardedHeadersFromAnUntrustedPeer(t *testing.T) {
 		t.Errorf("the spoofed address %s appears in the backend's echo:\n%s", spoof, body)
 	}
 }
+
+// TestS1DynamicFilesAreTemplates proves Traefik executes dynamic files as Go templates (D-08, T-21-09,
+// correction 5, O8), which its file-provider documentation does not say. A rule whose path holds a
+// template action is served at the action's output, so any user text that reached a rendered file
+// with two opening braces in it would run as a template. That is why the renderer refuses brace
+// characters outright and asserts no rendered file holds two opening braces. The braces are built
+// from single characters here so that this source file never holds two adjacent ones itself.
+func TestS1DynamicFilesAreTemplates(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	const host = "tpl.test"
+	lb, rb := "{", "}"
+	action := lb + lb + ` "tmpl" ` + rb + rb
+	env := traefiktest.NewEnv(t)
+	ca := traefiktest.NewCA(t)
+	chain, key := ca.Leaf(t, host)
+	rule := "Host(`" + host + "`) && Path(`/" + action + "`)"
+	doc := s1Doc("tpl", s1Router("r-tpl", rule, "s-a"))
+
+	s := startS1Files(t, env, ca, append(s1CertFiles("tpl", chain, key), s1Dynamic(doc)))
+	body := s.awaitGet(t, host, "/tmpl")
+	if !strings.Contains(body, "Hostname: shop-web") {
+		t.Errorf("/tmpl was not answered by the route whose rule held the template action:\n%s", body)
+	}
+	// The route matches the action's output only, so the proxy really evaluated it.
+	if status, err := s.statusOf(host, "/other"); err != nil || status != http.StatusNotFound {
+		t.Errorf("/other answered %d (error %v), want 404", status, err)
+	}
+}
+
+// s1PathCase is one request of the path-hygiene table and where Traefik sends it.
+type s1PathCase struct {
+	request string
+	backend string
+	// forwarded is the request line's target the backend must see; empty means only the backend is
+	// asserted (the forwarded target is logged).
+	forwarded string
+}
+
+// TestS1PathHygiene proves RTE-03's path rules on the real proxy (D-15, D-16, D-17, O6 and O7). Three
+// backends sit behind the routers `/` (priority 1), `/api` (1004, stripPrefix /api) and `/api/v2`
+// (2007), each with the rule form of D-15. Traefik cleans and decodes the path before it matches, so a
+// dot segment, a doubled slash, an encoded letter and an upper-case spelling cannot reach a router the
+// plain path would not, and an encoded slash stays inside one segment. The serving route is told by the
+// backend's Hostname line, the forwarded path by its request line.
+func TestS1PathHygiene(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	const host = "path.test"
+	env := traefiktest.NewEnv(t)
+	ca := traefiktest.NewCA(t)
+	chain, key := ca.Leaf(t, host)
+	for _, b := range []string{"root", "api", "v2"} {
+		env.StartWhoami(t, traefiktest.WhoamiOptions{Alias: "w" + b, Hostname: b})
+	}
+	svc := func(name, backend string) string {
+		return "    " + name + ":\n      loadBalancer:\n        servers:\n          - url: http://w" + backend + ":80\n"
+	}
+	doc := s1ReloadOptions +
+		"  certificates:\n    - certFile: " + traefiktest.NodeRoot + "/certs/path.crt\n      keyFile: " + traefiktest.NodeRoot + "/certs/path.key\n" +
+		"http:\n  routers:\n" +
+		s1Router("r-root", "Host(`"+host+"`)", "s-root") + "      priority: 1\n" +
+		s1Router("r-api", s1Rule(host, "/api"), "s-api") + "      priority: 1004\n      middlewares:\n        - m-strip-api\n" +
+		s1Router("r-v2", s1Rule(host, "/api/v2"), "s-v2") + "      priority: 2007\n" +
+		"  middlewares:\n    m-strip-api:\n      stripPrefix:\n        prefixes:\n          - /api\n" +
+		"  services:\n" + svc("s-root", "root") + svc("s-api", "api") + svc("s-v2", "v2")
+	env.Apply(t, append(s1CertFiles("path", chain, key), s1Dynamic(doc)))
+	s := &s1Site{env: env, ca: ca, tr: env.StartTraefik(t, traefiktest.TraefikOptions{Static: Static()})}
+	s.awaitStatus(t, host, "/api/v2/z", http.StatusOK)
+
+	cases := []s1PathCase{
+		{"/", "root", "/"},
+		{"/x", "root", "/x"},
+		{"/api", "api", "/"},
+		{"/api/", "api", "/"},
+		{"/api/x?q=1", "api", "/x?q=1"},
+		{"/apiary", "root", "/apiary"},
+		{"/api/v2", "v2", ""},
+		{"/api/v2/z", "v2", ""},
+		{"/api/v2x", "api", "/v2x"},
+		{"/api/../apiary", "root", ""},
+		{"//api/x", "api", ""},
+		{"/api/./x", "api", ""},
+		{"/api/v2/../x", "api", ""},
+		{"/%61pi/x", "api", ""},
+		{"/api%2Fx", "root", ""},
+		{"/API", "root", ""},
+	}
+	for _, tc := range cases {
+		status, body, _, err := s.tr.TryGet(ca.Pool(), host, tc.request, nil)
+		if err != nil || status != http.StatusOK {
+			t.Errorf("GET %s answered %d (error %v), want 200", tc.request, status, err)
+			continue
+		}
+		var gotBackend, gotTarget string
+		for _, line := range strings.Split(body, "\n") {
+			line = strings.TrimRight(line, "\r")
+			if v, ok := strings.CutPrefix(line, "Hostname: "); ok {
+				gotBackend = v
+			}
+			if rest, ok := strings.CutPrefix(line, "GET "); ok {
+				gotTarget, _, _ = strings.Cut(rest, " HTTP/")
+			}
+		}
+		t.Logf("%-16s -> backend %-4s as %s", tc.request, gotBackend, gotTarget)
+		if gotBackend != tc.backend {
+			t.Errorf("GET %s went to backend %q, want %q (forwarded as %q)", tc.request, gotBackend, tc.backend, gotTarget)
+		}
+		if tc.forwarded != "" && gotTarget != tc.forwarded {
+			t.Errorf("GET %s reached the backend as %q, want %q", tc.request, gotTarget, tc.forwarded)
+		}
+	}
+}
