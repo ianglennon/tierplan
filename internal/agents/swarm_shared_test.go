@@ -41,6 +41,7 @@ var sharedSwarmCases = []struct {
 	{"Janitor", sharedJanitor},
 	{"NetworkConnect", sharedNetworkConnect},
 	{"Networks", sharedNetworks},
+	{"NodeIDTemplate", sharedNodeIDTemplate},
 	{"OrphanMatrix", sharedOrphanMatrix},
 	{"PrivatePullEveryNode", sharedPrivatePullEveryNode},
 	{"RealEngineFacts", sharedRealEngineFacts},
