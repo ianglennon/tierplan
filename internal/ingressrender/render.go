@@ -182,7 +182,8 @@ const UserHTTPSTransport = "t-user-https"
 // built from two parts so this source never holds the pair literally.
 const templateOpen = "{" + "{"
 
-// Render turns one environment's snapshot and certificates into a verified bundle.
+// Render turns one environment's snapshot and certificates into a verified bundle of the latest
+// schema; it is RenderSchema(Latest, in).
 //
 // A route is rendered only when its hostname is claimed, its hostname has a servable certificate and
 // its backend can be named; every other route is returned in Skipped with the reason. The dynamic file
@@ -192,6 +193,11 @@ const templateOpen = "{" + "{"
 // The same input always gives the same bytes and the same bundle ID: the maps are marshalled in key
 // order and every list is sorted.
 func Render(in Input) (Result, error) {
+	return RenderSchema(Latest, in)
+}
+
+// renderSchema1 is the rendering of bundle schema 1.
+func renderSchema1(in Input) (Result, error) {
 	certs := make(map[string]HostCert, len(in.Certs))
 	for _, c := range in.Certs {
 		certs[c.Hostname] = c
