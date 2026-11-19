@@ -131,6 +131,14 @@ type AgentSource interface {
 	KickEnv(envID, code string)
 }
 
+// IngressSessions closes the live ingress sessions of an environment (D-29). The
+// ingress hub is one. It never blocks.
+type IngressSessions interface {
+	// KickEnv closes every live ingress session of the environment, recording code as
+	// why.
+	KickEnv(envID, code string)
+}
+
 // AgentUninstaller tells the agents of an environment to remove themselves from their
 // hosts (D-30). agents.Updater is one.
 type AgentUninstaller interface {
@@ -162,6 +170,8 @@ type Service struct {
 	health      HealthConfig
 	clusters    *Clusters
 	uninstaller AgentUninstaller
+	// ingress closes the ingress sessions of a removed environment (WithIngressSessions).
+	ingress IngressSessions
 	// uninstallWait is how long Remove waits for the agents; UninstallWait unless a
 	// test changed it.
 	uninstallWait time.Duration
@@ -196,6 +206,14 @@ func NewService(s *store.Store, w *audit.Writer, m *Monitor, dockerHost string, 
 // the service is used.
 func (s *Service) WithAgents(src AgentSource) *Service {
 	s.agents = src
+	return s
+}
+
+// WithIngressSessions tells the service who closes the ingress sessions of an
+// environment when it is removed (D-29). Without it Remove closes none. Call it before
+// the service is used.
+func (s *Service) WithIngressSessions(k IngressSessions) *Service {
+	s.ingress = k
 	return s
 }
 
@@ -856,6 +874,11 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	// environment that does not exist.
 	if s.agents != nil && row.Kind == KindAgent {
 		s.agents.KickEnv(id, tunnel.DisconnectRemoved)
+	}
+	// The ingress_nodes rows went with the environment, so an ingress session still
+	// open would be serving an environment that no longer exists (D-29).
+	if s.ingress != nil {
+		s.ingress.KickEnv(id, tunnel.DisconnectRemoved)
 	}
 	// An agent environment is monitored through its agents' targets.
 	s.mu.Lock()
