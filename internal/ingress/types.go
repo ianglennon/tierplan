@@ -184,3 +184,53 @@ type NameError struct {
 
 // Error implements error.
 func (e *NameError) Error() string { return e.Message }
+
+// Settings is an environment's ingress switch and counter. Exists is false when the environment has
+// no ingress_env row: it never had an ingress change, or it was removed.
+type Settings struct {
+	EnvID  string
+	Exists bool
+	// Enabled says the environment's ingress is switched on.
+	Enabled bool
+	// ConfigVersion is raised by every committed change to the environment's claims, routes and
+	// domains, and by a stack delete that cascaded; 0 when there is no row.
+	ConfigVersion int64
+	UpdatedAt     time.Time
+	UpdatedBy     string
+}
+
+// SnapshotClaim is a Claim with the stack that holds it. StackName and Target are empty for a
+// system claim (D-28).
+type SnapshotClaim struct {
+	Claim
+	StackName string
+	Target    Target
+}
+
+// SnapshotRoute is a route with the stack that owns its hostname; StackName and Target are empty for
+// a system claim (D-28). The route's owner is the owner of its hostname's claim.
+type SnapshotRoute struct {
+	Route
+	OwnerKind OwnerKind
+	StackID   string
+	StackName string
+	Target    Target
+}
+
+// Snapshot is everything the renderer needs of one environment; the reconciler re-reads it whenever
+// a version moves. Claims are ordered by hostname and Routes by hostname then path prefix, so two
+// reads with no write between them compare equal.
+type Snapshot struct {
+	Settings Settings
+	Domains  []Domain
+	Claims   []SnapshotClaim
+	Routes   []SnapshotRoute
+}
+
+// EnvVersion is the pair of counters one environment's ingress moves: ConfigVersion for its model and
+// CertsVersion for its certificates.
+type EnvVersion struct {
+	EnvID         string
+	ConfigVersion int64
+	CertsVersion  int64
+}

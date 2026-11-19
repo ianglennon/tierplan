@@ -324,6 +324,62 @@ func (q *Queries) InsertIngressRoute(ctx context.Context, arg InsertIngressRoute
 	return err
 }
 
+const listIngressClaimsByEnv = `-- name: ListIngressClaimsByEnv :many
+SELECT h.hostname, h.env_id, h.domain_id, h.owner_kind, h.stack_id, h.claimed_by, h.claimed_at,
+       s.name AS stack_name, s.target AS stack_target
+FROM ingress_hostnames h
+LEFT JOIN stacks s ON s.id = h.stack_id
+WHERE h.env_id = ?
+ORDER BY h.hostname
+`
+
+type ListIngressClaimsByEnvRow struct {
+	Hostname    string
+	EnvID       string
+	DomainID    string
+	OwnerKind   string
+	StackID     sql.NullString
+	ClaimedBy   string
+	ClaimedAt   int64
+	StackName   sql.NullString
+	StackTarget sql.NullString
+}
+
+// Every claim of one environment with the stack that holds it, for the renderer (D-12). A system claim has no
+// stack, so the join is a LEFT JOIN and stack_name and stack_target are NULL for it.
+func (q *Queries) ListIngressClaimsByEnv(ctx context.Context, envID string) ([]ListIngressClaimsByEnvRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIngressClaimsByEnv, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIngressClaimsByEnvRow
+	for rows.Next() {
+		var i ListIngressClaimsByEnvRow
+		if err := rows.Scan(
+			&i.Hostname,
+			&i.EnvID,
+			&i.DomainID,
+			&i.OwnerKind,
+			&i.StackID,
+			&i.ClaimedBy,
+			&i.ClaimedAt,
+			&i.StackName,
+			&i.StackTarget,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listIngressClaimsInstall = `-- name: ListIngressClaimsInstall :many
 SELECT h.hostname, h.env_id, h.domain_id, h.owner_kind, h.stack_id, h.claimed_by, h.claimed_at,
        e.name AS env_name, s.name AS stack_name
@@ -404,6 +460,40 @@ func (q *Queries) ListIngressDomainsByEnv(ctx context.Context, envID string) ([]
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIngressEnvVersions = `-- name: ListIngressEnvVersions :many
+SELECT env_id, config_version, certs_version FROM ingress_env ORDER BY env_id
+`
+
+type ListIngressEnvVersionsRow struct {
+	EnvID         string
+	ConfigVersion int64
+	CertsVersion  int64
+}
+
+// The version pair of every environment that has an ingress_env row, in one read, for the reconciler's poll (D-26).
+func (q *Queries) ListIngressEnvVersions(ctx context.Context) ([]ListIngressEnvVersionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIngressEnvVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIngressEnvVersionsRow
+	for rows.Next() {
+		var i ListIngressEnvVersionsRow
+		if err := rows.Scan(&i.EnvID, &i.ConfigVersion, &i.CertsVersion); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -556,6 +646,77 @@ func (q *Queries) ListIngressReservedInstall(ctx context.Context) ([]ListIngress
 	for rows.Next() {
 		var i ListIngressReservedInstallRow
 		if err := rows.Scan(&i.Hostname, &i.DomainID, &i.EnvID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIngressRoutesByEnv = `-- name: ListIngressRoutesByEnv :many
+SELECT r.id, r.env_id, r.hostname, r.name, r.path_prefix, r.service, r.port, r.scheme, r.strip,
+       r.created_at, r.updated_at,
+       h.owner_kind, h.stack_id, s.name AS stack_name, s.target AS stack_target
+FROM ingress_routes r
+JOIN ingress_hostnames h ON h.hostname = r.hostname
+LEFT JOIN stacks s ON s.id = h.stack_id
+WHERE r.env_id = ?
+ORDER BY r.hostname, r.path_prefix
+`
+
+type ListIngressRoutesByEnvRow struct {
+	ID          string
+	EnvID       string
+	Hostname    string
+	Name        string
+	PathPrefix  string
+	Service     string
+	Port        int64
+	Scheme      string
+	Strip       int64
+	CreatedAt   int64
+	UpdatedAt   int64
+	OwnerKind   string
+	StackID     sql.NullString
+	StackName   sql.NullString
+	StackTarget sql.NullString
+}
+
+// Every route of one environment with the stack that owns its hostname. One owner holds a hostname (Phase 18),
+// so the join through ingress_hostnames is exact. A system claim's routes have NULL stack columns. A fixed
+// order, so two reads compare equal.
+func (q *Queries) ListIngressRoutesByEnv(ctx context.Context, envID string) ([]ListIngressRoutesByEnvRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIngressRoutesByEnv, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIngressRoutesByEnvRow
+	for rows.Next() {
+		var i ListIngressRoutesByEnvRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.Hostname,
+			&i.Name,
+			&i.PathPrefix,
+			&i.Service,
+			&i.Port,
+			&i.Scheme,
+			&i.Strip,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.OwnerKind,
+			&i.StackID,
+			&i.StackName,
+			&i.StackTarget,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

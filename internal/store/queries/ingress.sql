@@ -98,6 +98,33 @@ JOIN ingress_hostnames h ON h.hostname = r.hostname
 WHERE h.stack_id = ?
 ORDER BY r.hostname, r.path_prefix;
 
+-- name: ListIngressClaimsByEnv :many
+-- Every claim of one environment with the stack that holds it, for the renderer (D-12). A system claim has no
+-- stack, so the join is a LEFT JOIN and stack_name and stack_target are NULL for it.
+SELECT h.hostname, h.env_id, h.domain_id, h.owner_kind, h.stack_id, h.claimed_by, h.claimed_at,
+       s.name AS stack_name, s.target AS stack_target
+FROM ingress_hostnames h
+LEFT JOIN stacks s ON s.id = h.stack_id
+WHERE h.env_id = ?
+ORDER BY h.hostname;
+
+-- name: ListIngressRoutesByEnv :many
+-- Every route of one environment with the stack that owns its hostname. One owner holds a hostname (Phase 18),
+-- so the join through ingress_hostnames is exact. A system claim's routes have NULL stack columns. A fixed
+-- order, so two reads compare equal.
+SELECT r.id, r.env_id, r.hostname, r.name, r.path_prefix, r.service, r.port, r.scheme, r.strip,
+       r.created_at, r.updated_at,
+       h.owner_kind, h.stack_id, s.name AS stack_name, s.target AS stack_target
+FROM ingress_routes r
+JOIN ingress_hostnames h ON h.hostname = r.hostname
+LEFT JOIN stacks s ON s.id = h.stack_id
+WHERE r.env_id = ?
+ORDER BY r.hostname, r.path_prefix;
+
+-- name: ListIngressEnvVersions :many
+-- The version pair of every environment that has an ingress_env row, in one read, for the reconciler's poll (D-26).
+SELECT env_id, config_version, certs_version FROM ingress_env ORDER BY env_id;
+
 -- name: CountIngressStateByEnv :one
 -- What a fold of the Local environment would delete through the cascade (D-12, D-17): domains, the reserved
 -- names under them (ingress_reserved has no env_id, so through its domain), hostname claims, routes, and
