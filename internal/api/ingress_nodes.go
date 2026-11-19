@@ -97,6 +97,39 @@ type IngressNodeBody struct {
 	Sync             string   `json:"sync" enum:"current,pending,incompatible,unknown" doc:"current: the node applied the bundle it should hold. pending: it holds an older one, or none, and a newer is waiting (not a failure). incompatible: it cannot apply this server's bundles. unknown: the node is revoked or no bundle has been built"`
 }
 
+// IngressNodePathInput carries {envId} and {nodeId} for the routes that act on one ingress node.
+type IngressNodePathInput struct {
+	EnvironmentPathInput
+	NodeID string `path:"nodeId" doc:"The ingress node ID, as listed by GET /api/env/{envId}/ingress/nodes"`
+}
+
+// RevokeIngressNodeBody is the optional body of a revoke.
+type RevokeIngressNodeBody struct {
+	Reason       string `json:"reason,omitempty" maxLength:"256" doc:"Why the node is revoked, for the audit log and the node table. Optional"`
+	AllowReenrol bool   `json:"allowReenrol,omitempty" doc:"Let the host enrol again with the join token still mounted in its container. By default a revoke blocks that"`
+}
+
+// RevokeIngressNodeInput is a revoke of one ingress node.
+type RevokeIngressNodeInput struct {
+	IngressNodePathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      *RevokeIngressNodeBody
+}
+
+// RevokeIngressNodeBodyOut is what a revoke says.
+type RevokeIngressNodeBodyOut struct {
+	HeldHostnames          []string `json:"heldHostnames" doc:"The hostnames whose private keys this node may still hold, sorted, as every one its bundles ever carried. They should be re-issued: they are not changed by the revoke"`
+	RotateTokenRecommended bool     `json:"rotateTokenRecommended" doc:"Always true: the join token stays mounted in the revoked node's container until it is rotated"`
+	RevokedAt              string   `json:"revokedAt" format:"date-time" doc:"When the node was revoked"`
+}
+
+// RevokeIngressNodeOutput wraps RevokeIngressNodeBodyOut for huma.
+type RevokeIngressNodeOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         RevokeIngressNodeBodyOut
+}
+
 // IngressNodeListBody is every ingress node of an environment.
 type IngressNodeListBody struct {
 	Items []IngressNodeBody `json:"items" doc:"One entry per node, oldest first, revoked nodes included"`
@@ -278,5 +311,42 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			items = append(items, b)
 		}
 		return &IngressNodeListOutput{CacheControl: "no-store", Body: IngressNodeListBody{Items: items}}, nil
+	})
+	httpx.Register(r, huma.Operation{
+		OperationID: "revokeIngressNode",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/ingress/nodes/{nodeId}/revoke",
+		Summary:     "Revoke one ingress node",
+		Description: "The node is disconnected within a second and its key is refused from now on; no other node is touched and nothing on its host " +
+			"is changed. Unless allowReenrol is true, its host is also blocked from enrolling again with the join token still mounted in its container. " +
+			"The answer lists heldHostnames: the names whose private keys this node may still hold and that should be re-issued. " +
+			"rotateTokenRecommended is always true. The optional reason is kept in the audit log. 404 environment_not_found or " +
+			problemIngressNodeNotFound + " (a node of another environment is the same 404); 409 " + problemIngressNodeAlreadyRevoked + " when it was revoked already. " +
+			"Answered with Cache-Control no-store. Needs environments.revoke on the environment (env Admin or instance admin), the permission that revokes an " +
+			"agent. Audited as ingress.node_revoked.",
+		Tags: []string{"ingress"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRevoke, Scope: rbac.ScopeEnvironment}, func(ctx context.Context, in *RevokeIngressNodeInput) (*RevokeIngressNodeOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		var opts ingresshub.RevokeOptions
+		if in.Body != nil {
+			opts = ingresshub.RevokeOptions{Reason: in.Body.Reason, AllowReenrol: in.Body.AllowReenrol}
+		}
+		res, err := d.Service.Revoke(ctx, p.AuditActor(), in.EnvID, in.NodeID, opts, httpx.ClientIP(ctx), in.UserAgent)
+		if err != nil {
+			return nil, fail("revoke the ingress node", err)
+		}
+		held := res.HeldHostnames
+		if held == nil {
+			held = []string{}
+		}
+		return &RevokeIngressNodeOutput{CacheControl: "no-store", Body: RevokeIngressNodeBodyOut{
+			HeldHostnames: held, RotateTokenRecommended: res.RotateTokenRecommended, RevokedAt: rfc3339(res.RevokedAt),
+		}}, nil
 	})
 }

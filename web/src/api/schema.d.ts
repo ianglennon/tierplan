@@ -1660,6 +1660,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/join-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Show which ingress join token an environment has
+         * @description Whether the environment has an ingress join token, its generation, when and by whom it was made, and whether it is disabled. Never the token: it is stored only as a hash. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressJoinToken"];
+        put?: never;
+        /**
+         * Make or rotate an environment's ingress join token
+         * @description Makes the ingress join token that lets ingress nodes enrol into this environment, or, when it has one, makes a new one and retires the current one in the same transaction. The token is in the answer, once, with Cache-Control no-store: the server keeps only its hash. A rotation stops the old token enrolling new nodes and does not affect nodes that are already enrolled, which authenticate with their own key. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or ingress.join_token_rotated with the generation, never the token.
+         */
+        post: operations["issueIngressJoinToken"];
+        /**
+         * Disable an environment's ingress join token
+         * @description The current ingress join token enrols nobody from now on. Nodes that are already enrolled keep working. Making a new token enables enrolment again. Disabling a disabled or missing token changes nothing. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_disabled.
+         */
+        delete: operations["disableIngressJoinToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the ingress nodes of an environment
+         * @description Every node that enrolled with the environment's ingress join token, revoked ones included, oldest first: its name, the swarm node it runs on, status, supervisor version and bundle schemas, the bundle it applied and the one it refused, its proxy health, when it was last seen, whether it is connected now, whether it is in sync with the bundle it should hold (a bundle still on its way is pending, not a failure), whether it is incompatible with this server, and for a revoked node who revoked it, why, and the hostnames whose keys it held. Never carries a key or a token. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["listIngressNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/nodes/{nodeId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke one ingress node
+         * @description The node is disconnected within a second and its key is refused from now on; no other node is touched and nothing on its host is changed. Unless allowReenrol is true, its host is also blocked from enrolling again with the join token still mounted in its container. The answer lists heldHostnames: the names whose private keys this node may still hold and that should be re-issued. rotateTokenRecommended is always true. The optional reason is kept in the audit log. 404 environment_not_found or ingress_node_not_found (a node of another environment is the same 404); 409 ingress_node_already_revoked when it was revoked already. Answered with Cache-Control no-store. Needs environments.revoke on the environment (env Admin or instance admin), the permission that revokes an agent. Audited as ingress.node_revoked.
+         */
+        post: operations["revokeIngressNode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor": {
         parameters: {
             query?: never;
@@ -10387,6 +10455,101 @@ export interface components {
             /** @description The hostnames of the uploaded certificates under the domain, sorted. The change leaves them alone */
             uploads: string[] | null;
         };
+        IngressJoinTokenBody: {
+            /**
+             * Format: int64
+             * @description Which token this is for the environment, from 1
+             */
+            generation: number;
+            /** @description True when it replaced an earlier token, which stops enrolling nodes. Nodes already enrolled are not affected */
+            rotated: boolean;
+            /** @description The ingress join token. Shown only in this answer: the server keeps its hash and cannot show it again */
+            token: string;
+        };
+        IngressJoinTokenStatusBody: {
+            /**
+             * Format: date-time
+             * @description When the token was made
+             */
+            createdAt?: string;
+            /** @description Who made it, as recorded in the audit log */
+            createdBy: string;
+            /** @description True while the token enrols nobody, until the next rotation */
+            disabled: boolean;
+            /** @description False while the environment has never had an ingress join token; the other fields are then empty */
+            exists: boolean;
+            /**
+             * Format: int64
+             * @description Which token this is for the environment, from 1
+             */
+            generation: number;
+        };
+        IngressNodeBody: {
+            /**
+             * Format: date-time
+             * @description When it applied that bundle
+             */
+            appliedAt?: string;
+            /** @description The bundle the node last applied; empty if none */
+            appliedBundleId: string;
+            /** @description Whether the node has a live connection now */
+            connected: boolean;
+            /**
+             * Format: date-time
+             * @description When the node enrolled
+             */
+            createdAt?: string;
+            /** @description What the node last reported about its proxy: ok, unhealthy, or empty before it has reported */
+            health: string;
+            /** @description Every hostname whose private key this node was ever sent, sorted */
+            heldHostnames: string[] | null;
+            /** @description The node ID, used in the path of the revoke */
+            id: string;
+            /** @description True when the node's supervisor shares no bundle schema with this server, so it keeps the last bundle it had */
+            incompatible: boolean;
+            /**
+             * Format: date-time
+             * @description When the node was last heard from, to the minute. Absent if it never has been
+             */
+            lastSeenAt?: string;
+            /** @description The name the node gave itself when it enrolled */
+            name: string;
+            /** @description True when the revoke also blocked the host from enrolling again with the join token still mounted in its container */
+            reenrolBlocked: boolean;
+            /** @description The last bundle the node refused; empty if none */
+            rejectedBundleId: string;
+            /** @description Why it refused that bundle, as a stable code */
+            rejectedReason: string;
+            /** @description The reason given when it was revoked */
+            revokeReason: string;
+            /**
+             * Format: date-time
+             * @description When the node was revoked
+             */
+            revokedAt?: string;
+            /** @description Who revoked it, as recorded in the audit log */
+            revokedBy: string;
+            /** @description The bundle schemas the node said it can apply; empty until it has said hello */
+            schemas: number[] | null;
+            /**
+             * @description revoked means an administrator revoked the node: it is disconnected and its key is refused
+             * @enum {string}
+             */
+            status: "active" | "revoked";
+            /** @description The swarm node it said it runs on; empty for a node of a standalone host */
+            swarmNodeId: string;
+            /**
+             * @description current: the node applied the bundle it should hold. pending: it holds an older one, or none, and a newer is waiting (not a failure). incompatible: it cannot apply this server's bundles. unknown: the node is revoked or no bundle has been built
+             * @enum {string}
+             */
+            sync: "current" | "pending" | "incompatible" | "unknown";
+            /** @description The version of the node's supervisor when it last connected */
+            version: string;
+        };
+        IngressNodeListBody: {
+            /** @description One entry per node, oldest first, revoked nodes included */
+            items: components["schemas"]["IngressNodeBody"][] | null;
+        };
         IngressReservationBody: {
             /**
              * Format: date-time
@@ -12768,6 +12931,23 @@ export interface components {
         RevokeAgentBody: {
             /** @description Why the node is revoked, for the audit log and the node table. Optional */
             reason?: string;
+        };
+        RevokeIngressNodeBody: {
+            /** @description Let the host enrol again with the join token still mounted in its container. By default a revoke blocks that */
+            allowReenrol?: boolean;
+            /** @description Why the node is revoked, for the audit log and the node table. Optional */
+            reason?: string;
+        };
+        RevokeIngressNodeBodyOut: {
+            /** @description The hostnames whose private keys this node may still hold, sorted, as every one its bundles ever carried. They should be re-issued: they are not changed by the revoke */
+            heldHostnames: string[] | null;
+            /**
+             * Format: date-time
+             * @description When the node was revoked
+             */
+            revokedAt: string;
+            /** @description Always true: the join token stays mounted in the revoked node's container until it is rotated */
+            rotateTokenRecommended: boolean;
         };
         RolloutBody: {
             /**
@@ -20825,6 +21005,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressDomainBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressJoinToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressJoinTokenStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    issueIngressJoinToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressJoinTokenBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngressJoinToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listIngressNodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressNodeListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeIngressNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The ingress node ID, as listed by GET /api/env/{envId}/ingress/nodes */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeIngressNodeBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeIngressNodeBodyOut"];
                 };
             };
             /** @description Error */

@@ -247,6 +247,9 @@ type RouterDeps struct {
 	// request ahead, the retry now and the budget. The zero value registers every route answering 503
 	// ingress_unavailable.
 	IngressCerts api.IngressCertDeps
+	// IngressNodes serves the ingress join token, the node list and the revoke of one node under
+	// /api/env/{envId}/ingress/ (Phase 22). The zero value registers every route answering 503 ingress_unavailable.
+	IngressNodes api.IngressNodesDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -306,6 +309,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterRegistries(r, d.Registries)
 	api.RegisterIngress(r, d.Ingress)
 	api.RegisterIngressCerts(r, d.IngressCerts)
+	api.RegisterIngressNodes(r, d.IngressNodes)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
