@@ -42,6 +42,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -168,6 +169,9 @@ type Server struct {
 	// ingressCerts is the per-hostname certificate manager and ingressCertStore the rows it keeps (Phase 20).
 	ingressCerts     *ingresscert.Manager
 	ingressCertStore *ingresscert.Store
+	// ingressRecon keeps every environment's ingress bundle current in memory (Phase 21). It is run in the
+	// background and read in process only: Phase 22 reads Current and Changes, and Failures is read by the bell.
+	ingressRecon *ingressrecon.Reconciler
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -1095,6 +1099,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	// The ingress reconciler renders every environment's bundle over the same stores, notifier and clock. It is run in
+	// the background below; it starts nothing else and adds no route, table or file (D-11, D-20).
+	ingressRecon := wireIngressRecon(log, ingressStore, certStore, ingressNotifier, bo.acmeClock)
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
 	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
 	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
@@ -1405,6 +1412,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 		ingressCerts:     certMgr,
 		ingressCertStore: certStore,
+		ingressRecon:     ingressRecon,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -1418,6 +1426,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
 	// The per-hostname certificates are ordered and renewed by their own manager, on the same clock.
 	srv.background.Go(func() { certMgr.Run(bg) })
+	// The ingress reconciler renders every environment's bundle and keeps it current until the server stops.
+	srv.background.Go(func() { ingressRecon.Run(bg) })
 	// The header is decided once before anything is served, then again on every certificate install
 	// and every minute.
 	hsts.Recompute(ctx)
