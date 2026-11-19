@@ -251,3 +251,9 @@ func (f File) String() string { return fmt.Sprintf("file %s (%d bytes)", f.Path,
 
 // GoString is String, so %#v shows no data either.
 func (f File) GoString() string { return f.String() }
+
+// LogValue is a group of the path and the byte length. Without it a File given
+// to a slog JSON handler would be written with its data as base64.
+func (f File) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("path", f.Path), slog.Int("bytes", len(f.Data)))
+}
