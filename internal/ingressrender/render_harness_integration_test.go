@@ -103,13 +103,3 @@ func servable(t testing.TB, ca *traefiktest.CA, hosts ...string) []HostCert {
 	}
 	return out
 }
-
-// renderOrFail renders an input and fails the test on an error.
-func renderOrFail(t testing.TB, in Input) Result {
-	t.Helper()
-	res, err := Render(in)
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-	return res
-}
