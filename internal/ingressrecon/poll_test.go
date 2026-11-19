@@ -221,3 +221,79 @@ func TestSafetyTickRendersEveryEnvironment(t *testing.T) {
 		t.Errorf("env-2 routers = %v, want one for blog.example.org", routerRules(t, b))
 	}
 }
+
+// Pitfall 12 / T-21-37 / PROH-21-05: when an environment is removed (its ingress_env row and claims cascade away),
+// the next poll drops its bundle, Current reports false and Changes names the environment.
+func TestRemovedEnvironmentDropsItsBundle(t *testing.T) {
+	rg := newRig(t)
+	s := settled(t, rg)
+	if _, ok := s.r.Current(rigEnv); !ok {
+		t.Fatal("Current has no bundle before the environment is removed")
+	}
+	rg.clock.AwaitTimer(t, PollInterval)
+
+	if _, err := rg.st.Write.Exec(`DELETE FROM environments WHERE id = ?`, rigEnv); err != nil {
+		t.Fatalf("remove the environment: %v", err)
+	}
+	rg.clock.Advance(PollInterval)
+
+	if got := s.awaitChange(t); len(got) != 1 || got[0] != rigEnv {
+		t.Fatalf("Changes named %v, want [%s]", got, rigEnv)
+	}
+	if b, ok := s.r.Current(rigEnv); ok {
+		t.Fatalf("Current still holds a bundle %s for the removed environment", b.ID)
+	}
+	if got := s.r.Skipped(rigEnv); len(got) != 0 {
+		t.Errorf("Skipped = %+v, want none for a removed environment", got)
+	}
+	// Dropped once: the environment is not listed, holds nothing and is not reconciled again.
+	rg.clock.AwaitTimer(t, PollInterval)
+	rg.clock.Advance(PollInterval)
+	rg.clock.AwaitTimer(t, PollInterval)
+	assertNothingAnnounced(t, s)
+}
+
+// Pitfall 12 / D-20: an environment with no ingress row and no claims gets no bundle and tells nobody; one with a row
+// and no claims gets the empty bundle (one file) and tells Changes once.
+func TestEnvironmentWithoutARowGetsNoBundle(t *testing.T) {
+	ctx := context.Background()
+	rg := newRig(t)
+	rg.seedEnv("env-bare", "Bare")
+	var events []renderEvent
+	r := New(rg.deps(func(envID, id string, changed bool) { events = append(events, renderEvent{envID, id, changed}) }))
+	sub := r.Changes().Subscribe()
+	t.Cleanup(sub.Close)
+
+	if err := r.Reconcile(ctx, "env-bare"); err != nil {
+		t.Fatalf("Reconcile of an environment with no row: %v", err)
+	}
+	if b, ok := r.Current("env-bare"); ok {
+		t.Fatalf("Current holds a bundle %s for an environment with no row and no claims", b.ID)
+	}
+	if len(events) != 0 {
+		t.Fatalf("OnRender was called %+v, want no render", events)
+	}
+	select {
+	case <-sub.C():
+		t.Fatalf("Changes was notified for %v, want nobody told", sub.Pending())
+	default:
+	}
+
+	// env-1 has a row (its domain registration made one) and no claims.
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("Reconcile of an environment with a row and no claims: %v", err)
+	}
+	b, ok := r.Current(rigEnv)
+	if !ok {
+		t.Fatal("Current has no bundle for an environment with a row and no claims")
+	}
+	if len(b.Files) != 1 {
+		t.Fatalf("the empty bundle holds %d files, want one", len(b.Files))
+	}
+	if got := sub.Pending(); len(got) != 1 || got[0] != rigEnv {
+		t.Fatalf("Changes named %v, want [%s] once", got, rigEnv)
+	}
+	if len(events) != 1 || !events[0].changed {
+		t.Fatalf("OnRender saw %+v, want one changed render", events)
+	}
+}
