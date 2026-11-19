@@ -19,3 +19,7 @@ func (h *Hub) GateAdmit(ip string) (release func(), refuse *ingresswire.Refuse) 
 func (h *Hub) GateEntries() (connect, enrol int) {
 	return h.gate.connect.Len(), h.gate.enrol.Len()
 }
+
+// EnvelopeBuilds is how many times the hub has marshalled a bundle message: once per environment, bundle ID and
+// instance ID however many sessions receive it.
+func (h *Hub) EnvelopeBuilds() int64 { return h.envelopes.builds.Load() }
