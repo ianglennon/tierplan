@@ -76,8 +76,8 @@ type Dial struct {
 	NoEKM bool
 	// Proto replaces the protocol version sent.
 	Proto int
-	// RawFirstFrame is sent as the first text frame instead of the auth. BinaryFirstFrame sends the auth as a
-	// binary frame.
+	// RawFirstFrame is sent as the first frame instead of the auth, and no auth is built for it. BinaryFirstFrame
+	// sends the first frame, the auth or the raw one, as a binary frame.
 	RawFirstFrame    []byte
 	BinaryFirstFrame bool
 	// Origin is sent as the Origin header, as a browser would.
@@ -172,40 +172,39 @@ func DialNode(t testing.TB, url string, client *http.Client, aud string, id *Ide
 			mode = ingresswire.ModeConnect
 		}
 	}
-	var a ingresswire.Auth
-	if mode == ingresswire.ModeConnect {
-		a, err = ingresswire.ConnectAuth(ch, ingresswire.ConnectOptions{
-			NodeID: id.NodeID, Version: testVersion, Aud: signedAud, Key: id.Key, EKM: ekm, Now: time.Now(),
-		})
-	} else {
-		a, err = ingresswire.EnrolAuth(ch, ingresswire.EnrolOptions{
-			Token: d.Token, Name: d.Name, SwarmNodeID: d.SwarmNodeID, Version: testVersion,
-			Aud: signedAud, Key: id.Key, EKM: ekm, Now: time.Now(),
-		})
-	}
-	if err != nil {
-		t.Fatalf("ingresstest: build the auth: %v", err)
-	}
-	a.Aud = sentAud
-	if d.Mode != "" {
-		a.Mode = d.Mode
-	}
-	if d.Proto != 0 {
-		a.Proto = d.Proto
-	}
-	if d.AgentTranscript {
-		a.Sig = authn.Sign(id.Key, authn.Transcript(mode, ingresswire.ProtoVersion, ch.Nonce, a.Nonce, signedAud, a.Pub, ekm))
-	}
-
 	typ, payload := websocket.MessageText, d.RawFirstFrame
+	if d.BinaryFirstFrame {
+		typ = websocket.MessageBinary
+	}
 	if payload == nil {
+		var a ingresswire.Auth
+		if mode == ingresswire.ModeConnect {
+			a, err = ingresswire.ConnectAuth(ch, ingresswire.ConnectOptions{
+				NodeID: id.NodeID, Version: testVersion, Aud: signedAud, Key: id.Key, EKM: ekm, Now: time.Now(),
+			})
+		} else {
+			a, err = ingresswire.EnrolAuth(ch, ingresswire.EnrolOptions{
+				Token: d.Token, Name: d.Name, SwarmNodeID: d.SwarmNodeID, Version: testVersion,
+				Aud: signedAud, Key: id.Key, EKM: ekm, Now: time.Now(),
+			})
+		}
+		if err != nil {
+			t.Fatalf("ingresstest: build the auth: %v", err)
+		}
+		a.Aud = sentAud
+		if d.Mode != "" {
+			a.Mode = d.Mode
+		}
+		if d.Proto != 0 {
+			a.Proto = d.Proto
+		}
+		if d.AgentTranscript {
+			a.Sig = authn.Sign(id.Key, authn.Transcript(mode, ingresswire.ProtoVersion, ch.Nonce, a.Nonce, signedAud, a.Pub, ekm))
+		}
 		payload, err = json.Marshal(a)
 		if err != nil {
 			t.Fatalf("ingresstest: encode the auth: %v", err)
 		}
-	}
-	if d.BinaryFirstFrame {
-		typ = websocket.MessageBinary
 	}
 	if err := ws.Write(ctx, typ, payload); err != nil {
 		// A node that answers after the server has given up on it finds the connection gone; that is an
