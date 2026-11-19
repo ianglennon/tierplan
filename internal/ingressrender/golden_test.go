@@ -97,6 +97,9 @@ func goldenScenarios() map[string]Input {
 			Certs:        []HostCert{{Hostname: "old.example.com", ChainPEM: chainA, KeyPEM: keyA}},
 			CertsVersion: 5,
 		},
+		// The root and a path under it with strip: the /api router lists its own stripPrefix middleware
+		// and the root router lists none (LBL-07, D-17).
+		"strip": stripInput(),
 	}
 }
 

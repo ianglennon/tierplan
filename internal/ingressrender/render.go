@@ -191,9 +191,20 @@ func Render(in Input) (Result, error) {
 	slices.SortFunc(routes, func(a, b ingress.SnapshotRoute) int {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.PathPrefix, b.PathPrefix))
 	})
+	// Every route is checked, rendered or not: a refusal fails the whole render, so the node keeps its
+	// last good bundle.
+	for _, r := range routes {
+		if err := refuseRoute(r); err != nil {
+			return Result{}, err
+		}
+	}
 
 	var (
-		http     = httpSection{Routers: map[string]router{}, Services: map[string]service{}}
+		http = httpSection{
+			Routers:     map[string]router{},
+			Services:    map[string]service{},
+			Middlewares: map[string]middleware{},
+		}
 		files    = map[string]ingressbundle.File{}
 		pairs    = map[certPair]struct{}{}
 		entries  []ingressbundle.RouteEntry
@@ -219,12 +230,20 @@ func Render(in Input) (Result, error) {
 
 		svc := ServiceName(schemeOf(r), url)
 		rname := RouterName(r.Hostname, r.PathPrefix)
-		http.Routers[rname] = router{
+		rt := router{
 			Rule:        Rule(r.Hostname, r.PathPrefix),
 			EntryPoints: []string{entryPointSecure},
 			Service:     svc,
 			Priority:    Priority(r.PathPrefix),
 		}
+		if r.Strip {
+			// The route forwards without its prefix through its own middleware (D-17). The root prefix was
+			// refused above, so the prefix here is always a real one.
+			mname := MiddlewareName(r.Hostname, r.PathPrefix)
+			http.Middlewares[mname] = middleware{StripPrefix: &stripPrefix{Prefixes: []string{r.PathPrefix}}}
+			rt.Middlewares = []string{mname}
+		}
+		http.Routers[rname] = rt
 		if _, shared := http.Services[svc]; !shared {
 			http.Services[svc] = service{LoadBalancer: loadBalancer{Servers: []server{{URL: url}}}}
 		}
@@ -282,6 +301,15 @@ func Render(in Input) (Result, error) {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.PathPrefix, b.PathPrefix))
 	})
 	return Result{Bundle: bundle, Skipped: skipped}, nil
+}
+
+// refuseRoute is the defence in depth behind the label parser (D-17): a route that strips the root
+// prefix would forward every request with no path, so it is never rendered.
+func refuseRoute(r ingress.SnapshotRoute) error {
+	if r.Strip && r.PathPrefix == "/" {
+		return &RefusedError{Code: CodeStripRoot, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Field: "strip"}
+	}
+	return nil
 }
 
 // selectRoute decides whether a route is served, in this order (D-09, D-10, D-12, D-28). It returns the
