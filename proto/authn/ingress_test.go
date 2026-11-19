@@ -5,10 +5,21 @@ package authn
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"math/big"
+	"net"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 func ingressInputs() (mode string, proto int, sn, nn []byte, aud string, pub, ekm []byte) {
@@ -85,5 +96,123 @@ func TestIngressTranscriptFieldBoundaries(t *testing.T) {
 	}
 	if bytes.Equal(IngressTranscript("m", 1, long1, nil, "x", nil, nil), IngressTranscript("m", 1, long1[:100], nil, "x", nil, nil)) {
 		t.Fatal("an oversized field collided with a short one")
+	}
+}
+
+func TestIngressAndAgentTranscriptsNeverCrossVerify(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, proto, sn, nn, aud, _, ekm := ingressInputs()
+	for _, mode := range []string{"enrol", "connect"} {
+		agent := Transcript(mode, proto, sn, nn, aud, pub, ekm)
+		ingress := IngressTranscript(mode, proto, sn, nn, aud, pub, ekm)
+		if bytes.Equal(agent, ingress) {
+			t.Fatalf("mode %s: the agent and ingress transcripts are the same digest", mode)
+		}
+		agentSig, ingressSig := Sign(priv, agent), Sign(priv, ingress)
+		if !Verify(pub, agent, agentSig) || !Verify(pub, ingress, ingressSig) {
+			t.Fatalf("mode %s: a signature does not verify over its own transcript", mode)
+		}
+		if Verify(pub, ingress, agentSig) {
+			t.Errorf("mode %s: an agent signature verified at the ingress endpoint", mode)
+		}
+		if Verify(pub, agent, ingressSig) {
+			t.Errorf("mode %s: an ingress signature verified at the agent endpoint", mode)
+		}
+	}
+}
+
+func TestIngressEKMLabelDiffersFromTheAgentLabel(t *testing.T) {
+	if IngressEKMLabel != "EXPORTER-tierplan-ingress-auth-v1" {
+		t.Fatalf("IngressEKMLabel %q", IngressEKMLabel)
+	}
+	if IngressEKMLabel == EKMLabel {
+		t.Fatal("the ingress and agent exporter labels are the same")
+	}
+	if !strings.HasPrefix(IngressEKMLabel, "EXPORTER-") || !strings.HasPrefix(EKMLabel, "EXPORTER-") {
+		t.Fatalf("an exporter label starts with EXPORTER-: %q, %q", IngressEKMLabel, EKMLabel)
+	}
+}
+
+// tlsPair completes a TLS 1.3 handshake over net.Pipe, with the client verifying
+// the server's in-memory self-signed certificate against a pool holding it, and
+// returns both ends' connection state.
+func tlsPair(t *testing.T) (client, server tls.ConnectionState) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "tierplan.test"},
+		DNSNames:  []string{"tierplan.test"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true, IsCA: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+
+	cc, sc := net.Pipe()
+	t.Cleanup(func() { _ = cc.Close(); _ = sc.Close() })
+	srv := tls.Server(sc, &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+	})
+	cli := tls.Client(cc, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: "tierplan.test"})
+
+	ctx := testsupport.Context(t)
+	done := make(chan error, 1)
+	go func() { done <- srv.HandshakeContext(ctx) }()
+	if err := cli.HandshakeContext(ctx); err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	if err := testsupport.Await(t, "the server handshake", done); err != nil {
+		t.Fatalf("server handshake: %v", err)
+	}
+	return cli.ConnectionState(), srv.ConnectionState()
+}
+
+func TestEKMForExportsPerLabel(t *testing.T) {
+	c, s := tlsPair(t)
+
+	ingressC, ingressS := EKMFor(&c, IngressEKMLabel), EKMFor(&s, IngressEKMLabel)
+	if len(ingressC) != EKMLength || len(ingressS) != EKMLength {
+		t.Fatalf("exported %d and %d bytes, want %d", len(ingressC), len(ingressS), EKMLength)
+	}
+	if !EKMEqual(ingressC, ingressS) {
+		t.Fatal("the two ends of one connection export different ingress material")
+	}
+	agentC, agentS := EKMFor(&c, EKMLabel), EKMFor(&s, EKMLabel)
+	if !EKMEqual(agentC, agentS) {
+		t.Fatal("the two ends of one connection export different agent material")
+	}
+	if bytes.Equal(ingressC, agentC) {
+		t.Fatal("the ingress and agent labels export the same material")
+	}
+	if !bytes.Equal(agentC, EKM(&c)) {
+		t.Fatal("EKMFor with the agent label is not EKM")
+	}
+	if EKMFor(nil, IngressEKMLabel) != nil {
+		t.Fatal("EKMFor of no connection should be nil")
+	}
+
+	// A connection whose handshake has not run cannot export: the failure is nil,
+	// never a panic and never material.
+	cc, sc := net.Pipe()
+	t.Cleanup(func() { _ = cc.Close(); _ = sc.Close() })
+	fresh := tls.Client(cc, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "tierplan.test"}).ConnectionState()
+	if EKMFor(&fresh, IngressEKMLabel) != nil {
+		t.Fatal("EKMFor of a connection that has not handshaken should be nil")
 	}
 }

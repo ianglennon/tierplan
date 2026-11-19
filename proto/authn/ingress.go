@@ -5,6 +5,7 @@ package authn
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"strconv"
 )
 
@@ -49,4 +50,19 @@ func IngressTranscript(mode string, proto int, serverNonce, nodeNonce []byte, au
 		h.Write(f)
 	}
 	return h.Sum(nil)
+}
+
+// EKMFor is the channel-binding material of a TLS connection for one exporter
+// label: ExportKeyingMaterial(label, nil, EKMLength), or nil when the connection
+// has none (a nil state, or one that cannot export). EKM is EKMFor with EKMLabel;
+// the ingress channel uses IngressEKMLabel.
+func EKMFor(cs *tls.ConnectionState, label string) []byte {
+	if cs == nil {
+		return nil
+	}
+	out, err := cs.ExportKeyingMaterial(label, nil, EKMLength)
+	if err != nil {
+		return nil
+	}
+	return out
 }
