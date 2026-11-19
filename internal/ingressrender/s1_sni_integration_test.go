@@ -26,8 +26,16 @@ const (
 	// s1Host is the hostname the fixture serves.
 	s1Host = "a.test.local"
 
+	// s1Unknown is a hostname nothing serves.
+	s1Unknown = "b.test.local"
+	// s1Loopback is the IP literal the tests send as an SNI.
+	s1Loopback = "127.0.0.1"
+
 	s1CertPath = traefiktest.NodeRoot + "/certs/a.crt"
 	s1KeyPath  = traefiktest.NodeRoot + "/certs/a.key"
+
+	// unrecognizedName is the text of the TLS alert strict SNI answers with.
+	unrecognizedName = "unrecognized name"
 )
 
 // s1Bundle describes a fixture dynamic configuration. The YAML is built from constants and the paths
@@ -90,8 +98,14 @@ func startS1(t *testing.T, b s1Bundle, withLeaf bool) *s1Site {
 	if withLeaf {
 		b.Chain, b.Key = ca.Leaf(t, s1Host)
 	}
+	return startS1Files(t, env, ca, b.files())
+}
+
+// startS1Files is startS1 for an arbitrary file set, such as none at all (an empty dynamic directory).
+func startS1Files(t *testing.T, env *traefiktest.Env, ca *traefiktest.CA, files []traefiktest.FileSpec) *s1Site {
+	t.Helper()
 	env.StartWhoami(t, traefiktest.WhoamiOptions{Alias: "shop_web", Hostname: "shop-web"})
-	env.Apply(t, b.files())
+	env.Apply(t, files)
 	return &s1Site{env: env, ca: ca, tr: env.StartTraefik(t, traefiktest.TraefikOptions{Static: Static()})}
 }
 
@@ -109,6 +123,19 @@ func (s *s1Site) awaitHandshake(t *testing.T, name string) tls.ConnectionState {
 		return true, ""
 	})
 	return state
+}
+
+// awaitRefusal polls until Traefik refuses name with the unrecognized-name alert, which tells the test
+// the configuration with strict SNI has been loaded (before that it presents its default certificate).
+func (s *s1Site) awaitRefusal(t *testing.T, name string) {
+	t.Helper()
+	testsupport.Poll(t, testsupport.Deadline, "Traefik to refuse "+name+" as an unrecognized name", func() (bool, string) {
+		_, err := s.tr.Handshake(name, s.ca.Pool())
+		if err == nil {
+			return false, "the handshake succeeded"
+		}
+		return strings.Contains(err.Error(), unrecognizedName), err.Error()
+	})
 }
 
 // awaitGet polls until a request answers 200, which also waits for the backend to listen.
@@ -156,5 +183,148 @@ func TestS1KnownSNIServesTheRouteLeaf(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the backend's echo lacks %q:\n%s", want, body)
 		}
+	}
+}
+
+// requireRefused fails unless err is the unrecognized-name alert with no certificate presented: a
+// default certificate would surface as a verification error that names its subject instead.
+func requireRefused(t *testing.T, what string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s: the handshake succeeded, want the %q alert", what, unrecognizedName)
+		return
+	}
+	if !strings.Contains(err.Error(), unrecognizedName) {
+		t.Errorf("%s: handshake error %q does not contain %q", what, err, unrecognizedName)
+	}
+	if got := traefiktest.PresentedSubject(err); got != "" {
+		t.Errorf("%s: Traefik presented a certificate (subject %q), want none", what, got)
+	}
+}
+
+// requireRefusesUnservedNames asserts the three ways a client can ask for a name nothing serves: an
+// unknown name, no SNI at all, and an IP address as SNI.
+func (s *s1Site) requireRefusesUnservedNames(t *testing.T) {
+	t.Helper()
+	_, err := s.tr.Handshake(s1Unknown, s.ca.Pool())
+	requireRefused(t, "unknown SNI "+s1Unknown, err)
+	_, err = s.tr.Handshake("", s.ca.Pool())
+	requireRefused(t, "no SNI", err)
+	requireRefused(t, "IP address as SNI", s.tr.HandshakeIPSNI(s1Loopback))
+}
+
+// TestS1StrictSNI proves RTE-01 on the pinned Traefik (D-04, D-23): with tls.options.default holding
+// sniStrict, a known name is served and an unknown name, no SNI and an IP address each fail the
+// handshake with the unrecognized-name alert and no certificate presented.
+func TestS1StrictSNI(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	s := startS1(t, fullBundle(), true)
+	// The known name succeeds only once the bundle is loaded, so the refusals below are the strict
+	// configuration speaking and not a proxy that has not read its files yet.
+	s.awaitHandshake(t, s1Host)
+	s.requireRefusesUnservedNames(t)
+}
+
+// TestS1EmptyBundleFailsClosed proves the empty bundle is safe (D-23, Pitfall 1): a dynamic file that
+// holds only tls.options.default, with no route and no certificate, still refuses every name. This is
+// the bundle a node must hold before Traefik starts.
+func TestS1EmptyBundleFailsClosed(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	s := startS1(t, s1Bundle{Options: true}, false)
+	// Before the file is read Traefik presents its default certificate, so wait for the alert.
+	s.awaitRefusal(t, s1Unknown)
+	s.requireRefusesUnservedNames(t)
+	requireRefused(t, "the known name with nothing to serve it", errOf(s.tr.Handshake(s1Host, s.ca.Pool())))
+}
+
+func errOf(_ tls.ConnectionState, err error) error { return err }
+
+// TestS1DefaultCertWithoutTLSOptions is the negative control (D-23, O3 and O4): without
+// tls.options.default Traefik presents its own generated certificate for a name it does not serve.
+// That is what the strict-SNI assertions above would see if the options were ever lost from a bundle,
+// so a pass there means something: the harness can tell a broken bundle from a good one.
+func TestS1DefaultCertWithoutTLSOptions(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+
+	requireDefaultCert := func(t *testing.T, s *s1Site) {
+		t.Helper()
+		_, err := s.tr.Handshake(s1Unknown, s.ca.Pool())
+		requireDefault(t, "unknown SNI "+s1Unknown, err)
+		_, err = s.tr.Handshake("", s.ca.Pool())
+		requireDefault(t, "no SNI", err)
+		// The rewritten hello of HandshakeIPSNI cannot show the certificate of a handshake that goes
+		// on (the client's transcript no longer matches the server's, so it fails with a bad record
+		// MAC before any certificate is read; D-30). What it can show is that Traefik did not
+		// refuse the name: without strict SNI an IP address is not met with the alert.
+		if err := s.tr.HandshakeIPSNI(s1Loopback); err == nil || strings.Contains(err.Error(), unrecognizedName) {
+			t.Errorf("IP address as SNI: handshake error %v, want a failure that is not the %q alert", err, unrecognizedName)
+		}
+	}
+
+	t.Run("empty dynamic directory", func(t *testing.T) {
+		env := traefiktest.NewEnv(t)
+		s := startS1Files(t, env, traefiktest.NewCA(t), nil)
+		// Nothing is loaded, so the default certificate is there as soon as Traefik listens.
+		testsupport.Poll(t, testsupport.Deadline, "Traefik to present its default certificate", func() (bool, string) {
+			_, err := s.tr.Handshake(s1Unknown, s.ca.Pool())
+			return traefiktest.PresentedSubject(err) != "", errString(err)
+		})
+		requireDefaultCert(t, s)
+	})
+
+	t.Run("routes and a certificate but no tls options", func(t *testing.T) {
+		b := fullBundle()
+		b.Options = false
+		s := startS1(t, b, true)
+		// The known name works once the file is read; the others then reach the default store.
+		s.awaitHandshake(t, s1Host)
+		requireDefaultCert(t, s)
+	})
+}
+
+func requireDefault(t *testing.T, what string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s: the handshake succeeded", what)
+		return
+	}
+	if got := traefiktest.PresentedSubject(err); got != traefiktest.DefaultCertSubject {
+		t.Errorf("%s: presented subject %q (error %v), want %q", what, got, err, traefiktest.DefaultCertSubject)
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// TestS1AbsoluteCertPaths proves D-24 (O14): certFile and keyFile are read as absolute paths under the
+// node root. A path relative to the YAML's own directory, and one relative to Traefik's working
+// directory, load nothing, so the hostname is refused. The renderer therefore writes absolute paths
+// and the proxy image mounts the bundle root at that same absolute path.
+func TestS1AbsoluteCertPaths(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+
+	t.Run("absolute path loads", func(t *testing.T) {
+		s := startS1(t, fullBundle(), true)
+		s.awaitHandshake(t, s1Host)
+	})
+
+	for _, tc := range []struct{ name, cert, key string }{
+		{"relative to the YAML's directory", "../certs/a.crt", "../certs/a.key"},
+		{"relative to the bundle root", "certs/a.crt", "certs/a.key"},
+	} {
+		t.Run(tc.name+" loads nothing", func(t *testing.T) {
+			b := fullBundle()
+			b.CertFile, b.KeyFile = tc.cert, tc.key
+			s := startS1(t, b, true)
+			// With the certificate not loaded the options still are, so the alert tells the file was read.
+			s.awaitRefusal(t, s1Host)
+			_, err := s.tr.Handshake(s1Host, s.ca.Pool())
+			requireRefused(t, "the known name with the certificate path "+tc.cert, err)
+			t.Logf("certFile %q was not loaded: a relative path is not read against the YAML's directory or the bundle root (O14: Traefik reads it against its own working directory, which is / in this image)", tc.cert)
+		})
 	}
 }
