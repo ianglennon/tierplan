@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package ingresswire
+
+// Challenge is the first message, server to node. The nonce is fresh for every
+// connection.
+type Challenge struct {
+	T             string   `json:"t"`
+	Proto         int      `json:"proto"`
+	Nonce         []byte   `json:"nonce"`
+	TS            int64    `json:"ts"`
+	ServerVersion string   `json:"serverVersion,omitempty"`
+	Features      []string `json:"features,omitempty"`
+}
+
+// Auth is the node's answer to the challenge. Sig is an Ed25519 signature over
+// the transcript: a proof of possession of the key in Pub. Each field says which
+// mode it belongs to.
+type Auth struct {
+	T           string `json:"t"`
+	Mode        string `json:"mode"`
+	Proto       int    `json:"proto"`
+	NodeVersion string `json:"nodeVersion,omitempty"`
+	// NodeID is the node's ID, set in connect mode only.
+	NodeID string `json:"nodeId,omitempty"`
+	// Name is the name the node asks for (enrol mode).
+	Name string `json:"name,omitempty"`
+	// SwarmNodeID is the swarm node ID the node runs on (enrol mode).
+	SwarmNodeID string `json:"swarmNodeId,omitempty"`
+	// Aud is the host[:port] the node dialed. The server checks it against its
+	// own public URL, so a relay to a different host fails.
+	Aud   string `json:"aud"`
+	Nonce []byte `json:"nonce"`
+	TS    int64  `json:"ts"`
+	// Pub is the node's Ed25519 public key (both modes): the key to enrol, or the
+	// key the signature is checked against in connect mode.
+	Pub []byte `json:"pub"`
+	// Token is the ingress join token (enrol mode). It travels here and never in
+	// a URL, so a proxy does not log it.
+	Token string `json:"token,omitempty"`
+	// EKM is the TLS exported keying material, empty when the node has none.
+	EKM []byte `json:"ekm,omitempty"`
+	Sig []byte `json:"sig"`
+}
+
+// Welcome is the server's answer to a successful handshake. InstanceID is the
+// installation's ID: it guards against a misdirected or stale TierPlan and is
+// not server authentication (TLS and the pins are).
+type Welcome struct {
+	T          string   `json:"t"`
+	NodeID     string   `json:"nodeId"`
+	EnvID      string   `json:"envId"`
+	InstanceID string   `json:"instanceId"`
+	HealthMs   int      `json:"healthMs"`
+	Pins       []string `json:"pins,omitempty"`
+	ServerTime int64    `json:"serverTime"`
+	// Features lists the optional behaviour the server offers, including any node
+	// message type later than the four of this version. A node sends a message
+	// type only when it is named here.
+	Features []string `json:"features,omitempty"`
+}
+
+// Refuse is the server's answer to a handshake it will not accept. The server
+// closes the connection with status 1008 and Code as the reason afterwards.
+type Refuse struct {
+	T            string `json:"t"`
+	Code         string `json:"code"`
+	Detail       string `json:"detail,omitempty"`
+	RetryAfterMs int    `json:"retryAfterMs,omitempty"`
+}
