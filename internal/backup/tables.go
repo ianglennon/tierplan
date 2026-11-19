@@ -105,6 +105,12 @@ var Tables = map[string]Class{
 	"ingress_cert_issuances": Included, // the budget belongs to the CA and the registered domain, not the instance (D-38)
 	"ingress_cert_orders":    Excluded, // an in-flight order never comes back with a restore, as acme_orders
 
+	// The proxy nodes an environment enrolled over the ingress channel (Phase 22). A restored server
+	// still recognises its nodes by their stored public keys, so the node rows travel; a node enrolled
+	// after the backup was taken must enrol again. They hold no sealed column, so vault.SealedColumns
+	// does not change. The join token table is classified with the credentials that never travel below.
+	"ingress_nodes": Included,
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key
@@ -208,7 +214,9 @@ var Tables = map[string]Class{
 	"sessions":        Excluded,
 	"user_links":      Excluded,
 	"env_join_tokens": Excluded,
-	"backup_runs":     Excluded,
+	// A join token never travels: a restored server is enrolled into with a new token, as for agents.
+	"ingress_join_tokens": Excluded,
+	"backup_runs":         Excluded,
 
 	// Bookkeeping written by the export and restore code itself.
 	"app_meta":         Special, // instance identity and the audit-prune anchor; carried by hand
