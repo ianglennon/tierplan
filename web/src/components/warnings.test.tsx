@@ -2454,7 +2454,11 @@ describe("HealthBell ingress render failure item", () => {
 
   it("falls back to a generic reason for a code this build does not know", async () => {
     items = [
-      renderWarning({ hostname: "app.example.com", path: "/", code: "ingress_render_from_the_future" }),
+      renderWarning({
+        hostname: "app.example.com",
+        path: "/",
+        code: "ingress_render_from_the_future",
+      }),
     ];
     renderWarnings();
     await openBell("Warnings, 1 item");
