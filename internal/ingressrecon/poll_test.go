@@ -253,6 +253,51 @@ func TestRemovedEnvironmentDropsItsBundle(t *testing.T) {
 	assertNothingAnnounced(t, s)
 }
 
+// WR-01 (phase 21 review): an environment whose renders have only ever failed holds no bundle. When it is removed,
+// Versions stops listing it, yet the poll and the safety tick must still visit it, so its failure leaves Failures
+// (and the bell) instead of standing until a restart.
+func TestRemovedEnvironmentThatOnlyFailedClearsItsFailure(t *testing.T) {
+	for _, pass := range []struct {
+		name string
+		run  func(r *Reconciler, ctx context.Context)
+	}{
+		{"the poll", (*Reconciler).pollVersions},
+		{"the safety tick", (*Reconciler).renderAll},
+	} {
+		t.Run(pass.name, func(t *testing.T) {
+			ctx := context.Background()
+			rg := newRig(t)
+			rg.certs.setServable("app.example.com")
+			rg.seedSwarmStack("stack-shop", "shop")
+			rg.storeRoutes("stack-shop", decl("app.example.com", "/"))
+			corruptRoute(t, rg, "app.example.com", corruptedPrefix)
+
+			r := New(rg.deps(nil))
+			if err := r.Reconcile(ctx, rigEnv); err == nil {
+				t.Fatal("the first render of a corrupted route succeeded, want a refusal")
+			}
+			if _, ok := r.Current(rigEnv); ok {
+				t.Fatal("Current holds a bundle after a render that only failed")
+			}
+			if got := r.Failures(); len(got) != 1 || got[0].EnvID != rigEnv {
+				t.Fatalf("Failures = %+v, want one for %s", got, rigEnv)
+			}
+
+			if _, err := rg.st.Write.Exec(`DELETE FROM environments WHERE id = ?`, rigEnv); err != nil {
+				t.Fatalf("remove the environment: %v", err)
+			}
+			pass.run(r, ctx)
+
+			if got := r.Failures(); len(got) != 0 {
+				t.Fatalf("Failures = %+v after %s visited the removed environment, want none", got, pass.name)
+			}
+			if b, ok := r.Current(rigEnv); ok {
+				t.Fatalf("Current holds a bundle %s for the removed environment", b.ID)
+			}
+		})
+	}
+}
+
 // Pitfall 12 / D-20: an environment with no ingress row and no claims gets no bundle and tells nobody; one with a row
 // and no claims gets the empty bundle (one file) and tells Changes once.
 func TestEnvironmentWithoutARowGetsNoBundle(t *testing.T) {

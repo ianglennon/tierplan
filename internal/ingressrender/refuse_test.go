@@ -166,6 +166,79 @@ func TestRefusesUnsafeValues(t *testing.T) {
 	})
 }
 
+// TestRefusesBackendURLCharacters pins the phase 21 review's WR-02: the stack and service names go into
+// the backend URL, so any character that would give that URL another host, userinfo, path, query or
+// fragment is refused, rendered route or not. Names of the characters compose allows are not refused.
+func TestRefusesBackendURLCharacters(t *testing.T) {
+	fields := []struct {
+		field string
+		set   func(r *ingress.SnapshotRoute, v string)
+	}{
+		{"service", func(r *ingress.SnapshotRoute, v string) { r.Service = v }},
+		{"stackName", func(r *ingress.SnapshotRoute, v string) { r.StackName = v }},
+	}
+	chars := map[string]string{
+		"at sign": "@", "slash": "/", "backslash": `\`, "hash": "#", "question mark": "?", "colon": ":",
+		"percent": "%", "space": " ", "tab": "\t", "newline": "\n", "non-ASCII": "é",
+	}
+	for _, f := range fields {
+		for _, name := range slices.Sorted(maps.Keys(chars)) {
+			for _, rendered := range []bool{true, false} {
+				label := f.field + " with " + name
+				if !rendered {
+					label += " on a skipped route"
+				}
+				t.Run(label, func(t *testing.T) {
+					in := oneRouteInput()
+					if !rendered {
+						in.Certs = nil
+					}
+					f.set(&in.Snapshot.Routes[0], "x"+chars[name]+"evil.example")
+					res, err := Render(in)
+					var refused *RefusedError
+					if !errors.As(err, &refused) {
+						t.Fatalf("error %T %v is not a *RefusedError", err, err)
+					}
+					if refused.Code != CodeUnsafeValue || refused.Field != f.field {
+						t.Errorf("refused code %q field %q, want %q %q", refused.Code, refused.Field, CodeUnsafeValue, f.field)
+					}
+					if res.Bundle.ID != "" || len(res.Bundle.Files) != 0 {
+						t.Errorf("a refusal returned a bundle: %+v", res)
+					}
+				})
+			}
+		}
+	}
+
+	t.Run("compose-legal names are not refused", func(t *testing.T) {
+		in := oneRouteInput()
+		in.Snapshot.Routes[0].StackName = "my-stack_2.v1"
+		in.Snapshot.Routes[0].Service = "Web.API-2_x"
+		res := mustRender(t, in)
+		if len(res.Skipped) != 0 {
+			t.Errorf("a compose-legal route was skipped: %+v", res.Skipped)
+		}
+	})
+}
+
+// TestPortOutOfRangeHasNoBackend pins the second half of WR-02: a port no TCP service can listen on
+// names no backend, so the route is skipped as no_backend rather than written into a URL.
+func TestPortOutOfRangeHasNoBackend(t *testing.T) {
+	for _, port := range []int{0, -1, 65536, 1 << 20} {
+		in := oneRouteInput()
+		in.Snapshot.Routes[0].Port = port
+		res := mustRender(t, in)
+		if len(res.Skipped) != 1 || res.Skipped[0].Reason != SkipNoBackend {
+			t.Errorf("port %d: Skipped = %+v, want the route skipped as %s", port, res.Skipped, SkipNoBackend)
+		}
+	}
+	in := oneRouteInput()
+	in.Snapshot.Routes[0].Port = 65535
+	if res := mustRender(t, in); len(res.Skipped) != 0 {
+		t.Errorf("port 65535: Skipped = %+v, want it rendered", res.Skipped)
+	}
+}
+
 // TestNoTemplateDelimiters pins the second line of D-08: a rendered file holding two consecutive
 // opening braces is refused, and the empty mapping and single braces are not.
 func TestNoTemplateDelimiters(t *testing.T) {
