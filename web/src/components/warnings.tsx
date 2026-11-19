@@ -186,9 +186,10 @@ const isAutoDeployKind = (id: string): id is AutoDeployKind =>
 
 // The HTTPS items, in the order the bell lists them (D-04): the fallback first, then the failed
 // renewal, the pause, the clock, the certificate that runs short and the TXT record left behind.
-// The per-hostname certificate items, in the order the bell lists them (D-10, D-32): the install-wide
-// pause, then failing renewals, then certificates that expire soon.
+// The ingress items, in the order the bell lists them (D-10, D-29, D-32): a proxy configuration that could not
+// be rendered first, then the install-wide certificate pause, failing renewals, and certificates that expire soon.
 const INGRESS_ORDER = [
+  "ingress_render_failed",
   "ingress_certs_paused",
   "ingress_cert_renewal_failed",
   "ingress_cert_expiring",
@@ -664,16 +665,44 @@ const INGRESS_CLASSES = [
   "dns_unavailable",
 ] as const;
 
-// The title and body of one ingress certificate item (D-10, D-32, D-41, D-45), or null for an id this
+// The codes a render failure can carry, each with a reason of its own in bell.json. A code this build
+// does not know gets the generic reason.
+const INGRESS_RENDER_CODES = [
+  "ingress_render_unsafe_value",
+  "ingress_render_strip_root",
+  "ingress_render_template_delimiter",
+  "ingress_render_name_collision",
+  "ingress_render_read_failed",
+  "ingress_render_failed",
+  "ingress_schema_unsupported",
+] as const;
+
+// The title and body of one ingress item (D-10, D-29, D-32, D-41, D-45), or null for an id this
 // build has no words for. The server sends facts, never sentences. Every value is plain text, and
 // the item carries no link: there is no ingress page until Phase 27.
 function ingressItemCopy(w: Warning, t: Translate): { title: string; body: string } | null {
   const g = w.ingress;
   const hostname = g?.hostname ?? "";
-  const more = g?.more ?? 0;
+  const r = w.ingressRender;
+  const more = g?.more ?? r?.more ?? 0;
   const withMore = (body: string) =>
     more > 0 ? `${body} ${t("bell.ingress.more", { count: more })}` : body;
   switch (w.id) {
+    case "ingress_render_failed": {
+      const code = INGRESS_RENDER_CODES.find((c) => c === r?.code);
+      const reason = t(
+        code ? `bell.ingress.render.reason.${code}` : "bell.ingress.render.reason.generic",
+      );
+      const route = r?.hostname ? `${r.hostname}${r.path ?? ""}` : "";
+      return {
+        title: t("bell.ingress.render.title"),
+        body: withMore(
+          route
+            ? t("bell.ingress.render.body", { route, reason })
+            : t("bell.ingress.render.bodyNoRoute", { reason }),
+        ),
+      };
+    }
     case "ingress_cert_expiring": {
       const urgent = g?.days === 7;
       const kind = g?.source === "upload" ? "Upload" : "Acme";

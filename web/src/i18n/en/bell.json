@@ -221,6 +221,21 @@
     "ingress": {
       "more_one": "and {{count}} more",
       "more_other": "and {{count}} more",
+      "render": {
+        "title": "Proxy configuration not updated",
+        "body": "TierPlan couldn't render the proxy configuration for {{route}}: {{reason}}. The proxy keeps serving its last working configuration.",
+        "bodyNoRoute": "TierPlan couldn't render an environment's proxy configuration: {{reason}}. The proxy keeps serving its last working configuration.",
+        "reason": {
+          "generic": "the render failed",
+          "ingress_render_unsafe_value": "a value in the route holds a brace or backtick, which the proxy configuration can't carry",
+          "ingress_render_strip_root": "the route strips the root path, which would remove every path",
+          "ingress_render_template_delimiter": "the generated configuration holds two opening braces, which the proxy would run as a template",
+          "ingress_render_name_collision": "two routes would get the same name in the proxy configuration",
+          "ingress_render_read_failed": "TierPlan couldn't read the routes or certificates",
+          "ingress_render_failed": "the render failed",
+          "ingress_schema_unsupported": "the proxy and this TierPlan share no configuration format"
+        }
+      },
       "expiring": {
         "title": "Certificate expires soon",
         "titleUrgent": "Certificate expires within a week",
