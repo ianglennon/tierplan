@@ -40,6 +40,34 @@ type Session struct {
 
 	reasonMu sync.Mutex
 	reason   string
+
+	// heardAt is when the node last sent a message, under heardMu.
+	heardMu sync.Mutex
+	heardAt time.Time
+}
+
+// kickGrace is how long a kicked session waits for the node to answer the close frame before the connection
+// is dropped.
+const kickGrace = time.Second
+
+// heard records that the node sent a message at t. Every message is a sign of life.
+func (s *Session) heard(t time.Time) {
+	s.heardMu.Lock()
+	if t.After(s.heardAt) {
+		s.heardAt = t
+	}
+	s.heardMu.Unlock()
+}
+
+// lastSignOfLife is when the node last sent a message, or when it connected if it has sent none yet, so a new
+// session has the whole window to say its first.
+func (s *Session) lastSignOfLife() time.Time {
+	s.heardMu.Lock()
+	defer s.heardMu.Unlock()
+	if s.heardAt.After(s.ConnectedAt) {
+		return s.heardAt
+	}
+	return s.ConnectedAt
 }
 
 // Done is closed when the session has ended.
@@ -69,11 +97,33 @@ func (s *Session) close(code websocket.StatusCode, reason string) {
 	s.once.Do(func() { _ = s.ws.Close(code, reason) })
 }
 
+// kick ends the session with policy-violation status and reason as the close reason, then drops it if the
+// node has not answered within kickGrace. A session that is already closing is left alone.
+func (s *Session) kick(reason string) { s.kickWith(websocket.StatusPolicyViolation, reason) }
+
+// kickWith is kick with the status of the close frame given.
+func (s *Session) kickWith(code websocket.StatusCode, reason string) {
+	s.once.Do(func() {
+		done := make(chan struct{})
+		go func() {
+			_ = s.ws.Close(code, reason)
+			close(done)
+		}()
+		t := time.NewTimer(kickGrace)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+			_ = s.ws.CloseNow()
+		}
+	})
+}
+
 // run is the session's read loop: it reads node messages until the connection ends or the node breaks the
 // protocol, and returns then. The first message must be a hello (anything else, or a binary frame, is a
 // protocol error); on it the node is sent its environment's bundle. The remaining messages (applied,
-// rejected, health), the push of a changed bundle and the silence watchdog are plan 22-16's, so any other
-// message closes the session protocol_error for now.
+// rejected, health) and the push of a changed bundle are plan 22-16's, so any other message closes the session
+// protocol_error for now. Every message read counts as a sign of life for the watchdog (Hub.watch).
 func (h *Hub) run(ctx context.Context, s *Session) {
 	defer close(s.done)
 	hello := false
@@ -83,6 +133,7 @@ func (h *Hub) run(ctx context.Context, s *Session) {
 			s.endWith(closeReason(err))
 			return
 		}
+		s.heard(h.now())
 		if typ != websocket.MessageText {
 			h.protocolError(s)
 			return

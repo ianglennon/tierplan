@@ -92,7 +92,16 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		NodeID: acc.NodeID, EnvID: acc.EnvID, Name: acc.Name, IP: acc.IP, Version: acc.Version,
 		DialHost: dialHost(aud), ConnectedAt: h.now(), order: order, ws: c, done: make(chan struct{}),
 	}
+	if h.beforeRegister != nil {
+		h.beforeRegister(s.NodeID)
+	}
 	switch err := h.register(s); {
+	case errors.Is(err, errSuperseded):
+		// This connection was accepted before the node's newest one, which has registered: the node has moved
+		// on, so this one only says why it is being dropped.
+		s.endWith(ingresswire.CloseReplaced)
+		s.close(websocket.StatusGoingAway, ingresswire.CloseReplaced)
+		return
 	case errors.Is(err, errNoLongerActive):
 		// A revoke landed between the connect check and the registration: the node was welcomed, and is now
 		// told why it is being dropped.
@@ -106,6 +115,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.log.Info("ingress node connected", "node_id", s.NodeID, "environment_id", s.EnvID, "version", s.Version, "ip", s.IP)
+	go h.watch(sctx, s)
 	h.run(sctx, s)
 	h.finish(s)
 	h.log.Info("ingress node disconnected", "node_id", s.NodeID, "environment_id", s.EnvID, "reason", s.Reason())

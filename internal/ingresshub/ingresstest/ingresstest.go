@@ -71,6 +71,16 @@ type Options struct {
 	Wrap func(http.Handler) http.Handler
 	// Log is where the hub logs, so a test can read what it wrote. Nil discards it.
 	Log *slog.Logger
+	// WatchTicks replaces the silence watchdog's ticker (Hub.WithWatchTicks). It is shared by every session,
+	// so a test that uses it holds one session. OfflineAfter is the offline window (default 90 s) and
+	// FirstFrame how long a node has to send its auth (default 3 s); zero keeps the default.
+	WatchTicks   <-chan time.Time
+	OfflineAfter time.Duration
+	FirstFrame   time.Duration
+	// Hold is called with the node ID after a handshake was verified and the node welcomed, and before its
+	// session is registered, so a test can revoke the node or finish another connection in that window. A
+	// test that blocks in it must release it before the test ends.
+	Hold func(nodeID string)
 }
 
 // Server is a running in-process TierPlan ingress endpoint.
@@ -126,9 +136,18 @@ func Start(t *testing.T, o Options) *Server {
 	if o.AuditRefusals {
 		hub = hub.WithRefusalAudit(aud)
 	}
+	hub = hub.WithOfflineAfter(o.OfflineAfter).WithFirstFrameTimeout(o.FirstFrame)
+	if o.WatchTicks != nil {
+		hub = hub.WithWatchTicks(o.WatchTicks)
+	}
+	if o.Hold != nil {
+		hub = hub.WithBeforeRegister(o.Hold)
+	}
 	if o.Configure != nil {
 		hub = o.Configure(hub)
 	}
+	// A revoke through the service closes the session, as it does in production.
+	s.Service.WithKicker(hub)
 	h := hub.Handler()
 	if o.Wrap != nil {
 		h = o.Wrap(h)

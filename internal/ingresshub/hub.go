@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,10 @@ import (
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
 )
+
+// DefaultOfflineAfter is how long a session may be silent before the hub closes it: three health intervals,
+// so two lost messages in a row do not read as a dead node (D-12).
+const DefaultOfflineAfter = 3 * ingresswire.HealthInterval
 
 // BundleSource is where the hub gets the bundle of an environment: its current one, and the notifier that is
 // told when an environment's bundle ID changes. ingressrecon.Reconciler satisfies it. The files of a bundle
@@ -55,6 +60,13 @@ type Hub struct {
 	warnLimit *auth.IPLimiter
 	// firstFrame is how long a node has to answer the challenge.
 	firstFrame time.Duration
+	// offlineAfter is how long a session may be silent, and watchTicks, when set, replaces the watchdog's
+	// ticker so a test decides when silence is looked for.
+	offlineAfter time.Duration
+	watchTicks   <-chan time.Time
+	// beforeRegister, when set, is called with the node ID after a handshake has been verified and welcomed
+	// and before the session is registered (WithBeforeRegister).
+	beforeRegister func(nodeID string)
 
 	// life serializes session lifecycle transitions: a registration and a kick take it, so a revoke that
 	// commits and then kicks either finds the session registered or is seen by the registration (register).
@@ -62,7 +74,11 @@ type Hub struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session
-	closed   bool
+	// newest is the highest accept order that has registered for each node. A session whose connection was
+	// accepted earlier is superseded and is turned away. It holds one number per node that ever connected, so
+	// it is bounded by the number of nodes.
+	newest map[string]uint64
+	closed bool
 	// regChanged is closed and cleared whenever a session is registered or removed, to wake AwaitSession
 	// waiters; a waiter makes it. Guarded by mu.
 	regChanged chan struct{}
@@ -82,10 +98,12 @@ func NewHub(svc *Service, src BundleSource, log *slog.Logger, now func() time.Ti
 	}
 	return &Hub{
 		svc: svc, src: src, log: log, now: now,
-		gate:       newGate(now),
-		warnLimit:  auth.NewIPLimiter(time.Minute, 1, limiterTTL, now),
-		firstFrame: firstFrameTimeout,
-		sessions:   map[string]*Session{},
+		gate:         newGate(now),
+		warnLimit:    auth.NewIPLimiter(time.Minute, 1, limiterTTL, now),
+		firstFrame:   firstFrameTimeout,
+		offlineAfter: DefaultOfflineAfter,
+		sessions:     map[string]*Session{},
+		newest:       map[string]uint64{},
 	}
 }
 
@@ -131,6 +149,33 @@ func (h *Hub) WithFirstFrameTimeout(d time.Duration) *Hub {
 	if d > 0 {
 		h.firstFrame = d
 	}
+	return h
+}
+
+// WithOfflineAfter sets how long a session may be silent before the watchdog closes it, and for how long a
+// session counts as live. A value below one keeps DefaultOfflineAfter. Call it before the hub serves.
+func (h *Hub) WithOfflineAfter(d time.Duration) *Hub {
+	if d > 0 {
+		h.offlineAfter = d
+	}
+	return h
+}
+
+// WithWatchTicks replaces the watchdog's time.Ticker with ticks: every value received is one look for silent
+// sessions. A test sends on an unbuffered channel, so a send that completes means the watchdog took the tick,
+// and the next send completing means it has finished evaluating the first. The channel is shared by every
+// session of the hub, so a test that uses it holds one session. Nil, the default, keeps the ticker. Call it
+// before the hub serves.
+func (h *Hub) WithWatchTicks(ticks <-chan time.Time) *Hub {
+	h.watchTicks = ticks
+	return h
+}
+
+// WithBeforeRegister sets a function the hub calls with the node ID after a handshake was verified and the
+// node welcomed, and before its session is registered. It exists for tests, which block in it to revoke a node
+// or finish another connection in that window; nothing else should set it. Call it before the hub serves.
+func (h *Hub) WithBeforeRegister(f func(nodeID string)) *Hub {
+	h.beforeRegister = f
 	return h
 }
 
@@ -225,20 +270,29 @@ func (h *Hub) isClosed() bool {
 	return h.closed
 }
 
-// errHubClosed and errNoLongerActive are why register turned a session away.
 var (
 	errHubClosed      = errors.New("ingresshub: the hub is closed")
 	errNoLongerActive = errors.New("ingresshub: the node was revoked while it connected")
 )
 
+// errSuperseded is why register turned away a session of a node whose newer connection has registered
+// already; errHubClosed and errNoLongerActive, above, are the other reasons.
+var errSuperseded = errors.New("ingresshub: a newer connection of the node has registered")
+
 // register adds s, replacing any session of the same node: a half-open stale connection must not block the
-// reconnect. The node's status is read again here, after the lifecycle lock is taken, so a revoke that commits
-// first and then kicks (Kick takes the same lock) is either seen by this read or finds the session already in
-// the map; there is no order in which a session of a revoked node stays registered (D-09). It reports
-// errHubClosed when the hub is closed.
+// reconnect. The old session is closed with the reason replaced, and it leaves the map in the same critical
+// section the new one enters, so two sessions of one node are never registered. It reports errHubClosed when
+// the hub is closed.
 //
-// The superseded-order rule (an older handshake that finishes last must not replace a newer session), Kick,
-// KickEnv, Live, DialHosts and the silence watchdog are plan 22-15's.
+// A session whose connection was accepted before that of the node's newest session is turned away with
+// errSuperseded instead: two handshakes of one node can overlap, the node has moved on to the newer connection
+// and dropped the older, and an older handshake that finishes last must not replace the live session with one
+// nobody answers on (D-09).
+//
+// The node's status is read again here, after the lifecycle lock is taken. A revoke commits first and then
+// calls Kick, and Kick takes the same lock, so either the status read below sees the revoke, or the session is
+// already in the map when Kick looks and is closed by it. There is no order in which a session of a revoked
+// node stays registered (D-09, T-22-36).
 func (h *Hub) register(s *Session) error {
 	h.life.Lock()
 	defer h.life.Unlock()
@@ -251,6 +305,11 @@ func (h *Hub) register(s *Session) error {
 		h.mu.Unlock()
 		return errHubClosed
 	}
+	if n, ok := h.newest[s.NodeID]; ok && s.order < n {
+		h.mu.Unlock()
+		return errSuperseded
+	}
+	h.newest[s.NodeID] = s.order
 	old := h.sessions[s.NodeID]
 	h.sessions[s.NodeID] = s
 	h.notifyRegistryLocked()
@@ -258,10 +317,111 @@ func (h *Hub) register(s *Session) error {
 
 	if old != nil {
 		old.endWith(ingresswire.CloseReplaced)
-		// The close frame waits for the peer, so it is not sent under the lifecycle lock.
-		go old.close(websocket.StatusGoingAway, ingresswire.CloseReplaced)
+		// The close frame waits for the peer, so it is not sent under the lifecycle lock; the grace makes it
+		// bounded.
+		go old.kickWith(websocket.StatusGoingAway, ingresswire.CloseReplaced)
 	}
 	return nil
+}
+
+// Kick ends the live session of nodeID, if it has one, with policy-violation status and code as the close
+// reason, and records code as why it ended. It returns at once; the session is closed within a second even if
+// the node never answers the close frame. The service calls it after a revoke has committed.
+//
+// Kick takes the lifecycle lock briefly, which makes it wait for a registration in progress: a session that
+// registered before the revoke committed is in the map by the time Kick looks (see register).
+func (h *Hub) Kick(nodeID, code string) {
+	h.life.Lock()
+	h.mu.Lock()
+	s := h.sessions[nodeID]
+	h.mu.Unlock()
+	h.life.Unlock()
+	if s != nil {
+		s.endWith(code)
+		go s.kick(code)
+	}
+}
+
+// KickEnv is Kick for every live session of the environment envID, and for no other.
+func (h *Hub) KickEnv(envID, code string) {
+	h.life.Lock()
+	h.mu.Lock()
+	var live []*Session
+	for _, s := range h.sessions {
+		if s.EnvID == envID {
+			live = append(live, s)
+		}
+	}
+	h.mu.Unlock()
+	h.life.Unlock()
+	for _, s := range live {
+		s.endWith(code)
+		go s.kick(code)
+	}
+}
+
+// Sessions returns the registered sessions, in no order.
+func (h *Hub) Sessions() []*Session {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]*Session, 0, len(h.sessions))
+	for _, s := range h.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
+// Live reports whether nodeID has a registered session that has shown a sign of life within the offline
+// window.
+func (h *Hub) Live(nodeID string) bool {
+	s := h.Session(nodeID)
+	return s != nil && h.alive(s)
+}
+
+// alive is whether s has shown a sign of life within the offline window.
+func (h *Hub) alive(s *Session) bool {
+	return h.now().Sub(s.lastSignOfLife()) <= h.offlineAfter
+}
+
+// DialHosts returns the host each live session dialed, once each and sorted: the names the ingress channel is
+// reachable under, which the certificate preflight of an ACME order checks (D-29).
+func (h *Hub) DialHosts() []string {
+	var hosts []string
+	for _, s := range h.Sessions() {
+		if h.alive(s) {
+			hosts = append(hosts, s.DialHost)
+		}
+	}
+	slices.Sort(hosts)
+	return slices.Compact(hosts)
+}
+
+// watch closes a session whose last sign of life is older than the offline window, with the reason timeout.
+// The close frame is bounded by kickGrace, because the peer has most likely stopped answering. It ends with
+// the session or ctx.
+func (h *Hub) watch(ctx context.Context, s *Session) {
+	ticks := h.watchTicks
+	if ticks == nil {
+		t := time.NewTicker(max(h.offlineAfter/6, 10*time.Millisecond))
+		defer t.Stop()
+		ticks = t.C
+	}
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+		if silent := h.now().Sub(s.lastSignOfLife()); silent > h.offlineAfter {
+			h.log.Warn("ingress node session closed: nothing heard within the offline window",
+				"node_id", s.NodeID, "environment_id", s.EnvID, "silent_for", silent.Round(time.Second).String())
+			s.endWith(ingresswire.CloseTimeout)
+			s.kick(ingresswire.CloseTimeout)
+			return
+		}
+	}
 }
 
 // finish removes s from the registry once its session has ended, unless a newer session of the node has
