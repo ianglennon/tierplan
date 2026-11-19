@@ -50,7 +50,8 @@ func TestExemptRoutesOfTheProductionRouterAreExactlyTheSevenKnownPaths(t *testin
 		t.Errorf("the production router has an unguarded route: %v", err)
 	}
 
-	// /ingress/connect is a placeholder until Phase 22 (D-25): with no handler supplied it answers 404.
+	// /ingress/connect is mounted with the real hub in production since Phase 22 (D-25). This router test builds it with
+	// no handler, so it still answers 404 here.
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, httpx.IngressConnectPath, nil))
 	if rec.Code != http.StatusNotFound {
