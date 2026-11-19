@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
@@ -173,5 +175,98 @@ func TestIngressWireImportsNoWire(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no non-test Go file was checked")
+	}
+}
+
+func fixedHello() Hello {
+	return Hello{T: TypeHello, Version: "0.2.0", Schemas: []int{1}, AppliedID: fixedBundleID}
+}
+
+func fixedApplied() Applied { return Applied{T: TypeApplied, ID: fixedBundleID} }
+
+func fixedRejected() Rejected {
+	return Rejected{T: TypeRejected, ID: fixedBundleID, Reason: "traefik_reload_failed"}
+}
+
+func fixedHealth() Health {
+	return Health{T: TypeHealth, TraefikOK: true, AppliedID: fixedBundleID}
+}
+
+func fixedEnvelope(t *testing.T) BundleEnvelope {
+	t.Helper()
+	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 3, Certs: 2, Own: 1},
+		[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: []byte("http:\n  routers: {}\n")}}, nil)
+	if err != nil {
+		t.Fatalf("build the fixed bundle: %v", err)
+	}
+	return BundleEnvelope{T: TypeBundle, InstanceID: fixedInstanceID, Bundle: b}
+}
+
+func TestIngressFrozenNodeMessagesMatchTheirGoldenFiles(t *testing.T) {
+	golden(t, "hello", fixedHello())
+	golden(t, "applied", fixedApplied())
+	golden(t, "rejected", fixedRejected())
+	golden(t, "health", fixedHealth())
+	golden(t, "bundle_envelope", fixedEnvelope(t))
+}
+
+// TestFrozenIngressNamesDoNotChange pins every string and number a node in the
+// field compares against or sends.
+func TestFrozenIngressNamesDoNotChange(t *testing.T) {
+	for _, c := range []struct{ name, got, want string }{
+		{"Subprotocol", Subprotocol, "tierplan.ingress.v1"},
+		{"TypeChallenge", TypeChallenge, "challenge"},
+		{"TypeAuth", TypeAuth, "auth"},
+		{"TypeWelcome", TypeWelcome, "welcome"},
+		{"TypeRefuse", TypeRefuse, "refuse"},
+		{"TypeHello", TypeHello, "hello"},
+		{"TypeBundle", TypeBundle, "bundle"},
+		{"TypeApplied", TypeApplied, "applied"},
+		{"TypeRejected", TypeRejected, "rejected"},
+		{"TypeHealth", TypeHealth, "health"},
+		{"ModeEnrol", ModeEnrol, "enrol"},
+		{"ModeConnect", ModeConnect, "connect"},
+		{"TokenPrefix", TokenPrefix, "tpit_"},
+		{"AgentTokenPrefix", AgentTokenPrefix, "tpjt_"},
+		{"RefuseAuthRejected", RefuseAuthRejected, "auth_rejected"},
+		{"RefuseWrongTokenKind", RefuseWrongTokenKind, "wrong_token_kind"},
+		{"RefuseRevoked", RefuseRevoked, "revoked"},
+		{"RefuseNodeRevoked", RefuseNodeRevoked, "node_revoked"},
+		{"RefuseNodeNotInSwarm", RefuseNodeNotInSwarm, "node_not_in_swarm"},
+		{"RefuseNodeUnverified", RefuseNodeUnverified, "node_unverified"},
+		{"RefuseNodeAlreadyEnrolled", RefuseNodeAlreadyEnrolled, "node_already_enrolled"},
+		{"RefuseRateLimited", RefuseRateLimited, "rate_limited"},
+		{"RefuseInsecureTransport", RefuseInsecureTransport, "insecure_transport"},
+		{"RefuseInternal", RefuseInternal, "internal_error"},
+		{"CloseProtocolError", CloseProtocolError, "protocol_error"},
+		{"CloseRevoked", CloseRevoked, "revoked"},
+		{"CloseReplaced", CloseReplaced, "replaced"},
+		{"CloseRemoved", CloseRemoved, "removed"},
+		{"CloseTimeout", CloseTimeout, "timeout"},
+		{"CloseShutdown", CloseShutdown, "shutdown"},
+	} {
+		if c.got != c.want {
+			t.Errorf("a frozen name changed: %s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		name      string
+		got, want int64
+	}{
+		{"ProtoVersion", ProtoVersion, 1},
+		{"MaxHandshakeBytes", MaxHandshakeBytes, 16 << 10},
+		{"HandshakeTimeout", int64(HandshakeTimeout), int64(10_000_000_000)},
+		{"MaxNodeMessageBytes", MaxNodeMessageBytes, 16 << 10},
+		{"MaxBundleMessageBytes", MaxBundleMessageBytes, 64 << 20},
+		{"HealthInterval", int64(HealthInterval), int64(30_000_000_000)},
+		{"MaxNameLen", MaxNameLen, 128},
+		{"MaxVersionLen", MaxVersionLen, 64},
+		{"MaxSchemas", MaxSchemas, 16},
+		{"MaxReasonLen", MaxReasonLen, 512},
+		{"MaxIdentityLen", MaxIdentityLen, 128},
+	} {
+		if c.got != c.want {
+			t.Errorf("a frozen limit changed: %s = %d, want %d", c.name, c.got, c.want)
+		}
 	}
 }

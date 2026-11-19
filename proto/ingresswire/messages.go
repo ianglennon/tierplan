@@ -3,6 +3,15 @@
 
 package ingresswire
 
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
+)
+
 // Challenge is the first message, server to node. The nonce is fresh for every
 // connection.
 type Challenge struct {
@@ -68,4 +77,125 @@ type Refuse struct {
 	Code         string `json:"code"`
 	Detail       string `json:"detail,omitempty"`
 	RetryAfterMs int    `json:"retryAfterMs,omitempty"`
+}
+
+// Hello is the first message a node sends after the welcome. It says what the
+// node is and which bundle it already runs; the server answers with a bundle.
+type Hello struct {
+	T string `json:"t"`
+	// Version is the node's version string; the server keeps at most
+	// MaxVersionLen bytes of it.
+	Version string `json:"version"`
+	// Schemas lists the bundle schemas the node can apply; the server reads at
+	// most MaxSchemas of them.
+	Schemas []int `json:"schemas"`
+	// AppliedID is the ID of the bundle the node currently runs, if any.
+	AppliedID string `json:"appliedId,omitempty"`
+}
+
+// Applied says the node verified a bundle and made it live. ID is the bundle ID.
+type Applied struct {
+	T  string `json:"t"`
+	ID string `json:"id"`
+}
+
+// Rejected says the node did not apply a bundle, and why. Reason is a short
+// machine-readable code; the server keeps at most MaxReasonLen bytes of it.
+type Rejected struct {
+	T      string `json:"t"`
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// Health is the node's periodic proof of life, every HealthInterval.
+type Health struct {
+	T         string `json:"t"`
+	TraefikOK bool   `json:"traefikOk"`
+	// AppliedID is the ID of the bundle the node runs now, if any.
+	AppliedID string `json:"appliedId,omitempty"`
+}
+
+var (
+	// ErrUnknownMessage is the error for a node message whose type is not one of
+	// hello, applied, rejected or health. The ingress channel accepts only those
+	// four; the server closes the session on it.
+	ErrUnknownMessage = errors.New("ingresswire: the ingress channel accepts only hello, applied, rejected and health")
+	// ErrMalformed is the error for a node message that is not a JSON object, or
+	// has no type, or whose known fields have the wrong JSON type.
+	ErrMalformed = errors.New("ingresswire: malformed node message")
+)
+
+// ParseNodeMessage parses one message a node sent after the welcome and returns a
+// Hello, Applied, Rejected or Health by value. Any other type, including every
+// type only the server sends, is ErrUnknownMessage; bad JSON or a missing type is
+// ErrMalformed. A field it does not know is ignored. It enforces no field limit:
+// the server applies MaxVersionLen, MaxSchemas and MaxReasonLen when it acts on
+// the message.
+func ParseNodeMessage(data []byte) (any, error) {
+	var head struct {
+		T string `json:"t"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if head.T == "" {
+		return nil, fmt.Errorf("%w: no type", ErrMalformed)
+	}
+	var v any
+	switch head.T {
+	case TypeHello:
+		v = new(Hello)
+	case TypeApplied:
+		v = new(Applied)
+	case TypeRejected:
+		v = new(Rejected)
+	case TypeHealth:
+		v = new(Health)
+	default:
+		return nil, ErrUnknownMessage
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	switch m := v.(type) {
+	case *Hello:
+		return *m, nil
+	case *Applied:
+		return *m, nil
+	case *Rejected:
+		return *m, nil
+	default:
+		return *v.(*Health), nil
+	}
+}
+
+// BundleEnvelope is the one message that carries a bundle, server to node. The
+// instance ID sits outside the bundle so the bundle ID stays a function of its
+// content alone. It holds every private key of one environment's node, so its
+// String, GoString and LogValue never show file data.
+//
+// It is sent as one binary WebSocket message of at most MaxBundleMessageBytes. A
+// node must call Bundle.Verify before it applies anything.
+type BundleEnvelope struct {
+	T          string               `json:"t"`
+	InstanceID string               `json:"instanceId"`
+	Bundle     ingressbundle.Bundle `json:"bundle"`
+}
+
+// String prints the type, the instance ID and the bundle's own redacted form.
+func (e BundleEnvelope) String() string {
+	return fmt.Sprintf("%s instance %s: %s", e.T, e.InstanceID, e.Bundle.String())
+}
+
+// GoString is String, so %#v shows no file data either.
+func (e BundleEnvelope) GoString() string { return e.String() }
+
+// LogValue is a group of the type, the instance ID and the bundle's redacted log
+// value, so an envelope passed to slog never writes file data.
+func (e BundleEnvelope) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("t", e.T),
+		slog.String("instanceId", e.InstanceID),
+		slog.Any("bundle", e.Bundle),
+	)
 }
