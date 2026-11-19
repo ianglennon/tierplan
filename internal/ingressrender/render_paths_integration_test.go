@@ -233,3 +233,70 @@ func TestTraefikStrip(t *testing.T) {
 		t.Errorf("GET /keep/z: X-Forwarded-Prefix = %q on a route without strip, want none", p)
 	}
 }
+
+// TestTraefikUnmatchedPathIs404 proves D-16's closing case: a request to a known hostname that matches
+// none of its routes (this host has no / route) gets Traefik's own 404 and reaches no backend, while
+// the route it does have answers 200.
+func TestTraefikUnmatchedPathIs404(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	env := traefiktest.NewEnv(t)
+	ca := traefiktest.NewCA(t)
+	env.StartWhoami(t, traefiktest.WhoamiOptions{Alias: "site_shop", Hostname: "shop"})
+
+	res := mustRender(t, Input{
+		Snapshot:     snapshotOf(swarmRoute(unmatchedHost, "/shop", "site", "shop", 80)),
+		Certs:        servable(t, ca, unmatchedHost),
+		CertsVersion: 1,
+	})
+	s := startRendered(t, env, ca, res.Bundle)
+	s.awaitHandshake(t, unmatchedHost)
+	s.awaitGet(t, unmatchedHost, "/shop")
+
+	for _, request := range []string{"/other", "/", "/shopping"} {
+		status, body, _, err := s.tr.TryGet(s.ca.Pool(), unmatchedHost, request, nil)
+		if err != nil || status != http.StatusNotFound {
+			t.Errorf("GET %s answered %d (error %v), want 404", request, status, err)
+		}
+		if h := bodyHostname(body); h != "" {
+			t.Errorf("GET %s reached the backend %q, want no backend", request, h)
+		}
+	}
+	status, body, _ := s.tr.Get(t, ca.Pool(), unmatchedHost, "/shop", nil)
+	if status != http.StatusOK || bodyHostname(body) != "shop" {
+		t.Errorf("GET /shop answered %d from %q, want 200 from shop", status, bodyHostname(body))
+	}
+}
+
+// TestTraefikHTTPSBackend proves D-13 on a rendered bundle: a route with scheme https reaches a
+// self-signed HTTPS backend through the bundle's t-user-https transport. The backend's certificate is a
+// leaf of the test CA for site_secure, but the transport does not verify it (D-13), so it would be
+// reached whoever signed it.
+func TestTraefikHTTPSBackend(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	env := traefiktest.NewEnv(t)
+	ca := traefiktest.NewCA(t)
+	beChain, beKey := ca.Leaf(t, "site_secure")
+	env.StartWhoami(t, traefiktest.WhoamiOptions{Alias: "site_secure", Hostname: "secure", CertPEM: beChain, KeyPEM: beKey})
+
+	res := mustRender(t, Input{
+		Snapshot:     snapshotOf(swarmRouteWith(secureHost, "/", "site", "secure", 443, ingress.SchemeHTTPS, false)),
+		Certs:        servable(t, ca, secureHost),
+		CertsVersion: 1,
+	})
+	if len(res.Skipped) != 0 {
+		t.Fatalf("the route was skipped: %+v", res.Skipped)
+	}
+	_, doc := dynamicOf(t, res.Bundle)
+	digMap(t, doc, "http", "serversTransports", UserHTTPSTransport)
+
+	s := startRendered(t, env, ca, res.Bundle)
+	s.awaitHandshake(t, secureHost)
+	body := s.awaitGet(t, secureHost, "/")
+	if bodyHostname(body) != "secure" {
+		t.Errorf("GET / was not answered by the HTTPS backend; body:\n%s", body)
+	}
+	status, body, _ := s.tr.Get(t, ca.Pool(), secureHost, "/", nil)
+	if status != http.StatusOK || !strings.Contains(body, "Hostname: secure") {
+		t.Errorf("GET / answered %d, want 200 with the backend's Hostname: secure line; body:\n%s", status, body)
+	}
+}
