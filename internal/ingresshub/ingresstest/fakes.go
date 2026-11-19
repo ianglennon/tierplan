@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Bundles is a hub.BundleSource a test fills: the current bundle of each environment and the notifier that is
@@ -109,4 +111,51 @@ func (n *NodeLists) SwarmNodeIDs(envID string) ([]string, time.Time, bool) {
 // RefreshSwarmNodeIDs implements agents.NodeLists: a refresh finds the held list unchanged.
 func (n *NodeLists) RefreshSwarmNodeIDs(_ context.Context, envID string, _ time.Duration) ([]string, time.Time, bool) {
 	return n.SwarmNodeIDs(envID)
+}
+
+// PushRecorder collects the hub's push events, in order, and lets a test wait for a condition on them without
+// polling: Await returns when the events satisfy it, woken by each new event.
+type PushRecorder struct {
+	mu      sync.Mutex
+	events  []ingresshub.PushEvent
+	changed chan struct{}
+}
+
+func newPushRecorder() *PushRecorder { return &PushRecorder{changed: make(chan struct{})} }
+
+// record is the hub's push observer. It never blocks.
+func (r *PushRecorder) record(ev ingresshub.PushEvent) {
+	r.mu.Lock()
+	r.events = append(r.events, ev)
+	close(r.changed)
+	r.changed = make(chan struct{})
+	r.mu.Unlock()
+}
+
+// Events is a copy of the events so far.
+func (r *PushRecorder) Events() []ingresshub.PushEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ingresshub.PushEvent(nil), r.events...)
+}
+
+// Await waits until cond is true of the events so far and returns them. cond is evaluated now and again after
+// every new event. The test's generous context only guards against a hang: it fails the test when it ends.
+func (r *PushRecorder) Await(t testing.TB, cond func([]ingresshub.PushEvent) bool) []ingresshub.PushEvent {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	for {
+		r.mu.Lock()
+		events, ch := append([]ingresshub.PushEvent(nil), r.events...), r.changed
+		r.mu.Unlock()
+		if cond(events) {
+			return events
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("ingresstest: the push events never satisfied the condition; saw %+v", events)
+			return events
+		}
+	}
 }

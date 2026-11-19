@@ -90,7 +90,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 
 	s := &Session{
 		NodeID: acc.NodeID, EnvID: acc.EnvID, Name: acc.Name, IP: acc.IP, Version: acc.Version,
-		DialHost: dialHost(aud), ConnectedAt: h.now(), order: order, ws: c, done: make(chan struct{}),
+		DialHost: dialHost(aud), ConnectedAt: h.now(), order: order, ws: c, done: make(chan struct{}), poke: make(chan struct{}, 1),
 	}
 	if h.beforeRegister != nil {
 		h.beforeRegister(s.NodeID)

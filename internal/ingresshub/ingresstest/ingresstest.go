@@ -97,7 +97,12 @@ type Server struct {
 	// from elsewhere in production.
 	Bundles *Bundles
 	Nodes   *NodeLists
+
+	pushes *PushRecorder
 }
+
+// Pushes records what the hub decided each time it looked at an environment's current bundle for a session.
+func (s *Server) Pushes() *PushRecorder { return s.pushes }
 
 // Start serves a hub over TLS with a real store and service. Everything is shut down when the test ends.
 func Start(t *testing.T, o Options) *Server {
@@ -118,7 +123,7 @@ func Start(t *testing.T, o Options) *Server {
 		t.Fatalf("ingresstest: instance ID: %v", err)
 	}
 	s := &Server{
-		Store: st, Clock: clock, Bundles: newBundles(), Nodes: newNodeLists(clock),
+		Store: st, Clock: clock, Bundles: newBundles(), Nodes: newNodeLists(clock), pushes: newPushRecorder(),
 	}
 	if o.InstanceID != "" {
 		s.SetInstanceID(t, o.InstanceID)
@@ -132,7 +137,8 @@ func Start(t *testing.T, o Options) *Server {
 	}
 	hub := ingresshub.NewHub(s.Service, s.Bundles, hubLog, clock.Now).
 		WithPublicURL(func() string { return "https://" + ts.Listener.Addr().String() }).
-		WithInstanceID(func(ctx context.Context) (string, error) { return instance.InstanceID(ctx, st) })
+		WithInstanceID(func(ctx context.Context) (string, error) { return instance.InstanceID(ctx, st) }).
+		WithPushObserver(s.pushes.record)
 	if o.AuditRefusals {
 		hub = hub.WithRefusalAudit(aud)
 	}
@@ -156,8 +162,17 @@ func Start(t *testing.T, o Options) *Server {
 	mux.Handle(httpx.IngressConnectPath, h)
 	ts.Config.Handler = mux
 	ts.StartTLS()
+	// The hub delivers changed bundles from Run. Close ends it, and the cleanup waits for it to return.
+	runDone := make(chan struct{})
+	runCtx, stopRun := context.WithCancel(context.Background())
+	go func() {
+		defer close(runDone)
+		hub.Run(runCtx)
+	}()
 	t.Cleanup(func() {
 		hub.Close()
+		stopRun()
+		<-runDone
 		ts.CloseClientConnections()
 		ts.Close()
 	})

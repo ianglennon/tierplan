@@ -84,10 +84,21 @@ type Hub struct {
 	regChanged chan struct{}
 	// accepted numbers the connections in the order they were accepted.
 	accepted atomic.Uint64
+
+	// sub is the subscription to the source's Changes, taken in NewHub so a change that lands before Run starts
+	// is not lost. stop is closed by Close and ends Run.
+	sub      *ingress.Subscription
+	stop     chan struct{}
+	stopOnce sync.Once
+	// envelopes holds the marshalled bundle message of each environment, shared by its sessions.
+	envelopes envelopeCache
+	// onPush, when set, is told the outcome of every look at the current bundle (WithPushObserver).
+	onPush func(PushEvent)
 }
 
 // NewHub returns a Hub. svc is required, src may be nil (a node then gets no bundle), and a nil log is
-// slog.Default. A nil now is time.Now, as NewService treats it (D-36); it is made before the gate is built from
+// slog.Default. It subscribes to the source's Changes at once, before any connection is served; Run consumes
+// the subscription. A nil now is time.Now, as NewService treats it (D-36); it is made before the gate is built from
 // it, so h.now is never nil and the gate's limiters and every read of the clock here share the one clock.
 func NewHub(svc *Service, src BundleSource, log *slog.Logger, now func() time.Time) *Hub {
 	if now == nil {
@@ -96,7 +107,7 @@ func NewHub(svc *Service, src BundleSource, log *slog.Logger, now func() time.Ti
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Hub{
+	h := &Hub{
 		svc: svc, src: src, log: log, now: now,
 		gate:         newGate(now),
 		warnLimit:    auth.NewIPLimiter(time.Minute, 1, limiterTTL, now),
@@ -104,7 +115,15 @@ func NewHub(svc *Service, src BundleSource, log *slog.Logger, now func() time.Ti
 		offlineAfter: DefaultOfflineAfter,
 		sessions:     map[string]*Session{},
 		newest:       map[string]uint64{},
+		stop:         make(chan struct{}),
+		envelopes:    newEnvelopeCache(),
 	}
+	if src != nil {
+		if n := src.Changes(); n != nil {
+			h.sub = n.Subscribe()
+		}
+	}
+	return h
 }
 
 // WithPublicURL tells the hub TierPlan's public URL. The audience of every handshake is checked against its
@@ -179,6 +198,14 @@ func (h *Hub) WithBeforeRegister(f func(nodeID string)) *Hub {
 	return h
 }
 
+// WithPushObserver sets a function told the outcome of every look at an environment's current bundle on behalf
+// of a session. It exists for tests, which wait on these events instead of on the clock; nothing else should
+// set it. It is called from the session's writer, so it must return promptly. Call it before the hub serves.
+func (h *Hub) WithPushObserver(f func(PushEvent)) *Hub {
+	h.onPush = f
+	return h
+}
+
 // Handler serves GET /ingress/connect.
 func (h *Hub) Handler() http.Handler { return http.HandlerFunc(h.serve) }
 
@@ -248,6 +275,10 @@ func (h *Hub) AwaitSession(ctx context.Context, nodeID string, cond func(*Sessio
 // http.Server.Shutdown ignores hijacked connections, so the server registers this with RegisterOnShutdown. It
 // is safe to call more than once.
 func (h *Hub) Close() {
+	h.stopOnce.Do(func() { close(h.stop) })
+	if h.sub != nil {
+		h.sub.Close()
+	}
 	h.mu.Lock()
 	h.closed = true
 	live := make([]*Session, 0, len(h.sessions))
@@ -434,5 +465,16 @@ func (h *Hub) finish(s *Session) {
 		delete(h.sessions, s.NodeID)
 	}
 	h.notifyRegistryLocked()
+	last := true
+	for _, other := range h.sessions {
+		if other.EnvID == s.EnvID {
+			last = false
+			break
+		}
+	}
 	h.mu.Unlock()
+	if last {
+		// No node of the environment is connected: its bundle bytes (every private key) need not stay in memory.
+		h.envelopes.drop(s.EnvID)
+	}
 }

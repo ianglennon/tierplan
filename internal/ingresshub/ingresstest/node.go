@@ -281,6 +281,36 @@ func (c *Conn) SendRaw(t testing.TB, typ websocket.MessageType, b []byte) {
 	}
 }
 
+// SendText writes b as one text message, whatever it holds: a message that is wrong on purpose.
+func (c *Conn) SendText(t testing.TB, b []byte) {
+	t.Helper()
+	c.SendRaw(t, websocket.MessageText, b)
+}
+
+// SendBinary writes b as one binary message, which the node may never send.
+func (c *Conn) SendBinary(t testing.TB, b []byte) {
+	t.Helper()
+	c.SendRaw(t, websocket.MessageBinary, b)
+}
+
+// Applied tells the server the node applied the bundle id.
+func (c *Conn) Applied(t testing.TB, id string) {
+	t.Helper()
+	c.Send(t, ingresswire.Applied{T: ingresswire.TypeApplied, ID: id})
+}
+
+// Rejected tells the server the node did not apply the bundle id, and why.
+func (c *Conn) Rejected(t testing.TB, id, reason string) {
+	t.Helper()
+	c.Send(t, ingresswire.Rejected{T: ingresswire.TypeRejected, ID: id, Reason: reason})
+}
+
+// Health sends the node's periodic proof of life, with whether its Traefik is answering.
+func (c *Conn) Health(t testing.TB, ok bool) {
+	t.Helper()
+	c.Send(t, ingresswire.Health{T: ingresswire.TypeHealth, TraefikOK: ok})
+}
+
 // Hello sends the first message after the welcome: the node's version, the schemas it can apply and the ID of
 // the bundle it runs.
 func (c *Conn) Hello(t testing.TB, schemas []int, appliedID string) {
