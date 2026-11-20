@@ -64,7 +64,7 @@ Work through this in order for every release. TierPlan follows Semantic Versioni
 
   Last run: 2026-11-13 | build c9dde2b70f0f254a512d959ab394f67f090088e2 | pass: Let's Encrypt certificate issued and served, agents re-enrolled by themselves after a guarded reinstall, stayed connected through the swap and reconnected after a server restart
 - [ ] Tag `vX.Y.Z` (for example `v0.1.0`) on the release commit and push the tag. Only a `v*` tag runs the release workflow.
-- [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the image, and the signatures and SBOMs below.
+- [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the three images (server, agent and ingress), and the signatures and SBOMs below.
 - [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Verifying needs **cosign v3** (`cosign version` must report v3). The release workflow installs cosign with `sigstore/cosign-installer` v4.1.2, whose default cosign is v3, and `sign-blob --bundle` writes the `.sigstore.json` bundle format that v3 reads: signed with v3, verify with v3. An older cosign can fail on the bundle or on the image signature for that reason alone. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect. The commands below are for the server image and the archive checksums; the agent and ingress images are verified above:
 
   ```sh
@@ -95,7 +95,13 @@ Work through this in order for every release. TierPlan follows Semantic Versioni
     ```
 
   - The agent and ingress images contain no web interface, so their SBOMs list Go modules only. That is correct: npm packages listed there would make them false.
-  - The ingress image SBOM must list `github.com/traefik/traefik/v3`, taken from the Traefik binary's build information. Its licences show NOASSERTION because Go build information carries none; the licence evidence for Traefik is the Traefik leg of `make licences`.
+  - The ingress image SBOM must list `github.com/traefik/traefik/v3`, taken from the Traefik binary's build information. Its licences show NOASSERTION because Go build information carries none; the licence evidence for Traefik is the Traefik leg of `make licences`. Run the filter below. It must print one line, `pkg:golang/github.com/traefik/traefik/v3@` followed by the tag that `scripts/ingress-pin-check.sh --print-tag` prints, and it exits non-zero with no output when Traefik is absent:
+
+    ```sh
+    docker buildx imagetools inspect ghcr.io/ianglennon/tierplan-ingress:X.Y.Z --format '{{ json .SBOM }}' \
+      | jq -e -r '[.. | .packages? // empty | .[] | .externalRefs[]? | .referenceLocator | select(startswith("pkg:golang/github.com/traefik/traefik/v3@"))] | unique | .[]'
+    ```
+
 - [ ] **Confirm the image tags.** `X.Y.Z` and `X.Y` exist (a pre-release gets only `X.Y.Z`), both for `linux/amd64` and `linux/arm64`, and **there is no `:latest` or other floating catch-all tag** while TierPlan is 0.x. `docker buildx imagetools inspect ghcr.io/ianglennon/tierplan:latest` must fail.
 - [ ] Pull the released image on a clean machine and run the README's install command. It must be healthy, show the setup wizard, and report the right version in Settings > About.
 - [ ] **Update the README's image tag from `:edge` to `:X.Y`** (and the upgrade example), in the same release, so the documented command pins the line it was written for.
