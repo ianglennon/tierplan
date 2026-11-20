@@ -26,6 +26,16 @@ list_deps() {
   fi
 }
 
+# Capture the list first. A `go list` failure (module resolution, a broken replace,
+# a toolchain error) then aborts here under set -e; reading it through a process
+# substitution would hide the exit status and let the gate pass on a partial or
+# empty list. An empty list is also a failure: nothing was checked.
+paths="$(list_deps "${1:-}")"
+if [ -z "${paths}" ]; then
+  echo "INGRESS DEPS: no packages listed; the dependency graph was not checked" >&2
+  exit 1
+fi
+
 bad=0
 while IFS= read -r path; do
   [ -n "$path" ] || continue
@@ -33,6 +43,6 @@ while IFS= read -r path; do
     echo "INGRESS DEPS: $path is not allowed in the ingress module (proto, coder/websocket, go.yaml.in/yaml/v3 and the standard library only)" >&2
     bad=1
   fi
-done < <(list_deps "${1:-}")
+done <<<"${paths}"
 
 exit "$bad"

@@ -351,6 +351,11 @@ expect_out "ingress-deps-moby names the import" "INGRESS DEPS: github.com/moby/m
 expect fail "ingress-deps-lookalike" ingress_deps github.com/coder/websocketx
 expect fail "ingress-deps-yamux" ingress_deps github.com/hashicorp/yamux
 expect pass "ingress-deps-repository" scripts/ingress-deps-check.sh
+# CR-B-01: a `go list` that fails, or lists nothing, is not a pass. A bad GOFLAGS makes
+# go list exit non-zero with no output; the gate used to read that as "nothing disallowed".
+expect fail "ingress-deps-go-list-fails" env GOFLAGS=-mod=bogus scripts/ingress-deps-check.sh
+expect fail "ingress-deps-empty-list" ingress_deps ""
+expect_out "ingress-deps-empty-list says so" "INGRESS DEPS: no packages listed"
 
 # --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
 # MAKEFLAGS and MAKELEVEL are removed so an outer `make test-scripts` cannot leak
