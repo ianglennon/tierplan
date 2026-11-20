@@ -3,10 +3,10 @@
 
 PKG := github.com/ianglennon/tierplan/internal/buildinfo
 
-# The three Go modules: the server (the root), the agent and the shared wire
-# protocol they both import. Every Go gate (test, lint, tidy-check) loops over
+# The four Go modules: the server (the root), the agent, the ingress supervisor
+# and the shared wire protocol they import. Every Go gate (test, lint, tidy-check) loops over
 # them, so a new module is covered the day it is added to this list.
-GO_MODULES := . agent proto
+GO_MODULES := . agent proto ingress
 
 # Set VERSION (and optionally COMMIT) for a release build, for example
 #   make build VERSION=v0.1.0
