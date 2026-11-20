@@ -46,6 +46,10 @@ type script struct {
 	// beforeHello, when set, is closed by the node's callback; the server reads
 	// hello only after it.
 	beforeHello <-chan struct{}
+	// session, when set, runs after the server has read hello and replaces the
+	// plain drain: it is the server's half of a bundle session. The server then
+	// reports nothing on saw, so a test that uses it does not call next.
+	session func(ctx context.Context, c *websocket.Conn)
 }
 
 // saw is what the test server observed of one connection.
@@ -167,6 +171,10 @@ func (s *testServer) serve(t *testing.T, sc script, w http.ResponseWriter, r *ht
 		got.Hello = &h
 	} else {
 		t.Errorf("test server: the node's first message after the welcome is not a hello: %s", data)
+	}
+	if sc.session != nil {
+		sc.session(ctx, c)
+		return
 	}
 	s.saw <- got
 	drain(ctx, c)
