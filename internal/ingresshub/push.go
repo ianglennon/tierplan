@@ -193,6 +193,9 @@ func (h *Hub) send(ctx context.Context, s *Session, b ingressbundle.Bundle) stri
 		return PushWriteFailed
 	}
 	s.markSent(b.ID)
+	if h.beforeWrite != nil {
+		h.beforeWrite(s.NodeID)
+	}
 	wctx, cancel := context.WithTimeout(ctx, bundleWriteTimeout)
 	defer cancel()
 	if err := s.ws.Write(wctx, websocket.MessageBinary, env.payload); err != nil {

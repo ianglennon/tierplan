@@ -226,17 +226,15 @@ func TestDeliveryNoBundleWhenTheEnvironmentHasNone(t *testing.T) {
 	}
 }
 
-// TestDeliveryHeldHostnamesRecordedBeforeSend: the hostnames of the routes of a bundle are in the node's row by
-// the time the hub reports the send, and so by the time the node can read the frame (D-24).
+// TestDeliveryHeldHostnamesRecordedBeforeSend: the hostnames of the routes of a bundle are in the node's row before
+// the frame is written (D-24). The row is read in the hub's before-write hook, at the instant the frame is about to
+// leave, so a regression that wrote the frame first and recorded the names after would read [] here on every run.
 func TestDeliveryHeldHostnamesRecordedBeforeSend(t *testing.T) {
 	var srvRef atomic.Pointer[ingresstest.Server]
 	held := make(chan string, 4)
 	srv := ingresstest.Start(t, ingresstest.Options{Configure: func(h *ingresshub.Hub) *ingresshub.Hub {
-		return h.WithPushObserver(func(ev ingresshub.PushEvent) {
-			if ev.Outcome != ingresshub.PushSent {
-				return
-			}
-			row, err := srvRef.Load().Store.RQ.GetIngressNode(context.Background(), ev.NodeID)
+		return h.WithBeforeWrite(func(nodeID string) {
+			row, err := srvRef.Load().Store.RQ.GetIngressNode(context.Background(), nodeID)
 			if err != nil {
 				held <- "error: " + err.Error()
 				return
@@ -249,14 +247,11 @@ func TestDeliveryHeldHostnamesRecordedBeforeSend(t *testing.T) {
 	srv.Nodes.Set(env.ID, "n1")
 	srv.Bundles.Set(env.ID, ingresstest.MakeBundle(t, 1, "a.example.com", "b.example.com"))
 
-	id, c := dvNode(t, srv, env, "n1", "")
-	if got := testsupport.Await(t, "the send to be reported", held); got != `["a.example.com","b.example.com"]` {
-		t.Errorf("held hostnames when the send was reported = %s", got)
+	_, c := dvNode(t, srv, env, "n1", "")
+	if got := testsupport.Await(t, "the bundle frame to be about to leave", held); got != `["a.example.com","b.example.com"]` {
+		t.Errorf("held hostnames just before the frame was written = %s", got)
 	}
 	c.NextBundle(t)
-	if got := roRow(t, srv, id.NodeID).HeldHostnames; got != `["a.example.com","b.example.com"]` {
-		t.Errorf("held hostnames after the frame arrived = %s", got)
-	}
 }
 
 // TestDeliveryOnlyTheNodesOwnEnvironment: a node is sent the bundle of the environment its credential belongs to

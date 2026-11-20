@@ -98,6 +98,8 @@ type Hub struct {
 	envelopes envelopeCache
 	// onPush, when set, is told the outcome of every look at the current bundle (WithPushObserver).
 	onPush func(PushEvent)
+	// beforeWrite, when set, is called just before a bundle frame is written (WithBeforeWrite).
+	beforeWrite func(nodeID string)
 }
 
 // NewHub returns a Hub. svc is required, src may be nil (a node then gets no bundle), and a nil log is
@@ -216,6 +218,15 @@ func (h *Hub) WithBeforeRegister(f func(nodeID string)) *Hub {
 // set it. It is called from the session's writer, so it must return promptly. Call it before the hub serves.
 func (h *Hub) WithPushObserver(f func(PushEvent)) *Hub {
 	h.onPush = f
+	return h
+}
+
+// WithBeforeWrite sets a function the hub calls with the node ID just before it writes a bundle frame, after
+// everything that must precede the write (the held hostnames, D-24). It exists for tests, which read the node's
+// row in it to prove that order; nothing else should set it. It is called from the session's writer, so it must
+// return promptly. Call it before the hub serves.
+func (h *Hub) WithBeforeWrite(f func(nodeID string)) *Hub {
+	h.beforeWrite = f
 	return h
 }
 
