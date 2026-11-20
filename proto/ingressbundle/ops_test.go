@@ -105,6 +105,47 @@ func TestRejectReasons(t *testing.T) {
 	}
 }
 
+// TestRejectReasonWireStrings is WR-C-03: the reason codes are stable wire strings ("never renamed", ops.go).
+// Phase 27 shows them and a server stores them as rejected_reason, so a rename of any value must fail here,
+// not pass because every other test compares the constant with itself. The literals are the frozen set.
+func TestRejectReasonWireStrings(t *testing.T) {
+	frozen := []struct{ name, got, literal string }{
+		// The nine the verifier already used.
+		{"ReasonChecksum", ReasonChecksum, "checksum"},
+		{"ReasonMissingFile", ReasonMissingFile, "missing_file"},
+		{"ReasonMissingEntry", ReasonMissingEntry, "missing_entry"},
+		{"ReasonID", ReasonID, "id"},
+		{"ReasonPath", ReasonPath, "path"},
+		{"ReasonDuplicate", ReasonDuplicate, "duplicate"},
+		{"ReasonSchema", ReasonSchema, "schema"},
+		{"ReasonMode", ReasonMode, "mode"},
+		{"ReasonStep", ReasonStep, "step"},
+		// The eleven the supervisor adds (D-37).
+		{"ReasonInstanceMismatch", ReasonInstanceMismatch, "instance_mismatch"},
+		{"ReasonTooLarge", ReasonTooLarge, "too_large"},
+		{"ReasonSchemaUnsupported", ReasonSchemaUnsupported, "schema_unsupported"},
+		{"ReasonMalformed", ReasonMalformed, "malformed"},
+		{"ReasonYAMLInvalid", ReasonYAMLInvalid, "yaml_invalid"},
+		{"ReasonTemplateSyntax", ReasonTemplateSyntax, "template_syntax"},
+		{"ReasonCertMissing", ReasonCertMissing, "cert_missing"},
+		{"ReasonCertPath", ReasonCertPath, "cert_path"},
+		{"ReasonKeyMismatch", ReasonKeyMismatch, "key_mismatch"},
+		{"ReasonTLSOptions", ReasonTLSOptions, "tls_options"},
+		{"ReasonApplyFailed", ReasonApplyFailed, "apply_failed"},
+	}
+	want := make([]string, 0, len(frozen))
+	for _, f := range frozen {
+		if f.got != f.literal {
+			t.Errorf("%s = %q, want the frozen wire string %q", f.name, f.got, f.literal)
+		}
+		want = append(want, f.literal)
+	}
+	slices.Sort(want)
+	if got := RejectReasons(); !slices.Equal(got, want) {
+		t.Fatalf("RejectReasons = %v, want the frozen set %v", got, want)
+	}
+}
+
 func TestSupportedSchemas(t *testing.T) {
 	if got := SupportedSchemas(); !slices.Equal(got, []int{Schema1}) {
 		t.Fatalf("SupportedSchemas = %v, want [%d]", got, Schema1)
