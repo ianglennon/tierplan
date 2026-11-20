@@ -83,7 +83,10 @@ func requireRateLimited(t *testing.T, m any, retryAfterMs int) {
 // TestLimitsPerAddressInFlight: one address holds at most eight handshakes at once. The ninth is refused
 // rate_limited with retryAfterMs 1000, and audited; another address is admitted; a slot given back admits one.
 func TestLimitsPerAddressInFlight(t *testing.T) {
-	srv := ingresstest.Start(t, ingresstest.Options{AuditRefusals: true})
+	// The held handshakes stay silent on purpose, so the first-frame timer, a real one (3 s by default), is
+	// lengthened to the suite's hang bound, so a slow runner does not see a held slot expire by itself (WR-C-1).
+	// The frozen 10 s ingresswire.HandshakeTimeout still bounds a handshake and is now the timer that applies.
+	srv := ingresstest.Start(t, ingresstest.Options{AuditRefusals: true, FirstFrame: testsupport.Deadline})
 
 	var open []*held
 	for range 8 {
