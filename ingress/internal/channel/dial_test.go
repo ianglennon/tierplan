@@ -4,11 +4,17 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -24,7 +30,7 @@ import (
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
-const testToken = "tpit_env1_0123456789abcdef0123456789abcdef"
+const testToken = "tpit_env1_0123456789abcdef0123456789abcdef" //nolint:gosec // a fixed fake join token for tests
 
 // testNow is the fixed clock every dial in this file stamps into its auth message.
 var testNow = time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
@@ -243,5 +249,256 @@ func TestEnrolPersistsBeforeHello(t *testing.T) {
 	}
 	if got.Hello.Version != "v0.2.0-test" || got.Hello.AppliedID != "b-1" || !slices.Equal(got.Hello.Schemas, ingressbundle.SupportedSchemas()) {
 		t.Errorf("hello = %+v, want the version, applied ID b-1 and schemas %v", *got.Hello, ingressbundle.SupportedSchemas())
+	}
+}
+
+// connectCreds are the credentials of a node that enrolled before: it has an ID
+// and the instance it pinned, and its token function must never be called.
+func connectCreds(t *testing.T, key ed25519.PrivateKey) Credentials {
+	t.Helper()
+	return Credentials{
+		Key: key, NodeID: "n-1", InstanceID: "i-1",
+		Token: func() (string, error) {
+			t.Error("the join token was read in connect mode (D-22)")
+			return "", errors.New("must not be called")
+		},
+	}
+}
+
+func TestConnectModeNeverReadsToken(t *testing.T) {
+	s := newTestServer(t, script{welcome: testWelcome("i-1")})
+	enrolledCalls := 0
+	o := Options{
+		URL: s.url(), InstallPins: []string{s.pin()}, Version: "v0.2.0-test", Now: fixedNow,
+		OnEnrolled: func(ingresswire.Welcome) error { enrolledCalls++; return nil },
+	}
+	conn, err := Dial(testsupport.Context(t), o, connectCreds(t, testKey(t)))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close("test done") })
+
+	got := s.next(t)
+	if got.Auth.Mode != ingresswire.ModeConnect || got.Auth.NodeID != "n-1" || got.Auth.Token != "" {
+		t.Errorf("auth = mode %q node %q token set %v, want connect, n-1 and no token", got.Auth.Mode, got.Auth.NodeID, got.Auth.Token != "")
+	}
+	if !got.SigOK || !got.AudOK || !got.EKMOK {
+		t.Errorf("signature over the connect transcript ok %v, audience ok %v, exporter ok %v, want all three", got.SigOK, got.AudOK, got.EKMOK)
+	}
+	if got.Hello == nil {
+		t.Fatalf("the server read no hello: %v", got.HelloErr)
+	}
+	if enrolledCalls != 0 {
+		t.Errorf("OnEnrolled was called %d times in connect mode", enrolledCalls)
+	}
+	if conn.InstanceID() != "i-1" {
+		t.Errorf("InstanceID() = %q, want the pinned i-1", conn.InstanceID())
+	}
+}
+
+func TestRefusalCarriesRetryAfter(t *testing.T) {
+	for _, tc := range []struct {
+		refuse ingresswire.Refuse
+		want   time.Duration
+	}{
+		{ingresswire.Refuse{T: ingresswire.TypeRefuse, Code: ingresswire.RefuseRateLimited, Detail: "slow down", RetryAfterMs: 1000}, time.Second},
+		{ingresswire.Refuse{T: ingresswire.TypeRefuse, Code: ingresswire.RefuseNodeRevoked}, 0},
+	} {
+		t.Run(tc.refuse.Code, func(t *testing.T) {
+			s := newTestServer(t, script{refuse: &tc.refuse})
+			o := Options{URL: s.url(), InstallPins: []string{s.pin()}, Now: fixedNow}
+			_, err := Dial(testsupport.Context(t), o, Credentials{Key: testKey(t), Token: tokenFunc(testToken)})
+			var re *RefusedError
+			if !errors.As(err, &re) {
+				t.Fatalf("Dial error = %v, want a *RefusedError", err)
+			}
+			if re.Code != tc.refuse.Code || re.Detail != tc.refuse.Detail || re.RetryAfter != tc.want {
+				t.Errorf("RefusedError = %+v, want code %q detail %q retry-after %v", *re, tc.refuse.Code, tc.refuse.Detail, tc.want)
+			}
+			if !strings.Contains(re.Error(), tc.refuse.Code) {
+				t.Errorf("Error() = %q, want it to name the code", re.Error())
+			}
+			if got := s.next(t); got.Hello != nil {
+				t.Error("a hello was sent after a refusal")
+			}
+		})
+	}
+}
+
+func TestWelcomeInstanceMismatch(t *testing.T) {
+	s := newTestServer(t, script{welcome: testWelcome("i-2")})
+	o := Options{URL: s.url(), InstallPins: []string{s.pin()}, Now: fixedNow}
+	_, err := Dial(testsupport.Context(t), o, connectCreds(t, testKey(t))) // pinned to i-1
+	if !errors.Is(err, ingresswire.ErrInstanceMismatch) {
+		t.Fatalf("Dial error = %v, want ErrInstanceMismatch", err)
+	}
+	got := s.next(t)
+	if got.Hello != nil || got.HelloErr == nil {
+		t.Errorf("hello = %+v, read error = %v, want the connection closed with no hello", got.Hello, got.HelloErr)
+	}
+}
+
+func TestOnEnrolledErrorStopsBeforeHello(t *testing.T) {
+	s := newTestServer(t, script{welcome: testWelcome("i-1")})
+	saveErr := errors.New("disk full")
+	o := Options{
+		URL: s.url(), InstallPins: []string{s.pin()}, Now: fixedNow,
+		OnEnrolled: func(ingresswire.Welcome) error { return saveErr },
+	}
+	_, err := Dial(testsupport.Context(t), o, Credentials{Key: testKey(t), Token: tokenFunc(testToken)})
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Dial error = %v, want the callback's error wrapped", err)
+	}
+	got := s.next(t)
+	if got.Hello != nil || got.HelloErr == nil {
+		t.Errorf("hello = %+v, read error = %v, want the connection closed with no hello", got.Hello, got.HelloErr)
+	}
+}
+
+// refusingTransport fails the test when it is used at all.
+type refusingTransport struct{ t *testing.T }
+
+func (r refusingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	r.t.Error("Dial made an HTTP request for a URL that is not wss")
+	return nil, errors.New("must not be called")
+}
+
+func TestDialRefusesPlainWS(t *testing.T) {
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(testsupport.Context(t), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan int, 1)
+	go func() {
+		n := 0
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				accepted <- n
+				return
+			}
+			n++
+			_ = c.Close()
+		}
+	}()
+
+	for name, o := range map[string]Options{
+		"default client":     {URL: "ws://" + ln.Addr().String() + "/ingress/connect"},
+		"transport spy":      {URL: "ws://" + ln.Addr().String() + "/ingress/connect", HTTPClient: &http.Client{Transport: refusingTransport{t}}},
+		"https is not wss":   {URL: "https://" + ln.Addr().String() + "/ingress/connect"},
+		"no scheme":          {URL: ln.Addr().String() + "/ingress/connect"},
+		"empty":              {URL: ""},
+		"wss without a host": {URL: "wss:///ingress/connect"},
+	} {
+		_, err := Dial(testsupport.Context(t), o, Credentials{Key: testKey(t), Token: tokenFunc(testToken)})
+		if err == nil {
+			t.Errorf("%s: Dial succeeded for %q", name, o.URL)
+		}
+	}
+	// Every attempt above returned before this point, so a connection it made is
+	// already in the listener's queue.
+	_ = ln.Close()
+	if n := testsupport.Await(t, "the listener's accept count", accepted); n != 0 {
+		t.Errorf("%d connections reached the listener, want none", n)
+	}
+}
+
+func TestDialErrorsHoldNoToken(t *testing.T) {
+	key := testKey(t)
+	agentToken := ingresswire.AgentTokenPrefix + "agent-secret-value-0123456789"
+	forbidden := []string{testToken, agentToken, "agent-secret-value"}
+	for _, raw := range [][]byte{key, key.Seed()} {
+		forbidden = append(forbidden,
+			base64.StdEncoding.EncodeToString(raw), base64.URLEncoding.EncodeToString(raw),
+			base64.RawStdEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw),
+			hex.EncodeToString(raw), strings.ToUpper(hex.EncodeToString(raw)))
+	}
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	cases := []struct {
+		name  string
+		sc    script
+		mod   func(s *testServer, o *Options, cr *Credentials)
+		works bool
+	}{
+		{name: "refused", sc: script{refuse: &ingresswire.Refuse{T: ingresswire.TypeRefuse, Code: ingresswire.RefuseAuthRejected, Detail: "bad credential"}}},
+		{name: "instance mismatch", sc: script{welcome: testWelcome("i-2")}, mod: func(_ *testServer, _ *Options, cr *Credentials) { cr.InstanceID = "i-1" }},
+		{name: "enrolment not saved", sc: script{welcome: testWelcome("i-1")}, mod: func(_ *testServer, o *Options, _ *Credentials) {
+			o.OnEnrolled = func(ingresswire.Welcome) error { return errors.New("disk full") }
+		}},
+		{name: "untrusted server", sc: script{welcome: testWelcome("i-1")}, mod: func(_ *testServer, o *Options, _ *Credentials) { o.InstallPins = nil }},
+		{name: "plain ws", mod: func(_ *testServer, o *Options, _ *Credentials) { o.URL = "ws://127.0.0.1:1/ingress/connect" }},
+		{name: "token unavailable", sc: script{welcome: testWelcome("i-1")}, mod: func(_ *testServer, _ *Options, cr *Credentials) {
+			cr.Token = func() (string, error) { return "", errors.New("the token file is missing") }
+		}},
+		{name: "agent token", sc: script{welcome: testWelcome("i-1")}, mod: func(_ *testServer, _ *Options, cr *Credentials) { cr.Token = tokenFunc(agentToken) }},
+		{name: "welcomed", sc: script{welcome: testWelcome("i-1")}, works: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, tc.sc)
+			o := Options{URL: s.url(), InstallPins: []string{s.pin()}, Version: "v0.2.0-test", Now: fixedNow, Log: logger}
+			cr := Credentials{Key: key, Name: "node-a", Token: tokenFunc(testToken)}
+			if tc.mod != nil {
+				tc.mod(s, &o, &cr)
+			}
+			conn, err := Dial(testsupport.Context(t), o, cr)
+			switch {
+			case tc.works && err != nil:
+				t.Fatalf("Dial: %v", err)
+			case tc.works:
+				_ = conn.Close("test done")
+			case err == nil:
+				t.Fatal("Dial succeeded, want a failure")
+			default:
+				for _, f := range forbidden {
+					if strings.Contains(err.Error(), f) {
+						t.Errorf("the error %q holds a secret (%d bytes of %q...)", err, len(f), f[:min(len(f), 6)])
+					}
+				}
+			}
+		})
+	}
+	if logs.Len() == 0 {
+		t.Error("the captured log is empty, so the check of the log proves nothing")
+	}
+	for _, f := range forbidden {
+		if strings.Contains(logs.String(), f) {
+			t.Errorf("the log holds a secret (%d bytes of %q...)", len(f), f[:min(len(f), 6)])
+		}
+	}
+}
+
+func TestNodeName(t *testing.T) {
+	host := func(name string, err error) func() (string, error) {
+		return func() (string, error) { return name, err }
+	}
+	for _, tc := range []struct {
+		name     string
+		hostname func() (string, error)
+		want     string
+	}{
+		{"hostname wins", host("edge-1", nil), "edge-1"},
+		{"an error falls back to the node ID", host("", errors.New("no hostname")), "node-id-7"},
+		{"an empty hostname falls back to the node ID", host("", nil), "node-id-7"},
+		{"no hostname function", nil, "node-id-7"},
+		{"a long hostname is cut to the limit", host(strings.Repeat("h", 200), nil), strings.Repeat("h", ingresswire.MaxNameLen)},
+		{"a cut never splits a character", host(strings.Repeat("h", ingresswire.MaxNameLen-1)+"\u00e9", nil), strings.Repeat("h", ingresswire.MaxNameLen-1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NodeName(tc.hostname, "node-id-7")
+			if got != tc.want {
+				t.Errorf("NodeName = %q, want %q", got, tc.want)
+			}
+			if len(got) > ingresswire.MaxNameLen {
+				t.Errorf("len = %d, want at most %d", len(got), ingresswire.MaxNameLen)
+			}
+		})
+	}
+	if got := NodeName(host(strings.Repeat("h", 200), nil), ""); len(got) != 128 {
+		t.Errorf("a 200-byte hostname gave %d bytes, want 128", len(got))
 	}
 }
