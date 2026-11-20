@@ -614,3 +614,24 @@ func TestDialRefusesAForeignSubprotocol(t *testing.T) {
 		t.Error("the node sent a message to a server that did not speak the protocol")
 	}
 }
+
+// TestRefusalRetryAfterCannotOverflow is IN-A-01: a retryAfterMs so large that ms*1e6 wraps a Duration to a
+// small positive value (here 448us) is clamped before the multiplication, to MaxRetryAfter.
+func TestRefusalRetryAfterCannotOverflow(t *testing.T) {
+	const wraps = 18446744073710 // times 1e6 is 2^64 + 448384, a small positive Duration once wrapped
+	ms := int64(wraps)
+	if wrapped := time.Duration(ms) * time.Millisecond; wrapped <= 0 || wrapped >= time.Second {
+		t.Fatalf("the test value no longer wraps to a small positive Duration (%v)", wrapped)
+	}
+	s := newTestServer(t, script{refuse: &ingresswire.Refuse{T: ingresswire.TypeRefuse, Code: ingresswire.RefuseRateLimited, RetryAfterMs: wraps}})
+	o := Options{URL: s.url(), InstallPins: []string{s.pin()}, Now: fixedNow}
+	_, err := Dial(testsupport.Context(t), o, Credentials{Key: testKey(t), Token: tokenFunc(testToken)})
+	var re *RefusedError
+	if !errors.As(err, &re) {
+		t.Fatalf("Dial error = %v, want a *RefusedError", err)
+	}
+	if re.RetryAfter != MaxRetryAfter {
+		t.Errorf("RetryAfter = %v, want the clamp %v", re.RetryAfter, MaxRetryAfter)
+	}
+	s.next(t)
+}

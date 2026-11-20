@@ -86,10 +86,7 @@ func (c *Conn) Serve(ctx context.Context, o SessionOptions) error {
 			return t.C, t.Stop
 		}
 	}
-	interval := time.Duration(c.welcome.HealthMs) * time.Millisecond
-	if interval <= 0 {
-		interval = ingresswire.HealthInterval
-	}
+	interval := healthInterval(c.welcome.HealthMs)
 
 	sctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -109,6 +106,26 @@ func (c *Conn) Serve(ctx context.Context, o SessionOptions) error {
 		o.Log.Debug("ingress channel session ended", "error", err)
 	}
 	return err
+}
+
+const (
+	// minHealthInterval is the shortest health interval a server can ask for: a node does not send health
+	// every millisecond because a welcome said healthMs 1.
+	minHealthInterval = time.Second
+	// maxHealthInterval is the longest: a gap past this reads as a dead node to the server, and the cap also
+	// keeps a huge healthMs from overflowing a Duration.
+	maxHealthInterval = time.Hour
+	maxHealthMs       = int(maxHealthInterval / time.Millisecond)
+)
+
+// healthInterval is the health interval for the welcome's healthMs: ingresswire.HealthInterval when the
+// server gave none, otherwise the value kept between minHealthInterval and maxHealthInterval.
+func healthInterval(healthMs int) time.Duration {
+	if healthMs <= 0 {
+		return ingresswire.HealthInterval
+	}
+	ms := min(healthMs, maxHealthMs)
+	return max(time.Duration(ms)*time.Millisecond, minHealthInterval)
 }
 
 // readFrames is the session's reader: it returns the error that ends the session.

@@ -39,6 +39,9 @@ import (
 // built from it stays short.
 const maxRefuseDetail = 256
 
+// maxRetryAfterMs is MaxRetryAfter in the unit of the wire field.
+const maxRetryAfterMs = int(MaxRetryAfter / time.Millisecond)
+
 // Credentials is who the node is. A node with no NodeID has not enrolled yet and
 // dials in enrol mode, the only mode that reads the join token (D-22).
 type Credentials struct {
@@ -255,9 +258,10 @@ func Dial(ctx context.Context, o Options, cr Credentials) (*Conn, error) {
 	switch m := msg.(type) {
 	case ingresswire.Refuse:
 		return fail(&RefusedError{
-			Code:       m.Code,
-			Detail:     cutUTF8(m.Detail, maxRefuseDetail),
-			RetryAfter: time.Duration(max(m.RetryAfterMs, 0)) * time.Millisecond,
+			Code:   m.Code,
+			Detail: cutUTF8(m.Detail, maxRefuseDetail),
+			// Clamped before the multiplication: a huge hint would wrap the Duration to a small one.
+			RetryAfter: time.Duration(min(max(m.RetryAfterMs, 0), maxRetryAfterMs)) * time.Millisecond,
 		})
 	case ingresswire.Welcome:
 		welcome = m

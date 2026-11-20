@@ -333,3 +333,43 @@ func TestTickerStopped(t *testing.T) {
 		t.Error("the ticker's stop function was not called by the time Serve returned")
 	}
 }
+
+// TestHealthIntervalIsBounded is IN-A-01: a welcome's healthMs is kept between a second and an hour, and a
+// value that would overflow a Duration is capped instead of wrapping.
+func TestHealthIntervalIsBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		healthMs int
+		want     time.Duration
+	}{
+		{"none", 0, ingresswire.HealthInterval},
+		{"negative", -5, ingresswire.HealthInterval},
+		{"a millisecond", 1, time.Second},
+		{"just under the floor", 999, time.Second},
+		{"the floor", 1000, time.Second},
+		{"ordinary", 45000, 45 * time.Second},
+		{"the cap", 3_600_000, time.Hour},
+		{"over the cap", 3_600_001, time.Hour},
+		{"overflowing", 18446744073710, time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := healthInterval(tc.healthMs); got != tc.want {
+				t.Errorf("healthInterval(%d) = %v, want %v", tc.healthMs, got, tc.want)
+			}
+		})
+	}
+
+	// Serve uses it: a welcome that says healthMs 1 asks the ticker for a second.
+	w := testWelcome("i-1")
+	w.HealthMs = 1
+	conn := sessionConn(t, w, serveHealth(0, make(chan any, 1)))
+	f := newFakeTicker()
+	_ = conn.Serve(testsupport.Context(t), SessionOptions{
+		Handle: func(context.Context, []byte, string) (string, string) { return "", "" },
+		Health: noHealth,
+		Ticker: f.Ticker,
+	})
+	if d := testsupport.Await(t, "the ticker request", f.asked); d != time.Second {
+		t.Errorf("ticker interval for healthMs 1 = %v, want the floor 1s", d)
+	}
+}

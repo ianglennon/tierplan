@@ -341,3 +341,25 @@ func TestLoopNeverExitsWhileContextLive(t *testing.T) {
 	}
 	stopLoop(t, cancel, done)
 }
+
+// TestLoopRetryAfterHasAFloor is IN-A-01: a server's retry-after hint of a millisecond waits BackoffMin, not
+// a millisecond, so a server bug cannot make the node reconnect in a tight loop.
+func TestLoopRetryAfterHasAFloor(t *testing.T) {
+	rate := func(after time.Duration) dialStep {
+		return failWith(&RefusedError{Code: ingresswire.RefuseRateLimited, RetryAfter: after})
+	}
+	dial, _, reached := scriptedDial([]dialStep{rate(time.Millisecond), rate(time.Second + time.Millisecond)})
+	clock := newFakeClock(true)
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	done := startLoop(ctx, loopOptions(dial, clock, nil))
+	testsupport.Await(t, "the loop to use up the failures", reached)
+
+	got := clock.delays(t, 2)
+	if got[0] != BackoffMin {
+		t.Errorf("delay after a 1ms hint = %v, want the floor %v", got[0], BackoffMin)
+	}
+	if got[1] != time.Second+time.Millisecond {
+		t.Errorf("delay after a hint above the floor = %v, want exactly the hint", got[1])
+	}
+	stopLoop(t, cancel, done)
+}

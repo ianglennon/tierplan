@@ -20,7 +20,9 @@ const (
 	// act on waits exactly this long, so the node keeps knocking gently (D-35).
 	BackoffMax = 60 * time.Second
 	// MaxRetryAfter caps a server's retry-after hint (D-19): the hint replaces the
-	// computed delay, but a server cannot park a node for longer than this.
+	// computed delay, but a server cannot park a node for longer than this. The hint
+	// is floored at BackoffMin as well, so a server cannot make the node reconnect
+	// every millisecond.
 	MaxRetryAfter = 5 * time.Minute
 	// RevokedLogInterval is how often a revoked node repeats its error line, so an
 	// operator who finds the node frozen can see why (D-35).
@@ -68,8 +70,8 @@ var administratorRefusals = map[string]bool{
 // Run keeps a session with TierPlan going and returns only when ctx ends, with
 // nil (D-19). An ordinary failure waits a jittered, doubling delay between
 // BackoffMin and BackoffMax; a session that reached the welcome resets the count.
-// A refusal that carries a retry-after hint waits exactly min(hint,
-// MaxRetryAfter) instead. A refusal an administrator must act on, and a welcome
+// A refusal that carries a retry-after hint waits exactly the hint, kept between
+// BackoffMin and MaxRetryAfter, instead. A refusal an administrator must act on, and a welcome
 // from an instance other than the pinned one, wait BackoffMax and say so in the
 // log. A revoked node (a refusal revoked or node_revoked, or a close with reason
 // revoked) never dials again: it logs one error line now and again every
@@ -154,10 +156,11 @@ func decideDelay(err error, failures int, rnd func() float64, logger *slog.Logge
 	return wait(delay, hint)
 }
 
-// wait is the delay actually waited: the server's hint, capped, when it gave one.
+// wait is the delay actually waited: the server's hint, between BackoffMin and MaxRetryAfter, when it gave
+// one.
 func wait(computed, hint time.Duration) time.Duration {
 	if hint > 0 {
-		return min(hint, MaxRetryAfter)
+		return max(min(hint, MaxRetryAfter), BackoffMin)
 	}
 	return computed
 }
