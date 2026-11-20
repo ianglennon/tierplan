@@ -309,7 +309,8 @@ func (s *Store) gc(r *record) {
 // the rename. A rename that fails, across devices included, fails the apply; no file is copied instead.
 //
 // A failed Check is returned as the *ingressbundle.VerifyError and nothing is written. Any other failure
-// is an *ApplyError naming the step. A failure of the final cleanup is not an error of Apply, because the
+// is an *ApplyError naming the step. A failure after the dynamic rename (the flush of dynamic/, the commit)
+// is an *ApplyError too, but the bundle is in force by then: AppliedID already names it. A failure of the final cleanup is not an error of Apply, because the
 // bundle is live by then: it is kept for GCErr.
 func (s *Store) Apply(b ingressbundle.Bundle) error {
 	s.mu.Lock()
@@ -373,11 +374,17 @@ func (s *Store) applyLocked(b ingressbundle.Bundle) error {
 			mode = fs.FileMode(e.Mode)
 		}
 	}
-	if err := fsx.WriteAtomic(s.fsys, s.abs(dirTmp), s.abs(ingressbundle.DynamicFile), data[ingressbundle.DynamicFile], mode); err != nil {
+	if err := fsx.WriteAtomicNoSync(s.fsys, s.abs(dirTmp), s.abs(ingressbundle.DynamicFile), data[ingressbundle.DynamicFile], mode); err != nil {
 		return &ApplyError{Step: stepDynamic, Err: err}
 	}
-	// From here the volume serves this bundle, whatever happens to the commit.
+	// From the rename the volume serves this bundle (Traefik's file provider reloads on it), whatever
+	// happens to the directory flush or the commit, so the state in memory follows the rename and not
+	// the flush: a node that reported the previous bundle while serving this one would contradict what
+	// it tells TierPlan and would change behaviour across a restart.
 	s.applied = &rec
+	if err := s.fsys.SyncDir(s.abs(dirDynamic)); err != nil {
+		return &ApplyError{Step: stepDynamic, Err: fmt.Errorf("flush %s: %w", s.abs(dirDynamic), err)}
+	}
 
 	if err := s.commit(); err != nil {
 		return err
