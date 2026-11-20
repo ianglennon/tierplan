@@ -60,6 +60,16 @@ WHERE env_id = sqlc.arg(env_id) AND swarm_node_id = sqlc.arg(swarm_node_id) AND 
 SELECT COUNT(*) FROM ingress_nodes
 WHERE env_id = ? AND swarm_node_id IS NULL AND status = 'active';
 
+-- name: ActiveIngressSwarmNode :one
+-- The live enrolment of a swarm node, if any; the partial unique index allows at most one.
+SELECT * FROM ingress_nodes
+WHERE env_id = sqlc.arg(env_id) AND swarm_node_id = sqlc.arg(swarm_node_id) AND status = 'active';
+
+-- name: ActiveIngressStandalone :one
+-- The live enrolment of a standalone environment's one slot, if any.
+SELECT * FROM ingress_nodes
+WHERE env_id = ? AND swarm_node_id IS NULL AND status = 'active';
+
 -- name: CountBlockedIngressSwarmNode :one
 -- A revoked row whose revoke also blocked re-enrolment (D-20).
 SELECT COUNT(*) FROM ingress_nodes

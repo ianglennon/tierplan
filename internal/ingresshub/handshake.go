@@ -79,6 +79,16 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		return accepted{}, false
 	}
 
+	// The instance ID is read before the auth is verified: an enrolment commits the node's row, and after that
+	// commit only the welcome may follow, so nothing that can fail stands between the two (CR-A-01). A node that
+	// still misses its welcome (the connection drops) enrols again with the same key and is given the same row.
+	instanceID, err := h.readInstanceID(ctx)
+	if err != nil {
+		h.log.Error("read the instance ID for a welcome", "ip", ip, "error", err)
+		h.refuse(ctx, c, ingresswire.RefuseInternal, "the server could not read its instance ID; it will retry", 0)
+		return accepted{}, false
+	}
+
 	acc, err := h.verifyAuth(ctx, a, serverNonce, peerInfo{
 		ip: ip, tls: r.TLS, trusted: httpx.PeerTrusted(r.Context()), aud: aud,
 	})
@@ -94,12 +104,6 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		return accepted{}, false
 	}
 
-	instanceID, err := h.readInstanceID(ctx)
-	if err != nil {
-		h.log.Error("read the instance ID for a welcome", "node_id", acc.NodeID, "error", err)
-		h.refuse(ctx, c, ingresswire.RefuseInternal, "the server could not read its instance ID; it will retry", 0)
-		return accepted{}, false
-	}
 	if err := writeJSON(ctx, c, ingresswire.Welcome{
 		T: ingresswire.TypeWelcome, NodeID: acc.NodeID, EnvID: acc.EnvID, InstanceID: instanceID,
 		HealthMs: int(ingresswire.HealthInterval / time.Millisecond), Pins: h.pinList(), ServerTime: h.now().UnixMilli(),

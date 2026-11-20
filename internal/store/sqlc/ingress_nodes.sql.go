@@ -10,6 +10,83 @@ import (
 	"database/sql"
 )
 
+const activeIngressStandalone = `-- name: ActiveIngressStandalone :one
+SELECT id, env_id, name, swarm_node_id, public_key, status, version, schemas, applied_bundle_id, applied_at, rejected_bundle_id, rejected_reason, rejected_at, health, health_at, held_hostnames, last_seen_at, created_at, revoked_at, revoked_by, revoke_reason, reenrol_blocked FROM ingress_nodes
+WHERE env_id = ? AND swarm_node_id IS NULL AND status = 'active'
+`
+
+// The live enrolment of a standalone environment's one slot, if any.
+func (q *Queries) ActiveIngressStandalone(ctx context.Context, envID string) (IngressNode, error) {
+	row := q.db.QueryRowContext(ctx, activeIngressStandalone, envID)
+	var i IngressNode
+	err := row.Scan(
+		&i.ID,
+		&i.EnvID,
+		&i.Name,
+		&i.SwarmNodeID,
+		&i.PublicKey,
+		&i.Status,
+		&i.Version,
+		&i.Schemas,
+		&i.AppliedBundleID,
+		&i.AppliedAt,
+		&i.RejectedBundleID,
+		&i.RejectedReason,
+		&i.RejectedAt,
+		&i.Health,
+		&i.HealthAt,
+		&i.HeldHostnames,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+		&i.RevokeReason,
+		&i.ReenrolBlocked,
+	)
+	return i, err
+}
+
+const activeIngressSwarmNode = `-- name: ActiveIngressSwarmNode :one
+SELECT id, env_id, name, swarm_node_id, public_key, status, version, schemas, applied_bundle_id, applied_at, rejected_bundle_id, rejected_reason, rejected_at, health, health_at, held_hostnames, last_seen_at, created_at, revoked_at, revoked_by, revoke_reason, reenrol_blocked FROM ingress_nodes
+WHERE env_id = ?1 AND swarm_node_id = ?2 AND status = 'active'
+`
+
+type ActiveIngressSwarmNodeParams struct {
+	EnvID       string
+	SwarmNodeID sql.NullString
+}
+
+// The live enrolment of a swarm node, if any; the partial unique index allows at most one.
+func (q *Queries) ActiveIngressSwarmNode(ctx context.Context, arg ActiveIngressSwarmNodeParams) (IngressNode, error) {
+	row := q.db.QueryRowContext(ctx, activeIngressSwarmNode, arg.EnvID, arg.SwarmNodeID)
+	var i IngressNode
+	err := row.Scan(
+		&i.ID,
+		&i.EnvID,
+		&i.Name,
+		&i.SwarmNodeID,
+		&i.PublicKey,
+		&i.Status,
+		&i.Version,
+		&i.Schemas,
+		&i.AppliedBundleID,
+		&i.AppliedAt,
+		&i.RejectedBundleID,
+		&i.RejectedReason,
+		&i.RejectedAt,
+		&i.Health,
+		&i.HealthAt,
+		&i.HeldHostnames,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.RevokedAt,
+		&i.RevokedBy,
+		&i.RevokeReason,
+		&i.ReenrolBlocked,
+	)
+	return i, err
+}
+
 const countActiveIngressStandalone = `-- name: CountActiveIngressStandalone :one
 SELECT COUNT(*) FROM ingress_nodes
 WHERE env_id = ? AND swarm_node_id IS NULL AND status = 'active'

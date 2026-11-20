@@ -327,3 +327,105 @@ func TestEnrolBlockedNodeIsRefusedNodeRevoked(t *testing.T) {
 		}
 	})
 }
+
+// TestEnrolAgainWithTheSameKeyGetsTheSameRow is CR-A-01: a node whose enrolment committed but whose welcome never
+// arrived enrols again with the same key and is given the row it already has, for a swarm node and for the
+// standalone slot. The repeat is audited and changes nothing on the row; another key is still refused (D-05).
+func TestEnrolAgainWithTheSameKeyGetsTheSameRow(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name, envType, claimed string
+	}{
+		{"swarm node", "swarm", swarmNodeN},
+		{"standalone slot", "standalone", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			envID := f.insertEnv(t, tc.envType)
+			f.freshList(envID, swarmNodeN)
+			tok := f.issue(t, envID)
+			_, key := newKey(t)
+
+			first, err := f.svc.Enrol(ctx, enrolRequest(t, key, tok.Token, "edge-a", tc.claimed))
+			if err != nil {
+				t.Fatalf("first Enrol: %v", err)
+			}
+			before := f.row(t, first.NodeID)
+
+			// The welcome was lost: the node only knows its key and enrols again, under another name even.
+			f.clock.Advance(time.Minute)
+			again, err := f.svc.Enrol(ctx, enrolRequest(t, key, tok.Token, "edge-renamed", tc.claimed))
+			if err != nil {
+				t.Fatalf("Enrol again with the same key: %v", err)
+			}
+			if again != first {
+				t.Errorf("Enrol again = %+v, want the first enrolment %+v", again, first)
+			}
+			if after := f.row(t, first.NodeID); !reflect.DeepEqual(before, after) {
+				t.Errorf("the row changed:\n before %+v\n after  %+v", before, after)
+			}
+			if n := f.countNodes(t, envID); n != 1 {
+				t.Errorf("%d node rows, want 1", n)
+			}
+			rows := f.auditRows(t, audit.ActionIngressNodeEnrolled)
+			if len(rows) != 2 {
+				t.Fatalf("%d %s rows, want 2", len(rows), audit.ActionIngressNodeEnrolled)
+			}
+			if rows[1].TargetID != first.NodeID || !strings.Contains(rows[1].Details, `"repeated":"true"`) {
+				t.Errorf("the repeat's audit row = %+v, want the same node with repeated true", rows[1])
+			}
+			if strings.Contains(rows[0].Details, "repeated") {
+				t.Errorf("the first enrolment's audit row says repeated: %s", rows[0].Details)
+			}
+
+			// Another key for the same slot is still refused, and replaces nothing.
+			if _, err := f.enrolOnce(t, tok.Token, "edge-b", tc.claimed); err == nil {
+				t.Fatal("another key enrolled into a live slot")
+			} else if re := refusal(t, err); re.Code != ingresswire.RefuseNodeAlreadyEnrolled {
+				t.Errorf("another key refusal = %q, want node_already_enrolled", re.Code)
+			}
+			if after := f.row(t, first.NodeID); !reflect.DeepEqual(before, after) {
+				t.Errorf("another key changed the row:\n before %+v\n after  %+v", before, after)
+			}
+		})
+	}
+}
+
+// TestEnrolTwiceConcurrentlySameKeyOneRow releases two enrolments of one node with one key at once, as a retry
+// that overlaps the first attempt does. Whichever of the pre-check and the unique index sees the other first,
+// both are given the one row.
+func TestEnrolTwiceConcurrentlySameKeyOneRow(t *testing.T) {
+	f := newFixture(t)
+	envID := f.insertEnv(t, "swarm")
+	f.freshList(envID, swarmNodeN)
+	tok := f.issue(t, envID)
+	_, key := newKey(t)
+	req := enrolRequest(t, key, tok.Token, "edge", swarmNodeN)
+
+	const racers = 2
+	start := make(chan struct{})
+	type outcome struct {
+		res ingresshub.EnrolResult
+		err error
+	}
+	out := make(chan outcome, racers)
+	for range racers {
+		go func() {
+			<-start
+			res, err := f.svc.Enrol(context.Background(), req)
+			out <- outcome{res, err}
+		}()
+	}
+	close(start)
+	a, b := <-out, <-out
+	if a.err != nil || b.err != nil {
+		t.Fatalf("Enrol errors = %v and %v, want both enrolled", a.err, b.err)
+	}
+	if a.res.NodeID != b.res.NodeID {
+		t.Errorf("node IDs %q and %q, want one row for both", a.res.NodeID, b.res.NodeID)
+	}
+	if n := f.activeNodes(t, envID); n != 1 {
+		t.Errorf("%d active rows, want 1", n)
+	}
+}

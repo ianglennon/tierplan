@@ -4,13 +4,17 @@
 package ingresshub_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingresshub/ingresstest"
 	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/proto/ingresswire"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -92,5 +96,47 @@ func TestHubEnrolTracer(t *testing.T) {
 	}
 	if version == "" {
 		t.Error("hello did not record the node's version")
+	}
+}
+
+// TestHubEnrolNothingCommittedBeforeTheInstanceID is CR-A-01 through the hub: the instance ID is read before the
+// enrolment commits, so a failing read leaves no row behind, and a node that enrols again with the same key, as
+// one whose welcome was lost would, is welcomed with the same node ID.
+func TestHubEnrolNothingCommittedBeforeTheInstanceID(t *testing.T) {
+	var failing atomic.Bool
+	var srv *ingresstest.Server
+	srv = ingresstest.Start(t, ingresstest.Options{Configure: func(h *ingresshub.Hub) *ingresshub.Hub {
+		return h.WithInstanceID(func(ctx context.Context) (string, error) {
+			if failing.Load() {
+				return "", errors.New("the settings read failed")
+			}
+			return instance.InstanceID(ctx, srv.Store)
+		})
+	}})
+	env := srv.NewEnvironment(t, "swarm")
+	srv.Nodes.Set(env.ID, "swarmnode1")
+	id := ingresstest.NewIdentity()
+	d := ingresstest.Dial{Token: env.Token, Name: "node-1", SwarmNodeID: "swarmnode1"}
+
+	failing.Store(true)
+	c := ingresstest.DialNode(t, srv.URL(), srv.Client(), srv.Audience(), id, d)
+	if c.Refuse == nil || c.Refuse.Code != ingresswire.RefuseInternal {
+		t.Fatalf("enrol with a failing instance ID read = refuse %+v, err %v, want internal_error", c.Refuse, c.Err)
+	}
+	var rows int
+	if err := srv.Store.Read.QueryRow(`SELECT COUNT(*) FROM ingress_nodes WHERE env_id = ?`, env.ID).Scan(&rows); err != nil {
+		t.Fatalf("count the node rows: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("%d node rows after an enrolment that was not welcomed, want 0", rows)
+	}
+
+	failing.Store(false)
+	first := srv.Enrol(t, id, d)
+	// The node lost the welcome: it still has no node ID and enrols again with the same key.
+	lost := &ingresstest.Identity{Key: id.Key}
+	again := srv.Enrol(t, lost, d)
+	if again.Welcome.NodeID != first.Welcome.NodeID {
+		t.Errorf("enrol again welcomed node %q, want the first enrolment's %q", again.Welcome.NodeID, first.Welcome.NodeID)
 	}
 }

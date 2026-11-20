@@ -208,12 +208,21 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 	// swarm node is the node ID it reports, a standalone host the environment's one slot (a NULL swarm node
 	// ID). A swarm node that reports no ID has no row to match and is refused node_unverified below. The
 	// pre-check on the live row only spares the list read; the partial unique index decides under a race, in
-	// the insert (7).
+	// the insert (7). This order, the slot before the node list, is noted for the Phase 28 threat model: a
+	// holder of a valid token learns which swarm node IDs are enrolled or blocked, bounded by the enrolment
+	// bucket.
+	//
+	// A live row with the same key is this node enrolling again, after a welcome it never received (a drop
+	// between the commit and the welcome, CR-A-01): it proved it holds that key, so it is given the row's ID
+	// instead of being refused. Another key is still refused node_already_enrolled and never replaces the row
+	// (D-05).
 	if !swarm || req.SwarmNodeID != "" {
-		if refuse, err := s.checkNodeSlot(ctx, envID, swarm, req.SwarmNodeID); err != nil {
+		if existing, refuse, err := s.checkNodeSlot(ctx, envID, swarm, req.SwarmNodeID, req.Pub); err != nil {
 			return EnrolResult{}, err
 		} else if refuse != nil {
 			return EnrolResult{}, refuse
+		} else if existing != nil {
+			return s.enrolledAgain(ctx, existing.ID, req)
 		}
 	}
 
@@ -256,6 +265,12 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 		Status: statusActive, CreatedAt: s.now().UTC().UnixNano(),
 	}); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			// Another enrolment of the slot committed between the pre-check and this insert. When it was this
+			// node's own (a retry that overlapped the first attempt), it is given that row, as above.
+			_ = tx.Rollback()
+			if existing, _, err := s.checkNodeSlot(ctx, envID, swarm, req.SwarmNodeID, req.Pub); err == nil && existing != nil {
+				return s.enrolledAgain(ctx, existing.ID, req)
+			}
 			return EnrolResult{}, &RefuseError{
 				Code: ingresswire.RefuseNodeAlreadyEnrolled, AuditReason: ingresswire.RefuseNodeAlreadyEnrolled,
 				Detail: detailNodeAlreadyEnrolled,
@@ -294,36 +309,69 @@ func cleanName(s string) string {
 }
 
 // checkNodeSlot refuses an enrolment for a node an administrator revoked with the block (node_revoked) or one that
-// has an active row already (node_already_enrolled), and returns nil for both a free slot and any other state.
-// The error is a database failure, not a refusal.
-func (s *Service) checkNodeSlot(ctx context.Context, envID string, swarm bool, swarmNodeID string) (*RefuseError, error) {
-	var blocked, active int64
-	var err error
+// has an active row already with another key than pub (node_already_enrolled). An active row with the key pub
+// is returned as existing: the same node enrolling again. Both are nil for a free slot and any other state. The
+// error is a database failure, not a refusal.
+func (s *Service) checkNodeSlot(ctx context.Context, envID string, swarm bool, swarmNodeID string, pub []byte) (existing *sqlc.IngressNode, refuse *RefuseError, err error) {
+	var blocked int64
+	var row sqlc.IngressNode
 	if swarm {
 		node := sql.NullString{String: swarmNodeID, Valid: true}
 		if blocked, err = s.st.RQ.CountBlockedIngressSwarmNode(ctx, sqlc.CountBlockedIngressSwarmNodeParams{EnvID: envID, SwarmNodeID: node}); err != nil {
-			return nil, fmt.Errorf("look for a block on the node: %w", err)
+			return nil, nil, fmt.Errorf("look for a block on the node: %w", err)
 		}
 		if blocked == 0 {
-			if active, err = s.st.RQ.CountActiveIngressSwarmNode(ctx, sqlc.CountActiveIngressSwarmNodeParams{EnvID: envID, SwarmNodeID: node}); err != nil {
-				return nil, fmt.Errorf("look for a live enrolment of the node: %w", err)
-			}
+			row, err = s.st.RQ.ActiveIngressSwarmNode(ctx, sqlc.ActiveIngressSwarmNodeParams{EnvID: envID, SwarmNodeID: node})
 		}
 	} else {
 		if blocked, err = s.st.RQ.CountBlockedIngressStandalone(ctx, envID); err != nil {
-			return nil, fmt.Errorf("look for a block on the node: %w", err)
+			return nil, nil, fmt.Errorf("look for a block on the node: %w", err)
 		}
 		if blocked == 0 {
-			if active, err = s.st.RQ.CountActiveIngressStandalone(ctx, envID); err != nil {
-				return nil, fmt.Errorf("look for a live enrolment of the node: %w", err)
-			}
+			row, err = s.st.RQ.ActiveIngressStandalone(ctx, envID)
 		}
 	}
 	switch {
 	case blocked > 0:
-		return &RefuseError{Code: ingresswire.RefuseNodeRevoked, AuditReason: ingresswire.RefuseNodeRevoked, Detail: detailNodeRevoked}, nil
-	case active > 0:
-		return &RefuseError{Code: ingresswire.RefuseNodeAlreadyEnrolled, AuditReason: ingresswire.RefuseNodeAlreadyEnrolled, Detail: detailNodeAlreadyEnrolled}, nil
+		return nil, &RefuseError{Code: ingresswire.RefuseNodeRevoked, AuditReason: ingresswire.RefuseNodeRevoked, Detail: detailNodeRevoked}, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil, nil
+	case err != nil:
+		return nil, nil, fmt.Errorf("look for a live enrolment of the node: %w", err)
+	case subtle.ConstantTimeCompare(row.PublicKey, pub) == 1:
+		return &row, nil, nil
 	}
-	return nil, nil
+	return nil, &RefuseError{Code: ingresswire.RefuseNodeAlreadyEnrolled, AuditReason: ingresswire.RefuseNodeAlreadyEnrolled, Detail: detailNodeAlreadyEnrolled}, nil
+}
+
+// enrolledAgain answers an enrolment of a node whose live row, nodeID, already holds the key it proved: it is the
+// node's own earlier enrolment, whose welcome it never received. The row is not changed. The enrolment is audited
+// all the same, as ingress.node_enrolled with the detail repeated, and the row's status is read again inside the
+// audit's transaction, so a revoke that committed since the slot was checked is not undone by a welcome; the node
+// is then told to retry and the retry gets the revoke's answer.
+func (s *Service) enrolledAgain(ctx context.Context, nodeID string, req EnrolRequest) (EnrolResult, error) {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return EnrolResult{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	row, err := s.st.Q.WithTx(tx).GetIngressNode(ctx, nodeID)
+	if err != nil {
+		return EnrolResult{}, fmt.Errorf("load the ingress node: %w", err)
+	}
+	if row.Status != statusActive || subtle.ConstantTimeCompare(row.PublicKey, req.Pub) != 1 {
+		return EnrolResult{}, errors.New("the node's enrolment changed while it enrolled again")
+	}
+	if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+		Actor: audit.SystemIngress, Action: audit.ActionIngressNodeEnrolled,
+		TargetType: targetIngressNode, TargetID: row.ID, EnvID: row.EnvID, Result: audit.ResultSuccess,
+		IP: req.IP, UserAgent: userAgentPrefix + req.Version,
+		Details: map[string]string{"node": row.Name, "swarm_node": row.SwarmNodeID.String, "repeated": "true"},
+	}); err != nil {
+		return EnrolResult{}, fmt.Errorf("audit ingress node enrolled again: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return EnrolResult{}, fmt.Errorf("commit: %w", err)
+	}
+	return EnrolResult{NodeID: row.ID, EnvID: row.EnvID, Name: row.Name, SwarmNodeID: row.SwarmNodeID.String}, nil
 }
