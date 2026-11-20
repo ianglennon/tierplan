@@ -46,24 +46,57 @@ func TestServesFromCache(t *testing.T) {
 	}
 }
 
+// noCacheLine is the supervisor's decision on a volume with no verified bundle, and reconnectLine is what the
+// channel loop logs for each failed attempt to reach TierPlan.
+const (
+	noCacheLine   = "no verified cached bundle: Traefik not started"
+	reconnectLine = "the session ended; reconnecting"
+)
+
 // TestNoCacheNoTierPlan (D-13, PRX-05, success criterion 5): a node with a new volume and a TierPlan it
 // cannot reach has nothing to serve, so it serves nothing and says so: readiness 503 with no body, the proxy
 // ports closed, no Traefik, and a health status of starting, not a failure and not a healthy node.
+//
+// The readiness listener opens first, so an answer from it proves nothing about the decision that follows. The
+// measurements wait for the supervisor's own decision line and for the channel loop's first failed attempt,
+// which are logged after the volume, the cache and the start-up order have all been settled, and they are
+// taken again after a second failed attempt, a full backoff later. A Traefik that a regression started late
+// would have opened its ports by then.
 func TestNoCacheNoTierPlan(t *testing.T) {
 	e := startNodeEnv(t)
 	e.srv.Stop() // the address answers nothing from here on
 	e.runIngress(t, "empty-data")
 
-	var status int
-	var body string
-	testsupport.Poll(t, pollFor, "/readyz to answer", func() (bool, string) { // testsupport: external, the image starts on its own schedule
-		s, b, err := e.readyz()
-		if err != nil {
-			return false, err.Error()
-		}
-		status, body = s, b
-		return true, ""
+	awaitLogs := func(what string, ready func(logs string) bool) {
+		t.Helper()
+		testsupport.Poll(t, pollFor, what, func() (bool, string) { // testsupport: external, the image logs on its own schedule
+			logs := e.logs(t)
+			if ready(logs) {
+				return true, ""
+			}
+			return false, tail(logs, 5)
+		})
+	}
+	awaitLogs("the supervisor's decision to start no Traefik and the first failed attempt to reach TierPlan", func(logs string) bool {
+		return strings.Contains(logs, noCacheLine) && strings.Contains(logs, reconnectLine)
 	})
+	checkNothingServed(t, e)
+
+	// A second failed attempt is a whole backoff later, by the node's own clock, with no sleep in the test.
+	awaitLogs("a second failed attempt to reach TierPlan", func(logs string) bool {
+		return strings.Count(logs, reconnectLine) >= 2
+	})
+	checkNothingServed(t, e)
+}
+
+// checkNothingServed fails unless the node serves nothing: readiness 503 with no body, the proxy ports
+// refused, a health status of starting and no Traefik process.
+func checkNothingServed(t *testing.T, e *nodeEnv) {
+	t.Helper()
+	status, body, err := e.readyz()
+	if err != nil {
+		t.Fatalf("/readyz did not answer: %v", err)
+	}
 	if status != 503 || body != "" {
 		t.Fatalf("/readyz answered %d with a body of %d bytes, want 503 and none", status, len(body))
 	}
