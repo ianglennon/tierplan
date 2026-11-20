@@ -47,3 +47,13 @@ go github.com/realclientip/realclientip-go BSD-0-Clause  # permissive, no obliga
 go github.com/in-toto/attestation Unknown  # Apache-2.0 notice in LICENSE (v1.2.0); go-licenses cannot classify the short file
 go github.com/in-toto/in-toto-golang Unknown  # Apache-2.0 notice in LICENSE (v0.11.0); go-licenses cannot classify the short file
 go gotest.tools/v3 Unknown  # Apache-2.0 notice in LICENSE (v3.5.2); go-licenses cannot classify the short file
+
+# --- Reviewed 2026-11-20 (plan 23-01, spike S11), Traefik v3.7.19 in the tierplan-ingress image ---
+
+# The tierplan-ingress image copies the Traefik v3.7.19 binary. TierPlan does not compile it but
+# distributes it, so its 411 Go packages are gated too (scripts/licences-check.sh, the Traefik leg).
+# Four rows failed the allowlist; these three lines clear them. Nothing here is BSL, SSPL,
+# GPL-2.0-only or proprietary.
+go github.com/nrdcg/oci-go-sdk UPL-1.0  # dual-licensed UPL-1.0 or Apache-2.0 (LICENSE.txt: "You may choose either license"); TierPlan takes Apache-2.0
+go github.com/nrdcg/vegadns Unknown  # LICENSE of v0.3.0 holds only the Apache-2.0 notice ("Copyright 2018, Cisco Systems, Inc."); go-licenses cannot classify the short file
+go github.com/traefik/traefik/dynamic/ext Unknown  # nested module of the Traefik repository with no LICENSE of its own; MIT LICENSE.md at the repository root
