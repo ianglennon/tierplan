@@ -21,12 +21,21 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
 	pnpm -C web build
 	touch web/dist/.gitkeep  # Vite empties outDir
+
+# The web interface's SPDX SBOM (D-25, D-27): written by scripts/web-sbom.sh and checked as an
+# exact name@version set against pnpm licenses. The file goes into the server archive and image
+# (23-10), so it must exist before goreleaser, `make e2e-image` and `make edge-context` build the
+# server image.
+WEB_SBOM := build/sbom/tierplan-web.spdx.json
+
+web-sbom:
+	scripts/web-sbom.sh $(WEB_SBOM)
 
 build: web
 	CGO_ENABLED=0 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o bin/tierplan ./cmd/tierplan
