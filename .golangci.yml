@@ -137,6 +137,22 @@ linters:
           deny:
             - pkg: github.com/go-acme
               desc: the agent image stays small; ACME belongs to the server only (D-11)
+        # The ingress node faces the internet and has no Docker socket (D-06, D-42). The
+        # glob is anchored at the module through ${config-path}, because depguard compares
+        # absolute file names: a bare ingress/** never matches, and a glob that starts with
+        # a double-star segment before the module name would also match internal/ingress
+        # in the server module. scripts/ingress-deps-check.sh holds the full allowlist.
+        ingress-module-seam:
+          list-mode: lax
+          files:
+            - "${config-path}/ingress/**"
+          deny:
+            - pkg: github.com/moby/moby
+              desc: the ingress node has no Docker socket (D-06)
+            - pkg: github.com/go-acme
+              desc: ACME belongs to the server only
+            - pkg: github.com/hashicorp/yamux
+              desc: yamux is the agent's tunnel, not the ingress channel
 
   exclusions:
     generated: lax

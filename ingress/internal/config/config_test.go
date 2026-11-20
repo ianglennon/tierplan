@@ -171,13 +171,13 @@ func TestJoinToken(t *testing.T) {
 }
 
 func TestLoadNeverReadsTheTokenFile(t *testing.T) {
-	_, err := Load(env(map[string]string{EnvURL: goodURL, EnvJoinTokenFile: "/run/secrets/absent"}))
+	_, err := Load(env(map[string]string{EnvURL: goodURL, EnvJoinTokenFile: "/run/secrets/absent"})) //nolint:gosec // a test fixture
 	if err != nil {
 		t.Fatalf("Load with a token file named: %v; an enrolled node needs no token", err)
 	}
 	// Load has no readFile parameter at all, so it cannot read one; JoinToken is
 	// where the file is opened, and only when it is called.
-	cfg, _ := Load(env(map[string]string{EnvURL: goodURL, EnvJoinTokenFile: "/run/secrets/absent"}))
+	cfg, _ := Load(env(map[string]string{EnvURL: goodURL, EnvJoinTokenFile: "/run/secrets/absent"})) //nolint:gosec // a test fixture
 	called := false
 	_, _ = cfg.JoinToken(func(string) ([]byte, error) {
 		called = true
@@ -197,7 +197,7 @@ func TestConfigFormattingNeverPrintsTheToken(t *testing.T) {
 		"%v":     fmt.Sprintf("%v", cfg),
 		"%+v":    fmt.Sprintf("%+v", cfg),
 		"%#v":    fmt.Sprintf("%#v", cfg),
-		"%s":     fmt.Sprintf("%s", cfg),
+		"%s":     fmt.Sprintf("%s|", cfg),
 		"ptr %v": fmt.Sprintf("%v", &cfg),
 	}
 	var buf bytes.Buffer

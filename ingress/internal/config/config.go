@@ -35,9 +35,9 @@ const (
 	EnvPin = "TIERPLAN_INGRESS_PIN"
 	// EnvJoinTokenFile is the path of a Docker secret holding the join token. It
 	// wins over EnvJoinToken.
-	EnvJoinTokenFile = "TIERPLAN_INGRESS_JOIN_TOKEN_FILE"
+	EnvJoinTokenFile = "TIERPLAN_INGRESS_JOIN_TOKEN_FILE" //nolint:gosec // the name of a variable, not a credential
 	// EnvJoinToken is the join token itself.
-	EnvJoinToken = "TIERPLAN_INGRESS_JOIN_TOKEN"
+	EnvJoinToken = "TIERPLAN_INGRESS_JOIN_TOKEN" //nolint:gosec // the name of a variable, not a credential
 	// EnvNodeID is the swarm node ID of the host the supervisor runs on. A
 	// standalone node has none, so it is optional (D-22).
 	EnvNodeID = "TIERPLAN_INGRESS_NODE_ID"
