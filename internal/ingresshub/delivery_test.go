@@ -294,8 +294,12 @@ func TestDeliveryOnlyTheNodesOwnEnvironment(t *testing.T) {
 		t.Fatalf("node of env 1 received %s, want %s", got.ID, y1.ID)
 	}
 
+	// The hub reports a send once the write returns, so a node can hold a frame before its sent event is
+	// recorded. Wait for both nodes' second send, then check every event seen so far.
+	dvAwaitCount(t, srv, a.NodeID, ingresshub.PushSent, "", 2)
+	evs := dvAwaitCount(t, srv, b.NodeID, ingresshub.PushSent, "", 2)
 	env1Bundles := []string{x1.ID, y1.ID}
-	for _, e := range srv.Pushes().Events() {
+	for _, e := range evs {
 		switch e.NodeID {
 		case a.NodeID:
 			if e.EnvID != env1.ID || (e.BundleID != "" && !slices.Contains(env1Bundles, e.BundleID)) {
@@ -309,7 +313,7 @@ func TestDeliveryOnlyTheNodesOwnEnvironment(t *testing.T) {
 	}
 	for _, id := range []string{a.NodeID, b.NodeID} {
 		want := map[string]int{a.NodeID: 2, b.NodeID: 2}[id]
-		if n := dvCount(srv.Pushes().Events(), id, ingresshub.PushSent, ""); n != want {
+		if n := dvCount(evs, id, ingresshub.PushSent, ""); n != want {
 			t.Errorf("node %s was sent %d bundles, want %d", id, n, want)
 		}
 	}
