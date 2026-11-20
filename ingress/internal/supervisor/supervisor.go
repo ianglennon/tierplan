@@ -57,8 +57,6 @@ type Traefik interface {
 	Start(ctx context.Context) error
 	// Stop stops it and returns once it has stopped.
 	Stop() error
-	// Running reports whether a process is running.
-	Running() bool
 }
 
 // Deps is everything Run touches outside its own memory, so a test can drive the whole start-up with fakes

@@ -247,11 +247,10 @@ func (f eventFS) ReadFile(name string) ([]byte, error) {
 }
 
 type fakeTraefik struct {
-	ev      *events
-	starts  atomic.Int32
-	stops   atomic.Int32
-	running atomic.Bool
-	onStop  func()
+	ev     *events
+	starts atomic.Int32
+	stops  atomic.Int32
+	onStop func()
 	// failStarts is how many of the next Start calls fail with errTraefikStart.
 	failStarts atomic.Int32
 }
@@ -266,7 +265,6 @@ func (f *fakeTraefik) Start(context.Context) error {
 		f.failStarts.Add(-1)
 		return errTraefikStart
 	}
-	f.running.Store(true)
 	return nil
 }
 
@@ -276,11 +274,8 @@ func (f *fakeTraefik) Stop() error {
 		f.onStop()
 	}
 	f.stops.Add(1)
-	f.running.Store(false)
 	return nil
 }
-
-func (f *fakeTraefik) Running() bool { return f.running.Load() }
 
 // syncBuffer is a bytes.Buffer a logger and a test can use from different goroutines.
 type syncBuffer struct {
