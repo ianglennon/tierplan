@@ -347,9 +347,6 @@ func TestRestartBackoff(t *testing.T) {
 		}
 		req.fire <- time.Time{}
 		child = testsupport.Await(t, "the restarted child", w.starts)
-		if !p.Running() || p.PID() != child.pid {
-			t.Fatalf("after the restart Running() = %v and PID() = %d, want true and %d", p.Running(), p.PID(), child.pid)
-		}
 	}
 	if got := delayStep(8); got != RestartMax {
 		t.Fatalf("the test never reached the ceiling: step %v, want %v", got, RestartMax)

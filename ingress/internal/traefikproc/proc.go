@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ianglennon/tierplan/ingress/internal/backoff"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
@@ -216,13 +217,15 @@ func (p *Proc) Start(ctx context.Context) error {
 
 // spawn starts one child and registers it with the reaper.
 func (p *Proc) spawn() (*child, error) {
+	// Read before the start, so the run is measured from no later than the moment the child exists.
+	startedAt := p.o.now()
 	proc, w, err := p.o.reap.spawn(func() (process, error) {
 		return p.o.start(p.o.Binary, p.o.Args, p.o.Env, p.o.Stdout, p.o.Stderr)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start traefik: %w", err)
 	}
-	c := &child{proc: proc, w: w, startedAt: p.o.now()}
+	c := &child{proc: proc, w: w, startedAt: startedAt}
 	p.mu.Lock()
 	p.cur = c
 	p.mu.Unlock()
@@ -230,15 +233,63 @@ func (p *Proc) spawn() (*child, error) {
 	return c, nil
 }
 
-// supervise follows the child until a stop is requested.
+// supervise follows the child until a stop is requested, restarting it each time it exits (D-20). The
+// supervisor never exits because Traefik did. The delay after the nth consecutive exit is backoff.Delay, and
+// a child that ran at least RestartMax before it exited counts as a fresh start, so a Traefik that crashes
+// once a day is not treated like one that crash-loops.
 func (p *Proc) supervise(ctx context.Context, c *child) {
-	select {
-	case <-c.w.done:
-		release(c)
-	case <-p.stopCh:
-		p.stopErr = p.terminate(c)
-	case <-ctx.Done():
-		p.stopErr = p.terminate(c)
+	failures := 0
+	for {
+		reason := "start failed"
+		if c != nil {
+			select {
+			case <-c.w.done:
+			case <-p.stopCh:
+				p.stopErr = p.terminate(c)
+				return
+			case <-ctx.Done():
+				p.stopErr = p.terminate(c)
+				return
+			}
+			release(c)
+			// A stop that arrived together with the exit wins: nothing is restarted after it.
+			select {
+			case <-p.stopCh:
+				return
+			default:
+			}
+			if p.o.now().Sub(c.startedAt) >= RestartMax {
+				failures = 0
+			}
+			reason = describe(c.w)
+		}
+		failures++
+		delay := backoff.Delay(failures, RestartMin, RestartMax, p.o.Rand)
+		p.o.Log.Warn("traefik exited", "status", reason, "restart_in", delay)
+		select {
+		case <-p.o.Clock.After(delay):
+		case <-p.stopCh:
+			return
+		case <-ctx.Done():
+			return
+		}
+		var err error
+		if c, err = p.spawn(); err != nil {
+			p.o.Log.Error("traefik did not start", "error", err)
+			c = nil
+		}
+	}
+}
+
+// describe says how a child ended.
+func describe(w *watch) string {
+	switch {
+	case w.lost:
+		return "exit status unknown"
+	case w.status.Signaled():
+		return "killed by signal " + w.status.Signal().String()
+	default:
+		return fmt.Sprintf("exit status %d", w.status.ExitStatus())
 	}
 }
 
