@@ -108,13 +108,21 @@ func TestHubConnectWithTheStoredKey(t *testing.T) {
 	nodeID, instanceID := id.NodeID, id.InstanceID
 	leaveAndWait(t, srv, id, first)
 
-	// A node that runs the current bundle is not sent it again. The next thing it reads is the close that
-	// follows a message the channel does not accept, so a bundle sent first would have been read instead.
+	// A node that runs the current bundle is not sent it again. The hub's decision is waited for first, so a
+	// resend would be seen as a sent event rather than race the close below (WR-C-4). The next thing it reads
+	// is then the close that follows a message the channel does not accept.
 	second := srv.Connect(t, id, ingresstest.Dial{})
 	if second.Welcome.NodeID != nodeID || second.Welcome.InstanceID != instanceID || second.Welcome.EnvID != env.ID {
 		t.Fatalf("connect welcome = %+v, want node %s instance %s env %s", second.Welcome, nodeID, instanceID, env.ID)
 	}
+	before := len(srv.Pushes().Events())
 	second.Hello(t, []int{1}, want.ID)
+	evs := srv.Pushes().Await(t, func(evs []ingresshub.PushEvent) bool {
+		return dvCount(evs[before:], nodeID, ingresshub.PushSame, want.ID)+dvCount(evs[before:], nodeID, ingresshub.PushSent, "") > 0
+	})
+	if n := dvCount(evs[before:], nodeID, ingresshub.PushSent, ""); n != 0 {
+		t.Fatalf("a node that runs the current bundle was sent it (%d sent events)", n)
+	}
 	second.Send(t, map[string]string{"t": "nope"})
 	if _, _, err := second.WS.Read(testsupport.Context(t)); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
 		t.Fatalf("a node that runs the current bundle read %v, want the close of the next message", err)
