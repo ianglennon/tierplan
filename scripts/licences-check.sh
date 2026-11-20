@@ -61,7 +61,8 @@ done
 
 # Traefik, from the tag held by the pinned image reference. The pin is read, never
 # copied here, from the Dockerfile that ships it; scripts/ingress-pin-check.sh
-# has first checked that the test harness pins the same reference (D-08).
+# has first checked that the test harness pins the same reference (D-08) and that
+# the image's NOTICE.md names the same tag.
 tag="$(scripts/ingress-pin-check.sh --print-tag)"
 if [ -z "${tag}" ]; then
   echo "licences: cannot read the Traefik tag from scripts/ingress-pin-check.sh" >&2
@@ -69,6 +70,10 @@ if [ -z "${tag}" ]; then
 fi
 git clone -q --depth 1 --branch "${tag}" https://github.com/traefik/traefik "${TOOLS}/traefik"
 echo "licences: traefik ${tag} commit $(git -C "${TOOLS}/traefik" rev-parse HEAD)"
+# The notice and the licence text the image ships must describe this tag: the commit
+# must be the one NOTICE.md records (a force-moved tag would scan something else than
+# was reviewed) and LICENSE.md must be the tag's own (WR-B-02).
+scripts/ingress-pin-check.sh --check-clone "${TOOLS}/traefik"
 for arch in amd64 arm64; do
   echo "licences: traefik go linux/${arch}"
   (cd "${TOOLS}/traefik" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
