@@ -510,3 +510,107 @@ func TestNodeName(t *testing.T) {
 		t.Errorf("a 200-byte hostname gave %d bytes, want 128", len(got))
 	}
 }
+
+// TestDefaultHandshakeHasADeadline is WR-A-01: with no HandshakeContext, Dial bounds the handshake by
+// ingresswire.HandshakeTimeout, so the supervisor's loop context (which has no deadline) cannot let one
+// stalled server park the reconnect loop for good.
+func TestDefaultHandshakeHasADeadline(t *testing.T) {
+	hctx, cancel := Options{}.handshakeContext(testsupport.Context(t))
+	defer cancel()
+	dl, ok := hctx.Deadline()
+	if !ok {
+		t.Fatal("the default handshake context has no deadline")
+	}
+	if left := time.Until(dl); left <= 0 || left > ingresswire.HandshakeTimeout {
+		t.Fatalf("the default handshake deadline is %v away, want within (0, %v]", left, ingresswire.HandshakeTimeout)
+	}
+}
+
+// stallingServer is a TLS server that accepts the connection and then never answers. With upgrade set it
+// completes the WebSocket upgrade and sends no challenge; without it, it never answers the upgrade request
+// at all. It signals stalled once the node is waiting on it.
+func stallingServer(t *testing.T, upgrade bool) (url, pin string, stalled <-chan struct{}) {
+	t.Helper()
+	sig := make(chan struct{}, 1)
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if upgrade {
+			c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{ingresswire.Subprotocol}})
+			if err != nil {
+				t.Errorf("stalling server: accept: %v", err)
+				return
+			}
+			defer func() { _ = c.CloseNow() }()
+		}
+		sig <- struct{}{}
+		<-r.Context().Done()
+	}))
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0)
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+	return "wss" + strings.TrimPrefix(ts.URL, "https") + "/ingress/connect", authn.SPKIPin(ts.Certificate()), sig
+}
+
+// TestDialGivesUpOnAStalledServer is WR-A-01: a server that accepts the TCP and TLS connection and then
+// answers neither the upgrade nor the challenge ends Dial when the handshake context ends. The test ends
+// that context itself once the server is stalled, so no clock is waited on; before the fix Dial used the
+// caller's context for every step and blocked until the test's own deadline.
+func TestDialGivesUpOnAStalledServer(t *testing.T) {
+	for name, upgrade := range map[string]bool{"never answers the upgrade": false, "never sends the challenge": true} {
+		t.Run(name, func(t *testing.T) {
+			url, pin, stalled := stallingServer(t, upgrade)
+			expire := make(chan context.CancelFunc, 1)
+			o := Options{
+				URL: url, InstallPins: []string{pin}, Now: fixedNow,
+				HandshakeContext: func(ctx context.Context) (context.Context, context.CancelFunc) {
+					hctx, cancel := context.WithCancel(ctx)
+					expire <- cancel
+					return hctx, cancel
+				},
+			}
+			go func() {
+				cancel := <-expire
+				<-stalled
+				cancel()
+			}()
+			conn, err := Dial(testsupport.Context(t), o, Credentials{Key: testKey(t), Token: tokenFunc(testToken)})
+			if err == nil {
+				_ = conn.Close("unexpected")
+				t.Fatal("Dial succeeded against a server that never answers")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("Dial error = %v, want the handshake context's cancellation", err)
+			}
+		})
+	}
+}
+
+// TestDialRefusesAForeignSubprotocol is WR-A-01: a peer that completes the upgrade without selecting
+// tierplan.ingress.v1 is not treated as a protocol participant, so no auth message goes to it.
+func TestDialRefusesAForeignSubprotocol(t *testing.T) {
+	got := make(chan bool, 1)
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil) // selects no subprotocol
+		if err != nil {
+			t.Errorf("foreign server: accept: %v", err)
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		// The node must close without sending anything: the first read ends with its close.
+		_, _, err = c.Read(r.Context())
+		got <- err != nil
+	}))
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0)
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+
+	o := Options{
+		URL: "wss" + strings.TrimPrefix(ts.URL, "https") + "/ingress/connect", InstallPins: []string{authn.SPKIPin(ts.Certificate())}, Now: fixedNow,
+	}
+	_, err := Dial(testsupport.Context(t), o, Credentials{Key: testKey(t), Token: tokenFunc(testToken)})
+	if err == nil || !strings.Contains(err.Error(), ingresswire.Subprotocol) {
+		t.Fatalf("Dial error = %v, want a refusal naming %s", err, ingresswire.Subprotocol)
+	}
+	if !testsupport.Await(t, "the foreign server's first read", got) {
+		t.Error("the node sent a message to a server that did not speak the protocol")
+	}
+}

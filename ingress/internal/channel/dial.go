@@ -80,6 +80,20 @@ type Options struct {
 	HTTPClient *http.Client
 	// Log receives the connection's debug lines. Nil discards them.
 	Log *slog.Logger
+	// HandshakeContext bounds the dial, the challenge, the auth, the answer and hello: it
+	// returns the context those steps use and its cancel function. Nil means a deadline of
+	// ingresswire.HandshakeTimeout on ctx. A test passes one it cancels itself, so a stalled
+	// server is cut off without waiting on the clock.
+	HandshakeContext func(ctx context.Context) (context.Context, context.CancelFunc)
+}
+
+// handshakeContext is the context of the handshake steps: o.HandshakeContext, or ctx with the
+// protocol's handshake deadline.
+func (o Options) handshakeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if o.HandshakeContext != nil {
+		return o.HandshakeContext(ctx)
+	}
+	return context.WithTimeout(ctx, ingresswire.HandshakeTimeout)
 }
 
 // RefusedError is the server's refusal of a handshake. The reconnect loop applies
@@ -128,7 +142,10 @@ func (c *Conn) Close(reason string) error {
 // refusal, a *UntrustedError for a certificate the supervisor does not trust,
 // ingresswire.ErrInstanceMismatch (wrapped) for a TierPlan that is not the pinned
 // one, or another error. ctx bounds the handshake only; the caller bounds each
-// later read itself.
+// later read itself. The handshake has its own deadline of ingresswire.HandshakeTimeout
+// within ctx (Options.HandshakeContext), so a server that accepts the connection and
+// then never answers cannot hold the reconnect loop; the deadline ends with Dial and
+// does not cut the session short.
 //
 // No error and no log line holds the join token or key bytes: every error is
 // built from a stage and a code, never from the auth message (D-23).
@@ -158,7 +175,10 @@ func Dial(ctx context.Context, o Options, cr Credentials) (*Conn, error) {
 		client = newHTTPClient(nil, o.InstallPins, nil, u.Hostname())
 	}
 
-	ws, resp, err := websocket.Dial(ctx, o.URL, &websocket.DialOptions{ //nolint:bodyclose // a WebSocket upgrade response has no body to close
+	hctx, cancelHandshake := o.handshakeContext(ctx)
+	defer cancelHandshake()
+
+	ws, resp, err := websocket.Dial(hctx, o.URL, &websocket.DialOptions{ //nolint:bodyclose // a WebSocket upgrade response has no body to close
 		HTTPClient:   client,
 		Subprotocols: []string{ingresswire.Subprotocol},
 	})
@@ -173,7 +193,12 @@ func Dial(ctx context.Context, o Options, cr Credentials) (*Conn, error) {
 		return nil, err
 	}
 
-	_, data, err := ws.Read(ctx)
+	// A peer that is not speaking the ingress protocol is not a participant in it.
+	if ws.Subprotocol() != ingresswire.Subprotocol {
+		return fail(errors.New("ingress channel: the server does not speak " + ingresswire.Subprotocol))
+	}
+
+	_, data, err := ws.Read(hctx)
 	if err != nil {
 		return fail(fmt.Errorf("ingress channel: read the challenge: %w", err))
 	}
@@ -214,11 +239,11 @@ func Dial(ctx context.Context, o Options, cr Credentials) (*Conn, error) {
 	if err != nil {
 		return fail(errors.New("ingress channel: encode the auth message"))
 	}
-	if err := ws.Write(ctx, websocket.MessageText, payload); err != nil {
+	if err := ws.Write(hctx, websocket.MessageText, payload); err != nil {
 		return fail(fmt.Errorf("ingress channel: send the auth message: %w", err))
 	}
 
-	_, data, err = ws.Read(ctx)
+	_, data, err = ws.Read(hctx)
 	if err != nil {
 		return fail(fmt.Errorf("ingress channel: read the answer: %w", err))
 	}
@@ -270,7 +295,7 @@ func Dial(ctx context.Context, o Options, cr Credentials) (*Conn, error) {
 	if err != nil {
 		return fail(errors.New("ingress channel: encode hello"))
 	}
-	if err := ws.Write(ctx, websocket.MessageText, hello); err != nil {
+	if err := ws.Write(hctx, websocket.MessageText, hello); err != nil {
 		return fail(fmt.Errorf("ingress channel: send hello: %w", err))
 	}
 	logger.Debug("ingress channel connected", "node_id", welcome.NodeID, "enrol", enrol)
