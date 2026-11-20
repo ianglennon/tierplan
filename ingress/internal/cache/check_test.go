@@ -56,11 +56,11 @@ func TestCertRefsMatchRendererGoldens(t *testing.T) {
 		}
 		seen++
 		t.Run(filepath.Base(dir), func(t *testing.T) {
-			dynamic, err := os.ReadFile(filepath.Join(dir, "tierplan.yml"))
+			dynamic, err := os.ReadFile(filepath.Join(dir, "tierplan.yml")) //nolint:gosec // G304: a fixture file in a Phase 21 golden directory found by Glob
 			if err != nil {
 				t.Fatalf("read tierplan.yml: %v", err)
 			}
-			raw, err := os.ReadFile(filepath.Join(dir, "bundle.json"))
+			raw, err := os.ReadFile(filepath.Join(dir, "bundle.json")) //nolint:gosec // G304: a fixture file in a Phase 21 golden directory found by Glob
 			if err != nil {
 				t.Fatalf("read bundle.json: %v", err)
 			}

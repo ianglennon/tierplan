@@ -198,7 +198,7 @@ func TestWriteStatic(t *testing.T) {
 		}
 	}
 	path := filepath.Join(root, "static", "traefik.yml")
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil || string(got) != "second\n" {
 		t.Fatalf("static/traefik.yml = %q (%v), want the second write", got, err)
 	}

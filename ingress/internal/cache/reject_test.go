@@ -32,7 +32,7 @@ func snapshot(t *testing.T, root string, dirs ...string) map[string][]byte {
 			if e.IsDir() {
 				return nil
 			}
-			raw, err := os.ReadFile(p)
+			raw, err := os.ReadFile(p) //nolint:gosec // G304: a file in this test's own temporary volume
 			if err != nil {
 				return err
 			}
@@ -209,7 +209,7 @@ func TestLowerVersionApplies(t *testing.T) {
 	if s.AppliedID() != lower.ID {
 		t.Fatalf("AppliedID = %q, want the lower-version bundle %q", s.AppliedID(), lower.ID)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "dynamic", "tierplan.yml"))
+	raw, err := os.ReadFile(filepath.Join(root, "dynamic", "tierplan.yml")) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil || string(raw) != dynamicOf(t, lower) {
 		t.Fatalf("dynamic/tierplan.yml is not the lower-version bundle's (%v)", err)
 	}
@@ -252,7 +252,7 @@ func TestLoadWithNoVerifiableRecordChangesNothing(t *testing.T) {
 	mustAccept(t, s, b)
 
 	tamper := filepath.Join(root, "dynamic", "tierplan.yml")
-	raw, err := os.ReadFile(tamper)
+	raw, err := os.ReadFile(tamper) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestLoadCompletesAVerifiedPending(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "state", "pending.json")); !os.IsNotExist(err) {
 		t.Fatalf("pending.json survived a Load that adopted it: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "state", "applied.json"))
+	raw, err := os.ReadFile(filepath.Join(root, "state", "applied.json")) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil || !strings.Contains(string(raw), c.ID) {
 		t.Fatalf("applied.json does not name the completed bundle (%v)", err)
 	}

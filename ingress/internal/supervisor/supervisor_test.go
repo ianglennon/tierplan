@@ -484,7 +484,7 @@ func snapshot(t *testing.T, root string, dirs ...string) map[string]string {
 			if e.IsDir() {
 				return nil
 			}
-			data, err := os.ReadFile(p)
+			data, err := os.ReadFile(p) //nolint:gosec // G304: a file in this test's own temporary volume
 			if err != nil {
 				return err
 			}
@@ -569,12 +569,12 @@ func TestStartCorruptCache(t *testing.T) {
 			crt = filepath.Join(root, p)
 		}
 	}
-	data, err := os.ReadFile(crt)
+	data, err := os.ReadFile(crt) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil {
 		t.Fatalf("read the cached certificate: %v", err)
 	}
 	data[len(data)/2] ^= 0x01
-	if err := os.WriteFile(crt, data, 0o600); err != nil {
+	if err := os.WriteFile(crt, data, 0o600); err != nil { //nolint:gosec // G703: a file in this test's own temporary volume
 		t.Fatalf("damage the cached certificate: %v", err)
 	}
 	before := snapshot(t, root, "certs", "dynamic", "state", "tmp")
@@ -695,7 +695,7 @@ func TestAppliedBundleIsLoggedWithItsIDOnly(t *testing.T) {
 
 func TestTokenReadOnlyWhenNotEnrolled(t *testing.T) {
 	const tokenPath = "/run/secrets/ingress-join-token"
-	const token = "tpit_e-1_notarealtoken"
+	const token = "tpit_e-1_notarealtoken" //nolint:gosec // G101: a fake token the test searches the logs for
 
 	setup := func(t *testing.T, root string) (h *harness, reads *[]string, tokenCalls *int, creds *[]channel.Credentials) {
 		h = newHarness(t, root)

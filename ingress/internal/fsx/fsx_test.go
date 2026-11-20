@@ -72,7 +72,7 @@ func TestWriteAtomicModes(t *testing.T) {
 			if st.Mode().Perm() != mode {
 				t.Fatalf("mode = %v, want %v", st.Mode().Perm(), mode)
 			}
-			got, err := os.ReadFile(dst)
+			got, err := os.ReadFile(dst) //nolint:gosec // G304: a file in this test's own temporary directory
 			if err != nil || string(got) != "data" {
 				t.Fatalf("content = %q, %v", got, err)
 			}
@@ -97,7 +97,7 @@ func TestWriteAtomicReplacesInPlace(t *testing.T) {
 			t.Fatalf("WriteAtomic %s: %v", body, err)
 		}
 	}
-	got, _ := os.ReadFile(dst)
+	got, _ := os.ReadFile(dst) //nolint:gosec // G304: a file in this test's own temporary directory
 	if string(got) != "two" {
 		t.Fatalf("content = %q, want the second write", got)
 	}
@@ -124,7 +124,7 @@ func TestWriteAtomicSyncsTheDestinationDirectory(t *testing.T) {
 
 func TestWriteAtomicFailedRenameKeepsDestinationAndRemovesTemp(t *testing.T) {
 	tmp, dst := layout(t)
-	if err := os.WriteFile(dst, []byte("old"), 0o644); err != nil {
+	if err := os.WriteFile(dst, []byte("old"), 0o644); err != nil { //nolint:gosec // G306: a pre-existing file in a temporary directory, a seed file with the same mode WriteAtomic is asked to write
 		t.Fatalf("seed: %v", err)
 	}
 	s := &spy{FS: OS(), renameErr: syscall.EXDEV}
@@ -132,7 +132,7 @@ func TestWriteAtomicFailedRenameKeepsDestinationAndRemovesTemp(t *testing.T) {
 	if !errors.Is(err, syscall.EXDEV) {
 		t.Fatalf("error = %v, want one wrapping EXDEV", err)
 	}
-	if got, _ := os.ReadFile(dst); string(got) != "old" {
+	if got, _ := os.ReadFile(dst); string(got) != "old" { //nolint:gosec // G304: a file in this test's own temporary directory
 		t.Fatalf("destination = %q, want the old content", got)
 	}
 	if left := entries(t, tmp); len(left) != 0 {

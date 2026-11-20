@@ -282,7 +282,7 @@ func (w *world) advance(d time.Duration) {
 // exit makes f exit with the given code and raises the SIGCHLD the reaper waits for.
 func (w *world) exit(f *fakeProc, code int) {
 	w.mu.Lock()
-	w.exits[f.pid] = append(w.exits[f.pid], syscall.WaitStatus(code<<8))
+	w.exits[f.pid] = append(w.exits[f.pid], syscall.WaitStatus(code<<8)) //nolint:gosec // G115: a small exit code shifted into a wait status
 	w.mu.Unlock()
 	w.sigchl <- syscall.SIGCHLD
 }

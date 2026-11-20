@@ -20,7 +20,7 @@ import (
 
 const (
 	opCreate = "create tmp/.part-*"
-	opWrite  = "write tmp/.part-*"
+	opWrite  = "write tmp/.part-*" //nolint:gosec // G101: the name of a recorded filesystem operation, not a credential
 	opChmod  = "chmod tmp/.part-*"
 	opSync   = "sync tmp/.part-*"
 	opClose  = "close tmp/.part-*"
@@ -189,7 +189,7 @@ func TestCrashAfterEachStep(t *testing.T) {
 			if err != nil || len(dyn) != 1 || dyn[0].Name() != "tierplan.yml" {
 				t.Fatalf("dynamic/ = %v (%v), want exactly tierplan.yml", dyn, err)
 			}
-			raw, err := os.ReadFile(filepath.Join(root, "dynamic", "tierplan.yml"))
+			raw, err := os.ReadFile(filepath.Join(root, "dynamic", "tierplan.yml")) //nolint:gosec // G304: a file in this test's own temporary volume
 			if err != nil || string(raw) != wantDynamic {
 				t.Fatalf("dynamic/tierplan.yml is neither whole old nor whole new content (%v)", err)
 			}
@@ -217,7 +217,7 @@ func TestRenameEXDEV(t *testing.T) {
 			t.Errorf("operation %q writes into dynamic/ although its only door, the rename, failed", op)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "dynamic", "tierplan.yml"))
+	raw, err := os.ReadFile(filepath.Join(root, "dynamic", "tierplan.yml")) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil || string(raw) != dynamicOf(t, a) {
 		t.Fatalf("dynamic/tierplan.yml changed after a failed rename (%v)", err)
 	}

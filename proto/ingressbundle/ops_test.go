@@ -14,7 +14,7 @@ import (
 // share (D-06, D-17, D-18, D-21): each stage of a stop gets longer than the one it waits for, and a
 // health probe finishes before the next one starts.
 func TestStopTimes(t *testing.T) {
-	if !(TraefikGraceTimeout < SupervisorStopWait && SupervisorStopWait < StopGracePeriod) {
+	if TraefikGraceTimeout >= SupervisorStopWait || SupervisorStopWait >= StopGracePeriod {
 		t.Errorf("want TraefikGraceTimeout (%v) < SupervisorStopWait (%v) < StopGracePeriod (%v)",
 			TraefikGraceTimeout, SupervisorStopWait, StopGracePeriod)
 	}

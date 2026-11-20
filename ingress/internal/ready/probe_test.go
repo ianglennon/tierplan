@@ -108,7 +108,7 @@ func TestProbeHonoursACancelledContext(t *testing.T) {
 }
 
 func TestTimeoutsNest(t *testing.T) {
-	if !(PingTimeout < ProbeTimeout && ProbeTimeout < ingressbundle.HealthcheckTimeout) {
+	if PingTimeout >= ProbeTimeout || ProbeTimeout >= ingressbundle.HealthcheckTimeout {
 		t.Fatalf("want PingTimeout (%s) < ProbeTimeout (%s) < HealthcheckTimeout (%s)",
 			PingTimeout, ProbeTimeout, ingressbundle.HealthcheckTimeout)
 	}

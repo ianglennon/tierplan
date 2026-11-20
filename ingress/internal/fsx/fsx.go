@@ -59,7 +59,7 @@ func (osFS) Rename(oldpath, newpath string) error { return os.Rename(oldpath, ne
 
 func (osFS) Remove(name string) error { return os.Remove(name) }
 
-func (osFS) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
+func (osFS) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) } //nolint:gosec // G304: fsx is the supervisor's one door to its own volume; every caller passes a path under the node root
 
 func (osFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
 

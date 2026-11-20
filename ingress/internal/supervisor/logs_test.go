@@ -60,7 +60,7 @@ func leaks(logged string, forbidden map[string]string) []string {
 }
 
 func TestNoSecretsInLogs(t *testing.T) {
-	const token = "tpit_e-1_SECRETSECRETSECRET"
+	const token = "tpit_e-1_SECRETSECRETSECRET" //nolint:gosec // G101: a fake token the test searches the logs for
 	h := newHarness(t, "")
 	cfg, err := config.Load(func(k string) string {
 		switch k {
@@ -144,7 +144,7 @@ func TestNoSecretsInLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the node key: %v", err)
 	}
-	priv := parsed.(ed25519.PrivateKey)
+	priv := parsed.(ed25519.PrivateKey) //nolint:errcheck // the key was just parsed from a PEM this test wrote with an Ed25519 key
 	forbidden["node key seed base64"] = base64.StdEncoding.EncodeToString(priv.Seed())
 	forbidden["node key seed hex"] = hex.EncodeToString(priv.Seed())
 	forbidden["node key full base64"] = base64.StdEncoding.EncodeToString(priv)

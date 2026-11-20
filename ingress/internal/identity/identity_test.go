@@ -40,7 +40,7 @@ func preparedRoot(t *testing.T) string {
 
 func readFile(t *testing.T, root, rel string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))) //nolint:gosec // G304: a file in this test's own temporary volume
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
