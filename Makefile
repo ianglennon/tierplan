@@ -395,7 +395,8 @@ agent-image-smoke:
 # and ingress/image/doc/. Traefik comes from the digest-pinned official image inside
 # the Dockerfile, so building needs the network. The supervisor is a plain build
 # (version "dev"); set INGRESS_VERSION=v0.1.0 to stamp one. INGRESS_CTX is overridable
-# so two builds on one runner can use separate contexts. Needs Docker with buildx.
+# (a relative path or an absolute one) so two builds on one runner can use separate
+# contexts. Needs Docker with buildx.
 INGRESS_ARCH ?= $(shell go env GOARCH)
 INGRESS_CTX ?= .devdata/ingress-image
 INGRESS_VERSION_PKG := github.com/ianglennon/tierplan/ingress/internal/version
@@ -407,7 +408,7 @@ ingress-image:
 	cp -R ingress/image/doc $(INGRESS_CTX)/ingress/image/doc
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(INGRESS_ARCH) go -C ingress build -trimpath \
 		-ldflags "-s -w $(if $(INGRESS_VERSION),-X $(INGRESS_VERSION_PKG).Version=$(INGRESS_VERSION))" \
-		-o $(CURDIR)/$(INGRESS_CTX)/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
+		-o $(abspath $(INGRESS_CTX))/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
 	docker buildx build --platform linux/$(INGRESS_ARCH) -f ingress/Dockerfile -t $(INGRESS_TAG) --load $(INGRESS_CTX)
 
 # Runs tierplan-ingress:dev as a node runs it, with and without the hardening

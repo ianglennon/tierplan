@@ -416,6 +416,15 @@ expect_out "ingress-deps-empty-list says so" "INGRESS DEPS: no packages listed"
 # MAKEFLAGS and MAKELEVEL are removed so an outer `make test-scripts` cannot leak
 # variables or the -n flag state into the make under test.
 mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
+# WR-B-03: INGRESS_CTX is overridable, so an absolute value must reach the Go output path
+# as itself, not as $(CURDIR)//abs/..., and a relative one still resolves under the repository.
+expect pass "ingress-image-ctx-default" mk ingress-image
+expect_out "ingress-image-ctx-default builds into the repository" "-o ${ROOT}/.devdata/ingress-image/linux/"
+expect pass "ingress-image-ctx-absolute" mk ingress-image INGRESS_CTX="${scratch}/ingress-ctx"
+expect_out "ingress-image-ctx-absolute builds into the given context" "-o ${scratch}/ingress-ctx/linux/"
+expect_out "ingress-image-ctx-absolute hands the same context to docker" "--load ${scratch}/ingress-ctx"
+expect pass "ingress-image-ctx-relative" mk ingress-image INGRESS_CTX=.devdata/other-ctx
+expect_out "ingress-image-ctx-relative resolves under the repository" "-o ${ROOT}/.devdata/other-ctx/linux/"
 expect pass "dev-go-default-public-url" mk dev-go
 expect_out "dev-go-default-public-url" "TIERPLAN_PUBLIC_URL='https://localhost:5173'"
 expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=https://dev.example.test:5173
