@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -317,6 +318,76 @@ func TestCloseClassification(t *testing.T) {
 				t.Errorf("ClosedError = %+v, want status %d and reason %q", *ce, tc.status, tc.reason)
 			}
 		})
+	}
+}
+
+// TestServeCancelledContextClosesWithShutdown is WR-C-08, first path: `docker stop` cancels the session's
+// context, and the node ends the session on the real socket with the going-away status and the "shutdown"
+// reason (D-21, "the channel ends first"), returning the context's error and not a *ClosedError.
+func TestServeCancelledContextClosesWithShutdown(t *testing.T) {
+	closed := make(chan websocket.CloseError, 1)
+	conn := sessionConn(t, testWelcome("i-1"), func(ctx context.Context, c *websocket.Conn) {
+		_, _, err := c.Read(ctx)
+		var ce websocket.CloseError
+		if errors.As(err, &ce) {
+			closed <- ce
+			return
+		}
+		closed <- websocket.CloseError{Code: -1, Reason: "no close frame: " + fmt.Sprint(err)}
+	})
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	cancel()
+	err := conn.Serve(ctx, SessionOptions{
+		Handle: func(context.Context, []byte, string) (string, string) { return "", "" },
+		Health: noHealth,
+	})
+	if !errors.Is(err, context.Canceled) || errors.As(err, new(*ClosedError)) {
+		t.Fatalf("Serve error = %v, want context.Canceled and not a *ClosedError", err)
+	}
+	ce := testsupport.Await(t, "the server's view of the close", closed)
+	if ce.Code != websocket.StatusGoingAway || ce.Reason != ingresswire.CloseShutdown {
+		t.Errorf("the server saw close %d %q, want %d %q", ce.Code, ce.Reason, websocket.StatusGoingAway, ingresswire.CloseShutdown)
+	}
+}
+
+// TestServeHealthWriteFailureEndsTheSession is WR-C-08, second path: a health message that cannot be written
+// ends the session with "send health" and the write's error, not a *ClosedError (the server did not close it).
+// The order is fixed without a clock: the reader is held inside the bundle handler, the health callback closes
+// the connection under the writer, so the write fails first, and the handler is released by the session's own
+// cancellation, which only the failed write causes.
+func TestServeHealthWriteFailureEndsTheSession(t *testing.T) {
+	conn := sessionConn(t, testWelcome("i-1"), func(ctx context.Context, c *websocket.Conn) {
+		if err := c.Write(ctx, websocket.MessageBinary, []byte("frame")); err != nil {
+			return
+		}
+		_, _, _ = c.Read(ctx) // returns when the node's side is closed
+	})
+	f := newFakeTicker()
+	inHandler := make(chan struct{}, 1)
+	done := serveAsync(testsupport.Context(t), conn, SessionOptions{
+		Handle: func(ctx context.Context, _ []byte, _ string) (string, string) {
+			inHandler <- struct{}{}
+			<-ctx.Done() // ends only when the failed health write cancels the session (or the test deadline passes)
+			return "", ""
+		},
+		Health: func(context.Context) (bool, string) {
+			_ = conn.WS().CloseNow() // the connection dies under the health write
+			return true, "b-1"
+		},
+		Ticker: f.Ticker,
+	})
+	testsupport.Await(t, "the bundle handler to start", inHandler)
+	f.tick(t)
+
+	err := testsupport.Await(t, "Serve to return", done)
+	if err == nil || errors.As(err, new(*ClosedError)) {
+		t.Fatalf("Serve error = %v, want an error that is not a *ClosedError", err)
+	}
+	if !strings.Contains(err.Error(), "send health") {
+		t.Errorf("Serve error = %q, want it to name the failed health write", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Serve error = %v: the test deadline ended the session, not the failed write", err)
 	}
 }
 

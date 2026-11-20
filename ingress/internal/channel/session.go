@@ -88,9 +88,15 @@ func (c *Conn) Serve(ctx context.Context, o SessionOptions) error {
 	}
 	interval := healthInterval(c.welcome.HealthMs)
 
-	sctx, cancel := context.WithCancelCause(ctx)
+	// The session's own context is not derived from ctx's cancellation: coder/websocket closes the connection
+	// without a close frame when the context of a read or a write ends, so a reader on ctx would cut the socket
+	// before the shutdown close frame could be sent. A cancelled ctx is turned into that frame instead
+	// (closeOnShutdown), and the session context ends after it.
+	sctx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancel(nil)
 	defer func() { _ = c.ws.CloseNow() }()
+	stopShutdown := context.AfterFunc(ctx, func() { c.closeOnShutdown(ctx, cancel) })
+	defer stopShutdown()
 
 	ticks, stop := newTicker(interval)
 	done := make(chan struct{})
@@ -106,6 +112,14 @@ func (c *Conn) Serve(ctx context.Context, o SessionOptions) error {
 		o.Log.Debug("ingress channel session ended", "error", err)
 	}
 	return err
+}
+
+// closeOnShutdown ends the session when its caller's context is cancelled: a close frame with the going-away
+// status and ingresswire.CloseShutdown, then the session's context. The close waits for the server's reply
+// (the library bounds it), while the reader, still running, receives that reply and returns.
+func (c *Conn) closeOnShutdown(ctx context.Context, cancel context.CancelCauseFunc) {
+	_ = c.ws.Close(websocket.StatusGoingAway, ingresswire.CloseShutdown)
+	cancel(ctx.Err())
 }
 
 const (
