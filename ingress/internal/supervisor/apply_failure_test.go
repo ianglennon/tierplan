@@ -73,7 +73,9 @@ func TestApplyFailureCauseIsLogged(t *testing.T) {
 			t.Errorf("the rejection logged error %q, want the apply step and %q", cause, syscall.EXDEV.Error())
 		}
 		cancel()
-		<-done
+		if err := awaitRun(t, done); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
 	})
 
 	t.Run("a verify code needs no cause", func(t *testing.T) {
@@ -94,7 +96,9 @@ func TestApplyFailureCauseIsLogged(t *testing.T) {
 			t.Errorf("a verify rejection logged error %v, want none", v)
 		}
 		cancel()
-		<-done
+		if err := awaitRun(t, done); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
 	})
 
 	t.Run("traefik start", func(t *testing.T) {
@@ -116,7 +120,9 @@ func TestApplyFailureCauseIsLogged(t *testing.T) {
 			t.Errorf("the start failure logged error %q, want %q", cause, errTraefikStart)
 		}
 		cancel()
-		<-done
+		if err := awaitRun(t, done); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
 	})
 }
 
@@ -174,7 +180,9 @@ func TestFailedStartIsRetriedAndNotReportedApplied(t *testing.T) {
 		t.Fatalf("Traefik Start was called %d times, want 2: a started Traefik is not started again", got)
 	}
 	cancel()
-	<-done
+	if err := awaitRun(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 }
 
 // TestCommitFailureStillStartsTraefik is WR-A-03, second path: the commit rename fails after the dynamic
@@ -198,5 +206,7 @@ func TestCommitFailureStillStartsTraefik(t *testing.T) {
 		t.Fatal("readiness is not marked applied although the live bundle is being served")
 	}
 	cancel()
-	<-done
+	if err := awaitRun(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 }

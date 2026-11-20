@@ -110,10 +110,10 @@ func TestNoSecretsInLogs(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := h.run(ctx)
-	waitUntil(t, h.events, "channel")
+	waitUntil(t, h.events, "channel", done)
 	// RunChannel returns only after both Handle calls above, so every handler line is in the log by then.
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	logged := h.logs.String()

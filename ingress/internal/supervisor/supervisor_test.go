@@ -37,6 +37,7 @@ import (
 	"github.com/ianglennon/tierplan/ingress/internal/ready"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // testInstance is the instance ID every test node is pinned to.
@@ -182,13 +183,14 @@ func (e *events) notify(kind string) {
 	}
 }
 
-// wait blocks until kind has been recorded. It waits on a channel the recorder closes, not on the clock.
-func (e *events) wait(t *testing.T, kind string) {
-	t.Helper()
+// channelFor returns a channel that is closed once kind has been recorded (already closed when it has been).
+func (e *events) channelFor(kind string) <-chan struct{} {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if slices.Contains(e.log, kind) {
-		e.mu.Unlock()
-		return
+		ch := make(chan struct{})
+		close(ch)
+		return ch
 	}
 	if e.waiters == nil {
 		e.waiters = map[string]chan struct{}{}
@@ -198,8 +200,7 @@ func (e *events) wait(t *testing.T, kind string) {
 		ch = make(chan struct{})
 		e.waiters[kind] = ch
 	}
-	e.mu.Unlock()
-	<-ch
+	return ch
 }
 
 // once records kind the first time only.
@@ -408,6 +409,9 @@ func (h *harness) runUntilChannel(ctx context.Context) (channel.LoopOptions, <-c
 	case err := <-done:
 		h.t.Fatalf("Run returned before the channel loop was entered: %v", err)
 		return channel.LoopOptions{}, nil
+	case <-testsupport.Context(h.t).Done():
+		h.t.Fatalf("timed out after %v waiting for Run to enter the channel loop", testsupport.Deadline)
+		return channel.LoopOptions{}, nil
 	}
 }
 
@@ -456,7 +460,7 @@ func TestStartNoCacheThenFirstBundle(t *testing.T) {
 	h.mustStatus(http.StatusOK)
 
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 }
@@ -536,16 +540,22 @@ func TestStartGoodCache(t *testing.T) {
 		if _, err := lo.Dial(ctx); err != errNoDial {
 			return fmt.Errorf("the dial closure returned %v, want the fake's error", err)
 		}
-		entry.dial = (<-got).dial
+		// The fake Dial sent before it returned, so the record is already there: no wait, no clock.
+		select {
+		case r := <-got:
+			entry.dial = r.dial
+		default:
+			return errors.New("the fake Dial recorded no attempt")
+		}
 		<-ctx.Done()
 		return nil
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := h.run(ctx)
-	waitUntil(t, h.events, "channel")
+	waitUntil(t, h.events, "channel", done)
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -603,9 +613,9 @@ func TestStartCorruptCache(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := h.run(ctx)
-	waitUntil(t, h.events, "channel")
+	waitUntil(t, h.events, "channel", done)
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -674,7 +684,7 @@ func TestRejectedBundleKeepsServing(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 }
@@ -693,7 +703,7 @@ func TestAppliedBundleIsLoggedWithItsIDOnly(t *testing.T) {
 		t.Fatalf("no `bundle applied` line with the ID in the log:\n%s", logged)
 	}
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 }
@@ -753,9 +763,9 @@ func TestTokenReadOnlyWhenNotEnrolled(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		done := h.run(ctx)
-		waitUntil(t, h.events, "channel")
+		waitUntil(t, h.events, "channel", done)
 		cancel()
-		if err := <-done; err != nil {
+		if err := awaitRun(t, done); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
 	}
@@ -831,9 +841,9 @@ func TestShutdownOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := h.run(ctx)
-	waitUntil(t, h.events, "channel")
+	waitUntil(t, h.events, "channel", done)
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run returned %v, want nil after an orderly stop", err)
 	}
 
@@ -864,7 +874,7 @@ func TestHealthReportsPingAndAppliedID(t *testing.T) {
 		}
 	}
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitRun(t, done); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 }
@@ -883,8 +893,22 @@ func tail(ev []string, n int, from string) []string {
 	return ev
 }
 
-// waitUntil blocks until the supervisor has recorded kind (a signal, never the clock).
-func waitUntil(t *testing.T, ev *events, kind string) {
+// waitUntil blocks until the supervisor has recorded kind (a signal, never the clock). It fails the test when
+// Run returns first (done holds its result), so a supervisor that stops early is reported at once, and when the
+// testsupport deadline passes, so a hang fails the test and does not spend the whole go test budget.
+func waitUntil(t *testing.T, ev *events, kind string, done <-chan error) {
 	t.Helper()
-	ev.wait(t, kind)
+	select {
+	case <-ev.channelFor(kind):
+	case err := <-done:
+		t.Fatalf("Run returned (%v) before %q was recorded", err, kind)
+	case <-testsupport.Context(t).Done():
+		t.Fatalf("timed out after %v waiting for the supervisor to record %q", testsupport.Deadline, kind)
+	}
+}
+
+// awaitRun is the result of Run, waited for within the testsupport deadline.
+func awaitRun(t *testing.T, done <-chan error) error {
+	t.Helper()
+	return testsupport.Await(t, "Run to return", done)
 }

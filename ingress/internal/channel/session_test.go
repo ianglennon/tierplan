@@ -95,7 +95,8 @@ func TestServeAnswersAppliedAndRejected(t *testing.T) {
 			t.Errorf("call %d = frame %q instance %q, want the frame unchanged and instance i-1", i, c.frame, c.instanceID)
 		}
 	}
-	first, second := <-got, <-got
+	first := testsupport.Await(t, "the first answer", got)
+	second := testsupport.Await(t, "the second answer", got)
 	if a, ok := first.(ingresswire.Applied); !ok || a.ID != "id-1" || a.T != ingresswire.TypeApplied {
 		t.Errorf("first answer = %#v, want applied id-1", first)
 	}
@@ -119,7 +120,7 @@ func TestServeCutsLongReason(t *testing.T) {
 		Handle: func(context.Context, []byte, string) (string, string) { return "id-1", long },
 		Health: noHealth,
 	})
-	r, ok := (<-got).(ingresswire.Rejected)
+	r, ok := testsupport.Await(t, "the rejected answer", got).(ingresswire.Rejected)
 	if !ok {
 		t.Fatal("the server did not read a rejected message")
 	}
