@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -229,7 +230,10 @@ func TestInstancePinLargeBundleIsReceived(t *testing.T) {
 	c2 := srv.Enrol(t, id2, ingresstest.Dial{Token: env.Token, Name: "node-n2", SwarmNodeID: "n2"})
 	c2.WS.SetReadLimit(32768)
 	c2.Hello(t, []int{1}, "")
-	if _, _, err := c2.WS.Read(testsupport.Context(t)); err == nil {
-		t.Error("a node with the default read limit read the large bundle")
+	// The read must fail on the limit itself, not on the test's own deadline: a hub that never sent the frame
+	// would otherwise pass after a stall (WR-C-2).
+	ctx := testsupport.Context(t)
+	if _, _, err := c2.WS.Read(ctx); err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "read limited") {
+		t.Errorf("a node with the default read limit: err = %v (test context: %v), want a read-limit error", err, ctx.Err())
 	}
 }

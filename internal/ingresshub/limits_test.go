@@ -314,8 +314,10 @@ func TestLimitsFirstFrameTimeout(t *testing.T) {
 	}
 	// The slot is given back without the client doing anything more.
 	awaitInFlight(t, srv, 0)
-	if _, _, err := h.ws.Read(testsupport.Context(t)); err == nil {
-		t.Error("the connection of a client that never sent its auth is still open")
+	// The server dropped the connection: the read fails at once, not when the test's own context runs out.
+	ctx := testsupport.Context(t)
+	if _, _, err := h.ws.Read(ctx); err == nil || ctx.Err() != nil {
+		t.Errorf("read on the connection of a client that never sent its auth = %v (test context: %v), want the server's close", err, ctx.Err())
 	}
 }
 
