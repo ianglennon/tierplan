@@ -22,11 +22,15 @@ package supervisor
 
 import (
 	"context"
+	"crypto/ed25519"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/ianglennon/tierplan/ingress/internal/cache"
@@ -35,6 +39,7 @@ import (
 	"github.com/ianglennon/tierplan/ingress/internal/identity"
 	"github.com/ianglennon/tierplan/ingress/internal/ready"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
+	"github.com/ianglennon/tierplan/proto/ingresswire"
 )
 
 const (
@@ -114,4 +119,178 @@ func (d *Deps) fill() {
 	}
 }
 
-func Run(ctx context.Context, d Deps) error { return nil }
+// node is the state the bundle handler shares with the start-up path: whether Traefik has been started.
+type node struct {
+	d *Deps
+	// traefikCtx outlives every session. A session's context ends with its connection, and Traefik must not.
+	traefikCtx context.Context
+
+	mu      sync.Mutex
+	started bool
+}
+
+// ensureTraefik starts Traefik when it has not been started. Traefik's own restart-on-exit is the process
+// supervisor's job, so Start is called once; a failed Start is tried again at the next bundle.
+func (n *node) ensureTraefik() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.started {
+		return nil
+	}
+	if err := n.d.Traefik.Start(n.traefikCtx); err != nil {
+		return err
+	}
+	n.started = true
+	return nil
+}
+
+// handle is the answer to one bundle frame (D-15, D-16). Accept decodes it against the pinned instance,
+// checks it and puts it in force or leaves the volume as it was. It never restarts or signals Traefik.
+func (n *node) handle(_ context.Context, frame []byte, instanceID string) (id, reason string) {
+	id, reason = n.d.Store.Accept(frame, instanceID)
+	if reason != "" {
+		n.d.Log.Warn("bundle rejected", "id", id, "reason", reason)
+		return id, reason
+	}
+	if err := n.ensureTraefik(); err != nil {
+		// The bundle is on the volume, so the next frame (the same bundle is answered applied without a
+		// write) tries the start again. The node reports it as not applied.
+		n.d.Log.Error("bundle is on disk but Traefik did not start", "id", id)
+		return id, ingressbundle.ReasonApplyFailed
+	}
+	n.d.Ready.SetApplied(true)
+	n.d.Log.Info("bundle applied", "id", id)
+	if err := n.d.Store.GCErr(); err != nil {
+		n.d.Log.Warn("certificate cleanup after the bundle failed; extra certificates stay on the volume", "error", err)
+	}
+	return id, ""
+}
+
+// Run starts the node and keeps it running until ctx ends, then stops it in order. It returns an error only
+// when the node cannot start (a listener that cannot open, a volume it cannot write, a Traefik it cannot
+// run from a good cache); TierPlan being unreachable, a revoked node and a rejected bundle are never errors
+// (PROH-23-03).
+func Run(ctx context.Context, d Deps) error {
+	d.fill()
+	log := d.Log
+
+	// 1. Readiness first, so a probe that arrives during start-up gets 503 and not a refused connection.
+	ln, err := d.Listen("tcp", d.ReadyAddr)
+	if err != nil {
+		return fmt.Errorf("supervisor: listen for readiness: %w", err)
+	}
+	srv := &http.Server{
+		Handler:           ready.Handler(d.Ready, d.Ping),
+		ReadHeaderTimeout: readyHeaderTimeout,
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("the readiness listener stopped", "error", err)
+		}
+	}()
+	closeReady := func() {
+		sctx, cancel := context.WithTimeout(context.Background(), readyShutdown)
+		defer cancel()
+		if err := srv.Shutdown(sctx); err != nil {
+			_ = srv.Close()
+		}
+	}
+
+	n := &node{d: &d, traefikCtx: context.WithoutCancel(ctx)}
+
+	key, err := prepareVolume(&d)
+	if err != nil {
+		closeReady()
+		return err
+	}
+
+	// 2. Cache-first: Traefik starts before TierPlan is contacted, and only from a bundle that verifies.
+	b, ok, loadErr := d.Store.Load()
+	switch {
+	case ok:
+		if loadErr != nil {
+			log.Warn("the cached bundle serves but its record could not be completed", "error", loadErr)
+		}
+		if err := n.ensureTraefik(); err != nil {
+			closeReady()
+			return fmt.Errorf("supervisor: start Traefik from the cached bundle: %w", err)
+		}
+		d.Ready.SetApplied(true)
+		log.Info("serving the cached bundle", "id", b.ID)
+	default:
+		if loadErr != nil {
+			log.Warn("the cache could not be read; nothing is served from it", "error", loadErr)
+		}
+		log.Info("no verified cached bundle: Traefik not started; waiting for the first bundle from TierPlan")
+	}
+
+	// 3. TierPlan last.
+	runErr := d.RunChannel(ctx, n.loopOptions(key))
+
+	// Shutdown order (D-21): the channel has ended; now Traefik, then the readiness listener.
+	if err := d.Traefik.Stop(); err != nil {
+		log.Warn("Traefik did not stop cleanly", "error", err)
+	}
+	closeReady()
+	return runErr
+}
+
+// prepareVolume makes the volume's layout, writes Traefik's static configuration and returns the node's key.
+// A node that cannot write its own volume cannot serve, so a failure here ends the process.
+func prepareVolume(d *Deps) (ed25519.PrivateKey, error) {
+	if err := d.Store.Prepare(); err != nil {
+		return nil, fmt.Errorf("supervisor: prepare the volume: %w", err)
+	}
+	if err := d.Store.WriteStatic(ingressbundle.StaticTraefik()); err != nil {
+		return nil, fmt.Errorf("supervisor: write Traefik's static configuration: %w", err)
+	}
+	k, err := d.Identity.LoadOrCreateKey()
+	if err != nil {
+		return nil, fmt.Errorf("supervisor: the node key: %w", err)
+	}
+	return k, nil
+}
+
+// loopOptions builds the channel loop: one Dial closure that reads the identity fresh every attempt, so a node
+// that enrolled in one attempt connects with its key in the next (D-38), and the session's two callbacks.
+func (n *node) loopOptions(key ed25519.PrivateKey) channel.LoopOptions {
+	d := n.d
+	opts := channel.Options{
+		URL:         d.Config.URL,
+		InstallPins: d.Config.Pins,
+		Version:     d.Version,
+		AppliedID:   d.Store.AppliedID,
+		OnEnrolled: func(w ingresswire.Welcome) error {
+			return d.Identity.Save(identity.Record{NodeID: w.NodeID, EnvID: w.EnvID, InstanceID: w.InstanceID})
+		},
+		Log: d.Log,
+	}
+	return channel.LoopOptions{
+		Dial: func(ctx context.Context) (*channel.Conn, error) {
+			cr := channel.Credentials{
+				Key:         key,
+				SwarmNodeID: d.Config.NodeID,
+				Name:        channel.NodeName(d.Hostname, d.Config.NodeID),
+				// Dial calls Token in enrol mode only (D-22): with a NodeID it never does.
+				Token: func() (string, error) { return d.Config.JoinToken(d.ReadFile) },
+			}
+			rec, enrolled, err := d.Identity.Load()
+			if err != nil {
+				return nil, fmt.Errorf("supervisor: the enrolment record: %w", err)
+			}
+			if enrolled {
+				cr.NodeID = rec.NodeID
+				cr.InstanceID = rec.InstanceID
+			}
+			return d.Dial(ctx, opts, cr)
+		},
+		Session: channel.SessionOptions{
+			Handle: n.handle,
+			Health: func(ctx context.Context) (bool, string) {
+				return d.Ping(ctx), d.Store.AppliedID()
+			},
+			Log: d.Log,
+		},
+		Log: d.Log,
+	}
+}
