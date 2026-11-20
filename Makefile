@@ -327,8 +327,9 @@ actionlint:
 GORELEASER_VERSION := v2.18.2
 GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
-# Validates .goreleaser.yaml, builds this machine's server and agent binaries the
-# way a release does (SPA, ldflags, trimpath) and runs each one's version output.
+# Validates .goreleaser.yaml, builds this machine's server, agent and ingress
+# binaries the way a release does (SPA, ldflags, trimpath) and runs each one's
+# version output.
 # Needs no Docker.
 release-check:
 	$(GORELEASER) check
@@ -344,6 +345,12 @@ release-check:
 	case "$$v" in \
 	  v[0-9]*) ;; \
 	  *) echo "release-check: the release agent reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
+	esac
+	$(GORELEASER) build --snapshot --clean --single-target --id tierplan-ingress --output bin/tierplan-ingress-release
+	@v="$$(bin/tierplan-ingress-release --version)"; echo "$$v"; \
+	case "$$v" in \
+	  v[0-9]*) ;; \
+	  *) echo "release-check: the release ingress binary reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
 	esac
 
 # The release image for this machine's engine, built exactly as a release builds
