@@ -31,6 +31,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ianglennon/tierplan/ingress/internal/cache"
@@ -125,23 +126,56 @@ type node struct {
 	// traefikCtx outlives every session. A session's context ends with its connection, and Traefik must not.
 	traefikCtx context.Context
 
+	// mu serialises Start. started is read without it, by the hello and the health tick.
 	mu      sync.Mutex
-	started bool
+	started atomic.Bool
 }
 
 // ensureTraefik starts Traefik when it has not been started. Traefik's own restart-on-exit is the process
-// supervisor's job, so Start is called once; a failed Start is tried again at the next bundle.
+// supervisor's job, so Start is called once; a failed Start is tried again at the next bundle and at every
+// health tick (retryStart).
 func (n *node) ensureTraefik() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.started {
+	if n.started.Load() {
 		return nil
 	}
 	if err := n.d.Traefik.Start(n.traefikCtx); err != nil {
 		return err
 	}
-	n.started = true
+	n.started.Store(true)
 	return nil
+}
+
+// appliedID is the bundle ID the node tells TierPlan it runs, in hello and in every health message: the
+// store's, once Traefik is up. A bundle that is on the volume while Traefik never started is not applied as
+// far as the server is concerned. If the node reported it, the server would take the node as up to date at
+// the next hello and never send it again, and a node whose ports are closed would stay that way.
+func (n *node) appliedID() string {
+	if !n.started.Load() {
+		return ""
+	}
+	return n.d.Store.AppliedID()
+}
+
+// retryStart starts Traefik when a bundle is on the volume and Traefik never came up, which is the one
+// state in which no frame will arrive to try again: the server answered "apply_failed" and has nothing more
+// to send. It runs at every health tick (30 s by default), so a transient Start failure (EAGAIN, ENOMEM)
+// heals by itself.
+func (n *node) retryStart() {
+	if n.started.Load() {
+		return
+	}
+	id := n.d.Store.AppliedID()
+	if id == "" {
+		return
+	}
+	if err := n.ensureTraefik(); err != nil {
+		n.d.Log.Error("Traefik still did not start; the bundle stays on disk and the start is tried again at the next health tick", "id", id, "error", err)
+		return
+	}
+	n.d.Ready.SetApplied(true)
+	n.d.Log.Info("Traefik started after an earlier failure", "id", id)
 }
 
 // handle is the answer to one bundle frame (D-15, D-16). Accept decodes it against the pinned instance,
@@ -152,11 +186,16 @@ func (n *node) handle(_ context.Context, frame []byte, instanceID string) (id, r
 		// cause is the apply step and the OS error of an apply_failed, and nil for a verify code; neither
 		// holds bundle bytes (D-23).
 		n.d.Log.Warn("bundle rejected", "id", id, "reason", reason, "error", cause)
+		if cause != nil && n.d.Store.AppliedID() == id {
+			// The apply failed after the dynamic rename (the flush of dynamic/ or the commit): the bundle is
+			// what Traefik reads, so Traefik must run even though the answer is apply_failed.
+			n.retryStart()
+		}
 		return id, reason
 	}
 	if err := n.ensureTraefik(); err != nil {
-		// The bundle is on the volume, so the next frame (the same bundle is answered applied without a
-		// write) tries the start again. The node reports it as not applied.
+		// The bundle is on the volume, and the node reports it as not applied. No frame will follow to try
+		// again, so the health tick does (retryStart).
 		n.d.Log.Error("bundle is on disk but Traefik did not start", "id", id, "error", err)
 		return id, ingressbundle.ReasonApplyFailed
 	}
@@ -261,7 +300,7 @@ func (n *node) loopOptions(key ed25519.PrivateKey) channel.LoopOptions {
 		URL:         d.Config.URL,
 		InstallPins: d.Config.Pins,
 		Version:     d.Version,
-		AppliedID:   d.Store.AppliedID,
+		AppliedID:   n.appliedID,
 		OnEnrolled: func(w ingresswire.Welcome) error {
 			return d.Identity.Save(identity.Record{NodeID: w.NodeID, EnvID: w.EnvID, InstanceID: w.InstanceID})
 		},
@@ -289,7 +328,8 @@ func (n *node) loopOptions(key ed25519.PrivateKey) channel.LoopOptions {
 		Session: channel.SessionOptions{
 			Handle: n.handle,
 			Health: func(ctx context.Context) (bool, string) {
-				return d.Ping(ctx), d.Store.AppliedID()
+				n.retryStart()
+				return d.Ping(ctx), n.appliedID()
 			},
 			Log: d.Log,
 		},

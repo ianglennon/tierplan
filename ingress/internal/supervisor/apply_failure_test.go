@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/tierplan/ingress/internal/cache"
+	"github.com/ianglennon/tierplan/ingress/internal/channel"
 	"github.com/ianglennon/tierplan/ingress/internal/fsx"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
@@ -117,4 +118,85 @@ func TestApplyFailureCauseIsLogged(t *testing.T) {
 		cancel()
 		<-done
 	})
+}
+
+// dialOptions makes the harness's fake Dial keep the channel options the supervisor hands it, so a test can
+// call hello's AppliedID callback as a real Dial would. The returned function is valid after lo.Dial ran.
+func dialOptions(h *harness) func() channel.Options {
+	var got channel.Options
+	h.deps.Dial = func(_ context.Context, o channel.Options, _ channel.Credentials) (*channel.Conn, error) {
+		got = o
+		return nil, errNoDial
+	}
+	return func() channel.Options { return got }
+}
+
+// TestFailedStartIsRetriedAndNotReportedApplied is WR-A-03, first path: the first bundle of a node with no
+// cache is on disk but Traefik does not start. The answer is apply_failed, hello must not claim the bundle
+// (the server would then never resend it), and the next health tick starts Traefik, because no frame will
+// come to do it. Before the fix hello reported the bundle and nothing retried the start.
+func TestFailedStartIsRetriedAndNotReportedApplied(t *testing.T) {
+	h := newHarness(t, "")
+	h.traefik.failStarts.Store(1)
+	opts := dialOptions(h)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lo, done := h.runUntilChannel(ctx)
+
+	b := validBundle(t, 1, "app.example.test")
+	if _, reason := lo.Session.Handle(ctx, frameFor(t, testInstance, b), testInstance); reason != ingressbundle.ReasonApplyFailed {
+		t.Fatalf("Handle reason = %q, want apply_failed", reason)
+	}
+	if h.state.Applied() {
+		t.Fatal("readiness is marked applied although Traefik never started")
+	}
+	if _, err := lo.Dial(ctx); err != errNoDial {
+		t.Fatalf("lo.Dial = %v, want the fake's error", err)
+	}
+	if got := opts().AppliedID(); got != "" {
+		t.Fatalf("hello's applied ID = %q while Traefik is not running, want none, so the server resends the bundle", got)
+	}
+	// A health tick tries the start again; the second Start succeeds, and now the node is whole.
+	lo.Session.Health(ctx)
+	if got := h.traefik.starts.Load(); got != 2 {
+		t.Fatalf("Traefik Start was called %d times, want 2 (the failure and the retry on the health tick)", got)
+	}
+	if !h.state.Applied() {
+		t.Fatal("readiness is not marked applied after the retried start")
+	}
+	if _, id := lo.Session.Health(ctx); id != b.ID {
+		t.Fatalf("health's applied ID = %q after the start, want %q", id, b.ID)
+	}
+	if got := opts().AppliedID(); got != b.ID {
+		t.Fatalf("hello's applied ID = %q after the start, want %q", got, b.ID)
+	}
+	if got := h.traefik.starts.Load(); got != 2 {
+		t.Fatalf("Traefik Start was called %d times, want 2: a started Traefik is not started again", got)
+	}
+	cancel()
+	<-done
+}
+
+// TestCommitFailureStillStartsTraefik is WR-A-03, second path: the commit rename fails after the dynamic
+// file is live, so Accept answers apply_failed, but the bundle is what Traefik should read. Before the fix
+// handle returned before ensureTraefik, so a node with no cache never started Traefik for it.
+func TestCommitFailureStillStartsTraefik(t *testing.T) {
+	h := newHarness(t, "")
+	h.deps.Store = cache.NewStore(renameFailFS{FS: fsx.OS(), suffix: "/state/applied.json", err: syscall.EIO}, h.root)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lo, done := h.runUntilChannel(ctx)
+
+	b := validBundle(t, 1, "app.example.test")
+	if _, reason := lo.Session.Handle(ctx, frameFor(t, testInstance, b), testInstance); reason != ingressbundle.ReasonApplyFailed {
+		t.Fatalf("Handle reason = %q, want apply_failed (the commit failed)", reason)
+	}
+	if got := h.traefik.starts.Load(); got != 1 {
+		t.Fatalf("Traefik Start was called %d times, want 1: the bundle is live on the volume", got)
+	}
+	if !h.state.Applied() {
+		t.Fatal("readiness is not marked applied although the live bundle is being served")
+	}
+	cancel()
+	<-done
 }
