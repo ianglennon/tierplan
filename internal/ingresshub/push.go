@@ -151,7 +151,14 @@ func (h *Hub) renderable(offered []int, b ingressbundle.Bundle) bool {
 // frame is written, so a revoke lists every hostname the node could have held whether or not the frame arrived
 // (D-24); the ID is remembered before the write too, because a fast node may answer before the write returns.
 func (h *Hub) send(ctx context.Context, s *Session, b ingressbundle.Bundle) string {
-	if !h.svc.StillActive(s.NodeID) {
+	active, err := h.svc.StillActive(s.NodeID)
+	if err != nil {
+		// Not a revoke: the status is unknown, so nothing is sent and the session ends, which the node retries.
+		h.log.Warn("could not confirm an ingress node is still active before a bundle", "node_id", s.NodeID, "environment_id", s.EnvID, "error", err)
+		h.endForError(s)
+		return PushWriteFailed
+	}
+	if !active {
 		// A revoke has committed and its kick is on the way: a revoked node is sent nothing, and the kick gives
 		// the node its reason. No outcome is reported, and the next wake looks again.
 		return ""

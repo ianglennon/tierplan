@@ -100,7 +100,7 @@ func TestRevokeAllowReenrol(t *testing.T) {
 		t.Errorf("the node enrolled again under the revoked row's ID")
 	}
 	// The old row stays revoked and cannot come back.
-	if f.svc.StillActive(a.res.NodeID) {
+	if active, err := f.svc.StillActive(a.res.NodeID); err != nil || active {
 		t.Error("the revoked row is active again")
 	}
 }
@@ -136,7 +136,7 @@ func TestRevokeKicksAfterCommitAndOnlyThatNode(t *testing.T) {
 	if afterB := f.row(t, b.res.NodeID); !reflect.DeepEqual(beforeB, afterB) {
 		t.Errorf("node B's row changed:\n before %+v\n after  %+v", beforeB, afterB)
 	}
-	if !f.svc.StillActive(b.res.NodeID) {
+	if active, err := f.svc.StillActive(b.res.NodeID); err != nil || !active {
 		t.Error("node B is no longer active")
 	}
 
@@ -147,7 +147,7 @@ func TestRevokeKicksAfterCommitAndOnlyThatNode(t *testing.T) {
 	if _, err := f2.svc.Revoke(ctx, testAdmin, env2, c.res.NodeID, ingresshub.RevokeOptions{}, "", ""); err != nil {
 		t.Fatalf("Revoke without a kicker: %v", err)
 	}
-	if f2.svc.StillActive(c.res.NodeID) {
+	if active, err := f2.svc.StillActive(c.res.NodeID); err != nil || active {
 		t.Error("the node is still active after a revoke without a kicker")
 	}
 }

@@ -109,6 +109,12 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 		s.endWith(ingresswire.CloseRevoked)
 		s.close(websocket.StatusPolicyViolation, ingresswire.CloseRevoked)
 		return
+	case errors.Is(err, errStatusUnknown):
+		// A fault of the server's, not a revoke: the node is closed with internal-error status, which it
+		// retries with backoff (WR-A-01).
+		h.log.Error("could not confirm an ingress node is still active; it will retry", "node_id", s.NodeID, "environment_id", s.EnvID, "error", err)
+		s.close(websocket.StatusInternalError, ingresswire.RefuseInternal)
+		return
 	case err != nil:
 		s.endWith(ingresswire.CloseShutdown)
 		s.close(websocket.StatusGoingAway, ingresswire.CloseShutdown)

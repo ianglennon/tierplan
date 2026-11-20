@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	// stillActiveTimeout bounds the status read made as a session registers.
-	stillActiveTimeout = 5 * time.Second
+	// stillActiveTimeout bounds the status read made as a session registers and before a bundle is sent. The
+	// registration makes it under the hub's lifecycle lock, which every kick of every node waits for, so it is
+	// short: a read that does not finish in time is a retryable fault, not a revoke.
+	stillActiveTimeout = 2 * time.Second
 
 	// detailKeyNotAccepted is the one outward detail of every refusal of a connect that proves nothing, so a
 	// probe learns neither which node IDs exist nor why a key failed. The audit reason says which it was
@@ -87,10 +89,18 @@ func (s *Service) Connect(ctx context.Context, req ConnectRequest) (ConnectResul
 }
 
 // StillActive reports whether the node exists and has not been revoked. The hub asks it when it registers a
-// session (D-09), after a revoke has committed.
-func (s *Service) StillActive(nodeID string) bool {
+// session (D-09), after a revoke has committed, and before it sends a bundle. A node with no row is not active
+// and no error. The error is a failed read, which the caller must not take for a revoke: the node is healthy as
+// far as anyone knows, and is told to retry.
+func (s *Service) StillActive(nodeID string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), stillActiveTimeout)
 	defer cancel()
 	row, err := s.st.RQ.GetIngressNode(ctx, nodeID)
-	return err == nil && row.Status == statusActive
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read the status of the ingress node: %w", err)
+	}
+	return row.Status == statusActive, nil
 }

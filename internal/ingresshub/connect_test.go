@@ -184,8 +184,8 @@ func TestConnectStillActive(t *testing.T) {
 		{"unknown", uuid.NewString(), false},
 		{"empty", "", false},
 	} {
-		if got := f.svc.StillActive(c.id); got != c.want {
-			t.Errorf("StillActive(%s) = %v, want %v", c.name, got, c.want)
+		if got, err := f.svc.StillActive(c.id); err != nil || got != c.want {
+			t.Errorf("StillActive(%s) = %v, %v, want %v", c.name, got, err, c.want)
 		}
 	}
 }

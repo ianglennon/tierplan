@@ -6,6 +6,7 @@ package ingresshub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -310,6 +311,10 @@ var (
 // already; errHubClosed and errNoLongerActive, above, are the other reasons.
 var errSuperseded = errors.New("ingresshub: a newer connection of the node has registered")
 
+// errStatusUnknown is why register turned away a session whose node's status could not be read: a fault of the
+// server's, which the node is told to retry, never a revoke.
+var errStatusUnknown = errors.New("ingresshub: the node's status could not be read")
+
 // register adds s, replacing any session of the same node: a half-open stale connection must not block the
 // reconnect. The old session is closed with the reason replaced, and it leaves the map in the same critical
 // section the new one enters, so two sessions of one node are never registered. It reports errHubClosed when
@@ -324,11 +329,20 @@ var errSuperseded = errors.New("ingresshub: a newer connection of the node has r
 // calls Kick, and Kick takes the same lock, so either the status read below sees the revoke, or the session is
 // already in the map when Kick looks and is closed by it. There is no order in which a session of a revoked
 // node stays registered (D-09, T-22-36).
+//
+// The read cannot move before the lock: a read that saw the node active, then a revoke that committed and
+// kicked while the lock was free and found no session, would let this registration proceed for a revoked node.
+// So it stays under the lock, bounded by the short stillActiveTimeout, and a read that fails is errStatusUnknown,
+// a retryable close, never errNoLongerActive (WR-A-01).
 func (h *Hub) register(s *Session) error {
 	h.life.Lock()
 	defer h.life.Unlock()
 
-	if !h.svc.StillActive(s.NodeID) {
+	active, err := h.svc.StillActive(s.NodeID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errStatusUnknown, err)
+	}
+	if !active {
 		return errNoLongerActive
 	}
 	h.mu.Lock()

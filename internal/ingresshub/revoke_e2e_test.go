@@ -158,7 +158,7 @@ func TestRevokeAllowReenrolLetsTheNodeBack(t *testing.T) {
 		t.Fatalf("welcome = %+v, want a new node ID other than %s", c.Welcome, a.NodeID)
 	}
 	lcAwaitRegistered(t, srv, id.NodeID)
-	if srv.Service.StillActive(a.NodeID) {
+	if active, err := srv.Service.StillActive(a.NodeID); err != nil || active {
 		t.Error("the revoked row is active again")
 	}
 	// The old identity is still refused as revoked.
