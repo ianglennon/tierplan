@@ -334,11 +334,12 @@ func (s *Store) applyLocked(b ingressbundle.Bundle) error {
 	slices.SortFunc(entries, func(x, y ingressbundle.FileEntry) int { return strings.Compare(x.Path, y.Path) })
 
 	// Step 1: certificates and keys, before any file that names them.
-	wrote := false
+	hasCerts := false
 	for _, e := range entries {
 		if e.Step != ingressbundle.StepCerts {
 			continue
 		}
+		hasCerts = true
 		dst := s.abs(e.Path)
 		if cur, err := s.fsys.ReadFile(dst); err == nil && bytes.Equal(cur, data[e.Path]) {
 			continue
@@ -346,9 +347,11 @@ func (s *Store) applyLocked(b ingressbundle.Bundle) error {
 		if err := fsx.WriteAtomicNoSync(s.fsys, s.abs(dirTmp), dst, data[e.Path], fs.FileMode(e.Mode)); err != nil {
 			return &ApplyError{Step: stepCerts, Err: err}
 		}
-		wrote = true
 	}
-	if wrote {
+	// certs/ is flushed whenever the bundle has certificates, not only when this call wrote one: a file that
+	// reads back equal is in the page cache, which says nothing about its directory entry surviving a power
+	// loss (an earlier apply may have written it and failed its flush).
+	if hasCerts {
 		if err := s.fsys.SyncDir(s.abs(dirCerts)); err != nil {
 			return &ApplyError{Step: stepCerts, Err: err}
 		}

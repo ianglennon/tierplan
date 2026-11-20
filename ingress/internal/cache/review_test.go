@@ -87,3 +87,33 @@ func TestFailedDynamicFlushStillRecordsTheBundleInForce(t *testing.T) {
 		t.Fatalf("Accept of the bundle in force = (%q, %q), want (%q, \"\")", id, reason, b.ID)
 	}
 }
+
+// TestCertsDirIsFlushedWhenTheFilesAreAlreadyThere is WR-A-06: a certificate that is already on disk with the
+// same content is not written again, but certs/ is still flushed, because "already on disk" is what the page
+// cache says and not what a power loss keeps. Before the fix the retry of an apply whose first flush failed
+// skipped the flush.
+func TestCertsDirIsFlushedWhenTheFilesAreAlreadyThere(t *testing.T) {
+	a, _, _ := threeBundles(t)
+	root := t.TempDir()
+	fsys := newSyncFS("certs")
+	s := NewStore(fsys, root)
+	if err := s.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	// First attempt: the certificates are written, the flush of certs/ fails, the apply fails.
+	var ae *ApplyError
+	if err := s.Apply(a); !errors.As(err, &ae) || ae.Step != stepCerts || !errors.Is(err, errFlush) {
+		t.Fatalf("first Apply = %v, want an *ApplyError at step certs wrapping the flush error", err)
+	}
+	failed := fsys.flushes("certs")
+
+	// The resend: every file is present and equal, so nothing is written, and certs/ must be flushed anyway.
+	fsys.fail("certs", false)
+	if err := s.Apply(a); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	if got := fsys.flushes("certs"); got <= failed {
+		t.Fatalf("certs/ was flushed %d times in total, %d by the failed attempt: the retry skipped the flush", got, failed)
+	}
+}
