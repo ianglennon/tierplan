@@ -337,9 +337,21 @@ func (h *Hub) protocolError(s *Session, what string) {
 // onHello records what the node said and remembers it for the writer, which sends the node the bundle of its
 // environment when it is not running it already. A node with no schema in common keeps the bundle it has: it is
 // frozen, not broken, and the node list says so (ListNodes), because the writer sends it nothing.
+//
+// A hello that says the node runs the environment's current bundle is recorded as applied: the writer will not
+// send that bundle again, so no applied message would ever follow, and a node whose applied frame was lost in a
+// drop would stay pending until the bundle next changes (WR-A-02). Only the ID the server itself holds as current
+// is written; any other ID the node names never reaches its row.
 func (h *Hub) onHello(ctx context.Context, s *Session, m ingresswire.Hello) error {
 	if err := h.svc.RecordHello(ctx, s.NodeID, m.Version, m.Schemas); err != nil {
 		return err
+	}
+	if m.AppliedID != "" && h.src != nil {
+		if b, ok := h.src.Current(s.EnvID); ok && b.ID == m.AppliedID {
+			if err := h.svc.RecordApplied(ctx, s.NodeID, b.ID); err != nil {
+				return err
+			}
+		}
 	}
 	schemas := m.Schemas
 	if len(schemas) > ingresswire.MaxSchemas {

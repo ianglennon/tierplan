@@ -342,3 +342,28 @@ func TestDeliveryMarshalledOncePerBundle(t *testing.T) {
 		t.Errorf("the bundle was encoded %d times for 3 nodes, want 1", n)
 	}
 }
+
+// TestDeliveryHelloOfTheCurrentBundleIsRecordedApplied is WR-A-02: a node that applied the current bundle but whose
+// applied frame was lost says so in its next hello. It is not sent the bundle again, so the hello itself records
+// it as applied. An ID the server does not hold as current never reaches the row.
+func TestDeliveryHelloOfTheCurrentBundleIsRecordedApplied(t *testing.T) {
+	srv := ingresstest.Start(t, ingresstest.Options{})
+	env := srv.NewEnvironment(t, "swarm")
+	srv.Nodes.Set(env.ID, "n1", "n2")
+	x := ingresstest.MakeBundle(t, 1, "a.example.com")
+	srv.Bundles.Set(env.ID, x)
+
+	id, _ := dvNode(t, srv, env, "n1", x.ID)
+	dvAwaitCount(t, srv, id.NodeID, ingresshub.PushSame, x.ID, 1)
+	if row := roRow(t, srv, id.NodeID); row.AppliedBundleID != x.ID || row.AppliedAt != srv.Clock.Now().UnixNano() {
+		t.Errorf("after a hello of the current bundle: applied %q at %d, want %q now", row.AppliedBundleID, row.AppliedAt, x.ID)
+	}
+
+	other, c := dvNode(t, srv, env, "n2", "an-id-the-server-never-held")
+	if got := c.NextBundle(t); got.ID != x.ID {
+		t.Fatalf("bundle = %s, want %s", got.ID, x.ID)
+	}
+	if row := roRow(t, srv, other.NodeID); row.AppliedBundleID != "" || row.AppliedAt != 0 {
+		t.Errorf("a hello of an unknown ID reached the row: applied %q at %d", row.AppliedBundleID, row.AppliedAt)
+	}
+}
