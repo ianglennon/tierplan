@@ -402,6 +402,14 @@ ingress-image:
 		-o $(CURDIR)/$(INGRESS_CTX)/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
 	docker buildx build --platform linux/$(INGRESS_ARCH) -f ingress/Dockerfile -t $(INGRESS_TAG) --load $(INGRESS_CTX)
 
+# Runs tierplan-ingress:dev as a node runs it, with and without the hardening
+# flags: UID and GID 1000, no capability, no-new-privileges set by the binary, no
+# Docker socket, a new volume owned by 1000, and with no cache and no TierPlan an
+# unready node (503, empty body) that serves nothing on 8080 and 8443. Needs Docker,
+# curl and tar.
+ingress-image-smoke:
+	scripts/ingress-image-smoke.sh
+
 # The build contexts for the :edge images: the binaries laid out as
 # $TARGETPLATFORM/tierplan (server) and $TARGETPLATFORM/tierplan-agent (agent)
 # next to their Dockerfiles, as goreleaser does it, plus the web SBOM the server
