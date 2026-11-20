@@ -392,10 +392,14 @@ func (s *Store) applyLocked(b ingressbundle.Bundle) error {
 // in force is answered applied again without a single write (D-16); any other bundle is applied whatever
 // its version, so a restore of an older configuration works. A refused bundle changes nothing under
 // certs/ or dynamic/.
-func (s *Store) Accept(frame []byte, pinned string) (id, reason string) {
+//
+// cause is set only when reason is apply_failed: the *ApplyError naming the step and the errno, for the
+// caller to log. It holds a step name, paths under the node root and the OS error, never bundle bytes
+// (D-23). The verify codes need no cause: the reason is the whole story.
+func (s *Store) Accept(frame []byte, pinned string) (id, reason string, cause error) {
 	b, err := ingresswire.DecodeBundle(frame, pinned)
 	if err != nil {
-		return ingresswire.PeekBundleID(frame), ReasonOf(err)
+		return ingresswire.PeekBundleID(frame), ReasonOf(err), nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -403,14 +407,14 @@ func (s *Store) Accept(frame []byte, pinned string) (id, reason string) {
 		_, _, _ = s.loadLocked()
 	}
 	if s.applied != nil && s.applied.ID == b.ID {
-		return b.ID, ""
+		return b.ID, "", nil
 	}
 	if err := s.applyLocked(b); err != nil {
 		var ve *ingressbundle.VerifyError
 		if errors.As(err, &ve) {
-			return b.ID, ReasonOf(err)
+			return b.ID, ReasonOf(err), nil
 		}
-		return b.ID, ingressbundle.ReasonApplyFailed
+		return b.ID, ingressbundle.ReasonApplyFailed, err
 	}
-	return b.ID, ""
+	return b.ID, "", nil
 }

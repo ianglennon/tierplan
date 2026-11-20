@@ -119,7 +119,7 @@ func TestRejectLeavesVolumeUnchanged(t *testing.T) {
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			frame := r.frame(t)
-			id, reason := s.Accept(frame, testInstance)
+			id, reason, _ := s.Accept(frame, testInstance)
 			if reason != r.want {
 				t.Fatalf("Accept refused with %q, want %q", reason, r.want)
 			}
@@ -165,7 +165,7 @@ func TestApplyFailedKeepsLastGood(t *testing.T) {
 	s, rec := recorded(t, root)
 	rec.RenameErr("dynamic/tierplan.yml", errors.New("the disk refused"))
 
-	id, reason := s.Accept(frameOf(t, b), testInstance)
+	id, reason, _ := s.Accept(frameOf(t, b), testInstance)
 	if reason != ingressbundle.ReasonApplyFailed || id != b.ID {
 		t.Fatalf("Accept = (%q, %q), want (%q, apply_failed)", id, reason, b.ID)
 	}
@@ -189,7 +189,7 @@ func TestIdenticalBundleIsNoOp(t *testing.T) {
 	again := a
 	again.Version = ingressbundle.Version{Config: 99, Certs: 7} // metadata is not part of the ID
 	for _, b := range []ingressbundle.Bundle{a, again} {
-		id, reason := s.Accept(frameOf(t, b), testInstance)
+		id, reason, _ := s.Accept(frameOf(t, b), testInstance)
 		if reason != "" || id != a.ID {
 			t.Fatalf("Accept = (%q, %q), want (%q, applied again)", id, reason, a.ID)
 		}
@@ -289,7 +289,7 @@ func TestLoadCompletesAVerifiedPending(t *testing.T) {
 
 	s, rec := recorded(t, root)
 	rec.FailFrom(commit)
-	if _, reason := s.Accept(frameOf(t, c), testInstance); reason != ingressbundle.ReasonApplyFailed {
+	if _, reason, _ := s.Accept(frameOf(t, c), testInstance); reason != ingressbundle.ReasonApplyFailed {
 		t.Fatalf("Accept reason = %q, want apply_failed from the killed commit", reason)
 	}
 	if _, err := os.Stat(filepath.Join(root, "state", "pending.json")); err != nil {

@@ -147,15 +147,17 @@ func (n *node) ensureTraefik() error {
 // handle is the answer to one bundle frame (D-15, D-16). Accept decodes it against the pinned instance,
 // checks it and puts it in force or leaves the volume as it was. It never restarts or signals Traefik.
 func (n *node) handle(_ context.Context, frame []byte, instanceID string) (id, reason string) {
-	id, reason = n.d.Store.Accept(frame, instanceID)
+	id, reason, cause := n.d.Store.Accept(frame, instanceID)
 	if reason != "" {
-		n.d.Log.Warn("bundle rejected", "id", id, "reason", reason)
+		// cause is the apply step and the OS error of an apply_failed, and nil for a verify code; neither
+		// holds bundle bytes (D-23).
+		n.d.Log.Warn("bundle rejected", "id", id, "reason", reason, "error", cause)
 		return id, reason
 	}
 	if err := n.ensureTraefik(); err != nil {
 		// The bundle is on the volume, so the next frame (the same bundle is answered applied without a
 		// write) tries the start again. The node reports it as not applied.
-		n.d.Log.Error("bundle is on disk but Traefik did not start", "id", id)
+		n.d.Log.Error("bundle is on disk but Traefik did not start", "id", id, "error", err)
 		return id, ingressbundle.ReasonApplyFailed
 	}
 	n.d.Ready.SetApplied(true)

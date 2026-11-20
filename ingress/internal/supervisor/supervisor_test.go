@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -251,11 +252,20 @@ type fakeTraefik struct {
 	stops   atomic.Int32
 	running atomic.Bool
 	onStop  func()
+	// failStarts is how many of the next Start calls fail with errTraefikStart.
+	failStarts atomic.Int32
 }
+
+// errTraefikStart is the error of a Start that failed (a missing binary, say).
+var errTraefikStart = errors.New("fork/exec /usr/local/bin/traefik: no such file or directory")
 
 func (f *fakeTraefik) Start(context.Context) error {
 	f.ev.add("traefik-start")
 	f.starts.Add(1)
+	if f.failStarts.Load() > 0 {
+		f.failStarts.Add(-1)
+		return errTraefikStart
+	}
 	f.running.Store(true)
 	return nil
 }
@@ -466,7 +476,7 @@ func cachedVolume(t *testing.T, b ingressbundle.Bundle) string {
 	if err := s.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if id, reason := s.Accept(frameFor(t, testInstance, b), testInstance); id != b.ID || reason != "" {
+	if id, reason, _ := s.Accept(frameFor(t, testInstance, b), testInstance); id != b.ID || reason != "" {
 		t.Fatalf("Accept = (%q, %q), want (%q, \"\")", id, reason, b.ID)
 	}
 	return root

@@ -158,7 +158,7 @@ func TestCrashAfterEachStep(t *testing.T) {
 			root := seeded(t, a, old)
 			s, rec := recorded(t, root)
 			rec.FailFrom(n)
-			_, reason := s.Accept(frameOf(t, next), testInstance)
+			_, reason, _ := s.Accept(frameOf(t, next), testInstance)
 			if n <= commitSync && reason != ingressbundle.ReasonApplyFailed {
 				t.Fatalf("killed before op %d (%s): Accept reason %q, want apply_failed", n, ops[n], reason)
 			}
@@ -209,7 +209,7 @@ func TestRenameEXDEV(t *testing.T) {
 	if !errors.As(err, &ae) || ae.Step != "dynamic" || !errors.Is(err, syscall.EXDEV) {
 		t.Fatalf("Apply = %v, want an *ApplyError at step dynamic wrapping EXDEV", err)
 	}
-	if _, reason := s.Accept(frameOf(t, b), testInstance); reason != ingressbundle.ReasonApplyFailed {
+	if _, reason, _ := s.Accept(frameOf(t, b), testInstance); reason != ingressbundle.ReasonApplyFailed {
 		t.Fatalf("Accept reason = %q, want apply_failed", reason)
 	}
 	for _, op := range rec.Ops() {

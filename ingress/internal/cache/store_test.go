@@ -65,7 +65,7 @@ func newPrepared(t *testing.T) (*Store, string) {
 
 func mustAccept(t *testing.T, s *Store, b ingressbundle.Bundle) {
 	t.Helper()
-	id, reason := s.Accept(frameOf(t, b), testInstance)
+	id, reason, _ := s.Accept(frameOf(t, b), testInstance)
 	if reason != "" || id != b.ID {
 		t.Fatalf("Accept = (%q, %q), want (%q, \"\")", id, reason, b.ID)
 	}
