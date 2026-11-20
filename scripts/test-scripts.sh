@@ -706,6 +706,8 @@ expect pass "test-go-gotestsum" mk test-go
 expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
 expect_out "test-go keeps race, shuffle and a timeout from the budget" "-race -count=1 -shuffle=on -timeout \${left}s"
 expect_out "test-go shows its one budget" "TEST_BUDGET=40m"
+# 23-review WR-C-02: the ingress no-new-privileges test skips under -race (cgo), so make test-go runs it once with cgo off.
+expect_out "test-go runs the ingress no-new-privileges test without cgo" "CGO_ENABLED=0 go test ./internal/traefikproc -run '^TestSetNoNewPrivs\$' -count=1 -v"
 # 06.1-46: the modules share one budget; a module with no time left fails, it is not skipped.
 expect fail "test-go-budget-used-up" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=0m TEST_RESULTS="${scratch}/go-results"
 expect_out "test-go-budget-used-up names the budget" "test-go: the 0m budget (TEST_GO_BUDGET) was used up before ."

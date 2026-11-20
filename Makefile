@@ -88,6 +88,9 @@ test: test-go test-web
 # per-binary caveat.
 TEST_GO_BUDGET := 40m
 
+# The ingress no-new-privileges test (D-06) needs AllThreadsSyscall, which a cgo build refuses, and -race
+# forces cgo, so under -race it skips. The step after the module loop runs that one test once with cgo off
+# and fails unless it passes, so the hardening is proved by a unit test and not only by the image smoke.
 # gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
 # failing module does not stop the next one, so one red run reports them all. A
 # module that finds no time left in the budget fails, it is never skipped quietly.
@@ -101,6 +104,12 @@ test-go:
 	  echo "test-go: $$m ($${left}s left of the $$TEST_BUDGET budget)"; \
 	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout $${left}s) || rc=1; \
 	done; \
+	left=$$(( end - $$(date +%s) )); \
+	if [ "$$left" -le 0 ]; then echo "test-go: the $$TEST_BUDGET budget (TEST_GO_BUDGET) was used up before the ingress no-new-privileges test" >&2; rc=1; else \
+	  echo "test-go: ingress no-new-privileges test, cgo off and without -race ($${left}s left of the $$TEST_BUDGET budget)"; \
+	  out=$$(cd ingress && CGO_ENABLED=0 go test ./internal/traefikproc -run '^TestSetNoNewPrivs$$' -count=1 -v -timeout $${left}s 2>&1) || { printf '%s\n' "$$out"; rc=1; }; \
+	  printf '%s\n' "$$out" | grep -q -e '--- PASS: TestSetNoNewPrivs ' || { echo "test-go: TestSetNoNewPrivs did not pass (it was skipped or did not run); the prctl must run for real once" >&2; printf '%s\n' "$$out" >&2; rc=1; }; \
+	fi; \
 	exit $$rc
 
 # The web unit suite, shuffled with a printed seed: WEB_SEED=<n> reproduces a run

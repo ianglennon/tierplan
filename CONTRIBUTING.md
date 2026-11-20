@@ -37,7 +37,7 @@ No tool is added to `go.mod` for development: golangci-lint, sqlc, goreleaser, a
 | `make dev` | The development loop: Go with live reload plus Vite with hot reload (see below). |
 | `make build` | Builds the SPA, then `bin/tierplan` (static, CGO off, SPA embedded). Pass `VERSION=v0.1.0` to stamp a version. |
 | `make test` | The Go modules (`make test-go`: race, shuffled, through gotestsum) and then the web unit tests (`make test-web`). |
-| `make test-go` | Every Go module with `-race -count=1 -shuffle=on`; the failing tests are listed at the end and the shuffle seed is printed. |
+| `make test-go` | Every Go module with `-race -count=1 -shuffle=on`; the failing tests are listed at the end and the shuffle seed is printed. It then runs the ingress no-new-privileges test once with cgo off and without `-race` (that test skips under `-race`) and fails unless it passes. |
 | `make test-web` | The Vitest suite in shuffled order. It prints its seed; `make test-web WEB_SEED=<seed>` reproduces a run. |
 | `make test-summary` | Lists the failing and hung tests from the result files in `.devdata/test`. CI runs it after every test job. |
 | `make test-stress` | The stability bar (20 shuffled race runs, then `-cpu=1` and `-cpu=4`) for one share of the suite: `STRESS_SHARD=api`, `core`, `rest` or `agent-web`. Takes hours; run by hand, for example before a release or when chasing a flake. |

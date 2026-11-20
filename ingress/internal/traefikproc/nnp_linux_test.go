@@ -44,7 +44,8 @@ func TestNoNewPrivsHelper(t *testing.T) {
 
 // The real prctl, in a child process so the test binary itself is left as it was. A cgo build (which
 // `go test -race` is) cannot use AllThreadsSyscall, so the helper reports that and the test skips, exactly as
-// the agent's test does; the run without -race proves the real call.
+// the agent's test does. `make test-go` runs this one test again with cgo off and without -race and fails
+// unless it passes, so the real call is proved on every run.
 func TestSetNoNewPrivs(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestNoNewPrivsHelper$") //nolint:gosec // re-runs this test binary
 	cmd.Env = append(os.Environ(), nnpHelperEnv+"=1")
