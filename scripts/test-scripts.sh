@@ -112,6 +112,15 @@ expect fail "licence-exception-wrong-licence" env LICENCE_EXCEPTIONS="${scratch}
 expect fail "licence-exception-lookalike" env LICENCE_EXCEPTIONS="${scratch}/exc-lookalike.txt" \
   node scripts/licence-check.mjs --format pnpm-json <scripts/testdata/licences/pnpm-gpl2.json
 
+# S11 (plan 23-01): the four rows of Traefik's dependency tree that fail the allowlist
+# fail on their own and pass only with the three reviewed lines in licence-exceptions.txt.
+: >"${scratch}/empty-exceptions.txt"
+expect fail "licence-s11-without-exceptions" env LICENCE_EXCEPTIONS="${scratch}/empty-exceptions.txt" \
+  node scripts/licence-check.mjs --format go-csv <scripts/testdata/licences/go-traefik-s11.csv
+expect_out "licence-s11-without-exceptions names vegadns" "github.com/nrdcg/vegadns"
+expect pass "licence-s11-with-exceptions" \
+  node scripts/licence-check.mjs --format go-csv <scripts/testdata/licences/go-traefik-s11.csv
+
 # --- DCO gate: a throwaway repo with one signed and one unsigned commit ---
 repo="${scratch}/dco-repo"
 mkdir "${repo}"

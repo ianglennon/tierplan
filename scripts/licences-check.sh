@@ -13,6 +13,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 
 GO_LICENSES="github.com/google/go-licenses/v2@v2.0.1"
 
@@ -39,6 +40,23 @@ for arch in amd64 arm64; do
   (cd agent && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
     "${TOOLS}/go-licenses" report ./cmd/tierplan-agent --ignore github.com/ianglennon/tierplan \
     | node ../scripts/licence-check.mjs --format go-csv)
+done
+
+# Traefik, from the tag held by the pinned image reference. The pin is read, never
+# copied here, so the gate scans what the test harness and the image use.
+tag="$(sed -nE 's/^[[:space:]]*TraefikImage[[:space:]]*=[[:space:]]*"traefik:(v[0-9]+\.[0-9]+\.[0-9]+)@sha256:[0-9a-f]{64}".*$/\1/p' \
+  internal/ingressrender/traefiktest/traefiktest.go | head -n 1)"
+if [ -z "${tag}" ]; then
+  echo "licences: cannot read the Traefik tag from internal/ingressrender/traefiktest/traefiktest.go" >&2
+  exit 1
+fi
+git clone -q --depth 1 --branch "${tag}" https://github.com/traefik/traefik "${TOOLS}/traefik"
+echo "licences: traefik ${tag} commit $(git -C "${TOOLS}/traefik" rev-parse HEAD)"
+for arch in amd64 arm64; do
+  echo "licences: traefik go linux/${arch}"
+  (cd "${TOOLS}/traefik" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+    "${TOOLS}/go-licenses" report ./cmd/traefik \
+    | node "${ROOT}/scripts/licence-check.mjs" --format go-csv)
 done
 
 echo "licences: pnpm (production)"
