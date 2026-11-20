@@ -86,15 +86,16 @@ func TestProbeDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-func TestProbeIgnoresProxyVariables(t *testing.T) {
-	srv := statusServer(t, http.StatusOK, "")
-	// A proxy variable must not send a loopback probe somewhere else. The address is one nothing listens on.
-	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	t.Setenv("http_proxy", "http://127.0.0.1:1")
-	t.Setenv("NO_PROXY", "")
-	t.Setenv("no_proxy", "")
-	if err := Probe(context.Background(), NewProbeClient(), srv.URL); err != nil {
-		t.Fatalf("Probe with HTTP_PROXY set = %v, want nil", err)
+// TestProbeClientHasNoProxy pins the property structurally. A behavioural test cannot prove it: Go never
+// proxies a loopback destination, so a probe of an httptest server succeeds whether or not the transport
+// would use HTTP_PROXY, and the environment is read once per process, so t.Setenv comes too late anyway.
+func TestProbeClientHasNoProxy(t *testing.T) {
+	tr, ok := NewProbeClient().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("probe transport is a %T, want an *http.Transport", NewProbeClient().Transport)
+	}
+	if tr.Proxy != nil {
+		t.Fatal("the probe transport has a Proxy func, so an HTTP_PROXY in the environment can redirect the probe")
 	}
 }
 
