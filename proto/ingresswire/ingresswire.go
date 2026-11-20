@@ -127,9 +127,14 @@ const (
 	RefuseAuthRejected = "auth_rejected"
 	// RefuseWrongTokenKind means the token is an agent join token (AgentTokenPrefix).
 	RefuseWrongTokenKind = "wrong_token_kind"
-	// RefuseRevoked means the ingress token was revoked.
+	// RefuseRevoked is sent on connect to a node that proved its key and that an
+	// administrator has revoked: the node itself was revoked, not a token. The
+	// node must stop connecting. It is the same text as CloseRevoked, the close
+	// reason of a live session whose node is revoked.
 	RefuseRevoked = "revoked"
-	// RefuseNodeRevoked means this node was revoked.
+	// RefuseNodeRevoked is sent on enrolment from a host an administrator
+	// revoked with the re-enrolment block: the join token is still valid, but
+	// this node may not enrol again until an administrator allows it.
 	RefuseNodeRevoked = "node_revoked"
 	// RefuseNodeNotInSwarm means the swarm node the node reports is not in the
 	// node list the server last read. It passes once the node is listed.
