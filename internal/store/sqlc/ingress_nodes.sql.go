@@ -439,9 +439,9 @@ func (q *Queries) UpdateIngressNodeHealth(ctx context.Context, arg UpdateIngress
 	return err
 }
 
-const updateIngressNodeHeld = `-- name: UpdateIngressNodeHeld :exec
+const updateIngressNodeHeld = `-- name: UpdateIngressNodeHeld :execrows
 UPDATE ingress_nodes SET held_hostnames = ?
-WHERE id = ? AND env_id = ?
+WHERE id = ? AND env_id = ? AND status = 'active'
 `
 
 type UpdateIngressNodeHeldParams struct {
@@ -450,9 +450,14 @@ type UpdateIngressNodeHeldParams struct {
 	EnvID         string
 }
 
-func (q *Queries) UpdateIngressNodeHeld(ctx context.Context, arg UpdateIngressNodeHeldParams) error {
-	_, err := q.db.ExecContext(ctx, updateIngressNodeHeld, arg.HeldHostnames, arg.ID, arg.EnvID)
-	return err
+// Only an active row: a revoke that committed first leaves the held set it answered with as it is, and the
+// caller learns from the zero rows that it must not send the bundle.
+func (q *Queries) UpdateIngressNodeHeld(ctx context.Context, arg UpdateIngressNodeHeldParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateIngressNodeHeld, arg.HeldHostnames, arg.ID, arg.EnvID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateIngressNodeHello = `-- name: UpdateIngressNodeHello :exec

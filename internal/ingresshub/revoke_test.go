@@ -328,3 +328,36 @@ func TestHeldHostnamesEmptyIsAnEmptyList(t *testing.T) {
 		t.Error("RotateTokenRecommended is false")
 	}
 }
+
+// TestRecordSentRefusesARevokedNode is CR-A-02: once a revoke has committed, a bundle's hostnames are not written
+// to the row and the hub is told not to send it, whether the send would grow the held set or not. The held set
+// the revoke answered with stays the whole truth.
+func TestRecordSentRefusesARevokedNode(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	envID, tok := f.swarmEnv(t, "node-1")
+	a := f.enrolNode(t, envID, tok.Token, "edge-a", "node-1")
+	if err := f.svc.RecordSent(ctx, a.res.NodeID, []string{"a.example"}); err != nil {
+		t.Fatalf("RecordSent while active: %v", err)
+	}
+
+	got, err := f.svc.Revoke(ctx, testAdmin, envID, a.res.NodeID, ingresshub.RevokeOptions{}, "", "")
+	if err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if want := []string{"a.example"}; !slices.Equal(got.HeldHostnames, want) {
+		t.Fatalf("Revoked.HeldHostnames = %v, want %v", got.HeldHostnames, want)
+	}
+
+	// A bundle that would grow the set: the write transaction finds the row revoked.
+	if err := f.svc.RecordSent(ctx, a.res.NodeID, []string{"a.example", "b.example"}); !errors.Is(err, ingresshub.ErrNodeNotActive) {
+		t.Errorf("RecordSent of a new name after the revoke error = %v, want ErrNodeNotActive", err)
+	}
+	// A bundle that adds nothing: refused all the same, so the hub does not send it.
+	if err := f.svc.RecordSent(ctx, a.res.NodeID, []string{"a.example"}); !errors.Is(err, ingresshub.ErrNodeNotActive) {
+		t.Errorf("RecordSent of a held name after the revoke error = %v, want ErrNodeNotActive", err)
+	}
+	if held := f.row(t, a.res.NodeID).HeldHostnames; held != `["a.example"]` {
+		t.Errorf("held_hostnames = %s after the revoke, want the list the revoke answered with", held)
+	}
+}

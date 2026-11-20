@@ -31,6 +31,8 @@ var (
 	ErrNodeNotFound = errors.New("ingresshub: no such ingress node")
 	// ErrAlreadyRevoked means the node was revoked already; nothing changed.
 	ErrAlreadyRevoked = errors.New("ingresshub: the ingress node is already revoked")
+	// ErrNodeNotActive means the node's row is revoked, so it is sent nothing (RecordSent).
+	ErrNodeNotActive = errors.New("ingresshub: the ingress node is not active")
 )
 
 // Kicker closes the live session of a node. The hub implements it; Revoke calls it only once the revoke has

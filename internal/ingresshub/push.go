@@ -6,6 +6,7 @@ package ingresshub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -176,7 +177,10 @@ func (h *Hub) send(ctx context.Context, s *Session, b ingressbundle.Bundle) stri
 	for _, r := range b.Manifest.Routes {
 		names = append(names, r.Hostname)
 	}
-	if err := h.svc.RecordSent(ctx, s.NodeID, names); err != nil {
+	if err := h.svc.RecordSent(ctx, s.NodeID, names); errors.Is(err, ErrNodeNotActive) {
+		// A revoke committed after the check above: as there, nothing is sent and the kick ends the session.
+		return ""
+	} else if err != nil {
 		h.log.Warn("could not record the hostnames of a bundle sent", "node_id", s.NodeID, "environment_id", s.EnvID, "error", err)
 		h.endForError(s)
 		return PushWriteFailed

@@ -81,9 +81,11 @@ WHERE id = ? AND env_id = ? AND status = 'active';
 UPDATE ingress_nodes SET version = ?, schemas = ?, last_seen_at = ?
 WHERE id = ? AND env_id = ?;
 
--- name: UpdateIngressNodeHeld :exec
+-- name: UpdateIngressNodeHeld :execrows
+-- Only an active row: a revoke that committed first leaves the held set it answered with as it is, and the
+-- caller learns from the zero rows that it must not send the bundle.
 UPDATE ingress_nodes SET held_hostnames = ?
-WHERE id = ? AND env_id = ?;
+WHERE id = ? AND env_id = ? AND status = 'active';
 
 -- name: UpdateIngressNodeApplied :exec
 UPDATE ingress_nodes SET applied_bundle_id = ?, applied_at = ?

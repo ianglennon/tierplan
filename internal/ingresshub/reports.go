@@ -49,12 +49,20 @@ func decodeHeld(col string) []string {
 // sent (D-24). The hub calls it before a bundle frame leaves, so a revoke lists every hostname the node could
 // have held, whether or not the frame arrived. The set is sorted, has no duplicates and only grows; the row is
 // written only when the set changes, so a bundle that is sent again costs the single writer nothing.
+//
+// It returns ErrNodeNotActive when the row is revoked, on both paths, and the hub then sends nothing. When the
+// set grows the status is read again, and the row written only while active, inside the write transaction: a
+// revoke and this write share the one writer, so either the revoke commits first and this write changes no row,
+// or this write commits first and the revoke's own read of the row lists the new names (CR-A-02).
 func (s *Service) RecordSent(ctx context.Context, nodeID string, hostnames []string) error {
 	row, err := s.st.RQ.GetIngressNode(ctx, nodeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNodeNotFound
 	} else if err != nil {
 		return fmt.Errorf("load the ingress node: %w", err)
+	}
+	if row.Status != statusActive {
+		return ErrNodeNotActive
 	}
 	if _, grew := mergeHeld(decodeHeld(row.HeldHostnames), hostnames); !grew {
 		return nil
@@ -73,6 +81,9 @@ func (s *Service) RecordSent(ctx context.Context, nodeID string, hostnames []str
 	} else if err != nil {
 		return fmt.Errorf("load the ingress node: %w", err)
 	}
+	if row.Status != statusActive {
+		return ErrNodeNotActive
+	}
 	merged, grew := mergeHeld(decodeHeld(row.HeldHostnames), hostnames)
 	if !grew {
 		return nil
@@ -81,8 +92,13 @@ func (s *Service) RecordSent(ctx context.Context, nodeID string, hostnames []str
 	if err != nil {
 		return fmt.Errorf("encode the held hostnames: %w", err)
 	}
-	if err := q.UpdateIngressNodeHeld(ctx, sqlc.UpdateIngressNodeHeldParams{HeldHostnames: string(enc), ID: nodeID, EnvID: row.EnvID}); err != nil {
+	n, err := q.UpdateIngressNodeHeld(ctx, sqlc.UpdateIngressNodeHeldParams{HeldHostnames: string(enc), ID: nodeID, EnvID: row.EnvID})
+	if err != nil {
 		return fmt.Errorf("record the held hostnames: %w", err)
+	}
+	if n == 0 {
+		// The row read above was active in this transaction, so this is a guard, not an expected path.
+		return ErrNodeNotActive
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
