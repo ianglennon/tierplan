@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -188,5 +189,147 @@ func TestServeNeedsHandlerAndHealth(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close("test done") })
 	if err := conn.Serve(testsupport.Context(t), SessionOptions{}); err == nil {
 		t.Error("Serve with no handler succeeded")
+	}
+}
+
+// fakeTicker is a SessionOptions.Ticker the test fires itself.
+type fakeTicker struct {
+	fire    chan time.Time
+	asked   chan time.Duration
+	stopped chan struct{}
+}
+
+func newFakeTicker() *fakeTicker {
+	return &fakeTicker{fire: make(chan time.Time), asked: make(chan time.Duration, 4), stopped: make(chan struct{}, 4)}
+}
+
+func (f *fakeTicker) Ticker(d time.Duration) (<-chan time.Time, func()) {
+	f.asked <- d
+	return f.fire, func() { f.stopped <- struct{}{} }
+}
+
+// tick makes one health tick happen and returns when the session has taken it.
+func (f *fakeTicker) tick(t *testing.T) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	select {
+	case f.fire <- time.Time{}:
+	case <-ctx.Done():
+		t.Fatal("the session never took the tick")
+	}
+}
+
+// serveAsync runs Serve on its own goroutine and reports its error.
+func serveAsync(ctx context.Context, conn *Conn, o SessionOptions) <-chan error {
+	done := make(chan error, 1)
+	go func() { done <- conn.Serve(ctx, o) }()
+	return done
+}
+
+// serveHealth plays a server that reads n health messages and then closes.
+func serveHealth(n int, out chan<- any) func(ctx context.Context, c *websocket.Conn) {
+	return func(ctx context.Context, c *websocket.Conn) {
+		nodeMessages(ctx, c, n, out)
+		_ = c.Close(websocket.StatusNormalClosure, "done")
+	}
+}
+
+func TestHealthOnWelcomeInterval(t *testing.T) {
+	got := make(chan any, 4)
+	conn := sessionConn(t, testWelcome("i-1"), serveHealth(2, got)) // healthMs 30000
+	f := newFakeTicker()
+	state := struct {
+		ok      bool
+		applied string
+	}{true, "b-1"}
+	done := serveAsync(testsupport.Context(t), conn, SessionOptions{
+		Handle: func(context.Context, []byte, string) (string, string) { return "", "" },
+		Health: func(context.Context) (bool, string) { return state.ok, state.applied },
+		Ticker: f.Ticker,
+	})
+	if d := testsupport.Await(t, "the ticker request", f.asked); d != 30*time.Second {
+		t.Errorf("ticker interval = %v, want the welcome's 30s", d)
+	}
+
+	f.tick(t)
+	first := testsupport.Await(t, "the first health message", got)
+	state.ok, state.applied = false, "b-2" // changed between ticks, read at the next one
+	f.tick(t)
+	second := testsupport.Await(t, "the second health message", got)
+
+	if h, ok := first.(ingresswire.Health); !ok || h.T != ingresswire.TypeHealth || !h.TraefikOK || h.AppliedID != "b-1" {
+		t.Errorf("first = %#v, want health traefikOk true appliedId b-1", first)
+	}
+	if h, ok := second.(ingresswire.Health); !ok || h.TraefikOK || h.AppliedID != "b-2" {
+		t.Errorf("second = %#v, want health traefikOk false appliedId b-2", second)
+	}
+	if err := testsupport.Await(t, "Serve to return", done); !errors.As(err, new(*ClosedError)) {
+		t.Errorf("Serve error = %v, want a *ClosedError", err)
+	}
+}
+
+func TestHealthDefaultInterval(t *testing.T) {
+	w := testWelcome("i-1")
+	w.HealthMs = 0
+	conn := sessionConn(t, w, serveHealth(0, make(chan any, 1)))
+	f := newFakeTicker()
+	_ = conn.Serve(testsupport.Context(t), SessionOptions{
+		Handle: func(context.Context, []byte, string) (string, string) { return "", "" },
+		Health: noHealth,
+		Ticker: f.Ticker,
+	})
+	if d := testsupport.Await(t, "the ticker request", f.asked); d != ingresswire.HealthInterval {
+		t.Errorf("ticker interval = %v, want ingresswire.HealthInterval %v", d, ingresswire.HealthInterval)
+	}
+}
+
+func TestCloseClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session func(ctx context.Context, c *websocket.Conn)
+		status  int
+		reason  string // empty: the error must not be a *ClosedError
+	}{
+		{"revoked", func(_ context.Context, c *websocket.Conn) {
+			_ = c.Close(websocket.StatusPolicyViolation, ingresswire.CloseRevoked)
+		}, int(websocket.StatusPolicyViolation), ingresswire.CloseRevoked},
+		{"replaced", func(_ context.Context, c *websocket.Conn) {
+			_ = c.Close(websocket.StatusPolicyViolation, ingresswire.CloseReplaced)
+		}, int(websocket.StatusPolicyViolation), ingresswire.CloseReplaced},
+		{"dropped connection", func(_ context.Context, c *websocket.Conn) { _ = c.CloseNow() }, 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := sessionConn(t, testWelcome("i-1"), tc.session)
+			err := conn.Serve(testsupport.Context(t), SessionOptions{
+				Handle: func(context.Context, []byte, string) (string, string) { return "", "" },
+				Health: noHealth,
+			})
+			var ce *ClosedError
+			switch {
+			case tc.reason == "" && errors.As(err, &ce):
+				t.Errorf("Serve error = %v, want a network error that is not a *ClosedError", err)
+			case tc.reason == "" && err == nil:
+				t.Error("Serve returned no error for a dropped connection")
+			case tc.reason != "" && !errors.As(err, &ce):
+				t.Errorf("Serve error = %v, want a *ClosedError", err)
+			case tc.reason != "" && (ce.Reason != tc.reason || ce.Status != tc.status):
+				t.Errorf("ClosedError = %+v, want status %d and reason %q", *ce, tc.status, tc.reason)
+			}
+		})
+	}
+}
+
+func TestTickerStopped(t *testing.T) {
+	conn := sessionConn(t, testWelcome("i-1"), serveHealth(0, make(chan any, 1)))
+	f := newFakeTicker()
+	_ = conn.Serve(testsupport.Context(t), SessionOptions{
+		Handle: func(context.Context, []byte, string) (string, string) { return "", "" },
+		Health: noHealth,
+		Ticker: f.Ticker,
+	})
+	select {
+	case <-f.stopped:
+	default:
+		t.Error("the ticker's stop function was not called by the time Serve returned")
 	}
 }
