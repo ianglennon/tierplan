@@ -17,6 +17,10 @@ before:
   hooks:
     # The SPA is embedded in the binary, so it is built first.
     - make web
+    # The web interface's SPDX SBOM (D-25), checked against pnpm licenses here, so
+    # the release workflow runs the D-27 completeness check too. The archives and
+    # the server image carry it.
+    - make web-sbom
 
 builds:
   - id: tierplan
@@ -61,17 +65,31 @@ archives:
     files:
       - LICENSE
       - README*
+      # Merged into the archive's SBOM by syft's SBOM cataloger (scripts/sbom-archive.sh).
+      - src: build/sbom/tierplan-web.spdx.json
+        dst: sbom/web.spdx.json
 
 checksum:
   name_template: checksums.txt
 
-# SPDX SBOMs of the archives, made by syft (installed by the release workflow).
-# The container image carries its own SPDX attestation from buildx (dockers_v2 sbom).
+# SPDX SBOMs of the archives. scripts/sbom-archive.sh runs syft (installed and
+# pinned by the release workflow) with the SBOM cataloger, so the web interface's
+# npm packages from sbom/web.spdx.json are merged in, and then gates the merged
+# document on its npm count (D-27). goreleaser runs this step before it signs or
+# publishes anything, so a failing gate stops the release. The cmd runs with dist/
+# as its working directory and is not templated, hence the relative path. The
+# default SYFT_FILE_METADATA_CATALOGER_ENABLED=true is added by goreleaser only
+# when the cmd is syft itself, so it is set here to keep the file entries.
+# The container images carry their own SPDX attestation from buildx (dockers_v2
+# sbom): the server image's holds the web SBOM too (it is copied in, and BuildKit's
+# scanner merges it); the agent image has no web interface, so its SBOM is Go only (D-26).
 sboms:
   - id: archives
     artifacts: archive
-    cmd: syft
-    args: ["$artifact", "--output", "spdx-json=$document"]
+    cmd: ../scripts/sbom-archive.sh
+    args: ["$artifact", "$document"]
+    env:
+      - SYFT_FILE_METADATA_CATALOGER_ENABLED=true
     documents: ["${artifact}.spdx.json"]
 
 # The multi-arch image. goreleaser lays the binaries out as
@@ -90,6 +108,9 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    # The web SBOM is copied into the image by the Dockerfile (D-25, D-40).
+    extra_files:
+      - build/sbom/tierplan-web.spdx.json
     labels:
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
