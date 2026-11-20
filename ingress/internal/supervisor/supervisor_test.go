@@ -161,14 +161,44 @@ func frameFor(t *testing.T, instance string, b ingressbundle.Bundle) []byte {
 
 // events is an ordered record of what the supervisor did.
 type events struct {
-	mu  sync.Mutex
-	log []string
+	mu      sync.Mutex
+	log     []string
+	waiters map[string]chan struct{}
 }
 
 func (e *events) add(kind string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.log = append(e.log, kind)
+	e.notify(kind)
+}
+
+// notify closes the channel a waiter for kind holds. The caller holds e.mu.
+func (e *events) notify(kind string) {
+	if ch, ok := e.waiters[kind]; ok {
+		close(ch)
+		delete(e.waiters, kind)
+	}
+}
+
+// wait blocks until kind has been recorded. It waits on a channel the recorder closes, not on the clock.
+func (e *events) wait(t *testing.T, kind string) {
+	t.Helper()
+	e.mu.Lock()
+	if slices.Contains(e.log, kind) {
+		e.mu.Unlock()
+		return
+	}
+	if e.waiters == nil {
+		e.waiters = map[string]chan struct{}{}
+	}
+	ch, ok := e.waiters[kind]
+	if !ok {
+		ch = make(chan struct{})
+		e.waiters[kind] = ch
+	}
+	e.mu.Unlock()
+	<-ch
 }
 
 // once records kind the first time only.
@@ -177,6 +207,7 @@ func (e *events) once(kind string) {
 	defer e.mu.Unlock()
 	if !slices.Contains(e.log, kind) {
 		e.log = append(e.log, kind)
+		e.notify(kind)
 	}
 }
 
@@ -423,4 +454,432 @@ func TestStartNoCacheThenFirstBundle(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+}
+
+// --- cache-first start, rejections, the token, shutdown ----------------------------------------------------
+
+// cachedVolume makes a volume that already serves b, as an earlier run of the node would have left it.
+func cachedVolume(t *testing.T, b ingressbundle.Bundle) string {
+	t.Helper()
+	root := t.TempDir()
+	s := cache.NewStore(fsx.OS(), root)
+	if err := s.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if id, reason := s.Accept(frameFor(t, testInstance, b), testInstance); id != b.ID || reason != "" {
+		t.Fatalf("Accept = (%q, %q), want (%q, \"\")", id, reason, b.ID)
+	}
+	return root
+}
+
+// snapshot reads every file under the given subdirectories of root, keyed by its path relative to root.
+func snapshot(t *testing.T, root string, dirs ...string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, d := range dirs {
+		err := filepath.WalkDir(filepath.Join(root, d), func(p string, e fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if e.IsDir() {
+				return nil
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(root, p)
+			out[rel] = string(data)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("snapshot %s: %v", d, err)
+		}
+	}
+	return out
+}
+
+// errNoDial is what a fake Dial returns: the supervisor treats it as an attempt that failed.
+var errNoDial = fmt.Errorf("no TierPlan in this test")
+
+// dialRecord is what one call of the fake Dial saw.
+type dialRecord struct {
+	appliedID string
+	creds     channel.Credentials
+}
+
+func TestStartGoodCache(t *testing.T) {
+	b := validBundle(t, 1, "app.example.test")
+	h := newHarness(t, cachedVolume(t, b))
+	h.ping.Store(true)
+
+	type seen struct {
+		startsAtEntry int32
+		status        int
+		dial          dialRecord
+	}
+	got := make(chan seen, 1)
+	h.deps.Dial = func(_ context.Context, o channel.Options, cr channel.Credentials) (*channel.Conn, error) {
+		got <- seen{dial: dialRecord{appliedID: o.AppliedID(), creds: cr}}
+		return nil, errNoDial
+	}
+	var entry seen
+	h.deps.RunChannel = func(ctx context.Context, lo channel.LoopOptions) error {
+		h.events.add("channel")
+		entry.startsAtEntry = h.traefik.starts.Load()
+		entry.status, _ = h.status()
+		if _, err := lo.Dial(ctx); err != errNoDial {
+			return fmt.Errorf("the dial closure returned %v, want the fake's error", err)
+		}
+		entry.dial = (<-got).dial
+		<-ctx.Done()
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := h.run(ctx)
+	waitUntil(t, h.events, "channel")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if entry.startsAtEntry != 1 {
+		t.Fatalf("Traefik had been started %d times when the channel loop was entered, want 1 (cache first)", entry.startsAtEntry)
+	}
+	if entry.status != http.StatusOK {
+		t.Fatalf("readiness before any dial = %d, want 200", entry.status)
+	}
+	if entry.dial.appliedID != b.ID {
+		t.Fatalf("hello's applied ID = %q, want the cached bundle's %q", entry.dial.appliedID, b.ID)
+	}
+	if want := []string{"traefik-start", "channel"}; !slices.Equal(tail(h.events.snapshot(), 2, "traefik-start"), want) {
+		t.Fatalf("Traefik did not start before the channel: %v", h.events.snapshot())
+	}
+}
+
+func TestStartCorruptCache(t *testing.T) {
+	b := validBundle(t, 1, "app.example.test")
+	root := cachedVolume(t, b)
+
+	// One byte of the certificate on the volume changes: the record no longer verifies.
+	var crt string
+	for p := range snapshot(t, root, "certs") {
+		if strings.HasSuffix(p, ".crt") {
+			crt = filepath.Join(root, p)
+		}
+	}
+	data, err := os.ReadFile(crt)
+	if err != nil {
+		t.Fatalf("read the cached certificate: %v", err)
+	}
+	data[len(data)/2] ^= 0x01
+	if err := os.WriteFile(crt, data, 0o600); err != nil {
+		t.Fatalf("damage the cached certificate: %v", err)
+	}
+	before := snapshot(t, root, "certs", "dynamic", "state", "tmp")
+	delete(before, filepath.Join("state", "node.key"))
+
+	h := newHarness(t, root)
+	h.ping.Store(true)
+	dialled := make(chan struct{}, 1)
+	h.deps.Dial = func(context.Context, channel.Options, channel.Credentials) (*channel.Conn, error) {
+		dialled <- struct{}{}
+		return nil, errNoDial
+	}
+	var status int
+	h.deps.RunChannel = func(ctx context.Context, lo channel.LoopOptions) error {
+		h.events.add("channel")
+		status, _ = h.status()
+		_, _ = lo.Dial(ctx)
+		<-ctx.Done()
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := h.run(ctx)
+	waitUntil(t, h.events, "channel")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := h.traefik.starts.Load(); got != 0 {
+		t.Fatalf("Traefik started %d times from a cache that does not verify", got)
+	}
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("readiness with a corrupt cache = %d, want 503", status)
+	}
+	select {
+	case <-dialled:
+	default:
+		t.Fatalf("the supervisor did not dial TierPlan with a corrupt cache")
+	}
+	after := snapshot(t, root, "certs", "dynamic", "state", "tmp")
+	delete(after, filepath.Join("state", "node.key"))
+	if len(before) != len(after) {
+		t.Fatalf("files under the root: %d before, %d after", len(before), len(after))
+	}
+	for p, was := range before {
+		if now, ok := after[p]; !ok || now != was {
+			t.Fatalf("%s changed (present after: %t); a cache that fails verification is left byte-identical", p, ok)
+		}
+	}
+}
+
+func TestRejectedBundleKeepsServing(t *testing.T) {
+	good := validBundle(t, 1, "app.example.test")
+	root := cachedVolume(t, good)
+	h := newHarness(t, root)
+	h.ping.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lo, done := h.runUntilChannel(ctx)
+
+	before := snapshot(t, root, "certs", "dynamic")
+	bad := refusedBundle(t, 2, "other.example.test")
+	id, reason := lo.Session.Handle(ctx, frameFor(t, testInstance, bad), testInstance)
+	if id != bad.ID || reason != ingressbundle.ReasonTLSOptions {
+		t.Fatalf("Handle = (%q, %q), want (%q, %q)", id, reason, bad.ID, ingressbundle.ReasonTLSOptions)
+	}
+
+	if starts, stops := h.traefik.starts.Load(), h.traefik.stops.Load(); starts != 1 || stops != 0 {
+		t.Fatalf("Traefik starts=%d stops=%d after a rejected bundle, want 1 and 0 (neither touched)", starts, stops)
+	}
+	if got := h.deps.Store.AppliedID(); got != good.ID {
+		t.Fatalf("applied ID = %q after a rejection, want the unchanged %q", got, good.ID)
+	}
+	h.mustStatus(http.StatusOK)
+	after := snapshot(t, root, "certs", "dynamic")
+	if len(before) != len(after) {
+		t.Fatalf("certs/ and dynamic/ hold %d files before, %d after a rejection", len(before), len(after))
+	}
+	for p, was := range before {
+		if after[p] != was {
+			t.Fatalf("%s changed on a rejected bundle", p)
+		}
+	}
+	logged := h.logs.String()
+	if !strings.Contains(logged, `"msg":"bundle rejected"`) || !strings.Contains(logged, `"level":"WARN"`) ||
+		!strings.Contains(logged, `"reason":"`+ingressbundle.ReasonTLSOptions+`"`) {
+		t.Fatalf("no warn line `bundle rejected` with the reason in the log:\n%s", logged)
+	}
+	if strings.Contains(logged, `"msg":"bundle applied"`) {
+		t.Fatalf("a rejected bundle was logged as applied")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestAppliedBundleIsLoggedWithItsIDOnly(t *testing.T) {
+	h := newHarness(t, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lo, done := h.runUntilChannel(ctx)
+	b := validBundle(t, 1, "app.example.test")
+	if _, reason := lo.Session.Handle(ctx, frameFor(t, testInstance, b), testInstance); reason != "" {
+		t.Fatalf("Handle: %q", reason)
+	}
+	logged := h.logs.String()
+	if !strings.Contains(logged, `"msg":"bundle applied"`) || !strings.Contains(logged, `"id":"`+b.ID+`"`) {
+		t.Fatalf("no `bundle applied` line with the ID in the log:\n%s", logged)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestTokenReadOnlyWhenNotEnrolled(t *testing.T) {
+	const tokenPath = "/run/secrets/ingress-join-token"
+	const token = "tpit_e-1_notarealtoken"
+
+	setup := func(t *testing.T, root string) (h *harness, reads *[]string, tokenCalls *int, creds *[]channel.Credentials) {
+		h = newHarness(t, root)
+		cfg, err := config.Load(func(k string) string {
+			switch k {
+			case config.EnvURL:
+				return "wss://tierplan.example.test/api/ingress"
+			case config.EnvJoinTokenFile:
+				return tokenPath
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatalf("config.Load: %v", err)
+		}
+		h.deps.Config = cfg
+		reads, tokenCalls, creds = new([]string), new(int), new([]channel.Credentials)
+		h.deps.ReadFile = func(name string) ([]byte, error) {
+			*reads = append(*reads, name)
+			return []byte(token + "\n"), nil
+		}
+		// The fake does what the real Dial does: it asks for the token in enrol mode only, and reports the
+		// welcome to OnEnrolled before it fails.
+		h.deps.Dial = func(_ context.Context, o channel.Options, cr channel.Credentials) (*channel.Conn, error) {
+			*creds = append(*creds, cr)
+			if cr.NodeID == "" {
+				*tokenCalls++
+				if got, err := cr.Token(); err != nil || got != token {
+					t.Errorf("Token = (%q, %v), want the token from the file", got, err)
+				}
+				w := ingresswire.Welcome{NodeID: "n-1", EnvID: "e-1", InstanceID: testInstance}
+				if err := o.OnEnrolled(w); err != nil {
+					t.Errorf("OnEnrolled: %v", err)
+				}
+			}
+			return nil, errNoDial
+		}
+		return h, reads, tokenCalls, creds
+	}
+	dialTwice := func(h *harness) {
+		h.deps.RunChannel = func(ctx context.Context, lo channel.LoopOptions) error {
+			h.events.add("channel")
+			_, _ = lo.Dial(ctx)
+			_, _ = lo.Dial(ctx)
+			<-ctx.Done()
+			return nil
+		}
+	}
+	runIt := func(t *testing.T, h *harness) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := h.run(ctx)
+		waitUntil(t, h.events, "channel")
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	}
+
+	t.Run("enrolled", func(t *testing.T) {
+		root := t.TempDir()
+		if err := cache.NewStore(fsx.OS(), root).Prepare(); err != nil {
+			t.Fatalf("Prepare: %v", err)
+		}
+		rec := identity.Record{NodeID: "n-1", EnvID: "e-1", InstanceID: testInstance}
+		if err := identity.New(fsx.OS(), root).Save(rec); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		h, reads, tokenCalls, creds := setup(t, root)
+		dialTwice(h)
+		runIt(t, h)
+		if *tokenCalls != 0 || len(*reads) != 0 {
+			t.Fatalf("an enrolled node asked for the token %d times and read %v", *tokenCalls, *reads)
+		}
+		if len(*creds) != 2 {
+			t.Fatalf("dials = %d, want 2", len(*creds))
+		}
+		for _, cr := range *creds {
+			if cr.NodeID != rec.NodeID || cr.InstanceID != rec.InstanceID {
+				t.Fatalf("an enrolled node dialled as (%q, %q), want its saved (%q, %q)", cr.NodeID, cr.InstanceID, rec.NodeID, rec.InstanceID)
+			}
+			if len(cr.Key) == 0 {
+				t.Fatalf("an enrolled node dialled without its key")
+			}
+		}
+	})
+
+	t.Run("not enrolled", func(t *testing.T) {
+		h, reads, tokenCalls, creds := setup(t, "")
+		dialTwice(h)
+		runIt(t, h)
+		if *tokenCalls != 1 || len(*reads) != 1 || (*reads)[0] != tokenPath {
+			t.Fatalf("token asked for %d times, files read %v; want once, from %s", *tokenCalls, *reads, tokenPath)
+		}
+		rec, ok, err := h.deps.Identity.Load()
+		if err != nil || !ok || rec != (identity.Record{NodeID: "n-1", EnvID: "e-1", InstanceID: testInstance}) {
+			t.Fatalf("saved identity = (%+v, %t, %v), want the welcome's record", rec, ok, err)
+		}
+		if len(*creds) != 2 {
+			t.Fatalf("dials = %d, want 2", len(*creds))
+		}
+		if first := (*creds)[0]; first.NodeID != "" || first.Name != "node-a" {
+			t.Fatalf("the first dial was (node %q, name %q), want an enrolment named node-a", first.NodeID, first.Name)
+		}
+		if second := (*creds)[1]; second.NodeID != "n-1" || second.InstanceID != testInstance {
+			t.Fatalf("the dial after enrolment was (%q, %q), want connect mode with the saved identity", second.NodeID, second.InstanceID)
+		}
+	})
+}
+
+func TestShutdownOrder(t *testing.T) {
+	good := validBundle(t, 1, "app.example.test")
+	h := newHarness(t, cachedVolume(t, good))
+	h.ping.Store(true)
+	var listenerOpenAtStop atomic.Bool
+	h.traefik.onStop = func() {
+		// The channel has ended and Traefik is stopping; the readiness listener must still answer.
+		if code, err := h.status(); err == nil && code == http.StatusOK {
+			listenerOpenAtStop.Store(true)
+		}
+	}
+	h.deps.RunChannel = func(ctx context.Context, _ channel.LoopOptions) error {
+		h.events.add("channel")
+		<-ctx.Done()
+		h.events.add("channel-returned")
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := h.run(ctx)
+	waitUntil(t, h.events, "channel")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned %v, want nil after an orderly stop", err)
+	}
+
+	ev := h.events.snapshot()
+	if want := []string{"channel", "channel-returned", "traefik-stop"}; !slices.Equal(tail(ev, 3, "channel"), want) {
+		t.Fatalf("shutdown order = %v, want %v", ev, want)
+	}
+	if !listenerOpenAtStop.Load() {
+		t.Fatalf("the readiness listener was already closed when Traefik was stopped")
+	}
+	if _, err := h.status(); err == nil {
+		t.Fatalf("the readiness listener still answers after Run returned")
+	}
+}
+
+func TestHealthReportsPingAndAppliedID(t *testing.T) {
+	good := validBundle(t, 1, "app.example.test")
+	h := newHarness(t, cachedVolume(t, good))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	lo, done := h.runUntilChannel(ctx)
+
+	for _, ping := range []bool{false, true} {
+		h.ping.Store(ping)
+		ok, id := lo.Session.Health(ctx)
+		if ok != ping || id != good.ID {
+			t.Fatalf("Health with ping=%t = (%t, %q), want (%t, %q)", ping, ok, id, ping, good.ID)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+// tail returns the last n events from the first occurrence of from on, so a test can look at the part of the
+// log it is about without the listen, prepare, static, key and load entries before it.
+func tail(ev []string, n int, from string) []string {
+	i := slices.Index(ev, from)
+	if i < 0 {
+		return nil
+	}
+	ev = ev[i:]
+	if len(ev) > n {
+		ev = ev[:n]
+	}
+	return ev
+}
+
+// waitUntil blocks until the supervisor has recorded kind (a signal, never the clock).
+func waitUntil(t *testing.T, ev *events, kind string) {
+	t.Helper()
+	ev.wait(t, kind)
 }
