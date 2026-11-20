@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"slices"
 	"strings"
@@ -107,8 +108,15 @@ func TestDeliveryOnChange(t *testing.T) {
 	if !strings.Contains(out, "bundle sent to an ingress node") {
 		t.Fatalf("the hub logged no send:\n%s", out)
 	}
+	// The log is JSON, so a file leaked as a string field would have its newlines escaped, and one leaked as
+	// a []byte field would be base64: both forms are looked for (IN-C-1).
 	for _, f := range y.Files {
-		if strings.Contains(out, string(f.Data)) || strings.Contains(out, base64.StdEncoding.EncodeToString(f.Data)) {
+		escaped, err := json.Marshal(string(f.Data))
+		if err != nil {
+			t.Fatalf("encode the data of %s: %v", f.Path, err)
+		}
+		asString := string(escaped[1 : len(escaped)-1])
+		if strings.Contains(out, asString) || strings.Contains(out, base64.StdEncoding.EncodeToString(f.Data)) {
 			t.Errorf("the hub's log holds the data of %s", f.Path)
 		}
 	}
