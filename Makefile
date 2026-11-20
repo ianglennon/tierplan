@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -148,14 +148,15 @@ test-summary:
 # run starts docker:<N>-dind (N is TIERPLAN_TEST_ENGINE, default 29) with testcontainers, so the
 # machine needs a Docker it can reach. The agent tests always start their own
 # dind (they need a network the in-process TierPlan is reachable on) and load the
-# agent image into it, so the image is built first.
+# agent image into it, so the image is built first. The ingress node tests run the
+# real tierplan-ingress image the same way (23-16), so that is built first too.
 #
 # Only the packages whose tests change under the tag run (D-05 shuffles them):
 # scripts/tagged-packages.sh derives the list, so a newly tagged package is never
 # missed, and an empty list fails the target. Every other internal package is the
 # unit suite, which `make test` already ran. $(shell) expands inside the recipe
 # only, so no other target pays for `go list`.
-test-int: agent-image
+test-int: agent-image ingress-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
 	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
 	echo "test-int: $$pkgs"; \
@@ -379,6 +380,27 @@ agent-image:
 # Docker, python3 and tar.
 agent-image-smoke:
 	scripts/agent-image-smoke.sh
+
+# The ingress image for this machine's architecture, tagged INGRESS_TAG (default
+# tierplan-ingress:dev) and loaded into the local engine. The context is laid out as
+# goreleaser lays it out: $TARGETPLATFORM/tierplan-ingress plus ingress/image/state/
+# and ingress/image/doc/. Traefik comes from the digest-pinned official image inside
+# the Dockerfile, so building needs the network. The supervisor is a plain build
+# (version "dev"); set INGRESS_VERSION=v0.1.0 to stamp one. INGRESS_CTX is overridable
+# so two builds on one runner can use separate contexts. Needs Docker with buildx.
+INGRESS_ARCH ?= $(shell go env GOARCH)
+INGRESS_CTX ?= .devdata/ingress-image
+INGRESS_VERSION_PKG := github.com/ianglennon/tierplan/ingress/internal/version
+INGRESS_TAG ?= tierplan-ingress:dev
+ingress-image:
+	rm -rf $(INGRESS_CTX)
+	mkdir -p $(INGRESS_CTX)/linux/$(INGRESS_ARCH) $(INGRESS_CTX)/ingress/image
+	cp -R ingress/image/state $(INGRESS_CTX)/ingress/image/state
+	cp -R ingress/image/doc $(INGRESS_CTX)/ingress/image/doc
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(INGRESS_ARCH) go -C ingress build -trimpath \
+		-ldflags "-s -w $(if $(INGRESS_VERSION),-X $(INGRESS_VERSION_PKG).Version=$(INGRESS_VERSION))" \
+		-o $(CURDIR)/$(INGRESS_CTX)/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
+	docker buildx build --platform linux/$(INGRESS_ARCH) -f ingress/Dockerfile -t $(INGRESS_TAG) --load $(INGRESS_CTX)
 
 # The build contexts for the :edge images: the binaries laid out as
 # $TARGETPLATFORM/tierplan (server) and $TARGETPLATFORM/tierplan-agent (agent)
