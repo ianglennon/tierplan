@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Release pipeline (D-75). A pushed v* tag builds the binaries, the multi-arch
-# images and the SBOMs with goreleaser, publishes ghcr.io/ianglennon/tierplan and
-# ghcr.io/ianglennon/tierplan-agent (D-16) as X.Y.Z and X.Y (never a floating
-# catch-all tag) and signs the checksums and both image digests with keyless
-# cosign (docker_signs in .goreleaser.yaml covers every image). No release is cut in Phase 1: nothing tags v0.1.0 until
-# the user decides to.
+# images and the SBOMs with goreleaser, publishes three images, ghcr.io/ianglennon/tierplan,
+# ghcr.io/ianglennon/tierplan-agent (D-16) and ghcr.io/ianglennon/tierplan-ingress (D-09),
+# as X.Y.Z and X.Y (never a floating catch-all tag) and signs the checksums and every
+# image digest with keyless cosign (docker_signs in .goreleaser.yaml covers every
+# image). No release is cut in Phase 1: nothing tags v0.1.0 until the user decides to.
 #
 # Supply chain (T-01-111): every action is pinned to a full commit SHA with the
 # release tag in a trailing comment. The token can write releases and packages,

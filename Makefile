@@ -418,14 +418,16 @@ ingress-image:
 ingress-image-smoke:
 	scripts/ingress-image-smoke.sh
 
-# The build contexts for the :edge images: the binaries laid out as
-# $TARGETPLATFORM/tierplan (server) and $TARGETPLATFORM/tierplan-agent (agent)
-# next to their Dockerfiles, as goreleaser does it, plus the web SBOM the server
-# Dockerfile copies (build/sbom/, which goreleaser's before hook has just written).
-# CI pushes them with buildx from the main branch.
+# The three build contexts for the :edge images: the binaries laid out as
+# $TARGETPLATFORM/tierplan (server), $TARGETPLATFORM/tierplan-agent (agent) and
+# $TARGETPLATFORM/tierplan-ingress (ingress) next to their Dockerfiles, as goreleaser
+# does it, plus the web SBOM the server Dockerfile copies (build/sbom/, which
+# goreleaser's before hook has just written) and the ingress image's state and doc
+# directories. The ingress image gets no SBOM file (D-26). CI pushes them with buildx
+# from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
-	rm -rf dist/edge dist/edge-agent
+	rm -rf dist/edge dist/edge-agent dist/edge-ingress
 	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/tierplan
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/tierplan
@@ -437,6 +439,12 @@ edge-context:
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_arm64*' -print | head -n 1)" dist/edge-agent/linux/arm64/tierplan-agent
 	cp -R agent/image/state dist/edge-agent/agent/image/state
 	cp agent/Dockerfile dist/edge-agent/Dockerfile
+	mkdir -p dist/edge-ingress/linux/amd64 dist/edge-ingress/linux/arm64 dist/edge-ingress/ingress/image
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-ingress -path '*linux_amd64*' -print | head -n 1)" dist/edge-ingress/linux/amd64/tierplan-ingress
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-ingress -path '*linux_arm64*' -print | head -n 1)" dist/edge-ingress/linux/arm64/tierplan-ingress
+	cp -R ingress/image/state dist/edge-ingress/ingress/image/state
+	cp -R ingress/image/doc dist/edge-ingress/ingress/image/doc
+	cp ingress/Dockerfile dist/edge-ingress/Dockerfile
 
 # --- End-to-end (D-80, D-59, RESEARCH Pattern 11) ---
 # The built image behind Caddy at https://127.0.0.1:8443/tierplan with a generated
