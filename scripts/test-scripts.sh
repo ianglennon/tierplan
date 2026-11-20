@@ -296,6 +296,62 @@ printf 'o = { secure: fal''se }\n' >"${nofix}/web/node_modules/p/vite.config.ts"
 expect pass "tls-gate-nongo-skips-dependencies" scripts/insecure-tls-check.sh "${nofix}"
 expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 
+# --- Ingress pins (D-08, Pitfall 9): one Traefik reference and one distroless digest ---
+pinfix="${scratch}/pin-fixture"
+pin_ref="traefik:v9.9.9@sha256:$(printf 'a%.0s' $(seq 1 64))"
+pin_ref_other_digest="traefik:v9.9.9@sha256:$(printf 'b%.0s' $(seq 1 64))"
+pin_base="gcr.io/distroless/static-debian13@sha256:$(printf 'c%.0s' $(seq 1 64))"
+pin_base_other="gcr.io/distroless/static-debian13@sha256:$(printf 'd%.0s' $(seq 1 64))"
+# pin_fixture <traefik ref in the harness> <distroless in agent/Dockerfile>: rewrites the four files.
+pin_fixture() {
+  rm -rf "${pinfix}"
+  mkdir -p "${pinfix}/agent" "${pinfix}/ingress" "${pinfix}/internal/ingressrender/traefiktest"
+  printf 'FROM %s\nCOPY a /a\n' "${pin_base}" >"${pinfix}/Dockerfile"
+  printf 'FROM %s\nCOPY a /a\n' "$2" >"${pinfix}/agent/Dockerfile"
+  printf 'FROM %s AS traefik\n\nFROM %s\nCOPY a /a\n' "${pin_ref}" "${pin_base}" >"${pinfix}/ingress/Dockerfile"
+  printf 'package traefiktest\n\nconst (\n\tTraefikImage = "%s"\n)\n' "$1" >"${pinfix}/internal/ingressrender/traefiktest/traefiktest.go"
+}
+pin_fixture "${pin_ref}" "${pin_base}"
+expect pass "pin-check-match" scripts/ingress-pin-check.sh "${pinfix}"
+expect pass "pin-check-print-tag" scripts/ingress-pin-check.sh --print-tag "${pinfix}"
+expect_out "pin-check-print-tag prints the tag" "v9.9.9"
+pin_fixture "traefik:v9.9.8@sha256:$(printf 'a%.0s' $(seq 1 64))" "${pin_base}"
+expect fail "pin-check-tag-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-tag-differs names the Dockerfile" "ingress/Dockerfile pins ${pin_ref}"
+expect_out "pin-check-tag-differs names the harness" "internal/ingressrender/traefiktest/traefiktest.go pins traefik:v9.9.8@sha256:"
+pin_fixture "${pin_ref_other_digest}" "${pin_base}"
+expect fail "pin-check-digest-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-digest-differs names the harness" "internal/ingressrender/traefiktest/traefiktest.go pins ${pin_ref_other_digest}"
+pin_fixture "${pin_ref}" "${pin_base_other}"
+expect fail "pin-check-distroless-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-distroless-differs names agent/Dockerfile" "agent/Dockerfile uses ${pin_base_other}"
+# --print-tag prints nothing when a check failed.
+expect fail "pin-check-print-tag-after-failure" scripts/ingress-pin-check.sh --print-tag "${pinfix}"
+if grep -q '^v9\.9\.9$' <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: pin-check-print-tag-after-failure (a tag was printed after a failed check)"
+  failures=$((failures + 1))
+fi
+pin_fixture "no reference here" "${pin_base}"
+expect fail "pin-check-no-reference" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-no-reference says so" "PIN CHECK: internal/ingressrender/traefiktest/traefiktest.go holds no Traefik reference"
+expect pass "pin-check-repository" scripts/ingress-pin-check.sh
+
+# --- Ingress dependency gate (D-42): the module imports a short list only ---
+ingress_deps() { printf '%s\n' "$@" | scripts/ingress-deps-check.sh --stdin; }
+expect pass "ingress-deps-allowed" ingress_deps \
+  github.com/ianglennon/tierplan/ingress/internal/cache \
+  github.com/ianglennon/tierplan/proto/ingressbundle \
+  github.com/coder/websocket \
+  github.com/coder/websocket/internal/util \
+  go.yaml.in/yaml/v3
+expect fail "ingress-deps-moby" ingress_deps \
+  github.com/ianglennon/tierplan/proto/ingressbundle \
+  github.com/moby/moby/client
+expect_out "ingress-deps-moby names the import" "INGRESS DEPS: github.com/moby/moby/client"
+expect fail "ingress-deps-lookalike" ingress_deps github.com/coder/websocketx
+expect fail "ingress-deps-yamux" ingress_deps github.com/hashicorp/yamux
+expect pass "ingress-deps-repository" scripts/ingress-deps-check.sh
+
 # --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
 # MAKEFLAGS and MAKELEVEL are removed so an outer `make test-scripts` cannot leak
 # variables or the -n flag state into the make under test.

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
-# Licence gate (D-70). Checks the Go dependencies of the server binary on both
-# release architectures, then the production pnpm dependencies of the SPA, against
-# the allowlist in scripts/licence-check.mjs and the reviewed exceptions in
-# licence-exceptions.txt.
+# Licence gate (D-70). Checks the Go dependencies of the server binary, the agent
+# and the ingress supervisor on both release architectures (the three images), the
+# Traefik binary the ingress image ships (D-01), then the production pnpm
+# dependencies of the SPA, against the allowlist in scripts/licence-check.mjs and
+# the reviewed exceptions in licence-exceptions.txt.
 #
 # The web SBOM is generated and compared with pnpm's licence list as an exact
 # name@version set (D-27, scripts/web-sbom.sh). The licences job runs on every pull
@@ -47,12 +48,23 @@ for arch in amd64 arm64; do
     | node ../scripts/licence-check.mjs --format go-csv)
 done
 
+# The ingress supervisor is a third module and the third image. Its dependency
+# graph is the standard library, coder/websocket and go.yaml.in/yaml/v3
+# (scripts/ingress-deps-check.sh keeps it that way); the shared proto module is
+# covered here too. The Traefik binary it ships is scanned next.
+for arch in amd64 arm64; do
+  echo "licences: ingress go linux/${arch}"
+  (cd ingress && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+    "${TOOLS}/go-licenses" report ./cmd/tierplan-ingress --ignore github.com/ianglennon/tierplan \
+    | node ../scripts/licence-check.mjs --format go-csv)
+done
+
 # Traefik, from the tag held by the pinned image reference. The pin is read, never
-# copied here, so the gate scans what the test harness and the image use.
-tag="$(sed -nE 's/^[[:space:]]*TraefikImage[[:space:]]*=[[:space:]]*"traefik:(v[0-9]+\.[0-9]+\.[0-9]+)@sha256:[0-9a-f]{64}".*$/\1/p' \
-  internal/ingressrender/traefiktest/traefiktest.go | head -n 1)"
+# copied here, from the Dockerfile that ships it; scripts/ingress-pin-check.sh
+# has first checked that the test harness pins the same reference (D-08).
+tag="$(scripts/ingress-pin-check.sh --print-tag)"
 if [ -z "${tag}" ]; then
-  echo "licences: cannot read the Traefik tag from internal/ingressrender/traefiktest/traefiktest.go" >&2
+  echo "licences: cannot read the Traefik tag from scripts/ingress-pin-check.sh" >&2
   exit 1
 fi
 git clone -q --depth 1 --branch "${tag}" https://github.com/traefik/traefik "${TOOLS}/traefik"

@@ -309,6 +309,7 @@ lint:
 	fi
 	scripts/ingress-deps-check.sh
 	scripts/insecure-tls-check.sh
+	scripts/ingress-pin-check.sh
 	scripts/timeouts-check.sh
 	scripts/no-retries-check.sh
 	scripts/poll-check.sh
