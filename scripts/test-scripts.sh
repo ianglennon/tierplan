@@ -174,6 +174,11 @@ printf '{}\n' >"${scratch}/lic-empty.json"
 sbom_doc "${scratch}/sbom-rootonly.json"
 sbom_doc "${scratch}/merged-ok.json" a@1.0.0 b@2.0.0 b@3.0.0 go:example.invalid/mod@v1.0.0
 sbom_doc "${scratch}/merged-short.json" a@1.0.0 go:example.invalid/mod@v1.0.0
+# WR-B-01: the merged document drops exactly one real package (b@3.0.0) and still has the
+# root's npm purl, so it holds as many npm purls as the web SBOM has packages; a count passes it.
+sbom_doc "${scratch}/merged-lost-one.json" a@1.0.0 b@2.0.0 go:example.invalid/mod@v1.0.0
+# A duplicate of a@1.0.0 covers the missing b@3.0.0 for a count; a set comparison does not.
+sbom_doc "${scratch}/merged-dup.json" a@1.0.0 a@1.0.0 b@2.0.0 go:example.invalid/mod@v1.0.0
 sbom_pairs() { node scripts/sbom-check.mjs pairs --sbom "$1" --licences "$2"; }
 
 expect pass "sbom-pairs-match" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-ok.json"
@@ -191,8 +196,11 @@ expect fail "sbom-pairs-root-only" sbom_pairs "${scratch}/sbom-rootonly.json" "$
 expect_out "sbom-pairs-root-only says so" "the SBOM lists no npm package"
 expect pass "sbom-count-ok" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-ok.json"
 expect fail "sbom-count-short" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-short.json"
-# The fixture root carries a pkg:npm/ purl too, so a@1.0.0 and the root make two.
-expect_out "sbom-count-short says so" "the merged SBOM lists 2 npm packages, fewer than the 3 in the web SBOM"
+expect_out "sbom-count-short says so" "the merged SBOM is missing 2 of the 3 npm packages of the web SBOM"
+expect fail "sbom-count-lost-one" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-lost-one.json"
+expect_out "sbom-count-lost-one names the package" "missing from the merged SBOM: b@3.0.0"
+expect fail "sbom-count-duplicate-masks-missing" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-dup.json"
+expect_out "sbom-count-duplicate names the package" "missing from the merged SBOM: b@3.0.0"
 
 # --- DCO gate: a throwaway repo with one signed and one unsigned commit ---
 repo="${scratch}/dco-repo"

@@ -86,7 +86,7 @@ Work through this in order for every release. TierPlan follows Semantic Versioni
 
   It must be present and list the Go and npm components, and the npm count is checked, not assumed:
   - Run `make web-sbom`. It prints how many npm packages the web interface has and fails when that list and `pnpm licenses` differ.
-  - The server archive's `.spdx.json` (each archive also holds the web interface's own `sbom/web.spdx.json`) must list at least that many packages with a `pkg:npm/` locator. The release already stops on this before anything is signed or published (`scripts/sbom-archive.sh`), so a short list here means the gate was bypassed.
+  - The server archive's `.spdx.json` (each archive also holds the web interface's own `sbom/web.spdx.json`) must list at least that many packages with a `pkg:npm/` locator. The release already stops before anything is signed or published when any one npm package of the web SBOM is absent from it (`scripts/sbom-archive.sh`, a set comparison, not a count), so a short list here means the gate was bypassed.
   - The server image attestation must list at least as many. Count the distinct `pkg:npm/` locators in its packages' `externalRefs` (the output is keyed by platform on a multi-platform image, so the filter walks the whole document) and compare the number with `make web-sbom`:
 
     ```sh

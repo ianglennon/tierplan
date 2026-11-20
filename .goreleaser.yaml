@@ -96,8 +96,8 @@ checksum:
 # SPDX SBOMs of the archives. scripts/sbom-archive.sh runs syft (installed and
 # pinned by the release workflow) with the SBOM cataloger, so the web interface's
 # npm packages from sbom/web.spdx.json are merged in, and then gates the merged
-# document on its npm count (D-27). goreleaser runs this step before it signs or
-# publishes anything, so a failing gate stops the release. The cmd runs with dist/
+# document on holding every npm package of the web SBOM (D-27). goreleaser runs this
+# step before it signs or publishes anything, so a failing gate stops the release. The cmd runs with dist/
 # as its working directory and is not templated, hence the relative path. The
 # default SYFT_FILE_METADATA_CATALOGER_ENABLED=true is added by goreleaser only
 # when the cmd is syft itself, so it is set here to keep the file entries.

@@ -16,9 +16,11 @@
 // as sets, so the order of either input does not matter, and the difference
 // lists are printed sorted.
 //
-// count passes only when the merged document holds at least as many packages
-// with a pkg:npm/ purl as the web SBOM has non-root packages (the release gate
-// uses it, so the merged SBOM cannot lose the web interface's components).
+// count passes only when every non-root package of the web SBOM is present in the
+// merged document, compared as a set by npm purl (or name@version); a count would
+// tolerate losing one package, because the merged document carries the web root as
+// an npm package too (the release gate uses it, so the merged SBOM cannot lose the
+// web interface's components).
 //
 // Exit codes: 0 pass, 1 check failed, 2 usage or unreadable input.
 import { readFileSync } from "node:fs";
@@ -121,20 +123,61 @@ function runPairs(args) {
   );
 }
 
+// The npm purl of a package, decoded and without qualifiers or subpath, so the web
+// SBOM's `pkg:npm/%40scope/name@1.0.0` and a merged document's spelling of the same
+// package compare equal. Undefined when the package has no npm purl.
+function npmPurlKey(p) {
+  for (const r of p.externalRefs ?? []) {
+    const loc = r.referenceLocator;
+    if (typeof loc !== "string" || !loc.startsWith("pkg:npm/")) continue;
+    let key = loc.replace(/[?#].*$/, "");
+    try {
+      key = decodeURIComponent(key);
+    } catch {
+      // Keep the raw locator when it is not valid percent-encoding.
+    }
+    return key;
+  }
+  return undefined;
+}
+
+// Every non-root package of the web SBOM must be present in the merged document. The
+// merged document carries the root as an npm package as well, so a bare count would
+// have one package of slack, and a duplicate could cover for a missing one; the
+// packages are compared as sets instead (D-27). A web package counts as present when
+// its npm purl, or its name@version, matches a merged package that carries an npm purl.
 function runCount(args) {
-  const web = sbomPairs(readJson(flag(args, "--web"), "web SBOM"), "the web SBOM");
+  const webDoc = readJson(flag(args, "--web"), "web SBOM");
   const merged = readJson(flag(args, "--merged"), "merged SBOM");
+  const { others } = splitRoot(webDoc, "the web SBOM");
   if (!merged || !Array.isArray(merged.packages)) {
     usage("the merged SBOM has no packages array; is it an SPDX JSON document?");
   }
-  const npm = merged.packages.filter((p) =>
-    (p.externalRefs ?? []).some((r) => typeof r.referenceLocator === "string" && r.referenceLocator.startsWith("pkg:npm/")),
-  ).length;
-  if (web.count === 0) failCheck("the web SBOM lists no npm package");
-  if (npm < web.count) {
-    failCheck(`the merged SBOM lists ${npm} npm packages, fewer than the ${web.count} in the web SBOM`);
+  if (others.length === 0) failCheck("the web SBOM lists no npm package");
+
+  const mergedKeys = new Set();
+  let npm = 0;
+  for (const p of merged.packages) {
+    const key = npmPurlKey(p);
+    if (key === undefined) continue;
+    npm += 1;
+    mergedKeys.add(key);
+    mergedKeys.add(`${p.name}@${p.versionInfo}`);
   }
-  console.log(`sbom-check: merged SBOM lists ${npm} npm packages (web SBOM ${web.count})`);
+
+  const missing = others
+    .filter((p) => {
+      const key = npmPurlKey(p);
+      return !((key !== undefined && mergedKeys.has(key)) || mergedKeys.has(`${p.name}@${p.versionInfo}`));
+    })
+    .map((p) => `${p.name}@${p.versionInfo}`)
+    .sort();
+  if (missing.length > 0) {
+    for (const pair of missing.slice(0, 50)) console.error(`SBOM CHECK: missing from the merged SBOM: ${pair}`);
+    if (missing.length > 50) console.error(`SBOM CHECK: ... and ${missing.length - 50} more`);
+    failCheck(`the merged SBOM is missing ${missing.length} of the ${others.length} npm packages of the web SBOM`);
+  }
+  console.log(`sbom-check: merged SBOM holds all ${others.length} npm packages of the web SBOM (${npm} npm packages in all)`);
 }
 
 const [mode, ...rest] = process.argv.slice(2);

@@ -5,9 +5,10 @@
 # The SBOM of one release archive (D-25, D-27). The archive holds the Go binary and
 # the web interface's SPDX SBOM (sbom/web.spdx.json). syft only merges that file into
 # its own document through the SBOM cataloger, which is off by default, so it is
-# selected here. The merged document is then gated on its npm count before anything
-# is published: goreleaser runs its sboms step before it signs or publishes, so a
-# non-zero exit from this script stops the release.
+# selected here. The merged document is then gated on holding every npm package of the
+# web SBOM (compared as a set, not a count) before anything is published: goreleaser
+# runs its sboms step before it signs or publishes, so a non-zero exit from this
+# script stops the release.
 #
 # goreleaser runs this as the sboms cmd with dist/ as the working directory, and
 # passes the artifact and the document path relative to it:
