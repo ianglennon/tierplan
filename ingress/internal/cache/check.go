@@ -91,8 +91,11 @@ func relativeCertPath(ref string) (string, bool) {
 // expands Go templates, S1) and is YAML; tls.options.default.sniStrict is true and tls.stores.default
 // is not set (so a node never presents Traefik's default certificate, PROH-21-02); every certificate,
 // key and root CA reference is CertRoot/<flat name> of a file in the bundle; and each certificate
-// matches its key. Every failure is a *ingressbundle.VerifyError carrying a stable code. Check writes
-// nothing and logs nothing.
+// matches its key. Traefik reads field names without regard to case and resolves merge keys, so Check
+// also refuses a spelling of a checked key other than the canonical one (yaml_invalid) and validates every
+// file field, in any spelling and at any depth, and every value that points into the node root
+// (refscan.go). Every failure is a *ingressbundle.VerifyError carrying a stable code. Check writes nothing
+// and logs nothing.
 func Check(b ingressbundle.Bundle) error {
 	if !slices.Contains(ingressbundle.SupportedSchemas(), b.Schema) {
 		return &ingressbundle.VerifyError{Reason: ingressbundle.ReasonSchemaUnsupported}
@@ -115,6 +118,13 @@ func Check(b ingressbundle.Bundle) error {
 	if err != nil {
 		return &ingressbundle.VerifyError{Path: ingressbundle.DynamicFile, Reason: ingressbundle.ReasonYAMLInvalid}
 	}
+	var tree yaml.Node
+	if err := yaml.Unmarshal(dynamic, &tree); err != nil || !keysCanonical(&tree) {
+		// Traefik reads field names without regard to case, so a key Check reads in one spelling and
+		// Traefik in another (or a tree too deep to scan) would let a bundle say one thing to Check and
+		// another to Traefik.
+		return &ingressbundle.VerifyError{Path: ingressbundle.DynamicFile, Reason: ingressbundle.ReasonYAMLInvalid}
+	}
 	if def, ok := doc.TLS.Options["default"]; !ok || def.SNIStrict == nil || !*def.SNIStrict {
 		return &ingressbundle.VerifyError{Path: ingressbundle.DynamicFile, Reason: ingressbundle.ReasonTLSOptions}
 	}
@@ -122,18 +132,8 @@ func Check(b ingressbundle.Bundle) error {
 		return &ingressbundle.VerifyError{Path: ingressbundle.DynamicFile, Reason: ingressbundle.ReasonTLSOptions}
 	}
 	for _, ref := range doc.refs() {
-		rel, ok := relativeCertPath(ref)
-		if !ok {
-			// Path is the relative form when the reference has one under the cert root, never the raw
-			// text of an arbitrary reference.
-			var path string
-			if name, under := strings.CutPrefix(ref, ingressbundle.CertRoot+"/"); under {
-				path = ingressbundle.CertsDir + "/" + name
-			}
-			return &ingressbundle.VerifyError{Path: path, Reason: ingressbundle.ReasonCertPath}
-		}
-		if _, present := files[rel]; !present {
-			return &ingressbundle.VerifyError{Path: rel, Reason: ingressbundle.ReasonCertMissing}
+		if err := refError(ref, files); err != nil {
+			return err
 		}
 	}
 	for _, p := range doc.TLS.Certificates {
@@ -142,6 +142,37 @@ func Check(b ingressbundle.Bundle) error {
 		if _, err := tls.X509KeyPair(files[certRel], files[keyRel]); err != nil {
 			return &ingressbundle.VerifyError{Path: certRel, Reason: ingressbundle.ReasonKeyMismatch}
 		}
+	}
+	// Every other file Traefik would read: a file field in any spelling and at any depth (caFiles of a client
+	// CA, the certificates of a servers transport, a forwardAuth tls block), and any value that points into
+	// the node root. The typed read above holds the canonical spelling only.
+	refs, ok := fileRefs(&tree)
+	if !ok {
+		return &ingressbundle.VerifyError{Path: ingressbundle.DynamicFile, Reason: ingressbundle.ReasonYAMLInvalid}
+	}
+	for _, ref := range refs {
+		if err := refError(ref, files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refError is the failure of one file reference of the dynamic file, or nil when it is CertRoot/<flat name>
+// of a file in the bundle.
+func refError(ref string, files map[string][]byte) error {
+	rel, ok := relativeCertPath(ref)
+	if !ok {
+		// Path is the relative form when the reference has one under the cert root, never the raw text of an
+		// arbitrary reference.
+		var path string
+		if name, under := strings.CutPrefix(ref, ingressbundle.CertRoot+"/"); under {
+			path = ingressbundle.CertsDir + "/" + name
+		}
+		return &ingressbundle.VerifyError{Path: path, Reason: ingressbundle.ReasonCertPath}
+	}
+	if _, present := files[rel]; !present {
+		return &ingressbundle.VerifyError{Path: rel, Reason: ingressbundle.ReasonCertMissing}
 	}
 	return nil
 }
