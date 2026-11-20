@@ -151,14 +151,18 @@ func abs(rel string) string { return ingressbundle.NodeRoot + "/" + rel }
 // TestCheckRejects has one row per check-level reason, and asserts the exact stable code in a
 // *ingressbundle.VerifyError. A row with verifies set targets a check after Verify, and the test asserts
 // its bundle passes Verify, so the check it names is the one that is reached.
-func TestCheckRejects(t *testing.T) {
+type rejectRow struct {
+	name     string
+	want     string
+	verifies bool
+	build    func(t *testing.T) ingressbundle.Bundle
+}
+
+// rejectRows is one faulty bundle per way Verify or Check refuses one. The store's tests reuse it, so the
+// faults a frame can carry are written once.
+func rejectRows() []rejectRow {
 	const host = "a.test.local"
-	rows := []struct {
-		name     string
-		want     string
-		verifies bool
-		build    func(t *testing.T) ingressbundle.Bundle
-	}{
+	return []rejectRow{
 		{"schema_unsupported", ingressbundle.ReasonSchemaUnsupported, true, func(t *testing.T) ingressbundle.Bundle {
 			b := testBundle(t, host)
 			out, err := ingressbundle.Build(2, b.Version, b.Files, nil)
@@ -300,7 +304,10 @@ func TestCheckRejects(t *testing.T) {
 			})
 		}},
 	}
+}
 
+func TestCheckRejects(t *testing.T) {
+	rows := rejectRows()
 	produced := map[string]bool{}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
