@@ -121,6 +121,79 @@ expect_out "licence-s11-without-exceptions names vegadns" "github.com/nrdcg/vega
 expect pass "licence-s11-with-exceptions" \
   node scripts/licence-check.mjs --format go-csv <scripts/testdata/licences/go-traefik-s11.csv
 
+# --- Web SBOM set check (D-27) ---
+# Minimal SPDX documents and pnpm licence lists. The root DESCRIBES from the document;
+# b has two versions, so two distinct pairs, listed in the opposite order to the SBOM.
+sbom_doc() {
+  # sbom_doc <out> [name@version | go:name@version]...: the root plus one package per argument.
+  local out="$1"
+  shift
+  node -e '
+    const [out, ...pkgs] = process.argv.slice(1);
+    const purl = (loc) => [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: loc }];
+    const packages = [{ SPDXID: "SPDXRef-RootPackage", name: "tierplan-web", versionInfo: "0.0.0", externalRefs: purl("pkg:npm/tierplan-web@0.0.0") }];
+    pkgs.forEach((p, i) => {
+      const at = p.lastIndexOf("@");
+      const name = p.slice(0, at), versionInfo = p.slice(at + 1);
+      const golang = name.startsWith("go:");
+      packages.push({
+        SPDXID: `SPDXRef-Package-${i}`,
+        name: golang ? name.slice(3) : name,
+        versionInfo,
+        externalRefs: purl(golang ? `pkg:golang/${name.slice(3)}@${versionInfo}` : `pkg:npm/${name}@${versionInfo}`),
+      });
+    });
+    const doc = {
+      spdxVersion: "SPDX-2.3", SPDXID: "SPDXRef-DOCUMENT", packages,
+      relationships: [{ spdxElementId: "SPDXRef-DOCUMENT", relatedSpdxElement: "SPDXRef-RootPackage", relationshipType: "DESCRIBES" }],
+    };
+    require("node:fs").writeFileSync(out, JSON.stringify(doc));
+  ' "${out}" "$@"
+}
+lic_doc() {
+  # lic_doc <out> <licence>=<name>:<version,version>...: pnpm licenses list --json shape.
+  local out="$1"
+  shift
+  node -e '
+    const [out, ...specs] = process.argv.slice(1);
+    const data = {};
+    for (const s of specs) {
+      const eq = s.indexOf("="), colon = s.lastIndexOf(":");
+      const lic = s.slice(0, eq), name = s.slice(eq + 1, colon), versions = s.slice(colon + 1).split(",");
+      (data[lic] ??= []).push({ name, versions, license: lic });
+    }
+    require("node:fs").writeFileSync(out, JSON.stringify(data));
+  ' "${out}" "$@"
+}
+sbom_doc "${scratch}/sbom-ok.json" a@1.0.0 b@2.0.0 b@3.0.0
+lic_doc "${scratch}/lic-ok.json" MIT=b:3.0.0,2.0.0 ISC=a:1.0.0
+lic_doc "${scratch}/lic-extra.json" MIT=b:3.0.0,2.0.0 ISC=a:1.0.0 ISC=c:1.0.0
+lic_doc "${scratch}/lic-missing.json" MIT=b:3.0.0,2.0.0
+lic_doc "${scratch}/lic-version.json" MIT=b:3.0.0,2.0.0 ISC=a:1.0.1
+printf '{}\n' >"${scratch}/lic-empty.json"
+sbom_doc "${scratch}/sbom-rootonly.json"
+sbom_doc "${scratch}/merged-ok.json" a@1.0.0 b@2.0.0 b@3.0.0 go:example.invalid/mod@v1.0.0
+sbom_doc "${scratch}/merged-short.json" a@1.0.0 go:example.invalid/mod@v1.0.0
+sbom_pairs() { node scripts/sbom-check.mjs pairs --sbom "$1" --licences "$2"; }
+
+expect pass "sbom-pairs-match" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-ok.json"
+expect_out "sbom-pairs-match prints the count" "sbom-check: 3 npm packages match pnpm licenses (root tierplan-web@0.0.0 excluded)"
+expect fail "sbom-pairs-only-in-licences" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-extra.json"
+expect_out "sbom-pairs-only-in-licences names the pair" "only in pnpm licenses: c@1.0.0"
+expect fail "sbom-pairs-only-in-sbom" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-missing.json"
+expect_out "sbom-pairs-only-in-sbom names the pair" "only in the SBOM: a@1.0.0"
+expect fail "sbom-pairs-version-differs" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-version.json"
+expect_out "sbom-pairs-version-differs names the SBOM side" "only in the SBOM: a@1.0.0"
+expect_out "sbom-pairs-version-differs names the licences side" "only in pnpm licenses: a@1.0.1"
+expect fail "sbom-pairs-empty-licences" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-empty.json"
+expect_out "sbom-pairs-empty-licences says so" "the licences list is empty"
+expect fail "sbom-pairs-root-only" sbom_pairs "${scratch}/sbom-rootonly.json" "${scratch}/lic-ok.json"
+expect_out "sbom-pairs-root-only says so" "the SBOM lists no npm package"
+expect pass "sbom-count-ok" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-ok.json"
+expect fail "sbom-count-short" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-short.json"
+# The fixture root carries a pkg:npm/ purl too, so a@1.0.0 and the root make two.
+expect_out "sbom-count-short says so" "the merged SBOM lists 2 npm packages, fewer than the 3 in the web SBOM"
+
 # --- DCO gate: a throwaway repo with one signed and one unsigned commit ---
 repo="${scratch}/dco-repo"
 mkdir "${repo}"

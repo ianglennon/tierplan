@@ -7,6 +7,11 @@
 # the allowlist in scripts/licence-check.mjs and the reviewed exceptions in
 # licence-exceptions.txt.
 #
+# The web SBOM is generated and compared with pnpm's licence list as an exact
+# name@version set (D-27, scripts/web-sbom.sh). The licences job runs on every pull
+# request, so that set check runs whenever web/package.json or the lockfile changes,
+# and on every other change too.
+#
 # go-licenses reports only what the target package imports, so test-only
 # dependencies are excluded. The project's own module is ignored because
 # AGPL-3.0 is not a dependency licence.
@@ -61,5 +66,8 @@ done
 
 echo "licences: pnpm (production)"
 pnpm -C web licenses list --json --prod | node scripts/licence-check.mjs --format pnpm-json
+
+echo "licences: web SBOM against pnpm licenses (D-27)"
+scripts/web-sbom.sh "${TOOLS}/web.spdx.json"
 
 echo "licences: OK"
