@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -134,8 +135,19 @@ func TestHubConnectWithTheStoredKey(t *testing.T) {
 // TestHubPreflightRefusals proves the order of the checks before the upgrade (D-36): Origin first, then TLS,
 // then the upgrade. Plain HTTP is 403 insecure_transport whether or not it carries upgrade headers, so it
 // never reaches the 426 path.
+//
+// Only the TLS request without upgrade headers is an upgrade failure, which the proxy observer hears of with the
+// client address (WR-B-2).
 func TestHubPreflightRefusals(t *testing.T) {
-	srv := ingresstest.Start(t, ingresstest.Options{})
+	var mu sync.Mutex
+	var failures []string
+	srv := ingresstest.Start(t, ingresstest.Options{Configure: func(h *ingresshub.Hub) *ingresshub.Hub {
+		return h.OnUpgradeFailure(func(peer string) {
+			mu.Lock()
+			failures = append(failures, peer)
+			mu.Unlock()
+		})
+	}})
 	upgrade := http.Header{
 		"Connection": {"Upgrade"}, "Upgrade": {"websocket"},
 		"Sec-WebSocket-Version": {"13"}, "Sec-WebSocket-Key": {"dGhlIHNhbXBsZSBub25jZQ=="},
@@ -189,6 +201,12 @@ func TestHubPreflightRefusals(t *testing.T) {
 				t.Errorf("got %d %q, want %d starting %q", status, body, tc.status, tc.prefix)
 			}
 		})
+	}
+	// The hook runs before the answer is written, so every request above has been heard by now.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(failures) != 1 || failures[0] != "127.0.0.1" {
+		t.Errorf("upgrade failures = %v, want one from 127.0.0.1 (the TLS request without upgrade headers)", failures)
 	}
 }
 

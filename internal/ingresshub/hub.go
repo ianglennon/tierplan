@@ -65,6 +65,9 @@ type Hub struct {
 	// ticker so a test decides when silence is looked for.
 	offlineAfter time.Duration
 	watchTicks   <-chan time.Time
+	// onUpgradeFailure, when set, hears the client address of every TLS request that is not a WebSocket
+	// upgrade (OnUpgradeFailure).
+	onUpgradeFailure func(peer string)
 	// beforeRegister, when set, is called with the node ID after a handshake has been verified and welcomed
 	// and before the session is registered (WithBeforeRegister).
 	beforeRegister func(nodeID string)
@@ -188,6 +191,15 @@ func (h *Hub) WithOfflineAfter(d time.Duration) *Hub {
 // before the hub serves.
 func (h *Hub) WithWatchTicks(ticks <-chan time.Time) *Hub {
 	h.watchTicks = ticks
+	return h
+}
+
+// OnUpgradeFailure sets a hook that runs, with the client address, for every request to /ingress/connect that
+// arrives over TLS and is not a WebSocket upgrade. A proxy that strips the Upgrade headers produces exactly this,
+// so the proxy observer reads it as a misconfiguration signal, as it does for the agent endpoint. The hook must
+// not block. Call it before the hub serves.
+func (h *Hub) OnUpgradeFailure(f func(peer string)) *Hub {
+	h.onUpgradeFailure = f
 	return h
 }
 

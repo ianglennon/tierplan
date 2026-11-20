@@ -170,6 +170,9 @@ func (h *Hub) preflight(r *http.Request, ip string) (aud string, ref *preflightR
 	}
 	if !isWebSocketUpgrade(r) {
 		// A proxy that strips the Upgrade headers lands here.
+		if h.onUpgradeFailure != nil {
+			h.onUpgradeFailure(ip)
+		}
 		h.logBeforeAdmission(slog.LevelWarn, ip, "ingress endpoint reached without a WebSocket upgrade; a reverse proxy may be dropping the Upgrade headers")
 		return "", &preflightRefusal{status: http.StatusUpgradeRequired, code: refusedNotUpgrade, msg: "a WebSocket upgrade is required", audit: true}
 	}

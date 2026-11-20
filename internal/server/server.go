@@ -1127,6 +1127,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// (D-23, D-29).
 	ingressSvc, ingressHub, err := wireIngressHub(ctx, ingressHubDeps{
 		Log: log, Store: st, Audit: aud, Instance: inst, Pins: rt.WelcomePins, Recon: ingressRecon, Nodes: clusters, Refusals: ingressAudit,
+		UpgradeFailure: proxyObs.RecordUpgradeFailure,
 	})
 	if err != nil {
 		jobHub.Close()

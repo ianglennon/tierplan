@@ -34,6 +34,9 @@ type ingressHubDeps struct {
 	Nodes agents.NodeLists
 	// Refusals records the refused handshakes. It is the hub's own throttle, apart from the agent hub's.
 	Refusals auth.AuditRecorder
+	// UpgradeFailure hears of a TLS request to /ingress/connect that is no WebSocket upgrade: the proxy observer's
+	// websocket_failing signal, as for the agent endpoint. Nil hears nothing.
+	UpgradeFailure func(peer string)
 }
 
 // wireIngressHub mints the instance ID, which must exist before the hub serves a node (D-23), and builds the ingress node
@@ -50,7 +53,8 @@ func wireIngressHub(ctx context.Context, d ingressHubDeps) (*ingresshub.Service,
 		WithPins(d.Pins).
 		WithInstanceID(func(ctx context.Context) (string, error) { return instance.InstanceID(ctx, d.Store) }).
 		WithServerVersion(buildinfo.Get().Version).
-		WithRefusalAudit(d.Refusals)
+		WithRefusalAudit(d.Refusals).
+		OnUpgradeFailure(d.UpgradeFailure)
 	svc.WithKicker(hub)
 	return svc, hub, nil
 }
