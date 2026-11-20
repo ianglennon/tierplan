@@ -43,8 +43,8 @@ const (
 	network = "ingress-test"
 	// hostTokenPath is where the join token sits in the node; secretPath is where the container reads it, as
 	// it would read a Docker secret.
-	hostTokenPath = "/run/ingress-join-token"
-	secretPath    = "/run/secrets/ingress-join-token"
+	hostTokenPath = "/run/ingress-join-token"         //nolint:gosec // a path, not a credential
+	secretPath    = "/run/secrets/ingress-join-token" //nolint:gosec // a path, not a credential
 	// pollFor bounds the waits for something the image does on its own schedule: an enrolment, a Traefik
 	// start or reload, a restart.
 	pollFor = 2 * time.Minute
