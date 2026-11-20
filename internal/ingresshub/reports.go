@@ -21,6 +21,10 @@ import (
 const (
 	// lastSeenEvery is the shortest time between two writes of one node's last_seen_at.
 	lastSeenEvery = time.Minute
+	// healthWriteEvery is the shortest time between two writes of one node's health. A node reports every 30 s,
+	// so an honest change is written at once; a node that flips its health on every message costs the single
+	// writer at most one write per interval (WR-A-03).
+	healthWriteEvery = 10 * time.Second
 	// maxBundleIDLen caps a bundle ID a node reports, which is untrusted input.
 	maxBundleIDLen = 128
 
@@ -28,10 +32,12 @@ const (
 	healthUnhealthy = "unhealthy"
 )
 
-// forgetSeen drops a node from the once-a-minute map, so the memory of a revoked node does not stay.
+// forgetSeen drops a node from the once-a-minute map and the health throttle, so the memory of a revoked node
+// does not stay.
 func (s *Service) forgetSeen(nodeID string) {
 	s.seenMu.Lock()
 	delete(s.seen, nodeID)
+	delete(s.healthAt, nodeID)
 	s.seenMu.Unlock()
 }
 
@@ -220,7 +226,9 @@ func (s *Service) RecordRejected(ctx context.Context, nodeID, bundleID, reason s
 	return nil
 }
 
-// RecordHealth stores whether the node's Traefik is answering: ok or unhealthy.
+// RecordHealth stores whether the node's Traefik is answering: ok or unhealthy. A change is written at most once
+// per healthWriteEvery per node; one that comes sooner is dropped here, and the node's next health report, at
+// most 30 s later, writes it.
 func (s *Service) RecordHealth(ctx context.Context, nodeID string, traefikOK bool) error {
 	row, err := s.nodeRow(ctx, nodeID)
 	if err != nil {
@@ -233,9 +241,20 @@ func (s *Service) RecordHealth(ctx context.Context, nodeID string, traefikOK boo
 	if row.Health == health {
 		return nil
 	}
+	now := s.now()
+	s.seenMu.Lock()
+	if last, ok := s.healthAt[nodeID]; ok && now.Sub(last) < healthWriteEvery {
+		s.seenMu.Unlock()
+		return nil
+	}
+	s.healthAt[nodeID] = now
+	s.seenMu.Unlock()
 	if err := s.st.Q.UpdateIngressNodeHealth(ctx, sqlc.UpdateIngressNodeHealthParams{
-		Health: health, HealthAt: s.now().UTC().UnixNano(), ID: nodeID, EnvID: row.EnvID,
+		Health: health, HealthAt: now.UTC().UnixNano(), ID: nodeID, EnvID: row.EnvID,
 	}); err != nil {
+		s.seenMu.Lock()
+		delete(s.healthAt, nodeID)
+		s.seenMu.Unlock()
 		return fmt.Errorf("record the health: %w", err)
 	}
 	return nil

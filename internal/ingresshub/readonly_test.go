@@ -4,6 +4,7 @@
 package ingresshub_test
 
 import (
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -237,7 +238,8 @@ func TestReadOnlyChannelReportsReachTheRow(t *testing.T) {
 	if row = roRow(t, srv, id.NodeID); row.Health != "ok" {
 		t.Errorf("health = %q, want ok", row.Health)
 	}
-	srv.Clock.Advance(time.Second)
+	// A change of health is written at most once per HealthWriteEvery.
+	srv.Clock.Advance(ingresshub.HealthWriteEvery)
 	c.Health(t, false)
 	roAwaitEvents(t, srv, 6)
 	row = roRow(t, srv, id.NodeID)
@@ -259,5 +261,49 @@ func TestReadOnlyChannelReportsReachTheRow(t *testing.T) {
 	roAwaitEvents(t, srv, 9)
 	if after := roRow(t, srv, id.NodeID); !reflect.DeepEqual(settled, after) {
 		t.Errorf("a repeated report changed the row:\n before %+v\n after  %+v", settled, after)
+	}
+}
+
+// TestReadOnlyChannelMessageFloodCloses is WR-A-03: a session may send ReportBurst messages at once and one a
+// second after that. The server's clock does not move here, so the message after the burst ends the session as
+// a protocol error.
+func TestReadOnlyChannelMessageFloodCloses(t *testing.T) {
+	srv := ingresstest.Start(t, ingresstest.Options{})
+	env := srv.NewEnvironment(t, "swarm")
+	srv.Nodes.Set(env.ID, "n1")
+	id := ingresstest.NewIdentity()
+	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-n1", SwarmNodeID: "n1"})
+
+	c.Hello(t, []int{1}, "")
+	for range ingresshub.ReportBurst {
+		c.Health(t, true)
+	}
+	requireClosed(t, c, websocket.StatusPolicyViolation, ingresswire.CloseProtocolError)
+}
+
+// TestReadOnlyChannelRepeatedRejectionLoggedOnce is WR-A-03: a node that keeps rejecting one bundle is logged once
+// on the session, however often and with whatever reason it repeats it.
+func TestReadOnlyChannelRepeatedRejectionLoggedOnce(t *testing.T) {
+	logs := &syncBuffer{}
+	srv := ingresstest.Start(t, ingresstest.Options{Log: slog.New(slog.NewJSONHandler(logs, nil))})
+	env := srv.NewEnvironment(t, "swarm")
+	srv.Nodes.Set(env.ID, "n1")
+	x := ingresstest.MakeBundle(t, 1, "a.example.com")
+	srv.Bundles.Set(env.ID, x)
+
+	id, c := roHello(t, srv, env, "n1", 1)
+	c.NextBundle(t)
+	for _, reason := range []string{"first", "second", "third"} {
+		c.Rejected(t, x.ID, reason)
+	}
+	// Messages are handled in order on one goroutine: once a message the channel does not accept has closed
+	// the session, every rejection before it has been handled and logged.
+	c.Send(t, map[string]string{"t": "nope"})
+	requireClosed(t, c, websocket.StatusPolicyViolation, ingresswire.CloseProtocolError)
+	if row := roRow(t, srv, id.NodeID); row.RejectedReason != "third" {
+		t.Errorf("rejected reason = %q, want the last one", row.RejectedReason)
+	}
+	if n := strings.Count(logs.String(), "an ingress node rejected a bundle"); n != 1 {
+		t.Errorf("%d log lines for one rejected bundle, want 1", n)
 	}
 }

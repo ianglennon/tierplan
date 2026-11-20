@@ -128,10 +128,20 @@ func TestReportsWriteOnlyOnChange(t *testing.T) {
 	if r := f.row(t, id); r.HealthAt != sentinelNS {
 		t.Errorf("an unchanged health report wrote the row")
 	}
+	// A change that comes within HealthWriteEvery of the last write is dropped, and written once the interval
+	// has passed (WR-A-03).
+	f.clock.Advance(ingresshub.HealthWriteEvery - time.Nanosecond)
 	if err := f.svc.RecordHealth(ctx, id, false); err != nil {
 		t.Fatal(err)
 	}
-	if r := f.row(t, id); r.Health != "unhealthy" || r.HealthAt == sentinelNS {
+	if r := f.row(t, id); r.Health != "ok" || r.HealthAt != sentinelNS {
+		t.Errorf("a change within the interval was written: %q", r.Health)
+	}
+	f.clock.Advance(time.Nanosecond)
+	if err := f.svc.RecordHealth(ctx, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.row(t, id); r.Health != "unhealthy" || r.HealthAt != f.clock.Now().UnixNano() {
 		t.Errorf("a changed health was not written: %q", r.Health)
 	}
 

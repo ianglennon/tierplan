@@ -11,12 +11,25 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/time/rate"
 
 	"github.com/ianglennon/tierplan/proto/ingresswire"
 )
 
 // bundleWriteTimeout bounds the write of one bundle message, the one large message on the channel.
 const bundleWriteTimeout = time.Minute
+
+// reportBurst and reportEvery are each session's budget of node messages: a burst of reportBurst, then one per
+// reportEvery. A node sends a hello, an applied or rejected per bundle and a health every 30 s, so an honest node
+// never comes near it; one that goes over it is broken or hostile and its session ends as a protocol error, so it
+// cannot keep the single database writer that sign-ins share busy (WR-A-03).
+const (
+	reportBurst = 10
+	reportEvery = time.Second
+)
+
+// newReportLimiter is a session's message budget, read against the hub's clock.
+func newReportLimiter() *rate.Limiter { return rate.NewLimiter(rate.Every(reportEvery), reportBurst) }
 
 // maxSentIDs is how many of the bundle IDs sent on one session are remembered, so an applied or rejected
 // message can be matched to a bundle this session was sent. The newest is the current bundle and the one
@@ -56,6 +69,24 @@ type Session struct {
 	// pushMu.
 	pushMu sync.Mutex
 	push   pushState
+
+	// reports is the session's message budget (reportBurst, reportEvery), and loggedRejections the last
+	// bundle IDs whose rejection was logged, at most maxSentIDs. Both are used by the read loop only.
+	reports          *rate.Limiter
+	loggedRejections []string
+}
+
+// logRejectionOnce reports whether a rejection of the bundle id is to be logged: the first on this session is,
+// a repeat is not, so a node that keeps rejecting one bundle costs one log line.
+func (s *Session) logRejectionOnce(id string) bool {
+	if slices.Contains(s.loggedRejections, id) {
+		return false
+	}
+	s.loggedRejections = append(s.loggedRejections, id)
+	if len(s.loggedRejections) > maxSentIDs {
+		s.loggedRejections = s.loggedRejections[len(s.loggedRejections)-maxSentIDs:]
+	}
+	return true
 }
 
 // pushState is the part of a session's state that the read loop and the writer share. It lives and dies with
@@ -226,7 +257,12 @@ func (h *Hub) run(ctx context.Context, s *Session) {
 			s.endWith(closeReason(err))
 			return
 		}
-		s.heard(h.now())
+		now := h.now()
+		s.heard(now)
+		if !s.reports.AllowN(now, 1) {
+			h.protocolError(s, "too many messages")
+			return
+		}
 		if typ != websocket.MessageText {
 			h.protocolError(s, "binary frame")
 			return
@@ -294,9 +330,12 @@ func (h *Hub) handle(ctx context.Context, s *Session, msg any, hello *bool) erro
 			return err
 		}
 		s.setRejected(m.ID)
-		// The reason is the node's text: it is logged cut and cleaned, and the bundle's files never are.
-		h.log.Warn("an ingress node rejected a bundle",
-			"node_id", s.NodeID, "environment_id", s.EnvID, "bundle", idPrefix(m.ID), "reason", reason)
+		// The reason is the node's text: it is logged cut and cleaned, and the bundle's files never are. A repeat
+		// for the same bundle is not logged again.
+		if s.logRejectionOnce(m.ID) {
+			h.log.Warn("an ingress node rejected a bundle",
+				"node_id", s.NodeID, "environment_id", s.EnvID, "bundle", idPrefix(m.ID), "reason", reason)
+		}
 	case ingresswire.Health:
 		if !*hello {
 			return protocolViolation{"health before hello"}

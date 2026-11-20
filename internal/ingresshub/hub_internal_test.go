@@ -6,6 +6,7 @@ package ingresshub
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/store/storetest"
 )
@@ -28,4 +29,26 @@ func TestNewHubNilClockDefaultsToTimeNow(t *testing.T) {
 		t.Fatalf("the gate refused the first handshake of an address: %+v", refuse)
 	}
 	release()
+}
+
+// TestReportLimiterBurstThenOnePerSecond pins WR-A-03's budget on the hub's clock: reportBurst messages at once,
+// then one per reportEvery.
+func TestReportLimiterBurstThenOnePerSecond(t *testing.T) {
+	l := newReportLimiter()
+	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	for i := range reportBurst {
+		if !l.AllowN(t0, 1) {
+			t.Fatalf("message %d of the burst was refused", i+1)
+		}
+	}
+	if l.AllowN(t0, 1) {
+		t.Fatal("a message over the burst was allowed")
+	}
+	t1 := t0.Add(reportEvery)
+	if !l.AllowN(t1, 1) {
+		t.Fatal("the message one interval later was refused")
+	}
+	if l.AllowN(t1, 1) {
+		t.Fatal("a second message within the interval was allowed")
+	}
 }

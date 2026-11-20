@@ -5,6 +5,13 @@ package ingresshub
 
 import "github.com/ianglennon/tierplan/proto/ingresswire"
 
+// HealthWriteEvery is the shortest time between two writes of one node's health, and ReportBurst how many node
+// messages a session may send at once.
+const (
+	HealthWriteEvery = healthWriteEvery
+	ReportBurst      = reportBurst
+)
+
 // This file is package ingresshub and is compiled only into the package's tests. It lets the external tests
 // reach the handshake gate directly, so a test can hold slots and spend attempts on the hub's injected clock
 // without opening hundreds of connections.

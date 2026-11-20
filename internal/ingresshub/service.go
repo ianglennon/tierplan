@@ -77,6 +77,9 @@ type Service struct {
 	// one write a minute per node (TouchLastSeen).
 	seenMu sync.Mutex
 	seen   map[string]time.Time
+	// healthAt is when each node's health was last written, under seenMu, so a node that flips its health costs
+	// at most one write per healthWriteEvery (RecordHealth).
+	healthAt map[string]time.Time
 }
 
 // NewService returns the service. now defaults to time.Now.
@@ -84,7 +87,7 @@ func NewService(st *store.Store, w *audit.Writer, now func() time.Time) *Service
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{st: st, aud: w, now: now, seen: map[string]time.Time{}}
+	return &Service{st: st, aud: w, now: now, seen: map[string]time.Time{}, healthAt: map[string]time.Time{}}
 }
 
 // WithNodeLists tells the service where the node lists of swarm environments are, so an enrolment checks the
