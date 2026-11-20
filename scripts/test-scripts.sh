@@ -224,7 +224,7 @@ if [ "$(grep -c '^Signed-off-by: Test Author <test@example.invalid>$' "${msg}")"
   failures=$((failures + 1))
 fi
 
-# --- TLS confinement gate: the setting may appear only in the agent's tls.go ---
+# --- TLS confinement gate: the setting may appear only in the agent's and the ingress supervisor's tls.go ---
 tls_setting="Insecure""SkipVerify"
 tlsfix="${scratch}/tls-fixture"
 mkdir -p "${tlsfix}/agent/internal/connect" "${tlsfix}/internal/server" "${tlsfix}/web/node_modules/p"
@@ -238,6 +238,15 @@ printf 'package p\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/web/node_modules
 expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfix}"
 printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
 expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
+# The ingress supervisor's tls.go is the second file allowed to name it (D-32); any other ingress file is not.
+mkdir -p "${tlsfix}/ingress/internal/channel"
+printf 'package channel\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/ingress/internal/channel/tls.go"
+rm -f "${tlsfix}/internal/server/x_test.go"
+expect pass "tls-gate-ingress-allowed-file" scripts/insecure-tls-check.sh "${tlsfix}"
+printf 'package channel\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/ingress/internal/channel/dial.go"
+expect fail "tls-gate-ingress-other-file" scripts/insecure-tls-check.sh "${tlsfix}"
+expect_out "tls-gate-ingress-other-file names the file" "ingress/internal/channel/dial.go"
+rm -f "${tlsfix}/ingress/internal/channel/dial.go"
 
 # The same gate over everything that is not Go (D-10, TLS-12): e2e, Vite, scripts and
 # the shipped proxy configs. Every spelling is built from halves so this file does not
