@@ -157,7 +157,10 @@ func newKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 // hub would rebuild for the key. The caller sets Token, Name and SwarmNodeID.
 func signEnrol(t *testing.T, key ed25519.PrivateKey, serverNonce []byte, aud string, ekm []byte) ingresshub.EnrolRequest {
 	t.Helper()
-	pub := key.Public().(ed25519.PublicKey)
+	pub, ok := key.Public().(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("public key of an ed25519 private key is a %T", key.Public())
+	}
 	transcript := authn.IngressTranscript(ingresswire.ModeEnrol, ingresswire.ProtoVersion, serverNonce, testNodeNonce, aud, pub, ekm)
 	return ingresshub.EnrolRequest{
 		Pub: pub, Sig: ed25519.Sign(key, transcript), Transcript: transcript,

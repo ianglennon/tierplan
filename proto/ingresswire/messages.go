@@ -164,8 +164,10 @@ func ParseNodeMessage(data []byte) (any, error) {
 		return *m, nil
 	case *Rejected:
 		return *m, nil
+	case *Health:
+		return *m, nil
 	default:
-		return *v.(*Health), nil
+		return nil, ErrUnknownMessage
 	}
 }
 

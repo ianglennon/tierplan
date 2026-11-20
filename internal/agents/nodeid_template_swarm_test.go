@@ -24,7 +24,7 @@ import (
 // through the service-body validator. The swarm holds the literal templates, and on each of the four nodes the task
 // container sees that node's own swarm node ID.
 func sharedNodeIDTemplate(t *testing.T, f *swarmFix) {
-	const user, password = "bot", "node-id-pass-0123456789"
+	const user, password = "bot", "node-id-pass-0123456789" //nolint:gosec // G101: a throwaway login for the fixture registry
 	const (
 		nodeIDEnv   = "TIERPLAN_INGRESS_NODE_ID={{.Node.ID}}"
 		nodeNameEnv = "TIERPLAN_INGRESS_NODE_NAME={{.Node.Hostname}}"

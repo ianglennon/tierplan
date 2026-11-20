@@ -104,7 +104,11 @@ func pubOf(key ed25519.PrivateKey) ([]byte, error) {
 	if len(key) != ed25519.PrivateKeySize {
 		return nil, errors.New("ingresswire: the node key is not an Ed25519 private key")
 	}
-	return []byte(key.Public().(ed25519.PublicKey)), nil
+	pub, ok := key.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("ingresswire: the node key has no Ed25519 public half")
+	}
+	return []byte(pub), nil
 }
 
 // EnrolAuth builds the node's auth message for its first connection, in mode

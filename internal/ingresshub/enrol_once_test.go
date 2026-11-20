@@ -127,8 +127,8 @@ func TestEnrolTwiceConcurrentlyOneWinner(t *testing.T) {
 	var wins, already int
 	for range racers {
 		err := <-errs
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			wins++
 		default:
 			if re := refusal(t, err); re.Code != ingresswire.RefuseNodeAlreadyEnrolled || re.AuditReason != "node_already_enrolled" {

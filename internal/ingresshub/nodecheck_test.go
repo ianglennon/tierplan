@@ -43,7 +43,7 @@ func (c *countingLists) RefreshSwarmNodeIDs(ctx context.Context, envID string, m
 	next := c.next
 	c.mu.Unlock()
 	if next != nil {
-		c.fakeNodeLists.set(envID, *next)
+		c.set(envID, *next)
 	}
 	return c.fakeNodeLists.SwarmNodeIDs(envID)
 }

@@ -88,7 +88,7 @@ func TestBundleEnvelopeNeverPrintsFileData(t *testing.T) {
 		"%v":  fmt.Sprintf("%v", e),
 		"%+v": fmt.Sprintf("%+v", e),
 		"%#v": fmt.Sprintf("%#v", e),
-		"%s":  fmt.Sprintf("%s", e),
+		"%s":  fmt.Sprintf("%s", e), //nolint:staticcheck // S1025: the %s verb is what the test exercises
 		"&%v": fmt.Sprintf("%v", &e),
 	}
 	var buf bytes.Buffer

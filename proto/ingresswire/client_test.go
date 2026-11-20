@@ -79,14 +79,14 @@ func TestNewNodeKeySignsAVerifiableEnrolment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub1 := k1.Public().(ed25519.PublicKey)
+	pub1 := publicOf(t, k1)
 	if !bytes.Equal(a.Pub, pub1) {
 		t.Fatal("Auth.Pub is not the key's public half")
 	}
 	if !authn.Verify(pub1, serverRebuild(ch, a, a.EKM), a.Sig) {
 		t.Fatal("the server's rebuild does not verify the enrolment")
 	}
-	pub2 := k2.Public().(ed25519.PublicKey)
+	pub2 := publicOf(t, k2)
 	if authn.Verify(pub2, serverRebuild(ch, a, a.EKM), a.Sig) {
 		t.Fatal("the second key's public half verified the first key's signature")
 	}
@@ -119,7 +119,7 @@ func TestEnrolAuthVerifiesAgainstTheServersRebuild(t *testing.T) {
 	if !bytes.Equal(a.EKM, ekm) {
 		t.Fatal("Auth.EKM is not o.EKM byte for byte")
 	}
-	pub := key.Public().(ed25519.PublicKey)
+	pub := publicOf(t, key)
 
 	// Trusted proxy: the server folds in the reported EKM field.
 	if !authn.Verify(a.Pub, serverRebuild(ch, a, a.EKM), a.Sig) {
@@ -212,7 +212,7 @@ func TestConnectAuthVerifies(t *testing.T) {
 	if !bytes.Equal(a.EKM, ekm) {
 		t.Fatal("Auth.EKM is not o.EKM byte for byte")
 	}
-	pub := key.Public().(ed25519.PublicKey)
+	pub := publicOf(t, key)
 	if !bytes.Equal(a.Pub, pub) {
 		t.Fatal("Auth.Pub is not the key's public half")
 	}
@@ -340,4 +340,14 @@ func TestPrepareNodeConnSetsTheBundleReadLimit(t *testing.T) {
 	if len(r.calls) != 1 || r.calls[0] != MaxBundleMessageBytes {
 		t.Fatalf("calls = %v, want exactly [%d]", r.calls, int64(MaxBundleMessageBytes))
 	}
+}
+
+// publicOf is the public half of a node key, failing the test if the key has none.
+func publicOf(t *testing.T, key ed25519.PrivateKey) ed25519.PublicKey {
+	t.Helper()
+	pub, ok := key.Public().(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("the public half of an Ed25519 private key is a %T", key.Public())
+	}
+	return pub
 }

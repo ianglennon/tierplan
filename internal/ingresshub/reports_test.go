@@ -24,7 +24,7 @@ const sentinelNS = int64(999)
 func (f *fixture) setInt(t *testing.T, column, nodeID string, v int64) {
 	t.Helper()
 	// The column name is a constant of the calling test, not input.
-	if _, err := f.st.Write.Exec(`UPDATE ingress_nodes SET `+column+` = ? WHERE id = ?`, v, nodeID); err != nil {
+	if _, err := f.st.Write.Exec(`UPDATE ingress_nodes SET `+column+` = ? WHERE id = ?`, v, nodeID); err != nil { //nolint:gosec // G202: a column name constant of the calling test
 		t.Fatalf("set %s: %v", column, err)
 	}
 }
