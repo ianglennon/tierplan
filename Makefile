@@ -382,8 +382,9 @@ agent-image-smoke:
 
 # The build contexts for the :edge images: the binaries laid out as
 # $TARGETPLATFORM/tierplan (server) and $TARGETPLATFORM/tierplan-agent (agent)
-# next to their Dockerfiles, as goreleaser does it. CI pushes them with buildx
-# from the main branch.
+# next to their Dockerfiles, as goreleaser does it, plus the web SBOM the server
+# Dockerfile copies (build/sbom/, which goreleaser's before hook has just written).
+# CI pushes them with buildx from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
 	rm -rf dist/edge dist/edge-agent
@@ -391,6 +392,8 @@ edge-context:
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/tierplan
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/tierplan
 	cp Dockerfile dist/edge/Dockerfile
+	mkdir -p dist/edge/build/sbom
+	cp $(WEB_SBOM) dist/edge/build/sbom/tierplan-web.spdx.json
 	mkdir -p dist/edge-agent/linux/amd64 dist/edge-agent/linux/arm64 dist/edge-agent/agent/image
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_amd64*' -print | head -n 1)" dist/edge-agent/linux/amd64/tierplan-agent
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_arm64*' -print | head -n 1)" dist/edge-agent/linux/arm64/tierplan-agent
@@ -418,9 +421,12 @@ E2E_ARGS ?=
 
 # The image under test: a linux/amd64 binary with the SPA embedded, wrapped by
 # the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/tierplan in
-# the build context), tagged tierplan:e2e and loaded into the local engine.
-e2e-image: web
+# the build context), tagged tierplan:e2e and loaded into the local engine. The
+# Dockerfile also copies the web SBOM, so it is generated and put into the context
+# at build/sbom/ (D-25, D-40).
+e2e-image: web web-sbom
 	mkdir -p $(E2E_DIST)/linux/amd64
+	mkdir -p $(E2E_DIST)/build/sbom && cp $(WEB_SBOM) $(E2E_DIST)/build/sbom/tierplan-web.spdx.json
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o $(E2E_DIST)/linux/amd64/tierplan ./cmd/tierplan
 	docker buildx build --platform linux/amd64 -f Dockerfile -t tierplan:e2e --load $(E2E_DIST)
 
@@ -458,7 +464,8 @@ ci-preflight:
 #
 # The baseline is UPGRADE_BASE_REF, a commit (CI passes the pull request's base, or the
 # previous commit on a push). It is BUILT here from a detached git worktree with the
-# same recipe as e2e-image, not pulled: there is no released image before v0.1.0 and
+# same recipe as e2e-image (including the web SBOM, when that revision's Dockerfile
+# copies one), not pulled: there is no released image before v0.1.0 and
 # the repository is private, so a registry has nothing to offer and a commit is the
 # only baseline that is both available and honest. The worktree and the build context
 # are removed on exit, even when the smoke fails. Needs Docker with buildx, pnpm, curl
@@ -478,6 +485,9 @@ upgrade-smoke: e2e-image agent-image
 	touch $(UPGRADE_BASE_DIR)/web/dist/.gitkeep; \
 	mkdir -p $(UPGRADE_BASE_CTX)/linux/amd64; \
 	(cd $(UPGRADE_BASE_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(CURDIR)/$(UPGRADE_BASE_CTX)/linux/amd64/tierplan ./cmd/tierplan); \
+	if grep -q 'build/sbom/' $(UPGRADE_BASE_DIR)/Dockerfile; then \
+		(cd $(UPGRADE_BASE_DIR) && scripts/web-sbom.sh $(CURDIR)/$(UPGRADE_BASE_CTX)/build/sbom/tierplan-web.spdx.json); \
+	fi; \
 	docker buildx build --platform linux/amd64 -f $(UPGRADE_BASE_DIR)/Dockerfile -t tierplan:base --load $(UPGRADE_BASE_CTX); \
 	BASE_IMAGE=tierplan:base HEAD_IMAGE=tierplan:e2e AGENT_IMAGE=tierplan-agent:dev scripts/upgrade-smoke.sh
 
