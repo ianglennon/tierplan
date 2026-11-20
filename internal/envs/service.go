@@ -25,6 +25,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/ingresswire"
 )
 
 // Errors of the registry. The API maps each to a stable problem type.
@@ -878,7 +879,7 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	// The ingress_nodes rows went with the environment, so an ingress session still
 	// open would be serving an environment that no longer exists (D-29).
 	if s.ingress != nil {
-		s.ingress.KickEnv(id, tunnel.DisconnectRemoved)
+		s.ingress.KickEnv(id, ingresswire.CloseRemoved)
 	}
 	// An agent environment is monitored through its agents' targets.
 	s.mu.Lock()
