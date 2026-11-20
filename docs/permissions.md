@@ -36,7 +36,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.delete` | global | no | no | no | yes | yes | Remove environments |
 | `environments.manage` | global | no | no | no | yes | no | Fold the local host into an environment |
 | `environments.read` | environment | yes | yes | yes | yes | no | View an environment |
-| `environments.revoke` | environment | no | no | yes | yes | no | Revoke, block and unblock this environment's agents |
+| `environments.revoke` | environment | no | no | yes | yes | no | Revoke, block and unblock this environment's agents, and revoke its ingress nodes |
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
 | `git.instance` | global | no | no | no | yes | yes | Manage git repositories and credentials that apply to every environment |
 | `git.manage` | environment | no | no | yes | yes | no | Manage this environment's git repositories and credentials, the webhooks of its git stacks, and convert or detach git stacks |
@@ -44,7 +44,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `images.delete` | environment | no | yes | yes | yes | no | Remove and untag images |
 | `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
-| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer |
+| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer; create, rotate and disable the ingress join token, and list the ingress nodes |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `janitor.run` | environment | no | no | yes | yes | no | Clean an environment now, keep items out of cleanup and set the swarm task history limit |
 | `networks.addressing` | environment | no | no | yes | yes | no | Change the address space settings: small stack subnets and entered address pools |

@@ -419,7 +419,12 @@
         "domain_issuer_changed": "Changed ingress domain issuer",
         "node_enrolled": "Enrolled ingress node",
         "node_removed": "Removed ingress node",
-        "vip_changed": "Changed ingress virtual address"
+        "vip_changed": "Changed ingress virtual address",
+        "node_revoked": "Revoked ingress node",
+        "join_token_created": "Created ingress join token",
+        "join_token_rotated": "Rotated ingress join token",
+        "join_token_disabled": "Disabled ingress join token",
+        "node_enrol_refused": "Refused ingress node connection"
       }
     },
     "coalesced": {

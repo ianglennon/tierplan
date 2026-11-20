@@ -100,7 +100,7 @@ var defaultRegistry = Registry{
 	{Name: PermEnvironmentsCreate, Scope: ScopeGlobal, Description: "Add environments"},
 	{Name: PermEnvironmentsManage, Scope: ScopeGlobal, Description: "Fold the local host into an environment"},
 	{Name: PermEnvironmentsToken, Scope: ScopeGlobal, Dangerous: true, Description: "Show or rotate an environment's join token"},
-	{Name: PermEnvironmentsRevoke, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Revoke, block and unblock this environment's agents"},
+	{Name: PermEnvironmentsRevoke, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Revoke, block and unblock this environment's agents, and revoke its ingress nodes"},
 	{Name: PermEnvironmentsDelete, Scope: ScopeGlobal, Dangerous: true, Description: "Remove environments"},
 	{Name: PermEnvironmentsConfigure, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Rename an environment, manage its agents and auto-update, adopt a changed cluster"},
 	{Name: PermEnvironmentsAccess, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "See and change who has access to an environment"},
@@ -151,7 +151,7 @@ var defaultRegistry = Registry{
 	{Name: PermGitRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View the git repositories and credentials that apply to this environment"},
 	{Name: PermGitManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's git repositories and credentials, the webhooks of its git stacks, and convert or detach git stacks"},
 	{Name: PermGitInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage git repositories and credentials that apply to every environment"},
-	{Name: PermIngressManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer"},
+	{Name: PermIngressManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer; create, rotate and disable the ingress join token, and list the ingress nodes"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

@@ -42,6 +42,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/janitor"
@@ -172,6 +173,8 @@ type Server struct {
 	// ingressRecon keeps every environment's ingress bundle current in memory (Phase 21). It is run in the
 	// background and read in process only: Phase 22 reads Current and Changes, and Failures is read by the bell.
 	ingressRecon *ingressrecon.Reconciler
+	// ingressHub holds the live ingress node sessions and serves /ingress/connect (Phase 22).
+	ingressHub *ingresshub.Hub
 
 	// unlock releases the data-directory lock; Close calls it last.
 	unlock func() error
@@ -247,6 +250,9 @@ type RouterDeps struct {
 	// request ahead, the retry now and the budget. The zero value registers every route answering 503
 	// ingress_unavailable.
 	IngressCerts api.IngressCertDeps
+	// IngressNodes serves the ingress join token, the node list and the revoke of one node under
+	// /api/env/{envId}/ingress/ (Phase 22). The zero value registers every route answering 503 ingress_unavailable.
+	IngressNodes api.IngressNodesDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -306,6 +312,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterRegistries(r, d.Registries)
 	api.RegisterIngress(r, d.Ingress)
 	api.RegisterIngressCerts(r, d.IngressCerts)
+	api.RegisterIngressNodes(r, d.IngressNodes)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -892,6 +899,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Pitfall 8, D-13). It is separate from anonAudit so that agents behind one
 	// address and people signing in do not spend each other's budget.
 	agentAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, nil), log, nil)
+	// The ingress channel's refused handshakes cost an audit row each as well, and go through a throttle of their
+	// own, with the same budget, so that nodes and agents behind one address do not spend each other's (T-22-46). The
+	// clocks are passed explicitly (D-36).
+	ingressAudit := auth.NewAuditThrottle(aud, auth.NewIPLimiter(6*time.Second, 20, 10*time.Minute, time.Now), log, time.Now)
 	// The pin an install command carries, and the hint a refused agent gets, are
 	// both read when asked: the pin changes only if the self-signed key is
 	// replaced, and the endpoint follows Settings.
@@ -1046,7 +1057,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if acmeDNS.Providers == nil {
 		acmeDNS.Providers = defaultDNSProviders()
 	}
-	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, &acmeDNS, hsts, listening)
+	// wireACME runs before the ingress hub exists, and the certificate preflight asks it which hosts nodes dial, so the
+	// hub is reached through a reference that is filled in once it is built (D-29, T-22-48).
+	var ingressHubRef atomic.Pointer[ingresshub.Hub]
+	ingressDialHosts := func() []string {
+		if h := ingressHubRef.Load(); h != nil {
+			return h.DialHosts()
+		}
+		return nil
+	}
+	acmeWire, err := wireACME(cfg, log, st, vlt, inst, jobHub, tunnelHub, rt, tlsSrc, bo.acmeClock, &acmeDNS, hsts, listening, ingressDialHosts)
 	if err != nil {
 		jobHub.Close()
 		tunnelHub.Close()
@@ -1102,6 +1122,21 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The ingress reconciler renders every environment's bundle over the same stores, notifier and clock. It is run in
 	// the background below; it starts nothing else and adds no route, table or file (D-11, D-20).
 	ingressRecon := wireIngressRecon(log, ingressStore, certStore, ingressNotifier, bo.acmeClock)
+	// The ingress channel: the instance ID is minted before the hub serves, and the hub delivers the reconciler's bundles to
+	// the nodes that dial in. A removed environment closes its nodes' sessions through the one kicker the registry holds
+	// (D-23, D-29).
+	ingressSvc, ingressHub, err := wireIngressHub(ctx, ingressHubDeps{
+		Log: log, Store: st, Audit: aud, Instance: inst, Pins: rt.WelcomePins, Recon: ingressRecon, Nodes: clusters, Refusals: ingressAudit,
+		UpgradeFailure: proxyObs.RecordUpgradeFailure,
+	})
+	if err != nil {
+		jobHub.Close()
+		tunnelHub.Close()
+		_ = st.Close()
+		return nil, err
+	}
+	ingressHubRef.Store(ingressHub)
+	envSvc.WithIngressSessions(ingressHub)
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
 	// registry call, and the checker and the service share one memory of the indexes workloads run so each is
 	// read once (D-02). The service reads the nodes through the aggregator for the platforms a service runs on.
@@ -1337,12 +1372,24 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Restart: func(swap func(context.Context) error) bool { return restart.request(RestartRequest{Swap: swap}) },
 		},
 		AgentConnect: tunnelHub.Handler(),
+		// The ingress nodes dial in here, and the typed API lists and revokes them (Phase 22). The bundle a node should
+		// hold is the reconciler's current one.
+		IngressConnect: ingressHub.Handler(),
+		IngressNodes: api.IngressNodesDeps{
+			Service: ingressSvc, Live: ingressHub.Live,
+			CurrentBundle: func(envID string) (string, bool) {
+				b, ok := ingressRecon.Current(envID)
+				return b.ID, ok
+			},
+			Log: log,
+		},
 	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).
 	if err := httpx.VerifyAllGuarded(router); err != nil {
 		jobHub.Close()
 		statsHub.Close()
 		tunnelHub.Close()
+		ingressHub.Close()
 		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
@@ -1369,6 +1416,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		jobHub.Close()
 		statsHub.Close()
 		tunnelHub.Close()
+		ingressHub.Close()
 		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
@@ -1414,6 +1462,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		ingressCerts:     certMgr,
 		ingressCertStore: certStore,
 		ingressRecon:     ingressRecon,
+		ingressHub:       ingressHub,
 	}
 
 	// The nightly audit.Prune runs in this process for as long as the server does.
@@ -1429,6 +1478,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { certMgr.Run(bg) })
 	// The ingress reconciler renders every environment's bundle and keeps it current until the server stops.
 	srv.background.Go(func() { ingressRecon.Run(bg) })
+	// The ingress hub pushes each environment's changed bundle to its nodes until the server stops.
+	srv.background.Go(func() { ingressHub.Run(bg) })
 	// The header is decided once before anything is served, then again on every certificate install
 	// and every minute.
 	hsts.Recompute(ctx)
@@ -1453,6 +1504,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { anonAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { refusals.Run(bg, 10*time.Second) })
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
+	srv.background.Go(func() { ingressAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
 	// Every environment's address space and orphan list are read every minute and after network, container
@@ -1484,6 +1536,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		jobHub.Close()
 		statsHub.Close()
 		tunnelHub.Close()
+		ingressHub.Close()
 		aggregator.Close()
 		hub.Close()
 		monitor.StopAll()
@@ -1593,6 +1646,7 @@ func (s *Server) Close() error {
 	s.broker.Close()
 	s.updater.Close()
 	s.tunnel.Close()
+	s.ingressHub.Close()
 	s.aggregator.Close()
 	s.hub.Close()
 	s.monitor.StopAll()
@@ -1688,6 +1742,9 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// tunnel is one. Closing the hub sends each a close frame so the agents
 	// reconnect with backoff instead of waiting on a dead session (Pitfall 5).
 	srv.RegisterOnShutdown(s.tunnel.Close)
+	// http.Server.Shutdown ignores hijacked connections, and every ingress node session is one. Closing the hub sends
+	// each a close frame with the reason shutdown, so the nodes reconnect with backoff (D-29, T-22-47).
+	srv.RegisterOnShutdown(s.ingressHub.Close)
 	errc := make(chan error, 1)
 	// Every mode serves through the one sniffing listener, which tells TLS from plain HTTP on each
 	// connection (D-01); plain carries only the ACME challenge, so the scheme is always https.

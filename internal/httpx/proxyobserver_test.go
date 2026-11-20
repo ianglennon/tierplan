@@ -234,6 +234,22 @@ func TestProbesAndLoopbackAreNotCheckedAgainstThePublicURL(t *testing.T) {
 	}
 }
 
+// TestTheIngressEndpointIsNotCheckedAgainstThePublicURL: ingress nodes dial the
+// agent URL, which may be another address than the public URL, so a request to
+// the ingress endpoint at another host is no url_mismatch (WR-B-2).
+func TestTheIngressEndpointIsNotCheckedAgainstThePublicURL(t *testing.T) {
+	rig := newObserverRig(observedTrusted, observedPublicURL)
+	p := goodViaProxy(nil)
+	p.host = "agents.lan:7480"
+	p.path = IngressConnectPath
+	rig.send(p)
+	p.path = AgentConnectPath
+	rig.send(p)
+	if sigs := rig.obs.Signals(); len(sigs) != 0 {
+		t.Fatalf("signals = %+v, want none for the agent and ingress endpoints at the agent URL", sigs)
+	}
+}
+
 func TestWithNoPublicURLNothingIsCompared(t *testing.T) {
 	rig := newObserverRig(observedTrusted, "")
 	rig.send(probe{peer: "198.51.100.7:5000", host: "box.lan:7480"})

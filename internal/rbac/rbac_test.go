@@ -127,7 +127,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 
 func TestEnrolmentPermissionsDescribeWhatTheyNowCover(t *testing.T) {
 	m := perms(t)
-	if got := m["environments.revoke"].Description; got != "Revoke, block and unblock this environment's agents" {
+	if got := m["environments.revoke"].Description; got != "Revoke, block and unblock this environment's agents, and revoke its ingress nodes" {
 		t.Errorf("environments.revoke description = %q", got)
 	}
 	if got := m["environments.manage"].Description; got != "Fold the local host into an environment" {

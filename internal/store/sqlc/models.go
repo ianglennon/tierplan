@@ -488,6 +488,42 @@ type IngressHostname struct {
 	ClaimedAt int64
 }
 
+type IngressJoinToken struct {
+	ID           string
+	EnvID        string
+	TokenHash    []byte
+	Generation   int64
+	CreatedAt    int64
+	CreatedBy    string
+	SupersededAt int64
+	DisabledAt   int64
+}
+
+type IngressNode struct {
+	ID               string
+	EnvID            string
+	Name             string
+	SwarmNodeID      sql.NullString
+	PublicKey        []byte
+	Status           string
+	Version          string
+	Schemas          string
+	AppliedBundleID  string
+	AppliedAt        int64
+	RejectedBundleID string
+	RejectedReason   string
+	RejectedAt       int64
+	Health           string
+	HealthAt         int64
+	HeldHostnames    string
+	LastSeenAt       int64
+	CreatedAt        int64
+	RevokedAt        int64
+	RevokedBy        string
+	RevokeReason     string
+	ReenrolBlocked   int64
+}
+
 type IngressReserved struct {
 	DomainID  string
 	Hostname  string

@@ -247,6 +247,9 @@ func (f *exportFixture) seedExcluded(t *testing.T) {
 		VALUES ('l1', 'u1', 'invite', ?, 1, 2, 'u1')`, linkMarker)
 	f.exec(t, `INSERT INTO env_join_tokens (id, env_id, token_hash, generation, created_at, created_by)
 		VALUES ('j1', 'env-1', ?, 1, 1, 'u1')`, joinMarker)
+	// A proxy node's join token (Phase 22) never travels either: a restored server is enrolled into with a new one.
+	f.exec(t, `INSERT INTO ingress_join_tokens (id, env_id, token_hash, generation, created_at, created_by)
+		VALUES ('ij1', 'env-1', ?, 1, 1, 'u1')`, make([]byte, 32))
 	f.exec(t, `INSERT INTO backup_runs (id, source, started_at) VALUES ('r1', 'ui', 1)`)
 	// The state of the last check of a git stack is derived: a restored instance checks again (Phase 9).
 	f.exec(t, `INSERT INTO stacks (id, env_id, name, target, source_kind, created_by, created_at)

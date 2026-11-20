@@ -232,6 +232,12 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "ingress.node_enrolled",
   "ingress.node_removed",
   "ingress.vip_changed",
+  // The node lifecycle and the ingress join token (Phase 22).
+  "ingress.node_revoked",
+  "ingress.join_token_created",
+  "ingress.join_token_rotated",
+  "ingress.join_token_disabled",
+  "ingress.node_enrol_refused",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

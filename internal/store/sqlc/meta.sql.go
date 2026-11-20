@@ -43,6 +43,23 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (string, error) {
 	return value, err
 }
 
+const insertSettingIfAbsent = `-- name: InsertSettingIfAbsent :exec
+INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+ON CONFLICT (key) DO NOTHING
+`
+
+type InsertSettingIfAbsentParams struct {
+	Key       string
+	Value     string
+	UpdatedAt int64
+}
+
+// Writes a default only when the key has no value yet, so a value an admin set is never overwritten.
+func (q *Queries) InsertSettingIfAbsent(ctx context.Context, arg InsertSettingIfAbsentParams) error {
+	_, err := q.db.ExecContext(ctx, insertSettingIfAbsent, arg.Key, arg.Value, arg.UpdatedAt)
+	return err
+}
+
 const upsertMeta = `-- name: UpsertMeta :exec
 INSERT INTO app_meta (key, value, updated_at) VALUES (?, ?, ?)
 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at

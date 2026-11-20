@@ -172,7 +172,7 @@ func defaultDNSProviders() map[string]dns.Factory {
 // error that stops start-up.
 func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.Vault, inst *instance.Instance,
 	jobHub *jobs.Hub, tunnelHub *tunnel.Hub, rt *httpsRuntime, self *certSource, clock stackops.Clock, dnsDeps *acme.DNSDeps,
-	hsts *hstsPolicy, listening <-chan struct{}) (acmeWiring, error) {
+	hsts *hstsPolicy, listening <-chan struct{}, ingressDialHosts func() []string) (acmeWiring, error) {
 	dir, err := acme.NewDirectory(cfg)
 	if err != nil {
 		return acmeWiring{}, err
@@ -202,13 +202,14 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 	mgr := acme.NewManager(acme.Deps{
 		Store: acmeStore, Client: client, Challenges: challenges, Jobs: jobHub, Installer: installer, Clock: clock,
 		PublicURL: inst.PublicURL, AgentURL: inst.AgentURL, BasePath: inst.BasePath,
-		DialHosts: func() []string {
+		// The preflight answers for every host a node dials: the agent sessions' and the ingress sessions' (T-22-48).
+		DialHosts: joinDialHosts(func() []string {
 			var hosts []string
 			for _, s := range tunnelHub.Sessions() {
 				hosts = append(hosts, s.DialHost)
 			}
 			return hosts
-		},
+		}, ingressDialHosts),
 		CertFiles: cfg.TLSCertFile != "", Log: log, DNS: dnsD,
 		// The outcome of every certificate run is a system:acme row in the audit log (Phase 17, SET-04). The writer is
 		// the server's own over the same database; several writers may append to one chain.

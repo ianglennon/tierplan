@@ -115,9 +115,9 @@ func (o *ProxyObserver) look(req *http.Request) {
 	}
 }
 
-// RecordUpgradeFailure notes a request to the agent endpoint that was not a
-// WebSocket upgrade. The tunnel hub calls it, with the client address, through
-// its OnUpgradeFailure hook.
+// RecordUpgradeFailure notes a request to the agent or ingress endpoint that
+// was not a WebSocket upgrade. The tunnel hub and the ingress hub call it, with
+// the client address, through their OnUpgradeFailure hooks.
 func (o *ProxyObserver) RecordUpgradeFailure(peer string) {
 	o.record(signalKey{kind: SignalWebSocketFailing, peer: peer})
 }
@@ -240,9 +240,10 @@ func hasForwardedHeader(h http.Header) bool {
 // anything from the machine itself, such as the container's own health check.
 func isProbe(req *http.Request, peer string) bool {
 	switch req.URL.Path {
-	case "/healthz", "/readyz", AgentConnectPath:
+	case "/healthz", "/readyz", AgentConnectPath, IngressConnectPath:
 		// The agent endpoint is dialled at the agent URL, which may be another
-		// address than the public URL.
+		// address than the public URL, and ingress nodes dial theirs at the
+		// same agent URL.
 		return true
 	}
 	addr, err := netip.ParseAddr(peer)
