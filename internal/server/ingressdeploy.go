@@ -47,13 +47,17 @@ type ingressDeployDeps struct {
 	Instance *instance.Instance
 	// Pins are the pins of the server's certificate, as the agent install carries them.
 	Pins func() []string
+	// Stacks lists the stacks to redeploy; nil lists none.
+	Stacks ingressdeploy.Stacks
+	// CurrentBundle is the reconciler's current bundle ID of an environment, for the status.
+	CurrentBundle func(envID string) (string, bool)
 	// OwnChallenge reads the challenge answer of the server's own address; nil reads none.
 	OwnChallenge func(ctx context.Context) (string, error)
 	Clock        stackops.Clock
 }
 
-// newIngressDeploy builds the deployer from the server's parts. Stacks is left nil here: the deployer then lists no stacks
-// to redeploy, until the stack side is wired.
+// newIngressDeploy builds the deployer from the server's parts. A nil Stacks leaves the deployer listing no stacks to
+// redeploy.
 func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 	return ingressdeploy.New(ingressdeploy.Deps{
 		Engine:        ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
@@ -61,6 +65,9 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Store:         d.Ingress,
 		Notifier:      d.Notifier,
 		Tokens:        d.Tokens,
+		Nodes:         d.Tokens,
+		Stacks:        d.Stacks,
+		CurrentBundle: d.CurrentBundle,
 		Jobs:          d.Jobs,
 		Locks:         d.Locks,
 		Audit:         d.Audit,

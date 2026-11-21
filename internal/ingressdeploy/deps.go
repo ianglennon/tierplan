@@ -85,6 +85,13 @@ type Tokens interface {
 
 var _ Tokens = (*ingresshub.Service)(nil)
 
+// NodeLister lists the ingress nodes of an environment: ingresshub.Service has this method.
+type NodeLister interface {
+	ListNodes(ctx context.Context, envID string) ([]ingresshub.Node, error)
+}
+
+var _ NodeLister = (*ingresshub.Service)(nil)
+
 // Addressing hands out the subnet of the ingress network: envs.AddressSpaces satisfies it.
 type Addressing interface {
 	// LockAllocation takes the environment's allocation lock and returns the function that gives it back.
@@ -111,9 +118,14 @@ type Deps struct {
 	Stacks Stacks
 	Store  *ingressstore.Store
 	Tokens Tokens
-	Jobs   *jobs.Hub
-	Locks  stackops.OperationLock
-	Audit  *audit.Writer
+	// Nodes lists the enrolled proxy nodes, for the status; nil reads none.
+	Nodes NodeLister
+	// CurrentBundle is the environment's current ingress bundle ID and whether it has one, for the status; nil
+	// reads none, so no node counts as ready.
+	CurrentBundle func(envID string) (string, bool)
+	Jobs          *jobs.Hub
+	Locks         stackops.OperationLock
+	Audit         *audit.Writer
 	// Notifier is the ingress store's notifier: the ensure loop takes a pass whenever it reports a change. Nil
 	// leaves the loop to its tick and to Wake.
 	Notifier *ingress.Notifier

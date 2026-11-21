@@ -11019,6 +11019,143 @@
         ],
         "type": "object"
       },
+      "IngressStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "accessLogs": {
+            "description": "True while the proxy writes an access log",
+            "type": "boolean"
+          },
+          "disablingIncomplete": {
+            "description": "True when ingress is off but an ingress object remains in the swarm",
+            "type": "boolean"
+          },
+          "enabled": {
+            "description": "True while ingress is switched on",
+            "type": "boolean"
+          },
+          "lastEnsure": {
+            "$ref": "#/components/schemas/IngressStatusEnsure",
+            "description": "The last pass that keeps the ingress objects as wanted"
+          },
+          "nodes": {
+            "$ref": "#/components/schemas/IngressStatusNodes",
+            "description": "How many proxy nodes are expected, enrolled and ready"
+          },
+          "objects": {
+            "$ref": "#/components/schemas/IngressStatusObjects",
+            "description": "Which ingress objects the swarm holds"
+          },
+          "objectsKnown": {
+            "description": "False when the swarm could not be read, so objects says nothing",
+            "type": "boolean"
+          },
+          "paused": {
+            "description": "True after a restore, until an Admin resumes the environment: nothing is written to the swarm while it is",
+            "type": "boolean"
+          },
+          "pendingWipes": {
+            "description": "Certificate cache volumes still to be wiped on nodes that could not be reached",
+            "format": "int64",
+            "type": "integer"
+          },
+          "redeploy": {
+            "description": "The stacks that must be redeployed to be attached to the ingress network",
+            "items": {
+              "$ref": "#/components/schemas/IngressRedeployBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tokenDisabled": {
+            "description": "True when the join token is disabled, so no further node can enrol",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "paused",
+          "accessLogs",
+          "objectsKnown",
+          "objects",
+          "nodes",
+          "lastEnsure",
+          "pendingWipes",
+          "disablingIncomplete",
+          "tokenDisabled",
+          "redeploy"
+        ],
+        "type": "object"
+      },
+      "IngressStatusEnsure": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When the last pass ended, RFC 3339 UTC; empty when none has run",
+            "type": "string"
+          },
+          "class": {
+            "description": "How it ended: empty for success, otherwise unreachable, locked, paused or write_failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "class"
+        ],
+        "type": "object"
+      },
+      "IngressStatusNodes": {
+        "additionalProperties": false,
+        "properties": {
+          "enrolled": {
+            "description": "The proxies that enrolled and were not revoked",
+            "format": "int64",
+            "type": "integer"
+          },
+          "expected": {
+            "description": "The swarm's nodes, each of which runs a proxy",
+            "format": "int64",
+            "type": "integer"
+          },
+          "ready": {
+            "description": "The enrolled proxies whose health is ok and whose applied bundle is the current one",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected",
+          "enrolled",
+          "ready"
+        ],
+        "type": "object"
+      },
+      "IngressStatusObjects": {
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "description": "True when the ingress network exists",
+            "type": "boolean"
+          },
+          "secret": {
+            "description": "True when a join token secret exists",
+            "type": "boolean"
+          },
+          "service": {
+            "description": "True when the proxy service exists",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network",
+          "service",
+          "secret"
+        ],
+        "type": "object"
+      },
       "InstallBody": {
         "additionalProperties": false,
         "properties": {
@@ -34461,6 +34598,57 @@
           }
         },
         "summary": "Revoke one ingress node",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/status": {
+      "get": {
+        "description": "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "getIngressStatus",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressStatusBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the ingress status of a swarm environment",
         "tags": [
           "ingress"
         ]

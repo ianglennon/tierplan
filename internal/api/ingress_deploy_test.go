@@ -106,6 +106,12 @@ func newDeployFix(t *testing.T, standalone bool) *deployFix {
 // newDeployFixWith is newDeployFix with the fake swarm adjusted by config, for a test that needs something running on it.
 func newDeployFixWith(t *testing.T, standalone bool, config func(*dockertest.FakeConfig)) *deployFix {
 	t.Helper()
+	return newDeployFixDeps(t, standalone, config, nil)
+}
+
+// newDeployFixDeps is newDeployFixWith with the deployer's dependencies adjusted by deps, which sees the fixture.
+func newDeployFixDeps(t *testing.T, standalone bool, config func(*dockertest.FakeConfig), deps func(*deployFix, *ingressdeploy.Deps)) *deployFix {
+	t.Helper()
 	f := newIngressFix(t)
 	cfg := dockertest.FakeConfig{
 		SwarmState: "active", SwarmControl: true, SwarmClusterID: "cluster-1",
@@ -126,8 +132,9 @@ func newDeployFixWith(t *testing.T, standalone bool, config func(*dockertest.Fak
 	t.Cleanup(hub.Close)
 	f.stackLocks = stackops.NewLocks()
 	f.ingressDeployJobs = hub
-	f.ingressDeploy = ingressdeploy.New(ingressdeploy.Deps{
-		Engine: deployEngine{cli: cli}, Envs: deployEnvs{standalone: standalone}, Store: f.ingressStore, Tokens: f.ingressNodes,
+	df := &deployFix{ingressFix: f, fake: fake, cli: cli, hub: hub}
+	d := ingressdeploy.Deps{
+		Engine: deployEngine{cli: cli}, Envs: deployEnvs{standalone: standalone}, Store: f.ingressStore, Tokens: f.ingressNodes, Nodes: f.ingressNodes,
 		Jobs: hub, Locks: f.stackLocks, Audit: f.aud, AddressSpaces: &deployAddressing{cli: cli},
 		AllocationWait: dockerx.AllocationWait{After: func(time.Duration) <-chan time.Time {
 			c := make(chan time.Time, 1)
@@ -136,9 +143,13 @@ func newDeployFixWith(t *testing.T, standalone bool, config func(*dockertest.Fak
 		}},
 		ServerVersion: deployServerVersion, URL: f.inst.IngressEndpoint, Pins: func() []string { return []string{"sha256/AAAA"} },
 		Clock: fixtureClock{f.clk},
-	})
+	}
+	if deps != nil {
+		deps(df, &d)
+	}
+	f.ingressDeploy = ingressdeploy.New(d)
 	f.h = f.build(t)
-	return &deployFix{ingressFix: f, fake: fake, cli: cli, hub: hub}
+	return df
 }
 
 // problemOf decodes the type and detail of a problem answer.

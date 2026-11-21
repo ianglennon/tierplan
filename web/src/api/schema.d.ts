@@ -1788,6 +1788,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the ingress status of a swarm environment
+         * @description Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor": {
         parameters: {
             query?: never;
@@ -10713,6 +10733,64 @@ export interface components {
             hostname: string;
             /** @description The domain's suffix */
             suffix: string;
+        };
+        IngressStatusBody: {
+            /** @description True while the proxy writes an access log */
+            accessLogs: boolean;
+            /** @description True when ingress is off but an ingress object remains in the swarm */
+            disablingIncomplete: boolean;
+            /** @description True while ingress is switched on */
+            enabled: boolean;
+            /** @description The last pass that keeps the ingress objects as wanted */
+            lastEnsure: components["schemas"]["IngressStatusEnsure"];
+            /** @description How many proxy nodes are expected, enrolled and ready */
+            nodes: components["schemas"]["IngressStatusNodes"];
+            /** @description Which ingress objects the swarm holds */
+            objects: components["schemas"]["IngressStatusObjects"];
+            /** @description False when the swarm could not be read, so objects says nothing */
+            objectsKnown: boolean;
+            /** @description True after a restore, until an Admin resumes the environment: nothing is written to the swarm while it is */
+            paused: boolean;
+            /**
+             * Format: int64
+             * @description Certificate cache volumes still to be wiped on nodes that could not be reached
+             */
+            pendingWipes: number;
+            /** @description The stacks that must be redeployed to be attached to the ingress network */
+            redeploy: components["schemas"]["IngressRedeployBody"][] | null;
+            /** @description True when the join token is disabled, so no further node can enrol */
+            tokenDisabled: boolean;
+        };
+        IngressStatusEnsure: {
+            /** @description When the last pass ended, RFC 3339 UTC; empty when none has run */
+            at: string;
+            /** @description How it ended: empty for success, otherwise unreachable, locked, paused or write_failed */
+            class: string;
+        };
+        IngressStatusNodes: {
+            /**
+             * Format: int64
+             * @description The proxies that enrolled and were not revoked
+             */
+            enrolled: number;
+            /**
+             * Format: int64
+             * @description The swarm's nodes, each of which runs a proxy
+             */
+            expected: number;
+            /**
+             * Format: int64
+             * @description The enrolled proxies whose health is ok and whose applied bundle is the current one
+             */
+            ready: number;
+        };
+        IngressStatusObjects: {
+            /** @description True when the ingress network exists */
+            network: boolean;
+            /** @description True when a join token secret exists */
+            secret: boolean;
+            /** @description True when the proxy service exists */
+            service: boolean;
         };
         InstallBody: {
             /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
@@ -21436,6 +21514,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevokeIngressNodeBodyOut"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressStatusBody"];
                 };
             };
             /** @description Error */

@@ -36,6 +36,47 @@ const (
 	ingressJobGone = "This ingress job is no longer here. Jobs are kept for 10 minutes after they end."
 )
 
+// IngressStatusObjects says which of the ingress objects the swarm holds.
+type IngressStatusObjects struct {
+	Network bool `json:"network" doc:"True when the ingress network exists"`
+	Service bool `json:"service" doc:"True when the proxy service exists"`
+	Secret  bool `json:"secret" doc:"True when a join token secret exists"`
+}
+
+// IngressStatusNodes counts the proxy nodes.
+type IngressStatusNodes struct {
+	Expected int `json:"expected" doc:"The swarm's nodes, each of which runs a proxy"`
+	Enrolled int `json:"enrolled" doc:"The proxies that enrolled and were not revoked"`
+	Ready    int `json:"ready" doc:"The enrolled proxies whose health is ok and whose applied bundle is the current one"`
+}
+
+// IngressStatusEnsure is the last pass of the loop that keeps the ingress objects as wanted.
+type IngressStatusEnsure struct {
+	At    string `json:"at" doc:"When the last pass ended, RFC 3339 UTC; empty when none has run"`
+	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused or write_failed"`
+}
+
+// IngressStatusBody is an environment's ingress status. It carries counts and names, never a token or a secret.
+type IngressStatusBody struct {
+	Enabled             bool                  `json:"enabled" doc:"True while ingress is switched on"`
+	Paused              bool                  `json:"paused" doc:"True after a restore, until an Admin resumes the environment: nothing is written to the swarm while it is"`
+	AccessLogs          bool                  `json:"accessLogs" doc:"True while the proxy writes an access log"`
+	ObjectsKnown        bool                  `json:"objectsKnown" doc:"False when the swarm could not be read, so objects says nothing"`
+	Objects             IngressStatusObjects  `json:"objects" doc:"Which ingress objects the swarm holds"`
+	Nodes               IngressStatusNodes    `json:"nodes" doc:"How many proxy nodes are expected, enrolled and ready"`
+	LastEnsure          IngressStatusEnsure   `json:"lastEnsure" doc:"The last pass that keeps the ingress objects as wanted"`
+	PendingWipes        int                   `json:"pendingWipes" doc:"Certificate cache volumes still to be wiped on nodes that could not be reached"`
+	DisablingIncomplete bool                  `json:"disablingIncomplete" doc:"True when ingress is off but an ingress object remains in the swarm"`
+	TokenDisabled       bool                  `json:"tokenDisabled" doc:"True when the join token is disabled, so no further node can enrol"`
+	Redeploy            []IngressRedeployBody `json:"redeploy" doc:"The stacks that must be redeployed to be attached to the ingress network"`
+}
+
+// IngressStatusOutput wraps IngressStatusBody for huma.
+type IngressStatusOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressStatusBody
+}
+
 // IngressDeployDeps are the dependencies of the ingress deploy routes.
 type IngressDeployDeps struct {
 	// Service runs the preview and the enable job. Nil answers 503 ingress_unavailable, so the routes are always
@@ -329,6 +370,41 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			return nil, httpx.Problem(http.StatusNotFound, problemIngressJobNotFound, ingressJobGone)
 		}
 		return &IngressJobOutput{CacheControl: "no-store", Body: ingressJobBody(job, outputOf(d.Jobs, job.ID))}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getIngressStatus",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/ingress/status",
+		Summary:     "Read the ingress status of a swarm environment",
+		Description: "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; " +
+			"how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; " +
+			"how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. " +
+			"It carries no token and no secret. 409 " + problemIngressStandalone + " on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressStatusOutput, error) {
+		if httpx.PrincipalFrom(ctx) == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		st, err := d.Service.Status(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "read the ingress status", err)
+		}
+		body := IngressStatusBody{
+			Enabled: st.Enabled, Paused: st.Paused, AccessLogs: st.AccessLogs, ObjectsKnown: st.ObjectsKnown,
+			Objects:      IngressStatusObjects{Network: st.Objects.Network, Service: st.Objects.Service, Secret: st.Objects.Secret},
+			Nodes:        IngressStatusNodes{Expected: st.Nodes.Expected, Enrolled: st.Nodes.Enrolled, Ready: st.Nodes.Ready},
+			LastEnsure:   IngressStatusEnsure{At: rfc3339(st.LastEnsure.At), Class: st.LastEnsure.Class},
+			PendingWipes: st.PendingWipes, DisablingIncomplete: st.DisablingIncomplete, TokenDisabled: st.TokenDisabled,
+			Redeploy: make([]IngressRedeployBody, 0, len(st.Redeploy)),
+		}
+		for _, r := range st.Redeploy {
+			body.Redeploy = append(body.Redeploy, IngressRedeployBody{StackID: r.ID, StackName: r.Name, HoldsClaims: r.HoldsClaims})
+		}
+		return &IngressStatusOutput{CacheControl: "no-store", Body: body}, nil
 	})
 
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}

@@ -1270,6 +1270,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
 		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
+		CurrentBundle: func(envID string) (string, bool) {
+			b, ok := ingressRecon.Current(envID)
+			return b.ID, ok
+		},
 	})
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
