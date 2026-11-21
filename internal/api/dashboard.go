@@ -205,6 +205,7 @@ type VolumeItem struct {
 	Anonymous        bool   `json:"anonymous" doc:"True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters"`
 	Project          string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the volume has none"`
 	Stack            string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the volume has none"`
+	Ingress          bool   `json:"ingress" doc:"True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it"`
 }
 
 // NetworkItem is one row of the networks list.
@@ -558,7 +559,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				return VolumeItem{
 					Node: v.Node, NodeID: v.NodeID, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created),
 					UsedByContainers: containers, UsedByServices: services, Anonymous: v.Anonymous,
-					Project: v.Labels[labelProject], Stack: v.Labels[labelStack],
+					Project: v.Labels[labelProject], Stack: v.Labels[labelStack], Ingress: ingress.OwnsVolume(v.Name, v.Labels),
 				}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{

@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -94,6 +95,7 @@ type SecretItem struct {
 	Owner           string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
 	OwnerKind       string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
 	TierPlanStackID string            `json:"tierplanStackId" doc:"The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
+	Ingress         bool              `json:"ingress" doc:"True for a proxy join token's secret (the component label and a name that starts with tierplan-ingress-token-): read-only here, with delete and rotate refused as ingress_owned. Switch ingress off to remove it"`
 }
 
 // SecretListBody is the answer of the secrets list.
@@ -138,6 +140,7 @@ type SecretDetailBody struct {
 	Owner           string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
 	OwnerKind       string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
 	TierPlanStackID string            `json:"tierplanStackId" doc:"The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
+	Ingress         bool              `json:"ingress" doc:"True for a proxy join token's secret (the component label and a name that starts with tierplan-ingress-token-): read-only here, with delete and rotate refused as ingress_owned. Switch ingress off to remove it"`
 	UsedByRows      []SecretUserBody  `json:"usedByRows" doc:"Every service whose spec references the secret, sorted by service name then ID"`
 }
 
@@ -319,6 +322,7 @@ func secretItem(row dockerx.SecretRow, used int, known stackIDs) SecretItem {
 	return SecretItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
 		UsedBy: used, Owner: owner, OwnerKind: kind, TierPlanStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
+		Ingress: ingress.OwnsSecret(row.Name, row.Labels),
 	}
 }
 
@@ -469,7 +473,7 @@ func getSecret(ctx context.Context, d SecretsDeps, envID, id string) (SecretDeta
 	it := secretItem(row, len(users), loadStackIDs(ctx, d.Store, envID, d.Log))
 	return SecretDetailBody{
 		ID: it.ID, Name: it.Name, Labels: it.Labels, CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
-		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, TierPlanStackID: it.TierPlanStackID, UsedByRows: users,
+		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, TierPlanStackID: it.TierPlanStackID, Ingress: it.Ingress, UsedByRows: users,
 	}, nil
 }
 
@@ -542,6 +546,10 @@ func createSecret(ctx context.Context, d SecretsDeps, p *rbac.Principal, envID s
 	if err := validateSecretLabels(body.Labels); err != nil {
 		return SecretCreateBody{}, err
 	}
+	// The component label is TierPlan's own mark on its ingress objects (D-41): a create never sets it.
+	if hasComponentLabel(body.Labels) {
+		return SecretCreateBody{}, componentLabelError()
+	}
 	if err := requireSwarm(ctx, d.services(), envID); err != nil {
 		return SecretCreateBody{}, err
 	}
@@ -598,6 +606,11 @@ func deleteSecret(ctx context.Context, d SecretsDeps, p *rbac.Principal, envID s
 			return err
 		}
 		id, name = row.ID, row.Name
+		// A join token's secret is removed by switching ingress off, never by hand (D-46); this comes before
+		// the typed name, which would not lift it.
+		if ingress.OwnsSecret(row.Name, row.Labels) {
+			return &secretRefusal{code: problemIngressOwned, problem: ingressOwnedError()}
+		}
 		if in.Confirm != row.Name {
 			return &secretRefusal{code: codeConfirmationRequired, problem: httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired,
 				"Type the secret's name, "+row.Name+", to confirm. Nothing was deleted.")}

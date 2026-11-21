@@ -13564,6 +13564,8 @@ export interface components {
             createdAt: string;
             /** @description The secret ID */
             id: string;
+            /** @description True for a proxy join token's secret (the component label and a name that starts with tierplan-ingress-token-): read-only here, with delete and rotate refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description Every label of the secret */
             labels: {
                 [key: string]: string;
@@ -13606,6 +13608,8 @@ export interface components {
             createdAt: string;
             /** @description The secret ID */
             id: string;
+            /** @description True for a proxy join token's secret (the component label and a name that starts with tierplan-ingress-token-): read-only here, with delete and rotate refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description Every label of the secret */
             labels: {
                 [key: string]: string;
@@ -17554,10 +17558,10 @@ export interface components {
         };
         VolumeDeleteResult: {
             /**
-             * @description Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. ingress_owned: the volume is TierPlan's ingress cache (the component label and the reserved name); nothing was removed, and switching ingress off removes it. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
-            code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "ingress_owned" | "action_failed";
             /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
             detail?: string;
             /** @description The volume name the request named */
@@ -17582,6 +17586,8 @@ export interface components {
             /** Format: date-time */
             created?: string;
             driver: string;
+            /** @description True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description Every label of the volume */
             labels: {
                 [key: string]: string;
@@ -17627,6 +17633,8 @@ export interface components {
             /** Format: date-time */
             created?: string;
             driver: string;
+            /** @description True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             name: string;
             /** @description The node that holds the volume */
             node: string;

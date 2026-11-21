@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/redact"
 	"github.com/ianglennon/tierplan/internal/swarmops"
@@ -325,6 +326,13 @@ func previewRotate(ctx context.Context, d ServicesDeps, k rotateKind, p *rbac.Pr
 	if err := requireServicesControl(ctx, d, p, envID, userAgent, k.previewRoute); err != nil {
 		return RotatePreviewBody{}, err
 	}
+	owned, ownErr := ingressOwnsRotated(ctx, d, k, envID, id)
+	if ownErr != nil {
+		return RotatePreviewBody{}, ownErr
+	}
+	if owned {
+		return RotatePreviewBody{}, ingressOwnedError()
+	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}
 	readCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
@@ -401,6 +409,14 @@ func rotateObject(ctx context.Context, d ServicesDeps, k rotateKind, p *rbac.Pri
 	if err := requireServicesControl(ctx, d, p, envID, userAgent, k.rotateRoute); err != nil {
 		return RotateBody{}, err
 	}
+	owned, ownErr := ingressOwnsRotated(ctx, d, k, envID, rp.id)
+	if ownErr != nil {
+		return RotateBody{}, ownErr
+	}
+	if owned {
+		auditRotated(ctx, d, k, p, envID, userAgent, rp.id, swarmops.RotateResult{}, problemIngressOwned)
+		return RotateBody{}, ingressOwnedError()
+	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rotateTimeout)
 	defer cancel()
@@ -430,6 +446,34 @@ func rotateObject(ctx context.Context, d ServicesDeps, k rotateKind, p *rbac.Pri
 		return RotateBody{}, problem
 	}
 	return rotateBody(res), nil
+}
+
+// ingressOwnsRotated says whether the object a rotate is asked about is a proxy join token's secret,
+// from a fresh inspect through a manager: the component label and the reserved name prefix together
+// (D-41). The proxy is the only service that mounts it, and every write to the proxy is refused, so a
+// rotate of it would only break what the ensure loop keeps in step; swarmops.Rotate itself is unchanged
+// because no rotate of any other secret or config can name the proxy as a user. A config is never
+// TierPlan's. An object that is not there is not owned: the rotate says it is gone.
+func ingressOwnsRotated(ctx context.Context, d ServicesDeps, k rotateKind, envID, id string) (bool, error) {
+	if k.kind != swarmops.KindSecret {
+		return false, nil
+	}
+	readCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	var row dockerx.SecretRow
+	err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
+		var e error
+		row, _, e = c.SecretInspect(readCtx, id)
+		return e
+	})
+	switch {
+	case err == nil:
+		return ingress.OwnsSecret(row.Name, row.Labels), nil
+	case errors.Is(err, dockerx.ErrObjectNotFound):
+		return false, nil
+	}
+	_, problem := k.problem(envID, problemUpdateFailed, id, err)
+	return false, problem
 }
 
 // notFoundCode is the code a rotate of an object that is not there is recorded with: it is not audited,
