@@ -103,11 +103,16 @@ func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal,
 	if err != nil {
 		return nil, err
 	}
+	return &stackops.ClaimWrite{Decls: decls, Restore: restore, HasGood: hasGood, Actor: claimActorOf(p), CanView: canView}, nil
+}
+
+// claimActorOf is who a claim write is recorded as: the principal's ID, with the system prefix on a system principal.
+func claimActorOf(p *rbac.Principal) string {
 	actor := p.ID
 	if p.Type == rbac.PrincipalSystem && !strings.HasPrefix(actor, "system:") {
 		actor = "system:" + actor
 	}
-	return &stackops.ClaimWrite{Decls: decls, Restore: restore, HasGood: hasGood, Actor: actor, CanView: canView}, nil
+	return actor
 }
 
 // ingressGatePolicy is the policy a deploy gate (a deploy, a roll back, a restore, an update) judges a working copy

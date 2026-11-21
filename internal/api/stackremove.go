@@ -247,7 +247,7 @@ func removeStack(ctx context.Context, d StacksDeps, in *RemoveStackInput) (*Remo
 	var rres stackops.RemoveResult
 	input := stackops.RemoveInput{
 		EnvID: env.ID, NodeID: node, Stack: st, Volumes: volumes, KeepDefinition: in.Body.KeepDefinition,
-		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Store: repo, Masker: stacks.NewMasker(nil, nil),
+		Caller: stackops.Caller{Principal: p, Actor: p.Name}, ClaimActor: claimActorOf(p), Store: repo, Masker: stacks.NewMasker(nil, nil),
 	}
 	out, err := launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, mode: stackops.ModeRemove, kind: stackops.ModeRemove, userAgent: in.UserAgent, jobKind: stackRemoveJobKind,

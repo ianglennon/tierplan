@@ -44,6 +44,9 @@ const (
 	CodeVolumeNotOwned = "volume_not_owned"
 	// CodeDefinitionFailed ends the last step of a removal whose definition could not be deleted.
 	CodeDefinitionFailed = "definition_failed"
+	// CodeIngressReleaseFailed ends the last step of a removal whose engine objects are gone but whose hostnames could not
+	// be released (LBL-06). The claims stay, so a second removal of the same stack finishes the job.
+	CodeIngressReleaseFailed = "ingress_release_failed"
 )
 
 func init() {
@@ -51,6 +54,7 @@ func init() {
 	codeMessages[CodeInUse] = "Something outside this stack still uses it, so it was left in place."
 	codeMessages[CodeVolumeNotOwned] = "That volume isn't one of this stack's, so it was left alone."
 	codeMessages[CodeDefinitionFailed] = "The stack's definition could not be deleted."
+	codeMessages[CodeIngressReleaseFailed] = "The stack was removed from the engine, but its hostnames could not be released. Remove it again to finish."
 }
 
 // VolumeChoice is a volume of the stack on one node. A swarm stack has one for each node that holds the volume
@@ -82,6 +86,9 @@ type RemovalPreview struct {
 	// HasDraft is true when the stack has a saved draft that a removal deletes with the definition. The caller
 	// fills it: the draft is stored, not on the engine.
 	HasDraft bool
+	// Hostnames are the hostnames the removal releases (LBL-06), each once and sorted. Empty when the stack holds none,
+	// when the server has no ingress or when the stack's claims could not be read.
+	Hostnames []string
 }
 
 // ownedStack is what a stack owns on its engine, read once.
@@ -259,11 +266,31 @@ func (d Deps) Preview(ctx context.Context, envID string, st Stack, decl Declared
 			}
 		}
 	}
+	out.Hostnames = d.heldHostnames(ctx, envID, st)
 	for _, list := range []*[]string{&out.Services, &out.Containers, &out.Networks, &out.Secrets, &out.Configs, &out.Externals} {
 		slices.Sort(*list)
 		*list = slices.Compact(*list)
 	}
 	return out, nil
+}
+
+// heldHostnames are the hostnames the stack holds now, each once and sorted: never nil. A read that fails is logged
+// and answers none, since the preview is only a read and the release itself does not depend on it.
+func (d Deps) heldHostnames(ctx context.Context, envID string, st Stack) []string {
+	out := []string{}
+	if d.Ingress == nil {
+		return out
+	}
+	routes, err := d.Ingress.HeldRoutes(ctx, envID, st.ID)
+	if err != nil {
+		d.log().Warn("could not read the hostnames a stack holds for its removal preview", "environment", envID, "stack", st.Name, "error", err)
+		return out
+	}
+	for _, r := range routes {
+		out = append(out, r.Hostname)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // RemoveStore is the stored side of a removal: the stack's definition, which a removal deletes unless the person
@@ -325,6 +352,9 @@ type RemoveInput struct {
 	KeepDefinition bool
 	Caller         Caller
 	Store          RemoveStore
+	// ClaimActor is who the release of the stack's hostnames is recorded as (the principal's audit actor, "system:..."
+	// for an automatic removal). It falls back to Caller.Actor.
+	ClaimActor string
 	// Masker hides the stack's secret values in every text a remote system sent that the job keeps.
 	Masker stacks.Masker
 	// OnDone, when set, is called once with the result before the job's last item is finished, so a job that
@@ -1054,6 +1084,19 @@ func (x *removal) conclude(ctx context.Context) {
 		return
 	}
 	wctx := context.WithoutCancel(ctx)
+	// The hostnames are let go only here: every service, network and object is gone from the engine, so nothing can
+	// still answer a name another stack could take (LBL-06, PROH-24-10). A removal that failed anywhere never gets here.
+	if d.Ingress != nil {
+		actor := cmp.Or(in.ClaimActor, in.Caller.Actor)
+		if err := d.Ingress.ReleaseStack(wctx, in.EnvID, in.Stack.ID, actor); err != nil {
+			d.log().Error("could not release a removed stack's hostnames", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+			if !in.KeepDefinition {
+				x.begin(ItemDefinition)
+			}
+			x.fail(x.last, CodeIngressReleaseFailed, "", nil, nil)
+			return
+		}
+	}
 	if in.KeepDefinition {
 		if in.Store != nil {
 			if err := in.Store.SetStopped(wctx, in.Stack.ID, false); err != nil {
