@@ -1660,6 +1660,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch ingress on for a swarm environment
+         * @description Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. 409 ingress_standalone_unavailable on a standalone environment; 409 ingress_preflight_refused when the preflight refuses, with each finding's code and items in errors; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). Audited as ingress.enabled when the job switches it on.
+         */
+        post: operations["enableIngress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/enable/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching ingress on for a swarm environment
+         * @description Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. 409 ingress_standalone_unavailable on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressEnable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One ingress job and its steps
+         * @description The job as it stands now. A job is kept for 10 minutes after it ends. A job of another environment, one that is not an ingress job, one you did not start and may not follow, or one that is gone is 404 ingress_job_not_found. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/join-token": {
         parameters: {
             query?: never;
@@ -10436,6 +10496,35 @@ export interface components {
             /** @description The environment's domains, by suffix */
             items: components["schemas"]["IngressDomainBody"][] | null;
         };
+        IngressEnablePreviewBody: {
+            /** @description What the enable would create, or reuse where it is there already */
+            creates: components["schemas"]["IngressPlanBody"];
+            /** @description Everything the preflight found, errors and warnings, in order */
+            findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description The stacks that hold routes and must be redeployed to be attached to the ingress network; the enable does not change them */
+            redeploy: components["schemas"]["IngressRedeployBody"][] | null;
+        };
+        IngressEnableRequest: {
+            /** @description The CIDR block of the ingress network, for example 10.0.8.0/22. Leave it out to let TierPlan choose the lowest free /22 of the swarm's address pools */
+            subnet?: string;
+        };
+        IngressEnableStartBody: {
+            /** @description The enable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
+        };
+        IngressFindingBody: {
+            /** @description The stable name of the finding, for example ingress_no_manager */
+            code: string;
+            /** @description What the finding is about (a port, a stack, a hostname); empty for none */
+            items: string[] | null;
+            /** @description The sentence to show */
+            message: string;
+            /**
+             * @description error refuses the enable; warning tells you something and lets it go on
+             * @enum {string}
+             */
+            severity: "error" | "warning";
+        };
         IngressIssuerPreviewBody: {
             /**
              * Format: int64
@@ -10454,6 +10543,30 @@ export interface components {
             issuer: "staging" | "production";
             /** @description The hostnames of the uploaded certificates under the domain, sorted. The change leaves them alone */
             uploads: string[] | null;
+        };
+        IngressJobBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The steps, in the order they run: token, network, service and switch */
+            items: components["schemas"]["StackJobItemBody"][] | null;
+            /**
+             * @description What the job does
+             * @enum {string}
+             */
+            kind: "ingress_enable";
+            /** @description The output log, oldest first */
+            output: components["schemas"]["StackJobOutputLine"][] | null;
+            /** @description Who started it, as the hub records its owner */
+            startedBy: string;
+            /**
+             * @description running until every step has ended, then done when every step is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
         };
         IngressJoinTokenBody: {
             /**
@@ -10549,6 +10662,42 @@ export interface components {
         IngressNodeListBody: {
             /** @description One entry per node, oldest first, revoked nodes included */
             items: components["schemas"]["IngressNodeBody"][] | null;
+        };
+        IngressPlanBody: {
+            network: components["schemas"]["IngressPlanNetwork"];
+            secret: components["schemas"]["IngressPlanSecret"];
+            service: components["schemas"]["IngressPlanService"];
+            volume: components["schemas"]["IngressPlanVolume"];
+        };
+        IngressPlanNetwork: {
+            /** @description The network's name */
+            name: string;
+            /** @description The block it has or would get; empty when no free block could be chosen yet */
+            subnet: string;
+        };
+        IngressPlanSecret: {
+            /** @description The secret's name; empty while the token is yet to be made, because the name carries the token's ID */
+            name: string;
+            /** @description True when the enable makes a new join token and secret */
+            new: boolean;
+        };
+        IngressPlanService: {
+            /** @description The image it runs, tagged with this server's version */
+            image: string;
+            /** @description The global proxy service's name */
+            name: string;
+        };
+        IngressPlanVolume: {
+            /** @description The volume's name */
+            name: string;
+        };
+        IngressRedeployBody: {
+            /** @description True when the stack holds hostname claims */
+            holdsClaims: boolean;
+            /** @description The stack's ID */
+            stackId: string;
+            /** @description The stack's name */
+            stackName: string;
         };
         IngressReservationBody: {
             /**
@@ -21005,6 +21154,115 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressDomainBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IngressEnableRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressEnableStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressEnable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IngressEnableRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressEnablePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The job ID the enable answered with */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressJobBody"];
                 };
             };
             /** @description Error */

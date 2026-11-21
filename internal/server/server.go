@@ -253,6 +253,9 @@ type RouterDeps struct {
 	// IngressNodes serves the ingress join token, the node list and the revoke of one node under
 	// /api/env/{envId}/ingress/ (Phase 22). The zero value registers every route answering 503 ingress_unavailable.
 	IngressNodes api.IngressNodesDeps
+	// IngressDeploy serves the preview and the enable of an environment's ingress and the job they start, under
+	// /api/env/{envId}/ingress/ (Phase 24). The zero value registers every route answering 503 ingress_unavailable.
+	IngressDeploy api.IngressDeployDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -313,6 +316,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterIngress(r, d.Ingress)
 	api.RegisterIngressCerts(r, d.IngressCerts)
 	api.RegisterIngressNodes(r, d.IngressNodes)
+	api.RegisterIngressDeploy(r, d.IngressDeploy)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -1260,6 +1264,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		},
 	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
+	// The ingress deployer shares the stack routes' operation lock and the job hub, so an enable and a stack operation exclude
+	// each other. Its stack side (the stacks to redeploy) is wired by a later plan.
+	ingressDeploy := newIngressDeploy(ingressDeployDeps{
+		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Tokens: ingressSvc,
+		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
+		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
+	})
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{
@@ -1375,6 +1386,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// The ingress nodes dial in here, and the typed API lists and revokes them (Phase 22). The bundle a node should
 		// hold is the reconciler's current one.
 		IngressConnect: ingressHub.Handler(),
+		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log},
 		IngressNodes: api.IngressNodesDeps{
 			Service: ingressSvc, Live: ingressHub.Live,
 			CurrentBundle: func(envID string) (string, bool) {

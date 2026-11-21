@@ -1,0 +1,399 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package api
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+)
+
+// The ingress deploy routes (Phase 24, DEP-01): an Admin previews what switching ingress on would create and what would
+// stop it, switches it on as a job, and follows that job. Nothing here changes a stack: stacks are redeployed by their
+// own deploy to join the ingress network.
+
+const (
+	problemIngressStandalone       = "ingress_standalone_unavailable"
+	problemIngressPreflightRefused = "ingress_preflight_refused"
+	problemIngressJobNotFound      = "ingress_job_not_found"
+
+	// ingressJobKindPrefix is what every kind of ingress job in the jobs hub starts with (ingress_enable today).
+	ingressJobKindPrefix = "ingress_"
+
+	ingressJobGone = "This ingress job is no longer here. Jobs are kept for 10 minutes after they end."
+)
+
+// IngressDeployDeps are the dependencies of the ingress deploy routes.
+type IngressDeployDeps struct {
+	// Service runs the preview and the enable job. Nil answers 503 ingress_unavailable, so the routes are always
+	// registered.
+	Service *ingressdeploy.Service
+	// Jobs is the hub the enable job runs in, the same one the Service was built with. Nil answers 503 jobs_unavailable
+	// to the job routes.
+	Jobs *jobs.Hub
+	// Checker decides whether a caller who did not start a job may still follow it.
+	Checker *rbac.Checker
+	// Heartbeat is how often an idle job stream gets a ping, MaxLifetime how long one stream may live and
+	// MaxStreamsPerUser how many one user may have open. Zero is each one's default.
+	Heartbeat, MaxLifetime time.Duration
+	MaxStreamsPerUser      int
+	// Log receives server-side failures. Nil means slog.Default().
+	Log *slog.Logger
+}
+
+// IngressEnableRequest is the optional body of the preview and the enable.
+type IngressEnableRequest struct {
+	Subnet string `json:"subnet,omitempty" maxLength:"43" doc:"The CIDR block of the ingress network, for example 10.0.8.0/22. Leave it out to let TierPlan choose the lowest free /22 of the swarm's address pools"`
+}
+
+// IngressEnableInput is the path and the optional body of the preview and the enable.
+type IngressEnableInput struct {
+	EnvironmentPathInput
+	Body *IngressEnableRequest
+}
+
+// IngressFindingBody is one thing the preflight found.
+type IngressFindingBody struct {
+	Code     string   `json:"code" doc:"The stable name of the finding, for example ingress_no_manager"`
+	Severity string   `json:"severity" enum:"error,warning" doc:"error refuses the enable; warning tells you something and lets it go on"`
+	Message  string   `json:"message" doc:"The sentence to show"`
+	Items    []string `json:"items" doc:"What the finding is about (a port, a stack, a hostname); empty for none"`
+}
+
+// IngressPlanBody is what an enable would create, or reuse when it is already there.
+type IngressPlanBody struct {
+	Network IngressPlanNetwork `json:"network"`
+	Service IngressPlanService `json:"service"`
+	Secret  IngressPlanSecret  `json:"secret"`
+	Volume  IngressPlanVolume  `json:"volume"`
+}
+
+// IngressPlanNetwork is the ingress network of the plan.
+type IngressPlanNetwork struct {
+	Name   string `json:"name" doc:"The network's name"`
+	Subnet string `json:"subnet" doc:"The block it has or would get; empty when no free block could be chosen yet"`
+}
+
+// IngressPlanService is the proxy service of the plan.
+type IngressPlanService struct {
+	Name  string `json:"name" doc:"The global proxy service's name"`
+	Image string `json:"image" doc:"The image it runs, tagged with this server's version"`
+}
+
+// IngressPlanSecret is the swarm secret that carries the join token.
+type IngressPlanSecret struct {
+	Name string `json:"name" doc:"The secret's name; empty while the token is yet to be made, because the name carries the token's ID"`
+	New  bool   `json:"new" doc:"True when the enable makes a new join token and secret"`
+}
+
+// IngressPlanVolume is the volume the proxy keeps its state in.
+type IngressPlanVolume struct {
+	Name string `json:"name" doc:"The volume's name"`
+}
+
+// IngressRedeployBody is a stack that holds routes and has to be redeployed to join the ingress network.
+type IngressRedeployBody struct {
+	StackID     string `json:"stackId" doc:"The stack's ID"`
+	StackName   string `json:"stackName" doc:"The stack's name"`
+	HoldsClaims bool   `json:"holdsClaims" doc:"True when the stack holds hostname claims"`
+}
+
+// IngressEnablePreviewBody is the answer to the preview.
+type IngressEnablePreviewBody struct {
+	Findings []IngressFindingBody  `json:"findings" doc:"Everything the preflight found, errors and warnings, in order"`
+	Creates  IngressPlanBody       `json:"creates" doc:"What the enable would create, or reuse where it is there already"`
+	Redeploy []IngressRedeployBody `json:"redeploy" doc:"The stacks that hold routes and must be redeployed to be attached to the ingress network; the enable does not change them"`
+}
+
+// IngressEnablePreviewOutput wraps IngressEnablePreviewBody for huma.
+type IngressEnablePreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressEnablePreviewBody
+}
+
+// IngressEnableStartBody is the answer to the enable: the job that does it.
+type IngressEnableStartBody struct {
+	JobID string `json:"jobId" doc:"The enable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream"`
+}
+
+// IngressEnableStartOutput wraps IngressEnableStartBody for huma.
+type IngressEnableStartOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressEnableStartBody
+}
+
+// IngressJobPathInput carries {envId} and {jobId}.
+type IngressJobPathInput struct {
+	EnvironmentPathInput
+	JobID string `path:"jobId" doc:"The job ID the enable answered with"`
+}
+
+// IngressJobBody is an ingress job.
+type IngressJobBody struct {
+	ID         string               `json:"id" doc:"The job ID"`
+	Kind       string               `json:"kind" enum:"ingress_enable" doc:"What the job does"`
+	StartedBy  string               `json:"startedBy" doc:"Who started it, as the hub records its owner"`
+	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
+	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
+	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
+	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch"`
+	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first"`
+}
+
+// IngressJobOutput wraps IngressJobBody for huma.
+type IngressJobOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressJobBody
+}
+
+func ingressJobBody(j jobs.Job, output []jobs.Output) IngressJobBody {
+	b := IngressJobBody{
+		ID: j.ID, Kind: j.Kind, StartedBy: j.Owner, State: j.State, CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt),
+		Items: make([]StackJobItemBody, 0, len(j.Items)), Output: make([]StackJobOutputLine, 0, len(output)),
+	}
+	for _, it := range j.Items {
+		b.Items = append(b.Items, stackJobItemBody(it))
+	}
+	for _, o := range output {
+		b.Output = append(b.Output, stackJobOutputLine(o))
+	}
+	return b
+}
+
+// ingressJobVisible reports whether the caller may follow the job: it must be an ingress job of this environment, and the
+// caller must have started it or hold ingress.manage on the environment. Anything else is the same 404 as a job that is
+// gone.
+func (d IngressDeployDeps) ingressJobVisible(ctx context.Context, p *rbac.Principal, envID string, job jobs.Job) bool {
+	if !strings.HasPrefix(job.Kind, ingressJobKindPrefix) || job.EnvID != envID {
+		return false
+	}
+	if job.Owner == stackJobOwner(p) {
+		return true
+	}
+	if d.Checker == nil {
+		return false
+	}
+	dec := d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermIngressManage, Scope: rbac.ScopeEnvironment}, envID)
+	return dec.Err == nil && dec.Allowed
+}
+
+func ingressFindings(fs []ingressdeploy.Finding) []IngressFindingBody {
+	out := make([]IngressFindingBody, 0, len(fs))
+	for _, f := range fs {
+		items := f.Items
+		if items == nil {
+			items = []string{}
+		}
+		out = append(out, IngressFindingBody{Code: f.Code, Severity: f.Severity, Message: f.Message, Items: items})
+	}
+	return out
+}
+
+// RegisterIngressDeploy registers the preview and the enable of an environment's ingress, and the read and the stream of
+// the enable job. All of them need ingress.manage on the environment (its Admin). The routes are always registered;
+// without a Service they answer 503 ingress_unavailable.
+func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	if d.Heartbeat <= 0 {
+		d.Heartbeat = defaultHeartbeat
+	}
+	if d.MaxLifetime <= 0 {
+		d.MaxLifetime = defaultMaxStreamLifetime
+	}
+	if d.MaxStreamsPerUser <= 0 {
+		d.MaxStreamsPerUser = defaultMaxStreams
+	}
+	unavailable := func() error {
+		return httpx.Problem(http.StatusServiceUnavailable, problemIngressUnavailable, "Ingress is not available on this server.")
+	}
+	request := func(b *IngressEnableRequest) ingressdeploy.EnableRequest {
+		if b == nil {
+			return ingressdeploy.EnableRequest{}
+		}
+		return ingressdeploy.EnableRequest{Subnet: strings.TrimSpace(b.Subnet)}
+	}
+	fail := func(ctx context.Context, what string, err error) error {
+		var pre *ingressdeploy.PreflightError
+		var locked *ingressdeploy.LockedError
+		switch {
+		case errors.Is(err, ingressdeploy.ErrStandaloneUnavailable):
+			return httpx.Problem(http.StatusConflict, problemIngressStandalone, "Ingress is not yet available on a standalone environment.")
+		case errors.As(err, &pre):
+			return ingressPreflightProblem(pre)
+		case errors.As(err, &locked):
+			name := ""
+			if env := httpx.EnvFrom(ctx); env != nil {
+				name = env.Name
+			}
+			return operationLocked(name, locked.Holder)
+		case errors.Is(err, envs.ErrNotFound):
+			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
+		}
+		d.Log.Error("ingress deploy request failed", "step", what, "error", err)
+		return huma.Error500InternalServerError("internal error")
+	}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewIngressEnable",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/ingress/enable/preview",
+		Summary:     "Preview switching ingress on for a swarm environment",
+		Description: "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret " +
+			"that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings " +
+			"do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. " +
+			"409 " + problemIngressStandalone + " on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressEnableInput) (*IngressEnablePreviewOutput, error) {
+		if httpx.PrincipalFrom(ctx) == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		res, err := d.Service.Preview(ctx, in.EnvID, request(in.Body))
+		if err != nil {
+			return nil, fail(ctx, "preview ingress", err)
+		}
+		body := IngressEnablePreviewBody{Findings: ingressFindings(res.Findings), Redeploy: make([]IngressRedeployBody, 0, len(res.Redeploy))}
+		body.Creates.Network = IngressPlanNetwork{Name: res.Plan.Network.Name, Subnet: res.Plan.Network.Subnet}
+		body.Creates.Service = IngressPlanService{Name: res.Plan.Service.Name, Image: res.Plan.Service.Image}
+		body.Creates.Secret = IngressPlanSecret{Name: res.Plan.Secret.Name, New: res.Plan.Secret.New}
+		body.Creates.Volume = IngressPlanVolume{Name: res.Plan.Volume.Name}
+		for _, st := range res.Redeploy {
+			body.Redeploy = append(body.Redeploy, IngressRedeployBody{StackID: st.ID, StackName: st.Name, HoldsClaims: st.HoldsClaims})
+		}
+		return &IngressEnablePreviewOutput{CacheControl: "no-store", Body: body}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "enableIngress",
+		Method:        http.MethodPost,
+		Path:          "/api/env/{envId}/ingress/enable",
+		Summary:       "Switch ingress on for a swarm environment",
+		DefaultStatus: http.StatusAccepted,
+		Description: "Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network " +
+			"and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. " +
+			"Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. " +
+			"409 " + problemIngressStandalone + " on a standalone environment; 409 " + problemIngressPreflightRefused + " when the preflight refuses, with each finding's code and items in errors; " +
+			"409 " + problemOperationLocked + " while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). " +
+			"Audited as ingress.enabled when the job switches it on.",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressEnableInput) (*IngressEnableStartOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		id, err := d.Service.Enable(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, request(in.Body))
+		if err != nil {
+			return nil, fail(ctx, "enable ingress", err)
+		}
+		return &IngressEnableStartOutput{CacheControl: "no-store", Body: IngressEnableStartBody{JobID: id}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getIngressJob",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/ingress/jobs/{jobId}",
+		Summary:     "One ingress job and its steps",
+		Description: "The job as it stands now. A job is kept for 10 minutes after it ends. A job of another environment, one that is not an ingress job, one you " +
+			"did not start and may not follow, or one that is gone is 404 " + problemIngressJobNotFound + ". Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressJobPathInput) (*IngressJobOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Jobs == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Ingress jobs are not available right now.")
+		}
+		job, ok := d.Jobs.Get(in.JobID)
+		if !ok || !d.ingressJobVisible(ctx, p, in.EnvID, job) {
+			return nil, httpx.Problem(http.StatusNotFound, problemIngressJobNotFound, ingressJobGone)
+		}
+		return &IngressJobOutput{CacheControl: "no-store", Body: ingressJobBody(job, outputOf(d.Jobs, job.ID))}, nil
+	})
+
+	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}
+	r.Guarded(http.MethodGet, "/api/env/{envId}/ingress/jobs/{jobId}/stream",
+		rbac.Requirement{Perm: rbac.PermIngressManage, Scope: rbac.ScopeEnvironment},
+		http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			serveIngressJobStream(w, req, d, lim)
+		}))
+}
+
+// serveIngressJobStream follows one ingress job through the shared job stream: the job as it stands, an item frame for each
+// change and a done frame at the end, resumed from Last-Event-ID. The job does not depend on the stream.
+func serveIngressJobStream(w http.ResponseWriter, req *http.Request, d IngressDeployDeps, lim *streamLimiter) {
+	ctx := req.Context()
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		writeJSONProblem(w, http.StatusInternalServerError, "", "internal error")
+		return
+	}
+	if d.Jobs == nil {
+		writeJSONProblem(w, http.StatusServiceUnavailable, problemJobsUnavail, "Ingress jobs are not available right now.")
+		return
+	}
+	jobID := chi.URLParam(req, "jobId")
+	if job, ok := d.Jobs.Get(jobID); !ok || !d.ingressJobVisible(ctx, p, env.ID, job) {
+		writeJSONProblem(w, http.StatusNotFound, problemIngressJobNotFound, ingressJobGone)
+		return
+	}
+	serveJobStream(w, req, jobStream{
+		Hub: d.Jobs, JobID: jobID, Key: string(p.Type) + ":" + p.ID, Limiter: lim, What: "ingress job",
+		GoneType: problemIngressJobNotFound, GoneDetail: ingressJobGone, TooManyType: problemTooManyStreams,
+		Heartbeat: d.Heartbeat, MaxLifetime: d.MaxLifetime, Log: d.Log,
+		Snapshot: func(j jobs.Job) any { return ingressJobBody(j, outputOf(d.Jobs, j.ID)) },
+		Encode: func(ev jobs.Event) (any, bool) {
+			switch {
+			case ev.Type == jobs.EventItem && ev.Item != nil:
+				return stackJobItemBody(*ev.Item), true
+			case ev.Type == jobs.EventOutput && ev.Output != nil:
+				return stackJobOutputLine(*ev.Output), true
+			case ev.Type == jobs.EventDone && ev.Job != nil:
+				return ingressJobBody(*ev.Job, outputOf(d.Jobs, ev.Job.ID)), true
+			}
+			return nil, false
+		},
+	})
+}
+
+// ingressPreflightProblem is the 409 for an enable the preflight refused: each finding that refuses is listed with its code
+// as the location, its sentence as the message and its items as the value.
+func ingressPreflightProblem(e *ingressdeploy.PreflightError) error {
+	var details []*huma.ErrorDetail
+	var msgs []string
+	for _, f := range e.Findings {
+		if f.Severity != ingressdeploy.SeverityError {
+			continue
+		}
+		items := f.Items
+		if items == nil {
+			items = []string{}
+		}
+		details = append(details, &huma.ErrorDetail{Location: f.Code, Message: f.Message, Value: items})
+		msgs = append(msgs, f.Message)
+	}
+	return &huma.ErrorModel{
+		Type: problemIngressPreflightRefused, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: "Ingress cannot be switched on: " + strings.Join(msgs, " "), Errors: details,
+	}
+}

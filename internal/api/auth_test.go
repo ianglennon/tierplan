@@ -39,6 +39,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
@@ -330,6 +331,10 @@ type authFixture struct {
 	// them before a build; left nil the routes are registered without them, as a server with no hub is.
 	ingressLive          func(nodeID string) bool
 	ingressCurrentBundle func(envID string) (string, bool)
+	// ingressDeploy and ingressDeployJobs are the deployer and the job hub behind the ingress preview, enable and job
+	// routes (phase 24); a test sets both and builds again. Left nil the routes answer 503 ingress_unavailable.
+	ingressDeploy     *ingressdeploy.Service
+	ingressDeployJobs *jobs.Hub
 }
 
 // fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
@@ -700,6 +705,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	})
 	f.ingressNodes = ingresshub.NewService(f.st, f.aud, f.clk.now)
 	api.RegisterIngressNodes(r, api.IngressNodesDeps{Service: f.ingressNodes, Live: f.ingressLive, CurrentBundle: f.ingressCurrentBundle, Log: log})
+	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
 		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,

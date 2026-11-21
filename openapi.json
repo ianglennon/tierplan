@@ -10451,6 +10451,103 @@
         ],
         "type": "object"
       },
+      "IngressEnablePreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "creates": {
+            "$ref": "#/components/schemas/IngressPlanBody",
+            "description": "What the enable would create, or reuse where it is there already"
+          },
+          "findings": {
+            "description": "Everything the preflight found, errors and warnings, in order",
+            "items": {
+              "$ref": "#/components/schemas/IngressFindingBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "redeploy": {
+            "description": "The stacks that hold routes and must be redeployed to be attached to the ingress network; the enable does not change them",
+            "items": {
+              "$ref": "#/components/schemas/IngressRedeployBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "findings",
+          "creates",
+          "redeploy"
+        ],
+        "type": "object"
+      },
+      "IngressEnableRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "subnet": {
+            "description": "The CIDR block of the ingress network, for example 10.0.8.0/22. Leave it out to let TierPlan choose the lowest free /22 of the swarm's address pools",
+            "maxLength": 43,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IngressEnableStartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The enable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      },
+      "IngressFindingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The stable name of the finding, for example ingress_no_manager",
+            "type": "string"
+          },
+          "items": {
+            "description": "What the finding is about (a port, a stack, a hostname); empty for none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "The sentence to show",
+            "type": "string"
+          },
+          "severity": {
+            "description": "error refuses the enable; warning tells you something and lets it go on",
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "message",
+          "items"
+        ],
+        "type": "object"
+      },
       "IngressIssuerPreviewBody": {
         "additionalProperties": false,
         "properties": {
@@ -10488,6 +10585,76 @@
           "certificates",
           "uploads",
           "confirmCount"
+        ],
+        "type": "object"
+      },
+      "IngressJobBody": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "description": "When the job started, RFC 3339 UTC",
+            "type": "string"
+          },
+          "finishedAt": {
+            "description": "When the job ended, RFC 3339 UTC, empty while it runs",
+            "type": "string"
+          },
+          "id": {
+            "description": "The job ID",
+            "type": "string"
+          },
+          "items": {
+            "description": "The steps, in the order they run: token, network, service and switch",
+            "items": {
+              "$ref": "#/components/schemas/StackJobItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "What the job does",
+            "enum": [
+              "ingress_enable"
+            ],
+            "type": "string"
+          },
+          "output": {
+            "description": "The output log, oldest first",
+            "items": {
+              "$ref": "#/components/schemas/StackJobOutputLine"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "startedBy": {
+            "description": "Who started it, as the hub records its owner",
+            "type": "string"
+          },
+          "state": {
+            "description": "running until every step has ended, then done when every step is",
+            "enum": [
+              "running",
+              "done",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "startedBy",
+          "state",
+          "createdAt",
+          "finishedAt",
+          "items",
+          "output"
         ],
         "type": "object"
       },
@@ -10701,6 +10868,120 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "IngressPlanBody": {
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "$ref": "#/components/schemas/IngressPlanNetwork"
+          },
+          "secret": {
+            "$ref": "#/components/schemas/IngressPlanSecret"
+          },
+          "service": {
+            "$ref": "#/components/schemas/IngressPlanService"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/IngressPlanVolume"
+          }
+        },
+        "required": [
+          "network",
+          "service",
+          "secret",
+          "volume"
+        ],
+        "type": "object"
+      },
+      "IngressPlanNetwork": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The network's name",
+            "type": "string"
+          },
+          "subnet": {
+            "description": "The block it has or would get; empty when no free block could be chosen yet",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "subnet"
+        ],
+        "type": "object"
+      },
+      "IngressPlanSecret": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The secret's name; empty while the token is yet to be made, because the name carries the token's ID",
+            "type": "string"
+          },
+          "new": {
+            "description": "True when the enable makes a new join token and secret",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "new"
+        ],
+        "type": "object"
+      },
+      "IngressPlanService": {
+        "additionalProperties": false,
+        "properties": {
+          "image": {
+            "description": "The image it runs, tagged with this server's version",
+            "type": "string"
+          },
+          "name": {
+            "description": "The global proxy service's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "image"
+        ],
+        "type": "object"
+      },
+      "IngressPlanVolume": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The volume's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "IngressRedeployBody": {
+        "additionalProperties": false,
+        "properties": {
+          "holdsClaims": {
+            "description": "True when the stack holds hostname claims",
+            "type": "boolean"
+          },
+          "stackId": {
+            "description": "The stack's ID",
+            "type": "string"
+          },
+          "stackName": {
+            "description": "The stack's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stackId",
+          "stackName",
+          "holdsClaims"
         ],
         "type": "object"
       },
@@ -33725,6 +34006,187 @@
           }
         },
         "summary": "Replace a domain's DNS token",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/enable": {
+      "post": {
+        "description": "Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. 409 ingress_standalone_unavailable on a standalone environment; 409 ingress_preflight_refused when the preflight refuses, with each finding's code and items in errors; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). Audited as ingress.enabled when the job switches it on.",
+        "operationId": "enableIngress",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngressEnableRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressEnableStartBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Switch ingress on for a swarm environment",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/enable/preview": {
+      "post": {
+        "description": "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. 409 ingress_standalone_unavailable on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "previewIngressEnable",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngressEnableRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressEnablePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview switching ingress on for a swarm environment",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/jobs/{jobId}": {
+      "get": {
+        "description": "The job as it stands now. A job is kept for 10 minutes after it ends. A job of another environment, one that is not an ingress job, one you did not start and may not follow, or one that is gone is 404 ingress_job_not_found. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "getIngressJob",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The job ID the enable answered with",
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "description": "The job ID the enable answered with",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressJobBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One ingress job and its steps",
         "tags": [
           "ingress"
         ]

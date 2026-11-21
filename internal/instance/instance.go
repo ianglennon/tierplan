@@ -303,6 +303,21 @@ func (i *Instance) AgentEndpoint() string {
 	return e
 }
 
+// IngressEndpoint is the address the ingress proxy dials: wss://, the host, port and path of AgentBase, and
+// /ingress/connect. It is "" when neither URL is set. Like AgentEndpoint it never reads a request header, so a forged
+// Host cannot point the proxy, and the join token it carries, somewhere else.
+func (i *Instance) IngressEndpoint() string {
+	base := i.AgentBase()
+	if base == "" {
+		return ""
+	}
+	e, err := config.IngressEndpoint(base)
+	if err != nil {
+		return ""
+	}
+	return e
+}
+
 // SetAgentURLTx stores the agent URL inside the caller's write transaction, with
 // "" clearing it. Like SetTx it leaves the cache alone: call ApplyAgentURL after
 // the commit. When TIERPLAN_AGENT_URL fixes the URL a different value is refused
