@@ -453,3 +453,167 @@ func TestDisableRemovesEverything(t *testing.T) {
 	}
 	release()
 }
+
+// TestDisableRefusedWhileRoutesLive: a running stack's claim and a stopped stack's each refuse a switch-off and its preview
+// with ingress_routes_live, the items read hostname, path and stack ordered by hostname then path, and a claim in another
+// environment does not refuse.
+func TestDisableRefusedWhileRoutesLive(t *testing.T) {
+	f := newDisableFix(t, disableOpts{})
+	other := f.otherEnv()
+	f.seedRoute(other, "stack-x", "elsewhere", "x.other.example.org", "/", false)
+
+	// Another environment's claim does not stand in the way.
+	if prev, err := f.svc.PreviewDisable(testsupport.Context(t), f.envID, seesAll); err != nil || len(prev.Findings) != 0 {
+		t.Fatalf("PreviewDisable = %+v, %v; want nothing in the way of another environment's claim", prev, err)
+	}
+
+	f.seedRoute(f.envID, "stack-1", "web", "b.apps.example.com", "/api", false)
+	f.seedRoute(f.envID, "stack-1", "web", "b.apps.example.com", "/", false)
+	f.seedRoute(f.envID, "stack-2", "batch", "a.apps.example.com", "/z", true)
+	got := f.wantRefused(seesAll, ingressdeploy.CodeRoutesLive)
+	want := []string{"a.apps.example.com/z (stack batch)", "b.apps.example.com/ (stack web)", "b.apps.example.com/api (stack web)"}
+	if !slices.Equal(got.Items, want) {
+		t.Errorf("items = %q, want %q", got.Items, want)
+	}
+	if !strings.Contains(got.Message, "Remove the labels and redeploy, or remove the stacks") || ingressdeploy.CodeRoutesLive != "ingress_routes_live" {
+		t.Errorf("message = %q, code = %q", got.Message, ingressdeploy.CodeRoutesLive)
+	}
+	if n := f.auditCount("ingress.node_removed"); n != 0 || len(f.kicker.calls) != 0 {
+		t.Errorf("a refusal kicked %v and removed %d nodes", f.kicker.calls, n)
+	}
+}
+
+// TestDisableRefusalIsRedacted: the stack's name appears for a canView that sees the environment; for one that does not, and
+// for none, the item carries the redacted wording and neither the stack's nor the environment's name appears anywhere.
+func TestDisableRefusalIsRedacted(t *testing.T) {
+	f := newDisableFix(t, disableOpts{})
+	f.seedRoute(f.envID, "stack-1", "secret-shop", "shop.apps.example.com", "/", false)
+
+	seen := f.wantRefused(seesAll, ingressdeploy.CodeRoutesLive)
+	if want := []string{"shop.apps.example.com/ (stack secret-shop)"}; !slices.Equal(seen.Items, want) {
+		t.Errorf("items for a caller who sees the environment = %q, want %q", seen.Items, want)
+	}
+
+	redacted := ingress.DescribeHolder(ingress.ClaimInfo{
+		Claim: ingress.Claim{EnvID: f.envID, Hostname: "shop.apps.example.com", OwnerKind: ingress.OwnerStack, StackID: "stack-1"},
+	}, nil)
+	for name, canView := range map[string]func(string) bool{
+		"a canView that sees nothing": func(string) bool { return false },
+		"no canView":                  nil,
+	} {
+		got := f.wantRefused(canView, ingressdeploy.CodeRoutesLive)
+		all := got.Message + " " + strings.Join(got.Items, " ")
+		for _, leak := range []string{"secret-shop", "prod", "stack-1", f.envID} {
+			if strings.Contains(all, leak) {
+				t.Errorf("%s: the refusal %q names %q", name, all, leak)
+			}
+		}
+		if len(got.Items) != 1 || !strings.Contains(got.Items[0], redacted) || !strings.HasPrefix(got.Items[0], "shop.apps.example.com/") {
+			t.Errorf("%s: items = %q, want the route followed by %q", name, got.Items, redacted)
+		}
+	}
+}
+
+// TestDisableRefusedWhilePaused: an environment a restore paused refuses the preview and the switch-off with ingress_paused
+// and starts no job, even with a route live: the pause is reported first.
+func TestDisableRefusedWhilePaused(t *testing.T) {
+	f := newDisableFix(t, disableOpts{})
+	if _, err := f.istore.SetPaused(testsupport.Context(t), f.envID, true, "system:restore", nil); err != nil {
+		t.Fatalf("SetPaused: %v", err)
+	}
+	f.seedRoute(f.envID, "stack-1", "web", "b.apps.example.com", "/", false)
+	got := f.wantRefused(seesAll, ingressdeploy.CodePaused)
+	if got.Code != "ingress_paused" {
+		t.Errorf("code = %q", got.Code)
+	}
+}
+
+// TestDisableEdges: with every node reachable nothing is unreachable; an environment with no nodes still loses its service,
+// network and secret; and a second switch-off after a complete one is done with nothing left to remove or record.
+func TestDisableEdges(t *testing.T) {
+	t.Run("every node reachable", func(t *testing.T) {
+		f := newDisableFix(t, disableOpts{worker: true})
+		prev, err := f.svc.PreviewDisable(testsupport.Context(t), f.envID, seesAll)
+		if err != nil || len(prev.Unreachable) != 0 {
+			t.Fatalf("PreviewDisable = %+v, %v; want no unreachable node", prev, err)
+		}
+		job := f.disable(seesAll)
+		wantDisableDone(t, job)
+		if it := itemOf(job, ingressdeploy.ItemVolumes); it.Result["unreachable"] != "" || it.Result["pending"] != "0" {
+			t.Errorf("volumes result = %v, want an empty unreachable list", it.Result)
+		}
+		if p, _ := f.istore.PendingWipes(testsupport.Context(t), f.envID); len(p) != 0 {
+			t.Errorf("pending wipes = %+v, want none", p)
+		}
+	})
+
+	t.Run("no nodes", func(t *testing.T) {
+		f := newDisableFix(t, disableOpts{})
+		f.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes = nil })
+		job := f.disable(seesAll)
+		wantDisableDone(t, job)
+		if _, ok := f.service(); ok {
+			t.Error("the service is still there")
+		}
+		if _, ok := f.network(); ok {
+			t.Error("the network is still there")
+		}
+		if len(f.secrets()) != 0 {
+			t.Error("a secret is still there")
+		}
+		if it := itemOf(job, ingressdeploy.ItemVolumes); it.Result["wiped"] != "0" {
+			t.Errorf("volumes result = %v, want none wiped", it.Result)
+		}
+	})
+
+	t.Run("again after a complete one", func(t *testing.T) {
+		f := newDisableFix(t, disableOpts{})
+		wantDisableDone(t, f.disable(seesAll))
+		writes := len(f.fake.Writes())
+		job := f.disable(seesAll)
+		wantDisableDone(t, job)
+		if n := len(f.fake.Writes()) - writes; n != 0 {
+			t.Errorf("a repeat wrote %v to the swarm, want nothing to remove", f.fake.Writes()[writes:])
+		}
+		for action, want := range map[string]int{"ingress.disabled": 1, "ingress.join_token_disabled": 1, "ingress.wipe_queued": 0} {
+			if got := f.auditCount(action); got != want {
+				t.Errorf("%s audit rows = %d after a repeat, want %d", action, got, want)
+			}
+		}
+	})
+}
+
+// TestDisableTasksThatNeverGoFailTheServiceStepAndARerunFinishes: proxy tasks still running after DisableTaskDeadline end the
+// service item failed with disable_service_failed and the items after it not run, with ingress already off and the lock free;
+// once they are gone the same call finishes the rest.
+func TestDisableTasksThatNeverGoFailTheServiceStepAndARerunFinishes(t *testing.T) {
+	f := newDisableFix(t, disableOpts{tasks: true})
+	job := f.disable(seesAll)
+	if job.State == jobs.JobDone {
+		t.Fatalf("the job ended done with a task still running: %+v", job.Items)
+	}
+	if it := itemOf(job, ingressdeploy.ItemSwitchOff); it.State != jobs.ItemDone {
+		t.Errorf("switch_off = %q, want done", it.State)
+	}
+	if it := itemOf(job, ingressdeploy.ItemService); it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeDisableServiceFailed {
+		t.Errorf("service = %q %q, want failed with disable_service_failed", it.State, it.Code)
+	}
+	for _, id := range []string{"volumes", "network", "secret", "token", "nodes"} {
+		if it := itemOf(job, id); it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
+			t.Errorf("%s = %q %q, want skipped and not_run", id, it.State, it.Code)
+		}
+	}
+	if !hasVolume(t, f.cli) {
+		t.Error("the cache volume was wiped under a task that still ran")
+	}
+	// Two minutes of the injected clock, polled every PollInterval, and no real wait.
+	if got, max := f.clock.waited(), int(ingressdeploy.DisableTaskDeadline/stackops.PollInterval)+1; got < max-1 || got > max {
+		t.Errorf("waited %d times, want about %d", got, max)
+	}
+
+	f.fake.Reconfigure(func() dockertest.FakeConfig { c := f.base; c.Tasks = nil; return c }())
+	wantDisableDone(t, f.disable(seesAll))
+	if hasVolume(t, f.cli) {
+		t.Error("the rerun left the cache volume")
+	}
+}
