@@ -60,3 +60,27 @@ func (s *Service) RefuseLocalOnSwarmNode(ctx context.Context) error {
 	}
 	return ErrLocalIsSwarmNode
 }
+
+// LocalSwarmClusterID is the swarm cluster ID of the engine behind the server's own Docker socket. It is empty,
+// with no error, when there is no socket at the configured path, the engine does not answer, or it is not an
+// active node of a swarm (a standalone engine). A manager reports the cluster it belongs to; a worker does not, so
+// its answer is empty as well.
+//
+// The ingress preflight compares it with the cluster ID of the environment it is about to write to (D-09): a
+// server that runs on a node of that very swarm must not publish its own ports 80 and 443 in a way that collides
+// with the proxy. It is one probe of the socket, bounded by the monitor's probe timeout, and nothing it learns is
+// kept.
+func (s *Service) LocalSwarmClusterID(ctx context.Context) (string, error) {
+	path, err := engine.ParseDockerHost(s.dockerHost)
+	if err != nil || !engine.SocketExists(path) {
+		return "", nil
+	}
+	res, err := s.probe(ctx, engine.LocalSocketTransport{Path: path})
+	if err != nil {
+		return "", nil
+	}
+	if res.SwarmNodeState != "active" {
+		return "", nil
+	}
+	return res.SwarmClusterID, nil
+}
