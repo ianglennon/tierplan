@@ -96,12 +96,17 @@ func (d Deps) reviewAdoptPlan(ctx context.Context, in ReviewInput, rv *Review) (
 			// The counter that makes the swarm replace tasks is carried over, as a deploy does.
 			spec.TaskTemplate.ForceUpdate = liveForceUpdate(existing.Spec)
 		}
-		desired[sp.Name] = spec
+		desired[sp.Name] = stacks.StripIngressAttachment(spec)
 	}
 	own := OwnershipOf(in.Stack)
 	running, err := liveSpecsOwned(live, func(s dockerx.ServiceDetail) bool { return own.owns(s.Stack, s.Labels) })
 	if err != nil {
 		return convert.Plan{}, err
+	}
+	// The live specs name their networks (liveSpecsOwned), so the attachment TierPlan adds at deploy time is dropped
+	// by name on both sides: it is neither a gap nor an ownership-only change (D-20).
+	for name, spec := range running {
+		running[name] = stacks.StripIngressAttachment(spec)
 	}
 	masker := stacks.NewMasker(in.Copy.Vars, in.Copy.Files)
 	rv.Services = stacks.DiffServices(desired, running, masker)

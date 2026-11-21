@@ -168,14 +168,16 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 			// carried over, as a deploy does.
 			spec.TaskTemplate.ForceUpdate = liveForceUpdate(existing.Spec)
 		}
-		desired[sp.Name] = stacks.StripOwnership(spec)
+		// TierPlan's ingress attachment is its own, added at deploy time and not part of what the user wrote: it is
+		// left out on both sides, so a service with it and a revision without it (or the reverse) is not drift (D-20).
+		desired[sp.Name] = stacks.StripIngressAttachment(stacks.StripOwnership(spec))
 	}
 	running, err := liveSpecs(live, in.Stack)
 	if err != nil {
 		return DriftResult{}, err
 	}
 	for name, spec := range running {
-		running[name] = stacks.StripOwnership(spec)
+		running[name] = stacks.StripIngressAttachment(stacks.StripOwnership(spec))
 	}
 
 	masker := driftMasker(in, deployed)

@@ -260,13 +260,13 @@ func maskReverts(rows []DriftRevert, m stacks.Masker) {
 }
 
 // rawSwarmRows are the rows of what a deploy would do to the swarm services, unmasked and with TierPlan's ownership
-// labels taken out on both sides, as drift compares them (so that the two are comparable): Current is what runs and
+// labels and its ingress attachment (D-20) taken out on both sides, as drift compares them (so that the two are comparable): Current is what runs and
 // Next what the deploy sends.
 func rawSwarmRows(desired, running map[string]swarm.ServiceSpec) []stacks.ServiceChange {
 	strip := func(in map[string]swarm.ServiceSpec) map[string]swarm.ServiceSpec {
 		out := make(map[string]swarm.ServiceSpec, len(in))
 		for name, spec := range in {
-			out[name] = stacks.StripOwnership(spec)
+			out[name] = stacks.StripIngressAttachment(stacks.StripOwnership(spec))
 		}
 		return out
 	}
