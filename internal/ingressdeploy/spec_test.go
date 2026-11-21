@@ -240,7 +240,7 @@ func TestUpdateConfigStopFirstRollback(t *testing.T) {
 // TestNoTokenInSpec proves the spec carries the token file's path and the secret's name and nothing
 // that could be a token.
 func TestNoTokenInSpec(t *testing.T) {
-	const token = "tpl_ingress_SECRET_TOKEN_VALUE"
+	const token = "tpl_ingress_SECRET_TOKEN_VALUE" //nolint:gosec // G101: a fake token the test checks never reaches the spec
 	in := vectorInput()
 	spec := proxySpec(in)
 	b, err := json.Marshal(spec)
