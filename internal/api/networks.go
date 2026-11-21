@@ -1210,7 +1210,7 @@ func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envI
 // and at which stage of its audit trail the row is. The zero value is an ordinary
 // container, whose rows carry neither.
 type ownedAttempt struct {
-	// kind is ownServer or ownAgent; empty for any other container.
+	// kind is ownServer, ownAgent or ownIngress; empty for any other container.
 	kind string
 	// stage is stageCompleted or stageConnectionLost once the call was made.
 	stage string
@@ -1258,6 +1258,8 @@ func ownContainerGate(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 		attempt.kind = ownServer
 	case own.Labels[ownerLabelAgent] == ownerLabelAgentValue:
 		attempt.kind = ownAgent
+	case isIngressTask(own.Labels):
+		attempt.kind = ownIngress
 	default:
 		return attempt, "", nil
 	}

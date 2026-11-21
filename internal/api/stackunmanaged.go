@@ -58,7 +58,7 @@ type UnmanagedStackBody struct {
 	FoundBy         UnmanagedFoundByBody `json:"foundBy" doc:"The label the stack was found by"`
 	Orphan          bool                 `json:"orphan" doc:"True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked"`
 	Portainer       bool                 `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
-	Owner           string               `json:"owner" enum:",tierplan,agent" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other"`
+	Owner           string               `json:"owner" enum:",tierplan,agent,ingress" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so no row has it today), empty for any other"`
 	Adoptable       bool                 `json:"adoptable" doc:"False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason          string               `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
 	Update          *StackUpdateBody     `json:"update,omitempty" doc:"Left out when update checks are not available or no service is judged: the states of the stack's services rolled up, as on the stack lists"`

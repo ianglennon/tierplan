@@ -2430,11 +2430,12 @@
             "type": "string"
           },
           "selfKind": {
-            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise",
+            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise",
             "enum": [
               "",
               "server",
-              "agent"
+              "agent",
+              "ingress"
             ],
             "type": "string"
           },
@@ -2604,11 +2605,12 @@
             "description": "Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"
           },
           "selfKind": {
-            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect",
+            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect",
             "enum": [
               "",
               "server",
-              "agent"
+              "agent",
+              "ingress"
             ],
             "type": "string"
           },
@@ -25918,11 +25920,12 @@
             "type": "boolean"
           },
           "owner": {
-            "description": "tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other",
+            "description": "tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so no row has it today), empty for any other",
             "enum": [
               "",
               "tierplan",
-              "agent"
+              "agent",
+              "ingress"
             ],
             "type": "string"
           },
@@ -30701,7 +30704,7 @@
     },
     "/api/env/{envId}/containers": {
       "get": {
-        "description": "Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
+        "description": "Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server, agent or ingress for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
         "operationId": "listContainers",
         "parameters": [
           {

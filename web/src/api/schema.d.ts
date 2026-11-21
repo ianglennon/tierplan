@@ -789,7 +789,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server, agent or ingress for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -7260,10 +7260,10 @@ export interface components {
             /** @enum {string} */
             restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent";
+            selfKind: "" | "server" | "agent" | "ingress";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -7328,10 +7328,10 @@ export interface components {
             /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
             restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent";
+            selfKind: "" | "server" | "agent" | "ingress";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -16902,10 +16902,10 @@ export interface components {
             /** @description True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked */
             orphan: boolean;
             /**
-             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other
+             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so no row has it today), empty for any other
              * @enum {string}
              */
-            owner: "" | "tierplan" | "agent";
+            owner: "" | "tierplan" | "agent" | "ingress";
             /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */

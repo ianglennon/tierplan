@@ -178,7 +178,7 @@ type ContainerItem struct {
 	Ports           []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
 	IsSelf          bool     `json:"isSelf" doc:"True for the container TierPlan itself runs in (D-27)"`
 	Health          string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
-	SelfKind        string   `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	SelfKind        string   `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
 	ReadOnly        bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
 	Project         string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack           string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
@@ -491,7 +491,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
 		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
-			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap)."),
+			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server, agent or ingress for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap)."),
 		need(rbac.PermContainersRead),
 		func(ctx context.Context, in *ContainerListInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
