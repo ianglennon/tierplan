@@ -228,3 +228,34 @@ func TestAdoptReviewIgnoresIngressAttachment(t *testing.T) {
 		t.Errorf("ownership-only services = %v, want %v as without the attachment", res.OwnershipOnly, want)
 	}
 }
+
+// TestDriftIgnoresDesiredIngressAttachment is the reverse direction of D-20 at the drift check itself: the funnel the
+// drift check converts through attaches the routed service to the ingress network once ingress is on, so the desired
+// side carries it while a service deployed before ingress was enabled does not, and the other way round. Neither is
+// drift, and a real change next to it is still the only difference reported.
+func TestDriftIgnoresDesiredIngressAttachment(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.Networks = append(c.Networks, ingressNetwork()) })
+	st, store := rig.deployedStack(t, "shop", routedGlobal, nil)
+	dr := &driftRig{swarmRig: rig, st: st, store: store}
+
+	fi := &fakeIngress{attach: attachedBy()}
+	rig.deps.Ingress = fi
+	if res := dr.drift(t); res.State != stackops.DriftNone || len(res.Services) != 0 || res.Count != 0 {
+		t.Fatalf("drift = %+v (%v), want none when only the desired side carries the attachment", res.State, driftNames(res))
+	}
+	if fi.asks == 0 {
+		t.Fatal("the drift check never asked whether to attach: the test proves nothing")
+	}
+
+	dr.editLive(t, "web", func(s *swarm.ServiceSpec) { addIngressAttachment(s) })
+	if res := dr.drift(t); res.State != stackops.DriftNone || len(res.Services) != 0 || res.Count != 0 {
+		t.Fatalf("drift = %+v (%v), want none when both sides carry the attachment", res.State, driftNames(res))
+	}
+
+	dr.editLive(t, "web", func(s *swarm.ServiceSpec) { s.Labels["edited"] = "outside" })
+	res := dr.drift(t)
+	if got := driftNames(res); len(got) != 1 || got[0] != "changed web" {
+		t.Errorf("drift = %v (count %d), want only the label change", got, res.Count)
+	}
+}
