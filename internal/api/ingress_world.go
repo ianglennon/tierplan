@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -37,6 +38,20 @@ func ingressPolicyFor(ctx context.Context, d StacksDeps, p *rbac.Principal, envI
 	if d.Ingress == nil {
 		return nil, nil
 	}
+	canView, err := ingressCanView(ctx, d, p, envID)
+	if err != nil {
+		return nil, err
+	}
+	world, err := d.Ingress.World(ctx, envID, canView)
+	if err != nil {
+		return nil, err
+	}
+	return &stacks.IngressPolicy{StackID: stackID, World: world}, nil
+}
+
+// ingressCanView says which environments a message about a held name may name: the stack's own, and, for a principal
+// with a role on another, that one too. With no principal, or no checker, only the stack's own environment is visible.
+func ingressCanView(ctx context.Context, d StacksDeps, p *rbac.Principal, envID string) (func(string) bool, error) {
 	canView := func(id string) bool { return id == envID }
 	if p != nil && d.Checker != nil {
 		access, err := d.Checker.Access(ctx, p)
@@ -45,11 +60,46 @@ func ingressPolicyFor(ctx context.Context, d StacksDeps, p *rbac.Principal, envI
 		}
 		canView = func(id string) bool { return access.For(id).Role != rbac.RoleNone }
 	}
-	world, err := d.Ingress.World(ctx, envID, canView)
+	return canView, nil
+}
+
+// claimWriteFor is the claim write a deploy of stack st carries (D-15, D-16, D-17): the routes of the revision it
+// deploys (project, loaded for that revision; nil means the routes are unchanged, as an Update images is, and the last
+// good revision's stand) and, for a deploy that fails, the routes of the last good revision to put back. p is who
+// acts; viewer is who a refusal may be worded for (nil for an automatic deploy, whose refusal is read by every viewer
+// of the environment, so it names only the stack's own environment, D-20). The answer is nil when the server has no
+// ingress store. It must be called holding the environment's operation lock and before the new revision exists, so
+// the last good revision it reads is the one that runs.
+//
+// A last good revision that cannot be read or loaded is treated as none (a failed deploy then releases every claim)
+// and logged: it must never stop the deploy that would replace it.
+func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal, st stackops.Stack, project *types.Project) (*stackops.ClaimWrite, error) {
+	if d.Ingress == nil {
+		return nil, nil
+	}
+	canView, err := ingressCanView(ctx, d, viewer, st.EnvID)
 	if err != nil {
 		return nil, err
 	}
-	return &stacks.IngressPolicy{StackID: stackID, World: world}, nil
+	restore, hasGood, err := stackops.LastGoodDeclarations(ctx, d.repo(), st)
+	if err != nil {
+		lg := d.Log
+		if lg == nil {
+			lg = slog.Default()
+		}
+		lg.WarnContext(ctx, "the hostname claims of a stack's last good revision could not be read; a failed deploy releases them all",
+			"env", st.EnvID, "stack", st.ID, "error", err)
+		restore, hasGood = nil, false
+	}
+	decls := restore
+	if project != nil {
+		decls = stacks.IngressDeclarations(project, st.Target)
+	}
+	actor := p.ID
+	if p.Type == rbac.PrincipalSystem && !strings.HasPrefix(actor, "system:") {
+		actor = "system:" + actor
+	}
+	return &stackops.ClaimWrite{Decls: decls, Restore: restore, HasGood: hasGood, Actor: actor, CanView: canView}, nil
 }
 
 // ingressGatePolicy is the policy a deploy gate (a deploy, a roll back, a restore, an update) judges a working copy

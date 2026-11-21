@@ -21,7 +21,7 @@ import (
 
 // Every deploy path refuses a hostname the ingress policy refuses (plan 18-13, D-18): the manual deploy of a swarm
 // and of a standalone stack, the git auto-deploy, rollback and restore, and Update images. The refusal comes before
-// anything is stored, and no path writes a claim (D-21). The seeding is that of plan 18-11 (seedIngressWorld).
+// anything is stored; the claims are written by the job once the check passed (plan 24-18). The seeding is that of plan 18-11 (seedIngressWorld).
 
 // ingressStandaloneCompose is a standalone compose file with one service per hostname, each declaring its host on
 // the service's labels (a standalone stack carries its labels there, a swarm stack under deploy.labels).
@@ -75,13 +75,13 @@ func TestIngressGateDeploySwarmStartsForAFreeHostUnderTheDomain(t *testing.T) {
 	st := newStack(t, admin, "gate-free")
 
 	f.deployGood(t, admin, st.ID, ingressCompose("free.apps.example.com"))
-	// The read-only gate wrote no claim: the host is still free for another stack to take.
+	// The job claimed the host once the gate and the check had passed (D-15), so the name is held by this stack.
 	world, err := f.stackDeps.Ingress.World(testsupport.Context(t), e.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, held := world.Claims["free.apps.example.com"]; held {
-		t.Error("the deploy claimed a hostname, want it left to a later phase (D-21)")
+	if c, held := world.Claims["free.apps.example.com"]; !held || c.StackName != "gate-free" {
+		t.Errorf("claim = %+v (held %v), want the host held by the deployed stack", c, held)
 	}
 }
 

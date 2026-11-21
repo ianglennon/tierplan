@@ -478,7 +478,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		return nil, stackInternal(d, "read the ingress names", env.ID, err)
 	}
 	if st.Target == stacks.TargetStandalone {
-		return deployStandaloneStack(ctx, d, p, env, st, draft, body, userAgent, o, mode, update, masker, pol)
+		return deployStandaloneStack(ctx, d, p, viewer, env, st, draft, body, userAgent, o, mode, update, masker, pol)
 	}
 
 	// The draft is judged once, by the check pipeline the review ran, before anything is stored or
@@ -565,6 +565,12 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		}
 	}()
 
+	// The stack's hostname claims are written by the job, under this lock, with the routes this revision declares and the
+	// last good revision's to put back if it fails (D-15, D-16). They are read now, before the new revision exists.
+	claims, err := claimWriteFor(ctx, d, p, viewer, st, loaded.Project)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
@@ -596,6 +602,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
 		Caller: caller, Masker: rendering.masker,
 		Pins: repo, Subnets: repo, RevisionID: rev.ID, Update: update, Reviewed: body.Pins,
+		Ingress: claims,
 	}
 	out, err := launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -635,7 +642,7 @@ func declaresIngress(c stacks.WorkingCopy) bool {
 // same way, and the job runs the Compose SDK instead of the swarm engine. Every step before the lock is a
 // read or a check; nothing is stored or started until the draft, the objects, the pins, the host-access
 // policy and the name have all passed.
-func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
+func deployStandaloneStack(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
 	repo := d.repo()
 	// ingress: unattached, the standalone attach is Phase 25
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
@@ -694,6 +701,11 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}()
 
+	// Hostname ownership is install-wide, so a standalone stack claims its names as a swarm stack does (D-15, D-17).
+	claims, err := claimWriteFor(ctx, d, p, viewer, st, checked.Loaded.Project)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
@@ -723,6 +735,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		Subnets: repo,
 		// The job's own check refuses what this request refused (D-18).
 		IngressPolicy: pol,
+		Ingress:       claims,
 	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
