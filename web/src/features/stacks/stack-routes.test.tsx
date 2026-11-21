@@ -290,7 +290,9 @@ describe("the stack's Routes card", () => {
     const c = await card();
     expect(within(c).getByRole("heading", { name: "Routes" })).toBeTruthy();
   });
+});
 
+describe("the Routes card on narrow screens and with long values", () => {
   it("writes a 120-character hostname and path whole, wrapped, and keeps the buttons touch-sized", async () => {
     const host = `${"a".repeat(60)}.${"b".repeat(56)}.io`;
     expect(host).toHaveLength(120);
@@ -330,6 +332,16 @@ describe("the stack's Routes card", () => {
     expect(within(d).getByRole("button", { name: "Show all 11" }).className).toContain(
       "max-md:h-11",
     );
+  });
+
+  it("wraps a long reason and a long service name instead of widening the card", async () => {
+    const reason = "x".repeat(150);
+    serve([route({ state: "waiting_certificate", reason, service: "s".repeat(90) })]);
+    mount();
+    const c = await card();
+    const detail = within(c).getByText(reason);
+    expect(detail.className).toContain("break-words");
+    expect(within(c).getByText("s".repeat(90)).className).toContain("break-all");
   });
 });
 
