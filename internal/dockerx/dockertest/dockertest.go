@@ -722,6 +722,8 @@ type Fake struct {
 	nodeGone map[string]bool
 	// svcGone are the IDs of the services removed through the fake.
 	svcGone map[string]bool
+	// svcRemoveErr is the refusal of the removal of a service, by name (SetServiceRemoveError).
+	svcRemoveErr map[string]string
 	// taskStates are the states SetTaskState gave the tasks that follow writes, by service name.
 	taskStates map[string]fakeTaskState
 	// quorumLost is set by LoseQuorum.

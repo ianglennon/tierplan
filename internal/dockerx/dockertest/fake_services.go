@@ -445,6 +445,11 @@ func (f *Fake) serveServiceRemove(w http.ResponseWriter, r *http.Request, p stri
 		return true
 	}
 	f.mu.Lock()
+	if msg, bad := f.svcRemoveErr[fs.Name]; bad {
+		f.mu.Unlock()
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": msg})
+		return true
+	}
 	if f.svcGone == nil {
 		f.svcGone = map[string]bool{}
 	}
@@ -575,4 +580,20 @@ func filterServicesByLabel(in []swarm.Service, rawFilters string) []swarm.Servic
 		}
 	}
 	return out
+}
+
+// SetServiceRemoveError makes the removal of the service of that name answer 500 with the message, as a manager does
+// when it cannot remove one. It can be set while a test runs, so a service the test created through a deploy can be
+// the one that refuses. An empty message lifts it.
+func (f *Fake) SetServiceRemoveError(name, message string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if message == "" {
+		delete(f.svcRemoveErr, name)
+		return
+	}
+	if f.svcRemoveErr == nil {
+		f.svcRemoveErr = map[string]string{}
+	}
+	f.svcRemoveErr[name] = message
 }

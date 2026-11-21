@@ -268,3 +268,208 @@ func TestCertificateNotReadyNeverFailsDeploy(t *testing.T) {
 	}
 	wantHeld(t, f, st, "app.example.com")
 }
+
+// claimSteps is every way a deploy of the stack's second revision can end badly. The stack's good revision declares
+// a.example.com and the second revision b.example.com.
+var claimSteps = []struct {
+	name string
+	// step is the item that is expected to fail.
+	step    string
+	tune    func(*dockertest.FakeConfig)
+	compose string
+	files   []stacks.File
+}{
+	{
+		name: "lookup", step: stackops.ItemLookup,
+		tune: func(c *dockertest.FakeConfig) {
+			c.PullStatus = dockertest.FakePullStatus{Code: 404, Message: "manifest unknown"}
+		},
+		compose: strings.Replace(routed("b.example.com"), "nginx:1.27-alpine", "nginx:1.27", 1),
+	},
+	{
+		name: "networks", step: stackops.ItemNetworks,
+		tune: func(c *dockertest.FakeConfig) {
+			c.SwarmClusterID = "cluster-1"
+			c.SwarmUnallocated = map[string]int{"10.70.0.0/24": -1}
+		},
+		compose: "services:\n  web:\n    image: nginx:1.27-alpine\n    networks: [back]\n    deploy:\n      labels:\n        tierplan.ingress.host: b.example.com\n        tierplan.ingress.port: \"80\"\nnetworks:\n  back:\n    ipam:\n      config:\n        - subnet: 10.70.0.0/24\n",
+	},
+	{
+		name: "objects", step: stackops.ItemObjects,
+		tune:    func(c *dockertest.FakeConfig) { c.WriteError = "engine said no" },
+		compose: "services:\n  web:\n    image: nginx:1.27-alpine\n    secrets:\n      - tok\n    deploy:\n      labels:\n        tierplan.ingress.host: b.example.com\n        tierplan.ingress.port: \"80\"\nsecrets:\n  tok:\n    file: tok.txt\n",
+		files:   tokFile("s3cret"),
+	},
+	{
+		name: "services", step: stackops.ItemServices,
+		tune:    func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" },
+		compose: routed("b.example.com"),
+	},
+}
+
+func TestClaimsFollowLastGood(t *testing.T) {
+	t.Parallel()
+	for _, tc := range claimSteps {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newClaimFix(t, false, tc.tune)
+			st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+			f.makeGood(t, st)
+			wantHeld(t, f, st, "a.example.com")
+			in := f.swarmInput(t, st, tc.compose, tc.files...)
+
+			res, job := f.rig.deploy(t, in)
+
+			if res.OK() {
+				t.Fatalf("result = %+v, want the %s step to fail", res, tc.step)
+			}
+			if got := itemStates(job)[tc.step]; !strings.HasPrefix(got, "failed:") {
+				t.Fatalf("items = %v, want %s failed", itemStates(job), tc.step)
+			}
+			wantHeld(t, f, st, "a.example.com")
+		})
+	}
+
+	t.Run("cleanup", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, false, nil)
+		two := routed("a.example.com") + "  old:\n    image: busybox:1.36\n"
+		st := f.newStack(t, "web", stacks.TargetSwarm, two)
+		// The good revision ran both services; the claim is what its deploy stored.
+		plain := f.swarmInput(t, st, two)
+		plain.Ingress = nil
+		if res, _ := f.rig.deploy(t, plain); !res.OK() {
+			t.Fatalf("first deploy = %+v", res)
+		}
+		f.makeGood(t, st)
+		f.rig.fake.SetServiceRemoveError("web_old", "the manager cannot remove it")
+		in := f.swarmInput(t, st, routed("b.example.com"))
+
+		res, job := f.rig.deploy(t, in)
+
+		if res.OK() || !strings.HasPrefix(itemStates(job)[stackops.ItemCleanup], "failed:") {
+			t.Fatalf("result = %+v, items = %v, want the cleanup step to fail", res, itemStates(job))
+		}
+		wantHeld(t, f, st, "a.example.com")
+	})
+
+	t.Run("converge_timeout", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, false, nil)
+		clk := newStepClock()
+		f.rig.deps.Clock, f.rig.deps.ConvergeTimeout = clk, time.Minute
+		f.rig.fake.SetTaskState("web_web", "rejected", "No such image: nginx:1.27-alpine")
+		st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+		f.makeGood(t, st)
+		d := f.rig.startDeploy(t, f.swarmInput(t, st, routed("b.example.com")))
+		for range 30 {
+			clk.Tick(t, stackops.PollInterval)
+		}
+
+		res, _ := d.finish(t)
+
+		if res.Code != stackops.CodeConvergeTimeout {
+			t.Fatalf("result = %+v, want a converge timeout", res)
+		}
+		wantHeld(t, f, st, "a.example.com")
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, false, nil)
+		f.rig.deps.Clock, f.rig.deps.ConvergeTimeout = newStepClock(), time.Minute
+		f.rig.fake.SetTaskState("web_web", "preparing", "")
+		st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+		f.makeGood(t, st)
+		d := f.rig.startDeploy(t, f.swarmInput(t, st, routed("b.example.com")))
+		d.until(t, "the service to wait for its tasks", func(items map[string]jobs.Item) bool {
+			return items["service:web_web"].Unit == "tasks"
+		})
+		wantHeld(t, f, st, "b.example.com") // the deploy holds the new claim while it runs
+		if err := f.rig.hub.Cancel(d.job.ID); err != nil {
+			t.Fatal(err)
+		}
+
+		res, _ := d.finish(t)
+
+		if res.Code != stackops.CodeCancelled {
+			t.Fatalf("result = %+v, want cancelled", res)
+		}
+		wantHeld(t, f, st, "a.example.com")
+	})
+}
+
+func TestClaimsReleasedOnFailedFirstDeploy(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
+	st := f.newStack(t, "web", stacks.TargetSwarm, routed("b.example.com"))
+	in := f.swarmInput(t, st, routed("b.example.com"))
+	if in.Ingress.HasGood {
+		t.Fatal("the stack has no good revision yet")
+	}
+
+	res, _ := f.rig.deploy(t, in)
+
+	if res.OK() || res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v, want the service rejected", res)
+	}
+	wantHeld(t, f, st)
+}
+
+func TestFailedRevisionsHostnameIsFreeAgain(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
+	st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+	f.makeGood(t, st)
+	other := f.newStack(t, "other", stacks.TargetSwarm, routed("b.example.com"))
+
+	if res, _ := f.rig.deploy(t, f.swarmInput(t, st, routed("b.example.com"))); res.OK() {
+		t.Fatalf("result = %+v, want the deploy to fail", res)
+	}
+
+	// Right after the failure the second stack may claim what only the failed revision asked for.
+	f.claim(t, other, declsOf(t, routed("b.example.com"), stacks.TargetSwarm))
+	wantHeld(t, f, other, "b.example.com")
+	wantHeld(t, f, st, "a.example.com")
+}
+
+func TestRestoreRefusedFallsBackToRelease(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
+	st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+	f.makeGood(t, st)
+	other := f.newStack(t, "other", stacks.TargetSwarm, routed("a.example.com"))
+	// The deploy's own write frees a.example.com; another stack takes it before the deploy ends.
+	f.ops.mu.Lock()
+	f.ops.stackID = st.ID
+	f.ops.after = func() { f.claim(t, other, declsOf(t, routed("a.example.com"), stacks.TargetSwarm)) }
+	f.ops.mu.Unlock()
+
+	res, _ := f.rig.deploy(t, f.swarmInput(t, st, routed("b.example.com")))
+
+	if res.OK() {
+		t.Fatalf("result = %+v, want the deploy to fail", res)
+	}
+	wantHeld(t, f, st)
+	wantHeld(t, f, other, "a.example.com")
+	if !strings.Contains(f.logs.String(), "released") {
+		t.Errorf("log = %q, want a warning that the claims were released", f.logs.String())
+	}
+}
+
+func TestLastGoodDeclarations(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, nil)
+	st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+
+	decls, ok, err := stackops.LastGoodDeclarations(testsupport.Context(t), f.repo, st)
+	if err != nil || ok || decls != nil {
+		t.Fatalf("with no good revision: %v, %v, %v, want nil, false, nil", decls, ok, err)
+	}
+
+	f.makeGood(t, st)
+	decls, ok, err = stackops.LastGoodDeclarations(testsupport.Context(t), f.repo, st)
+	if err != nil || !ok || len(decls) != 1 || decls[0].Host != "a.example.com" || decls[0].Service != "web" {
+		t.Fatalf("with a good revision: %v, %v, %v, want the one route of a.example.com", decls, ok, err)
+	}
+}
