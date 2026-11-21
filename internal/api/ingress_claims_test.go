@@ -11,10 +11,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Every path that deploys a revision claims its hostnames as a manual deploy does, and nothing else touches the claims
@@ -192,4 +195,197 @@ func TestIngressClaimsOnManualDeploy(t *testing.T) {
 			t.Errorf("claims = %v, want the host of the deployed revision", got)
 		}
 	})
+}
+
+// rollbackAs posts a roll back or a restore of the stack and waits for its job.
+func rollbackAs(t *testing.T, f *envFix, c *roleCaller, stackID, body string) jobs.Job {
+	t.Helper()
+	rec := c.do(http.MethodPost, rollbackPath(stackID), body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %.300s, want 202", rec.Code, rec.Body)
+	}
+	return jobOf(t, f, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID)
+}
+
+func TestIngressClaimsOnEveryPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("git", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seed := seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		owner := f.addUser(t, "ia-owner", true)
+		deployer := api.NewStackDeployer(f.stackDeps)
+		actor := rbac.OnBehalf("system:gitsync", owner)
+
+		// A name another stack holds is refused by the automatic deploy, as by a manual one.
+		taken := newStack(t, admin, "git-taken")
+		v := saveCompose(t, admin, taken.ID, ingressCompose(seed.takenHost), "[]")
+		if _, err := deployer.DeployDraft(testsupport.Context(t), actor, e.ID, taken.ID, v, "poll"); refusalOf(t, err).Code != "not_deployable" {
+			t.Fatalf("deploy of a taken name: %v, want a not_deployable refusal", err)
+		}
+		if got := claimsOf(t, f, e.ID, taken.ID); len(got) != 0 {
+			t.Errorf("claims of the refused stack = %v, want none", got)
+		}
+
+		// A free name is claimed by the job the automatic deploy starts, under the system actor.
+		st := newStack(t, admin, "git-free")
+		v = saveCompose(t, admin, st.ID, ingressCompose("git.apps.example.com"), "[]")
+		started, err := deployer.DeployDraft(testsupport.Context(t), actor, e.ID, st.ID, v, "poll")
+		if err != nil {
+			t.Fatalf("deploy of a free name: %v", err)
+		}
+		if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"git.apps.example.com"}) {
+			t.Errorf("claims = %v, want the host of the deployed revision", got)
+		}
+		world, err := f.stackDeps.Ingress.World(context.Background(), e.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if by := world.Claims["git.apps.example.com"].ClaimedBy; by != "system:gitsync" {
+			t.Errorf("claimed by %q, want the system actor of the automatic deploy", by)
+		}
+	})
+
+	t.Run("rollback", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claims-rollback")
+		f.deployGood(t, admin, st.ID, ingressCompose("old.apps.example.com"))
+		f.deployGood(t, admin, st.ID, ingressCompose("new.apps.example.com"))
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"new.apps.example.com"}) {
+			t.Fatalf("claims before = %v, want the newer revision's host", got)
+		}
+
+		job := rollbackAs(t, f, admin, st.ID, `{"revision":1}`)
+
+		if job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"old.apps.example.com"}) {
+			t.Errorf("claims = %v, want the restored revision's host held and the newer one's released", got)
+		}
+	})
+
+	t.Run("a roll back that fails puts the claims back", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claims-rollback-fails")
+		f.deployGood(t, admin, st.ID, ingressCompose("old.apps.example.com"))
+		f.deployGood(t, admin, st.ID, ingressCompose("new.apps.example.com"))
+		f.fake.RefuseServiceUpdates(st.Name+"_weba", "the swarm will not take this spec")
+
+		job := rollbackAs(t, f, admin, st.ID, `{"revision":1}`)
+
+		if job.State == "done" {
+			t.Fatalf("job = %+v, want it failed", job)
+		}
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"new.apps.example.com"}) {
+			t.Errorf("claims = %v, want the claims held before the roll back", got)
+		}
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claims-restore")
+		f.deployGood(t, admin, st.ID, ingressCompose("kept.apps.example.com"))
+		// Something outside the deploys let go of the name; a restore puts the deployed revision back, claim included.
+		if err := f.stackDeps.Ingress.ReleaseStack(context.Background(), e.ID, st.ID, "admin", nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := claimsOf(t, f, e.ID, st.ID); len(got) != 0 {
+			t.Fatalf("claims after the release = %v, want none", got)
+		}
+
+		job := rollbackAs(t, f, admin, st.ID, `{"mode":"restore","revision":1}`)
+
+		if job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"kept.apps.example.com"}) {
+			t.Errorf("claims = %v, want the deployed revision's host held again", got)
+		}
+	})
+}
+
+// shopRouted is the shop stack's compose file with its one service routed to host.
+func shopRouted(host string) string {
+	return "services:\n  web:\n    image: registry.test/team/web:1\n    deploy:\n      labels:\n" +
+		"        tierplan.ingress.host: " + host + "\n        tierplan.ingress.port: \"80\"\n"
+}
+
+// routedShop is a shop stack of one service that has claimed shop.apps.example.com, with the claims' version and claim audit
+// count (written and released) read after that deploy.
+func routedShop(t *testing.T, quick bool) (s *shopFix, version int64, audits int) {
+	t.Helper()
+	if quick {
+		s = shopQuick(t, "web")
+	} else {
+		s = newShop(t, "web")
+	}
+	seedIngressWorld(t, s.f, s.e)
+	s.f.deployGood(t, s.operator, s.st.ID, shopRouted("shop.apps.example.com"))
+	if got := claimsOf(t, s.f, s.e.ID, s.st.ID); !slices.Equal(got, []string{"shop.apps.example.com"}) {
+		t.Fatalf("claims after the deploy = %v, want the shop's host", got)
+	}
+	return s, configVersion(t, s.f, s.e.ID), claimAudits(t, s.f, "ingress.claim_replaced") + claimAudits(t, s.f, "ingress.claim_released")
+}
+
+// wantClaimsUntouched fails unless the shop still holds its host and no claim write was made since version and audits.
+func wantClaimsUntouched(t *testing.T, s *shopFix, version int64, audits int) {
+	t.Helper()
+	if got := claimsOf(t, s.f, s.e.ID, s.st.ID); !slices.Equal(got, []string{"shop.apps.example.com"}) {
+		t.Errorf("claims = %v, want the shop's host still held", got)
+	}
+	if now := configVersion(t, s.f, s.e.ID); now != version {
+		t.Errorf("config_version went from %d to %d, want it unchanged", version, now)
+	}
+	if n := claimAudits(t, s.f, "ingress.claim_replaced") + claimAudits(t, s.f, "ingress.claim_released"); n != audits {
+		t.Errorf("claim audit rows = %d, want %d (no claim write)", n, audits)
+	}
+}
+
+func TestIngressClaimsUpdateIsNoOp(t *testing.T) {
+	t.Parallel()
+	s, version, audits := routedShop(t, false)
+
+	for _, digest := range []byte{'b', 'c'} {
+		s.move(t, "web", digest)
+		s.updateStack(t, s.operator, "stack", "shop", nil)
+		wantClaimsUntouched(t, s, version, audits)
+	}
+}
+
+func TestIngressClaimsNotWrittenByStartAndAutoRollback(t *testing.T) {
+	t.Parallel()
+	s, version, audits := routedShop(t, true)
+
+	if _, job := s.f.lifecycle(t, s.operator, stopPath(s.st.ID)); job.State != "done" {
+		t.Fatalf("stop = %+v, want it done", job)
+	}
+	if _, job := s.f.lifecycle(t, s.operator, startPath(s.st.ID)); job.State != "done" {
+		t.Fatalf("start = %+v, want it done", job)
+	}
+	wantClaimsUntouched(t, s, version, audits)
+
+	// An update that fails is rolled back by TierPlan itself; the roll back claims nothing.
+	s.move(t, "web", 'b')
+	s.rejectNewVersion("web", 'b')
+	if _, job := s.startUpdate(t, "stack", "shop"); job.State == "done" {
+		t.Fatalf("update = %+v, want it failed and rolled back", job)
+	}
+	wantClaimsUntouched(t, s, version, audits)
 }
