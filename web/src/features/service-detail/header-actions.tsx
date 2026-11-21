@@ -29,7 +29,7 @@ import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog } from "@/features/services/scale-dialog";
 import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
 import { useUpdateGate } from "@/features/updates/update-gate";
-import { useNeeds } from "@/hooks/use-needs";
+import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
 
@@ -74,8 +74,15 @@ interface ServiceHeaderActionsProps {
 // link to the editor when it is available, and a button that only says why when it is not.
 export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProps) {
   const t = useT();
-  const needs = useNeeds("services.control", envId);
-  const manage = useNeeds("services.manage", envId);
+  const controlNeeds = useNeeds("services.control", envId);
+  const manageNeeds = useNeeds("services.manage", envId);
+  // TierPlan's ingress proxy is TierPlan's own: every write control of it is unavailable, with
+  // the one reason, whatever the caller's role (D-29). The server refuses each write anyway.
+  const owned: Needs | undefined = detail.ingress
+    ? { allowed: false, reason: t("ingress.owned.reason") }
+    : undefined;
+  const needs = owned ?? controlNeeds;
+  const manage = owned ?? manageNeeds;
   const navigate = useNavigate();
   // A scale, force update or rollback waiting for the manager's answer: the actions wait too, so
   // a second one cannot start on a service that is changing.
@@ -90,7 +97,11 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
   // service of a stack TierPlan manages is updated as a new revision of its stack.
   const gate = useUpdateGate(envId, detail.update);
   const envName = useEnvName(envId);
-  const canUpdate = detail.update?.state === "update_available" && gate.shown && !detail.agent;
+  // The proxy keeps an Update on offer, unavailable with the reason, so the page says why it
+  // cannot be used (UI-SPEC S3).
+  const canUpdate =
+    detail.update?.state === "update_available" && (gate.shown || detail.ingress) && !detail.agent;
+  const updateReason = owned?.reason ?? gate.reason;
   const host = useRef<HTMLDivElement>(null);
   const editBlocked = !needs.allowed || detail.stack !== "";
   const editReason =
@@ -120,7 +131,7 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
           </Link>
         </Button>
       )}
-      {canScale(detail) ? (
+      {canScale(detail) || detail.ingress ? (
         <NeedsTooltip reason={needs.reason}>
           <Button
             type="button"
@@ -145,13 +156,13 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
         </Button>
       </NeedsTooltip>
       {canUpdate ? (
-        <NeedsTooltip reason={gate.reason}>
+        <NeedsTooltip reason={updateReason}>
           <Button
             type="button"
             variant="outline"
             className="max-md:h-11"
-            disabled={pending || gate.unavailable}
-            onClick={gate.reason ? undefined : () => setUpdating(true)}
+            disabled={pending || (gate.unavailable && !detail.ingress)}
+            onClick={updateReason ? undefined : () => setUpdating(true)}
           >
             {t("updates.header.update")}
           </Button>

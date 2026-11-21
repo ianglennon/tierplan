@@ -49,3 +49,18 @@ describe("scaleEligibility", () => {
     });
   });
 });
+
+describe("scaleEligibility and the ingress proxy", () => {
+  it("skips the proxy with the ingress note, before the mode decides", () => {
+    for (const mode of ["global", "replicated"]) {
+      expect(scaleEligibility({ mode, stack: "", ingress: true })).toMatchObject({
+        eligible: false,
+        note: "ingress",
+      });
+    }
+  });
+
+  it("does not skip a row that is not the proxy", () => {
+    expect(scaleEligibility({ mode: "replicated", stack: "", ingress: false }).eligible).toBe(true);
+  });
+});

@@ -85,3 +85,15 @@ describe("refusalOf spec_invalid", () => {
     expect(r.message).toContain("Something went wrong on the server");
   });
 });
+
+describe("refusalOf ingress_owned", () => {
+  it("says it is managed by TierPlan ingress and that nothing was changed, for both actions", () => {
+    for (const action of ["update", "rollback"] as const) {
+      const r = refusalOf(t, new ServiceActionError(409, "ingress_owned"), { ...ctx, action });
+      expect(r.message).toBe(
+        "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
+      );
+      expect(r.agentPolicy).toBe(false);
+    }
+  });
+});

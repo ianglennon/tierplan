@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -53,6 +53,7 @@ beforeEach(() => {
       desired: 3,
       image: "tierplan/ingress:1",
       ingress: true,
+      hasPreviousSpec: true,
     }),
   ];
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 1 } } });
@@ -118,5 +119,60 @@ describe("the services list and the ingress proxy", () => {
     expect(
       within(screen.getByRole("row", { name: /^Select web/ })).queryByText("TierPlan ingress"),
     ).toBeNull();
+  });
+});
+
+const REASON = "Managed by TierPlan. Switch ingress off to remove it.";
+
+async function openMenu(name: string) {
+  await screen.findByText(name);
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1));
+  await act(async () => {});
+  const trigger = screen.getByRole("button", { name: `Actions for ${name}` });
+  await act(async () => {
+    fireEvent.keyDown(trigger, { key: "Enter" });
+  });
+}
+
+describe("the services list: the ingress proxy is read-only", () => {
+  it("draws the proxy's row menu items aria-disabled with the reason, and Open enabled", async () => {
+    mount();
+    await openMenu("tierplan-ingress");
+    expect(
+      (await screen.findByRole("menuitem", { name: "Open" })).getAttribute("aria-disabled"),
+    ).toBeNull();
+    for (const name of ["Scale…", "Force update…", /^Roll back…/, "Remove…"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+    }
+    expect(screen.getAllByText(REASON).length).toBeGreaterThan(0);
+  });
+
+  it("leaves a plain row's menu enabled", async () => {
+    mount();
+    await openMenu("web");
+    expect(
+      (await screen.findByRole("menuitem", { name: "Force update…" })).getAttribute(
+        "aria-disabled",
+      ),
+    ).toBeNull();
+    expect(screen.queryByText(REASON)).toBeNull();
+  });
+
+  it("lists the proxy as skipped in the bulk scale dialog with the note", async () => {
+    mount();
+    await screen.findByText("tierplan-ingress");
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    fireEvent.click(
+      within(screen.getByRole("toolbar", { name: "Bulk actions" })).getByRole("button", {
+        name: "Scale…",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Scale 2 services" });
+    expect(within(dialog).getByRole("button", { name: "Scale 1 service" })).toBeTruthy();
+    expect(within(dialog).getByText("Managed by TierPlan ingress")).toBeTruthy();
+    expect(within(dialog).queryByText("Global services can't be scaled.")).toBeNull();
   });
 });

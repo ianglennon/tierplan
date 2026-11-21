@@ -364,6 +364,7 @@ function noteWords(t: Translate, row: BulkRow): string {
   if (!eligible) {
     if (note === "global") return t("services.scale.errors.not_scalable_global");
     if (note === "job") return t("services.scale.errors.not_scalable_job");
+    if (note === "ingress") return t("ingress.owned.bulkNote");
     return "";
   }
   return stack ? t("services.scale.partOfStack", { stack }) : "";
